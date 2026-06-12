@@ -296,6 +296,62 @@ func TestSessionAssertEmitsOnlyForInsertedFacts(t *testing.T) {
 	}
 }
 
+func TestSessionAssertImmediatelyReconcilesAgendaAndSkipsDuplicateNoise(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(revision, WithSessionID("assert-agenda-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if !inserted.Inserted() {
+		t.Fatalf("assert status = %v, want inserted", inserted.Status)
+	}
+
+	events := collector.Events()
+	if len(events) != 2 {
+		t.Fatalf("events after first assert = %d, want 2", len(events))
+	}
+	if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated {
+		t.Fatalf("event order after first assert = %#v", []EventType{events[0].Type, events[1].Type})
+	}
+
+	duplicate, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("duplicate assert: %v", err)
+	}
+	if duplicate.Status != AssertExisting {
+		t.Fatalf("duplicate status = %v, want %v", duplicate.Status, AssertExisting)
+	}
+	if got := len(collector.Events()); got != 2 {
+		t.Fatalf("duplicate assert emitted %d events, want 2", got)
+	}
+}
+
 func TestSessionAssertClosedSessionAndConcurrencyMisuse(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "closed-session")
 	if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"})); err != nil {

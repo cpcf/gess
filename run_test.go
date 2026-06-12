@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
@@ -267,6 +268,133 @@ func TestSessionRunFiresActivationAndAllowsActionContextMutations(t *testing.T) 
 	}
 }
 
+func TestSessionRunActionContextMutationAdvancesNextActivation(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	var actionsSeen []string
+	if err := workspace.AddAction(ActionSpec{
+		Name: "promote",
+		Fn: func(ctx ActionContext) error {
+			actionsSeen = append(actionsSeen, "promote")
+			binding, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("missing person binding")
+			}
+			_, err := ctx.Modify(binding.ID(), FactPatch{
+				Set: mustFields(t, map[string]any{"status": "done"}),
+			})
+			return err
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(promote): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			actionsSeen = append(actionsSeen, "record")
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(record): %v", err)
+	}
+
+	if err := workspace.AddRule(RuleSpec{
+		Name: "pending-rule",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: TemplateKey("person"),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "promote"}},
+	}); err != nil {
+		t.Fatalf("AddRule(pending): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "done-rule",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: TemplateKey("person"),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	}); err != nil {
+		t.Fatalf("AddRule(done): %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		revision,
+		WithSessionID("run-safe-point-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: TemplateKey("person"),
+			Fields: mustFields(t, map[string]any{
+				"name":   "Ada",
+				"status": "pending",
+			}),
+		}),
+		WithEventListener(collector),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+	}
+	if result.Fired != 2 {
+		t.Fatalf("run fired = %d, want 2", result.Fired)
+	}
+	if got, want := actionsSeen, []string{"promote", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("action order = %#v, want %#v", got, want)
+	}
+
+	events := collector.Events()
+	modifyIndex := -1
+	secondFireIndex := -1
+	for i, event := range events {
+		if event.Type == EventFactModified && modifyIndex == -1 {
+			modifyIndex = i
+		}
+		if event.Type == EventRuleFired && i > 0 {
+			secondFireIndex = i
+		}
+	}
+	if modifyIndex == -1 {
+		t.Fatal("modify event missing")
+	}
+	if secondFireIndex == -1 {
+		t.Fatal("second rule fired event missing")
+	}
+	if modifyIndex > secondFireIndex {
+		t.Fatalf("modify event appeared after second fire: modify=%d fire=%d", modifyIndex, secondFireIndex)
+	}
+}
+
 func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
@@ -521,6 +649,10 @@ func TestSessionRunCancellationBeforeSelectionDoesNotConsumeActivation(t *testin
 	session, err := NewSession(
 		revision,
 		WithSessionID("run-cancel-selection-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: TemplateKey("person"),
+			Fields:      mustFields(t, map[string]any{"name": "Ada"}),
+		}),
 		WithEventListener(collector),
 		WithEventListener(EventFunc(func(_ context.Context, event Event) error {
 			if event.Type == EventRuleActivated {
@@ -531,9 +663,6 @@ func TestSessionRunCancellationBeforeSelectionDoesNotConsumeActivation(t *testin
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
-	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
 	}
 	result, err := session.Run(cancelCtx)
 	if !errors.Is(err, context.Canceled) {
@@ -754,12 +883,13 @@ func TestSessionRunRejectsRecursiveAndOverlappingRuns(t *testing.T) {
 	})
 }
 
-func TestSessionRunBlocksExternalMutationsDuringRun(t *testing.T) {
+func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
 		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
 		},
 	}); err != nil {
 		t.Fatalf("AddTemplate(person): %v", err)
@@ -774,72 +904,223 @@ func TestSessionRunBlocksExternalMutationsDuringRun(t *testing.T) {
 	}
 
 	var (
-		session  *Session
-		personID FactID
+		session     *Session
+		personID    FactID
+		actionsSeen []string
 	)
 
+	started := make(chan struct{})
+	release := make(chan struct{})
 	if err := workspace.AddAction(ActionSpec{
-		Name: "check-external",
+		Name: "pause",
 		Fn: func(ActionContext) error {
-			result, err := session.Assert(context.Background(), "note", mustFields(t, map[string]any{"kind": "note"}))
-			if !errors.Is(err, ErrConcurrencyMisuse) || result.Status != AssertConcurrencyMisuse {
-				return errors.New("assert should return concurrency misuse")
-			}
-			result2, err := session.AssertTemplate(context.Background(), TemplateKey("audit"), mustFields(t, map[string]any{"kind": "audit"}))
-			if !errors.Is(err, ErrConcurrencyMisuse) || result2.Status != AssertConcurrencyMisuse {
-				return errors.New("assert template should return concurrency misuse")
-			}
-			modifyResult, err := session.Modify(context.Background(), personID, FactPatch{
-				Set: mustFields(t, map[string]any{"name": "Bob"}),
-			})
-			if !errors.Is(err, ErrConcurrencyMisuse) || modifyResult.Status != ModifyConcurrencyMisuse {
-				return errors.New("modify should return concurrency misuse")
-			}
-			retractResult, err := session.Retract(context.Background(), personID)
-			if !errors.Is(err, ErrConcurrencyMisuse) || retractResult.Status != RetractConcurrencyMisuse {
-				return errors.New("retract should return concurrency misuse")
-			}
-			resetResult, err := session.Reset(context.Background())
-			if !errors.Is(err, ErrConcurrencyMisuse) || resetResult.Status != ResetConcurrencyMisuse {
-				return errors.New("reset should return concurrency misuse")
-			}
+			actionsSeen = append(actionsSeen, "pause")
+			close(started)
+			<-release
 			return nil
 		},
 	}); err != nil {
-		t.Fatalf("AddAction(check-external): %v", err)
+		t.Fatalf("AddAction(pause): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "record-audit",
+		Fn: func(ActionContext) error {
+			actionsSeen = append(actionsSeen, "audit")
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(record-audit): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "record-done",
+		Fn: func(ActionContext) error {
+			actionsSeen = append(actionsSeen, "done")
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(record-done): %v", err)
 	}
 	if err := workspace.AddRule(RuleSpec{
-		Name: "person-rule",
+		Name: "pending-person",
 		Conditions: []RuleConditionSpec{
 			{
 				Binding:     "person",
 				TemplateKey: TemplateKey("person"),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
+				},
 			},
 		},
-		Actions: []RuleActionSpec{{Name: "check-external"}},
+		Actions: []RuleActionSpec{{Name: "pause"}},
 	}); err != nil {
-		t.Fatalf("AddRule: %v", err)
+		t.Fatalf("AddRule(pending-person): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "audit-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "audit", TemplateKey: TemplateKey("audit")},
+		},
+		Actions: []RuleActionSpec{{Name: "record-audit"}},
+	}); err != nil {
+		t.Fatalf("AddRule(audit-rule): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "done-person",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: TemplateKey("person"),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "record-done"}},
+	}); err != nil {
+		t.Fatalf("AddRule(done-person): %v", err)
 	}
 
 	revision, err := workspace.Compile(context.Background())
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	session, err = NewSession(revision, WithSessionID("run-external-mutation-session"))
+	collector := &testEventCollector{}
+	session, err = NewSession(revision, WithSessionID("run-external-mutation-session"), WithEventListener(collector))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	asserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	asserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+		"name":   "Ada",
+		"status": "pending",
+	}))
 	if err != nil {
 		t.Fatalf("AssertTemplate(person): %v", err)
 	}
 	personID = asserted.Fact.ID()
 
-	result, err := session.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	type assertOutcome struct {
+		result AssertResult
+		err    error
 	}
-	if result.Status != RunCompleted {
-		t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+	type modifyOutcome struct {
+		result ModifyResult
+		err    error
+	}
+
+	runDone := make(chan struct{})
+	var runResult RunResult
+	var runErr error
+	go func() {
+		defer close(runDone)
+		runResult, runErr = session.Run(context.Background())
+	}()
+
+	<-started
+
+	assertDone := make(chan assertOutcome, 1)
+	go func() {
+		result, err := session.AssertTemplate(context.Background(), TemplateKey("audit"), mustFields(t, map[string]any{"kind": "queued"}))
+		assertDone <- assertOutcome{result: result, err: err}
+	}()
+	waitForQueuedMutationCount(t, session, 1)
+
+	modifyDone := make(chan modifyOutcome, 1)
+	go func() {
+		result, err := session.Modify(context.Background(), personID, FactPatch{
+			Set: mustFields(t, map[string]any{"status": "done"}),
+		})
+		modifyDone <- modifyOutcome{result: result, err: err}
+	}()
+	waitForQueuedMutationCount(t, session, 2)
+
+	resetResult, resetErr := session.Reset(context.Background())
+	if !errors.Is(resetErr, ErrConcurrencyMisuse) || resetResult.Status != ResetConcurrencyMisuse {
+		t.Fatalf("reset during run = (%v, %v), want concurrency misuse", resetResult.Status, resetErr)
+	}
+
+	select {
+	case outcome := <-assertDone:
+		t.Fatalf("queued assert completed before safe point: %#v", outcome)
+	default:
+	}
+	select {
+	case outcome := <-modifyDone:
+		t.Fatalf("queued modify completed before safe point: %#v", outcome)
+	default:
+	}
+
+	close(release)
+
+	var assertedAudit assertOutcome
+	select {
+	case assertedAudit = <-assertDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued assert")
+	}
+	if assertedAudit.err != nil {
+		t.Fatalf("queued assert: %v", assertedAudit.err)
+	}
+	if assertedAudit.result.Status != AssertInserted {
+		t.Fatalf("queued assert status = %v, want %v", assertedAudit.result.Status, AssertInserted)
+	}
+	var modifiedPerson modifyOutcome
+	select {
+	case modifiedPerson = <-modifyDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued modify")
+	}
+	if modifiedPerson.err != nil {
+		t.Fatalf("queued modify: %v", modifiedPerson.err)
+	}
+	if modifiedPerson.result.Status != ModifyChanged {
+		t.Fatalf("queued modify status = %v, want %v", modifiedPerson.result.Status, ModifyChanged)
+	}
+
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not complete")
+	}
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if runResult.Status != RunCompleted {
+		t.Fatalf("run status = %v, want %v", runResult.Status, RunCompleted)
+	}
+	if runResult.Fired != 3 {
+		t.Fatalf("run fired = %d, want 3", runResult.Fired)
+	}
+	if got, want := actionsSeen, []string{"pause", "done", "audit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("action order = %#v, want %#v", got, want)
+	}
+
+	events := make([]EventType, 0)
+	for _, event := range collector.Events() {
+		if event.Type == EventFactAsserted || event.Type == EventFactModified {
+			events = append(events, event.Type)
+		}
+	}
+	if got, want := events, []EventType{EventFactAsserted, EventFactAsserted, EventFactModified}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("fact mutation event order = %#v, want %#v", got, want)
+	}
+}
+
+func waitForQueuedMutationCount(t *testing.T, session *Session, want int) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		session.mutationQueueMu.Lock()
+		got := len(session.mutationQueue)
+		session.mutationQueueMu.Unlock()
+		if got == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("queued mutations = %d, want %d", got, want)
+		case <-ticker.C:
+		}
 	}
 }

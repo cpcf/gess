@@ -194,7 +194,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	}
 
 	events := collector.Events()
-	if got, want := len(events), 3; got != want {
+	if got, want := len(events), 4; got != want {
 		t.Fatalf("events = %d, want %d", got, want)
 	}
 	if events[0].Type != EventFactAsserted {
@@ -208,6 +208,9 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	}
 	if events[2].Type != EventFactModified {
 		t.Fatalf("third event type = %q, want %q", events[2].Type, EventFactModified)
+	}
+	if events[3].Type != EventRuleActivated {
+		t.Fatalf("fourth event type = %q, want %q", events[3].Type, EventRuleActivated)
 	}
 	if events[2].RuleID != selected.ruleID || events[2].RuleRevisionID != selected.ruleRevisionID || events[2].ActivationID != selected.id {
 		t.Fatalf("modify event origin = %#v", events[2])

@@ -2,7 +2,9 @@ package gess
 
 import (
 	"context"
+	"errors"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -52,17 +54,19 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 type Session struct {
-	id         SessionID
-	revision   *Ruleset
-	agenda     *agenda
-	generation Generation
-	initials   []SessionInitialFact
-	listeners  []EventListener
-	eventClock func() time.Time
-	closed     bool
-	runGuard   chan struct{}
-	runState   atomic.Value
-	mu         struct {
+	id              SessionID
+	revision        *Ruleset
+	agenda          *agenda
+	generation      Generation
+	initials        []SessionInitialFact
+	listeners       []EventListener
+	eventClock      func() time.Time
+	closed          bool
+	runGuard        chan struct{}
+	runState        atomic.Value
+	mutationQueueMu sync.Mutex
+	mutationQueue   []queuedMutation
+	mu              struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -76,6 +80,17 @@ type Session struct {
 	factsByName       map[string][]FactID
 	insertionOrder    []FactID
 	nextEventSequence uint64
+}
+
+type queuedMutation struct {
+	ctx    context.Context
+	apply  func(context.Context) (any, error)
+	result chan queuedMutationResult
+}
+
+type queuedMutationResult struct {
+	value any
+	err   error
 }
 
 type runGuardState struct {
@@ -222,13 +237,39 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	if s == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return AssertResult{Status: AssertValidationFailure}, err
 	}
+	if s.shouldQueueMutationDuringRun(origin) {
+		resultCh := make(chan queuedMutationResult, 1)
+		if s.enqueueMutationDuringRun(queuedMutation{
+			ctx: ctx,
+			apply: func(mutationCtx context.Context) (any, error) {
+				return s.insertFactImmediate(mutationCtx, name, templateKey, fields, origin)
+			},
+			result: resultCh,
+		}) {
+			select {
+			case outcome := <-resultCh:
+				if outcome.err != nil {
+					if result, ok := outcome.value.(AssertResult); ok {
+						return result, outcome.err
+					}
+					return AssertResult{}, outcome.err
+				}
+				if result, ok := outcome.value.(AssertResult); ok {
+					return result, nil
+				}
+				return AssertResult{}, ErrInvalidRuleset
+			case <-ctx.Done():
+				return AssertResult{Status: AssertValidationFailure}, ctx.Err()
+			}
+		}
+	}
+
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return AssertResult{Status: AssertConcurrencyMisuse}, ErrConcurrencyMisuse
@@ -237,6 +278,19 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 		defer s.endMutation()
 	}
 
+	result, err := s.insertFactImmediate(ctx, name, templateKey, fields, origin)
+	if err != nil {
+		return result, err
+	}
+	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
+		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func (s *Session) insertFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin) (AssertResult, error) {
 	if s == nil || s.closed {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
@@ -316,6 +370,32 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 	if err := ctx.Err(); err != nil {
 		return RetractResult{}, err
 	}
+	if s.shouldQueueMutationDuringRun(origin) {
+		resultCh := make(chan queuedMutationResult, 1)
+		if s.enqueueMutationDuringRun(queuedMutation{
+			ctx: ctx,
+			apply: func(mutationCtx context.Context) (any, error) {
+				return s.retractImmediate(mutationCtx, id, origin)
+			},
+			result: resultCh,
+		}) {
+			select {
+			case outcome := <-resultCh:
+				if outcome.err != nil {
+					if result, ok := outcome.value.(RetractResult); ok {
+						return result, outcome.err
+					}
+					return RetractResult{}, outcome.err
+				}
+				if result, ok := outcome.value.(RetractResult); ok {
+					return result, nil
+				}
+				return RetractResult{}, ErrInvalidRuleset
+			case <-ctx.Done():
+				return RetractResult{}, ctx.Err()
+			}
+		}
+	}
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return RetractResult{Status: RetractConcurrencyMisuse}, ErrConcurrencyMisuse
@@ -324,6 +404,19 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 		defer s.endMutation()
 	}
 
+	result, err := s.retractImmediate(ctx, id, origin)
+	if err != nil {
+		return result, err
+	}
+	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
+		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutationOrigin) (RetractResult, error) {
 	if s.closed {
 		return RetractResult{Status: RetractClosed}, ErrClosedSession
 	}
@@ -416,6 +509,17 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 		defer s.endMutation()
 	}
 
+	result, err := s.resetImmediate(ctx)
+	if err != nil {
+		return result, err
+	}
+	if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if s.closed {
 		return ResetResult{Status: ResetClosed}, ErrClosedSession
 	}
@@ -520,6 +624,32 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	if err := ctx.Err(); err != nil {
 		return ModifyResult{}, err
 	}
+	if s.shouldQueueMutationDuringRun(origin) {
+		resultCh := make(chan queuedMutationResult, 1)
+		if s.enqueueMutationDuringRun(queuedMutation{
+			ctx: ctx,
+			apply: func(mutationCtx context.Context) (any, error) {
+				return s.modifyImmediate(mutationCtx, id, patch, origin)
+			},
+			result: resultCh,
+		}) {
+			select {
+			case outcome := <-resultCh:
+				if outcome.err != nil {
+					if result, ok := outcome.value.(ModifyResult); ok {
+						return result, outcome.err
+					}
+					return ModifyResult{}, outcome.err
+				}
+				if result, ok := outcome.value.(ModifyResult); ok {
+					return result, nil
+				}
+				return ModifyResult{}, ErrInvalidRuleset
+			case <-ctx.Done():
+				return ModifyResult{}, ctx.Err()
+			}
+		}
+	}
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return ModifyResult{Status: ModifyConcurrencyMisuse}, ErrConcurrencyMisuse
@@ -527,7 +657,19 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	if locked {
 		defer s.endMutation()
 	}
+	result, err := s.modifyImmediate(ctx, id, patch, origin)
+	if err != nil {
+		return result, err
+	}
+	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
+		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
 
+func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatch, origin mutationOrigin) (ModifyResult, error) {
 	if s.closed {
 		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
 	}
@@ -952,6 +1094,139 @@ func (s *Session) canMutateDuringRun(origin mutationOrigin) bool {
 	}
 	state := s.currentRunState()
 	return state.active && state.allowMutationOrigin == origin
+}
+
+func (s *Session) shouldQueueMutationDuringRun(origin mutationOrigin) bool {
+	if s == nil || !origin.isZero() || !s.runGuardHeld() {
+		return false
+	}
+	return true
+}
+
+func (s *Session) enqueueMutationDuringRun(req queuedMutation) bool {
+	if s == nil {
+		return false
+	}
+	s.mutationQueueMu.Lock()
+	defer s.mutationQueueMu.Unlock()
+	if !s.runGuardHeld() {
+		return false
+	}
+	s.mutationQueue = append(s.mutationQueue, req)
+	return true
+}
+
+func (s *Session) popQueuedMutations() []queuedMutation {
+	if s == nil {
+		return nil
+	}
+	s.mutationQueueMu.Lock()
+	if len(s.mutationQueue) == 0 {
+		s.mutationQueueMu.Unlock()
+		return nil
+	}
+	out := make([]queuedMutation, len(s.mutationQueue))
+	copy(out, s.mutationQueue)
+	s.mutationQueue = nil
+	s.mutationQueueMu.Unlock()
+	return out
+}
+
+func (s *Session) failQueuedMutations(err error) {
+	if s == nil {
+		return
+	}
+	for _, req := range s.popQueuedMutations() {
+		if req.result == nil {
+			continue
+		}
+		req.result <- queuedMutationResult{err: err}
+	}
+}
+
+func (s *Session) drainQueuedMutations(ctx context.Context) error {
+	for {
+		requests := s.popQueuedMutations()
+		if len(requests) == 0 {
+			return nil
+		}
+		for i, req := range requests {
+			if req.result == nil {
+				continue
+			}
+			if req.ctx != nil {
+				if err := req.ctx.Err(); err != nil {
+					req.result <- queuedMutationResult{err: err}
+					continue
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				req.result <- queuedMutationResult{err: err}
+				for j := i + 1; j < len(requests); j++ {
+					remaining := requests[j]
+					if remaining.result == nil {
+						continue
+					}
+					if remaining.ctx != nil {
+						if remainingErr := remaining.ctx.Err(); remainingErr != nil {
+							remaining.result <- queuedMutationResult{err: remainingErr}
+							continue
+						}
+					}
+					remaining.result <- queuedMutationResult{err: err}
+				}
+				return err
+			}
+			if !s.beginMutation() {
+				err := ErrConcurrencyMisuse
+				req.result <- queuedMutationResult{err: err}
+				for j := i + 1; j < len(requests); j++ {
+					remaining := requests[j]
+					if remaining.result == nil {
+						continue
+					}
+					if remaining.ctx != nil {
+						if remainingErr := remaining.ctx.Err(); remainingErr != nil {
+							remaining.result <- queuedMutationResult{err: remainingErr}
+							continue
+						}
+					}
+					remaining.result <- queuedMutationResult{err: err}
+				}
+				return err
+			}
+			mutationCtx := ctx
+			if req.ctx != nil {
+				mutationCtx = req.ctx
+			}
+			value, err := req.apply(mutationCtx)
+			s.endMutation()
+			if err == nil && mutationResultNeedsReconcile(value) {
+				if _, reconcileErr := s.reconcileAgenda(ctx, s.snapshotLocked()); reconcileErr != nil {
+					err = reconcileErr
+				}
+			}
+			req.result <- queuedMutationResult{value: value, err: err}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+		}
+	}
+}
+
+func mutationResultNeedsReconcile(value any) bool {
+	switch result := value.(type) {
+	case AssertResult:
+		return result.Status == AssertInserted
+	case ModifyResult:
+		return result.Status == ModifyChanged
+	case RetractResult:
+		return result.Status == RetractRemoved
+	case ResetResult:
+		return result.Status == ResetApplied
+	default:
+		return true
+	}
 }
 
 func (s *Session) beginMutationForOrigin(origin mutationOrigin) (bool, bool) {

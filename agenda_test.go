@@ -252,11 +252,22 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 0 {
-		t.Fatalf("pending activations after reset = %#v, want none", got)
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if got := session.agenda.activationsByRuleRevisionID(selected.ruleRevisionID); len(got) != 0 {
-		t.Fatalf("activations by revision after reset = %#v, want none", got)
+	if pending[0].id == selected.id {
+		t.Fatalf("reset reused consumed activation ID %q", selected.id)
+	}
+	if pending[0].generation != 2 {
+		t.Fatalf("reset activation generation = %d, want 2", pending[0].generation)
+	}
+	byRevision := session.agenda.activationsByRuleRevisionID(selected.ruleRevisionID)
+	if got, want := len(byRevision), 1; got != want {
+		t.Fatalf("activations by revision after reset = %d, want %d", got, want)
+	}
+	if byRevision[0].id != pending[0].id {
+		t.Fatalf("revision index activation = %q, want %q", byRevision[0].id, pending[0].id)
 	}
 
 	results = mustAgendaMatchResults(t, revision, session)
@@ -264,11 +275,8 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("post-reset reconcile: %v", err)
 	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("post-reset reconcile changes = %d, want %d", got, want)
-	}
-	if changes[0].kind != agendaChangeActivated {
-		t.Fatalf("post-reset change kind = %v, want activated", changes[0].kind)
+	if got := len(changes); got != 0 {
+		t.Fatalf("post-reset reconcile changes = %d, want none", got)
 	}
 	if got := session.agenda.pendingActivations(); len(got) != 1 || got[0].id == selected.id {
 		t.Fatalf("post-reset pending activations = %#v, want new activation ID", got)
@@ -455,15 +463,19 @@ func TestSessionReconcileAgendaEmitsActivationEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after assert = %d, want %d", got, want)
+	}
+	activationID := pending[0].id
 	snapshot := mustSnapshot(t, context.Background(), session)
 	changes, err := session.reconcileAgenda(context.Background(), snapshot)
 	if err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("activation changes = %d, want %d", got, want)
+	if got := len(changes); got != 0 {
+		t.Fatalf("duplicate activation changes = %d, want none", got)
 	}
-	activationID := changes[0].activation.id
 
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("duplicate reconcileAgenda: %v", err)
@@ -477,8 +489,8 @@ func TestSessionReconcileAgendaEmitsActivationEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retract reconcileAgenda: %v", err)
 	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("deactivation changes = %d, want %d", got, want)
+	if got := len(changes); got != 0 {
+		t.Fatalf("duplicate deactivation changes = %d, want none", got)
 	}
 
 	events := collector.Events()
@@ -544,8 +556,15 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 0 {
-		t.Fatalf("pending activations after reset = %#v, want none", got)
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+	if pending[0].id == initialID {
+		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
+	}
+	if pending[0].generation != 2 {
+		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].generation)
 	}
 
 	snapshot = mustSnapshot(t, context.Background(), session)
@@ -553,11 +572,8 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if err != nil {
 		t.Fatalf("post-reset reconcileAgenda: %v", err)
 	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("post-reset changes = %d, want %d", got, want)
-	}
-	if changes[0].activation.id == initialID {
-		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
+	if got := len(changes); got != 0 {
+		t.Fatalf("duplicate post-reset changes = %d, want none", got)
 	}
 
 	events := collector.Events()

@@ -76,6 +76,62 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	}
 }
 
+func TestSessionRetractImmediatelyDeactivatesPendingActivation(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(revision, WithSessionID("retract-agenda-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if got := len(collector.Events()); got != 2 {
+		t.Fatalf("events after assert = %d, want 2", got)
+	}
+
+	result, err := session.Retract(context.Background(), inserted.Fact.ID())
+	if err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+	if result.Status != RetractRemoved {
+		t.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+	}
+
+	events := collector.Events()
+	if got, want := len(events), 4; got != want {
+		t.Fatalf("events = %d, want %d", got, want)
+	}
+	if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventFactRetracted || events[3].Type != EventRuleDeactivated {
+		t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type})
+	}
+	if got := mustSnapshot(t, context.Background(), session).Len(); got != 0 {
+		t.Fatalf("snapshot length after retract = %d, want 0", got)
+	}
+}
+
 func TestSessionRetractMissingReturnsNoopResultWithoutEvent(t *testing.T) {
 	collector := &testEventCollector{}
 	session, err := NewSession(mustCompile(t), WithSessionID("retract-missing-session"), WithEventListener(collector))
@@ -236,6 +292,78 @@ func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
 	}
 	if resultAfter.Fact.Generation() != 2 {
 		t.Fatalf("post-reset fact generation = %d, want 2", resultAfter.Fact.Generation())
+	}
+}
+
+func TestSessionResetRebuildsAgendaForInitialFacts(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		revision,
+		WithSessionID("reset-agenda-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: template.Key(),
+			Fields:      mustFields(t, map[string]any{"name": "Ada"}),
+		}),
+		WithEventListener(collector),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("run fired = %d, want 1", result.Fired)
+	}
+
+	resetResult, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if resetResult.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", resetResult.Status, ResetApplied)
+	}
+	if got, want := session.Generation(), Generation(2); got != want {
+		t.Fatalf("generation after reset = %d, want %d", got, want)
+	}
+
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+	if pending[0].generation != 2 {
+		t.Fatalf("pending activation generation = %d, want 2", pending[0].generation)
+	}
+
+	events := collector.Events()
+	if len(events) < 4 {
+		t.Fatalf("events = %d, want at least 4", len(events))
+	}
+	if events[len(events)-2].Type != EventReset || events[len(events)-1].Type != EventRuleActivated {
+		t.Fatalf("tail event order = %#v", []EventType{events[len(events)-2].Type, events[len(events)-1].Type})
 	}
 }
 

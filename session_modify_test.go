@@ -65,6 +65,165 @@ func TestSessionModifyNoOpReturnsWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestSessionModifyNoOpDoesNotCreateAgendaNoise(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(revision, WithSessionID("modify-noise-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if got := len(collector.Events()); got != 2 {
+		t.Fatalf("events after assert = %d, want 2", got)
+	}
+
+	result, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Ada"}),
+	})
+	if err != nil {
+		t.Fatalf("Modify no-op: %v", err)
+	}
+	if result.Status != ModifyNoOp {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyNoOp)
+	}
+	if got := len(collector.Events()); got != 2 {
+		t.Fatalf("no-op modify emitted %d events, want 2", got)
+	}
+}
+
+func TestSessionModifyReconcilesAgendaForChangedAndDroppedMatches(t *testing.T) {
+	t.Run("still matches", func(t *testing.T) {
+		workspace := NewWorkspace()
+		template := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "match-person",
+			Conditions: []RuleConditionSpec{
+				{Binding: "person", TemplateKey: template.Key()},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		collector := &testEventCollector{}
+		session, err := NewSession(revision, WithSessionID("modify-still-matches-session"), WithEventListener(collector))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+			Set: mustFields(t, map[string]any{"name": "Grace"}),
+		})
+		if err != nil {
+			t.Fatalf("Modify: %v", err)
+		}
+		if modified.Status != ModifyChanged {
+			t.Fatalf("modify status = %v, want %v", modified.Status, ModifyChanged)
+		}
+
+		events := collector.Events()
+		if got, want := len(events), 5; got != want {
+			t.Fatalf("events = %d, want %d", got, want)
+		}
+		if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventFactModified || events[3].Type != EventRuleDeactivated || events[4].Type != EventRuleActivated {
+			t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type, events[4].Type})
+		}
+		if events[1].ActivationID == events[4].ActivationID {
+			t.Fatalf("modify reused activation ID %q", events[4].ActivationID)
+		}
+	})
+
+	t.Run("stops matching", func(t *testing.T) {
+		workspace := NewWorkspace()
+		template := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Fields: []FieldSpec{{Name: "status", Kind: ValueString, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "pending-only",
+			Conditions: []RuleConditionSpec{
+				{Binding: "person", TemplateKey: template.Key(), FieldConstraints: []FieldConstraintSpec{{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")}}},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		collector := &testEventCollector{}
+		session, err := NewSession(revision, WithSessionID("modify-stops-matching-session"), WithEventListener(collector))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"status": "pending"}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+			Set: mustFields(t, map[string]any{"status": "done"}),
+		})
+		if err != nil {
+			t.Fatalf("Modify: %v", err)
+		}
+		if modified.Status != ModifyChanged {
+			t.Fatalf("modify status = %v, want %v", modified.Status, ModifyChanged)
+		}
+
+		events := collector.Events()
+		if got, want := len(events), 4; got != want {
+			t.Fatalf("events = %d, want %d", got, want)
+		}
+		if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventFactModified || events[3].Type != EventRuleDeactivated {
+			t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type})
+		}
+	})
+}
+
 func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T) {
 	collector := &testEventCollector{}
 	session, err := NewSession(mustCompile(t), WithSessionID("modify-dynamic-session"), WithEventListener(collector))

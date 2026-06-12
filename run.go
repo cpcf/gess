@@ -45,25 +45,57 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	s.endMutation()
 	defer s.endRun()
 	defer s.setRunState(runGuardState{})
+	var runErr error
+	abort := func(status RunStatus, fired int, err error) (RunResult, error) {
+		runErr = err
+		return RunResult{RunID: runID, Status: status, Fired: fired}, err
+	}
+	defer func() {
+		if runErr != nil {
+			s.failQueuedMutations(runErr)
+		}
+	}()
 
+	if err := s.drainQueuedMutations(ctx); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return abort(RunCanceled, 0, err)
+		}
+		return abort(RunFailed, 0, err)
+	}
 	snapshot := s.snapshotLocked()
 	if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return RunResult{RunID: runID, Status: RunCanceled}, err
+			return abort(RunCanceled, 0, err)
 		}
-		return RunResult{RunID: runID, Status: RunFailed}, err
+		return abort(RunFailed, 0, err)
 	}
 
 	fired := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return RunResult{RunID: runID, Status: RunCanceled, Fired: fired}, err
+			return abort(RunCanceled, fired, err)
 		}
 
+		if err := s.drainQueuedMutations(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return abort(RunCanceled, fired, err)
+			}
+			return abort(RunFailed, fired, err)
+		}
+
+		s.mutationQueueMu.Lock()
+		if len(s.mutationQueue) > 0 {
+			s.mutationQueueMu.Unlock()
+			continue
+		}
 		activation, ok := s.agenda.next()
 		if !ok {
+			s.endRun()
+			s.setRunState(runGuardState{})
+			s.mutationQueueMu.Unlock()
 			return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 		}
+		s.mutationQueueMu.Unlock()
 		fired++
 
 		s.emitRuleFiredEvent(ctx, runID, activation)
@@ -80,22 +112,22 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		})
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return RunResult{RunID: runID, Status: RunCanceled, Fired: fired}, err
+				return abort(RunCanceled, fired, err)
 			}
 			var actionFailure *ActionFailureError
 			if errors.As(err, &actionFailure) {
 				s.emitActionFailedEvent(ctx, runID, activation, *actionFailure)
-				return RunResult{RunID: runID, Status: RunActionFailed, Fired: fired}, actionFailure
+				return abort(RunActionFailed, fired, actionFailure)
 			}
-			return RunResult{RunID: runID, Status: RunFailed, Fired: fired}, err
+			return abort(RunFailed, fired, err)
 		}
 
 		snapshot = s.snapshotLocked()
 		if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return RunResult{RunID: runID, Status: RunCanceled, Fired: fired}, err
+				return abort(RunCanceled, fired, err)
 			}
-			return RunResult{RunID: runID, Status: RunFailed, Fired: fired}, err
+			return abort(RunFailed, fired, err)
 		}
 	}
 }
