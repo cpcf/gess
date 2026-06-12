@@ -17,6 +17,19 @@ func (id SessionID) String() string {
 	return string(id)
 }
 
+type RunID string
+
+func (id RunID) String() string {
+	if id.IsZero() {
+		return "run:zero"
+	}
+	return string(id)
+}
+
+func (id RunID) IsZero() bool {
+	return strings.TrimSpace(string(id)) == ""
+}
+
 type RuleID string
 
 func (id RuleID) String() string {

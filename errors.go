@@ -9,6 +9,7 @@ var (
 	ErrInvalidRuleset    = errors.New("gess: invalid ruleset")
 	ErrClosedSession     = errors.New("gess: closed session")
 	ErrConcurrencyMisuse = errors.New("gess: concurrency misuse")
+	ErrActionFailed      = errors.New("gess: action failed")
 	ErrValidation        = errors.New("gess: validation failed")
 	ErrFactNotFound      = errors.New("gess: fact not found")
 	ErrStaleFactID       = errors.New("gess: stale fact id")

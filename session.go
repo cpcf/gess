@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"sort"
+	"sync/atomic"
 	"time"
 )
 
@@ -59,6 +60,8 @@ type Session struct {
 	listeners  []EventListener
 	eventClock func() time.Time
 	closed     bool
+	runGuard   chan struct{}
+	runState   atomic.Value
 	mu         struct {
 		mutate chan struct{}
 		lock   chan struct{}
@@ -66,12 +69,19 @@ type Session struct {
 
 	nextFactSequence  uint64
 	nextRecency       Recency
+	nextRunSequence   uint64
 	factsByID         map[FactID]*workingFact
 	factsByDuplicate  map[DuplicateKey]FactID
 	factsByTemplate   map[TemplateKey][]FactID
 	factsByName       map[string][]FactID
 	insertionOrder    []FactID
 	nextEventSequence uint64
+}
+
+type runGuardState struct {
+	runID               RunID
+	active              bool
+	allowMutationOrigin mutationOrigin
 }
 
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
@@ -105,7 +115,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		}
 	}
 
-	return &Session{
+	session := &Session{
 		id:         cfg.id,
 		revision:   revision,
 		agenda:     newAgenda(),
@@ -113,6 +123,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		initials:   initials,
 		listeners:  listeners,
 		eventClock: cfg.eventClock,
+		runGuard:   make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
@@ -123,8 +134,11 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		factsByName:      state.factsByName,
 		nextFactSequence: state.nextFactSequence(),
 		nextRecency:      state.nextRecency(),
+		nextRunSequence:  0,
 		insertionOrder:   state.factsByInsertionOrder(),
-	}, nil
+	}
+	session.runState.Store(runGuardState{})
+	return session, nil
 }
 
 func cloneSessionInitialFacts(initials []SessionInitialFact) []SessionInitialFact {
@@ -174,6 +188,9 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
+	if s.runGuardHeld() {
+		return Snapshot{}, ErrConcurrencyMisuse
+	}
 	if !s.lock() {
 		return Snapshot{}, ErrConcurrencyMisuse
 	}
@@ -212,10 +229,13 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	if err := ctx.Err(); err != nil {
 		return AssertResult{Status: AssertValidationFailure}, err
 	}
-	if !s.beginMutation() {
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
 		return AssertResult{Status: AssertConcurrencyMisuse}, ErrConcurrencyMisuse
 	}
-	defer s.endMutation()
+	if locked {
+		defer s.endMutation()
+	}
 
 	if s == nil || s.closed {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
@@ -296,10 +316,13 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 	if err := ctx.Err(); err != nil {
 		return RetractResult{}, err
 	}
-	if !s.beginMutation() {
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
 		return RetractResult{Status: RetractConcurrencyMisuse}, ErrConcurrencyMisuse
 	}
-	defer s.endMutation()
+	if locked {
+		defer s.endMutation()
+	}
 
 	if s.closed {
 		return RetractResult{Status: RetractClosed}, ErrClosedSession
@@ -385,10 +408,13 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err := ctx.Err(); err != nil {
 		return ResetResult{}, err
 	}
-	if !s.beginMutation() {
+	locked, ok := s.beginMutationForOrigin(mutationOrigin{})
+	if !ok {
 		return ResetResult{Status: ResetConcurrencyMisuse}, ErrConcurrencyMisuse
 	}
-	defer s.endMutation()
+	if locked {
+		defer s.endMutation()
+	}
 
 	if s.closed {
 		return ResetResult{Status: ResetClosed}, ErrClosedSession
@@ -494,10 +520,13 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	if err := ctx.Err(); err != nil {
 		return ModifyResult{}, err
 	}
-	if !s.beginMutation() {
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
 		return ModifyResult{Status: ModifyConcurrencyMisuse}, ErrConcurrencyMisuse
 	}
-	defer s.endMutation()
+	if locked {
+		defer s.endMutation()
+	}
 
 	if s.closed {
 		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
@@ -883,6 +912,61 @@ func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionI
 		}
 	}
 	return nil
+}
+
+func (s *Session) currentRunState() runGuardState {
+	if s == nil {
+		return runGuardState{}
+	}
+	value := s.runState.Load()
+	if value == nil {
+		return runGuardState{}
+	}
+	state, _ := value.(runGuardState)
+	return state
+}
+
+func (s *Session) setRunState(state runGuardState) {
+	if s == nil {
+		return
+	}
+	s.runState.Store(state)
+}
+
+func (s *Session) runGuardHeld() bool {
+	if s == nil || s.runGuard == nil {
+		return false
+	}
+	select {
+	case s.runGuard <- struct{}{}:
+		<-s.runGuard
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *Session) canMutateDuringRun(origin mutationOrigin) bool {
+	if s == nil || origin.isZero() {
+		return false
+	}
+	state := s.currentRunState()
+	return state.active && state.allowMutationOrigin == origin
+}
+
+func (s *Session) beginMutationForOrigin(origin mutationOrigin) (bool, bool) {
+	if s == nil {
+		return false, false
+	}
+	if s.runGuardHeld() {
+		if !s.canMutateDuringRun(origin) {
+			return false, false
+		}
+	}
+	if !s.beginMutation() {
+		return false, false
+	}
+	return true, true
 }
 
 func (s *Session) beginMutation() bool {

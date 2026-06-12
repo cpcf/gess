@@ -207,7 +207,7 @@ func (a compiledAction) clone() compiledAction {
 	return a
 }
 
-func (s *Session) executeActivationActions(ctx context.Context, activation activation) error {
+func (s *Session) executeActivationActions(ctx context.Context, runID RunID, activation activation) error {
 	if s == nil {
 		return ErrClosedSession
 	}
@@ -238,12 +238,23 @@ func (s *Session) executeActivationActions(ctx context.Context, activation activ
 	}
 
 	for _, actionSpec := range rule.actions {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		action, ok := s.revision.actions[actionSpec.name]
 		if !ok {
 			return fmt.Errorf("%w: missing action %q", ErrInvalidRuleset, actionSpec.name)
 		}
 		if err := action.fn(actionCtx); err != nil {
-			return err
+			return &ActionFailureError{
+				RunID:          runID,
+				RuleID:         activation.ruleID,
+				RuleRevisionID: activation.ruleRevisionID,
+				ActivationID:   activation.id,
+				ActionName:     actionSpec.name,
+				ActionIndex:    actionSpec.order,
+				Err:            err,
+			}
 		}
 	}
 

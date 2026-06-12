@@ -147,7 +147,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-action-order"), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 
@@ -356,9 +356,16 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	selectionRuleID = selected.ruleID
 	selectionRevID = selected.ruleRevisionID
 
-	err = session.executeActivationActions(context.Background(), selected)
+	err = session.executeActivationActions(context.Background(), RunID("run:test-action-failure"), selected)
 	if !errors.Is(err, terminalErr) {
 		t.Fatalf("executeActivationActions error = %v, want %v", err, terminalErr)
+	}
+	var failure *ActionFailureError
+	if !errors.As(err, &failure) {
+		t.Fatalf("expected ActionFailureError, got %T: %v", err, err)
+	}
+	if failure.RunID != RunID("run:test-action-failure") || failure.RuleID != selectionRuleID || failure.RuleRevisionID != selectionRevID || failure.ActivationID != selectionID || failure.ActionName != "fail" || failure.ActionIndex != 3 {
+		t.Fatalf("action failure metadata = %#v", failure)
 	}
 	if terminalCalled {
 		t.Fatal("later action was called after error")
@@ -486,7 +493,7 @@ func TestSessionExecuteActivationActionsRejectsStaleBindings(t *testing.T) {
 		t.Fatalf("Modify: %v", err)
 	}
 
-	err = session.executeActivationActions(context.Background(), selected)
+	err = session.executeActivationActions(context.Background(), RunID("run:test-stale"), selected)
 	if !errors.Is(err, ErrMatcher) {
 		t.Fatalf("executeActivationActions error = %v, want ErrMatcher", err)
 	}

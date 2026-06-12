@@ -47,6 +47,14 @@ type activation struct {
 	status           activationStatus
 }
 
+func (a activation) mutationOrigin() mutationOrigin {
+	return mutationOrigin{
+		ActivationID:   a.id,
+		RuleID:         a.ruleID,
+		RuleRevisionID: a.ruleRevisionID,
+	}
+}
+
 func (a activation) clone() activation {
 	out := a
 	out.bindings = cloneBindingTupleEntries(a.bindings)

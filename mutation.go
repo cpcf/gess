@@ -1,5 +1,7 @@
 package gess
 
+import "fmt"
+
 type MutationKind string
 
 const (
@@ -8,6 +10,74 @@ const (
 	MutationRetract MutationKind = "retract"
 	MutationReset   MutationKind = "reset"
 )
+
+type RunStatus string
+
+const (
+	RunCompleted         RunStatus = "completed"
+	RunCanceled          RunStatus = "canceled"
+	RunActionFailed      RunStatus = "action_failed"
+	RunClosed            RunStatus = "closed"
+	RunConcurrencyMisuse RunStatus = "concurrency_misuse"
+	RunFailed            RunStatus = "failed"
+)
+
+type RunResult struct {
+	RunID  RunID
+	Status RunStatus
+	Fired  int
+}
+
+type ActionFailureError struct {
+	RunID          RunID
+	RuleID         RuleID
+	RuleRevisionID RuleRevisionID
+	ActivationID   ActivationID
+	ActionName     string
+	ActionIndex    int
+	Err            error
+}
+
+func (e *ActionFailureError) Error() string {
+	if e == nil {
+		return ErrActionFailed.Error()
+	}
+
+	msg := "gess: action failed"
+	if !e.RunID.IsZero() {
+		msg += " run " + e.RunID.String()
+	}
+	if !e.RuleID.IsZero() {
+		msg += " rule " + e.RuleID.String()
+	}
+	if !e.RuleRevisionID.IsZero() {
+		msg += " revision " + e.RuleRevisionID.String()
+	}
+	if !e.ActivationID.IsZero() {
+		msg += " activation " + e.ActivationID.String()
+	}
+	if e.ActionIndex >= 0 {
+		msg += fmt.Sprintf(" action %d", e.ActionIndex)
+	}
+	if e.ActionName != "" {
+		msg += " " + fmt.Sprintf("%q", e.ActionName)
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *ActionFailureError) Unwrap() error {
+	if e != nil && e.Err != nil {
+		return e.Err
+	}
+	return ErrActionFailed
+}
+
+func (e *ActionFailureError) Is(target error) bool {
+	return target == ErrActionFailed
+}
 
 type DuplicateKey string
 
@@ -45,6 +115,10 @@ type mutationOrigin struct {
 	ActivationID   ActivationID
 	RuleID         RuleID
 	RuleRevisionID RuleRevisionID
+}
+
+func (o mutationOrigin) isZero() bool {
+	return o == (mutationOrigin{})
 }
 
 type MutationDelta struct {

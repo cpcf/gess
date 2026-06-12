@@ -14,19 +14,33 @@ const (
 	EventReset           EventType = "reset"
 	EventRuleActivated   EventType = "rule_activated"
 	EventRuleDeactivated EventType = "rule_deactivated"
+	EventRuleFired       EventType = "rule_fired"
+	EventActionFailed    EventType = "action_failed"
+)
+
+type EventSeverity string
+
+const (
+	EventSeverityInfo  EventSeverity = "info"
+	EventSeverityError EventSeverity = "error"
 )
 
 type Event struct {
 	SessionID      SessionID
 	RulesetID      RulesetID
+	RunID          RunID
 	Sequence       uint64
 	Timestamp      time.Time
 	Type           EventType
+	Severity       EventSeverity
 	Generation     Generation
 	Recency        Recency
 	RuleID         RuleID
 	RuleRevisionID RuleRevisionID
 	ActivationID   ActivationID
+	ActionName     string
+	ActionIndex    int
+	Cause          error
 	FactIDs        []FactID
 	Delta          *MutationDelta
 }
