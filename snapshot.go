@@ -1,6 +1,9 @@
 package gess
 
-import "fmt"
+import (
+	"strconv"
+	"strings"
+)
 
 // Snapshot is an immutable working-memory view.
 type Snapshot struct {
@@ -14,9 +17,7 @@ type Snapshot struct {
 func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation, facts []FactSnapshot) Snapshot {
 	copied := make([]FactSnapshot, len(facts))
 	for i, fact := range facts {
-		copied[i] = fact
-		copied[i].fields = cloneFields(fact.fields)
-		copied[i].fieldPresence = cloneFieldPresence(fact.fieldPresence)
+		copied[i] = fact.clone()
 	}
 
 	byID := make(map[FactID]int, len(copied))
@@ -52,7 +53,9 @@ func (s Snapshot) Len() int {
 // Facts returns snapshot facts in deterministic order.
 func (s Snapshot) Facts() []FactSnapshot {
 	out := make([]FactSnapshot, len(s.facts))
-	copy(out, s.facts)
+	for i, fact := range s.facts {
+		out[i] = fact.clone()
+	}
 	return out
 }
 
@@ -61,19 +64,45 @@ func (s Snapshot) Fact(id FactID) (FactSnapshot, bool) {
 	if !ok {
 		return FactSnapshot{}, false
 	}
-	return s.facts[idx], true
+	return s.facts[idx].clone(), true
 }
 
 func (s Snapshot) FactsByName(name string) []FactSnapshot {
 	var out []FactSnapshot
 	for _, fact := range s.facts {
 		if fact.Name() == name {
-			out = append(out, fact)
+			out = append(out, fact.clone())
+		}
+	}
+	return out
+}
+
+func (s Snapshot) FactsByTemplateKey(templateKey TemplateKey) []FactSnapshot {
+	var out []FactSnapshot
+	for _, fact := range s.facts {
+		if fact.TemplateKey() == templateKey {
+			out = append(out, fact.clone())
 		}
 	}
 	return out
 }
 
 func (s Snapshot) String() string {
-	return fmt.Sprintf("Snapshot{session:%s ruleset:%s generation:%d facts:%d}", s.sessionID, s.rulesetID, s.generation, len(s.facts))
+	var b strings.Builder
+	b.WriteString("Snapshot{session:")
+	b.WriteString(s.sessionID.String())
+	b.WriteString(", ruleset:")
+	b.WriteString(s.rulesetID.String())
+	b.WriteString(", generation:")
+	b.WriteString(strconv.FormatUint(uint64(s.generation), 10))
+	b.WriteString(", facts:[")
+	for i, fact := range s.facts {
+		if i > 0 {
+			b.WriteByte(',')
+			b.WriteByte(' ')
+		}
+		b.WriteString(fact.String())
+	}
+	b.WriteString("]}")
+	return b.String()
 }

@@ -2,6 +2,8 @@ package gess
 
 import (
 	"maps"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -75,6 +77,75 @@ func (f *workingFact) snapshot() FactSnapshot {
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
+	}
+}
+
+func (f FactSnapshot) clone() FactSnapshot {
+	return FactSnapshot{
+		id:            f.id,
+		name:          f.name,
+		templateKey:   f.templateKey,
+		version:       f.version,
+		recency:       f.recency,
+		generation:    f.generation,
+		fields:        cloneFields(f.fields),
+		fieldPresence: cloneFieldPresence(f.fieldPresence),
+	}
+}
+
+func (f FactSnapshot) String() string {
+	var b strings.Builder
+	b.WriteString("Fact{")
+	b.WriteString("id:")
+	b.WriteString(f.id.String())
+	b.WriteString(", name:")
+	b.WriteString(f.name)
+	b.WriteString(", template:")
+	b.WriteString(f.templateKey.String())
+	b.WriteString(", version:")
+	b.WriteString(strconv.FormatUint(uint64(f.version), 10))
+	b.WriteString(", recency:")
+	b.WriteString(strconv.FormatUint(uint64(f.recency), 10))
+	b.WriteString(", generation:")
+	b.WriteString(strconv.FormatUint(uint64(f.generation), 10))
+	b.WriteString(", fields:{")
+	emitOrderedFieldsString(&b, f.fields)
+	b.WriteString("}, presence:{")
+	emitOrderedPresenceString(&b, f.fieldPresence)
+	b.WriteString("}}")
+	return b.String()
+}
+
+func emitOrderedFieldsString(b *strings.Builder, fields Fields) {
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(fields[key].String())
+	}
+}
+
+func emitOrderedPresenceString(b *strings.Builder, presence map[string]FieldPresence) {
+	keys := make([]string, 0, len(presence))
+	for key := range presence {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(string(presence[key]))
 	}
 }
 

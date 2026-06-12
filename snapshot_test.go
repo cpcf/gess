@@ -1,0 +1,314 @@
+package gess
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestSnapshotRemainsUnchangedAfterAssert(t *testing.T) {
+	session := mustSession(t, mustCompile(t), "snapshot-assert-session")
+	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("baseline assert: %v", err)
+	}
+
+	baseline := mustSnapshot(t, context.Background(), session)
+
+	_, err = session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Grace",
+	}))
+	if err != nil {
+		t.Fatalf("follow-up assert: %v", err)
+	}
+
+	if got, want := baseline.Len(), 1; got != want {
+		t.Fatalf("snapshot length changed after assert: got %d, want %d", got, want)
+	}
+	original, ok := baseline.Fact(baselineInserted.Fact.ID())
+	if !ok {
+		t.Fatalf("baseline no longer contains original fact %q", baselineInserted.Fact.ID())
+	}
+	if original.Version() != baselineInserted.Fact.Version() {
+		t.Fatalf("snapshot preserved fact version = %d, want %d", original.Version(), baselineInserted.Fact.Version())
+	}
+	if got := baseline.Facts()[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("snapshot fact mutated after assert: %v", got)
+	}
+}
+
+func TestSnapshotRemainsUnchangedAfterModify(t *testing.T) {
+	session := mustSession(t, mustCompile(t), "snapshot-modify-session")
+	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name":  "Ada",
+		"count": 1,
+	}))
+	if err != nil {
+		t.Fatalf("insert baseline: %v", err)
+	}
+
+	baseline := mustSnapshot(t, context.Background(), session)
+
+	_, err = session.Modify(context.Background(), baselineInserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{
+			"count": 2,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	if got := baseline.Len(); got != 1 {
+		t.Fatalf("snapshot length changed after modify: got %d, want %d", got, 1)
+	}
+	original, ok := baseline.Fact(baselineInserted.Fact.ID())
+	if !ok {
+		t.Fatalf("baseline no longer contains original fact id %q", baselineInserted.Fact.ID())
+	}
+	if original.Version() != baselineInserted.Fact.Version() {
+		t.Fatalf("snapshot fact version changed after modify: got %d, want %d", original.Version(), baselineInserted.Fact.Version())
+	}
+	if got := original.Fields()["count"]; !got.Equal(mustValue(t, 1)) {
+		t.Fatalf("snapshot fact value changed after modify: %v", got)
+	}
+}
+
+func TestSnapshotRemainsUnchangedAfterRetract(t *testing.T) {
+	session := mustSession(t, mustCompile(t), "snapshot-retract-session")
+	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Grace",
+	}))
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+
+	baseline := mustSnapshot(t, context.Background(), session)
+
+	_, err = session.Retract(context.Background(), first.Fact.ID())
+	if err != nil {
+		t.Fatalf("retract: %v", err)
+	}
+
+	if got := baseline.Len(); got != 2 {
+		t.Fatalf("snapshot length changed after retract: got %d, want %d", got, 2)
+	}
+	if _, ok := baseline.Fact(first.Fact.ID()); !ok {
+		t.Fatalf("baseline lost retracted fact %q", first.Fact.ID())
+	}
+	if _, ok := baseline.Fact(second.Fact.ID()); !ok {
+		t.Fatalf("baseline lost surviving fact %q", second.Fact.ID())
+	}
+}
+
+func TestSnapshotRemainsUnchangedAfterReset(t *testing.T) {
+	session := mustSession(t, mustCompile(t), "snapshot-reset-session")
+	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("baseline assert: %v", err)
+	}
+
+	baseline := mustSnapshot(t, context.Background(), session)
+
+	_, err = session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+
+	if got := baseline.Generation(); got != 1 {
+		t.Fatalf("baseline generation changed after reset: got %d, want %d", got, 1)
+	}
+	if got := baseline.Len(); got != 1 {
+		t.Fatalf("baseline length changed after reset: got %d, want %d", got, 1)
+	}
+	if original, ok := baseline.Fact(baselineInserted.Fact.ID()); !ok || original.Name() != "person" {
+		t.Fatalf("baseline fact changed after reset: (%v, %v)", original.ID(), ok)
+	}
+}
+
+func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString}},
+	}, TemplateSpec{
+		Name:   "event",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString}},
+	})
+	session := mustSession(t, revision, "snapshot-filter-session")
+
+	personTemplate, ok := revision.Template("person")
+	if !ok {
+		t.Fatal("expected person template")
+	}
+	eventTemplate, ok := revision.Template("event")
+	if !ok {
+		t.Fatal("expected event template")
+	}
+
+	person, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("insert person: %v", err)
+	}
+	if _, err = session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		"name": "Grace",
+	})); err != nil {
+		t.Fatalf("insert second person: %v", err)
+	}
+	if _, err = session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Untyped",
+	})); err != nil {
+		t.Fatalf("insert dynamic fact: %v", err)
+	}
+	if _, err = session.AssertTemplate(context.Background(), eventTemplate.Key(), mustFields(t, map[string]any{
+		"id": "evt-1",
+	})); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	persons := snapshot.FactsByTemplateKey(personTemplate.Key())
+	if len(persons) != 2 {
+		t.Fatalf("template filtered person facts = %d, want 2", len(persons))
+	}
+	if persons[0].ID() != person.Fact.ID() {
+		t.Fatalf("template fact order changed: first=%q want %q", persons[0].ID(), person.Fact.ID())
+	}
+
+	events := snapshot.FactsByTemplateKey(eventTemplate.Key())
+	if len(events) != 1 || events[0].TemplateKey() != eventTemplate.Key() {
+		t.Fatalf("template filter for event = %#v", events)
+	}
+
+	if got := snapshot.FactsByTemplateKey("unknown"); len(got) != 0 {
+		t.Fatalf("unknown template key should return empty results, got %d", len(got))
+	}
+
+	fields := persons[0].Fields()
+	fields["name"] = mustValue(t, "MUT")
+	if got := snapshot.FactsByTemplateKey(personTemplate.Key())[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("snapshot person fields changed through copied result map")
+	}
+
+	presence := persons[0].FieldPresenceMap()
+	presence["name"] = FieldPresenceDefault
+	if got, ok := snapshot.FactsByTemplateKey(personTemplate.Key())[0].FieldPresence("name"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("snapshot field presence changed through copied presence map: %v, %v", got, ok)
+	}
+}
+
+func TestSnapshotRecencyAndGenerationMetadata(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:   "event",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString}},
+	})
+	session := mustSession(t, revision, "snapshot-metadata-session")
+	template, ok := revision.Template("event")
+	if !ok {
+		t.Fatal("expected event template")
+	}
+
+	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1"}))
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if got, want := snapshot.Len(), 2; got != want {
+		t.Fatalf("snapshot length = %d, want %d", got, want)
+	}
+	if got := snapshot.Generation(); got != 1 {
+		t.Fatalf("snapshot generation = %d, want %d", got, 1)
+	}
+	firstSnapshot, ok := snapshot.Fact(first.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot missing first fact %q", first.Fact.ID())
+	}
+	if got, want := firstSnapshot.Recency(), Recency(1); got != want {
+		t.Fatalf("first fact recency = %d, want %d", got, want)
+	}
+	if got, want := firstSnapshot.Generation(), Generation(1); got != want {
+		t.Fatalf("first fact generation = %d, want %d", got, want)
+	}
+	secondSnapshot, ok := snapshot.Fact(second.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot missing second fact %q", second.Fact.ID())
+	}
+	if got, want := secondSnapshot.Recency(), Recency(2); got != want {
+		t.Fatalf("second fact recency = %d, want %d", got, want)
+	}
+
+	before, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if before.Generation != 2 {
+		t.Fatalf("reset generation = %d, want %d", before.Generation, 2)
+	}
+	snapshotAfterReset := mustSnapshot(t, context.Background(), session)
+	if snapshotAfterReset.Generation() != 2 {
+		t.Fatalf("post-reset snapshot generation = %d, want 2", snapshotAfterReset.Generation())
+	}
+	if _, ok := snapshotAfterReset.Fact(first.Fact.ID()); ok {
+		t.Fatalf("post-reset snapshot should not contain pre-reset fact id %q", first.Fact.ID())
+	}
+	for _, fact := range snapshotAfterReset.Facts() {
+		if fact.Generation() != 2 {
+			t.Fatalf("post-reset fact generation = %d, want 2", fact.Generation())
+		}
+	}
+}
+
+func TestSnapshotRenderingIsDeterministic(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name: "payload",
+		Fields: []FieldSpec{
+			{Name: "zeta", Kind: ValueInt},
+			{Name: "alpha", Kind: ValueString},
+			{Name: "nested", Kind: ValueMap},
+		},
+	})
+	session := mustSession(t, revision, "snapshot-render-session")
+	template, ok := revision.Template("payload")
+	if !ok {
+		t.Fatal("expected payload template")
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"zeta":   2,
+		"alpha":  "done",
+		"nested": map[string]any{"c": 3, "b": 2, "a": 1},
+	}))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	rendered := snapshot.String()
+	reRendered := snapshot.String()
+	if rendered != reRendered {
+		t.Fatalf("snapshot rendering changed between reads: %q != %q", rendered, reRendered)
+	}
+
+	if !strings.Contains(rendered, inserted.Fact.ID().String()) {
+		t.Fatalf("snapshot rendering missing fact id %q", inserted.Fact.ID())
+	}
+	expectedFields := "alpha=string:\"done\", nested=map{a=number:1,b=number:2,c=number:3}, zeta=number:2"
+	if got := strings.Index(snapshot.Facts()[0].String(), expectedFields); got < 0 {
+		t.Fatalf("snapshot field order is unstable: %q", snapshot.Facts()[0].String())
+	}
+}
