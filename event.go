@@ -26,7 +26,42 @@ type Event struct {
 	Delta      *MutationDelta
 }
 
+func cloneMutationDelta(delta *MutationDelta) *MutationDelta {
+	if delta == nil {
+		return nil
+	}
+
+	clone := *delta
+	if delta.Before != nil {
+		before := delta.Before.clone()
+		clone.Before = &before
+	}
+	if delta.After != nil {
+		after := delta.After.clone()
+		clone.After = &after
+	}
+	clone.ChangedFields = make([]FieldChange, len(delta.ChangedFields))
+	for i, field := range delta.ChangedFields {
+		clone.ChangedFields[i] = FieldChange{
+			Field: field.Field,
+			Old:   cloneValue(field.Old),
+			New:   cloneValue(field.New),
+		}
+	}
+	return &clone
+}
+
+func (e Event) clone() Event {
+	out := e
+	out.FactIDs = e.RelatedFactIDs()
+	out.Delta = cloneMutationDelta(e.Delta)
+	return out
+}
+
 func (e Event) RelatedFactIDs() []FactID {
+	if e.FactIDs == nil {
+		return nil
+	}
 	out := make([]FactID, len(e.FactIDs))
 	copy(out, e.FactIDs)
 	return out

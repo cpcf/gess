@@ -3,38 +3,8 @@ package gess
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 )
-
-type testEventCollector struct {
-	mu     sync.Mutex
-	events []Event
-	waitCh chan struct{}
-	block  chan struct{}
-}
-
-func (c *testEventCollector) HandleEvent(_ context.Context, event Event) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.events = append(c.events, event)
-	if c.waitCh != nil {
-		close(c.waitCh)
-		c.waitCh = nil
-	}
-	if c.block != nil {
-		<-c.block
-	}
-	return nil
-}
-
-func (c *testEventCollector) Events() []Event {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]Event, len(c.events))
-	copy(out, c.events)
-	return out
-}
 
 func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "dynamic-template-assert-session")

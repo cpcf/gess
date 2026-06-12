@@ -9,9 +9,10 @@ import (
 type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
-	id        SessionID
-	listeners []EventListener
-	initials  []SessionInitialFact
+	id         SessionID
+	listeners  []EventListener
+	initials   []SessionInitialFact
+	eventClock func() time.Time
 }
 
 type SessionInitialFact struct {
@@ -34,6 +35,15 @@ func WithEventListener(listener EventListener) SessionOption {
 	}
 }
 
+// WithEventClock sets the clock used to timestamp emitted events.
+func WithEventClock(clock func() time.Time) SessionOption {
+	return func(cfg *sessionConfig) {
+		if clock != nil {
+			cfg.eventClock = clock
+		}
+	}
+}
+
 func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 	return func(cfg *sessionConfig) {
 		cfg.initials = append(cfg.initials, cloneSessionInitialFacts(initials)...)
@@ -46,6 +56,7 @@ type Session struct {
 	generation Generation
 	initials   []SessionInitialFact
 	listeners  []EventListener
+	eventClock func() time.Time
 	closed     bool
 	mu         struct {
 		mutate chan struct{}
@@ -73,6 +84,9 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 			opt(&cfg)
 		}
 	}
+	if cfg.eventClock == nil {
+		cfg.eventClock = time.Now
+	}
 
 	listeners := make([]EventListener, len(cfg.listeners))
 	copy(listeners, cfg.listeners)
@@ -96,6 +110,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		generation: 1,
 		initials:   initials,
 		listeners:  listeners,
+		eventClock: cfg.eventClock,
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
@@ -246,7 +261,7 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 		SessionID:  s.id,
 		RulesetID:  s.revision.ID(),
 		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  time.Now(),
+		Timestamp:  s.eventClock(),
 		Type:       EventFactAsserted,
 		Generation: s.generation,
 		Recency:    fact.recency,
@@ -328,7 +343,7 @@ func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error)
 		SessionID:  s.id,
 		RulesetID:  s.revision.ID(),
 		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  time.Now(),
+		Timestamp:  s.eventClock(),
 		Type:       EventFactRetracted,
 		Generation: s.generation,
 		Recency:    fact.recency,
@@ -390,7 +405,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 		SessionID:  s.id,
 		RulesetID:  s.revision.ID(),
 		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  time.Now(),
+		Timestamp:  s.eventClock(),
 		Type:       EventReset,
 		Generation: s.generation,
 		FactIDs:    nil,
@@ -498,7 +513,7 @@ func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (Modif
 		SessionID:  s.id,
 		RulesetID:  s.revision.ID(),
 		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  time.Now(),
+		Timestamp:  s.eventClock(),
 		Type:       EventFactModified,
 		Generation: s.generation,
 		Recency:    fact.recency,
@@ -848,7 +863,7 @@ func (s *Session) emitEvent(ctx context.Context, event Event) {
 		if listener == nil {
 			continue
 		}
-		_ = listener.HandleEvent(ctx, event)
+		_ = listener.HandleEvent(ctx, event.clone())
 	}
 }
 
