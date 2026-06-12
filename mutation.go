@@ -11,6 +11,25 @@ const (
 
 type DuplicateKey string
 
+type FactSupportState string
+
+const (
+	FactSupportStated           FactSupportState = "stated"
+	FactSupportLogical          FactSupportState = "logical"
+	FactSupportStatedAndLogical FactSupportState = "stated_and_logical"
+	FactSupportMetadataOnly     FactSupportState = "metadata_only"
+)
+
+type FactSupportProvenance struct {
+	State      FactSupportState
+	provenance supportProvenance
+}
+
+type supportProvenance struct {
+	source uint64
+	trace  uint64
+}
+
 type FieldChange struct {
 	Field string
 	Old   Value
@@ -26,6 +45,8 @@ type MutationDelta struct {
 	Kind          MutationKind
 	Generation    Generation
 	OldGeneration Generation
+	SupportBefore FactSupportProvenance
+	SupportAfter  FactSupportProvenance
 	Recency       Recency
 	FactID        FactID
 	OldVersion    FactVersion
@@ -39,7 +60,13 @@ type MutationDelta struct {
 
 func (d MutationDelta) FieldChanges() []FieldChange {
 	out := make([]FieldChange, len(d.ChangedFields))
-	copy(out, d.ChangedFields)
+	for i, field := range d.ChangedFields {
+		out[i] = FieldChange{
+			Field: field.Field,
+			Old:   cloneValue(field.Old),
+			New:   cloneValue(field.New),
+		}
+	}
 	return out
 }
 

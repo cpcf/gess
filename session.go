@@ -244,6 +244,7 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 	delta := MutationDelta{
 		Kind:         MutationAssert,
 		Generation:   s.generation,
+		SupportAfter: snapshot.Support(),
 		Recency:      fact.recency,
 		FactID:       fact.id,
 		NewVersion:   fact.version,
@@ -325,13 +326,14 @@ func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error)
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 
 	delta := MutationDelta{
-		Kind:         MutationRetract,
-		Generation:   s.generation,
-		Recency:      fact.recency,
-		FactID:       fact.id,
-		OldVersion:   oldVersion,
-		OldDuplicate: oldDuplicate,
-		Before:       &before,
+		Kind:          MutationRetract,
+		Generation:    s.generation,
+		Recency:       fact.recency,
+		FactID:        fact.id,
+		SupportBefore: before.Support(),
+		OldVersion:    oldVersion,
+		OldDuplicate:  oldDuplicate,
+		Before:        &before,
 	}
 
 	result := RetractResult{
@@ -496,6 +498,8 @@ func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (Modif
 		Generation:    s.generation,
 		Recency:       fact.recency,
 		FactID:        fact.id,
+		SupportBefore: before.Support(),
+		SupportAfter:  after.Support(),
 		OldVersion:    oldVersion,
 		NewVersion:    fact.version,
 		Before:        &before,
@@ -663,6 +667,9 @@ func (s *Session) snapshotLocked() Snapshot {
 		if !ok {
 			continue
 		}
+		if fact.isTransient {
+			continue
+		}
 		facts = append(facts, fact.snapshot())
 	}
 
@@ -775,6 +782,8 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		fields:        canonical,
 		fieldPresence: presence,
 		dupKey:        duplicateKey,
+		support:       FactSupportProvenance{State: FactSupportStated},
+		isTransient:   false,
 	}
 
 	w.factsByID[id] = fact

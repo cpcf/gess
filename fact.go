@@ -24,6 +24,7 @@ type FactSnapshot struct {
 	generation    Generation
 	fields        Fields
 	fieldPresence map[string]FieldPresence
+	support       FactSupportProvenance
 }
 
 func (f FactSnapshot) ID() FactID {
@@ -55,6 +56,10 @@ func (f FactSnapshot) Fields() Fields {
 	return cloneFields(f.fields)
 }
 
+func (f FactSnapshot) Support() FactSupportProvenance {
+	return f.support
+}
+
 type workingFact struct {
 	id            FactID
 	name          string
@@ -65,6 +70,8 @@ type workingFact struct {
 	fields        Fields
 	fieldPresence map[string]FieldPresence
 	dupKey        DuplicateKey
+	support       FactSupportProvenance
+	isTransient   bool
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
@@ -77,6 +84,7 @@ func (f *workingFact) snapshot() FactSnapshot {
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
+		support:       f.support,
 	}
 }
 
@@ -90,6 +98,7 @@ func (f FactSnapshot) clone() FactSnapshot {
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
+		support:       f.support,
 	}
 }
 
