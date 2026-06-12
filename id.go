@@ -56,6 +56,19 @@ func (id ActivationID) IsZero() bool {
 	return strings.TrimSpace(string(id)) == ""
 }
 
+type ConditionID string
+
+func (id ConditionID) String() string {
+	if id.IsZero() {
+		return "condition:zero"
+	}
+	return string(id)
+}
+
+func (id ConditionID) IsZero() bool {
+	return strings.TrimSpace(string(id)) == ""
+}
+
 type TemplateKey string
 
 func (key TemplateKey) String() string {

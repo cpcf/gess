@@ -58,10 +58,15 @@ func (s RuleSpec) clone() RuleSpec {
 }
 
 type RuleCondition struct {
+	id          ConditionID
 	binding     string
 	name        string
 	templateKey TemplateKey
 	order       int
+}
+
+func (c RuleCondition) ID() ConditionID {
+	return c.id
 }
 
 func (c RuleCondition) Binding() string {
@@ -182,6 +187,7 @@ type compiledRule struct {
 	salience         int
 	declarationOrder int
 	conditions       []RuleCondition
+	conditionPlans   []compiledConditionPlan
 	actions          []RuleAction
 }
 
@@ -233,6 +239,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 
 	seenBindings := make(map[string]struct{}, len(normalized.Conditions))
 	conditions := make([]RuleCondition, 0, len(normalized.Conditions))
+	conditionPlans := make([]compiledConditionPlan, 0, len(normalized.Conditions))
 	for i, condition := range normalized.Conditions {
 		if condition.Binding == "" {
 			return compiledRule{}, &ValidationError{
@@ -240,6 +247,14 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "condition binding is required",
+			}
+		}
+		if !isValidBindingName(condition.Binding) {
+			return compiledRule{}, &ValidationError{
+				RuleName:          normalized.Name,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "invalid binding name",
 			}
 		}
 		if _, exists := seenBindings[condition.Binding]; exists {
@@ -273,11 +288,38 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			}
 		}
 
+		target := conditionTarget{}
+		indexKind := conditionIndexUnknown
+		if hasName {
+			target = conditionTarget{
+				kind: conditionTargetName,
+				name: condition.Name,
+			}
+			indexKind = conditionIndexName
+		} else {
+			target = conditionTarget{
+				kind:        conditionTargetTemplateKey,
+				templateKey: condition.TemplateKey,
+			}
+			indexKind = conditionIndexTemplateKey
+		}
+
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey)
 		conditions = append(conditions, RuleCondition{
+			id:          conditionID,
 			binding:     condition.Binding,
 			name:        condition.Name,
 			templateKey: condition.TemplateKey,
 			order:       i,
+		})
+		conditionPlans = append(conditionPlans, compiledConditionPlan{
+			id:          conditionID,
+			binding:     condition.Binding,
+			bindingSlot: i,
+			path:        []int{i},
+			target:      target,
+			indexable:   true,
+			indexKind:   indexKind,
 		})
 	}
 
@@ -313,6 +355,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		salience:         normalized.Salience,
 		declarationOrder: declarationOrder,
 		conditions:       conditions,
+		conditionPlans:   conditionPlans,
 		actions:          actions,
 	}
 	compiled.revisionID = ruleRevisionIDFor(compiled)

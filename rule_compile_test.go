@@ -74,6 +74,9 @@ func TestWorkspaceCompilesRulesIntoImmutableRevision(t *testing.T) {
 	if conditions[0].Binding() != "p" || conditions[0].Name() != "person" {
 		t.Fatalf("condition = %#v, want binding p and name person", conditions[0])
 	}
+	if conditions[0].ID().IsZero() {
+		t.Fatal("condition ID is zero")
+	}
 	if got := conditions[0].DeclarationOrder(); got != 0 {
 		t.Fatalf("condition declaration order = %d, want 0", got)
 	}
@@ -175,6 +178,9 @@ func TestRuleRevisionIdentitySurvivesUnrelatedWorkspaceEdits(t *testing.T) {
 	if rule1.RevisionID() != rule2.RevisionID() {
 		t.Fatalf("rule revision ID changed across unrelated edit: %q vs %q", rule1.RevisionID(), rule2.RevisionID())
 	}
+	if got1, got2 := rule1.Conditions()[0].ID(), rule2.Conditions()[0].ID(); got1 != got2 {
+		t.Fatalf("condition ID changed across unrelated edit: %q vs %q", got1, got2)
+	}
 	if revision1.ID() == revision2.ID() {
 		t.Fatalf("ruleset ID should change after adding an action, but both revisions used %q", revision1.ID())
 	}
@@ -233,6 +239,9 @@ func TestReplacingRuleBySameNamePreservesIdentity(t *testing.T) {
 	if rule1.RevisionID() != rule2.RevisionID() {
 		t.Fatalf("rule revision ID changed after identical replace: %q vs %q", rule1.RevisionID(), rule2.RevisionID())
 	}
+	if got1, got2 := rule1.Conditions()[0].ID(), rule2.Conditions()[0].ID(); got1 != got2 {
+		t.Fatalf("condition ID changed after identical replace: %q vs %q", got1, got2)
+	}
 
 	if err := workspace.ReplaceRule(RuleSpec{
 		Name:        "classify-adult",
@@ -253,6 +262,9 @@ func TestReplacingRuleBySameNamePreservesIdentity(t *testing.T) {
 	}
 	if rule1.ID() != rule3.ID() {
 		t.Fatalf("rule ID changed after semantic edit: %q vs %q", rule1.ID(), rule3.ID())
+	}
+	if got1, got3 := rule1.Conditions()[0].ID(), rule3.Conditions()[0].ID(); got1 != got3 {
+		t.Fatalf("condition ID changed when condition content did not: %q vs %q", got1, got3)
 	}
 	if rule1.RevisionID() == rule3.RevisionID() {
 		t.Fatalf("rule revision ID did not change after semantic edit: %q", rule1.RevisionID())
@@ -435,6 +447,149 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		}
 	})
 
+	t.Run("missing binding", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "person",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+		}); err != nil {
+			t.Fatalf("AddTemplate: %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		}); err != nil {
+			t.Fatalf("AddAction: %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "broken",
+			Conditions: []RuleConditionSpec{
+				{Binding: " ", Name: "person"},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		}); err != nil {
+			t.Fatalf("AddRule: %v", err)
+		}
+
+		_, err := workspace.Compile(context.Background())
+		if err == nil {
+			t.Fatal("Compile should reject missing bindings")
+		}
+		var validation *ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("expected ValidationError, got %T: %v", err, err)
+		}
+		if validation.RuleName != "broken" {
+			t.Fatalf("rule name = %q, want broken", validation.RuleName)
+		}
+		if !validation.HasConditionIndex || validation.ConditionIndex != 0 {
+			t.Fatalf("condition index = (%v, %d), want (true, 0)", validation.HasConditionIndex, validation.ConditionIndex)
+		}
+		if validation.Reason != "condition binding is required" {
+			t.Fatalf("reason = %q, want condition binding is required", validation.Reason)
+		}
+	})
+
+	t.Run("invalid binding name", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "person",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+		}); err != nil {
+			t.Fatalf("AddTemplate: %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		}); err != nil {
+			t.Fatalf("AddAction: %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "broken",
+			Conditions: []RuleConditionSpec{
+				{Binding: "1person", Name: "person"},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		}); err != nil {
+			t.Fatalf("AddRule: %v", err)
+		}
+
+		_, err := workspace.Compile(context.Background())
+		if err == nil {
+			t.Fatal("Compile should reject invalid binding names")
+		}
+		var validation *ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("expected ValidationError, got %T: %v", err, err)
+		}
+		if validation.RuleName != "broken" {
+			t.Fatalf("rule name = %q, want broken", validation.RuleName)
+		}
+		if !validation.HasConditionIndex || validation.ConditionIndex != 0 {
+			t.Fatalf("condition index = (%v, %d), want (true, 0)", validation.HasConditionIndex, validation.ConditionIndex)
+		}
+		if validation.Reason != "invalid binding name" {
+			t.Fatalf("reason = %q, want invalid binding name", validation.Reason)
+		}
+	})
+
+	t.Run("invalid condition target", func(t *testing.T) {
+		for _, tc := range []struct {
+			name      string
+			condition RuleConditionSpec
+		}{
+			{
+				name:      "missing",
+				condition: RuleConditionSpec{Binding: "p"},
+			},
+			{
+				name:      "conflicting",
+				condition: RuleConditionSpec{Binding: "p", Name: "person", TemplateKey: TemplateKey("person")},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				workspace := NewWorkspace()
+				if err := workspace.AddTemplate(TemplateSpec{
+					Name:   "person",
+					Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+				}); err != nil {
+					t.Fatalf("AddTemplate: %v", err)
+				}
+				if err := workspace.AddAction(ActionSpec{
+					Name: "mark",
+					Fn:   func(ActionContext) error { return nil },
+				}); err != nil {
+					t.Fatalf("AddAction: %v", err)
+				}
+				if err := workspace.AddRule(RuleSpec{
+					Name:       "broken",
+					Conditions: []RuleConditionSpec{tc.condition},
+					Actions:    []RuleActionSpec{{Name: "mark"}},
+				}); err != nil {
+					t.Fatalf("AddRule: %v", err)
+				}
+
+				_, err := workspace.Compile(context.Background())
+				if err == nil {
+					t.Fatal("Compile should reject invalid condition targets")
+				}
+				var validation *ValidationError
+				if !errors.As(err, &validation) {
+					t.Fatalf("expected ValidationError, got %T: %v", err, err)
+				}
+				if validation.RuleName != "broken" {
+					t.Fatalf("rule name = %q, want broken", validation.RuleName)
+				}
+				if !validation.HasConditionIndex || validation.ConditionIndex != 0 {
+					t.Fatalf("condition index = (%v, %d), want (true, 0)", validation.HasConditionIndex, validation.ConditionIndex)
+				}
+				if validation.Reason != "condition target must be either a name or a template key" {
+					t.Fatalf("reason = %q, want target validation failure", validation.Reason)
+				}
+			})
+		}
+	})
+
 	t.Run("unknown template key", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddAction(ActionSpec{
@@ -524,5 +679,150 @@ func TestZeroValueRuleIdentifiersAreInvalid(t *testing.T) {
 	}
 	if got := ActivationID("").String(); got != "activation:zero" {
 		t.Fatalf("zero ActivationID string = %q, want activation:zero", got)
+	}
+
+	if !ConditionID("").IsZero() {
+		t.Fatal("empty ConditionID should be zero")
+	}
+	if got := ConditionID("").String(); got != "condition:zero" {
+		t.Fatalf("zero ConditionID string = %q, want condition:zero", got)
+	}
+}
+
+func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
+	workspace := NewWorkspace()
+	personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person-by-name",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", Name: "person"},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person-by-template",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: personTemplate.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	nameRule := revision.rules["match-person-by-name"]
+	namePlan := nameRule.conditionPlans[0]
+	if got, want := namePlan.binding, "person"; got != want {
+		t.Fatalf("name plan binding = %q, want %q", got, want)
+	}
+	if got, want := namePlan.bindingSlot, 0; got != want {
+		t.Fatalf("name plan binding slot = %d, want %d", got, want)
+	}
+	if got, want := namePlan.path, []int{0}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("name plan path = %#v, want %#v", got, want)
+	}
+	if !namePlan.indexable || namePlan.indexKind != conditionIndexName {
+		t.Fatalf("name plan index metadata = (%v, %v), want (true, conditionIndexName)", namePlan.indexable, namePlan.indexKind)
+	}
+	if namePlan.target.kind != conditionTargetName || namePlan.target.name != "person" {
+		t.Fatalf("name plan target = %#v, want name target person", namePlan.target)
+	}
+
+	templateRule := revision.rules["match-person-by-template"]
+	templatePlan := templateRule.conditionPlans[0]
+	if templatePlan.target.kind != conditionTargetTemplateKey || templatePlan.target.templateKey != personTemplate.Key() {
+		t.Fatalf("template plan target = %#v, want template key %q", templatePlan.target, personTemplate.Key())
+	}
+	if !templatePlan.indexable || templatePlan.indexKind != conditionIndexTemplateKey {
+		t.Fatalf("template plan index metadata = (%v, %v), want (true, conditionIndexTemplateKey)", templatePlan.indexable, templatePlan.indexKind)
+	}
+
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"kind": "dynamic"})); err != nil {
+		t.Fatalf("Assert dynamic person: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.Assert(context.Background(), "other", mustFields(t, map[string]any{"kind": "noise"})); err != nil {
+		t.Fatalf("Assert other: %v", err)
+	}
+
+	before := mustSnapshot(t, context.Background(), session)
+
+	nameMatches := nameRule.scanCondition(before, 0)
+	if got, want := len(nameMatches), 2; got != want {
+		t.Fatalf("name matches = %d, want %d", got, want)
+	}
+	if nameMatches[0].bindingSlot != 0 || nameMatches[1].bindingSlot != 0 {
+		t.Fatalf("name match binding slots = %#v, want all zero", nameMatches)
+	}
+	if nameMatches[0].conditionID != namePlan.id || nameMatches[1].conditionID != namePlan.id {
+		t.Fatalf("name match condition IDs = %#v, want %q", nameMatches, namePlan.id)
+	}
+	if got, want := nameMatches[0].fact.Name(), "person"; got != want {
+		t.Fatalf("first name match fact name = %q, want %q", got, want)
+	}
+	if got, want := nameMatches[1].fact.TemplateKey(), personTemplate.Key(); got != want {
+		t.Fatalf("second name match template key = %q, want %q", got, want)
+	}
+
+	templateMatches := templateRule.scanCondition(before, 0)
+	if got, want := len(templateMatches), 1; got != want {
+		t.Fatalf("template matches = %d, want %d", got, want)
+	}
+	if templateMatches[0].bindingSlot != 0 {
+		t.Fatalf("template match binding slot = %d, want 0", templateMatches[0].bindingSlot)
+	}
+	if templateMatches[0].conditionID != templatePlan.id {
+		t.Fatalf("template match condition ID = %q, want %q", templateMatches[0].conditionID, templatePlan.id)
+	}
+	if got, want := templateMatches[0].fact.TemplateKey(), personTemplate.Key(); got != want {
+		t.Fatalf("template match template key = %q, want %q", got, want)
+	}
+
+	after := mustSnapshot(t, context.Background(), session)
+	if before.String() != after.String() {
+		t.Fatalf("snapshot changed after scan: before %q after %q", before, after)
+	}
+}
+
+func mustAddTemplate(t *testing.T, workspace *Workspace, spec TemplateSpec) Template {
+	t.Helper()
+	if err := workspace.AddTemplate(spec); err != nil {
+		t.Fatalf("AddTemplate: %v", err)
+	}
+	compiled, err := compileTemplateSpec(workspace.templates[len(workspace.templates)-1])
+	if err != nil {
+		t.Fatalf("compileTemplateSpec: %v", err)
+	}
+	return compiled
+}
+
+func mustAddAction(t *testing.T, workspace *Workspace, spec ActionSpec) {
+	t.Helper()
+	if err := workspace.AddAction(spec); err != nil {
+		t.Fatalf("AddAction: %v", err)
+	}
+}
+
+func mustAddRule(t *testing.T, workspace *Workspace, spec RuleSpec) {
+	t.Helper()
+	if err := workspace.AddRule(spec); err != nil {
+		t.Fatalf("AddRule: %v", err)
 	}
 }
