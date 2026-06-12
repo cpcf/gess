@@ -1,6 +1,9 @@
 package gess
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type RulesetID string
 
@@ -12,6 +15,45 @@ type SessionID string
 
 func (id SessionID) String() string {
 	return string(id)
+}
+
+type RuleID string
+
+func (id RuleID) String() string {
+	if id.IsZero() {
+		return "rule:zero"
+	}
+	return string(id)
+}
+
+func (id RuleID) IsZero() bool {
+	return strings.TrimSpace(string(id)) == ""
+}
+
+type RuleRevisionID string
+
+func (id RuleRevisionID) String() string {
+	if id.IsZero() {
+		return "rule-revision:zero"
+	}
+	return string(id)
+}
+
+func (id RuleRevisionID) IsZero() bool {
+	return strings.TrimSpace(string(id)) == ""
+}
+
+type ActivationID string
+
+func (id ActivationID) String() string {
+	if id.IsZero() {
+		return "activation:zero"
+	}
+	return string(id)
+}
+
+func (id ActivationID) IsZero() bool {
+	return strings.TrimSpace(string(id)) == ""
 }
 
 type TemplateKey string

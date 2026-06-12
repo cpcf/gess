@@ -11,6 +11,8 @@ import (
 
 type Workspace struct {
 	templates []TemplateSpec
+	actions   []ActionSpec
+	rules     []RuleSpec
 }
 
 func NewWorkspace() *Workspace {
@@ -46,6 +48,132 @@ func (w *Workspace) AddTemplate(spec TemplateSpec) error {
 	return nil
 }
 
+func (w *Workspace) AddAction(spec ActionSpec) error {
+	normalized, err := normalizeActionSpec(spec)
+	if err != nil {
+		return err
+	}
+	if _, ok := w.actionIndex(normalized.Name); ok {
+		return &ValidationError{
+			Reason: "duplicate action",
+		}
+	}
+
+	w.actions = append(w.actions, normalized)
+	return nil
+}
+
+func (w *Workspace) ReplaceAction(spec ActionSpec) error {
+	normalized, err := normalizeActionSpec(spec)
+	if err != nil {
+		return err
+	}
+
+	idx, ok := w.actionIndex(normalized.Name)
+	if !ok {
+		return &ValidationError{
+			Reason: "action not found",
+		}
+	}
+
+	w.actions[idx] = normalized
+	return nil
+}
+
+func (w *Workspace) RemoveAction(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ValidationError{
+			Reason: "action name is required",
+		}
+	}
+
+	idx, ok := w.actionIndex(name)
+	if !ok {
+		return &ValidationError{
+			Reason: "action not found",
+		}
+	}
+
+	w.actions = append(w.actions[:idx], w.actions[idx+1:]...)
+	return nil
+}
+
+func (w *Workspace) AddRule(spec RuleSpec) error {
+	normalized, err := normalizeRuleSpec(spec)
+	if err != nil {
+		return err
+	}
+
+	identity := normalized.ID
+	if identity.IsZero() {
+		identity = RuleID(normalized.Name)
+	}
+	if _, ok := w.ruleIndex(normalized.Name); ok {
+		return &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "duplicate rule",
+		}
+	}
+	if _, ok := w.ruleIndexByID(identity); ok {
+		return &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "duplicate rule id",
+		}
+	}
+
+	normalized.ID = identity
+	w.rules = append(w.rules, normalized)
+	return nil
+}
+
+func (w *Workspace) ReplaceRule(spec RuleSpec) error {
+	normalized, err := normalizeRuleSpec(spec)
+	if err != nil {
+		return err
+	}
+
+	idx, ok := w.ruleIndex(normalized.Name)
+	if !ok {
+		return &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "rule not found",
+		}
+	}
+
+	existing := w.rules[idx]
+	if !normalized.ID.IsZero() && normalized.ID != existing.ID {
+		return &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "rule id is immutable once assigned",
+		}
+	}
+
+	normalized.ID = existing.ID
+	w.rules[idx] = normalized
+	return nil
+}
+
+func (w *Workspace) RemoveRule(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ValidationError{
+			Reason: "rule name is required",
+		}
+	}
+
+	idx, ok := w.ruleIndex(name)
+	if !ok {
+		return &ValidationError{
+			RuleName: name,
+			Reason:   "rule not found",
+		}
+	}
+
+	w.rules = append(w.rules[:idx], w.rules[idx+1:]...)
+	return nil
+}
+
 func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -54,7 +182,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		return nil, err
 	}
 
-	compiled := make([]Template, 0, len(w.templates))
+	compiledTemplates := make([]Template, 0, len(w.templates))
 	for _, spec := range w.templates {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -63,17 +191,17 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if err != nil {
 			return nil, err
 		}
-		compiled = append(compiled, template)
+		compiledTemplates = append(compiledTemplates, template)
 	}
 
-	sort.Slice(compiled, func(i, j int) bool {
-		return compiled[i].name < compiled[j].name
+	sort.Slice(compiledTemplates, func(i, j int) bool {
+		return compiledTemplates[i].name < compiledTemplates[j].name
 	})
 
-	templates := make(map[string]Template, len(compiled))
-	templatesByKey := make(map[TemplateKey]Template, len(compiled))
-	order := make([]string, 0, len(compiled))
-	for _, template := range compiled {
+	templates := make(map[string]Template, len(compiledTemplates))
+	templatesByKey := make(map[TemplateKey]Template, len(compiledTemplates))
+	templateOrder := make([]string, 0, len(compiledTemplates))
+	for _, template := range compiledTemplates {
 		if _, exists := templates[template.name]; exists {
 			return nil, &ValidationError{
 				TemplateName: template.name,
@@ -88,22 +216,97 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		templates[template.name] = template.clone()
 		templatesByKey[template.key] = template.clone()
-		order = append(order, template.name)
+		templateOrder = append(templateOrder, template.name)
+	}
+
+	compiledActions := make([]compiledAction, 0, len(w.actions))
+	actionsByName := make(map[string]compiledAction, len(w.actions))
+	actionOrder := make([]string, 0, len(w.actions))
+	for i, spec := range w.actions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		action, err := compileActionSpec(spec, i)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := actionsByName[action.name]; exists {
+			return nil, &ValidationError{
+				Reason: "duplicate action",
+			}
+		}
+		actionsByName[action.name] = action
+		compiledActions = append(compiledActions, action)
+		actionOrder = append(actionOrder, action.name)
+	}
+
+	compiledRules := make([]compiledRule, 0, len(w.rules))
+	rulesByName := make(map[string]compiledRule, len(w.rules))
+	rulesByID := make(map[RuleID]compiledRule, len(w.rules))
+	rulesByRevisionID := make(map[RuleRevisionID]compiledRule, len(w.rules))
+	ruleOrder := make([]string, 0, len(w.rules))
+	for i, spec := range w.rules {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ruleID := spec.ID
+		if ruleID.IsZero() {
+			ruleID = RuleID(strings.TrimSpace(spec.Name))
+		}
+		rule, err := compileRuleSpec(spec, ruleID, i, templatesByKey, actionsByName)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := rulesByName[rule.name]; exists {
+			return nil, &ValidationError{
+				RuleName: rule.name,
+				Reason:   "duplicate rule",
+			}
+		}
+		if _, exists := rulesByID[rule.id]; exists {
+			return nil, &ValidationError{
+				RuleName: rule.name,
+				Reason:   "duplicate rule id",
+			}
+		}
+		if _, exists := rulesByRevisionID[rule.revisionID]; exists {
+			return nil, &ValidationError{
+				RuleName: rule.name,
+				Reason:   "duplicate rule revision",
+			}
+		}
+		rulesByName[rule.name] = rule
+		rulesByID[rule.id] = rule
+		rulesByRevisionID[rule.revisionID] = rule
+		compiledRules = append(compiledRules, rule)
+		ruleOrder = append(ruleOrder, rule.name)
 	}
 
 	return &Ruleset{
-		id:             rulesetID(compiled),
-		templates:      templates,
-		templatesByKey: templatesByKey,
-		templateOrder:  order,
+		id:                rulesetID(compiledTemplates, compiledActions, compiledRules),
+		templates:         templates,
+		templatesByKey:    templatesByKey,
+		templateOrder:     templateOrder,
+		actions:           actionsByName,
+		actionOrder:       actionOrder,
+		rules:             rulesByName,
+		rulesByID:         rulesByID,
+		rulesByRevisionID: rulesByRevisionID,
+		ruleOrder:         ruleOrder,
 	}, nil
 }
 
 type Ruleset struct {
-	id             RulesetID
-	templates      map[string]Template
-	templatesByKey map[TemplateKey]Template
-	templateOrder  []string
+	id                RulesetID
+	templates         map[string]Template
+	templatesByKey    map[TemplateKey]Template
+	templateOrder     []string
+	actions           map[string]compiledAction
+	actionOrder       []string
+	rules             map[string]compiledRule
+	rulesByID         map[RuleID]compiledRule
+	rulesByRevisionID map[RuleRevisionID]compiledRule
+	ruleOrder         []string
 }
 
 func (r *Ruleset) ID() RulesetID {
@@ -146,9 +349,104 @@ func (r *Ruleset) Templates() []Template {
 	return out
 }
 
-func rulesetID(templates []Template) RulesetID {
+func (r *Ruleset) Action(name string) (Action, bool) {
+	if r == nil {
+		return Action{}, false
+	}
+	action, ok := r.actions[name]
+	if !ok {
+		return Action{}, false
+	}
+	return action.inspect().clone(), true
+}
+
+func (r *Ruleset) Actions() []Action {
+	if r == nil {
+		return nil
+	}
+	out := make([]Action, 0, len(r.actionOrder))
+	for _, name := range r.actionOrder {
+		out = append(out, r.actions[name].inspect().clone())
+	}
+	return out
+}
+
+func (r *Ruleset) Rule(name string) (Rule, bool) {
+	if r == nil {
+		return Rule{}, false
+	}
+	rule, ok := r.rules[name]
+	if !ok {
+		return Rule{}, false
+	}
+	return rule.inspect().clone(), true
+}
+
+func (r *Ruleset) RuleByID(id RuleID) (Rule, bool) {
+	if r == nil {
+		return Rule{}, false
+	}
+	rule, ok := r.rulesByID[id]
+	if !ok {
+		return Rule{}, false
+	}
+	return rule.inspect().clone(), true
+}
+
+func (r *Ruleset) RuleByRevisionID(id RuleRevisionID) (Rule, bool) {
+	if r == nil {
+		return Rule{}, false
+	}
+	rule, ok := r.rulesByRevisionID[id]
+	if !ok {
+		return Rule{}, false
+	}
+	return rule.inspect().clone(), true
+}
+
+func (r *Ruleset) Rules() []Rule {
+	if r == nil {
+		return nil
+	}
+	out := make([]Rule, 0, len(r.ruleOrder))
+	for _, name := range r.ruleOrder {
+		out = append(out, r.rules[name].inspect().clone())
+	}
+	return out
+}
+
+func (w *Workspace) actionIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, action := range w.actions {
+		if action.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (w *Workspace) ruleIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, rule := range w.rules {
+		if rule.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (w *Workspace) ruleIndexByID(id RuleID) (int, bool) {
+	for i, rule := range w.rules {
+		if rule.ID == id {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func rulesetID(templates []Template, actions []compiledAction, rules []compiledRule) RulesetID {
 	sum := sha256.New()
-	sum.Write([]byte("gess/ruleset/v1\n"))
+	sum.Write([]byte("gess/ruleset/v2\n"))
 	for _, template := range templates {
 		sum.Write(fmt.Appendf(nil, "template:%s:%s:%s:%d:%t\n", template.name, template.key, template.compatibilityKey, template.duplicatePolicy, template.closed))
 		sum.Write(fmt.Appendf(nil, "dup:%d:", template.duplicatePolicy))
@@ -172,5 +470,33 @@ func rulesetID(templates []Template) RulesetID {
 			}
 		}
 	}
+
+	sum.Write([]byte("actions:\n"))
+	for _, action := range actions {
+		sum.Write(fmt.Appendf(nil, "action:%s:%d\n", action.name, action.order))
+	}
+
+	sum.Write([]byte("rules:\n"))
+	for _, rule := range rules {
+		sum.Write(fmt.Appendf(nil, "rule:%s:%s:%s:%d:%d\n", rule.id, rule.revisionID, rule.name, rule.salience, rule.declarationOrder))
+		sum.Write([]byte("description:"))
+		sum.Write([]byte(rule.description))
+		sum.Write([]byte("\n"))
+		sum.Write(fmt.Appendf(nil, "tags:%d:", len(rule.tags)))
+		for _, tag := range rule.tags {
+			sum.Write([]byte(tag))
+			sum.Write([]byte(","))
+		}
+		sum.Write([]byte("\n"))
+		sum.Write(fmt.Appendf(nil, "condition-count:%d\n", len(rule.conditions)))
+		for _, condition := range rule.conditions {
+			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s\n", condition.order, condition.binding, condition.name, condition.templateKey))
+		}
+		sum.Write(fmt.Appendf(nil, "action-count:%d\n", len(rule.actions)))
+		for _, action := range rule.actions {
+			sum.Write(fmt.Appendf(nil, "action:%d:%s\n", action.order, action.name))
+		}
+	}
+
 	return RulesetID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
 }

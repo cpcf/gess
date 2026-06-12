@@ -16,10 +16,15 @@ var (
 )
 
 type ValidationError struct {
-	TemplateName string
-	FieldName    string
-	Reason       string
-	Err          error
+	TemplateName      string
+	RuleName          string
+	FieldName         string
+	ConditionIndex    int
+	HasConditionIndex bool
+	ActionIndex       int
+	HasActionIndex    bool
+	Reason            string
+	Err               error
 }
 
 func (e *ValidationError) Error() string {
@@ -31,8 +36,17 @@ func (e *ValidationError) Error() string {
 	if e.TemplateName != "" {
 		msg += fmt.Sprintf(" for template %q", e.TemplateName)
 	}
+	if e.RuleName != "" {
+		msg += fmt.Sprintf(" for rule %q", e.RuleName)
+	}
 	if e.FieldName != "" {
 		msg += fmt.Sprintf(" field %q", e.FieldName)
+	}
+	if e.HasConditionIndex {
+		msg += fmt.Sprintf(" condition %d", e.ConditionIndex)
+	}
+	if e.HasActionIndex {
+		msg += fmt.Sprintf(" action %d", e.ActionIndex)
 	}
 	if e.Reason != "" {
 		msg += ": " + e.Reason
