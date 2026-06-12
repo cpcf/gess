@@ -764,7 +764,10 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 
 	before := mustSnapshot(t, context.Background(), session)
 
-	nameMatches := nameRule.scanCondition(before, 0)
+	nameMatches, err := nameRule.scanCondition(context.Background(), before, 0)
+	if err != nil {
+		t.Fatalf("scanCondition(name): %v", err)
+	}
 	if got, want := len(nameMatches), 2; got != want {
 		t.Fatalf("name matches = %d, want %d", got, want)
 	}
@@ -781,7 +784,10 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 		t.Fatalf("second name match template key = %q, want %q", got, want)
 	}
 
-	templateMatches := templateRule.scanCondition(before, 0)
+	templateMatches, err := templateRule.scanCondition(context.Background(), before, 0)
+	if err != nil {
+		t.Fatalf("scanCondition(template): %v", err)
+	}
 	if got, want := len(templateMatches), 1; got != want {
 		t.Fatalf("template matches = %d, want %d", got, want)
 	}

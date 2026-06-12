@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"reflect"
 	"sort"
 	"strconv"
@@ -427,6 +428,43 @@ func numericValuesEqual(left, right Value) bool {
 	default:
 		return false
 	}
+}
+
+func compareValues(left, right Value) (int, bool) {
+	switch {
+	case left.Kind() == ValueString && right.Kind() == ValueString:
+		return strings.Compare(left.data.(string), right.data.(string)), true
+	case isNumericValue(left) && isNumericValue(right):
+		return compareNumericValues(left, right), true
+	default:
+		return 0, false
+	}
+}
+
+func isNumericValue(value Value) bool {
+	switch value.Kind() {
+	case ValueInt, ValueFloat:
+		return true
+	default:
+		return false
+	}
+}
+
+func compareNumericValues(left, right Value) int {
+	leftValue := numericComparisonValue(left)
+	rightValue := numericComparisonValue(right)
+	return leftValue.Cmp(rightValue)
+}
+
+func numericComparisonValue(value Value) *big.Float {
+	comparison := new(big.Float).SetPrec(256)
+	switch value.Kind() {
+	case ValueInt:
+		comparison.SetInt64(value.data.(int64))
+	case ValueFloat:
+		comparison.SetFloat64(value.data.(float64))
+	}
+	return comparison
 }
 
 func intEqualsFloat(integer int64, floating float64) bool {

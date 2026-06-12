@@ -16,15 +16,17 @@ var (
 )
 
 type ValidationError struct {
-	TemplateName      string
-	RuleName          string
-	FieldName         string
-	ConditionIndex    int
-	HasConditionIndex bool
-	ActionIndex       int
-	HasActionIndex    bool
-	Reason            string
-	Err               error
+	TemplateName       string
+	RuleName           string
+	FieldName          string
+	ConditionIndex     int
+	HasConditionIndex  bool
+	ConstraintIndex    int
+	HasConstraintIndex bool
+	ActionIndex        int
+	HasActionIndex     bool
+	Reason             string
+	Err                error
 }
 
 func (e *ValidationError) Error() string {
@@ -44,6 +46,9 @@ func (e *ValidationError) Error() string {
 	}
 	if e.HasConditionIndex {
 		msg += fmt.Sprintf(" condition %d", e.ConditionIndex)
+	}
+	if e.HasConstraintIndex {
+		msg += fmt.Sprintf(" constraint %d", e.ConstraintIndex)
 	}
 	if e.HasActionIndex {
 		msg += fmt.Sprintf(" action %d", e.ActionIndex)
