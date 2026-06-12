@@ -63,14 +63,12 @@ func TestLoanUnderwritingJessFixtureMatchesContract(t *testing.T) {
 }
 
 func BenchmarkLoanUnderwritingGessSessionCycle(b *testing.B) {
-	trace := make([]string, 0, len(expectedLoanUnderwritingTrace()))
-	revision := mustCompileLoanUnderwritingRuleset(b, &trace)
+	revision := mustCompileLoanUnderwritingRuleset(b, nil)
 	initials := loanUnderwritingInitialFacts(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		trace = trace[:0]
 		session := mustLoanUnderwritingSession(b, revision)
 		for _, fact := range initials {
 			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
@@ -88,16 +86,37 @@ func BenchmarkLoanUnderwritingGessSessionCycle(b *testing.B) {
 	}
 }
 
+func BenchmarkLoanUnderwritingGessResetRun(b *testing.B) {
+	revision := mustCompileLoanUnderwritingRuleset(b, nil)
+	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(b)...))
+	if err != nil {
+		b.Fatalf("NewSession: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := session.Reset(context.Background()); err != nil {
+			b.Fatalf("Reset: %v", err)
+		}
+		result, err := session.Run(context.Background())
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 5 {
+			b.Fatalf("run result = (%v, %d), want (%v, 5)", result.Status, result.Fired, RunCompleted)
+		}
+	}
+}
+
 func BenchmarkLoanUnderwritingGessRunOnly(b *testing.B) {
-	trace := make([]string, 0, len(expectedLoanUnderwritingTrace()))
-	revision := mustCompileLoanUnderwritingRuleset(b, &trace)
+	revision := mustCompileLoanUnderwritingRuleset(b, nil)
 	initials := loanUnderwritingInitialFacts(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.StopTimer()
 	for i := 0; i < b.N; i++ {
-		trace = trace[:0]
 		session := mustLoanUnderwritingSession(b, revision)
 		for _, fact := range initials {
 			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
@@ -402,10 +421,12 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 			}
 			id := loanUnderwritingStringField(t, applicant, "id")
 
-			*trace = append(*trace,
-				"FIRED|"+ruleName+"|"+id,
-				"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,
-			)
+			if trace != nil {
+				*trace = append(*trace,
+					"FIRED|"+ruleName+"|"+id,
+					"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,
+				)
+			}
 			_, err := ctx.AssertTemplate(decisionKey, mustFields(t, map[string]any{
 				"applicant-id": id,
 				"outcome":      outcome,
@@ -438,6 +459,16 @@ func loanUnderwritingInitialFacts(t testing.TB) []SessionInitialFact {
 		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "annual-income": 28000, "monthly-debt": 200, "credit-score": 710})},
 		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "status": "employed", "months": 14})},
 	}
+}
+
+func loanUnderwritingTemplateInitialFacts(t testing.TB) []SessionInitialFact {
+	t.Helper()
+
+	initials := loanUnderwritingInitialFacts(t)
+	for i := range initials {
+		initials[i].Name = ""
+	}
+	return initials
 }
 
 func loanUnderwritingStringField(t testing.TB, fact FactSnapshot, field string) string {
