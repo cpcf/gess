@@ -13,6 +13,7 @@ var (
 	ErrFactNotFound      = errors.New("gess: fact not found")
 	ErrStaleFactID       = errors.New("gess: stale fact id")
 	ErrDuplicateFact     = errors.New("gess: duplicate fact")
+	ErrMatcher           = errors.New("gess: matcher error")
 )
 
 type ValidationError struct {
@@ -23,6 +24,8 @@ type ValidationError struct {
 	HasConditionIndex  bool
 	ConstraintIndex    int
 	HasConstraintIndex bool
+	JoinIndex          int
+	HasJoinIndex       bool
 	ActionIndex        int
 	HasActionIndex     bool
 	Reason             string
@@ -49,6 +52,9 @@ func (e *ValidationError) Error() string {
 	}
 	if e.HasConstraintIndex {
 		msg += fmt.Sprintf(" constraint %d", e.ConstraintIndex)
+	}
+	if e.HasJoinIndex {
+		msg += fmt.Sprintf(" join %d", e.JoinIndex)
 	}
 	if e.HasActionIndex {
 		msg += fmt.Sprintf(" action %d", e.ActionIndex)

@@ -12,6 +12,7 @@ type RuleConditionSpec struct {
 	Name             string
 	TemplateKey      TemplateKey
 	FieldConstraints []FieldConstraintSpec
+	JoinConstraints  []JoinConstraintSpec
 }
 
 func (s RuleConditionSpec) clone() RuleConditionSpec {
@@ -22,6 +23,10 @@ func (s RuleConditionSpec) clone() RuleConditionSpec {
 	out.FieldConstraints = make([]FieldConstraintSpec, len(s.FieldConstraints))
 	for i, constraint := range s.FieldConstraints {
 		out.FieldConstraints[i] = constraint.clone()
+	}
+	out.JoinConstraints = make([]JoinConstraintSpec, len(s.JoinConstraints))
+	for i, constraint := range s.JoinConstraints {
+		out.JoinConstraints[i] = constraint.clone()
 	}
 	return out
 }
@@ -68,6 +73,7 @@ type RuleCondition struct {
 	name             string
 	templateKey      TemplateKey
 	fieldConstraints []FieldConstraint
+	joinConstraints  []JoinConstraint
 	order            int
 }
 
@@ -95,6 +101,14 @@ func (c RuleCondition) FieldConstraints() []FieldConstraint {
 	return out
 }
 
+func (c RuleCondition) JoinConstraints() []JoinConstraint {
+	out := make([]JoinConstraint, len(c.joinConstraints))
+	for i, constraint := range c.joinConstraints {
+		out[i] = constraint.clone()
+	}
+	return out
+}
+
 func (c RuleCondition) DeclarationOrder() int {
 	return c.order
 }
@@ -104,6 +118,10 @@ func (c RuleCondition) clone() RuleCondition {
 	out.fieldConstraints = make([]FieldConstraint, len(c.fieldConstraints))
 	for i, constraint := range c.fieldConstraints {
 		out.fieldConstraints[i] = constraint.clone()
+	}
+	out.joinConstraints = make([]JoinConstraint, len(c.joinConstraints))
+	for i, constraint := range c.joinConstraints {
+		out.joinConstraints[i] = constraint.clone()
 	}
 	return out
 }
@@ -264,7 +282,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		}
 	}
 
-	seenBindings := make(map[string]struct{}, len(normalized.Conditions))
+	bindingSlots := make(map[string]int, len(normalized.Conditions))
 	conditions := make([]RuleCondition, 0, len(normalized.Conditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalized.Conditions))
 	for i, condition := range normalized.Conditions {
@@ -284,7 +302,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 				Reason:            "invalid binding name",
 			}
 		}
-		if _, exists := seenBindings[condition.Binding]; exists {
+		if _, exists := bindingSlots[condition.Binding]; exists {
 			return compiledRule{}, &ValidationError{
 				RuleName:          normalized.Name,
 				ConditionIndex:    i,
@@ -292,7 +310,6 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 				Reason:            "duplicate binding",
 			}
 		}
-		seenBindings[condition.Binding] = struct{}{}
 
 		hasName := condition.Name != ""
 		hasTemplateKey := condition.TemplateKey != ""
@@ -345,13 +362,25 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			compiledConstraints = append(compiledConstraints, planConstraint)
 		}
 
-		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints)
+		joinConstraints := make([]JoinConstraint, 0, len(condition.JoinConstraints))
+		compiledJoins := make([]compiledJoinConstraint, 0, len(condition.JoinConstraints))
+		for joinIndex, joinConstraint := range condition.JoinConstraints {
+			compiledJoin, planJoin, err := compileJoinConstraintSpec(joinConstraint, normalized.Name, i, joinIndex, template, conditions, bindingSlots, templatesByKey)
+			if err != nil {
+				return compiledRule{}, err
+			}
+			joinConstraints = append(joinConstraints, compiledJoin)
+			compiledJoins = append(compiledJoins, planJoin)
+		}
+
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints)
 		conditions = append(conditions, RuleCondition{
 			id:               conditionID,
 			binding:          condition.Binding,
 			name:             condition.Name,
 			templateKey:      condition.TemplateKey,
 			fieldConstraints: fieldConstraints,
+			joinConstraints:  joinConstraints,
 			order:            i,
 		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
@@ -361,9 +390,11 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			path:        []int{i},
 			target:      target,
 			constraints: compiledConstraints,
+			joins:       compiledJoins,
 			indexable:   true,
 			indexKind:   indexKind,
 		})
+		bindingSlots[condition.Binding] = i
 	}
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
@@ -429,6 +460,17 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte(string(constraint.Operator)))
 			sum.Write([]byte("="))
 			sum.Write([]byte(constraint.Value.String()))
+			sum.Write([]byte(","))
+		}
+		sum.Write([]byte("|"))
+		for _, join := range condition.joinConstraints {
+			sum.Write([]byte(join.Field))
+			sum.Write([]byte("="))
+			sum.Write([]byte(string(join.Operator)))
+			sum.Write([]byte("="))
+			sum.Write([]byte(join.Ref.Binding))
+			sum.Write([]byte("."))
+			sum.Write([]byte(join.Ref.Field))
 			sum.Write([]byte(","))
 		}
 		sum.Write([]byte(";"))

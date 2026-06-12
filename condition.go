@@ -36,6 +36,7 @@ type compiledConditionPlan struct {
 	path        []int
 	target      conditionTarget
 	constraints []compiledFieldConstraint
+	joins       []compiledJoinConstraint
 	indexable   bool
 	indexKind   conditionIndexKind
 }
@@ -44,6 +45,10 @@ type conditionMatch struct {
 	conditionID ConditionID
 	bindingSlot int
 	fact        FactSnapshot
+}
+
+type bindingSet struct {
+	matches []conditionMatch
 }
 
 func isValidBindingName(name string) bool {
@@ -61,7 +66,7 @@ func isValidBindingName(name string) bool {
 	return true
 }
 
-func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint) ConditionID {
+func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint) ConditionID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/condition/v1\n"))
 	sum.Write([]byte("rule:"))
@@ -83,10 +88,25 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 		sum.Write([]byte(constraint.Value.String()))
 		sum.Write([]byte(";"))
 	}
+	sum.Write([]byte("\njoins:"))
+	for _, join := range joins {
+		sum.Write([]byte(join.Field))
+		sum.Write([]byte(":"))
+		sum.Write([]byte(string(join.Operator)))
+		sum.Write([]byte(":"))
+		sum.Write([]byte(join.Ref.Binding))
+		sum.Write([]byte("."))
+		sum.Write([]byte(join.Ref.Field))
+		sum.Write([]byte(";"))
+	}
 	return ConditionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
 }
 
 func (p compiledConditionPlan) scan(ctx context.Context, snapshot Snapshot) ([]conditionMatch, error) {
+	return p.scanWithBindings(ctx, snapshot, nil)
+}
+
+func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Snapshot, bindings []conditionMatch) ([]conditionMatch, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -112,6 +132,13 @@ func (p compiledConditionPlan) scan(ctx context.Context, snapshot Snapshot) ([]c
 		if !ok {
 			continue
 		}
+		ok, err = p.matchesJoins(ctx, fact, bindings)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
 		matches = append(matches, conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
@@ -119,6 +146,22 @@ func (p compiledConditionPlan) scan(ctx context.Context, snapshot Snapshot) ([]c
 		})
 	}
 	return matches, nil
+}
+
+func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact FactSnapshot, bindings []conditionMatch) (bool, error) {
+	for _, join := range p.joins {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		ok, err := join.matches(fact, bindings)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (p compiledConditionPlan) matchesFact(fact FactSnapshot) bool {
@@ -149,4 +192,49 @@ func (r compiledRule) scanCondition(ctx context.Context, snapshot Snapshot, cond
 		return nil, nil
 	}
 	return r.conditionPlans[conditionIndex].scan(ctx, snapshot)
+}
+
+func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) ([]bindingSet, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(r.conditionPlans) == 0 {
+		return nil, nil
+	}
+
+	var sets []bindingSet
+	var walk func(conditionIndex int, selected []conditionMatch) error
+	walk = func(conditionIndex int, selected []conditionMatch) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if conditionIndex == len(r.conditionPlans) {
+			matches := make([]conditionMatch, len(selected))
+			copy(matches, selected)
+			sets = append(sets, bindingSet{matches: matches})
+			return nil
+		}
+
+		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, snapshot, selected)
+		if err != nil {
+			return err
+		}
+		for _, match := range matches {
+			next := make([]conditionMatch, len(selected)+1)
+			copy(next, selected)
+			next[len(selected)] = match
+			if err := walk(conditionIndex+1, next); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := walk(0, nil); err != nil {
+		return nil, err
+	}
+	return sets, nil
 }
