@@ -8,22 +8,27 @@ import (
 type EventType string
 
 const (
-	EventFactAsserted  EventType = "fact_asserted"
-	EventFactModified  EventType = "fact_modified"
-	EventFactRetracted EventType = "fact_retracted"
-	EventReset         EventType = "reset"
+	EventFactAsserted    EventType = "fact_asserted"
+	EventFactModified    EventType = "fact_modified"
+	EventFactRetracted   EventType = "fact_retracted"
+	EventReset           EventType = "reset"
+	EventRuleActivated   EventType = "rule_activated"
+	EventRuleDeactivated EventType = "rule_deactivated"
 )
 
 type Event struct {
-	SessionID  SessionID
-	RulesetID  RulesetID
-	Sequence   uint64
-	Timestamp  time.Time
-	Type       EventType
-	Generation Generation
-	Recency    Recency
-	FactIDs    []FactID
-	Delta      *MutationDelta
+	SessionID      SessionID
+	RulesetID      RulesetID
+	Sequence       uint64
+	Timestamp      time.Time
+	Type           EventType
+	Generation     Generation
+	Recency        Recency
+	RuleID         RuleID
+	RuleRevisionID RuleRevisionID
+	ActivationID   ActivationID
+	FactIDs        []FactID
+	Delta          *MutationDelta
 }
 
 func cloneMutationDelta(delta *MutationDelta) *MutationDelta {

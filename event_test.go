@@ -133,6 +133,11 @@ func TestSessionEventClockCanBeInjectedForDeterministicTimestamps(t *testing.T) 
 	if events[3].FactIDs != nil {
 		t.Fatalf("reset event fact IDs should be nil, got %#v", events[3].FactIDs)
 	}
+	for i, event := range events {
+		if event.RuleID != "" || event.RuleRevisionID != "" || event.ActivationID != "" {
+			t.Fatalf("fact event %d carried rule metadata: %#v", i, event)
+		}
+	}
 	if events[3].Delta == nil || events[3].Delta.Generation != 2 || events[3].Delta.OldGeneration != 1 {
 		t.Fatalf("reset event delta generation mismatch: %#v", events[3].Delta)
 	}

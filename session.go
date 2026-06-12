@@ -53,6 +53,7 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 type Session struct {
 	id         SessionID
 	revision   *Ruleset
+	agenda     *agenda
 	generation Generation
 	initials   []SessionInitialFact
 	listeners  []EventListener
@@ -107,6 +108,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	return &Session{
 		id:         cfg.id,
 		revision:   revision,
+		agenda:     newAgenda(),
 		generation: 1,
 		initials:   initials,
 		listeners:  listeners,
@@ -391,6 +393,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	s.factsByTemplate = next.factsByTemplate
 	s.factsByName = next.factsByName
 	s.insertionOrder = next.factsByInsertionOrder()
+	s.emitAgendaEvents(ctx, s.agenda.clear())
 
 	delta := MutationDelta{
 		Kind:          MutationReset,
@@ -416,6 +419,49 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	s.nextEventSequence++
 
 	return result, nil
+}
+
+func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]agendaChange, error) {
+	if s == nil || s.closed {
+		return nil, ErrClosedSession
+	}
+	if s.revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if s.agenda == nil {
+		s.agenda = newAgenda()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	results, err := newNaiveMatcher(s.revision).match(ctx, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	changes, err := s.agenda.reconcile(ctx, s.revision, results)
+	if err != nil {
+		return nil, err
+	}
+	s.emitAgendaEvents(ctx, changes)
+	return changes, nil
+}
+
+func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) {
+	if s == nil || len(changes) == 0 {
+		return
+	}
+	rulesetID := RulesetID("")
+	if s.revision != nil {
+		rulesetID = s.revision.ID()
+	}
+	for _, change := range changes {
+		s.nextEventSequence++
+		s.emitEvent(ctx, change.event(s.id, rulesetID, s.nextEventSequence, s.eventClock()))
+	}
 }
 
 func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (ModifyResult, error) {

@@ -21,6 +21,7 @@ type naiveMatcher struct {
 type ruleMatchResult struct {
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
+	salience         int
 	declarationOrder int
 	candidates       []matchCandidate
 }
@@ -87,6 +88,7 @@ func (m *naiveMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatc
 		results = append(results, ruleMatchResult{
 			ruleID:           rule.id,
 			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
 			declarationOrder: rule.declarationOrder,
 			candidates:       candidates,
 		})
