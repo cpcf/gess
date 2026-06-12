@@ -65,6 +65,8 @@ type Session struct {
 	closed          bool
 	runGuard        chan struct{}
 	runState        atomic.Value
+	agendaReady     bool
+	agendaDirty     bool
 	mutationQueueMu sync.Mutex
 	mutationQueue   []queuedMutation
 	mu              struct {
@@ -283,9 +285,13 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	if err != nil {
 		return result, err
 	}
-	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
-		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
-			return result, err
+	if mutationResultNeedsReconcile(result, s.revision) {
+		if origin.isZero() || !s.runGuardHeld() {
+			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+				return result, err
+			}
+		} else {
+			s.markAgendaDirty()
 		}
 	}
 	return result, nil
@@ -338,21 +344,23 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
-	s.emitEvent(ctx, Event{
-		SessionID:      s.id,
-		RulesetID:      s.revision.ID(),
-		Sequence:       s.nextEventSequence + 1,
-		Timestamp:      s.eventClock(),
-		Type:           EventFactAsserted,
-		Generation:     s.generation,
-		Recency:        fact.recency,
-		RuleID:         origin.RuleID,
-		RuleRevisionID: origin.RuleRevisionID,
-		ActivationID:   origin.ActivationID,
-		FactIDs:        []FactID{fact.id},
-		Delta:          &delta,
-	})
-	s.nextEventSequence++
+	if len(s.listeners) > 0 {
+		s.emitEvent(ctx, Event{
+			SessionID:      s.id,
+			RulesetID:      s.revision.ID(),
+			Sequence:       s.nextEventSequence + 1,
+			Timestamp:      s.eventClock(),
+			Type:           EventFactAsserted,
+			Generation:     s.generation,
+			Recency:        fact.recency,
+			RuleID:         origin.RuleID,
+			RuleRevisionID: origin.RuleRevisionID,
+			ActivationID:   origin.ActivationID,
+			FactIDs:        []FactID{fact.id},
+			Delta:          &delta,
+		})
+		s.nextEventSequence++
+	}
 
 	return result, nil
 }
@@ -409,9 +417,13 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 	if err != nil {
 		return result, err
 	}
-	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
-		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
-			return result, err
+	if mutationResultNeedsReconcile(result, s.revision) {
+		if origin.isZero() || !s.runGuardHeld() {
+			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+				return result, err
+			}
+		} else {
+			s.markAgendaDirty()
 		}
 	}
 	return result, nil
@@ -473,21 +485,23 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		Fact:   before,
 		Delta:  &delta,
 	}
-	s.emitEvent(ctx, Event{
-		SessionID:      s.id,
-		RulesetID:      s.revision.ID(),
-		Sequence:       s.nextEventSequence + 1,
-		Timestamp:      s.eventClock(),
-		Type:           EventFactRetracted,
-		Generation:     s.generation,
-		Recency:        fact.recency,
-		RuleID:         origin.RuleID,
-		RuleRevisionID: origin.RuleRevisionID,
-		ActivationID:   origin.ActivationID,
-		FactIDs:        []FactID{fact.id},
-		Delta:          &delta,
-	})
-	s.nextEventSequence++
+	if len(s.listeners) > 0 {
+		s.emitEvent(ctx, Event{
+			SessionID:      s.id,
+			RulesetID:      s.revision.ID(),
+			Sequence:       s.nextEventSequence + 1,
+			Timestamp:      s.eventClock(),
+			Type:           EventFactRetracted,
+			Generation:     s.generation,
+			Recency:        fact.recency,
+			RuleID:         origin.RuleID,
+			RuleRevisionID: origin.RuleRevisionID,
+			ActivationID:   origin.ActivationID,
+			FactIDs:        []FactID{fact.id},
+			Delta:          &delta,
+		})
+		s.nextEventSequence++
+	}
 
 	return result, nil
 }
@@ -580,6 +594,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 
 	oldGeneration := s.generation
 	s.generation = s.generation + 1
+	s.agendaReady = false
+	s.agendaDirty = false
 	s.nextFactSequence = next.nextFactSequence()
 	s.nextRecency = next.nextRecency()
 	s.factsByID = next.factsByID
@@ -600,17 +616,19 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		Before:     before,
 		Delta:      delta,
 	}
-	s.emitEvent(ctx, Event{
-		SessionID:  s.id,
-		RulesetID:  s.revision.ID(),
-		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  s.eventClock(),
-		Type:       EventReset,
-		Generation: s.generation,
-		FactIDs:    nil,
-		Delta:      &delta,
-	})
-	s.nextEventSequence++
+	if len(s.listeners) > 0 {
+		s.emitEvent(ctx, Event{
+			SessionID:  s.id,
+			RulesetID:  s.revision.ID(),
+			Sequence:   s.nextEventSequence + 1,
+			Timestamp:  s.eventClock(),
+			Type:       EventReset,
+			Generation: s.generation,
+			FactIDs:    nil,
+			Delta:      &delta,
+		})
+		s.nextEventSequence++
+	}
 
 	return result, nil
 }
@@ -679,6 +697,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	if err != nil {
 		return ApplyRulesetResult{}, err
 	}
+	s.agendaReady = true
+	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
 
 	return ApplyRulesetResult{
@@ -717,6 +737,8 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	if err != nil {
 		return nil, err
 	}
+	s.agendaReady = true
+	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
 }
@@ -830,7 +852,7 @@ func templatesCompatible(left, right Template) bool {
 }
 
 func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) {
-	if s == nil || len(changes) == 0 {
+	if s == nil || len(s.listeners) == 0 || len(changes) == 0 {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -894,9 +916,13 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	if err != nil {
 		return result, err
 	}
-	if mutationResultNeedsReconcile(result) && (origin.isZero() || !s.runGuardHeld()) {
-		if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
-			return result, err
+	if mutationResultNeedsReconcile(result, s.revision) {
+		if origin.isZero() || !s.runGuardHeld() {
+			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+				return result, err
+			}
+		} else {
+			s.markAgendaDirty()
 		}
 	}
 	return result, nil
@@ -920,7 +946,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	}
 
 	before := fact.snapshot()
-	template, templateExists := s.revision.TemplateByKey(fact.templateKey)
+	template, templateExists := s.revision.templateByKey(fact.templateKey)
 
 	proposedFields, proposedPresence := applyPatchToFact(fact, patch)
 	var err error
@@ -986,21 +1012,23 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		Fact:   after,
 		Delta:  &delta,
 	}
-	s.emitEvent(ctx, Event{
-		SessionID:      s.id,
-		RulesetID:      s.revision.ID(),
-		Sequence:       s.nextEventSequence + 1,
-		Timestamp:      s.eventClock(),
-		Type:           EventFactModified,
-		Generation:     s.generation,
-		Recency:        fact.recency,
-		RuleID:         origin.RuleID,
-		RuleRevisionID: origin.RuleRevisionID,
-		ActivationID:   origin.ActivationID,
-		FactIDs:        []FactID{fact.id},
-		Delta:          &delta,
-	})
-	s.nextEventSequence++
+	if len(s.listeners) > 0 {
+		s.emitEvent(ctx, Event{
+			SessionID:      s.id,
+			RulesetID:      s.revision.ID(),
+			Sequence:       s.nextEventSequence + 1,
+			Timestamp:      s.eventClock(),
+			Type:           EventFactModified,
+			Generation:     s.generation,
+			Recency:        fact.recency,
+			RuleID:         origin.RuleID,
+			RuleRevisionID: origin.RuleRevisionID,
+			ActivationID:   origin.ActivationID,
+			FactIDs:        []FactID{fact.id},
+			Delta:          &delta,
+		})
+		s.nextEventSequence++
+	}
 
 	return result, nil
 }
@@ -1149,7 +1177,18 @@ func (s *Session) snapshotLocked() Snapshot {
 		facts = append(facts, fact.snapshot())
 	}
 
-	return newSnapshot(s.id, s.revision.ID(), s.generation, facts)
+	byID := make(map[FactID]int, len(facts))
+	for i, fact := range facts {
+		byID[fact.ID()] = i
+	}
+
+	return Snapshot{
+		sessionID:  s.id,
+		rulesetID:  s.revision.ID(),
+		generation: s.generation,
+		facts:      facts,
+		byID:       byID,
+	}
 }
 
 type factWorkspace struct {
@@ -1202,7 +1241,7 @@ func (w *factWorkspace) factsByInsertionOrder() []FactID {
 
 func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {
 	canonical := normalizeFields(fields)
-	template, templateExists := revision.TemplateByKey(templateKey)
+	template, templateExists := revision.templateByKey(templateKey)
 	if templateKey != "" && !templateExists {
 		return nil, "", false, &ValidationError{
 			TemplateName: string(templateKey),
@@ -1377,6 +1416,21 @@ func (s *Session) failQueuedMutations(err error) {
 	}
 }
 
+func (s *Session) markAgendaDirty() {
+	if s != nil {
+		s.agendaDirty = true
+		s.agendaReady = false
+	}
+}
+
+func (s *Session) consumeAgendaDirty() bool {
+	if s == nil || !s.agendaDirty {
+		return false
+	}
+	s.agendaDirty = false
+	return true
+}
+
 func (s *Session) drainQueuedMutations(ctx context.Context) error {
 	for {
 		requests := s.popQueuedMutations()
@@ -1434,7 +1488,7 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 			}
 			value, err := req.apply(mutationCtx)
 			s.endMutation()
-			if err == nil && mutationResultNeedsReconcile(value) {
+			if err == nil && mutationResultNeedsReconcile(value, s.revision) {
 				if _, reconcileErr := s.reconcileAgenda(ctx, s.snapshotLocked()); reconcileErr != nil {
 					err = reconcileErr
 				}
@@ -1447,14 +1501,14 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 	}
 }
 
-func mutationResultNeedsReconcile(value any) bool {
+func mutationResultNeedsReconcile(value any, revision *Ruleset) bool {
 	switch result := value.(type) {
 	case AssertResult:
-		return result.Status == AssertInserted
+		return result.Status == AssertInserted && revision.factMayAffectRuleMatches(result.Fact)
 	case ModifyResult:
-		return result.Status == ModifyChanged
+		return result.Status == ModifyChanged && revision.factMayAffectRuleMatches(result.Fact)
 	case RetractResult:
-		return result.Status == RetractRemoved
+		return result.Status == RetractRemoved && revision.factMayAffectRuleMatches(result.Fact)
 	case ResetResult:
 		return result.Status == ResetApplied
 	case ApplyRulesetResult:

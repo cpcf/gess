@@ -245,6 +245,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	rulesByID := make(map[RuleID]compiledRule, len(w.rules))
 	rulesByRevisionID := make(map[RuleRevisionID]compiledRule, len(w.rules))
 	ruleOrder := make([]string, 0, len(w.rules))
+	conditionTemplateKeys := make(map[TemplateKey]struct{})
+	conditionNames := make(map[string]struct{})
 	for i, spec := range w.rules {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -280,33 +282,38 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		rulesByRevisionID[rule.revisionID] = rule
 		compiledRules = append(compiledRules, rule)
 		ruleOrder = append(ruleOrder, rule.name)
+		indexRuleConditionDependencies(rule, conditionTemplateKeys, conditionNames)
 	}
 
 	return &Ruleset{
-		id:                rulesetID(compiledTemplates, compiledActions, compiledRules),
-		templates:         templates,
-		templatesByKey:    templatesByKey,
-		templateOrder:     templateOrder,
-		actions:           actionsByName,
-		actionOrder:       actionOrder,
-		rules:             rulesByName,
-		rulesByID:         rulesByID,
-		rulesByRevisionID: rulesByRevisionID,
-		ruleOrder:         ruleOrder,
+		id:                    rulesetID(compiledTemplates, compiledActions, compiledRules),
+		templates:             templates,
+		templatesByKey:        templatesByKey,
+		templateOrder:         templateOrder,
+		actions:               actionsByName,
+		actionOrder:           actionOrder,
+		rules:                 rulesByName,
+		rulesByID:             rulesByID,
+		rulesByRevisionID:     rulesByRevisionID,
+		ruleOrder:             ruleOrder,
+		conditionTemplateKeys: conditionTemplateKeys,
+		conditionNames:        conditionNames,
 	}, nil
 }
 
 type Ruleset struct {
-	id                RulesetID
-	templates         map[string]Template
-	templatesByKey    map[TemplateKey]Template
-	templateOrder     []string
-	actions           map[string]compiledAction
-	actionOrder       []string
-	rules             map[string]compiledRule
-	rulesByID         map[RuleID]compiledRule
-	rulesByRevisionID map[RuleRevisionID]compiledRule
-	ruleOrder         []string
+	id                    RulesetID
+	templates             map[string]Template
+	templatesByKey        map[TemplateKey]Template
+	templateOrder         []string
+	actions               map[string]compiledAction
+	actionOrder           []string
+	rules                 map[string]compiledRule
+	rulesByID             map[RuleID]compiledRule
+	rulesByRevisionID     map[RuleRevisionID]compiledRule
+	ruleOrder             []string
+	conditionTemplateKeys map[TemplateKey]struct{}
+	conditionNames        map[string]struct{}
 }
 
 func (r *Ruleset) ID() RulesetID {
@@ -336,6 +343,14 @@ func (r *Ruleset) TemplateByKey(key TemplateKey) (Template, bool) {
 		return Template{}, false
 	}
 	return template.clone(), true
+}
+
+func (r *Ruleset) templateByKey(key TemplateKey) (Template, bool) {
+	if r == nil {
+		return Template{}, false
+	}
+	template, ok := r.templatesByKey[key]
+	return template, ok
 }
 
 func (r *Ruleset) Templates() []Template {
@@ -413,6 +428,38 @@ func (r *Ruleset) Rules() []Rule {
 		out = append(out, r.rules[name].inspect().clone())
 	}
 	return out
+}
+
+func indexRuleConditionDependencies(rule compiledRule, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
+	for _, plan := range rule.conditionPlans {
+		switch plan.target.kind {
+		case conditionTargetTemplateKey:
+			if plan.target.templateKey != "" {
+				templateKeys[plan.target.templateKey] = struct{}{}
+			}
+		case conditionTargetName:
+			if plan.target.name != "" {
+				names[plan.target.name] = struct{}{}
+			}
+		}
+	}
+}
+
+func (r *Ruleset) factMayAffectRuleMatches(fact FactSnapshot) bool {
+	if r == nil {
+		return true
+	}
+	if fact.templateKey != "" {
+		if _, ok := r.conditionTemplateKeys[fact.templateKey]; ok {
+			return true
+		}
+	}
+	if fact.name != "" {
+		if _, ok := r.conditionNames[fact.name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Workspace) actionIndex(name string) (int, bool) {

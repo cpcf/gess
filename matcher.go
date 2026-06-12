@@ -2,8 +2,6 @@ package gess
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -203,36 +201,23 @@ func buildMatchCandidate(rule compiledRule, snapshot Snapshot, set bindingSet) (
 }
 
 func candidateKeyFor(ruleID RuleID, revisionID RuleRevisionID, generation Generation, bindings []bindingTupleEntry) string {
-	orderedBindings := append([]bindingTupleEntry(nil), bindings...)
-	sort.SliceStable(orderedBindings, func(i, j int) bool {
-		if orderedBindings[i].conditionOrder != orderedBindings[j].conditionOrder {
-			return orderedBindings[i].conditionOrder < orderedBindings[j].conditionOrder
-		}
-		if orderedBindings[i].bindingSlot != orderedBindings[j].bindingSlot {
-			return orderedBindings[i].bindingSlot < orderedBindings[j].bindingSlot
-		}
-		if orderedBindings[i].binding != orderedBindings[j].binding {
-			return orderedBindings[i].binding < orderedBindings[j].binding
-		}
-		if orderedBindings[i].conditionID != orderedBindings[j].conditionID {
-			return orderedBindings[i].conditionID < orderedBindings[j].conditionID
-		}
-		if orderedBindings[i].factID != orderedBindings[j].factID {
-			return orderedBindings[i].factID.String() < orderedBindings[j].factID.String()
-		}
-		return orderedBindings[i].factVersion < orderedBindings[j].factVersion
-	})
+	orderedBindings := bindings
+	if !bindingTupleEntriesSorted(bindings) {
+		orderedBindings = append([]bindingTupleEntry(nil), bindings...)
+		sort.SliceStable(orderedBindings, func(i, j int) bool {
+			return bindingTupleEntryLess(orderedBindings[i], orderedBindings[j])
+		})
+	}
 
 	var b strings.Builder
 	b.Grow(128 + len(orderedBindings)*64)
-	b.WriteString("gess/match-candidate/v1\n")
-	b.WriteString("rule:")
+	b.WriteString("gess/match-candidate/v2|rule=")
 	b.WriteString(ruleID.String())
-	b.WriteString("\nrevision:")
+	b.WriteString("|revision=")
 	b.WriteString(revisionID.String())
-	b.WriteString("\ngeneration:")
+	b.WriteString("|generation=")
 	b.WriteString(strconv.FormatUint(uint64(generation), 10))
-	b.WriteString("\nbindings:")
+	b.WriteString("|bindings=")
 	for _, entry := range orderedBindings {
 		b.WriteString(entry.binding)
 		b.WriteByte(':')
@@ -255,8 +240,35 @@ func candidateKeyFor(ruleID RuleID, revisionID RuleRevisionID, generation Genera
 		b.WriteByte(';')
 	}
 
-	sum := sha256.Sum256([]byte(b.String()))
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return b.String()
+}
+
+func bindingTupleEntriesSorted(entries []bindingTupleEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		if bindingTupleEntryLess(entries[i], entries[i-1]) {
+			return false
+		}
+	}
+	return true
+}
+
+func bindingTupleEntryLess(left, right bindingTupleEntry) bool {
+	if left.conditionOrder != right.conditionOrder {
+		return left.conditionOrder < right.conditionOrder
+	}
+	if left.bindingSlot != right.bindingSlot {
+		return left.bindingSlot < right.bindingSlot
+	}
+	if left.binding != right.binding {
+		return left.binding < right.binding
+	}
+	if left.conditionID != right.conditionID {
+		return left.conditionID < right.conditionID
+	}
+	if left.factID != right.factID {
+		return left.factID.String() < right.factID.String()
+	}
+	return left.factVersion < right.factVersion
 }
 
 func candidatePathFor(entries []bindingTupleEntry) []int {

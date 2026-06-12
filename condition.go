@@ -142,7 +142,7 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 		matches = append(matches, conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
-			fact:        fact.clone(),
+			fact:        fact,
 		})
 	}
 	return matches, nil

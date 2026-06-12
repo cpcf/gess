@@ -62,12 +62,15 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		}
 		return abort(RunFailed, 0, err)
 	}
-	snapshot := s.snapshotLocked()
-	if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return abort(RunCanceled, 0, err)
+	snapshot := Snapshot{}
+	if !s.agendaReady || s.agendaDirty {
+		snapshot = s.snapshotLocked()
+		if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return abort(RunCanceled, 0, err)
+			}
+			return abort(RunFailed, 0, err)
 		}
-		return abort(RunFailed, 0, err)
 	}
 
 	fired := 0
@@ -122,12 +125,14 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			return abort(RunFailed, fired, err)
 		}
 
-		snapshot = s.snapshotLocked()
-		if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				return abort(RunCanceled, fired, err)
+		if s.consumeAgendaDirty() {
+			snapshot = s.snapshotLocked()
+			if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return abort(RunCanceled, fired, err)
+				}
+				return abort(RunFailed, fired, err)
 			}
-			return abort(RunFailed, fired, err)
 		}
 	}
 }
@@ -155,7 +160,7 @@ func (s *Session) endRun() {
 }
 
 func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activation activation) {
-	if s == nil {
+	if s == nil || len(s.listeners) == 0 {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -181,7 +186,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 }
 
 func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activation activation, failure ActionFailureError) {
-	if s == nil {
+	if s == nil || len(s.listeners) == 0 {
 		return
 	}
 	rulesetID := RulesetID("")
