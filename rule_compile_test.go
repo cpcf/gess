@@ -807,7 +807,7 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 	}
 }
 
-func mustAddTemplate(t *testing.T, workspace *Workspace, spec TemplateSpec) Template {
+func mustAddTemplate(t testing.TB, workspace *Workspace, spec TemplateSpec) Template {
 	t.Helper()
 	if err := workspace.AddTemplate(spec); err != nil {
 		t.Fatalf("AddTemplate: %v", err)
@@ -819,14 +819,14 @@ func mustAddTemplate(t *testing.T, workspace *Workspace, spec TemplateSpec) Temp
 	return compiled
 }
 
-func mustAddAction(t *testing.T, workspace *Workspace, spec ActionSpec) {
+func mustAddAction(t testing.TB, workspace *Workspace, spec ActionSpec) {
 	t.Helper()
 	if err := workspace.AddAction(spec); err != nil {
 		t.Fatalf("AddAction: %v", err)
 	}
 }
 
-func mustAddRule(t *testing.T, workspace *Workspace, spec RuleSpec) {
+func mustAddRule(t testing.TB, workspace *Workspace, spec RuleSpec) {
 	t.Helper()
 	if err := workspace.AddRule(spec); err != nil {
 		t.Fatalf("AddRule: %v", err)

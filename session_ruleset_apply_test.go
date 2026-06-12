@@ -669,7 +669,7 @@ func TestSessionApplyRulesetQueuesDuringRunBeforeNextActivation(t *testing.T) {
 	}
 }
 
-func mustCompileWorkspace(t *testing.T, workspace *Workspace) *Ruleset {
+func mustCompileWorkspace(t testing.TB, workspace *Workspace) *Ruleset {
 	t.Helper()
 	revision, err := workspace.Compile(context.Background())
 	if err != nil {

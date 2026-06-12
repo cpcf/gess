@@ -122,7 +122,7 @@ func mustCompile(t *testing.T, specs ...TemplateSpec) *Ruleset {
 	return revision
 }
 
-func mustSession(t *testing.T, revision *Ruleset, id SessionID) *Session {
+func mustSession(t testing.TB, revision *Ruleset, id SessionID) *Session {
 	t.Helper()
 	session, err := NewSession(revision, WithSessionID(id))
 	if err != nil {

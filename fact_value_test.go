@@ -261,7 +261,7 @@ func TestNumericValuesAndUnsupportedTypes(t *testing.T) {
 	}
 }
 
-func mustFields(t *testing.T, raw map[string]any) Fields {
+func mustFields(t testing.TB, raw map[string]any) Fields {
 	t.Helper()
 	fields, err := NewFields(raw)
 	if err != nil {

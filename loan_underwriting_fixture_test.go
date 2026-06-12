@@ -62,7 +62,62 @@ func TestLoanUnderwritingJessFixtureMatchesContract(t *testing.T) {
 	}
 }
 
-func runLoanUnderwritingFixture(t *testing.T) []string {
+func BenchmarkLoanUnderwritingGessSessionCycle(b *testing.B) {
+	trace := make([]string, 0, len(expectedLoanUnderwritingTrace()))
+	revision := mustCompileLoanUnderwritingRuleset(b, &trace)
+	initials := loanUnderwritingInitialFacts(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		trace = trace[:0]
+		session := mustLoanUnderwritingSession(b, revision)
+		for _, fact := range initials {
+			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			}
+		}
+
+		result, err := session.Run(context.Background())
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 5 {
+			b.Fatalf("run result = (%v, %d), want (%v, 5)", result.Status, result.Fired, RunCompleted)
+		}
+	}
+}
+
+func BenchmarkLoanUnderwritingGessRunOnly(b *testing.B) {
+	trace := make([]string, 0, len(expectedLoanUnderwritingTrace()))
+	revision := mustCompileLoanUnderwritingRuleset(b, &trace)
+	initials := loanUnderwritingInitialFacts(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		trace = trace[:0]
+		session := mustLoanUnderwritingSession(b, revision)
+		for _, fact := range initials {
+			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			}
+		}
+
+		b.StartTimer()
+		result, err := session.Run(context.Background())
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 5 {
+			b.Fatalf("run result = (%v, %d), want (%v, 5)", result.Status, result.Fired, RunCompleted)
+		}
+	}
+}
+
+func runLoanUnderwritingFixture(t testing.TB) []string {
 	t.Helper()
 
 	trace := make([]string, 0, len(expectedLoanUnderwritingTrace()))
@@ -87,6 +142,15 @@ func runLoanUnderwritingFixture(t *testing.T) []string {
 	}
 
 	return trace
+}
+
+func mustLoanUnderwritingSession(t testing.TB, revision *Ruleset) *Session {
+	t.Helper()
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	return session
 }
 
 func runLoanUnderwritingJessProcess(ctx context.Context, classpath, scriptPath string) ([]byte, error) {
@@ -167,7 +231,7 @@ func patchLoanUnderwritingJessRUClock(classData []byte) ([]byte, error) {
 	return patched, nil
 }
 
-func mustCompileLoanUnderwritingRuleset(t *testing.T, trace *[]string) *Ruleset {
+func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset {
 	t.Helper()
 
 	workspace := NewWorkspace()
@@ -326,7 +390,7 @@ func mustCompileLoanUnderwritingRuleset(t *testing.T, trace *[]string) *Ruleset 
 	return mustCompileWorkspace(t, workspace)
 }
 
-func addDecisionAction(t *testing.T, workspace *Workspace, name string, decisionKey TemplateKey, trace *[]string, ruleName, outcome, reason, tier string) {
+func addDecisionAction(t testing.TB, workspace *Workspace, name string, decisionKey TemplateKey, trace *[]string, ruleName, outcome, reason, tier string) {
 	t.Helper()
 
 	mustAddAction(t, workspace, ActionSpec{
@@ -353,7 +417,7 @@ func addDecisionAction(t *testing.T, workspace *Workspace, name string, decision
 	})
 }
 
-func loanUnderwritingInitialFacts(t *testing.T) []SessionInitialFact {
+func loanUnderwritingInitialFacts(t testing.TB) []SessionInitialFact {
 	t.Helper()
 
 	return []SessionInitialFact{
@@ -376,7 +440,7 @@ func loanUnderwritingInitialFacts(t *testing.T) []SessionInitialFact {
 	}
 }
 
-func loanUnderwritingStringField(t *testing.T, fact FactSnapshot, field string) string {
+func loanUnderwritingStringField(t testing.TB, fact FactSnapshot, field string) string {
 	t.Helper()
 
 	value, ok := fact.Fields()[field]
