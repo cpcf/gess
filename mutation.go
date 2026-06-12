@@ -25,6 +25,7 @@ type FactPatch struct {
 type MutationDelta struct {
 	Kind          MutationKind
 	Generation    Generation
+	OldGeneration Generation
 	Recency       Recency
 	FactID        FactID
 	OldVersion    FactVersion
@@ -89,9 +90,11 @@ func (r ModifyResult) Changed() bool {
 type RetractStatus string
 
 const (
-	RetractRemoved RetractStatus = "removed"
-	RetractMissing RetractStatus = "missing"
-	RetractStale   RetractStatus = "stale"
+	RetractRemoved           RetractStatus = "removed"
+	RetractMissing           RetractStatus = "missing"
+	RetractStale             RetractStatus = "stale"
+	RetractClosed            RetractStatus = "closed"
+	RetractConcurrencyMisuse RetractStatus = "concurrency_misuse"
 )
 
 type RetractResult struct {
@@ -104,7 +107,18 @@ func (r RetractResult) Removed() bool {
 	return r.Status == RetractRemoved
 }
 
+type ResetStatus string
+
+const (
+	ResetApplied           ResetStatus = "applied"
+	ResetValidationFailure ResetStatus = "validation_failure"
+	ResetClosed            ResetStatus = "closed"
+	ResetConcurrencyMisuse ResetStatus = "concurrency_misuse"
+)
+
 type ResetResult struct {
+	Status     ResetStatus
 	Generation Generation
+	Before     Snapshot
 	Delta      MutationDelta
 }

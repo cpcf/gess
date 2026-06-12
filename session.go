@@ -11,6 +11,13 @@ type SessionOption func(*sessionConfig)
 type sessionConfig struct {
 	id        SessionID
 	listeners []EventListener
+	initials  []SessionInitialFact
+}
+
+type SessionInitialFact struct {
+	Name        string
+	TemplateKey TemplateKey
+	Fields      Fields
 }
 
 func WithSessionID(id SessionID) SessionOption {
@@ -27,10 +34,17 @@ func WithEventListener(listener EventListener) SessionOption {
 	}
 }
 
+func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.initials = append(cfg.initials, cloneSessionInitialFacts(initials)...)
+	}
+}
+
 type Session struct {
 	id         SessionID
 	revision   *Ruleset
 	generation Generation
+	initials   []SessionInitialFact
 	listeners  []EventListener
 	closed     bool
 	mu         struct {
@@ -62,21 +76,54 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 
 	listeners := make([]EventListener, len(cfg.listeners))
 	copy(listeners, cfg.listeners)
+	initials := cloneSessionInitialFacts(cfg.initials)
+
+	state := newFactWorkspace(1)
+	state.factsByID = make(map[FactID]*workingFact)
+	state.factsByTemplate = make(map[TemplateKey][]FactID)
+	state.factsByName = make(map[string][]FactID)
+	state.factsByDuplicate = make(map[DuplicateKey]FactID)
+
+	if len(initials) > 0 {
+		if err := state.applyInitialFacts(revision, initials); err != nil {
+			return nil, err
+		}
+	}
 
 	return &Session{
 		id:         cfg.id,
 		revision:   revision,
 		generation: 1,
+		initials:   initials,
 		listeners:  listeners,
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		factsByID:        make(map[FactID]*workingFact),
-		factsByDuplicate: make(map[DuplicateKey]FactID),
-		factsByTemplate:  make(map[TemplateKey][]FactID),
-		factsByName:      make(map[string][]FactID),
+		factsByID:        state.factsByID,
+		factsByDuplicate: state.factsByDuplicate,
+		factsByTemplate:  state.factsByTemplate,
+		factsByName:      state.factsByName,
+		nextFactSequence: state.nextFactSequence(),
+		nextRecency:      state.nextRecency(),
+		insertionOrder:   state.factsByInsertionOrder(),
 	}, nil
+}
+
+func cloneSessionInitialFacts(initials []SessionInitialFact) []SessionInitialFact {
+	if len(initials) == 0 {
+		return nil
+	}
+
+	out := make([]SessionInitialFact, len(initials))
+	for i, initial := range initials {
+		out[i] = SessionInitialFact{
+			Name:        initial.Name,
+			TemplateKey: initial.TemplateKey,
+			Fields:      cloneFields(initial.Fields),
+		}
+	}
+	return out
 }
 
 func (s *Session) ID() SessionID {
@@ -114,17 +161,7 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, ErrConcurrencyMisuse
 	}
 	defer s.unlock()
-
-	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
-	for _, id := range s.insertionOrder {
-		fact, ok := s.factsByID[id]
-		if !ok {
-			continue
-		}
-		facts = append(facts, fact.snapshot())
-	}
-
-	return newSnapshot(s.id, s.revision.ID(), s.generation, facts), nil
+	return s.snapshotLocked(), nil
 }
 
 func (s *Session) Close() error {
@@ -167,78 +204,26 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
 
-	canonical := normalizeFields(fields)
-	template, templateExists := s.revision.TemplateByKey(templateKey)
-	if templateKey != "" && !templateExists {
-		result := AssertResult{Status: AssertValidationFailure}
-		if name != "" {
-			result.Fact = FactSnapshot{name: name}
-		}
-		return result, &ValidationError{
-			TemplateName: string(templateKey),
-			Reason:       "unknown template key",
-		}
+	state := factWorkspace{
+		sequence:         &s.nextFactSequence,
+		recency:          &s.nextRecency,
+		insertionOrder:   &s.insertionOrder,
+		factsByID:        s.factsByID,
+		factsByDuplicate: s.factsByDuplicate,
+		factsByTemplate:  s.factsByTemplate,
+		factsByName:      s.factsByName,
 	}
-	if templateExists {
-		name = template.Name()
+	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
+	if err != nil {
+		return AssertResult{Status: AssertValidationFailure}, err
 	}
-
-	var presence map[string]FieldPresence
-	var err error
-	if templateExists {
-		canonical, presence, err = template.applyDefaultsAndValidate(canonical)
-		if err != nil {
-			return AssertResult{Status: AssertValidationFailure}, err
-		}
-	} else {
-		presence = make(map[string]FieldPresence, len(canonical))
-		for field := range canonical {
-			presence[field] = FieldPresenceExplicit
-		}
+	if !inserted {
+		return AssertResult{
+			Status:       AssertExisting,
+			Fact:         fact.snapshot(),
+			DuplicateKey: duplicateKey,
+		}, nil
 	}
-
-	duplicateKey := makeDuplicateKeyForTemplate(name, template, canonical)
-	duplicatePolicy := template.duplicatePolicy
-	if templateExists && duplicatePolicy == DuplicateAllow {
-		duplicateKey = ""
-	}
-
-	if duplicatePolicy != DuplicateAllow {
-		if existingID, ok := s.factsByDuplicate[duplicateKey]; ok {
-			fact, ok := s.factsByID[existingID]
-			if ok {
-				factSnapshot := fact.snapshot()
-				return AssertResult{
-					Status:       AssertExisting,
-					Fact:         factSnapshot,
-					DuplicateKey: duplicateKey,
-				}, nil
-			}
-		}
-	}
-
-	s.nextFactSequence++
-	s.nextRecency++
-	id := newFactID(s.generation, s.nextFactSequence)
-	fact := &workingFact{
-		id:            id,
-		name:          name,
-		templateKey:   templateKey,
-		version:       1,
-		recency:       s.nextRecency,
-		generation:    s.generation,
-		fields:        canonical,
-		fieldPresence: presence,
-		dupKey:        duplicateKey,
-	}
-
-	s.factsByID[id] = fact
-	if duplicatePolicy != DuplicateAllow {
-		s.factsByDuplicate[duplicateKey] = id
-	}
-	s.factsByTemplate[templateKey] = append(s.factsByTemplate[templateKey], id)
-	s.factsByName[name] = append(s.factsByName[name], id)
-	s.insertionOrder = append(s.insertionOrder, id)
 
 	snapshot := fact.snapshot()
 	delta := MutationDelta{
@@ -266,6 +251,149 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 		Generation: s.generation,
 		Recency:    fact.recency,
 		FactIDs:    []FactID{fact.id},
+		Delta:      &delta,
+	})
+	s.nextEventSequence++
+
+	return result, nil
+}
+
+func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
+	if s == nil {
+		return RetractResult{Status: RetractClosed}, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return RetractResult{}, err
+	}
+	if !s.beginMutation() {
+		return RetractResult{Status: RetractConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	defer s.endMutation()
+
+	if s.closed {
+		return RetractResult{Status: RetractClosed}, ErrClosedSession
+	}
+
+	if id.Generation() != s.generation {
+		if id.Generation() != 0 && id.Generation() < s.generation {
+			return RetractResult{Status: RetractStale}, ErrStaleFactID
+		}
+		return RetractResult{Status: RetractMissing}, ErrFactNotFound
+	}
+
+	fact, ok := s.factsByID[id]
+	if !ok {
+		return RetractResult{Status: RetractMissing}, ErrFactNotFound
+	}
+
+	before := fact.snapshot()
+	oldVersion := fact.version
+	oldDuplicate := fact.dupKey
+
+	delete(s.factsByID, id)
+	if oldDuplicate != "" {
+		if existingID, ok := s.factsByDuplicate[oldDuplicate]; ok && existingID == id {
+			delete(s.factsByDuplicate, oldDuplicate)
+		}
+	}
+	s.factsByTemplate[fact.templateKey] = removeFactIDFromSlice(s.factsByTemplate[fact.templateKey], id)
+	if len(s.factsByTemplate[fact.templateKey]) == 0 {
+		delete(s.factsByTemplate, fact.templateKey)
+	}
+	s.factsByName[fact.name] = removeFactIDFromSlice(s.factsByName[fact.name], id)
+	if len(s.factsByName[fact.name]) == 0 {
+		delete(s.factsByName, fact.name)
+	}
+	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
+
+	delta := MutationDelta{
+		Kind:         MutationRetract,
+		Generation:   s.generation,
+		Recency:      fact.recency,
+		FactID:       fact.id,
+		OldVersion:   oldVersion,
+		OldDuplicate: oldDuplicate,
+		Before:       &before,
+	}
+
+	result := RetractResult{
+		Status: RetractRemoved,
+		Fact:   before,
+		Delta:  &delta,
+	}
+	s.emitEvent(ctx, Event{
+		SessionID:  s.id,
+		RulesetID:  s.revision.ID(),
+		Sequence:   s.nextEventSequence + 1,
+		Timestamp:  time.Now(),
+		Type:       EventFactRetracted,
+		Generation: s.generation,
+		Recency:    fact.recency,
+		FactIDs:    []FactID{fact.id},
+		Delta:      &delta,
+	})
+	s.nextEventSequence++
+
+	return result, nil
+}
+
+func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
+	if s == nil {
+		return ResetResult{Status: ResetClosed}, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return ResetResult{}, err
+	}
+	if !s.beginMutation() {
+		return ResetResult{Status: ResetConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	defer s.endMutation()
+
+	if s.closed {
+		return ResetResult{Status: ResetClosed}, ErrClosedSession
+	}
+
+	before := s.snapshotLocked()
+	next := newFactWorkspace(s.generation + 1)
+	if err := next.applyInitialFacts(s.revision, s.initials); err != nil {
+		return ResetResult{Status: ResetValidationFailure, Before: before}, err
+	}
+
+	oldGeneration := s.generation
+	s.generation = s.generation + 1
+	s.nextFactSequence = next.nextFactSequence()
+	s.nextRecency = next.nextRecency()
+	s.factsByID = next.factsByID
+	s.factsByDuplicate = next.factsByDuplicate
+	s.factsByTemplate = next.factsByTemplate
+	s.factsByName = next.factsByName
+	s.insertionOrder = next.factsByInsertionOrder()
+
+	delta := MutationDelta{
+		Kind:          MutationReset,
+		Generation:    s.generation,
+		OldGeneration: oldGeneration,
+	}
+	result := ResetResult{
+		Status:     ResetApplied,
+		Generation: s.generation,
+		Before:     before,
+		Delta:      delta,
+	}
+	s.emitEvent(ctx, Event{
+		SessionID:  s.id,
+		RulesetID:  s.revision.ID(),
+		Sequence:   s.nextEventSequence + 1,
+		Timestamp:  time.Now(),
+		Type:       EventReset,
+		Generation: s.generation,
+		FactIDs:    nil,
 		Delta:      &delta,
 	})
 	s.nextEventSequence++
@@ -498,6 +626,169 @@ func changedFields(beforeFields Fields, beforePresence map[string]FieldPresence,
 	return changes
 }
 
+func removeFactIDFromSlice(ids []FactID, target FactID) []FactID {
+	for i, id := range ids {
+		if id != target {
+			continue
+		}
+		copy(ids[i:], ids[i+1:])
+		ids = ids[:len(ids)-1]
+		break
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func (s *Session) snapshotLocked() Snapshot {
+	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
+	for _, id := range s.insertionOrder {
+		fact, ok := s.factsByID[id]
+		if !ok {
+			continue
+		}
+		facts = append(facts, fact.snapshot())
+	}
+
+	return newSnapshot(s.id, s.revision.ID(), s.generation, facts)
+}
+
+type factWorkspace struct {
+	generation       Generation
+	sequence         *uint64
+	recency          *Recency
+	insertionOrder   *[]FactID
+	factsByID        map[FactID]*workingFact
+	factsByDuplicate map[DuplicateKey]FactID
+	factsByTemplate  map[TemplateKey][]FactID
+	factsByName      map[string][]FactID
+}
+
+func newFactWorkspace(generation Generation) *factWorkspace {
+	var sequence uint64
+	var recency Recency
+	insertionOrder := make([]FactID, 0)
+	return &factWorkspace{
+		generation:       generation,
+		sequence:         &sequence,
+		recency:          &recency,
+		insertionOrder:   &insertionOrder,
+		factsByID:        make(map[FactID]*workingFact),
+		factsByDuplicate: make(map[DuplicateKey]FactID),
+		factsByTemplate:  make(map[TemplateKey][]FactID),
+		factsByName:      make(map[string][]FactID),
+	}
+}
+
+func (w *factWorkspace) nextFactSequence() uint64 {
+	if w == nil || w.sequence == nil {
+		return 0
+	}
+	return *w.sequence
+}
+
+func (w *factWorkspace) nextRecency() Recency {
+	if w == nil || w.recency == nil {
+		return 0
+	}
+	return *w.recency
+}
+
+func (w *factWorkspace) factsByInsertionOrder() []FactID {
+	if w == nil || w.insertionOrder == nil {
+		return nil
+	}
+	return *w.insertionOrder
+}
+
+func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {
+	canonical := normalizeFields(fields)
+	template, templateExists := revision.TemplateByKey(templateKey)
+	if templateKey != "" && !templateExists {
+		return nil, "", false, &ValidationError{
+			TemplateName: string(templateKey),
+			Reason:       "unknown template key",
+		}
+	}
+
+	if templateExists {
+		name = template.Name()
+	}
+
+	var presence map[string]FieldPresence
+	var err error
+	if templateExists {
+		canonical, presence, err = template.applyDefaultsAndValidate(canonical)
+		if err != nil {
+			return nil, "", false, err
+		}
+	} else {
+		presence = make(map[string]FieldPresence, len(canonical))
+		for field := range canonical {
+			presence[field] = FieldPresenceExplicit
+		}
+	}
+
+	templateDuplicatePolicy := template.duplicatePolicy
+	duplicateKey := makeDuplicateKeyForTemplate(name, template, canonical)
+	if templateExists && templateDuplicatePolicy == DuplicateAllow {
+		duplicateKey = ""
+	}
+
+	if templateDuplicatePolicy != DuplicateAllow {
+		existingID, ok := w.factsByDuplicate[duplicateKey]
+		if ok {
+			existing, ok := w.factsByID[existingID]
+			if ok {
+				return existing, duplicateKey, false, nil
+			}
+			delete(w.factsByDuplicate, duplicateKey)
+		}
+	}
+
+	*w.sequence++
+	*w.recency++
+	id := newFactID(generation, *w.sequence)
+	fact := &workingFact{
+		id:            id,
+		name:          name,
+		templateKey:   templateKey,
+		version:       1,
+		recency:       *w.recency,
+		generation:    generation,
+		fields:        canonical,
+		fieldPresence: presence,
+		dupKey:        duplicateKey,
+	}
+
+	w.factsByID[id] = fact
+	if templateDuplicatePolicy != DuplicateAllow {
+		w.factsByDuplicate[duplicateKey] = id
+	}
+	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
+	w.factsByName[name] = append(w.factsByName[name], id)
+	*w.insertionOrder = append(*w.insertionOrder, id)
+
+	return fact, duplicateKey, true, nil
+}
+
+func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionInitialFact) error {
+	for _, initial := range initials {
+		if initial.TemplateKey == "" && initial.Name == "" {
+			return &ValidationError{TemplateName: "session", Reason: "initializer must set name or template key"}
+		}
+		if initial.TemplateKey != "" && initial.Name != "" {
+			return &ValidationError{TemplateName: initial.Name, Reason: "initializer must not set both name and template key"}
+		}
+		_, _, _, err := w.insertFact(revision, w.generation, initial.Name, initial.TemplateKey, initial.Fields)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Session) beginMutation() bool {
 	if s == nil {
 		return false
@@ -604,7 +895,6 @@ func (s *Session) resetWorkingMemory() {
 	s.generation++
 	s.nextFactSequence = 0
 	s.nextRecency = 0
-	s.nextEventSequence = 0
 	s.factsByID = make(map[FactID]*workingFact)
 	s.factsByDuplicate = make(map[DuplicateKey]FactID)
 	s.factsByTemplate = make(map[TemplateKey][]FactID)
