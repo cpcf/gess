@@ -1,6 +1,9 @@
 package gess
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type SessionOption func(*sessionConfig)
 
@@ -29,14 +32,19 @@ type Session struct {
 	generation Generation
 	listeners  []EventListener
 	closed     bool
+	mu         struct {
+		mutate chan struct{}
+		lock   chan struct{}
+	}
 
-	nextFactSequence uint64
-	nextRecency      Recency
-	factsByID        map[FactID]*workingFact
-	factsByDuplicate map[DuplicateKey]FactID
-	factsByTemplate  map[TemplateKey][]FactID
-	factsByName      map[string][]FactID
-	insertionOrder   []FactID
+	nextFactSequence  uint64
+	nextRecency       Recency
+	factsByID         map[FactID]*workingFact
+	factsByDuplicate  map[DuplicateKey]FactID
+	factsByTemplate   map[TemplateKey][]FactID
+	factsByName       map[string][]FactID
+	insertionOrder    []FactID
+	nextEventSequence uint64
 }
 
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
@@ -55,10 +63,14 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	copy(listeners, cfg.listeners)
 
 	return &Session{
-		id:               cfg.id,
-		revision:         revision,
-		generation:       1,
-		listeners:        listeners,
+		id:         cfg.id,
+		revision:   revision,
+		generation: 1,
+		listeners:  listeners,
+		mu: struct {
+			mutate chan struct{}
+			lock   chan struct{}
+		}{make(chan struct{}, 1), make(chan struct{}, 1)},
 		factsByID:        make(map[FactID]*workingFact),
 		factsByDuplicate: make(map[DuplicateKey]FactID),
 		factsByTemplate:  make(map[TemplateKey][]FactID),
@@ -97,6 +109,10 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
+	if !s.lock() {
+		return Snapshot{}, ErrConcurrencyMisuse
+	}
+	defer s.unlock()
 
 	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
 	for _, id := range s.insertionOrder {
@@ -118,21 +134,52 @@ func (s *Session) Close() error {
 	return nil
 }
 
+func (s *Session) Assert(ctx context.Context, name string, fields Fields) (AssertResult, error) {
+	return s.insertFactWithContext(ctx, name, "", fields)
+}
+
+func (s *Session) AssertTemplate(ctx context.Context, templateKey TemplateKey, fields Fields) (AssertResult, error) {
+	return s.insertFactWithContext(ctx, "", templateKey, fields)
+}
+
 func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields) (AssertResult, error) {
+	return s.insertFactWithContext(context.Background(), name, templateKey, fields)
+}
+
+func (s *Session) insertFactWithContext(ctx context.Context, name string, templateKey TemplateKey, fields Fields) (AssertResult, error) {
+	if s == nil {
+		return AssertResult{Status: AssertClosed}, ErrClosedSession
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return AssertResult{Status: AssertValidationFailure}, err
+	}
+	if !s.beginMutation() {
+		return AssertResult{Status: AssertConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	defer s.endMutation()
+
 	if s == nil || s.closed {
-		if s == nil {
-			return AssertResult{}, ErrClosedSession
-		}
-		return AssertResult{}, ErrClosedSession
+		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
 
 	canonical := normalizeFields(fields)
 	template, templateExists := s.revision.TemplateByKey(templateKey)
 	if templateKey != "" && !templateExists {
-		return AssertResult{}, &ValidationError{
+		result := AssertResult{Status: AssertValidationFailure}
+		if name != "" {
+			result.Fact = FactSnapshot{name: name}
+		}
+		return result, &ValidationError{
 			TemplateName: string(templateKey),
 			Reason:       "unknown template key",
 		}
+	}
+	if templateExists {
+		name = template.Name()
 	}
 
 	var presence map[string]FieldPresence
@@ -140,7 +187,7 @@ func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields
 	if templateExists {
 		canonical, presence, err = template.applyDefaultsAndValidate(canonical)
 		if err != nil {
-			return AssertResult{}, err
+			return AssertResult{Status: AssertValidationFailure}, err
 		}
 	} else {
 		presence = make(map[string]FieldPresence, len(canonical))
@@ -159,7 +206,12 @@ func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields
 		if existingID, ok := s.factsByDuplicate[duplicateKey]; ok {
 			fact, ok := s.factsByID[existingID]
 			if ok {
-				return AssertResult{Status: AssertExisting, Fact: fact.snapshot()}, nil
+				factSnapshot := fact.snapshot()
+				return AssertResult{
+					Status:       AssertExisting,
+					Fact:         factSnapshot,
+					DuplicateKey: duplicateKey,
+				}, nil
 			}
 		}
 	}
@@ -189,15 +241,98 @@ func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields
 
 	snapshot := fact.snapshot()
 	delta := MutationDelta{
-		Kind:       MutationAssert,
-		Generation: s.generation,
-		Recency:    fact.recency,
-		FactID:     fact.id,
-		NewVersion: fact.version,
-		After:      &snapshot,
+		Kind:         MutationAssert,
+		Generation:   s.generation,
+		Recency:      fact.recency,
+		FactID:       fact.id,
+		NewVersion:   fact.version,
+		NewDuplicate: duplicateKey,
+		After:        &snapshot,
 	}
 
-	return AssertResult{Status: AssertInserted, Fact: snapshot, Delta: &delta}, nil
+	result := AssertResult{
+		Status:       AssertInserted,
+		Fact:         snapshot,
+		DuplicateKey: duplicateKey,
+		Delta:        &delta,
+	}
+	s.emitEvent(ctx, Event{
+		SessionID:  s.id,
+		RulesetID:  s.revision.ID(),
+		Sequence:   s.nextEventSequence + 1,
+		Timestamp:  time.Now(),
+		Type:       EventFactAsserted,
+		Generation: s.generation,
+		Recency:    fact.recency,
+		FactIDs:    []FactID{fact.id},
+		Delta:      &delta,
+	})
+	s.nextEventSequence++
+
+	return result, nil
+}
+
+func (s *Session) beginMutation() bool {
+	if s == nil {
+		return false
+	}
+	select {
+	case s.mu.mutate <- struct{}{}:
+		select {
+		case s.mu.lock <- struct{}{}:
+			return true
+		default:
+			<-s.mu.mutate
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func (s *Session) endMutation() {
+	if s == nil {
+		return
+	}
+	select {
+	case <-s.mu.lock:
+	default:
+	}
+	select {
+	case <-s.mu.mutate:
+	default:
+	}
+}
+
+func (s *Session) lock() bool {
+	select {
+	case s.mu.lock <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Session) unlock() {
+	if s == nil {
+		return
+	}
+	select {
+	case <-s.mu.lock:
+	default:
+	}
+}
+
+func (s *Session) emitEvent(ctx context.Context, event Event) {
+	if s == nil || len(s.listeners) == 0 {
+		return
+	}
+	for _, listener := range s.listeners {
+		if listener == nil {
+			continue
+		}
+		_ = listener.HandleEvent(ctx, event)
+	}
 }
 
 func (s *Session) factByID(id FactID) (FactSnapshot, bool) {
@@ -243,6 +378,7 @@ func (s *Session) resetWorkingMemory() {
 	s.generation++
 	s.nextFactSequence = 0
 	s.nextRecency = 0
+	s.nextEventSequence = 0
 	s.factsByID = make(map[FactID]*workingFact)
 	s.factsByDuplicate = make(map[DuplicateKey]FactID)
 	s.factsByTemplate = make(map[TemplateKey][]FactID)

@@ -40,14 +40,18 @@ func (d MutationDelta) FieldChanges() []FieldChange {
 type AssertStatus string
 
 const (
-	AssertInserted AssertStatus = "inserted"
-	AssertExisting AssertStatus = "existing"
+	AssertInserted          AssertStatus = "inserted"
+	AssertExisting          AssertStatus = "existing"
+	AssertValidationFailure AssertStatus = "validation_failure"
+	AssertClosed            AssertStatus = "closed"
+	AssertConcurrencyMisuse AssertStatus = "concurrency_misuse"
 )
 
 type AssertResult struct {
-	Status AssertStatus
-	Fact   FactSnapshot
-	Delta  *MutationDelta
+	Status       AssertStatus
+	Fact         FactSnapshot
+	DuplicateKey DuplicateKey
+	Delta        *MutationDelta
 }
 
 func (r AssertResult) Inserted() bool {
