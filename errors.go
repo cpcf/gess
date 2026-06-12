@@ -6,15 +6,16 @@ import (
 )
 
 var (
-	ErrInvalidRuleset    = errors.New("gess: invalid ruleset")
-	ErrClosedSession     = errors.New("gess: closed session")
-	ErrConcurrencyMisuse = errors.New("gess: concurrency misuse")
-	ErrActionFailed      = errors.New("gess: action failed")
-	ErrValidation        = errors.New("gess: validation failed")
-	ErrFactNotFound      = errors.New("gess: fact not found")
-	ErrStaleFactID       = errors.New("gess: stale fact id")
-	ErrDuplicateFact     = errors.New("gess: duplicate fact")
-	ErrMatcher           = errors.New("gess: matcher error")
+	ErrInvalidRuleset      = errors.New("gess: invalid ruleset")
+	ErrIncompatibleRuleset = errors.New("gess: incompatible ruleset")
+	ErrClosedSession       = errors.New("gess: closed session")
+	ErrConcurrencyMisuse   = errors.New("gess: concurrency misuse")
+	ErrActionFailed        = errors.New("gess: action failed")
+	ErrValidation          = errors.New("gess: validation failed")
+	ErrFactNotFound        = errors.New("gess: fact not found")
+	ErrStaleFactID         = errors.New("gess: stale fact id")
+	ErrDuplicateFact       = errors.New("gess: duplicate fact")
+	ErrMatcher             = errors.New("gess: matcher error")
 )
 
 type ValidationError struct {

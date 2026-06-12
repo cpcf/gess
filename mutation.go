@@ -232,3 +232,38 @@ type ResetResult struct {
 	Before     Snapshot
 	Delta      MutationDelta
 }
+
+type ApplyRulesetStatus string
+
+const (
+	ApplyRulesetApplied           ApplyRulesetStatus = "applied"
+	ApplyRulesetUnchanged         ApplyRulesetStatus = "unchanged"
+	ApplyRulesetIncompatible      ApplyRulesetStatus = "incompatible"
+	ApplyRulesetClosed            ApplyRulesetStatus = "closed"
+	ApplyRulesetConcurrencyMisuse ApplyRulesetStatus = "concurrency_misuse"
+)
+
+type RuleRevisionSummary struct {
+	RuleID     RuleID
+	RevisionID RuleRevisionID
+}
+
+type RuleReplacement struct {
+	RuleID        RuleID
+	OldRevisionID RuleRevisionID
+	NewRevisionID RuleRevisionID
+}
+
+type ApplyRulesetResult struct {
+	Status                 ApplyRulesetStatus
+	PreviousRulesetID      RulesetID
+	CurrentRulesetID       RulesetID
+	AddedRuleRevisions     []RuleRevisionSummary
+	RemovedRuleRevisions   []RuleRevisionSummary
+	ReplacedRuleRevisions  []RuleReplacement
+	UnchangedRuleRevisions []RuleRevisionSummary
+}
+
+func (r ApplyRulesetResult) Applied() bool {
+	return r.Status == ApplyRulesetApplied
+}

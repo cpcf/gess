@@ -225,6 +225,67 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	return changes, nil
 }
 
+func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []agendaChange {
+	if a == nil || len(revisionIDs) == 0 {
+		return nil
+	}
+
+	changes := make([]agendaChange, 0)
+	removed := make(map[activationKey]struct{})
+	for _, key := range a.pending {
+		current, ok := a.activations[key]
+		if !ok || current == nil {
+			continue
+		}
+		if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
+			continue
+		}
+		removed[key] = struct{}{}
+		if current.status != activationStatusPending {
+			continue
+		}
+		current.status = activationStatusDeactivated
+		changes = append(changes, agendaChange{
+			kind:       agendaChangeDeactivated,
+			activation: current.clone(),
+		})
+	}
+
+	nextActivations := make(map[activationKey]*activation, len(a.activations))
+	nextByFactID := make(map[FactID]map[activationKey]struct{}, len(a.byFactID))
+	nextByRevision := make(map[RuleRevisionID]map[activationKey]struct{}, len(a.byRevision))
+	nextPending := make([]activationKey, 0, len(a.pending))
+
+	for key, current := range a.activations {
+		if current == nil {
+			continue
+		}
+		if _, ok := revisionIDs[current.ruleRevisionID]; ok {
+			continue
+		}
+		nextActivations[key] = current
+		indexActivation(nextByFactID, nextByRevision, *current)
+	}
+
+	for _, key := range a.pending {
+		if _, ok := removed[key]; ok {
+			continue
+		}
+		current, ok := nextActivations[key]
+		if !ok || current.status != activationStatusPending {
+			continue
+		}
+		nextPending = append(nextPending, key)
+	}
+
+	a.activations = nextActivations
+	a.byFactID = nextByFactID
+	a.byRevision = nextByRevision
+	a.pending = nextPending
+
+	return changes
+}
+
 func (a *agenda) next() (activation, bool) {
 	if a == nil {
 		return activation{}, false

@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -519,6 +520,53 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	return result, nil
 }
 
+func (s *Session) ApplyRuleset(ctx context.Context, next *Ruleset) (ApplyRulesetResult, error) {
+	if s == nil {
+		return ApplyRulesetResult{Status: ApplyRulesetClosed}, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return ApplyRulesetResult{}, err
+	}
+	if s.shouldQueueMutationDuringRun(mutationOrigin{}) {
+		resultCh := make(chan queuedMutationResult, 1)
+		if s.enqueueMutationDuringRun(queuedMutation{
+			ctx: ctx,
+			apply: func(mutationCtx context.Context) (any, error) {
+				return s.applyRulesetImmediate(mutationCtx, next)
+			},
+			result: resultCh,
+		}) {
+			select {
+			case outcome := <-resultCh:
+				if outcome.err != nil {
+					if result, ok := outcome.value.(ApplyRulesetResult); ok {
+						return result, outcome.err
+					}
+					return ApplyRulesetResult{}, outcome.err
+				}
+				if result, ok := outcome.value.(ApplyRulesetResult); ok {
+					return result, nil
+				}
+				return ApplyRulesetResult{}, ErrInvalidRuleset
+			case <-ctx.Done():
+				return ApplyRulesetResult{}, ctx.Err()
+			}
+		}
+	}
+	locked, ok := s.beginMutationForOrigin(mutationOrigin{})
+	if !ok {
+		return ApplyRulesetResult{Status: ApplyRulesetConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+
+	return s.applyRulesetImmediate(ctx, next)
+}
+
 func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if s.closed {
 		return ResetResult{Status: ResetClosed}, ErrClosedSession
@@ -567,6 +615,83 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	return result, nil
 }
 
+func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (ApplyRulesetResult, error) {
+	if s.closed {
+		return ApplyRulesetResult{Status: ApplyRulesetClosed}, ErrClosedSession
+	}
+
+	previousID := RulesetID("")
+	if s.revision != nil {
+		previousID = s.revision.ID()
+	}
+	if next == nil {
+		return ApplyRulesetResult{
+			Status:            ApplyRulesetIncompatible,
+			PreviousRulesetID: previousID,
+		}, ErrIncompatibleRuleset
+	}
+
+	nextID := next.ID()
+	if nextID == previousID {
+		return ApplyRulesetResult{
+			Status:            ApplyRulesetUnchanged,
+			PreviousRulesetID: previousID,
+			CurrentRulesetID:  nextID,
+		}, nil
+	}
+	if s.revision == nil {
+		return ApplyRulesetResult{
+			Status:            ApplyRulesetIncompatible,
+			PreviousRulesetID: previousID,
+			CurrentRulesetID:  nextID,
+		}, ErrInvalidRuleset
+	}
+
+	snapshot := s.snapshotLocked()
+	if err := rulesetCompatibleWithSession(s.revision, next, snapshot, s.initials); err != nil {
+		return ApplyRulesetResult{
+			Status:            ApplyRulesetIncompatible,
+			PreviousRulesetID: previousID,
+			CurrentRulesetID:  nextID,
+		}, err
+	}
+
+	plan, err := classifyRulesetChanges(s.revision, next)
+	if err != nil {
+		return ApplyRulesetResult{
+			Status:            ApplyRulesetIncompatible,
+			PreviousRulesetID: previousID,
+			CurrentRulesetID:  nextID,
+		}, err
+	}
+
+	results, err := newNaiveMatcher(next).match(ctx, snapshot)
+	if err != nil {
+		return ApplyRulesetResult{}, err
+	}
+
+	s.revision = next
+	if s.agenda == nil {
+		s.agenda = newAgenda()
+	}
+	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
+	changes, err := s.agenda.reconcile(context.Background(), next, results)
+	if err != nil {
+		return ApplyRulesetResult{}, err
+	}
+	s.emitAgendaEvents(ctx, changes)
+
+	return ApplyRulesetResult{
+		Status:                 ApplyRulesetApplied,
+		PreviousRulesetID:      previousID,
+		CurrentRulesetID:       nextID,
+		AddedRuleRevisions:     plan.Added,
+		RemovedRuleRevisions:   plan.Removed,
+		ReplacedRuleRevisions:  plan.Replaced,
+		UnchangedRuleRevisions: plan.Unchanged,
+	}, nil
+}
+
 func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]agendaChange, error) {
 	if s == nil || s.closed {
 		return nil, ErrClosedSession
@@ -594,6 +719,114 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	}
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
+}
+
+type rulesetChangePlan struct {
+	Added     []RuleRevisionSummary
+	Removed   []RuleRevisionSummary
+	Replaced  []RuleReplacement
+	Unchanged []RuleRevisionSummary
+
+	purgeRevisions map[RuleRevisionID]struct{}
+}
+
+func classifyRulesetChanges(current, next *Ruleset) (rulesetChangePlan, error) {
+	plan := rulesetChangePlan{
+		purgeRevisions: make(map[RuleRevisionID]struct{}),
+	}
+	if current == nil || next == nil {
+		return plan, ErrInvalidRuleset
+	}
+
+	currentRules := current.Rules()
+	nextRules := next.Rules()
+
+	currentByID := make(map[RuleID]Rule, len(currentRules))
+	for _, rule := range currentRules {
+		currentByID[rule.ID()] = rule
+	}
+	nextByID := make(map[RuleID]Rule, len(nextRules))
+	for _, rule := range nextRules {
+		nextByID[rule.ID()] = rule
+	}
+
+	for _, rule := range nextRules {
+		currentRule, ok := currentByID[rule.ID()]
+		if !ok {
+			plan.Added = append(plan.Added, ruleRevisionSummaryForRule(rule))
+			continue
+		}
+		if currentRule.RevisionID() == rule.RevisionID() {
+			plan.Unchanged = append(plan.Unchanged, ruleRevisionSummaryForRule(rule))
+			continue
+		}
+		plan.Replaced = append(plan.Replaced, RuleReplacement{
+			RuleID:        rule.ID(),
+			OldRevisionID: currentRule.RevisionID(),
+			NewRevisionID: rule.RevisionID(),
+		})
+		plan.purgeRevisions[currentRule.RevisionID()] = struct{}{}
+	}
+
+	for _, rule := range currentRules {
+		if _, ok := nextByID[rule.ID()]; ok {
+			continue
+		}
+		plan.Removed = append(plan.Removed, ruleRevisionSummaryForRule(rule))
+		plan.purgeRevisions[rule.RevisionID()] = struct{}{}
+	}
+
+	return plan, nil
+}
+
+func ruleRevisionSummaryForRule(rule Rule) RuleRevisionSummary {
+	return RuleRevisionSummary{
+		RuleID:     rule.ID(),
+		RevisionID: rule.RevisionID(),
+	}
+}
+
+func rulesetCompatibleWithSession(current, next *Ruleset, snapshot Snapshot, initials []SessionInitialFact) error {
+	if current == nil || next == nil {
+		return ErrIncompatibleRuleset
+	}
+
+	for _, fact := range snapshot.Facts() {
+		templateKey := fact.TemplateKey()
+		if templateKey == "" {
+			continue
+		}
+		currentTemplate, ok := current.TemplateByKey(templateKey)
+		if !ok {
+			return ErrIncompatibleRuleset
+		}
+		nextTemplate, ok := next.TemplateByKey(templateKey)
+		if !ok {
+			return ErrIncompatibleRuleset
+		}
+		if !templatesCompatible(currentTemplate, nextTemplate) {
+			return ErrIncompatibleRuleset
+		}
+	}
+
+	for _, initial := range initials {
+		if initial.TemplateKey == "" {
+			continue
+		}
+		nextTemplate, ok := next.TemplateByKey(initial.TemplateKey)
+		if !ok {
+			return ErrIncompatibleRuleset
+		}
+		if _, _, err := nextTemplate.applyDefaultsAndValidate(initial.Fields); err != nil {
+			return ErrIncompatibleRuleset
+		}
+	}
+
+	return nil
+}
+
+func templatesCompatible(left, right Template) bool {
+	return reflect.DeepEqual(left.spec(), right.spec())
 }
 
 func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) {
@@ -1224,6 +1457,8 @@ func mutationResultNeedsReconcile(value any) bool {
 		return result.Status == RetractRemoved
 	case ResetResult:
 		return result.Status == ResetApplied
+	case ApplyRulesetResult:
+		return false
 	default:
 		return true
 	}
