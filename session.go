@@ -127,11 +127,40 @@ func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields
 	}
 
 	canonical := normalizeFields(fields)
-	duplicateKey := makeDuplicateKey(name, templateKey, canonical)
-	if existingID, ok := s.factsByDuplicate[duplicateKey]; ok {
-		fact, ok := s.factsByID[existingID]
-		if ok {
-			return AssertResult{Status: AssertExisting, Fact: fact.snapshot()}, nil
+	template, templateExists := s.revision.TemplateByKey(templateKey)
+	if templateKey != "" && !templateExists {
+		return AssertResult{}, &ValidationError{
+			TemplateName: string(templateKey),
+			Reason:       "unknown template key",
+		}
+	}
+
+	var presence map[string]FieldPresence
+	var err error
+	if templateExists {
+		canonical, presence, err = template.applyDefaultsAndValidate(canonical)
+		if err != nil {
+			return AssertResult{}, err
+		}
+	} else {
+		presence = make(map[string]FieldPresence, len(canonical))
+		for field := range canonical {
+			presence[field] = FieldPresenceExplicit
+		}
+	}
+
+	duplicateKey := makeDuplicateKeyForTemplate(name, template, canonical)
+	duplicatePolicy := template.duplicatePolicy
+	if templateExists && duplicatePolicy == DuplicateAllow {
+		duplicateKey = ""
+	}
+
+	if duplicatePolicy != DuplicateAllow {
+		if existingID, ok := s.factsByDuplicate[duplicateKey]; ok {
+			fact, ok := s.factsByID[existingID]
+			if ok {
+				return AssertResult{Status: AssertExisting, Fact: fact.snapshot()}, nil
+			}
 		}
 	}
 
@@ -139,18 +168,21 @@ func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields
 	s.nextRecency++
 	id := newFactID(s.generation, s.nextFactSequence)
 	fact := &workingFact{
-		id:          id,
-		name:        name,
-		templateKey: templateKey,
-		version:     1,
-		recency:     s.nextRecency,
-		generation:  s.generation,
-		fields:      canonical,
-		dupKey:      duplicateKey,
+		id:            id,
+		name:          name,
+		templateKey:   templateKey,
+		version:       1,
+		recency:       s.nextRecency,
+		generation:    s.generation,
+		fields:        canonical,
+		fieldPresence: presence,
+		dupKey:        duplicateKey,
 	}
 
 	s.factsByID[id] = fact
-	s.factsByDuplicate[duplicateKey] = id
+	if duplicatePolicy != DuplicateAllow {
+		s.factsByDuplicate[duplicateKey] = id
+	}
 	s.factsByTemplate[templateKey] = append(s.factsByTemplate[templateKey], id)
 	s.factsByName[name] = append(s.factsByName[name], id)
 	s.insertionOrder = append(s.insertionOrder, id)

@@ -16,6 +16,7 @@ func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation
 	for i, fact := range facts {
 		copied[i] = fact
 		copied[i].fields = cloneFields(fact.fields)
+		copied[i].fieldPresence = cloneFieldPresence(fact.fieldPresence)
 	}
 
 	byID := make(map[FactID]int, len(copied))
