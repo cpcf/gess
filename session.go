@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"sort"
 	"time"
 )
 
@@ -270,6 +271,231 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 	s.nextEventSequence++
 
 	return result, nil
+}
+
+func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (ModifyResult, error) {
+	if s == nil {
+		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return ModifyResult{}, err
+	}
+	if !s.beginMutation() {
+		return ModifyResult{Status: ModifyConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	defer s.endMutation()
+
+	if s.closed {
+		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
+	}
+
+	if id.Generation() != s.generation {
+		if id.Generation() != 0 && id.Generation() < s.generation {
+			return ModifyResult{Status: ModifyStale}, ErrStaleFactID
+		}
+		return ModifyResult{Status: ModifyMissing}, ErrFactNotFound
+	}
+
+	fact, ok := s.factsByID[id]
+	if !ok {
+		return ModifyResult{Status: ModifyMissing}, ErrFactNotFound
+	}
+
+	before := fact.snapshot()
+	template, templateExists := s.revision.TemplateByKey(fact.templateKey)
+
+	proposedFields, proposedPresence := applyPatchToFact(fact, patch)
+	var err error
+	if templateExists {
+		proposedFields, proposedPresence, err = template.applyDefaultsAndValidate(proposedFields)
+		if err != nil {
+			return ModifyResult{Status: ModifyValidationFailure, Fact: before}, err
+		}
+	}
+
+	newDuplicate := makeDuplicateKeyForTemplate(fact.name, template, proposedFields)
+	duplicatePolicy := template.duplicatePolicy
+	if templateExists && duplicatePolicy == DuplicateAllow {
+		newDuplicate = ""
+	}
+	oldDuplicate := fact.dupKey
+
+	if duplicatePolicy != DuplicateAllow {
+		if existingID, ok := s.factsByDuplicate[newDuplicate]; ok && existingID != fact.id {
+			return ModifyResult{Status: ModifyDuplicate, Fact: before}, ErrDuplicateFact
+		}
+	}
+
+	if fieldsAndPresenceEqual(before.fields, before.fieldPresence, proposedFields, proposedPresence) {
+		return ModifyResult{Status: ModifyNoOp, Fact: before}, nil
+	}
+
+	s.nextRecency++
+
+	if duplicatePolicy != DuplicateAllow && oldDuplicate != newDuplicate {
+		delete(s.factsByDuplicate, oldDuplicate)
+		s.factsByDuplicate[newDuplicate] = fact.id
+	}
+
+	oldVersion := fact.version
+	fact.version++
+	fact.recency = s.nextRecency
+	fact.fields = proposedFields
+	fact.fieldPresence = proposedPresence
+	fact.dupKey = newDuplicate
+
+	after := fact.snapshot()
+	delta := MutationDelta{
+		Kind:          MutationModify,
+		Generation:    s.generation,
+		Recency:       fact.recency,
+		FactID:        fact.id,
+		OldVersion:    oldVersion,
+		NewVersion:    fact.version,
+		Before:        &before,
+		After:         &after,
+		OldDuplicate:  oldDuplicate,
+		NewDuplicate:  newDuplicate,
+		ChangedFields: changedFields(before.fields, before.fieldPresence, proposedFields, proposedPresence),
+	}
+	result := ModifyResult{
+		Status: ModifyChanged,
+		Fact:   after,
+		Delta:  &delta,
+	}
+	s.emitEvent(ctx, Event{
+		SessionID:  s.id,
+		RulesetID:  s.revision.ID(),
+		Sequence:   s.nextEventSequence + 1,
+		Timestamp:  time.Now(),
+		Type:       EventFactModified,
+		Generation: s.generation,
+		Recency:    fact.recency,
+		FactIDs:    []FactID{fact.id},
+		Delta:      &delta,
+	})
+	s.nextEventSequence++
+
+	return result, nil
+}
+
+func applyPatchToFact(fact *workingFact, patch FactPatch) (Fields, map[string]FieldPresence) {
+	nextFields := cloneFields(fact.fields)
+	nextPresence := cloneFieldPresence(fact.fieldPresence)
+
+	for _, field := range patch.Unset {
+		delete(nextFields, field)
+		delete(nextPresence, field)
+	}
+
+	for field, value := range patch.Set {
+		nextFields = setField(nextFields, field, value)
+		if nextPresence == nil {
+			nextPresence = make(map[string]FieldPresence)
+		}
+		nextPresence[field] = FieldPresenceExplicit
+	}
+
+	return nextFields, nextPresence
+}
+
+func setField(fields Fields, field string, value Value) Fields {
+	if fields == nil {
+		fields = make(Fields)
+	}
+	fields[field] = cloneValue(value)
+	return fields
+}
+
+func fieldsAndPresenceEqual(leftFields Fields, leftPresence map[string]FieldPresence, rightFields Fields, rightPresence map[string]FieldPresence) bool {
+	if len(leftFields) != len(rightFields) {
+		return false
+	}
+	for key, left := range leftFields {
+		right, ok := rightFields[key]
+		if !ok || !left.Equal(right) {
+			return false
+		}
+	}
+	for key, right := range rightFields {
+		left, ok := leftFields[key]
+		if !ok || !left.Equal(right) {
+			return false
+		}
+	}
+
+	if len(leftPresence) != len(rightPresence) {
+		return false
+	}
+	for key, left := range leftPresence {
+		right, ok := rightPresence[key]
+		if !ok || left != right {
+			return false
+		}
+	}
+	for key, right := range rightPresence {
+		left, ok := leftPresence[key]
+		if !ok || left != right {
+			return false
+		}
+	}
+	return true
+}
+
+func changedFields(beforeFields Fields, beforePresence map[string]FieldPresence, afterFields Fields, afterPresence map[string]FieldPresence) []FieldChange {
+	keys := make(map[string]struct{}, len(beforeFields)+len(afterFields)+len(beforePresence)+len(afterPresence))
+	for key := range beforeFields {
+		keys[key] = struct{}{}
+	}
+	for key := range afterFields {
+		keys[key] = struct{}{}
+	}
+	for key := range beforePresence {
+		keys[key] = struct{}{}
+	}
+	for key := range afterPresence {
+		keys[key] = struct{}{}
+	}
+	orderedKeys := make([]string, 0, len(keys))
+	for key := range keys {
+		orderedKeys = append(orderedKeys, key)
+	}
+	sort.Strings(orderedKeys)
+
+	changes := make([]FieldChange, 0, len(orderedKeys))
+	for _, key := range orderedKeys {
+		beforePresenceType, beforeHasPresence := beforePresence[key]
+		beforeValue, beforeHasValue := beforeFields[key]
+		afterPresenceType, afterHasPresence := afterPresence[key]
+		afterValue, afterHasValue := afterFields[key]
+
+		beforeEquivalent := beforeHasPresence == afterHasPresence && beforePresenceType == afterPresenceType
+		beforeEquivalent = beforeEquivalent && beforeHasValue == afterHasValue
+		if beforeEquivalent && beforeHasValue {
+			beforeEquivalent = beforeValue.Equal(afterValue)
+		}
+		if beforeEquivalent {
+			continue
+		}
+
+		if !beforeHasValue {
+			beforeValue = Value{}
+		}
+		if !afterHasValue {
+			afterValue = Value{}
+		}
+
+		changes = append(changes, FieldChange{
+			Field: key,
+			Old:   cloneValue(beforeValue),
+			New:   cloneValue(afterValue),
+		})
+	}
+
+	return changes
 }
 
 func (s *Session) beginMutation() bool {

@@ -17,6 +17,11 @@ type FieldChange struct {
 	New   Value
 }
 
+type FactPatch struct {
+	Set   Fields
+	Unset []string
+}
+
 type MutationDelta struct {
 	Kind          MutationKind
 	Generation    Generation
@@ -61,10 +66,14 @@ func (r AssertResult) Inserted() bool {
 type ModifyStatus string
 
 const (
-	ModifyChanged ModifyStatus = "changed"
-	ModifyNoOp    ModifyStatus = "no_op"
-	ModifyMissing ModifyStatus = "missing"
-	ModifyStale   ModifyStatus = "stale"
+	ModifyChanged           ModifyStatus = "changed"
+	ModifyNoOp              ModifyStatus = "no_op"
+	ModifyMissing           ModifyStatus = "missing"
+	ModifyStale             ModifyStatus = "stale"
+	ModifyValidationFailure ModifyStatus = "validation_failure"
+	ModifyDuplicate         ModifyStatus = "duplicate"
+	ModifyClosed            ModifyStatus = "closed"
+	ModifyConcurrencyMisuse ModifyStatus = "concurrency_misuse"
 )
 
 type ModifyResult struct {
