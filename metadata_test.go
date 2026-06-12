@@ -98,6 +98,9 @@ func TestMutationDeltasCarryMatcherMetadataAndCopies(t *testing.T) {
 	if modified.Delta.SupportAfter.State != FactSupportStated {
 		t.Fatalf("delta support after = %q, want %q", modified.Delta.SupportAfter.State, FactSupportStated)
 	}
+	if modified.Delta.ActivationID != "" || modified.Delta.RuleID != "" || modified.Delta.RuleRevisionID != "" {
+		t.Fatalf("external modify delta carried origin metadata: %#v", modified.Delta)
+	}
 
 	changes := modified.Delta.FieldChanges()
 	if len(changes) != 1 || changes[0].Field != "name" {
@@ -127,6 +130,9 @@ func TestMutationDeltasCarryMatcherMetadataAndCopies(t *testing.T) {
 	if retracted.Delta.SupportBefore.State != FactSupportStated {
 		t.Fatalf("retract before support state = %q, want %q", retracted.Delta.SupportBefore.State, FactSupportStated)
 	}
+	if retracted.Delta.ActivationID != "" || retracted.Delta.RuleID != "" || retracted.Delta.RuleRevisionID != "" {
+		t.Fatalf("external retract delta carried origin metadata: %#v", retracted.Delta)
+	}
 
 	resetResult, err := session.Reset(context.Background())
 	if err != nil {
@@ -137,6 +143,9 @@ func TestMutationDeltasCarryMatcherMetadataAndCopies(t *testing.T) {
 	}
 	if resetResult.Delta.OldGeneration != retracted.Fact.Generation() {
 		t.Fatalf("reset old generation = %d, want %d", resetResult.Delta.OldGeneration, retracted.Fact.Generation())
+	}
+	if resetResult.Delta.ActivationID != "" || resetResult.Delta.RuleID != "" || resetResult.Delta.RuleRevisionID != "" {
+		t.Fatalf("external reset delta carried origin metadata: %#v", resetResult.Delta)
 	}
 
 	if len(collector.Events()) != 4 {

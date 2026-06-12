@@ -41,21 +41,30 @@ type FactPatch struct {
 	Unset []string
 }
 
+type mutationOrigin struct {
+	ActivationID   ActivationID
+	RuleID         RuleID
+	RuleRevisionID RuleRevisionID
+}
+
 type MutationDelta struct {
-	Kind          MutationKind
-	Generation    Generation
-	OldGeneration Generation
-	SupportBefore FactSupportProvenance
-	SupportAfter  FactSupportProvenance
-	Recency       Recency
-	FactID        FactID
-	OldVersion    FactVersion
-	NewVersion    FactVersion
-	Before        *FactSnapshot
-	After         *FactSnapshot
-	OldDuplicate  DuplicateKey
-	NewDuplicate  DuplicateKey
-	ChangedFields []FieldChange
+	Kind           MutationKind
+	Generation     Generation
+	OldGeneration  Generation
+	ActivationID   ActivationID
+	RuleID         RuleID
+	RuleRevisionID RuleRevisionID
+	SupportBefore  FactSupportProvenance
+	SupportAfter   FactSupportProvenance
+	Recency        Recency
+	FactID         FactID
+	OldVersion     FactVersion
+	NewVersion     FactVersion
+	Before         *FactSnapshot
+	After          *FactSnapshot
+	OldDuplicate   DuplicateKey
+	NewDuplicate   DuplicateKey
+	ChangedFields  []FieldChange
 }
 
 func (d MutationDelta) FieldChanges() []FieldChange {

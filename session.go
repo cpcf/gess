@@ -190,18 +190,18 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) Assert(ctx context.Context, name string, fields Fields) (AssertResult, error) {
-	return s.insertFactWithContext(ctx, name, "", fields)
+	return s.insertFactWithContextAndOrigin(ctx, name, "", fields, mutationOrigin{})
 }
 
 func (s *Session) AssertTemplate(ctx context.Context, templateKey TemplateKey, fields Fields) (AssertResult, error) {
-	return s.insertFactWithContext(ctx, "", templateKey, fields)
+	return s.insertFactWithContextAndOrigin(ctx, "", templateKey, fields, mutationOrigin{})
 }
 
 func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields) (AssertResult, error) {
-	return s.insertFactWithContext(context.Background(), name, templateKey, fields)
+	return s.insertFactWithContextAndOrigin(context.Background(), name, templateKey, fields, mutationOrigin{})
 }
 
-func (s *Session) insertFactWithContext(ctx context.Context, name string, templateKey TemplateKey, fields Fields) (AssertResult, error) {
+func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin) (AssertResult, error) {
 	if s == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
@@ -244,14 +244,17 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 
 	snapshot := fact.snapshot()
 	delta := MutationDelta{
-		Kind:         MutationAssert,
-		Generation:   s.generation,
-		SupportAfter: snapshot.Support(),
-		Recency:      fact.recency,
-		FactID:       fact.id,
-		NewVersion:   fact.version,
-		NewDuplicate: duplicateKey,
-		After:        &snapshot,
+		Kind:           MutationAssert,
+		Generation:     s.generation,
+		ActivationID:   origin.ActivationID,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		SupportAfter:   snapshot.Support(),
+		Recency:        fact.recency,
+		FactID:         fact.id,
+		NewVersion:     fact.version,
+		NewDuplicate:   duplicateKey,
+		After:          &snapshot,
 	}
 
 	result := AssertResult{
@@ -261,15 +264,18 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 		Delta:        &delta,
 	}
 	s.emitEvent(ctx, Event{
-		SessionID:  s.id,
-		RulesetID:  s.revision.ID(),
-		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  s.eventClock(),
-		Type:       EventFactAsserted,
-		Generation: s.generation,
-		Recency:    fact.recency,
-		FactIDs:    []FactID{fact.id},
-		Delta:      &delta,
+		SessionID:      s.id,
+		RulesetID:      s.revision.ID(),
+		Sequence:       s.nextEventSequence + 1,
+		Timestamp:      s.eventClock(),
+		Type:           EventFactAsserted,
+		Generation:     s.generation,
+		Recency:        fact.recency,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		ActivationID:   origin.ActivationID,
+		FactIDs:        []FactID{fact.id},
+		Delta:          &delta,
 	})
 	s.nextEventSequence++
 
@@ -277,6 +283,10 @@ func (s *Session) insertFactWithContext(ctx context.Context, name string, templa
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
+	return s.retractWithContextAndOrigin(ctx, id, mutationOrigin{})
+}
+
+func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, origin mutationOrigin) (RetractResult, error) {
 	if s == nil {
 		return RetractResult{Status: RetractClosed}, ErrClosedSession
 	}
@@ -328,14 +338,17 @@ func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error)
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 
 	delta := MutationDelta{
-		Kind:          MutationRetract,
-		Generation:    s.generation,
-		Recency:       fact.recency,
-		FactID:        fact.id,
-		SupportBefore: before.Support(),
-		OldVersion:    oldVersion,
-		OldDuplicate:  oldDuplicate,
-		Before:        &before,
+		Kind:           MutationRetract,
+		Generation:     s.generation,
+		ActivationID:   origin.ActivationID,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		Recency:        fact.recency,
+		FactID:         fact.id,
+		SupportBefore:  before.Support(),
+		OldVersion:     oldVersion,
+		OldDuplicate:   oldDuplicate,
+		Before:         &before,
 	}
 
 	result := RetractResult{
@@ -344,15 +357,18 @@ func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error)
 		Delta:  &delta,
 	}
 	s.emitEvent(ctx, Event{
-		SessionID:  s.id,
-		RulesetID:  s.revision.ID(),
-		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  s.eventClock(),
-		Type:       EventFactRetracted,
-		Generation: s.generation,
-		Recency:    fact.recency,
-		FactIDs:    []FactID{fact.id},
-		Delta:      &delta,
+		SessionID:      s.id,
+		RulesetID:      s.revision.ID(),
+		Sequence:       s.nextEventSequence + 1,
+		Timestamp:      s.eventClock(),
+		Type:           EventFactRetracted,
+		Generation:     s.generation,
+		Recency:        fact.recency,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		ActivationID:   origin.ActivationID,
+		FactIDs:        []FactID{fact.id},
+		Delta:          &delta,
 	})
 	s.nextEventSequence++
 
@@ -465,6 +481,10 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 }
 
 func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (ModifyResult, error) {
+	return s.modifyWithContextAndOrigin(ctx, id, patch, mutationOrigin{})
+}
+
+func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, patch FactPatch, origin mutationOrigin) (ModifyResult, error) {
 	if s == nil {
 		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
 	}
@@ -540,19 +560,22 @@ func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (Modif
 
 	after := fact.snapshot()
 	delta := MutationDelta{
-		Kind:          MutationModify,
-		Generation:    s.generation,
-		Recency:       fact.recency,
-		FactID:        fact.id,
-		SupportBefore: before.Support(),
-		SupportAfter:  after.Support(),
-		OldVersion:    oldVersion,
-		NewVersion:    fact.version,
-		Before:        &before,
-		After:         &after,
-		OldDuplicate:  oldDuplicate,
-		NewDuplicate:  newDuplicate,
-		ChangedFields: changedFields(before.fields, before.fieldPresence, proposedFields, proposedPresence),
+		Kind:           MutationModify,
+		Generation:     s.generation,
+		ActivationID:   origin.ActivationID,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		Recency:        fact.recency,
+		FactID:         fact.id,
+		SupportBefore:  before.Support(),
+		SupportAfter:   after.Support(),
+		OldVersion:     oldVersion,
+		NewVersion:     fact.version,
+		Before:         &before,
+		After:          &after,
+		OldDuplicate:   oldDuplicate,
+		NewDuplicate:   newDuplicate,
+		ChangedFields:  changedFields(before.fields, before.fieldPresence, proposedFields, proposedPresence),
 	}
 	result := ModifyResult{
 		Status: ModifyChanged,
@@ -560,15 +583,18 @@ func (s *Session) Modify(ctx context.Context, id FactID, patch FactPatch) (Modif
 		Delta:  &delta,
 	}
 	s.emitEvent(ctx, Event{
-		SessionID:  s.id,
-		RulesetID:  s.revision.ID(),
-		Sequence:   s.nextEventSequence + 1,
-		Timestamp:  s.eventClock(),
-		Type:       EventFactModified,
-		Generation: s.generation,
-		Recency:    fact.recency,
-		FactIDs:    []FactID{fact.id},
-		Delta:      &delta,
+		SessionID:      s.id,
+		RulesetID:      s.revision.ID(),
+		Sequence:       s.nextEventSequence + 1,
+		Timestamp:      s.eventClock(),
+		Type:           EventFactModified,
+		Generation:     s.generation,
+		Recency:        fact.recency,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		ActivationID:   origin.ActivationID,
+		FactIDs:        []FactID{fact.id},
+		Delta:          &delta,
 	})
 	s.nextEventSequence++
 
