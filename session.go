@@ -55,21 +55,23 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 type Session struct {
-	id              SessionID
-	revision        *Ruleset
-	agenda          *agenda
-	generation      Generation
-	initials        []SessionInitialFact
-	listeners       []EventListener
-	eventClock      func() time.Time
-	closed          bool
-	runGuard        chan struct{}
-	runState        atomic.Value
-	agendaReady     bool
-	agendaDirty     bool
-	mutationQueueMu sync.Mutex
-	mutationQueue   []queuedMutation
-	mu              struct {
+	id               SessionID
+	revision         *Ruleset
+	agenda           *agenda
+	generation       Generation
+	initials         []SessionInitialFact
+	initialCount     int
+	compiledInitials []compiledSessionInitialFact
+	listeners        []EventListener
+	eventClock       func() time.Time
+	closed           bool
+	runGuard         chan struct{}
+	runState         atomic.Value
+	agendaReady      bool
+	agendaDirty      bool
+	mutationQueueMu  sync.Mutex
+	mutationQueue    []queuedMutation
+	mu               struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -127,21 +129,25 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	state.factsByName = make(map[string][]FactID)
 	state.factsByDuplicate = make(map[DuplicateKey]FactID)
 
-	if len(initials) > 0 {
-		if err := state.applyInitialFacts(revision, initials); err != nil {
-			return nil, err
-		}
+	compiledInitials, err := compileSessionInitialFacts(revision, initials)
+	if err != nil {
+		return nil, err
+	}
+	if len(compiledInitials) > 0 {
+		state.applyCompiledInitialFacts(compiledInitials)
 	}
 
 	session := &Session{
-		id:         cfg.id,
-		revision:   revision,
-		agenda:     newAgenda(),
-		generation: 1,
-		initials:   initials,
-		listeners:  listeners,
-		eventClock: cfg.eventClock,
-		runGuard:   make(chan struct{}, 1),
+		id:               cfg.id,
+		revision:         revision,
+		agenda:           newAgenda(),
+		generation:       1,
+		initials:         initials,
+		initialCount:     len(initials),
+		compiledInitials: compiledInitials,
+		listeners:        listeners,
+		eventClock:       cfg.eventClock,
+		runGuard:         make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
@@ -287,7 +293,7 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
 				return result, err
 			}
 		} else {
@@ -419,7 +425,7 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
 				return result, err
 			}
 		} else {
@@ -528,7 +534,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+	if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -586,11 +592,14 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		return ResetResult{Status: ResetClosed}, ErrClosedSession
 	}
 
-	before := s.snapshotLocked()
-	next := newFactWorkspace(s.generation + 1)
-	if err := next.applyInitialFacts(s.revision, s.initials); err != nil {
-		return ResetResult{Status: ResetValidationFailure, Before: before}, err
+	compiledInitials, err := s.compiledResetInitials()
+	if err != nil {
+		return ResetResult{Status: ResetValidationFailure, Before: s.snapshotLocked()}, err
 	}
+
+	before := s.detachedSnapshotLocked()
+	next := newFactWorkspace(s.generation + 1)
+	next.applyCompiledInitialFacts(compiledInitials)
 
 	oldGeneration := s.generation
 	s.generation = s.generation + 1
@@ -665,7 +674,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		}, ErrInvalidRuleset
 	}
 
-	snapshot := s.snapshotLocked()
+	snapshot := s.indexedSnapshotLocked()
 	if err := rulesetCompatibleWithSession(s.revision, next, snapshot, s.initials); err != nil {
 		return ApplyRulesetResult{
 			Status:            ApplyRulesetIncompatible,
@@ -918,7 +927,7 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.snapshotLocked()); err != nil {
+			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
 				return result, err
 			}
 		} else {
@@ -1165,6 +1174,18 @@ func removeFactIDFromSlice(ids []FactID, target FactID) []FactID {
 }
 
 func (s *Session) snapshotLocked() Snapshot {
+	return s.snapshotLockedWithOptions(false, true)
+}
+
+func (s *Session) indexedSnapshotLocked() Snapshot {
+	return s.snapshotLockedWithOptions(true, false)
+}
+
+func (s *Session) detachedSnapshotLocked() Snapshot {
+	return s.snapshotLockedWithOptions(false, false)
+}
+
+func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFacts bool) Snapshot {
 	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
 	for _, id := range s.insertionOrder {
 		fact, ok := s.factsByID[id]
@@ -1174,21 +1195,25 @@ func (s *Session) snapshotLocked() Snapshot {
 		if fact.isTransient {
 			continue
 		}
-		facts = append(facts, fact.snapshot())
+		if cloneFacts {
+			facts = append(facts, fact.snapshot())
+		} else {
+			facts = append(facts, fact.detachedSnapshot())
+		}
 	}
 
-	byID := make(map[FactID]int, len(facts))
-	for i, fact := range facts {
-		byID[fact.ID()] = i
-	}
-
-	return Snapshot{
+	snapshot := Snapshot{
 		sessionID:  s.id,
 		rulesetID:  s.revision.ID(),
 		generation: s.generation,
 		facts:      facts,
-		byID:       byID,
 	}
+	if includeTargetIndexes {
+		snapshot.byID, snapshot.byName, snapshot.byTemplate = snapshotIndexes(facts)
+	} else {
+		snapshot.byID = snapshotIDIndex(facts)
+	}
+	return snapshot
 }
 
 type factWorkspace struct {
@@ -1326,6 +1351,139 @@ func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionI
 		}
 	}
 	return nil
+}
+
+type compiledSessionInitialFact struct {
+	name            string
+	templateKey     TemplateKey
+	fields          Fields
+	fieldPresence   map[string]FieldPresence
+	duplicatePolicy DuplicatePolicy
+	duplicateKey    DuplicateKey
+}
+
+func compileSessionInitialFacts(revision *Ruleset, initials []SessionInitialFact) ([]compiledSessionInitialFact, error) {
+	if len(initials) == 0 {
+		return nil, nil
+	}
+
+	compiled := make([]compiledSessionInitialFact, 0, len(initials))
+	seen := make(map[DuplicateKey]struct{}, len(initials))
+	for _, initial := range initials {
+		next, err := compileSessionInitialFact(revision, initial)
+		if err != nil {
+			return nil, err
+		}
+		if next.duplicatePolicy != DuplicateAllow {
+			if _, ok := seen[next.duplicateKey]; ok {
+				continue
+			}
+			seen[next.duplicateKey] = struct{}{}
+		}
+		compiled = append(compiled, next)
+	}
+	return compiled, nil
+}
+
+func (s *Session) compiledResetInitials() ([]compiledSessionInitialFact, error) {
+	if s == nil {
+		return nil, ErrClosedSession
+	}
+	if len(s.initials) == s.initialCount {
+		return s.compiledInitials, nil
+	}
+	compiled, err := compileSessionInitialFacts(s.revision, s.initials)
+	if err != nil {
+		return nil, err
+	}
+	s.initialCount = len(s.initials)
+	s.compiledInitials = compiled
+	return compiled, nil
+}
+
+func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (compiledSessionInitialFact, error) {
+	if initial.TemplateKey == "" && initial.Name == "" {
+		return compiledSessionInitialFact{}, &ValidationError{TemplateName: "session", Reason: "initializer must set name or template key"}
+	}
+	if initial.TemplateKey != "" && initial.Name != "" {
+		return compiledSessionInitialFact{}, &ValidationError{TemplateName: initial.Name, Reason: "initializer must not set both name and template key"}
+	}
+
+	name := initial.Name
+	templateKey := initial.TemplateKey
+	template, templateExists := revision.templateByKey(templateKey)
+	if templateKey != "" && !templateExists {
+		return compiledSessionInitialFact{}, &ValidationError{
+			TemplateName: string(templateKey),
+			Reason:       "unknown template key",
+		}
+	}
+	if templateExists {
+		name = template.Name()
+	}
+
+	fields := normalizeFields(initial.Fields)
+	var presence map[string]FieldPresence
+	var err error
+	if templateExists {
+		fields, presence, err = template.applyDefaultsAndValidate(fields)
+		if err != nil {
+			return compiledSessionInitialFact{}, err
+		}
+	} else {
+		presence = make(map[string]FieldPresence, len(fields))
+		for field := range fields {
+			presence[field] = FieldPresenceExplicit
+		}
+	}
+
+	duplicatePolicy := template.duplicatePolicy
+	duplicateKey := makeDuplicateKeyForTemplate(name, template, fields)
+	if templateExists && duplicatePolicy == DuplicateAllow {
+		duplicateKey = ""
+	}
+
+	return compiledSessionInitialFact{
+		name:            name,
+		templateKey:     templateKey,
+		fields:          fields,
+		fieldPresence:   presence,
+		duplicatePolicy: duplicatePolicy,
+		duplicateKey:    duplicateKey,
+	}, nil
+}
+
+func (w *factWorkspace) applyCompiledInitialFacts(initials []compiledSessionInitialFact) {
+	for _, initial := range initials {
+		w.insertCompiledInitialFact(initial)
+	}
+}
+
+func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitialFact) {
+	*w.sequence++
+	*w.recency++
+	id := newFactID(w.generation, *w.sequence)
+	fact := &workingFact{
+		id:            id,
+		name:          initial.name,
+		templateKey:   initial.templateKey,
+		version:       1,
+		recency:       *w.recency,
+		generation:    w.generation,
+		fields:        cloneFields(initial.fields),
+		fieldPresence: cloneFieldPresence(initial.fieldPresence),
+		dupKey:        initial.duplicateKey,
+		support:       FactSupportProvenance{State: FactSupportStated},
+		isTransient:   false,
+	}
+
+	w.factsByID[id] = fact
+	if initial.duplicatePolicy != DuplicateAllow {
+		w.factsByDuplicate[initial.duplicateKey] = id
+	}
+	w.factsByTemplate[initial.templateKey] = append(w.factsByTemplate[initial.templateKey], id)
+	w.factsByName[initial.name] = append(w.factsByName[initial.name], id)
+	*w.insertionOrder = append(*w.insertionOrder, id)
 }
 
 func (s *Session) currentRunState() runGuardState {
@@ -1489,7 +1647,7 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 			value, err := req.apply(mutationCtx)
 			s.endMutation()
 			if err == nil && mutationResultNeedsReconcile(value, s.revision) {
-				if _, reconcileErr := s.reconcileAgenda(ctx, s.snapshotLocked()); reconcileErr != nil {
+				if _, reconcileErr := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); reconcileErr != nil {
 					err = reconcileErr
 				}
 			}

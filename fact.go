@@ -56,6 +56,15 @@ func (f FactSnapshot) Fields() Fields {
 	return cloneFields(f.fields)
 }
 
+// Field returns a defensive copy of one fact field.
+func (f FactSnapshot) Field(name string) (Value, bool) {
+	value, ok := f.fields[name]
+	if !ok {
+		return Value{}, false
+	}
+	return cloneValue(value), true
+}
+
 func (f FactSnapshot) Support() FactSupportProvenance {
 	return f.support
 }
@@ -84,6 +93,20 @@ func (f *workingFact) snapshot() FactSnapshot {
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
+		support:       f.support,
+	}
+}
+
+func (f *workingFact) detachedSnapshot() FactSnapshot {
+	return FactSnapshot{
+		id:            f.id,
+		name:          f.name,
+		templateKey:   f.templateKey,
+		version:       f.version,
+		recency:       f.recency,
+		generation:    f.generation,
+		fields:        f.fields,
+		fieldPresence: f.fieldPresence,
 		support:       f.support,
 	}
 }

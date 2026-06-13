@@ -73,12 +73,7 @@ func (m *naiveMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatc
 			return nil, fmt.Errorf("%w: missing compiled rule %q", ErrMatcher, ruleName)
 		}
 
-		bindingSets, err := rule.matchBindingSets(ctx, snapshot)
-		if err != nil {
-			return nil, err
-		}
-
-		candidates, err := collectMatchCandidates(ctx, rule, snapshot, bindingSets)
+		candidates, err := rule.matchCandidates(ctx, snapshot)
 		if err != nil {
 			return nil, err
 		}
@@ -124,17 +119,21 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 }
 
 func buildMatchCandidate(rule compiledRule, snapshot Snapshot, set bindingSet) (matchCandidate, error) {
+	return buildMatchCandidateFromMatches(rule, snapshot, set.matches)
+}
+
+func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matches []conditionMatch) (matchCandidate, error) {
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
-	if len(set.matches) == 0 {
+	if len(matches) == 0 {
 		return matchCandidate{}, fmt.Errorf("%w: empty binding set for rule %q", ErrMatcher, rule.name)
 	}
 
-	entries := make([]bindingTupleEntry, len(set.matches))
+	entries := make([]bindingTupleEntry, len(matches))
 	maxRecency := Recency(0)
 	aggregateRecency := Recency(0)
-	for i, match := range set.matches {
+	for i, match := range matches {
 		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) || match.bindingSlot >= len(rule.conditionPlans) {
 			return matchCandidate{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
 		}
@@ -210,33 +209,18 @@ func candidateKeyFor(ruleID RuleID, revisionID RuleRevisionID, generation Genera
 	}
 
 	var b strings.Builder
-	b.Grow(128 + len(orderedBindings)*64)
-	b.WriteString("gess/match-candidate/v2|rule=")
+	b.Grow(96 + len(orderedBindings)*32)
+	b.WriteString("gess/match-candidate/v3|rule=")
 	b.WriteString(ruleID.String())
-	b.WriteString("|revision=")
+	b.WriteString("|rev=")
 	b.WriteString(revisionID.String())
-	b.WriteString("|generation=")
-	b.WriteString(strconv.FormatUint(uint64(generation), 10))
-	b.WriteString("|bindings=")
+	b.WriteString("|gen=")
+	writeUintToBuilder(&b, uint64(generation))
+	b.WriteString("|facts=")
 	for _, entry := range orderedBindings {
-		b.WriteString(entry.binding)
+		writeFactIDToBuilder(&b, entry.factID)
 		b.WriteByte(':')
-		b.WriteString(strconv.Itoa(entry.bindingSlot))
-		b.WriteByte(':')
-		b.WriteString(strconv.Itoa(entry.conditionOrder))
-		b.WriteByte(':')
-		b.WriteString(entry.conditionID.String())
-		b.WriteByte(':')
-		for i, segment := range entry.conditionPath {
-			if i > 0 {
-				b.WriteByte('/')
-			}
-			b.WriteString(strconv.Itoa(segment))
-		}
-		b.WriteByte(':')
-		b.WriteString(entry.factID.String())
-		b.WriteByte(':')
-		b.WriteString(strconv.FormatUint(uint64(entry.factVersion), 10))
+		writeUintToBuilder(&b, uint64(entry.factVersion))
 		b.WriteByte(';')
 	}
 
@@ -266,9 +250,32 @@ func bindingTupleEntryLess(left, right bindingTupleEntry) bool {
 		return left.conditionID < right.conditionID
 	}
 	if left.factID != right.factID {
-		return left.factID.String() < right.factID.String()
+		return factIDLess(left.factID, right.factID)
 	}
 	return left.factVersion < right.factVersion
+}
+
+func factIDLess(left, right FactID) bool {
+	if left.generation != right.generation {
+		return left.generation < right.generation
+	}
+	return left.sequence < right.sequence
+}
+
+func writeFactIDToBuilder(b *strings.Builder, id FactID) {
+	if id.IsZero() {
+		b.WriteString("fact:zero")
+		return
+	}
+	b.WriteString("fact:g")
+	writeUintToBuilder(b, uint64(id.generation))
+	b.WriteByte(':')
+	writeUintToBuilder(b, id.sequence)
+}
+
+func writeUintToBuilder(b *strings.Builder, value uint64) {
+	var buf [20]byte
+	b.Write(strconv.AppendUint(buf[:0], value, 10))
 }
 
 func candidatePathFor(entries []bindingTupleEntry) []int {

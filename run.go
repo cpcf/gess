@@ -64,7 +64,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	}
 	snapshot := Snapshot{}
 	if !s.agendaReady || s.agendaDirty {
-		snapshot = s.snapshotLocked()
+		snapshot = s.indexedSnapshotLocked()
 		if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return abort(RunCanceled, 0, err)
@@ -126,7 +126,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		}
 
 		if s.consumeAgendaDirty() {
-			snapshot = s.snapshotLocked()
+			snapshot = s.indexedSnapshotLocked()
 			if _, err := s.reconcileAgenda(ctx, snapshot); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 					return abort(RunCanceled, fired, err)

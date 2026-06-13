@@ -12,6 +12,8 @@ type Snapshot struct {
 	generation Generation
 	facts      []FactSnapshot
 	byID       map[FactID]int
+	byName     map[string][]int
+	byTemplate map[TemplateKey][]int
 }
 
 func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation, facts []FactSnapshot) Snapshot {
@@ -20,10 +22,7 @@ func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation
 		copied[i] = fact.clone()
 	}
 
-	byID := make(map[FactID]int, len(copied))
-	for i, fact := range copied {
-		byID[fact.ID()] = i
-	}
+	byID := snapshotIDIndex(copied)
 
 	return Snapshot{
 		sessionID:  sessionID,
@@ -68,6 +67,20 @@ func (s Snapshot) Fact(id FactID) (FactSnapshot, bool) {
 }
 
 func (s Snapshot) FactsByName(name string) []FactSnapshot {
+	if s.byName == nil {
+		return s.factsByNameScan(name)
+	}
+	return s.factsByIndexes(s.byName[name])
+}
+
+func (s Snapshot) FactsByTemplateKey(templateKey TemplateKey) []FactSnapshot {
+	if s.byTemplate == nil {
+		return s.factsByTemplateKeyScan(templateKey)
+	}
+	return s.factsByIndexes(s.byTemplate[templateKey])
+}
+
+func (s Snapshot) factsByNameScan(name string) []FactSnapshot {
 	var out []FactSnapshot
 	for _, fact := range s.facts {
 		if fact.Name() == name {
@@ -77,7 +90,7 @@ func (s Snapshot) FactsByName(name string) []FactSnapshot {
 	return out
 }
 
-func (s Snapshot) FactsByTemplateKey(templateKey TemplateKey) []FactSnapshot {
+func (s Snapshot) factsByTemplateKeyScan(templateKey TemplateKey) []FactSnapshot {
 	var out []FactSnapshot
 	for _, fact := range s.facts {
 		if fact.TemplateKey() == templateKey {
@@ -85,6 +98,80 @@ func (s Snapshot) FactsByTemplateKey(templateKey TemplateKey) []FactSnapshot {
 		}
 	}
 	return out
+}
+
+func (s Snapshot) factsByIndexes(indexes []int) []FactSnapshot {
+	if len(indexes) == 0 {
+		return nil
+	}
+	out := make([]FactSnapshot, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(s.facts) {
+			continue
+		}
+		out = append(out, s.facts[idx].clone())
+	}
+	return out
+}
+
+func (s Snapshot) indexesForTarget(target conditionTarget) []int {
+	switch target.kind {
+	case conditionTargetName:
+		if s.byName == nil {
+			return s.indexesForNameScan(target.name)
+		}
+		return s.byName[target.name]
+	case conditionTargetTemplateKey:
+		if s.byTemplate == nil {
+			return s.indexesForTemplateKeyScan(target.templateKey)
+		}
+		return s.byTemplate[target.templateKey]
+	default:
+		return nil
+	}
+}
+
+func (s Snapshot) indexesForNameScan(name string) []int {
+	var out []int
+	for i, fact := range s.facts {
+		if fact.Name() == name {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func (s Snapshot) indexesForTemplateKeyScan(templateKey TemplateKey) []int {
+	var out []int
+	for i, fact := range s.facts {
+		if fact.TemplateKey() == templateKey {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func snapshotIndexes(facts []FactSnapshot) (map[FactID]int, map[string][]int, map[TemplateKey][]int) {
+	byID := snapshotIDIndex(facts)
+	byName := make(map[string][]int)
+	byTemplate := make(map[TemplateKey][]int)
+	for i, fact := range facts {
+		if fact.name != "" {
+			byName[fact.name] = append(byName[fact.name], i)
+		}
+		if fact.templateKey != "" {
+			byTemplate[fact.templateKey] = append(byTemplate[fact.templateKey], i)
+		}
+	}
+	return byID, byName, byTemplate
+}
+
+func snapshotIDIndex(facts []FactSnapshot) map[FactID]int {
+	byID := make(map[FactID]int, len(facts))
+	for i, fact := range facts {
+		byID[fact.ID()] = i
+	}
+	return byID
 }
 
 func (s Snapshot) String() string {

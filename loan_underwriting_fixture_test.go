@@ -412,6 +412,9 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 func addDecisionAction(t testing.TB, workspace *Workspace, name string, decisionKey TemplateKey, trace *[]string, ruleName, outcome, reason, tier string) {
 	t.Helper()
 
+	outcomeValue := mustValue(t, outcome)
+	reasonValue := mustValue(t, reason)
+	tierValue := mustValue(t, tier)
 	mustAddAction(t, workspace, ActionSpec{
 		Name: name,
 		Fn: func(ctx ActionContext) error {
@@ -419,20 +422,27 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 			if !ok {
 				t.Fatalf("action %s missing applicant binding", name)
 			}
-			id := loanUnderwritingStringField(t, applicant, "id")
+			idValue, ok := applicant.Field("id")
+			if !ok {
+				t.Fatalf("action %s missing applicant id", name)
+			}
+			if idValue.Kind() != ValueString {
+				t.Fatalf("action %s applicant id kind = %s, want %s", name, idValue.Kind(), ValueString)
+			}
 
 			if trace != nil {
+				id := idValue.data.(string)
 				*trace = append(*trace,
 					"FIRED|"+ruleName+"|"+id,
 					"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,
 				)
 			}
-			_, err := ctx.AssertTemplate(decisionKey, mustFields(t, map[string]any{
-				"applicant-id": id,
-				"outcome":      outcome,
-				"reason":       reason,
-				"tier":         tier,
-			}))
+			_, err := ctx.AssertTemplate(decisionKey, Fields{
+				"applicant-id": idValue,
+				"outcome":      outcomeValue,
+				"reason":       reasonValue,
+				"tier":         tierValue,
+			})
 			return err
 		},
 	})
@@ -469,19 +479,6 @@ func loanUnderwritingTemplateInitialFacts(t testing.TB) []SessionInitialFact {
 		initials[i].Name = ""
 	}
 	return initials
-}
-
-func loanUnderwritingStringField(t testing.TB, fact FactSnapshot, field string) string {
-	t.Helper()
-
-	value, ok := fact.Fields()[field]
-	if !ok {
-		t.Fatalf("fact %s missing field %s", fact.ID(), field)
-	}
-	if value.Kind() != ValueString {
-		t.Fatalf("fact %s field %s kind = %s, want %s", fact.ID(), field, value.Kind(), ValueString)
-	}
-	return value.data.(string)
 }
 
 func expectedLoanUnderwritingTrace() []string {

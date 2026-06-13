@@ -299,7 +299,7 @@ func (a *agenda) next() (activation, bool) {
 			continue
 		}
 		current.status = activationStatusConsumed
-		return current.clone(), true
+		return *current, true
 	}
 	return activation{}, false
 }
@@ -426,7 +426,7 @@ func activationLess(left, right *activation) bool {
 }
 
 func activationIDForKey(key activationKey) ActivationID {
-	return ActivationID("activation:" + string(key))
+	return ActivationID(key)
 }
 
 func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {

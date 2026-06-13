@@ -117,14 +117,13 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 		return nil, nil
 	}
 
-	matches := make([]conditionMatch, 0, len(snapshot.facts))
-	for _, fact := range snapshot.facts {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !p.matchesFact(fact) {
+	indexes := snapshot.indexesForTarget(p.target)
+	matches := make([]conditionMatch, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(snapshot.facts) {
 			continue
 		}
+		fact := snapshot.facts[idx]
 		ok, err := p.matchesConstraints(ctx, fact)
 		if err != nil {
 			return nil, err
@@ -150,9 +149,6 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 
 func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact FactSnapshot, bindings []conditionMatch) (bool, error) {
 	for _, join := range p.joins {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
 		ok, err := join.matches(fact, bindings)
 		if err != nil {
 			return false, err
@@ -177,9 +173,6 @@ func (p compiledConditionPlan) matchesFact(fact FactSnapshot) bool {
 
 func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact FactSnapshot) (bool, error) {
 	for _, constraint := range p.constraints {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
 		if !constraint.matches(fact) {
 			return false, nil
 		}
@@ -237,4 +230,56 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 		return nil, err
 	}
 	return sets, nil
+}
+
+func (r compiledRule) matchCandidates(ctx context.Context, snapshot Snapshot) ([]matchCandidate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(r.conditionPlans) == 0 {
+		return nil, nil
+	}
+
+	selected := make([]conditionMatch, len(r.conditionPlans))
+	candidates := make([]matchCandidate, 0)
+	seen := make(map[string]struct{})
+
+	var walk func(conditionIndex int) error
+	walk = func(conditionIndex int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if conditionIndex == len(r.conditionPlans) {
+			candidate, err := buildMatchCandidateFromMatches(r, snapshot, selected[:conditionIndex])
+			if err != nil {
+				return err
+			}
+			if _, ok := seen[candidate.key]; ok {
+				return nil
+			}
+			seen[candidate.key] = struct{}{}
+			candidates = append(candidates, candidate)
+			return nil
+		}
+
+		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, snapshot, selected[:conditionIndex])
+		if err != nil {
+			return err
+		}
+		for _, match := range matches {
+			selected[conditionIndex] = match
+			if err := walk(conditionIndex + 1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := walk(0); err != nil {
+		return nil, err
+	}
+	return candidates, nil
 }

@@ -600,7 +600,7 @@ func TestSessionModifyClosedAndConcurrencyStatus(t *testing.T) {
 	<-done
 }
 
-func mustValue(t *testing.T, value any) Value {
+func mustValue(t testing.TB, value any) Value {
 	t.Helper()
 	next, err := NewValue(value)
 	if err != nil {

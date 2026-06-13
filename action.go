@@ -18,10 +18,10 @@ type ActionContext struct {
 	ruleRevisionID RuleRevisionID
 	generation     Generation
 	boundFacts     []FactSnapshot
-	bindings       map[string]FactSnapshot
+	bindings       []string
 }
 
-func newActionContext(ctx context.Context, session *Session, activation activation, boundFacts []FactSnapshot, bindings map[string]FactSnapshot) ActionContext {
+func newActionContext(ctx context.Context, session *Session, activation activation, boundFacts []FactSnapshot, bindings []string) ActionContext {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -81,21 +81,24 @@ func (c ActionContext) BoundFacts() []FactSnapshot {
 		return nil
 	}
 	out := make([]FactSnapshot, len(c.boundFacts))
-	for i, fact := range c.boundFacts {
-		out[i] = fact.clone()
-	}
+	copy(out, c.boundFacts)
 	return out
 }
 
 func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
-	if len(c.bindings) == 0 {
+	if name == "" {
 		return FactSnapshot{}, false
 	}
-	fact, ok := c.bindings[name]
-	if !ok {
-		return FactSnapshot{}, false
+	for idx, binding := range c.bindings {
+		if binding != name {
+			continue
+		}
+		if idx < 0 || idx >= len(c.boundFacts) {
+			return FactSnapshot{}, false
+		}
+		return c.boundFacts[idx], true
 	}
-	return fact.clone(), true
+	return FactSnapshot{}, false
 }
 
 func (c ActionContext) Assert(name string, fields Fields) (AssertResult, error) {
@@ -273,7 +276,7 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 	}
 
 	boundFacts := make([]FactSnapshot, 0, len(activation.bindings))
-	bindings := make(map[string]FactSnapshot, len(activation.bindings))
+	bindings := make([]string, 0, len(activation.bindings))
 	for _, entry := range activation.bindings {
 		fact, ok := s.factsByID[entry.factID]
 		if !ok {
@@ -284,9 +287,7 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		}
 		snapshot := fact.snapshot()
 		boundFacts = append(boundFacts, snapshot)
-		if entry.binding != "" {
-			bindings[entry.binding] = snapshot.clone()
-		}
+		bindings = append(bindings, entry.binding)
 	}
 
 	return newActionContext(ctx, s, activation, boundFacts, bindings), nil
