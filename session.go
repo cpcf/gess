@@ -58,6 +58,7 @@ type Session struct {
 	id               SessionID
 	revision         *Ruleset
 	agenda           *agenda
+	rete             *reteRuntime
 	generation       Generation
 	initials         []SessionInitialFact
 	initialCount     int
@@ -131,11 +132,20 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
+	var rete *reteRuntime
+	if len(*state.insertionOrder) >= reteAlphaMinimumFacts {
+		rete, err = newReteRuntime(revision)
+		if err != nil {
+			return nil, err
+		}
+		rete.resetAlpha(state.detachedFactsByInsertionOrder())
+	}
 
 	session := &Session{
 		id:               cfg.id,
 		revision:         revision,
 		agenda:           newAgenda(),
+		rete:             rete,
 		generation:       1,
 		initials:         initials,
 		initialCount:     len(initials),
@@ -325,6 +335,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 
 	snapshot := fact.snapshot()
+	s.updateReteAlphaAfterAssert(snapshot)
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
@@ -466,6 +477,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		delete(s.factsByName, fact.name)
 	}
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
+	s.updateReteAlphaAfterRetract(before.ID())
 
 	delta := MutationDelta{
 		Kind:           MutationRetract,
@@ -607,6 +619,18 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.factsByTemplate = next.factsByTemplate
 	s.factsByName = next.factsByName
 	s.insertionOrder = next.factsByInsertionOrder()
+	if len(s.insertionOrder) >= reteAlphaMinimumFacts {
+		facts := next.detachedFactsByInsertionOrder()
+		if s.rete == nil {
+			s.rebuildReteRuntime(s.revision, facts)
+		} else {
+			s.rete.resetAlpha(facts)
+		}
+	} else {
+		if s.rete != nil {
+			s.rete.alpha = nil
+		}
+	}
 	s.emitAgendaEvents(ctx, s.agenda.clear())
 
 	delta := MutationDelta{
@@ -689,12 +713,18 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 
 	s.rebuildFieldSlots(next)
 	snapshot = s.indexedSnapshotLocked()
-	results, err := newNaiveMatcher(next).match(ctx, snapshot)
+	rete, err := newReteRuntime(next)
+	if err != nil {
+		return ApplyRulesetResult{}, err
+	}
+	rete.resetAlpha(snapshot.facts)
+	results, err := rete.match(ctx, snapshot)
 	if err != nil {
 		return ApplyRulesetResult{}, err
 	}
 
 	s.revision = next
+	s.rete = rete
 	if s.agenda == nil {
 		s.agenda = newAgenda()
 	}
@@ -735,7 +765,11 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 		return nil, err
 	}
 
-	results, err := newNaiveMatcher(s.revision).match(ctx, snapshot)
+	runtimeMatcher := matcher(newNaiveMatcher(s.revision))
+	if s.rete != nil {
+		runtimeMatcher = s.rete
+	}
+	results, err := runtimeMatcher.match(ctx, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -747,6 +781,52 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
+}
+
+func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
+	if s == nil || revision == nil {
+		return
+	}
+	rete, err := newReteRuntime(revision)
+	if err != nil {
+		s.rete = nil
+		return
+	}
+	rete.resetAlpha(facts)
+	s.rete = rete
+}
+
+func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) {
+	if s == nil {
+		return
+	}
+	if s.rete == nil {
+		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
+			s.rebuildReteRuntime(s.revision, s.detachedFactsByInsertionOrder())
+		}
+		return
+	}
+	if s.rete.alpha == nil {
+		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
+			s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
+		}
+		return
+	}
+	s.rete.insertAlphaFact(fact)
+}
+
+func (s *Session) updateReteAlphaAfterRetract(id FactID) {
+	if s == nil || s.rete == nil {
+		return
+	}
+	s.rete.removeAlphaFact(id)
+}
+
+func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) {
+	if s == nil || s.rete == nil {
+		return
+	}
+	s.rete.updateAlphaFact(before, after)
 }
 
 func (s *Session) rebuildFieldSlots(revision *Ruleset) {
@@ -1062,6 +1142,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.dupKey = newDuplicate
 
 	after := fact.snapshot()
+	s.updateReteAlphaAfterModify(before, after)
 	delta := MutationDelta{
 		Kind:           MutationModify,
 		Generation:     s.generation,
@@ -1229,6 +1310,21 @@ func (s *Session) detachedSnapshotLocked() Snapshot {
 	return s.snapshotLockedWithOptions(false, false)
 }
 
+func (s *Session) detachedFactsByInsertionOrder() []FactSnapshot {
+	if s == nil || len(s.insertionOrder) == 0 {
+		return nil
+	}
+	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
+	for _, id := range s.insertionOrder {
+		fact, ok := s.factsByID[id]
+		if !ok || fact == nil || fact.isTransient {
+			continue
+		}
+		facts = append(facts, fact.detachedSnapshot())
+	}
+	return facts
+}
+
 func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFacts bool) Snapshot {
 	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
 	for _, id := range s.insertionOrder {
@@ -1309,6 +1405,21 @@ func (w *factWorkspace) factsByInsertionOrder() []FactID {
 		return nil
 	}
 	return *w.insertionOrder
+}
+
+func (w *factWorkspace) detachedFactsByInsertionOrder() []FactSnapshot {
+	if w == nil || w.insertionOrder == nil || len(*w.insertionOrder) == 0 {
+		return nil
+	}
+	facts := make([]FactSnapshot, 0, len(*w.insertionOrder))
+	for _, id := range *w.insertionOrder {
+		fact, ok := w.factsByID[id]
+		if !ok || fact == nil || fact.isTransient {
+			continue
+		}
+		facts = append(facts, fact.detachedSnapshot())
+	}
+	return facts
 }
 
 func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {

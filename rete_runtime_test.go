@@ -137,6 +137,143 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
 }
 
+func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	session := mustSession(t, revision, "alpha-lifecycle-session")
+
+	young, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate young: %v", err)
+	}
+	inactive, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "inactive"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate inactive: %v", err)
+	}
+	active, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 22, "status": "active"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate active: %v", err)
+	}
+	assertAlphaMemoryFillerFacts(t, session, templateKey, reteAlphaMinimumFacts-3)
+
+	assertAlphaMemoryCount(t, session, "adult-active", 1)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "active"})}); err != nil {
+		t.Fatalf("Modify inactive: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 2)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Modify(ctx, active.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 16})}); err != nil {
+		t.Fatalf("Modify active: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 1)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Retract(ctx, inactive.Fact.ID()); err != nil {
+		t.Fatalf("Retract inactive: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 0)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Retract(ctx, young.Fact.ID()); err != nil {
+		t.Fatalf("Retract young: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 0)
+}
+
+func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	initials := []SessionInitialFact{
+		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 18, "status": "active"})},
+		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 22, "status": "active"})},
+		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 16, "status": "active"})},
+	}
+	for i := len(initials); i < reteAlphaMinimumFacts; i++ {
+		initials = append(initials, SessionInitialFact{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 15, "status": "inactive"})})
+	}
+	session, err := NewSession(revision, WithSessionID("alpha-reset-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 2)
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 40, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate extra: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 3)
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "adult-active", 2)
+	assertAlphaMemoryGeneration(t, session, "adult-active", session.Generation())
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) {
+	ctx := context.Background()
+	revision1, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	revision2, _ := mustAlphaMemoryRuleset(t, "young-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintLessThan, Value: 18},
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	session := mustSession(t, revision1, "alpha-apply-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate young: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate adult: %v", err)
+	}
+	assertAlphaMemoryFillerFacts(t, session, templateKey, reteAlphaMinimumFacts-2)
+	assertAlphaMemoryCount(t, session, "adult-active", 1)
+
+	if _, err := session.ApplyRuleset(ctx, revision2); err != nil {
+		t.Fatalf("ApplyRuleset: %v", err)
+	}
+	assertAlphaMemoryCount(t, session, "young-active", 1)
+	assertMatcherParity(t, revision2, mustSnapshot(t, ctx, session), newNaiveMatcher(revision2), session.rete)
+}
+
+func TestReteRuntimeUnsupportedPlanFallsBackToOracle(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "dynamic-event",
+		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "alpha-fallback-session")
+	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "created"})); err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if len(runtime.plan.unsupported) == 0 {
+		t.Fatalf("unsupported plan reasons = %#v, want fallback reasons", runtime.plan.unsupported)
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), runtime)
+}
+
 func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	runtime, err := newReteRuntime(nil)
 	if err != ErrInvalidRuleset {
@@ -144,6 +281,85 @@ func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	}
 	if runtime != nil {
 		t.Fatalf("newReteRuntime(nil) runtime = %#v, want nil", runtime)
+	}
+}
+
+func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldConstraintSpec) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "person",
+		Closed:          true,
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: ruleName,
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:          "person",
+				TemplateKey:      person.Key(),
+				FieldConstraints: constraints,
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
+func assertAlphaMemoryCount(t testing.TB, session *Session, ruleName string, want int) {
+	t.Helper()
+	if session == nil || session.rete == nil {
+		t.Fatal("session has no Rete runtime")
+	}
+	rule, ok := session.revision.rules[ruleName]
+	if !ok {
+		t.Fatalf("rule %q not found", ruleName)
+	}
+	if len(rule.conditionPlans) == 0 {
+		t.Fatalf("rule %q has no conditions", ruleName)
+	}
+	conditionID := rule.conditionPlans[0].id
+	if got := session.rete.alphaFactCount(conditionID); got != want {
+		t.Fatalf("alpha fact count for %s = %d, want %d", ruleName, got, want)
+	}
+}
+
+func assertAlphaMemoryFillerFacts(t testing.TB, session *Session, templateKey TemplateKey, count int) {
+	t.Helper()
+	for i := range count {
+		if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{"age": 15, "status": "inactive"})); err != nil {
+			t.Fatalf("AssertTemplate filler %d: %v", i, err)
+		}
+	}
+}
+
+func assertAlphaMemoryGeneration(t testing.TB, session *Session, ruleName string, want Generation) {
+	t.Helper()
+	if session == nil || session.rete == nil || session.rete.alpha == nil {
+		t.Fatal("session has no alpha memory")
+	}
+	rule, ok := session.revision.rules[ruleName]
+	if !ok {
+		t.Fatalf("rule %q not found", ruleName)
+	}
+	conditionID := rule.conditionPlans[0].id
+	facts, ok := session.rete.alpha.factsForCondition(conditionID)
+	if !ok {
+		t.Fatalf("alpha facts for %s unavailable", ruleName)
+	}
+	for i, fact := range facts {
+		if fact.Generation() != want {
+			t.Fatalf("alpha fact %d generation = %d, want %d", i, fact.Generation(), want)
+		}
 	}
 }
 

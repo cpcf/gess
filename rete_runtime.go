@@ -5,10 +5,13 @@ import (
 	"strconv"
 )
 
+const reteAlphaMinimumFacts = 32
+
 type reteRuntime struct {
 	revision *Ruleset
 	plan     reteNetworkPlan
 	oracle   matcher
+	alpha    *reteAlphaMemory
 }
 
 type reteNetworkPlan struct {
@@ -33,6 +36,7 @@ type reteConditionPlan struct {
 	bindingSlot int
 	path        []int
 	target      conditionTarget
+	constraints []compiledFieldConstraint
 	alpha       reteAlphaPlan
 	beta        []reteBetaPlan
 	supported   bool
@@ -132,7 +136,10 @@ func (r *reteRuntime) match(ctx context.Context, snapshot Snapshot) ([]ruleMatch
 	if r == nil || r.revision == nil || r.oracle == nil {
 		return nil, ErrInvalidRuleset
 	}
-	return r.oracle.match(ctx, snapshot)
+	if len(r.plan.unsupported) > 0 || r.alpha == nil {
+		return r.oracle.match(ctx, snapshot)
+	}
+	return (&alphaMatcher{revision: r.revision, source: r.alpha}).match(ctx, snapshot)
 }
 
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
@@ -150,6 +157,7 @@ func (r *reteRuntime) metrics() reteRuntimeMetrics {
 				kind:           reteNodeAlpha,
 				ruleRevisionID: condition.alpha.ruleRevisionID,
 				conditionID:    condition.alpha.conditionID,
+				facts:          r.alphaFactCount(condition.conditionID),
 			})
 			for _, beta := range condition.beta {
 				metrics.nodes = append(metrics.nodes, reteNodeMetrics{
@@ -167,6 +175,47 @@ func (r *reteRuntime) metrics() reteRuntimeMetrics {
 		})
 	}
 	return metrics
+}
+
+func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
+	if r == nil {
+		return
+	}
+	if len(facts) < reteAlphaMinimumFacts {
+		r.alpha = nil
+		return
+	}
+	alpha := newReteAlphaMemory(r.plan)
+	alpha.reset(r.plan, facts)
+	r.alpha = alpha
+}
+
+func (r *reteRuntime) insertAlphaFact(fact FactSnapshot) {
+	if r == nil || r.alpha == nil {
+		return
+	}
+	r.alpha.insert(r.plan, fact)
+}
+
+func (r *reteRuntime) removeAlphaFact(id FactID) {
+	if r == nil || r.alpha == nil {
+		return
+	}
+	r.alpha.remove(id)
+}
+
+func (r *reteRuntime) updateAlphaFact(before, after FactSnapshot) {
+	if r == nil || r.alpha == nil {
+		return
+	}
+	r.alpha.update(r.plan, before, after)
+}
+
+func (r *reteRuntime) alphaFactCount(conditionID ConditionID) int {
+	if r == nil || r.alpha == nil {
+		return 0
+	}
+	return r.alpha.factCount(conditionID)
 }
 
 func planReteNetwork(revision *Ruleset) reteNetworkPlan {
@@ -233,6 +282,7 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		bindingSlot: condition.bindingSlot,
 		path:        cloneIntPath(condition.path),
 		target:      condition.target,
+		constraints: condition.constraints,
 		alpha: reteAlphaPlan{
 			id:             reteAlphaNodeID(rule.revisionID, condition.id),
 			ruleRevisionID: rule.revisionID,
@@ -288,6 +338,243 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 	}
 
 	return conditionPlan, unsupported
+}
+
+type alphaMatcher struct {
+	revision *Ruleset
+	source   alphaFactSource
+}
+
+type alphaFactSource interface {
+	factsForCondition(ConditionID) ([]FactSnapshot, bool)
+}
+
+func (m *alphaMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatchResult, error) {
+	if m == nil || m.revision == nil || m.source == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	results := make([]ruleMatchResult, 0, len(m.revision.ruleOrder))
+	for _, ruleName := range m.revision.ruleOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		rule, ok := m.revision.rules[ruleName]
+		if !ok {
+			return nil, ErrMatcher
+		}
+
+		candidates, err := rule.matchCandidatesWithAlpha(ctx, snapshot, m.source)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, ruleMatchResult{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates:       candidates,
+		})
+	}
+
+	return results, nil
+}
+
+type reteAlphaMemory struct {
+	conditions map[ConditionID]*reteAlphaConditionMemory
+}
+
+type reteAlphaConditionMemory struct {
+	facts   []FactSnapshot
+	indexes map[FactID]int
+}
+
+func newReteAlphaMemory(plan reteNetworkPlan) *reteAlphaMemory {
+	memory := &reteAlphaMemory{
+		conditions: make(map[ConditionID]*reteAlphaConditionMemory, plan.stats.conditions),
+	}
+	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
+		memory.conditions[condition.conditionID] = &reteAlphaConditionMemory{
+			indexes: make(map[FactID]int),
+		}
+	})
+	return memory
+}
+
+func (m *reteAlphaMemory) reset(plan reteNetworkPlan, facts []FactSnapshot) {
+	if m == nil {
+		return
+	}
+	for _, fact := range facts {
+		m.insert(plan, fact)
+	}
+}
+
+func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot) {
+	if m == nil {
+		return
+	}
+	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
+		if !condition.matchesAlpha(fact) {
+			return
+		}
+		conditionMemory := m.conditions[condition.conditionID]
+		if conditionMemory == nil {
+			return
+		}
+		conditionMemory.upsert(fact)
+	})
+}
+
+func (m *reteAlphaMemory) update(plan reteNetworkPlan, before, after FactSnapshot) {
+	if m == nil {
+		return
+	}
+	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
+		conditionMemory := m.conditions[condition.conditionID]
+		if conditionMemory == nil {
+			return
+		}
+		matchedBefore := conditionMemory.contains(before.id)
+		matchesAfter := condition.matchesAlpha(after)
+		switch {
+		case matchedBefore && matchesAfter:
+			conditionMemory.upsert(after)
+		case matchedBefore:
+			conditionMemory.remove(before.id)
+		case matchesAfter:
+			conditionMemory.upsert(after)
+		}
+	})
+}
+
+func (m *reteAlphaMemory) remove(id FactID) {
+	if m == nil {
+		return
+	}
+	for _, conditionMemory := range m.conditions {
+		if conditionMemory != nil {
+			conditionMemory.remove(id)
+		}
+	}
+}
+
+func (m *reteAlphaMemory) factsForCondition(conditionID ConditionID) ([]FactSnapshot, bool) {
+	if m == nil {
+		return nil, false
+	}
+	conditionMemory, ok := m.conditions[conditionID]
+	if !ok {
+		return nil, false
+	}
+	return conditionMemory.facts, true
+}
+
+func (m *reteAlphaMemory) factCount(conditionID ConditionID) int {
+	if m == nil {
+		return 0
+	}
+	conditionMemory := m.conditions[conditionID]
+	if conditionMemory == nil {
+		return 0
+	}
+	return len(conditionMemory.facts)
+}
+
+func (m *reteAlphaConditionMemory) contains(id FactID) bool {
+	if m == nil || m.indexes == nil {
+		return false
+	}
+	_, ok := m.indexes[id]
+	return ok
+}
+
+func (m *reteAlphaConditionMemory) upsert(fact FactSnapshot) bool {
+	if m == nil {
+		return false
+	}
+	if m.indexes == nil {
+		m.indexes = make(map[FactID]int)
+	}
+	if idx, ok := m.indexes[fact.id]; ok {
+		m.facts[idx] = fact
+		return false
+	}
+	idx := len(m.facts)
+	for idx > 0 && factIDLess(fact.id, m.facts[idx-1].id) {
+		idx--
+	}
+	m.facts = append(m.facts, FactSnapshot{})
+	copy(m.facts[idx+1:], m.facts[idx:])
+	m.facts[idx] = fact
+	m.reindexFrom(idx)
+	return true
+}
+
+func (m *reteAlphaConditionMemory) remove(id FactID) {
+	if m == nil || m.indexes == nil {
+		return
+	}
+	idx, ok := m.indexes[id]
+	if !ok {
+		return
+	}
+	copy(m.facts[idx:], m.facts[idx+1:])
+	m.facts[len(m.facts)-1] = FactSnapshot{}
+	m.facts = m.facts[:len(m.facts)-1]
+	delete(m.indexes, id)
+	m.reindexFrom(idx)
+}
+
+func (m *reteAlphaConditionMemory) reindexFrom(start int) {
+	if m == nil {
+		return
+	}
+	for i := start; i < len(m.facts); i++ {
+		m.indexes[m.facts[i].id] = i
+	}
+}
+
+func (p reteNetworkPlan) forEachSupportedCondition(yield func(reteConditionPlan)) {
+	for _, rule := range p.rules {
+		for _, condition := range rule.conditions {
+			if condition.supported {
+				yield(condition)
+			}
+		}
+	}
+}
+
+func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {
+	if !p.supported {
+		return false
+	}
+	switch p.target.kind {
+	case conditionTargetTemplateKey:
+		if fact.TemplateKey() != p.target.templateKey {
+			return false
+		}
+	case conditionTargetName:
+		if fact.Name() != p.target.name {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, constraint := range p.constraints {
+		if !constraint.matches(fact) {
+			return false
+		}
+	}
+	return true
 }
 
 func reteAlphaNodeID(ruleRevisionID RuleRevisionID, conditionID ConditionID) reteNodeID {

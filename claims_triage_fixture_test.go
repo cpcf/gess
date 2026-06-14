@@ -196,6 +196,34 @@ func BenchmarkClaimsTriageGessMatchOnly(b *testing.B) {
 	}
 }
 
+func BenchmarkClaimsTriageGessReteMatchOnly(b *testing.B) {
+	revision := mustCompileClaimsTriageRuleset(b, nil)
+	initials := claimsTriageInitialFacts(b, claimsTriageBenchmarkFactCount)
+	session := mustSession(b, revision, "claims-triage-rete-match-only")
+	for _, fact := range initials {
+		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		}
+	}
+	snapshot := session.indexedSnapshotLocked()
+	expectedCandidates := claimsTriageFiredCount(claimsTriageBenchmarkFactCount)
+	if session.rete == nil {
+		b.Fatal("session Rete runtime is nil")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		results, err := session.rete.match(context.Background(), snapshot)
+		if err != nil {
+			b.Fatalf("match: %v", err)
+		}
+		if got := countClaimsTriageCandidates(results); got != expectedCandidates {
+			b.Fatalf("candidate count = %d, want %d", got, expectedCandidates)
+		}
+	}
+}
+
 func runClaimsTriageFixture(t testing.TB, count int) []string {
 	t.Helper()
 
