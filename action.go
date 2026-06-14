@@ -285,7 +285,7 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		if fact.generation != activation.generation || fact.version != entry.factVersion {
 			return ActionContext{}, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.id)
 		}
-		snapshot := fact.snapshot()
+		snapshot := fact.detachedSnapshot()
 		boundFacts = append(boundFacts, snapshot)
 		bindings = append(bindings, entry.binding)
 	}

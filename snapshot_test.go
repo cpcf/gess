@@ -273,6 +273,85 @@ func TestSnapshotRecencyAndGenerationMetadata(t *testing.T) {
 	}
 }
 
+func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "profile", Kind: ValueMap},
+		},
+	})
+	session := mustSession(t, revision, "snapshot-defensive-accessors-session")
+	template, ok := revision.Template("person")
+	if !ok {
+		t.Fatal("expected person template")
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"name":    "Ada",
+		"profile": map[string]any{"likes": "jazz"},
+	}))
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	fact, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot missing inserted fact %q", inserted.Fact.ID())
+	}
+	facts := snapshot.Facts()
+	if len(facts) != 1 {
+		t.Fatalf("snapshot facts length = %d, want 1", len(facts))
+	}
+	byName := snapshot.FactsByName("person")
+	if len(byName) != 1 {
+		t.Fatalf("snapshot facts by name length = %d, want 1", len(byName))
+	}
+	byTemplate := snapshot.FactsByTemplateKey(template.Key())
+	if len(byTemplate) != 1 {
+		t.Fatalf("snapshot facts by template length = %d, want 1", len(byTemplate))
+	}
+
+	factFields := fact.Fields()
+	factFields["name"] = mustValue(t, "MUT")
+	factProfile, ok := fact.Field("profile")
+	if !ok {
+		t.Fatal("fact missing profile field")
+	}
+	factProfileMap := factProfile.data.(map[string]Value)
+	factProfileMap["likes"] = mustValue(t, "rock")
+	factPresence := fact.FieldPresenceMap()
+	factPresence["name"] = FieldPresenceDefault
+
+	facts[0].Fields()["name"] = mustValue(t, "MUT")
+	byName[0].FieldPresenceMap()["name"] = FieldPresenceDefault
+	byTemplate[0].Fields()["profile"] = NullValue()
+
+	if got, ok := snapshot.Fact(inserted.Fact.ID()); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("snapshot fact changed through copied result")
+	}
+	freshFact, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot fact disappeared during verification")
+	}
+	if got := snapshot.Facts()[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("snapshot facts changed through copied result map")
+	}
+	if got, ok := snapshot.FactsByName("person")[0].FieldPresence("name"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("snapshot facts by name changed through copied presence map: %v, %v", got, ok)
+	}
+	if got := snapshot.FactsByTemplateKey(template.Key())[0].Fields()["profile"]; !got.Equal(mustValue(t, map[string]any{"likes": "jazz"})) {
+		t.Fatalf("snapshot facts by template changed through copied result map: %v", got)
+	}
+	if got, ok := freshFact.Field("profile"); !ok || !got.Equal(mustValue(t, map[string]any{"likes": "jazz"})) {
+		t.Fatalf("snapshot fact field changed through copied value: (%v, %v)", got, ok)
+	}
+	if got, ok := freshFact.FieldPresence("name"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("snapshot fact presence changed through copied presence map: %v, %v", got, ok)
+	}
+}
+
 func TestSnapshotRenderingIsDeterministic(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name: "payload",

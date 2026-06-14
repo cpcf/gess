@@ -6,6 +6,125 @@ import (
 	"testing"
 )
 
+func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	if err := workspace.AddAction(ActionSpec{
+		Name: "mutate",
+		Fn: func(ctx ActionContext) error {
+			if _, ok := ctx.Binding(""); ok {
+				return errors.New("empty binding should not resolve")
+			}
+
+			binding, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("missing person binding")
+			}
+			boundFacts := ctx.BoundFacts()
+			if len(boundFacts) != 1 {
+				return errors.New("expected one bound fact")
+			}
+			if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return errors.New("unexpected initial binding value")
+			}
+			if got := boundFacts[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return errors.New("unexpected initial bound fact value")
+			}
+
+			bindingFields := binding.Fields()
+			bindingFields["name"] = mustValue(t, "MUT")
+			if got, ok := ctx.Binding("person"); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+				return errors.New("binding changed after mutating returned fields map")
+			}
+
+			boundFactFields := boundFacts[0].Fields()
+			boundFactFields["name"] = mustValue(t, "MUT")
+			if got := ctx.BoundFacts(); len(got) != 1 || !got[0].Fields()["name"].Equal(mustValue(t, "Ada")) {
+				return errors.New("bound facts changed after mutating returned fields map")
+			}
+
+			_, err := ctx.Modify(binding.ID(), FactPatch{
+				Set: mustFields(t, map[string]any{"name": "Grace"}),
+			})
+			if err != nil {
+				return err
+			}
+
+			if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return errors.New("binding changed after modify")
+			}
+			if got := boundFacts[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return errors.New("bound fact changed after modify")
+			}
+			if got, ok := ctx.Binding("person"); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+				return errors.New("later binding read changed after modify")
+			}
+			if got := ctx.BoundFacts(); len(got) != 1 || !got[0].Fields()["name"].Equal(mustValue(t, "Ada")) {
+				return errors.New("later bound facts read changed after modify")
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(mutate): %v", err)
+	}
+
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{
+			{Name: "mutate"},
+		},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("action-detached-binding-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-action-detached-binding"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+
+	after := mustSnapshot(t, context.Background(), session)
+	if got := after.Facts()[0].Fields()["name"]; !got.Equal(mustValue(t, "Grace")) {
+		t.Fatalf("session fact name after modify = %v, want Grace", got)
+	}
+	if !inserted.Inserted() {
+		t.Fatalf("initial assert status = %v, want inserted", inserted.Status)
+	}
+}
+
 func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()
