@@ -451,20 +451,74 @@ func isNumericValue(value Value) bool {
 }
 
 func compareNumericValues(left, right Value) int {
-	leftValue := numericComparisonValue(left)
-	rightValue := numericComparisonValue(right)
-	return leftValue.Cmp(rightValue)
+	switch left.Kind() {
+	case ValueInt:
+		return compareNumericValuesWithInt(left, right)
+	case ValueFloat:
+		return compareNumericValuesWithFloat(left, right)
+	}
+	return 0
 }
 
-func numericComparisonValue(value Value) *big.Float {
-	comparison := new(big.Float).SetPrec(256)
-	switch value.Kind() {
+func compareNumericValuesWithInt(left, right Value) int {
+	leftInt := left.data.(int64)
+	switch right.Kind() {
 	case ValueInt:
-		comparison.SetInt64(value.data.(int64))
+		rightInt := right.data.(int64)
+		switch {
+		case leftInt < rightInt:
+			return -1
+		case leftInt > rightInt:
+			return 1
+		default:
+			return 0
+		}
 	case ValueFloat:
-		comparison.SetFloat64(value.data.(float64))
+		return compareIntAndFloatValues(leftInt, right.data.(float64))
+	default:
+		return 0
 	}
-	return comparison
+}
+
+func compareNumericValuesWithFloat(left, right Value) int {
+	leftFloat := left.data.(float64)
+	switch right.Kind() {
+	case ValueInt:
+		return -compareIntAndFloatValues(right.data.(int64), leftFloat)
+	case ValueFloat:
+		rightFloat := right.data.(float64)
+		switch {
+		case leftFloat < rightFloat:
+			return -1
+		case leftFloat > rightFloat:
+			return 1
+		default:
+			return 0
+		}
+	default:
+		return 0
+	}
+}
+
+func compareIntAndFloatValues(integer int64, floating float64) int {
+	if integer >= -maxExactFloatInt && integer <= maxExactFloatInt {
+		exact := float64(integer)
+		switch {
+		case exact < floating:
+			return -1
+		case exact > floating:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return compareNumericValuesSlow(integer, floating)
+}
+
+func compareNumericValuesSlow(integer int64, floating float64) int {
+	leftValue := new(big.Float).SetPrec(256).SetInt64(integer)
+	rightValue := new(big.Float).SetPrec(256).SetFloat64(floating)
+	return leftValue.Cmp(rightValue)
 }
 
 func intEqualsFloat(integer int64, floating float64) bool {
