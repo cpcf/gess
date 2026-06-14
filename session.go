@@ -123,16 +123,11 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	copy(listeners, cfg.listeners)
 	initials := cloneSessionInitialFacts(cfg.initials)
 
-	state := newFactWorkspace(1)
-	state.factsByID = make(map[FactID]*workingFact)
-	state.factsByTemplate = make(map[TemplateKey][]FactID)
-	state.factsByName = make(map[string][]FactID)
-	state.factsByDuplicate = make(map[DuplicateKey]FactID)
-
 	compiledInitials, err := compileSessionInitialFacts(revision, initials)
 	if err != nil {
 		return nil, err
 	}
+	state := newFactWorkspace(1, len(compiledInitials))
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
@@ -598,7 +593,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 
 	before := s.detachedSnapshotLocked()
-	next := newFactWorkspace(s.generation + 1)
+	next := newFactWorkspace(s.generation+1, len(compiledInitials))
 	next.applyCompiledInitialFacts(compiledInitials)
 
 	oldGeneration := s.generation
@@ -1276,19 +1271,22 @@ type factWorkspace struct {
 	factsByName      map[string][]FactID
 }
 
-func newFactWorkspace(generation Generation) *factWorkspace {
+func newFactWorkspace(generation Generation, initialCapacity int) *factWorkspace {
 	var sequence uint64
 	var recency Recency
-	insertionOrder := make([]FactID, 0)
+	if initialCapacity < 0 {
+		initialCapacity = 0
+	}
+	insertionOrder := make([]FactID, 0, initialCapacity)
 	return &factWorkspace{
 		generation:       generation,
 		sequence:         &sequence,
 		recency:          &recency,
 		insertionOrder:   &insertionOrder,
-		factsByID:        make(map[FactID]*workingFact),
-		factsByDuplicate: make(map[DuplicateKey]FactID),
-		factsByTemplate:  make(map[TemplateKey][]FactID),
-		factsByName:      make(map[string][]FactID),
+		factsByID:        make(map[FactID]*workingFact, initialCapacity),
+		factsByDuplicate: make(map[DuplicateKey]FactID, initialCapacity),
+		factsByTemplate:  make(map[TemplateKey][]FactID, initialCapacity),
+		factsByName:      make(map[string][]FactID, initialCapacity),
 	}
 }
 
@@ -1421,6 +1419,8 @@ type compiledSessionInitialFact struct {
 	fieldPresence   map[string]FieldPresence
 	duplicatePolicy DuplicatePolicy
 	duplicateKey    DuplicateKey
+	shareFields     bool
+	shareSlots      bool
 }
 
 func compileSessionInitialFacts(revision *Ruleset, initials []SessionInitialFact) ([]compiledSessionInitialFact, error) {
@@ -1517,6 +1517,8 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		fieldPresence:   presence,
 		duplicatePolicy: duplicatePolicy,
 		duplicateKey:    duplicateKey,
+		shareFields:     fieldsShareable(fields),
+		shareSlots:      factSlotsShareable(fieldSlots),
 	}, nil
 }
 
@@ -1531,20 +1533,28 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	*w.recency++
 	id := newFactID(w.generation, *w.sequence)
 	fact := &workingFact{
-		id:            id,
-		name:          initial.name,
-		templateKey:   initial.templateKey,
-		version:       1,
-		recency:       *w.recency,
-		generation:    w.generation,
-		fields:        cloneFields(initial.fields),
-		fieldSlots:    cloneFactSlots(initial.fieldSlots),
-		fieldSpecs:    initial.fieldSpecs,
-		fieldPresence: cloneFieldPresence(initial.fieldPresence),
-		dupKey:        initial.duplicateKey,
-		support:       FactSupportProvenance{State: FactSupportStated},
-		isTransient:   false,
+		id:          id,
+		name:        initial.name,
+		templateKey: initial.templateKey,
+		version:     1,
+		recency:     *w.recency,
+		generation:  w.generation,
+		fieldSpecs:  initial.fieldSpecs,
+		dupKey:      initial.duplicateKey,
+		support:     FactSupportProvenance{State: FactSupportStated},
+		isTransient: false,
 	}
+	if initial.shareFields {
+		fact.fields = initial.fields
+	} else {
+		fact.fields = cloneFields(initial.fields)
+	}
+	if initial.shareSlots {
+		fact.fieldSlots = initial.fieldSlots
+	} else {
+		fact.fieldSlots = cloneFactSlots(initial.fieldSlots)
+	}
+	fact.fieldPresence = cloneFieldPresence(initial.fieldPresence)
 
 	if len(fact.fieldSlots) > 0 {
 		fact.fields = nil

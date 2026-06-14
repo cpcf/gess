@@ -365,6 +365,33 @@ func cloneValue(v Value) Value {
 	}
 }
 
+func valueShareable(v Value) bool {
+	switch v.Kind() {
+	case ValueList, ValueMap:
+		return false
+	default:
+		return true
+	}
+}
+
+func fieldsShareable(fields Fields) bool {
+	for _, value := range fields {
+		if !valueShareable(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func factSlotsShareable(slots []factSlot) bool {
+	for _, slot := range slots {
+		if !valueShareable(slot.value) {
+			return false
+		}
+	}
+	return true
+}
+
 func encodeValueForDuplicateKey(b *strings.Builder, value Value) {
 	switch value.Kind() {
 	case ValueNull:

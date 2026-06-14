@@ -412,6 +412,51 @@ func TestSessionResetFailureLeavesStateIntact(t *testing.T) {
 	}
 }
 
+func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T) {
+	session, err := NewSession(
+		mustCompile(t),
+		WithInitialFacts(SessionInitialFact{
+			Name: "settings",
+			Fields: mustFields(t, map[string]any{
+				"labels": []any{"stable"},
+				"meta":   map[string]any{"tier": "gold"},
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	firstSnapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	resetFact := mustOnlyFact(t, session)
+	resetLabels := resetFact.fields["labels"].data.([]Value)
+	resetLabels[0] = mustValue(t, "mutated")
+	resetMeta := resetFact.fields["meta"].data.(map[string]Value)
+	resetMeta["tier"] = mustValue(t, "mutated")
+
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("second Reset: %v", err)
+	}
+	nextFact := mustOnlyFact(t, session)
+	nextLabels := nextFact.fields["labels"].data.([]Value)
+	if got, want := nextLabels[0].data.(string), "stable"; got != want {
+		t.Fatalf("compiled list initial aliased reset fact = %q, want %q", got, want)
+	}
+	nextMeta := nextFact.fields["meta"].data.(map[string]Value)
+	if got, want := nextMeta["tier"].data.(string), "gold"; got != want {
+		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
+	}
+
+	snapshotFact := firstSnapshot.Facts()[0]
+	snapshotLabels := snapshotFact.Fields()["labels"].data.([]Value)
+	if got, want := snapshotLabels[0].data.(string), "stable"; got != want {
+		t.Fatalf("pre-reset snapshot list changed = %q, want %q", got, want)
+	}
+}
+
 func TestSessionResetClosedStatus(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "reset-closed-session")
 	if err := session.Close(); err != nil {
@@ -454,4 +499,19 @@ func TestSessionResetDoesNotReemitInitializersAsAsserts(t *testing.T) {
 	if snapshot.Len() != 1 {
 		t.Fatalf("snapshot length after reset = %d, want 1", snapshot.Len())
 	}
+}
+
+func mustOnlyFact(t testing.TB, session *Session) *workingFact {
+	t.Helper()
+	if session == nil {
+		t.Fatal("session is nil")
+	}
+	if got, want := len(session.factsByID), 1; got != want {
+		t.Fatalf("working facts = %d, want %d", got, want)
+	}
+	for _, fact := range session.factsByID {
+		return fact
+	}
+	t.Fatal("working fact missing")
+	return nil
 }
