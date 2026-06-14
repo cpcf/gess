@@ -256,7 +256,7 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 		t.Fatalf("old revision activations still indexed after replace: %#v", got)
 	}
 	if _, ok := session.agenda.activationByKey(oldActivation.key); ok {
-		t.Fatalf("old activation key %q still present after replace", oldActivation.key)
+		t.Fatalf("old activation key %#v still present after replace", oldActivation.key)
 	}
 	pending := session.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {

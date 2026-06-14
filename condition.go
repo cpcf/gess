@@ -271,7 +271,7 @@ func (r compiledRule) matchCandidates(ctx context.Context, snapshot Snapshot) ([
 
 	selected := make([]conditionMatch, len(r.conditionPlans))
 	candidates := make([]matchCandidate, 0)
-	seen := make(map[string]struct{})
+	seen := newCandidateSeenSet(0)
 
 	var walk func(conditionIndex int) error
 	walk = func(conditionIndex int) error {
@@ -283,10 +283,9 @@ func (r compiledRule) matchCandidates(ctx context.Context, snapshot Snapshot) ([
 			if err != nil {
 				return err
 			}
-			if _, ok := seen[candidate.key]; ok {
+			if seen.seen(candidates, candidate) {
 				return nil
 			}
-			seen[candidate.key] = struct{}{}
 			candidates = append(candidates, candidate)
 			return nil
 		}

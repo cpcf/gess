@@ -139,6 +139,58 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	}
 }
 
+func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
+	revision, _ := mustAgendaRevision(t, 10)
+	rule := revision.rules["match-person"]
+	identity := candidateIdentity{
+		generation: 1,
+		count:      1,
+		key: candidateIdentityKey{
+			scopeHash: candidateIdentityScopeHash(rule.id, rule.revisionID),
+			hash:      42,
+		},
+	}
+	firstID := newFactID(1, 1)
+	secondID := newFactID(1, 2)
+	results := []ruleMatchResult{
+		{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates: []matchCandidate{
+				mustCollisionCandidate(rule.id, rule.revisionID, identity, firstID, 1, 1),
+				mustCollisionCandidate(rule.id, rule.revisionID, identity, secondID, 1, 2),
+				mustCollisionCandidate(rule.id, rule.revisionID, identity, firstID, 1, 1),
+			},
+		},
+	}
+
+	agenda := newAgenda()
+	changes, err := agenda.reconcile(context.Background(), revision, results)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, want := len(changes), 2; got != want {
+		t.Fatalf("collision activation changes = %d, want %d", got, want)
+	}
+	pending := agenda.pendingActivations()
+	if got, want := len(pending), 2; got != want {
+		t.Fatalf("pending collision activations = %d, want %d", got, want)
+	}
+	if pending[0].id == pending[1].id {
+		t.Fatalf("colliding activations reused public ID %q", pending[0].id)
+	}
+
+	changes, err = agenda.reconcile(context.Background(), revision, results)
+	if err != nil {
+		t.Fatalf("duplicate collision reconcile: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("duplicate collision reconcile changes = %#v, want none", changes)
+	}
+}
+
 func TestAgendaReconcileDeactivatesMissingPendingActivation(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-missing-session")
@@ -635,4 +687,27 @@ func mustAgendaMatchResults(t *testing.T, revision *Ruleset, session *Session) [
 		t.Fatalf("match: %v", err)
 	}
 	return results
+}
+
+func mustCollisionCandidate(ruleID RuleID, revisionID RuleRevisionID, identity candidateIdentity, factID FactID, version FactVersion, recency Recency) matchCandidate {
+	return matchCandidate{
+		ruleID:           ruleID,
+		ruleRevisionID:   revisionID,
+		identity:         identity,
+		factIDs:          []FactID{factID},
+		factVersions:     []FactVersion{version},
+		generation:       identity.generation,
+		maxRecency:       recency,
+		aggregateRecency: recency,
+		path:             []int{0},
+		bindingTuple: []bindingTupleEntry{
+			{
+				binding:        "person",
+				bindingSlot:    0,
+				conditionOrder: 0,
+				factID:         factID,
+				factVersion:    version,
+			},
+		},
+	}
 }

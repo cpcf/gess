@@ -123,8 +123,8 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		if got, want := candidate.path, []int{0}; len(got) != len(want) || got[0] != want[0] {
 			t.Fatalf("match-person candidate %d path = %#v, want %#v", i, got, want)
 		}
-		if candidate.key == "" {
-			t.Fatalf("match-person candidate %d key is empty", i)
+		if candidate.identity.isZero() {
+			t.Fatalf("match-person candidate %d identity is empty", i)
 		}
 	}
 
@@ -189,13 +189,13 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		if got, want := candidate.path, []int{0, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("age-pairs candidate %d path = %#v, want %#v", i, got, want)
 		}
-		if candidate.key == "" {
-			t.Fatalf("age-pairs candidate %d key is empty", i)
+		if candidate.identity.isZero() {
+			t.Fatalf("age-pairs candidate %d identity is empty", i)
 		}
 	}
 }
 
-func TestCandidateKeyCanonicalizesBindingTupleOrder(t *testing.T) {
+func TestCandidateIdentityCanonicalizesBindingTupleOrder(t *testing.T) {
 	base := []bindingTupleEntry{
 		{
 			binding:        "beta",
@@ -218,11 +218,11 @@ func TestCandidateKeyCanonicalizesBindingTupleOrder(t *testing.T) {
 	}
 	reversed := []bindingTupleEntry{base[1], base[0]}
 
-	keyA := candidateKeyFor(RuleID("rule"), RuleRevisionID("revision"), 7, base)
-	keyB := candidateKeyFor(RuleID("rule"), RuleRevisionID("revision"), 7, reversed)
+	keyA := candidateIdentityFor(RuleID("rule"), RuleRevisionID("revision"), 0, 7, base)
+	keyB := candidateIdentityFor(RuleID("rule"), RuleRevisionID("revision"), 0, 7, reversed)
 
 	if keyA != keyB {
-		t.Fatalf("canonical keys differ for reordered bindings: %q vs %q", keyA, keyB)
+		t.Fatalf("canonical identities differ for reordered bindings: %#v vs %#v", keyA, keyB)
 	}
 }
 

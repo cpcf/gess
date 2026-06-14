@@ -4,10 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
-type activationKey string
+type activationKey struct {
+	identity candidateIdentityKey
+	index    int
+}
+
+type activationBucket struct {
+	first    *activation
+	overflow []*activation
+}
 
 type activationStatus uint8
 
@@ -36,6 +45,7 @@ type activation struct {
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
+	identity         candidateIdentity
 	bindings         []bindingTupleEntry
 	factIDs          []FactID
 	factVersions     []FactVersion
@@ -98,7 +108,7 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 }
 
 type agenda struct {
-	activations map[activationKey]*activation
+	activations map[candidateIdentityKey]activationBucket
 	pending     []activationKey
 	byFactID    map[FactID]map[activationKey]struct{}
 	byRevision  map[RuleRevisionID]map[activationKey]struct{}
@@ -106,7 +116,7 @@ type agenda struct {
 
 func newAgenda() *agenda {
 	return &agenda{
-		activations: make(map[activationKey]*activation),
+		activations: make(map[candidateIdentityKey]activationBucket),
 		byFactID:    make(map[FactID]map[activationKey]struct{}),
 		byRevision:  make(map[RuleRevisionID]map[activationKey]struct{}),
 	}
@@ -116,7 +126,7 @@ func (a *agenda) reset() {
 	if a == nil {
 		return
 	}
-	a.activations = make(map[activationKey]*activation)
+	a.activations = make(map[candidateIdentityKey]activationBucket)
 	a.pending = nil
 	a.byFactID = make(map[FactID]map[activationKey]struct{})
 	a.byRevision = make(map[RuleRevisionID]map[activationKey]struct{})
@@ -155,8 +165,8 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 				return nil, err
 			}
 
-			key := activationKey(candidate.key)
-			if existing, ok := a.activations[key]; ok {
+			existing, key, ok := a.activationForCandidate(candidate)
+			if ok {
 				if existing.status == activationStatusPending {
 					if _, seenBefore := seen[key]; !seenBefore {
 						seen[key] = struct{}{}
@@ -167,11 +177,10 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			}
 
 			created := activation{
-				id:               activationIDForKey(key),
-				key:              key,
 				ruleID:           result.ruleID,
 				ruleRevisionID:   result.ruleRevisionID,
 				generation:       candidate.generation,
+				identity:         candidate.identity,
 				bindings:         cloneBindingTupleEntries(candidate.bindingTuple),
 				factIDs:          cloneFactIDs(candidate.factIDs),
 				factVersions:     cloneFactVersions(candidate.factVersions),
@@ -184,7 +193,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			}
 
 			copyActivation := created.clone()
-			a.activations[key] = &copyActivation
+			key = a.storeActivation(&copyActivation)
 			indexActivation(a.byFactID, a.byRevision, copyActivation)
 
 			if _, seenBefore := seen[key]; !seenBefore {
@@ -202,7 +211,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		existing, ok := a.activations[key]
+		existing, ok := a.activationByKeyPtr(key)
 		if !ok || existing.status != activationStatusPending {
 			continue
 		}
@@ -216,8 +225,8 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	changes = append(changes, activated...)
 
 	sort.SliceStable(nextPending, func(i, j int) bool {
-		left := a.activations[nextPending[i]]
-		right := a.activations[nextPending[j]]
+		left, _ := a.activationByKeyPtr(nextPending[i])
+		right, _ := a.activationByKeyPtr(nextPending[j])
 		return activationLess(left, right)
 	})
 
@@ -233,7 +242,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	changes := make([]agendaChange, 0)
 	removed := make(map[activationKey]struct{})
 	for _, key := range a.pending {
-		current, ok := a.activations[key]
+		current, ok := a.activationByKeyPtr(key)
 		if !ok || current == nil {
 			continue
 		}
@@ -251,27 +260,42 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 		})
 	}
 
-	nextActivations := make(map[activationKey]*activation, len(a.activations))
+	nextActivations := make(map[candidateIdentityKey]activationBucket, len(a.activations))
 	nextByFactID := make(map[FactID]map[activationKey]struct{}, len(a.byFactID))
 	nextByRevision := make(map[RuleRevisionID]map[activationKey]struct{}, len(a.byRevision))
 	nextPending := make([]activationKey, 0, len(a.pending))
 
-	for key, current := range a.activations {
-		if current == nil {
-			continue
+	for identityKey, bucket := range a.activations {
+		nextBucket := activationBucket{}
+		if current := bucket.first; current != nil {
+			if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
+				nextBucket.first = current
+				indexActivation(nextByFactID, nextByRevision, *current)
+			}
 		}
-		if _, ok := revisionIDs[current.ruleRevisionID]; ok {
-			continue
+		if len(bucket.overflow) > 0 {
+			nextBucket.overflow = make([]*activation, len(bucket.overflow))
 		}
-		nextActivations[key] = current
-		indexActivation(nextByFactID, nextByRevision, *current)
+		for i, current := range bucket.overflow {
+			if current == nil {
+				continue
+			}
+			if _, ok := revisionIDs[current.ruleRevisionID]; ok {
+				continue
+			}
+			nextBucket.overflow[i] = current
+			indexActivation(nextByFactID, nextByRevision, *current)
+		}
+		if nextBucket.first != nil || len(nextBucket.overflow) > 0 {
+			nextActivations[identityKey] = nextBucket
+		}
 	}
 
 	for _, key := range a.pending {
 		if _, ok := removed[key]; ok {
 			continue
 		}
-		current, ok := nextActivations[key]
+		current, ok := activationFromBuckets(nextActivations, key)
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
@@ -294,7 +318,7 @@ func (a *agenda) next() (activation, bool) {
 		key := a.pending[0]
 		a.pending = a.pending[1:]
 
-		current, ok := a.activations[key]
+		current, ok := a.activationByKeyPtr(key)
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
@@ -310,7 +334,7 @@ func (a *agenda) clear() []agendaChange {
 	}
 	changes := make([]agendaChange, 0, len(a.pending))
 	for _, key := range a.pending {
-		current, ok := a.activations[key]
+		current, ok := a.activationByKeyPtr(key)
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
@@ -328,7 +352,7 @@ func (a *agenda) activationByKey(key activationKey) (activation, bool) {
 	if a == nil {
 		return activation{}, false
 	}
-	current, ok := a.activations[key]
+	current, ok := a.activationByKeyPtr(key)
 	if !ok {
 		return activation{}, false
 	}
@@ -341,7 +365,7 @@ func (a *agenda) pendingActivations() []activation {
 	}
 	out := make([]activation, 0, len(a.pending))
 	for _, key := range a.pending {
-		if current, ok := a.activations[key]; ok && current.status == activationStatusPending {
+		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
 			out = append(out, current.clone())
 		}
 	}
@@ -358,7 +382,7 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 	}
 	out := make([]activation, 0, len(keys))
 	for key := range keys {
-		if current, ok := a.activations[key]; ok {
+		if current, ok := a.activationByKeyPtr(key); ok {
 			out = append(out, current.clone())
 		}
 	}
@@ -378,7 +402,7 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 	}
 	out := make([]activation, 0, len(keys))
 	for key := range keys {
-		if current, ok := a.activations[key]; ok {
+		if current, ok := a.activationByKeyPtr(key); ok {
 			out = append(out, current.clone())
 		}
 	}
@@ -425,8 +449,88 @@ func activationLess(left, right *activation) bool {
 	return left.id < right.id
 }
 
+func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, activationKey, bool) {
+	if a == nil {
+		return nil, activationKey{}, false
+	}
+	bucket := a.activations[candidate.identity.key]
+	if current := bucket.first; current != nil && activationMatchesCandidate(current, candidate) {
+		return current, activationKey{identity: candidate.identity.key}, true
+	}
+	for i, current := range bucket.overflow {
+		if current != nil && activationMatchesCandidate(current, candidate) {
+			return current, activationKey{identity: candidate.identity.key, index: i + 1}, true
+		}
+	}
+	return nil, activationKey{}, false
+}
+
+func activationMatchesCandidate(current *activation, candidate matchCandidate) bool {
+	if current == nil {
+		return false
+	}
+	if current.ruleID != candidate.ruleID || current.ruleRevisionID != candidate.ruleRevisionID {
+		return false
+	}
+	return candidateIdentityEqual(current.identity, current.factIDs, current.factVersions, candidate.identity, candidate.factIDs, candidate.factVersions)
+}
+
+func (a *agenda) storeActivation(act *activation) activationKey {
+	bucket := a.activations[act.identity.key]
+	key := activationKey{
+		identity: act.identity.key,
+	}
+	if bucket.first == nil {
+		bucket.first = act
+	} else {
+		key.index = len(bucket.overflow) + 1
+		bucket.overflow = append(bucket.overflow, act)
+	}
+	act.key = key
+	act.id = activationIDForKey(key)
+	a.activations[act.identity.key] = bucket
+	return key
+}
+
+func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
+	if a == nil {
+		return nil, false
+	}
+	return activationFromBuckets(a.activations, key)
+}
+
+func activationFromBuckets(buckets map[candidateIdentityKey]activationBucket, key activationKey) (*activation, bool) {
+	bucket := buckets[key.identity]
+	if key.index == 0 {
+		if bucket.first == nil {
+			return nil, false
+		}
+		return bucket.first, true
+	}
+	overflowIndex := key.index - 1
+	if overflowIndex < 0 || overflowIndex >= len(bucket.overflow) {
+		return nil, false
+	}
+	current := bucket.overflow[overflowIndex]
+	if current == nil {
+		return nil, false
+	}
+	return current, true
+}
+
 func activationIDForKey(key activationKey) ActivationID {
-	return ActivationID(key)
+	if key.identity == (candidateIdentityKey{}) {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(64)
+	b.WriteString("activation:v1:")
+	writeUintToBuilder(&b, key.identity.scopeHash)
+	b.WriteByte(':')
+	writeUintToBuilder(&b, key.identity.hash)
+	b.WriteByte(':')
+	writeUintToBuilder(&b, uint64(key.index))
+	return ActivationID(b.String())
 }
 
 func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {

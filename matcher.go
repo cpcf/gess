@@ -27,6 +27,7 @@ type ruleMatchResult struct {
 type matchCandidate struct {
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
+	identity         candidateIdentity
 	bindingTuple     []bindingTupleEntry
 	factIDs          []FactID
 	factVersions     []FactVersion
@@ -34,7 +35,6 @@ type matchCandidate struct {
 	maxRecency       Recency
 	aggregateRecency Recency
 	path             []int
-	key              string
 }
 
 type bindingTupleEntry struct {
@@ -45,6 +45,26 @@ type bindingTupleEntry struct {
 	conditionPath  []int
 	factID         FactID
 	factVersion    FactVersion
+}
+
+type candidateIdentity struct {
+	generation Generation
+	count      int
+	key        candidateIdentityKey
+}
+
+type candidateIdentityKey struct {
+	scopeHash uint64
+	hash      uint64
+}
+
+type candidateSeenSet struct {
+	first    map[candidateIdentityKey]int
+	overflow map[candidateIdentityKey][]int
+}
+
+func newCandidateSeenSet(size int) candidateSeenSet {
+	return candidateSeenSet{first: make(map[candidateIdentityKey]int, size)}
 }
 
 func newNaiveMatcher(revision *Ruleset) matcher {
@@ -99,7 +119,7 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 	}
 
 	candidates := make([]matchCandidate, 0, len(bindingSets))
-	seen := make(map[string]struct{}, len(bindingSets))
+	seen := newCandidateSeenSet(len(bindingSets))
 	for _, set := range bindingSets {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -108,10 +128,9 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := seen[candidate.key]; ok {
+		if seen.seen(candidates, candidate) {
 			continue
 		}
-		seen[candidate.key] = struct{}{}
 		candidates = append(candidates, candidate)
 	}
 
@@ -183,11 +202,12 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 	}
 
 	path := candidatePathFor(entries)
-	key := candidateKeyFor(rule.id, rule.revisionID, snapshot.Generation(), entries)
+	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, snapshot.Generation(), entries)
 
 	return matchCandidate{
 		ruleID:           rule.id,
 		ruleRevisionID:   rule.revisionID,
+		identity:         identity,
 		bindingTuple:     entries,
 		factIDs:          factIDs,
 		factVersions:     factVersions,
@@ -195,11 +215,10 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 		maxRecency:       maxRecency,
 		aggregateRecency: aggregateRecency,
 		path:             path,
-		key:              key,
 	}, nil
 }
 
-func candidateKeyFor(ruleID RuleID, revisionID RuleRevisionID, generation Generation, bindings []bindingTupleEntry) string {
+func candidateIdentityFor(ruleID RuleID, revisionID RuleRevisionID, scopeHash uint64, generation Generation, bindings []bindingTupleEntry) candidateIdentity {
 	orderedBindings := bindings
 	if !bindingTupleEntriesSorted(bindings) {
 		orderedBindings = append([]bindingTupleEntry(nil), bindings...)
@@ -207,24 +226,125 @@ func candidateKeyFor(ruleID RuleID, revisionID RuleRevisionID, generation Genera
 			return bindingTupleEntryLess(orderedBindings[i], orderedBindings[j])
 		})
 	}
-
-	var b strings.Builder
-	b.Grow(96 + len(orderedBindings)*32)
-	b.WriteString("gess/match-candidate/v3|rule=")
-	b.WriteString(ruleID.String())
-	b.WriteString("|rev=")
-	b.WriteString(revisionID.String())
-	b.WriteString("|gen=")
-	writeUintToBuilder(&b, uint64(generation))
-	b.WriteString("|facts=")
-	for _, entry := range orderedBindings {
-		writeFactIDToBuilder(&b, entry.factID)
-		b.WriteByte(':')
-		writeUintToBuilder(&b, uint64(entry.factVersion))
-		b.WriteByte(';')
+	if scopeHash == 0 {
+		scopeHash = candidateIdentityScopeHash(ruleID, revisionID)
 	}
 
-	return b.String()
+	hash := candidateIdentityHash(generation, orderedBindings)
+	return candidateIdentity{
+		generation: generation,
+		count:      len(orderedBindings),
+		key: candidateIdentityKey{
+			scopeHash: scopeHash,
+			hash:      hash,
+		},
+	}
+}
+
+func candidateIdentityScopeHash(ruleID RuleID, revisionID RuleRevisionID) uint64 {
+	hash := uint64(1469598103934665603)
+	hash = fnvMixUint64(hash, 4)
+	hash = fnvMixString(hash, ruleID.String())
+	hash = fnvMixString(hash, revisionID.String())
+	return hash
+}
+
+func candidateIdentityHash(generation Generation, orderedBindings []bindingTupleEntry) uint64 {
+	hash := uint64(1469598103934665603)
+	hash = fnvMixUint64(hash, 4)
+	hash = fnvMixUint64(hash, uint64(generation))
+	hash = fnvMixUint64(hash, uint64(len(orderedBindings)))
+	for _, entry := range orderedBindings {
+		hash = fnvMixUint64(hash, uint64(entry.factID.generation))
+		hash = fnvMixUint64(hash, entry.factID.sequence)
+		hash = fnvMixUint64(hash, uint64(entry.factVersion))
+	}
+
+	return hash
+}
+
+func fnvMixString(hash uint64, value string) uint64 {
+	hash = fnvMixUint64(hash, uint64(len(value)))
+	for i := 0; i < len(value); i++ {
+		hash ^= uint64(value[i])
+		hash *= 1099511628211
+	}
+	return hash
+}
+
+func fnvMixUint64(hash uint64, value uint64) uint64 {
+	for range 8 {
+		hash ^= uint64(byte(value))
+		hash *= 1099511628211
+		value >>= 8
+	}
+	return hash
+}
+
+func (s *candidateSeenSet) seen(candidates []matchCandidate, candidate matchCandidate) bool {
+	if s == nil {
+		return false
+	}
+	key := candidate.identity.key
+	idx, ok := s.first[key]
+	if !ok {
+		s.first[key] = len(candidates)
+		return false
+	}
+	if candidateAtIndexEqual(candidates, idx, candidate) {
+		return true
+	}
+	for _, idx := range s.overflow[key] {
+		if candidateAtIndexEqual(candidates, idx, candidate) {
+			return true
+		}
+	}
+	if s.overflow == nil {
+		s.overflow = make(map[candidateIdentityKey][]int)
+	}
+	s.overflow[key] = append(s.overflow[key], len(candidates))
+	return false
+}
+
+func candidateAtIndexEqual(candidates []matchCandidate, idx int, candidate matchCandidate) bool {
+	if idx < 0 || idx >= len(candidates) {
+		return false
+	}
+	return candidateIdentityEqual(candidates[idx].identity, candidates[idx].factIDs, candidates[idx].factVersions, candidate.identity, candidate.factIDs, candidate.factVersions)
+}
+
+func candidateSeen(candidates []matchCandidate, indexes []int, candidate matchCandidate) bool {
+	for _, idx := range indexes {
+		if idx < 0 || idx >= len(candidates) {
+			continue
+		}
+		if candidateIdentityEqual(candidates[idx].identity, candidates[idx].factIDs, candidates[idx].factVersions, candidate.identity, candidate.factIDs, candidate.factVersions) {
+			return true
+		}
+	}
+	return false
+}
+
+func candidateIdentityEqual(left candidateIdentity, leftFactIDs []FactID, leftFactVersions []FactVersion, right candidateIdentity, rightFactIDs []FactID, rightFactVersions []FactVersion) bool {
+	if left.key != right.key {
+		return false
+	}
+	if left.generation != right.generation || left.count != right.count {
+		return false
+	}
+	if len(leftFactIDs) != len(rightFactIDs) || len(leftFactVersions) != len(rightFactVersions) || len(leftFactIDs) != len(leftFactVersions) {
+		return false
+	}
+	for i := range leftFactIDs {
+		if leftFactIDs[i] != rightFactIDs[i] || leftFactVersions[i] != rightFactVersions[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func (i candidateIdentity) isZero() bool {
+	return i.key == candidateIdentityKey{}
 }
 
 func bindingTupleEntriesSorted(entries []bindingTupleEntry) bool {
@@ -260,17 +380,6 @@ func factIDLess(left, right FactID) bool {
 		return left.generation < right.generation
 	}
 	return left.sequence < right.sequence
-}
-
-func writeFactIDToBuilder(b *strings.Builder, id FactID) {
-	if id.IsZero() {
-		b.WriteString("fact:zero")
-		return
-	}
-	b.WriteString("fact:g")
-	writeUintToBuilder(b, uint64(id.generation))
-	b.WriteByte(':')
-	writeUintToBuilder(b, id.sequence)
 }
 
 func writeUintToBuilder(b *strings.Builder, value uint64) {

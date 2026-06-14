@@ -216,16 +216,17 @@ func (r Rule) clone() Rule {
 }
 
 type compiledRule struct {
-	id               RuleID
-	revisionID       RuleRevisionID
-	name             string
-	description      string
-	tags             []string
-	salience         int
-	declarationOrder int
-	conditions       []RuleCondition
-	conditionPlans   []compiledConditionPlan
-	actions          []RuleAction
+	id                RuleID
+	revisionID        RuleRevisionID
+	name              string
+	description       string
+	tags              []string
+	salience          int
+	declarationOrder  int
+	identityScopeHash uint64
+	conditions        []RuleCondition
+	conditionPlans    []compiledConditionPlan
+	actions           []RuleAction
 }
 
 func (r compiledRule) inspect() Rule {
@@ -433,6 +434,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		actions:          actions,
 	}
 	compiled.revisionID = ruleRevisionIDFor(compiled)
+	compiled.identityScopeHash = candidateIdentityScopeHash(compiled.id, compiled.revisionID)
 	return compiled, nil
 }
 
