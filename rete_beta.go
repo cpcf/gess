@@ -1,0 +1,595 @@
+package gess
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+type reteBetaMemory struct {
+	revision *Ruleset
+	rules    map[RuleRevisionID]*reteBetaRuleMemory
+}
+
+type reteBetaRuleMemory struct {
+	rule             compiledRule
+	conditionMatches [][]conditionMatch
+	conditionIndexes []map[string][]int
+	prefixes         [][]betaPrefix
+	prefixIndexes    []map[string][]int
+}
+
+type betaPrefix struct {
+	matches []conditionMatch
+	token   *matchToken
+}
+
+func newReteBetaMemory(revision *Ruleset, plan reteNetworkPlan, facts []FactSnapshot) *reteBetaMemory {
+	if revision == nil || !plan.betaSupported {
+		return nil
+	}
+
+	memory := &reteBetaMemory{
+		revision: revision,
+		rules:    make(map[RuleRevisionID]*reteBetaRuleMemory, len(plan.rules)),
+	}
+	for _, rulePlan := range plan.rules {
+		if !rulePlan.supported || !rulePlan.betaSupported {
+			continue
+		}
+		rule, ok := revision.rulesByRevisionID[rulePlan.ruleRevisionID]
+		if !ok {
+			return nil
+		}
+		ruleMemory := newReteBetaRuleMemory(rule)
+		ruleMemory.resetFacts(facts)
+		memory.rules[rule.revisionID] = ruleMemory
+	}
+
+	return memory
+}
+
+func (m *reteBetaMemory) match(ctx context.Context, snapshot Snapshot, source alphaFactSource) ([]ruleMatchResult, error) {
+	if m == nil || m.revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	results := make([]ruleMatchResult, 0, len(m.revision.ruleOrder))
+	for _, ruleName := range m.revision.ruleOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		rule, ok := m.revision.rules[ruleName]
+		if !ok {
+			return nil, fmt.Errorf("%w: missing compiled rule %q", ErrMatcher, ruleName)
+		}
+
+		candidates, err := m.matchRuleCandidates(ctx, snapshot, rule, source)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, ruleMatchResult{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates:       candidates,
+		})
+	}
+
+	return results, nil
+}
+
+func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, snapshot Snapshot, rule compiledRule, source alphaFactSource) ([]matchCandidate, error) {
+	ruleMemory := m.rules[rule.revisionID]
+	if ruleMemory == nil {
+		return rule.matchCandidatesWithAlpha(ctx, snapshot, source)
+	}
+	terminal := ruleMemory.terminalPrefixes()
+	bindingSets := make([]bindingSet, 0, len(terminal))
+	for _, prefix := range terminal {
+		bindingSets = append(bindingSets, bindingSet{token: prefix.token})
+	}
+	return collectMatchCandidates(ctx, rule, snapshot, bindingSets)
+}
+
+func (m *reteBetaMemory) insertFact(fact FactSnapshot) {
+	if m == nil {
+		return
+	}
+	for _, ruleMemory := range m.rules {
+		ruleMemory.insertFact(fact)
+	}
+}
+
+func (m *reteBetaMemory) removeFact(id FactID) {
+	if m == nil {
+		return
+	}
+	for _, ruleMemory := range m.rules {
+		ruleMemory.removeFact(id)
+	}
+}
+
+func (m *reteBetaMemory) updateFact(before, after FactSnapshot) {
+	if m == nil {
+		return
+	}
+	m.removeFact(before.ID())
+	m.insertFact(after)
+}
+
+func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
+	conditions := len(rule.conditionPlans)
+	return &reteBetaRuleMemory{
+		rule:             rule,
+		conditionMatches: make([][]conditionMatch, conditions),
+		conditionIndexes: make([]map[string][]int, conditions),
+		prefixes:         make([][]betaPrefix, conditions),
+		prefixIndexes:    make([]map[string][]int, conditions),
+	}
+}
+
+func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
+	if m == nil {
+		return
+	}
+	for conditionIndex, plan := range m.rule.conditionPlans {
+		matches := make([]conditionMatch, 0)
+		for _, fact := range facts {
+			match, ok, err := betaConditionMatch(plan, fact)
+			if err != nil || !ok {
+				continue
+			}
+			matches = append(matches, match)
+		}
+		m.conditionMatches[conditionIndex] = matches
+		m.rebuildConditionIndex(conditionIndex)
+	}
+	for conditionIndex, matches := range m.conditionMatches {
+		if len(matches) == 0 {
+			return
+		}
+		var prefixes []betaPrefix
+		if conditionIndex == 0 {
+			plan := m.rule.conditionPlans[conditionIndex]
+			prefixes = make([]betaPrefix, 0, len(matches))
+			for _, match := range matches {
+				prefixes = append(prefixes, betaPrefix{
+					matches: []conditionMatch{match},
+					token:   newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+				})
+			}
+		} else {
+			var err error
+			prefixes, err = m.joinExistingPrefixes(conditionIndex)
+			if err != nil {
+				return
+			}
+		}
+		if len(prefixes) == 0 {
+			return
+		}
+		m.prefixes[conditionIndex] = prefixes
+		m.rebuildPrefixIndex(conditionIndex)
+	}
+}
+
+func (m *reteBetaRuleMemory) insertFact(fact FactSnapshot) {
+	if m == nil {
+		return
+	}
+	for conditionIndex, plan := range m.rule.conditionPlans {
+		match, ok, err := betaConditionMatch(plan, fact)
+		if err != nil || !ok {
+			continue
+		}
+		m.addConditionMatch(conditionIndex, match)
+		nextPrefixes, err := m.prefixesForRightMatch(conditionIndex, match)
+		if err != nil {
+			continue
+		}
+		for _, prefix := range nextPrefixes {
+			m.addAndPropagatePrefix(conditionIndex, prefix)
+		}
+	}
+}
+
+func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) ([]betaPrefix, error) {
+	plan := m.rule.conditionPlans[conditionIndex]
+	out := make([]betaPrefix, 0)
+	for _, prefix := range m.prefixes[conditionIndex-1] {
+		matches, err := m.matchesForLeftPrefix(conditionIndex, prefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range matches {
+			ok, err := plan.matchesJoins(context.Background(), match.fact, prefix.matches)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			out = append(out, betaPrefix{
+				matches: append(cloneConditionMatchSlice(prefix.matches), match),
+				token:   newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+			})
+		}
+	}
+	return out, nil
+}
+
+func (m *reteBetaRuleMemory) removeFact(id FactID) {
+	if m == nil {
+		return
+	}
+	for conditionIndex := range m.conditionMatches {
+		m.removeConditionMatch(conditionIndex, id)
+	}
+	for conditionIndex := range m.prefixes {
+		m.removePrefixesContainingFact(conditionIndex, id)
+	}
+}
+
+func (m *reteBetaRuleMemory) addAndPropagatePrefix(conditionIndex int, prefix betaPrefix) {
+	if !m.addPrefix(conditionIndex, prefix) {
+		return
+	}
+	m.propagatePrefix(conditionIndex, prefix)
+}
+
+func (m *reteBetaRuleMemory) propagatePrefix(conditionIndex int, prefix betaPrefix) {
+	nextCondition := conditionIndex + 1
+	if m == nil || nextCondition >= len(m.rule.conditionPlans) {
+		return
+	}
+	matches, err := m.matchesForLeftPrefix(nextCondition, prefix)
+	if err != nil {
+		return
+	}
+	for _, match := range matches {
+		ok, err := m.rule.conditionPlans[nextCondition].matchesJoins(context.Background(), match.fact, prefix.matches)
+		if err != nil || !ok {
+			continue
+		}
+		nextPrefix := betaPrefix{
+			matches: append(cloneConditionMatchSlice(prefix.matches), match),
+			token:   newMatchToken(prefix.token, m.rule.conditionPlans[nextCondition].bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+		}
+		m.addAndPropagatePrefix(nextCondition, nextPrefix)
+	}
+}
+
+func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match conditionMatch) ([]betaPrefix, error) {
+	plan := m.rule.conditionPlans[conditionIndex]
+	if conditionIndex == 0 {
+		return []betaPrefix{{
+			matches: []conditionMatch{match},
+			token:   newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+		}}, nil
+	}
+
+	var prefixes []betaPrefix
+	if len(plan.joins) == 0 {
+		prefixes = m.prefixes[conditionIndex-1]
+	} else {
+		key, ok := betaJoinKeyForFact(plan, match.fact)
+		if !ok {
+			return nil, nil
+		}
+		for _, idx := range m.prefixIndexes[conditionIndex-1][key] {
+			if idx >= 0 && idx < len(m.prefixes[conditionIndex-1]) {
+				prefixes = append(prefixes, m.prefixes[conditionIndex-1][idx])
+			}
+		}
+	}
+
+	out := make([]betaPrefix, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		ok, err := plan.matchesJoins(context.Background(), match.fact, prefix.matches)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		out = append(out, betaPrefix{
+			matches: append(cloneConditionMatchSlice(prefix.matches), match),
+			token:   newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+		})
+	}
+	return out, nil
+}
+
+func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix betaPrefix) ([]conditionMatch, error) {
+	plan := m.rule.conditionPlans[conditionIndex]
+	if len(plan.joins) == 0 {
+		return m.conditionMatches[conditionIndex], nil
+	}
+	key, ok := betaJoinKeyForPrefix(plan, prefix.matches)
+	if !ok {
+		return nil, nil
+	}
+	indexes := m.conditionIndexes[conditionIndex][key]
+	matches := make([]conditionMatch, 0, len(indexes))
+	for _, idx := range indexes {
+		if idx >= 0 && idx < len(m.conditionMatches[conditionIndex]) {
+			matches = append(matches, m.conditionMatches[conditionIndex][idx])
+		}
+	}
+	return matches, nil
+}
+
+func (m *reteBetaRuleMemory) addConditionMatch(conditionIndex int, match conditionMatch) bool {
+	matches := m.conditionMatches[conditionIndex]
+	insertAt := len(matches)
+	for insertAt > 0 && conditionMatchLess(match, matches[insertAt-1]) {
+		insertAt--
+	}
+	if insertAt < len(matches) && conditionMatchEqual(matches[insertAt], match) {
+		return false
+	}
+	if insertAt > 0 && conditionMatchEqual(matches[insertAt-1], match) {
+		return false
+	}
+	if insertAt == len(matches) {
+		m.conditionMatches[conditionIndex] = append(matches, match)
+		m.indexConditionMatch(conditionIndex, insertAt, match)
+		return true
+	}
+
+	matches = append(matches, conditionMatch{})
+	copy(matches[insertAt+1:], matches[insertAt:])
+	matches[insertAt] = match
+	m.conditionMatches[conditionIndex] = matches
+	m.rebuildConditionIndex(conditionIndex)
+	return true
+}
+
+func (m *reteBetaRuleMemory) removeConditionMatch(conditionIndex int, id FactID) {
+	matches := m.conditionMatches[conditionIndex]
+	next := matches[:0]
+	removed := false
+	for _, match := range matches {
+		if match.fact.ID() == id {
+			removed = true
+			continue
+		}
+		next = append(next, match)
+	}
+	if !removed {
+		return
+	}
+	for i := len(next); i < len(matches); i++ {
+		matches[i] = conditionMatch{}
+	}
+	m.conditionMatches[conditionIndex] = next
+	m.rebuildConditionIndex(conditionIndex)
+}
+
+func (m *reteBetaRuleMemory) addPrefix(conditionIndex int, prefix betaPrefix) bool {
+	prefixes := m.prefixes[conditionIndex]
+	insertAt := len(prefixes)
+	for insertAt > 0 && betaPrefixLess(prefix, prefixes[insertAt-1]) {
+		insertAt--
+	}
+	if insertAt < len(prefixes) && betaPrefixEqual(prefixes[insertAt], prefix) {
+		return false
+	}
+	if insertAt > 0 && betaPrefixEqual(prefixes[insertAt-1], prefix) {
+		return false
+	}
+	if insertAt == len(prefixes) {
+		m.prefixes[conditionIndex] = append(prefixes, prefix)
+		m.indexPrefix(conditionIndex, insertAt, prefix)
+		return true
+	}
+
+	prefixes = append(prefixes, betaPrefix{})
+	copy(prefixes[insertAt+1:], prefixes[insertAt:])
+	prefixes[insertAt] = prefix
+	m.prefixes[conditionIndex] = prefixes
+	m.rebuildPrefixIndex(conditionIndex)
+	return true
+}
+
+func (m *reteBetaRuleMemory) removePrefixesContainingFact(conditionIndex int, id FactID) {
+	prefixes := m.prefixes[conditionIndex]
+	next := prefixes[:0]
+	removed := false
+	for _, prefix := range prefixes {
+		if betaPrefixContainsFact(prefix, id) {
+			removed = true
+			continue
+		}
+		next = append(next, prefix)
+	}
+	if !removed {
+		return
+	}
+	for i := len(next); i < len(prefixes); i++ {
+		prefixes[i] = betaPrefix{}
+	}
+	m.prefixes[conditionIndex] = next
+	m.rebuildPrefixIndex(conditionIndex)
+}
+
+func (m *reteBetaRuleMemory) terminalPrefixes() []betaPrefix {
+	if m == nil || len(m.prefixes) == 0 {
+		return nil
+	}
+	return m.prefixes[len(m.prefixes)-1]
+}
+
+func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex, matchIndex int, match conditionMatch) {
+	plan := m.rule.conditionPlans[conditionIndex]
+	if len(plan.joins) == 0 {
+		return
+	}
+	key, ok := betaJoinKeyForFact(plan, match.fact)
+	if !ok {
+		return
+	}
+	if m.conditionIndexes[conditionIndex] == nil {
+		m.conditionIndexes[conditionIndex] = make(map[string][]int)
+	}
+	m.conditionIndexes[conditionIndex][key] = append(m.conditionIndexes[conditionIndex][key], matchIndex)
+}
+
+func (m *reteBetaRuleMemory) rebuildConditionIndex(conditionIndex int) {
+	m.conditionIndexes[conditionIndex] = nil
+	for i, match := range m.conditionMatches[conditionIndex] {
+		m.indexConditionMatch(conditionIndex, i, match)
+	}
+}
+
+func (m *reteBetaRuleMemory) indexPrefix(conditionIndex, prefixIndex int, prefix betaPrefix) {
+	nextCondition := conditionIndex + 1
+	if nextCondition >= len(m.rule.conditionPlans) {
+		return
+	}
+	nextPlan := m.rule.conditionPlans[nextCondition]
+	if len(nextPlan.joins) == 0 {
+		return
+	}
+	key, ok := betaJoinKeyForPrefix(nextPlan, prefix.matches)
+	if !ok {
+		return
+	}
+	if m.prefixIndexes[conditionIndex] == nil {
+		m.prefixIndexes[conditionIndex] = make(map[string][]int)
+	}
+	m.prefixIndexes[conditionIndex][key] = append(m.prefixIndexes[conditionIndex][key], prefixIndex)
+}
+
+func (m *reteBetaRuleMemory) rebuildPrefixIndex(conditionIndex int) {
+	m.prefixIndexes[conditionIndex] = nil
+	for i, prefix := range m.prefixes[conditionIndex] {
+		m.indexPrefix(conditionIndex, i, prefix)
+	}
+}
+
+func betaConditionMatch(plan compiledConditionPlan, fact FactSnapshot) (conditionMatch, bool, error) {
+	if !plan.matchesFact(fact) {
+		return conditionMatch{}, false, nil
+	}
+	ok, err := plan.matchesConstraints(context.Background(), fact)
+	if err != nil || !ok {
+		return conditionMatch{}, false, err
+	}
+	return conditionMatch{
+		conditionID: plan.id,
+		bindingSlot: plan.bindingSlot,
+		fact:        fact,
+	}, true, nil
+}
+
+func conditionMatchLess(left, right conditionMatch) bool {
+	if left.fact.ID() != right.fact.ID() {
+		return factIDLess(left.fact.ID(), right.fact.ID())
+	}
+	return left.fact.Version() < right.fact.Version()
+}
+
+func conditionMatchEqual(left, right conditionMatch) bool {
+	return left.conditionID == right.conditionID &&
+		left.bindingSlot == right.bindingSlot &&
+		left.fact.ID() == right.fact.ID() &&
+		left.fact.Version() == right.fact.Version()
+}
+
+func betaPrefixLess(left, right betaPrefix) bool {
+	for i := 0; i < len(left.matches) && i < len(right.matches); i++ {
+		if left.matches[i].fact.ID() != right.matches[i].fact.ID() {
+			return factIDLess(left.matches[i].fact.ID(), right.matches[i].fact.ID())
+		}
+		if left.matches[i].fact.Version() != right.matches[i].fact.Version() {
+			return left.matches[i].fact.Version() < right.matches[i].fact.Version()
+		}
+	}
+	return len(left.matches) < len(right.matches)
+}
+
+func betaPrefixEqual(left, right betaPrefix) bool {
+	if len(left.matches) != len(right.matches) {
+		return false
+	}
+	for i := range left.matches {
+		if !conditionMatchEqual(left.matches[i], right.matches[i]) {
+			return false
+		}
+	}
+	return matchTokenEqual(left.token, right.token)
+}
+
+func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
+	for token := prefix.token; token != nil; token = token.parent {
+		if token.entry.factID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func betaJoinKeyForFact(plan compiledConditionPlan, fact FactSnapshot) (string, bool) {
+	if len(plan.joins) == 0 {
+		return "", true
+	}
+
+	var b strings.Builder
+	b.WriteString(plan.id.String())
+	for _, join := range plan.joins {
+		if join.indexKind != joinIndexEquality {
+			return "", false
+		}
+		value, ok := fact.compiledFieldValue(join.field, join.fieldSlot)
+		if !ok {
+			return "", false
+		}
+		b.WriteByte('|')
+		b.WriteString(value.canonicalKey())
+	}
+	return b.String(), true
+}
+
+func betaJoinKeyForPrefix(plan compiledConditionPlan, matches []conditionMatch) (string, bool) {
+	if len(plan.joins) == 0 {
+		return "", true
+	}
+
+	var b strings.Builder
+	b.WriteString(plan.id.String())
+	for _, join := range plan.joins {
+		if join.indexKind != joinIndexEquality {
+			return "", false
+		}
+		if join.refBindingSlot < 0 || join.refBindingSlot >= len(matches) {
+			return "", false
+		}
+		value, ok := matches[join.refBindingSlot].fact.compiledFieldValue(join.refField, join.refFieldSlot)
+		if !ok {
+			return "", false
+		}
+		b.WriteByte('|')
+		b.WriteString(value.canonicalKey())
+	}
+	return b.String(), true
+}
+
+func cloneConditionMatchSlice(in []conditionMatch) []conditionMatch {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]conditionMatch, len(in))
+	copy(out, in)
+	return out
+}

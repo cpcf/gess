@@ -628,7 +628,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 	} else {
 		if s.rete != nil {
-			s.rete.alpha = nil
+			s.rete.clearMemories()
 		}
 	}
 	s.emitAgendaEvents(ctx, s.agenda.clear())
@@ -809,10 +809,12 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) {
 	if s.rete.alpha == nil {
 		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
 			s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
+			return
 		}
 		return
 	}
 	s.rete.insertAlphaFact(fact)
+	s.rete.insertBetaFact(fact)
 }
 
 func (s *Session) updateReteAlphaAfterRetract(id FactID) {
@@ -820,6 +822,7 @@ func (s *Session) updateReteAlphaAfterRetract(id FactID) {
 		return
 	}
 	s.rete.removeAlphaFact(id)
+	s.rete.removeBetaFact(id)
 }
 
 func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) {
@@ -827,6 +830,7 @@ func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) {
 		return
 	}
 	s.rete.updateAlphaFact(before, after)
+	s.rete.updateBetaFact(before, after)
 }
 
 func (s *Session) rebuildFieldSlots(revision *Ruleset) {

@@ -274,6 +274,138 @@ func TestReteRuntimeUnsupportedPlanFallsBackToOracle(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), runtime)
 }
 
+func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
+	ctx := context.Background()
+	revision1, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	initials := mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)
+	session, err := NewSession(revision1, WithSessionID("beta-lifecycle-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil {
+		t.Fatal("expected beta session to initialize Rete runtime")
+	}
+	if !session.rete.plan.betaSupported {
+		t.Fatalf("beta plan = %#v, want supported", session.rete.plan)
+	}
+	if session.rete.beta == nil {
+		t.Fatal("expected beta memory to be initialized")
+	}
+	betaMemory := session.rete.beta
+
+	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate(Ben): %v", err)
+	}
+	if session.rete.beta != betaMemory {
+		t.Fatal("assert rebuilt beta memory, want incremental update")
+	}
+	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+
+	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
+	if _, err := session.Modify(ctx, employee.ID(), FactPatch{Set: mustFields(t, map[string]any{"dept": "Sales"})}); err != nil {
+		t.Fatalf("Modify(Ada): %v", err)
+	}
+	if session.rete.beta != betaMemory {
+		t.Fatal("modify rebuilt beta memory, want incremental update")
+	}
+	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+
+	salesDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Sales")
+	if _, err := session.Retract(ctx, salesDepartment.ID()); err != nil {
+		t.Fatalf("Retract(Sales department): %v", err)
+	}
+	if session.rete.beta != betaMemory {
+		t.Fatal("retract rebuilt beta memory, want incremental update")
+	}
+	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+
+	resetResult, err := session.Reset(ctx)
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if resetResult.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", resetResult.Status, ResetApplied)
+	}
+	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+
+	workspace2 := NewWorkspace()
+	noise2 := mustAddTemplate(t, workspace2, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	employee2 := mustAddTemplate(t, workspace2, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department2 := mustAddTemplate(t, workspace2, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace2, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace2, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee2.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department2.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace2, RuleSpec{
+		Name: "engineering-employee",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "employee",
+				TemplateKey: employee2.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "dept", Operator: FieldConstraintEqual, Value: "Engineering"},
+				},
+			},
+			{
+				Binding:     "department",
+				TemplateKey: department2.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Value: "Engineering"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision2 := mustCompileWorkspace(t, workspace2)
+
+	result, err := session.ApplyRuleset(ctx, revision2)
+	if err != nil {
+		t.Fatalf("ApplyRuleset: %v", err)
+	}
+	if result.Status != ApplyRulesetApplied {
+		t.Fatalf("apply status = %v, want %v", result.Status, ApplyRulesetApplied)
+	}
+	if session.rete == nil || session.rete.beta == nil || !session.rete.plan.betaSupported {
+		t.Fatalf("beta runtime after apply = %#v", session.rete)
+	}
+	assertMatcherParity(t, revision2, mustSnapshot(t, ctx, session), newNaiveMatcher(revision2), session.rete)
+	_ = noise2
+}
+
 func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	runtime, err := newReteRuntime(nil)
 	if err != ErrInvalidRuleset {
@@ -282,6 +414,296 @@ func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	if runtime != nil {
 		t.Fatalf("newReteRuntime(nil) runtime = %#v, want nil", runtime)
 	}
+}
+
+func TestReteRuntimeFallsBackForNumericJoinPlans(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	noise := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "threshold",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "candidate",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "older-than-threshold",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+3)
+	for i := range reteAlphaMinimumFacts {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noise.Key(),
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials,
+		SessionInitialFact{TemplateKey: threshold.Key(), Fields: mustFields(t, map[string]any{"age": 20})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 10})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 30})},
+	)
+	session, err := NewSession(revision, WithSessionID("numeric-join-fallback-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil {
+		t.Fatal("expected Rete runtime")
+	}
+	if session.rete.plan.betaSupported {
+		t.Fatalf("beta plan = %#v, want unsupported for numeric joins", session.rete.plan)
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	noise := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "threshold",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "candidate",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "older-than-threshold",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+5)
+	for i := range reteAlphaMinimumFacts {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noise.Key(),
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials,
+		SessionInitialFact{TemplateKey: employee.Key(), Fields: mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})},
+		SessionInitialFact{TemplateKey: department.Key(), Fields: mustFields(t, map[string]any{"id": "Engineering"})},
+		SessionInitialFact{TemplateKey: threshold.Key(), Fields: mustFields(t, map[string]any{"age": 20})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 10})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 30})},
+	)
+	session, err := NewSession(revision, WithSessionID("mixed-beta-fallback-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil || !session.rete.plan.betaSupported {
+		t.Fatalf("beta runtime = %#v, want mixed beta support", session.rete)
+	}
+	equalityRule := revision.rules["employee-department"]
+	numericRule := revision.rules["older-than-threshold"]
+	if session.rete.beta.rules[equalityRule.revisionID] == nil {
+		t.Fatal("equality join rule did not get beta memory")
+	}
+	if session.rete.beta.rules[numericRule.revisionID] != nil {
+		t.Fatal("numeric join rule unexpectedly got beta memory")
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeResetBelowThresholdClearsBetaMemory(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-reset-small-session"),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: employeeKey, Fields: mustFields(t, map[string]any{"name": "Initial", "dept": "Engineering"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil {
+		t.Fatal("small initial session unexpectedly has Rete runtime")
+	}
+
+	for i := range reteAlphaMinimumFacts {
+		if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": i})); err != nil {
+			t.Fatalf("AssertTemplate noise %d: %v", i, err)
+		}
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatal("expected beta memory after crossing threshold")
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if session.rete == nil {
+		t.Fatal("expected Rete runtime object to remain after reset")
+	}
+	if session.rete.alpha != nil || session.rete.beta != nil {
+		t.Fatalf("Rete memories after small reset = alpha:%#v beta:%#v, want cleared", session.rete.alpha, session.rete.beta)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	noise := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "dept", Kind: ValueString, Required: true}},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), noise.Key(), employee.Key(), department.Key()
+}
+
+func mustBetaMemoryInitialFacts(t testing.TB, noiseKey, employeeKey, departmentKey TemplateKey) []SessionInitialFact {
+	t.Helper()
+
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+3)
+	for i := range reteAlphaMinimumFacts {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noiseKey,
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials,
+		SessionInitialFact{
+			TemplateKey: employeeKey,
+			Fields:      mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}),
+		},
+		SessionInitialFact{
+			TemplateKey: departmentKey,
+			Fields:      mustFields(t, map[string]any{"id": "Engineering"}),
+		},
+		SessionInitialFact{
+			TemplateKey: departmentKey,
+			Fields:      mustFields(t, map[string]any{"id": "Sales"}),
+		},
+	)
+	return initials
+}
+
+func mustSessionFactByTemplateAndField(t *testing.T, session *Session, templateKey TemplateKey, field string, want any) FactSnapshot {
+	t.Helper()
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	expected := mustValue(t, want)
+	for _, fact := range snapshot.Facts() {
+		if fact.TemplateKey() != templateKey {
+			continue
+		}
+		got, ok := fact.Field(field)
+		if !ok {
+			continue
+		}
+		if got.Equal(expected) {
+			return fact
+		}
+	}
+	t.Fatalf("fact not found for template %q field %q = %v", templateKey, field, want)
+	return FactSnapshot{}
 }
 
 func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldConstraintSpec) (*Ruleset, TemplateKey) {

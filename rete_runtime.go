@@ -12,12 +12,14 @@ type reteRuntime struct {
 	plan     reteNetworkPlan
 	oracle   matcher
 	alpha    *reteAlphaMemory
+	beta     *reteBetaMemory
 }
 
 type reteNetworkPlan struct {
-	rules       []reteRulePlan
-	unsupported []reteUnsupportedReason
-	stats       retePlanStats
+	rules         []reteRulePlan
+	unsupported   []reteUnsupportedReason
+	stats         retePlanStats
+	betaSupported bool
 }
 
 type reteRulePlan struct {
@@ -28,18 +30,20 @@ type reteRulePlan struct {
 	conditions       []reteConditionPlan
 	terminal         reteTerminalPlan
 	supported        bool
+	betaSupported    bool
 }
 
 type reteConditionPlan struct {
-	conditionID ConditionID
-	binding     string
-	bindingSlot int
-	path        []int
-	target      conditionTarget
-	constraints []compiledFieldConstraint
-	alpha       reteAlphaPlan
-	beta        []reteBetaPlan
-	supported   bool
+	conditionID   ConditionID
+	binding       string
+	bindingSlot   int
+	path          []int
+	target        conditionTarget
+	constraints   []compiledFieldConstraint
+	alpha         reteAlphaPlan
+	beta          []reteBetaPlan
+	supported     bool
+	betaSupported bool
 }
 
 type reteAlphaPlan struct {
@@ -136,6 +140,9 @@ func (r *reteRuntime) match(ctx context.Context, snapshot Snapshot) ([]ruleMatch
 	if r == nil || r.revision == nil || r.oracle == nil {
 		return nil, ErrInvalidRuleset
 	}
+	if r.plan.betaSupported && r.beta != nil {
+		return r.beta.match(ctx, snapshot, r.alpha)
+	}
 	if len(r.plan.unsupported) > 0 || r.alpha == nil {
 		return r.oracle.match(ctx, snapshot)
 	}
@@ -182,12 +189,53 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 		return
 	}
 	if len(facts) < reteAlphaMinimumFacts {
-		r.alpha = nil
+		r.clearMemories()
+	} else {
+		alpha := newReteAlphaMemory(r.plan)
+		alpha.reset(r.plan, facts)
+		r.alpha = alpha
+	}
+	r.rebuildBeta(facts)
+}
+
+func (r *reteRuntime) clearMemories() {
+	if r == nil {
 		return
 	}
-	alpha := newReteAlphaMemory(r.plan)
-	alpha.reset(r.plan, facts)
-	r.alpha = alpha
+	r.alpha = nil
+	r.beta = nil
+}
+
+func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
+	if r == nil {
+		return
+	}
+	if !r.plan.betaSupported || len(facts) < reteAlphaMinimumFacts {
+		r.beta = nil
+		return
+	}
+	r.beta = newReteBetaMemory(r.revision, r.plan, facts)
+}
+
+func (r *reteRuntime) insertBetaFact(fact FactSnapshot) {
+	if r == nil || r.beta == nil {
+		return
+	}
+	r.beta.insertFact(fact)
+}
+
+func (r *reteRuntime) removeBetaFact(id FactID) {
+	if r == nil || r.beta == nil {
+		return
+	}
+	r.beta.removeFact(id)
+}
+
+func (r *reteRuntime) updateBetaFact(before, after FactSnapshot) {
+	if r == nil || r.beta == nil {
+		return
+	}
+	r.beta.updateFact(before, after)
 }
 
 func (r *reteRuntime) insertAlphaFact(fact FactSnapshot) {
@@ -244,7 +292,8 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 				ruleRevisionID: rule.revisionID,
 				conditions:     len(rule.conditionPlans),
 			},
-			supported: true,
+			supported:     true,
+			betaSupported: true,
 		}
 
 		for _, condition := range rule.conditionPlans {
@@ -264,10 +313,16 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			if !condition.supported {
 				plan.stats.unsupportedConditions++
 			}
+			if !condition.betaSupported {
+				rulePlan.betaSupported = false
+			}
 		}
 		plan.stats.terminalNodes++
 		if !rulePlan.supported {
 			plan.stats.unsupportedRules++
+		}
+		if rulePlan.betaSupported {
+			plan.betaSupported = true
 		}
 		plan.rules = append(plan.rules, rulePlan)
 	}
@@ -291,13 +346,15 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 			indexKind:      condition.indexKind,
 			constraints:    len(condition.constraints),
 		},
-		beta:      make([]reteBetaPlan, 0, len(condition.joins)),
-		supported: true,
+		beta:          make([]reteBetaPlan, 0, len(condition.joins)),
+		supported:     true,
+		betaSupported: true,
 	}
 
 	var unsupported []reteUnsupportedReason
 	addUnsupported := func(kind reteUnsupportedKind, detail string) {
 		conditionPlan.supported = false
+		conditionPlan.betaSupported = false
 		unsupported = append(unsupported, reteUnsupportedReason{
 			ruleID:         rule.id,
 			ruleRevisionID: rule.revisionID,
@@ -332,6 +389,9 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 			refBindingSlot: join.refBindingSlot,
 			indexKind:      join.indexKind,
 		})
+		if join.indexKind != joinIndexEquality {
+			conditionPlan.betaSupported = false
+		}
 		if !join.indexable {
 			addUnsupported(reteUnsupportedUnindexedJoin, "join is not indexable by the current planner")
 		}
