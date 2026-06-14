@@ -48,6 +48,7 @@ type Template struct {
 	compatibilityKey  TemplateKey
 	fields            []FieldSpec
 	fieldsByName      map[string]FieldSpec
+	fieldIndexes      map[string]int
 	fieldDefaults     map[string]Value
 	fieldAllowed      map[string][]Value
 	duplicatePolicy   DuplicatePolicy
@@ -118,6 +119,30 @@ func (t Template) Fields() []FieldSpec {
 	return out
 }
 
+func (t Template) fieldSlot(field string) (int, bool) {
+	if len(t.fieldIndexes) == 0 {
+		return 0, false
+	}
+	slot, ok := t.fieldIndexes[field]
+	return slot, ok
+}
+
+func (t Template) buildFieldSlots(fields Fields) []factSlot {
+	if !t.closed || len(t.fields) == 0 {
+		return nil
+	}
+
+	slots := make([]factSlot, len(t.fields))
+	for i, field := range t.fields {
+		value, ok := fields[field.Name]
+		if !ok {
+			continue
+		}
+		slots[i] = factSlot{value: cloneValue(value), ok: true}
+	}
+	return slots
+}
+
 func (t Template) clone() Template {
 	out := t
 	out.fields = make([]FieldSpec, len(t.fields))
@@ -128,6 +153,10 @@ func (t Template) clone() Template {
 	if t.fieldsByName != nil {
 		out.fieldsByName = make(map[string]FieldSpec, len(t.fieldsByName))
 		maps.Copy(out.fieldsByName, t.fieldsByName)
+	}
+	if t.fieldIndexes != nil {
+		out.fieldIndexes = make(map[string]int, len(t.fieldIndexes))
+		maps.Copy(out.fieldIndexes, t.fieldIndexes)
 	}
 
 	out.fieldDefaults = cloneFieldDefaults(t.fieldDefaults)
@@ -331,6 +360,10 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	slices.SortFunc(fields, func(a, b FieldSpec) int {
 		return strings.Compare(a.Name, b.Name)
 	})
+	fieldIndexes := make(map[string]int, len(fields))
+	for i, field := range fields {
+		fieldIndexes[field.Name] = i
+	}
 
 	duplicateKeyNames, err := normalizeTemplateDuplicateFields(spec.DuplicateKeyNames, fieldsByName)
 	if err != nil {
@@ -360,6 +393,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		compatibilityKey:  compatibilityKey,
 		fields:            fields,
 		fieldsByName:      fieldsByName,
+		fieldIndexes:      fieldIndexes,
 		fieldDefaults:     fieldDefaults,
 		fieldAllowed:      fieldAllowed,
 		duplicatePolicy:   spec.DuplicatePolicy,

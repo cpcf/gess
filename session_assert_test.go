@@ -64,6 +64,60 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	}
 }
 
+func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
+	workspace := NewWorkspace()
+	targeted := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "targeted",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	untargeted := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "untargeted",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "targeted-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "fact", TemplateKey: targeted.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("untargeted-slot-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	targetedResult, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{"id": "a"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate targeted: %v", err)
+	}
+	if got := len(session.factsByID[targetedResult.Fact.ID()].fieldSlots); got == 0 {
+		t.Fatalf("targeted field slots = %d, want non-zero", got)
+	}
+
+	untargetedResult, err := session.AssertTemplate(context.Background(), untargeted.Key(), mustFields(t, map[string]any{"id": "b"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate untargeted: %v", err)
+	}
+	if got := len(session.factsByID[untargetedResult.Fact.ID()].fieldSlots); got != 0 {
+		t.Fatalf("untargeted field slots = %d, want zero", got)
+	}
+}
+
 func TestSessionAssertDuplicateMetadataIsStable(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "duplicate-metadata-session")
 

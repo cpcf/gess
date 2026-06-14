@@ -55,9 +55,10 @@ func (c FieldConstraint) clone() FieldConstraint {
 }
 
 type compiledFieldConstraint struct {
-	field    string
-	operator FieldConstraintOperator
-	value    Value
+	field     string
+	operator  FieldConstraintOperator
+	value     Value
+	fieldSlot int
 }
 
 func (o FieldConstraintOperator) valid() bool {
@@ -105,8 +106,11 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Reason:             "exists constraint must not set a value",
 			}
 		}
+
+		fieldSlot := -1
 		if template != nil && template.closed {
-			if _, ok := template.fieldsByName[normalized.Field]; !ok {
+			slot, ok := template.fieldSlot(normalized.Field)
+			if !ok {
 				return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 					RuleName:           ruleName,
 					TemplateName:       template.name,
@@ -118,6 +122,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 					Reason:             "unknown field",
 				}
 			}
+			fieldSlot = slot
 		}
 
 		return FieldConstraint{
@@ -125,9 +130,10 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Operator: normalized.Operator,
 				Value:    NullValue(),
 			}, compiledFieldConstraint{
-				field:    normalized.Field,
-				operator: normalized.Operator,
-				value:    NullValue(),
+				field:     normalized.Field,
+				operator:  normalized.Operator,
+				value:     NullValue(),
+				fieldSlot: fieldSlot,
 			}, nil
 	}
 
@@ -143,8 +149,10 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Err:                err,
 		}
 	}
+	fieldSlot := -1
 	if template != nil && template.closed {
-		if _, ok := template.fieldsByName[normalized.Field]; !ok {
+		slot, ok := template.fieldSlot(normalized.Field)
+		if !ok {
 			return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 				RuleName:           ruleName,
 				TemplateName:       template.name,
@@ -156,6 +164,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Reason:             "unknown field",
 			}
 		}
+		fieldSlot = slot
 	}
 
 	return FieldConstraint{
@@ -163,14 +172,15 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Operator: normalized.Operator,
 			Value:    cloneValue(value),
 		}, compiledFieldConstraint{
-			field:    normalized.Field,
-			operator: normalized.Operator,
-			value:    value,
+			field:     normalized.Field,
+			operator:  normalized.Operator,
+			value:     value,
+			fieldSlot: fieldSlot,
 		}, nil
 }
 
 func (c compiledFieldConstraint) matches(fact FactSnapshot) bool {
-	value, ok := fact.fields[c.field]
+	value, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
 	switch c.operator {
 	case FieldConstraintOpExists:
 		return ok

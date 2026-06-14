@@ -298,6 +298,87 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 	}
 }
 
+func TestSessionModifyRebuildsClosedTemplateSlots(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "age-21",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: template.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "age", Operator: FieldConstraintEqual, Value: 21},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	planConstraint := revision.rules["age-21"].conditionPlans[0].constraints[0]
+	if planConstraint.fieldSlot < 0 {
+		t.Fatalf("field slot = %d, want non-negative", planConstraint.fieldSlot)
+	}
+
+	session, err := NewSession(revision, WithSessionID("modify-slot-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"age":  18,
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	snapshot := session.indexedSnapshotLocked()
+	matches, err := revision.rules["age-21"].scanCondition(context.Background(), snapshot, 0)
+	if err != nil {
+		t.Fatalf("scanCondition before modify: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("pre-modify matches = %#v, want none", matches)
+	}
+
+	modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"age": 21}),
+	})
+	if err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if modified.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", modified.Status, ModifyChanged)
+	}
+
+	snapshot = session.indexedSnapshotLocked()
+	matches, err = revision.rules["age-21"].scanCondition(context.Background(), snapshot, 0)
+	if err != nil {
+		t.Fatalf("scanCondition after modify: %v", err)
+	}
+	if got, want := len(matches), 1; got != want {
+		t.Fatalf("post-modify matches = %d, want %d", got, want)
+	}
+	if matches[0].fact.ID() != inserted.Fact.ID() {
+		t.Fatalf("matched fact = %q, want %q", matches[0].fact.ID(), inserted.Fact.ID())
+	}
+}
+
 func TestSessionModifyTemplateUnsetDefaultAndOptionalBehavior(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name: "event",

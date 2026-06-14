@@ -353,6 +353,16 @@ func (r *Ruleset) templateByKey(key TemplateKey) (Template, bool) {
 	return template, ok
 }
 
+func (r *Ruleset) buildFieldSlots(template Template, fields Fields) []factSlot {
+	if r == nil || template.key == "" {
+		return nil
+	}
+	if _, ok := r.conditionTemplateKeys[template.key]; !ok {
+		return nil
+	}
+	return template.buildFieldSlots(fields)
+}
+
 func (r *Ruleset) Templates() []Template {
 	if r == nil {
 		return nil

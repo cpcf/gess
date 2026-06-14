@@ -692,6 +692,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		}, err
 	}
 
+	s.rebuildFieldSlots(next)
+	snapshot = s.indexedSnapshotLocked()
 	results, err := newNaiveMatcher(next).match(ctx, snapshot)
 	if err != nil {
 		return ApplyRulesetResult{}, err
@@ -750,6 +752,23 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
+}
+
+func (s *Session) rebuildFieldSlots(revision *Ruleset) {
+	if s == nil {
+		return
+	}
+	for _, fact := range s.factsByID {
+		if fact == nil {
+			continue
+		}
+		template, ok := revision.templateByKey(fact.templateKey)
+		if !ok {
+			fact.fieldSlots = nil
+			continue
+		}
+		fact.fieldSlots = revision.buildFieldSlots(template, fact.fields)
+	}
 }
 
 type rulesetChangePlan struct {
@@ -994,6 +1013,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.version++
 	fact.recency = s.nextRecency
 	fact.fields = proposedFields
+	fact.fieldSlots = s.revision.buildFieldSlots(template, proposedFields)
 	fact.fieldPresence = proposedPresence
 	fact.dupKey = newDuplicate
 
@@ -1297,6 +1317,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	if templateExists && templateDuplicatePolicy == DuplicateAllow {
 		duplicateKey = ""
 	}
+	fieldSlots := revision.buildFieldSlots(template, canonical)
 
 	if templateDuplicatePolicy != DuplicateAllow {
 		existingID, ok := w.factsByDuplicate[duplicateKey]
@@ -1320,6 +1341,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		recency:       *w.recency,
 		generation:    generation,
 		fields:        canonical,
+		fieldSlots:    fieldSlots,
 		fieldPresence: presence,
 		dupKey:        duplicateKey,
 		support:       FactSupportProvenance{State: FactSupportStated},
@@ -1357,6 +1379,7 @@ type compiledSessionInitialFact struct {
 	name            string
 	templateKey     TemplateKey
 	fields          Fields
+	fieldSlots      []factSlot
 	fieldPresence   map[string]FieldPresence
 	duplicatePolicy DuplicatePolicy
 	duplicateKey    DuplicateKey
@@ -1447,6 +1470,7 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		name:            name,
 		templateKey:     templateKey,
 		fields:          fields,
+		fieldSlots:      revision.buildFieldSlots(template, fields),
 		fieldPresence:   presence,
 		duplicatePolicy: duplicatePolicy,
 		duplicateKey:    duplicateKey,
@@ -1471,6 +1495,7 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		recency:       *w.recency,
 		generation:    w.generation,
 		fields:        cloneFields(initial.fields),
+		fieldSlots:    initial.fieldSlots,
 		fieldPresence: cloneFieldPresence(initial.fieldPresence),
 		dupKey:        initial.duplicateKey,
 		support:       FactSupportProvenance{State: FactSupportStated},

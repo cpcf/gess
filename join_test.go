@@ -227,6 +227,222 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 	})
 }
 
+func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
+	t.Run("closed template uses slots", func(t *testing.T) {
+		workspace := NewWorkspace()
+		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueAny},
+				{Name: "label", Kind: ValueString},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "join-eq",
+			Conditions: []RuleConditionSpec{
+				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{
+					Binding:     "right",
+					TemplateKey: personTemplate.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		planJoin := revision.rules["join-eq"].conditionPlans[1].joins[0]
+		if planJoin.fieldSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planJoin.fieldSlot)
+		}
+		if planJoin.refFieldSlot < 0 {
+			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refFieldSlot)
+		}
+
+		session, err := NewSession(revision, WithSessionID("join-slot-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+			"age":   20,
+			"label": "alpha",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		sets, err := revision.rules["join-eq"].matchBindingSets(context.Background(), snapshot)
+		if err != nil {
+			t.Fatalf("matchBindingSets: %v", err)
+		}
+		if got, want := len(sets), 1; got != want {
+			t.Fatalf("binding set count = %d, want %d", got, want)
+		}
+		if got := sets[0].matches[0].fact.ID(); got != inserted.Fact.ID() {
+			t.Fatalf("left match fact = %q, want %q", got, inserted.Fact.ID())
+		}
+		if got := sets[0].matches[1].fact.ID(); got != inserted.Fact.ID() {
+			t.Fatalf("right match fact = %q, want %q", got, inserted.Fact.ID())
+		}
+	})
+
+	t.Run("closed current falls back to dynamic ref", func(t *testing.T) {
+		workspace := NewWorkspace()
+		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueAny},
+				{Name: "label", Kind: ValueString},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "join-dynamic-ref",
+			Conditions: []RuleConditionSpec{
+				{Binding: "baseline", Name: "baseline"},
+				{
+					Binding:     "candidate",
+					TemplateKey: personTemplate.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "baseline", Field: "age"}},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		planJoin := revision.rules["join-dynamic-ref"].conditionPlans[1].joins[0]
+		if planJoin.fieldSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planJoin.fieldSlot)
+		}
+		if planJoin.refFieldSlot != -1 {
+			t.Fatalf("ref field slot = %d, want -1 for dynamic reference", planJoin.refFieldSlot)
+		}
+
+		session, err := NewSession(revision, WithSessionID("join-dynamic-ref-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if _, err := session.Assert(context.Background(), "baseline", mustFields(t, map[string]any{"age": 20})); err != nil {
+			t.Fatalf("Assert baseline: %v", err)
+		}
+		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+			"age":   20,
+			"label": "beta",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		sets, err := revision.rules["join-dynamic-ref"].matchBindingSets(context.Background(), snapshot)
+		if err != nil {
+			t.Fatalf("matchBindingSets: %v", err)
+		}
+		if got, want := len(sets), 1; got != want {
+			t.Fatalf("binding set count = %d, want %d", got, want)
+		}
+		if got := sets[0].matches[0].fact.Name(); got != "baseline" {
+			t.Fatalf("left match name = %q, want baseline", got)
+		}
+		if got := sets[0].matches[1].fact.ID(); got != inserted.Fact.ID() {
+			t.Fatalf("right match fact = %q, want %q", got, inserted.Fact.ID())
+		}
+	})
+
+	t.Run("dynamic current falls back to closed ref", func(t *testing.T) {
+		workspace := NewWorkspace()
+		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueAny},
+				{Name: "label", Kind: ValueString},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "join-dynamic-current",
+			Conditions: []RuleConditionSpec{
+				{Binding: "baseline", TemplateKey: personTemplate.Key()},
+				{
+					Binding: "candidate",
+					Name:    "candidate",
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "baseline", Field: "age"}},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		planJoin := revision.rules["join-dynamic-current"].conditionPlans[1].joins[0]
+		if planJoin.fieldSlot != -1 {
+			t.Fatalf("field slot = %d, want -1 for dynamic current conditions", planJoin.fieldSlot)
+		}
+		if planJoin.refFieldSlot < 0 {
+			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refFieldSlot)
+		}
+
+		session, err := NewSession(revision, WithSessionID("join-dynamic-current-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		insertedRef, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+			"age":   20,
+			"label": "gamma",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate baseline: %v", err)
+		}
+		insertedCurrent, err := session.Assert(context.Background(), "candidate", mustFields(t, map[string]any{"age": 20}))
+		if err != nil {
+			t.Fatalf("Assert candidate: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		sets, err := revision.rules["join-dynamic-current"].matchBindingSets(context.Background(), snapshot)
+		if err != nil {
+			t.Fatalf("matchBindingSets: %v", err)
+		}
+		if got, want := len(sets), 1; got != want {
+			t.Fatalf("binding set count = %d, want %d", got, want)
+		}
+		if got := sets[0].matches[0].fact.ID(); got != insertedRef.Fact.ID() {
+			t.Fatalf("left match fact = %q, want %q", got, insertedRef.Fact.ID())
+		}
+		if got := sets[0].matches[1].fact.ID(); got != insertedCurrent.Fact.ID() {
+			t.Fatalf("right match fact = %q, want %q", got, insertedCurrent.Fact.ID())
+		}
+	})
+}
+
 func TestJoinConstraintMatching(t *testing.T) {
 	t.Run("equality order and self join", func(t *testing.T) {
 		workspace := NewWorkspace()

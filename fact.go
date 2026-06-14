@@ -23,6 +23,7 @@ type FactSnapshot struct {
 	recency       Recency
 	generation    Generation
 	fields        Fields
+	fieldSlots    []factSlot
 	fieldPresence map[string]FieldPresence
 	support       FactSupportProvenance
 }
@@ -65,6 +66,16 @@ func (f FactSnapshot) Field(name string) (Value, bool) {
 	return cloneValue(value), true
 }
 
+func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+
+	value, ok := f.fields[field]
+	return value, ok
+}
+
 func (f FactSnapshot) Support() FactSupportProvenance {
 	return f.support
 }
@@ -77,10 +88,16 @@ type workingFact struct {
 	recency       Recency
 	generation    Generation
 	fields        Fields
+	fieldSlots    []factSlot
 	fieldPresence map[string]FieldPresence
 	dupKey        DuplicateKey
 	support       FactSupportProvenance
 	isTransient   bool
+}
+
+type factSlot struct {
+	value Value
+	ok    bool
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
@@ -106,6 +123,7 @@ func (f *workingFact) detachedSnapshot() FactSnapshot {
 		recency:       f.recency,
 		generation:    f.generation,
 		fields:        f.fields,
+		fieldSlots:    f.fieldSlots,
 		fieldPresence: f.fieldPresence,
 		support:       f.support,
 	}

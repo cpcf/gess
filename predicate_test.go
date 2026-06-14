@@ -226,6 +226,214 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 	})
 }
 
+func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
+	t.Run("closed template uses slot", func(t *testing.T) {
+		workspace := NewWorkspace()
+		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueInt, Required: true},
+				{Name: "name", Kind: ValueString, Required: true},
+				{Name: "tag", Kind: ValueString},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "closed-age",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "p",
+					TemplateKey: personTemplate.Key(),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "age", Operator: FieldConstraintEqual, Value: 18},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		planConstraint := revision.rules["closed-age"].conditionPlans[0].constraints[0]
+		if planConstraint.fieldSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planConstraint.fieldSlot)
+		}
+
+		session, err := NewSession(revision, WithSessionID("field-slot-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+			"age":  18,
+			"name": "Ada",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		matches, err := revision.rules["closed-age"].scanCondition(context.Background(), snapshot, 0)
+		if err != nil {
+			t.Fatalf("scanCondition: %v", err)
+		}
+		if got, want := len(matches), 1; got != want {
+			t.Fatalf("match count = %d, want %d", got, want)
+		}
+		if matches[0].fact.ID() != inserted.Fact.ID() {
+			t.Fatalf("matched fact = %q, want %q", matches[0].fact.ID(), inserted.Fact.ID())
+		}
+	})
+
+	t.Run("name target falls back to fields", func(t *testing.T) {
+		workspace := NewWorkspace()
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "named-age",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding: "p",
+					Name:    "person",
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "age", Operator: FieldConstraintEqual, Value: 18},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		planConstraint := revision.rules["named-age"].conditionPlans[0].constraints[0]
+		if planConstraint.fieldSlot != -1 {
+			t.Fatalf("field slot = %d, want -1 for name-target conditions", planConstraint.fieldSlot)
+		}
+
+		session, err := NewSession(revision, WithSessionID("field-fallback-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"age": 18}))
+		if err != nil {
+			t.Fatalf("Assert: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		matches, err := revision.rules["named-age"].scanCondition(context.Background(), snapshot, 0)
+		if err != nil {
+			t.Fatalf("scanCondition: %v", err)
+		}
+		if got, want := len(matches), 1; got != want {
+			t.Fatalf("match count = %d, want %d", got, want)
+		}
+		if matches[0].fact.ID() != inserted.Fact.ID() {
+			t.Fatalf("matched fact = %q, want %q", matches[0].fact.ID(), inserted.Fact.ID())
+		}
+	})
+
+	t.Run("missing optional field does not match", func(t *testing.T) {
+		workspace := NewWorkspace()
+		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueInt, Required: true},
+				{Name: "tag", Kind: ValueString},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "tag-exists",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "p",
+					TemplateKey: personTemplate.Key(),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "tag", Operator: FieldConstraintExists},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "tag-eq",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "p",
+					TemplateKey: personTemplate.Key(),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "tag", Operator: FieldConstraintEqual, Value: "blue"},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		for _, ruleName := range []string{"tag-exists", "tag-eq"} {
+			planConstraint := revision.rules[ruleName].conditionPlans[0].constraints[0]
+			if planConstraint.fieldSlot < 0 {
+				t.Fatalf("%s field slot = %d, want non-negative", ruleName, planConstraint.fieldSlot)
+			}
+		}
+
+		session, err := NewSession(revision, WithSessionID("field-optional-session"))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 18})); err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+
+		snapshot := session.indexedSnapshotLocked()
+		for _, ruleName := range []string{"tag-exists", "tag-eq"} {
+			matches, err := revision.rules[ruleName].scanCondition(context.Background(), snapshot, 0)
+			if err != nil {
+				t.Fatalf("scanCondition(%s): %v", ruleName, err)
+			}
+			if len(matches) != 0 {
+				t.Fatalf("%s matched missing optional field: %#v", ruleName, matches)
+			}
+		}
+	})
+}
+
+func TestCompiledFieldValueUsesSlotBeforeMapFallback(t *testing.T) {
+	fact := FactSnapshot{
+		fields: Fields{
+			"tag": mustValue(t, "blue"),
+		},
+		fieldSlots: []factSlot{
+			{},
+		},
+	}
+
+	if value, ok := fact.compiledFieldValue("tag", 0); ok {
+		t.Fatalf("slot value = %v, true; want missing indexed slot", value)
+	}
+
+	value, ok := fact.compiledFieldValue("tag", -1)
+	if !ok || !value.Equal(mustValue(t, "blue")) {
+		t.Fatalf("fallback value = (%v, %v), want blue true", value, ok)
+	}
+}
+
 func TestFieldConstraintEvaluation(t *testing.T) {
 	workspace := NewWorkspace()
 	personTemplate := mustAddTemplate(t, workspace, TemplateSpec{

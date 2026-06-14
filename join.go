@@ -56,10 +56,12 @@ type compiledJoinConstraint struct {
 	path           []int
 	bindingSlot    int
 	field          string
+	fieldSlot      int
 	operator       FieldConstraintOperator
 	refBinding     string
 	refBindingSlot int
 	refField       string
+	refFieldSlot   int
 	indexable      bool
 	indexKind      joinIndexKind
 }
@@ -125,8 +127,10 @@ func compileJoinConstraintSpec(
 		}
 	}
 
+	fieldSlot := -1
 	if template != nil && template.closed {
-		if _, ok := template.fieldsByName[normalized.Field]; !ok {
+		slot, ok := template.fieldSlot(normalized.Field)
+		if !ok {
 			return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 				RuleName:          ruleName,
 				TemplateName:      template.name,
@@ -138,6 +142,7 @@ func compileJoinConstraintSpec(
 				Reason:            "unknown field",
 			}
 		}
+		fieldSlot = slot
 	}
 
 	refSlot, ok := bindingSlots[normalized.Ref.Binding]
@@ -156,13 +161,15 @@ func compileJoinConstraintSpec(
 	}
 
 	refCondition := conditions[refSlot]
+	refFieldSlot := -1
 	if refCondition.templateKey != "" {
 		refTemplate, ok := templatesByKey[refCondition.templateKey]
 		if !ok {
 			return JoinConstraint{}, compiledJoinConstraint{}, fmt.Errorf("%w: missing template for join binding %q", ErrMatcher, normalized.Ref.Binding)
 		}
 		if refTemplate.closed {
-			if _, ok := refTemplate.fieldsByName[normalized.Ref.Field]; !ok {
+			slot, ok := refTemplate.fieldSlot(normalized.Ref.Field)
+			if !ok {
 				return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 					RuleName:          ruleName,
 					TemplateName:      refTemplate.name,
@@ -174,6 +181,7 @@ func compileJoinConstraintSpec(
 					Reason:            "unknown field",
 				}
 			}
+			refFieldSlot = slot
 		}
 	}
 
@@ -191,10 +199,12 @@ func compileJoinConstraintSpec(
 			path:           []int{conditionIndex, joinIndex},
 			bindingSlot:    conditionIndex,
 			field:          normalized.Field,
+			fieldSlot:      fieldSlot,
 			operator:       normalized.Operator,
 			refBinding:     normalized.Ref.Binding,
 			refBindingSlot: refSlot,
 			refField:       normalized.Ref.Field,
+			refFieldSlot:   refFieldSlot,
 			indexable:      true,
 			indexKind:      indexKind,
 		}, nil
@@ -208,13 +218,13 @@ func (c compiledJoinConstraint) matches(fact FactSnapshot, bindings []conditionM
 		return false, nil
 	}
 
-	left, ok := fact.fields[c.field]
+	left, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
 	if !ok {
 		return false, nil
 	}
 
 	rightFact := bindings[c.refBindingSlot].fact
-	right, ok := rightFact.fields[c.refField]
+	right, ok := rightFact.compiledFieldValue(c.refField, c.refFieldSlot)
 	if !ok {
 		return false, nil
 	}
