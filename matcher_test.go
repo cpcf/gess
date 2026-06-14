@@ -280,13 +280,75 @@ func TestMatchCandidatesMatchesMaterializedBindingSets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("matchBindingSets: %v", err)
 	}
-	materialized, err := collectMatchCandidates(context.Background(), rule, snapshot, sets)
+	materializedSets := make([]bindingSet, len(sets))
+	for i, set := range sets {
+		materializedSets[i] = bindingSet{matches: set.matches}
+	}
+	materialized, err := collectMatchCandidates(context.Background(), rule, snapshot, materializedSets)
 	if err != nil {
 		t.Fatalf("collectMatchCandidates: %v", err)
 	}
 
 	if !reflect.DeepEqual(streamed, materialized) {
 		t.Fatalf("streamed candidates differ from materialized candidates:\nstreamed=%#v\nmaterialized=%#v", streamed, materialized)
+	}
+}
+
+func TestMatchBindingSetsIncludeLinkedTokens(t *testing.T) {
+	revision, snapshot := mustMatcherJoinFixture(t)
+	rule := revision.rules["age-pairs"]
+
+	sets, err := rule.matchBindingSets(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("matchBindingSets: %v", err)
+	}
+	if got, want := len(sets), 6; got != want {
+		t.Fatalf("binding set count = %d, want %d", got, want)
+	}
+	if sets[0].token == nil {
+		t.Fatal("binding set token is nil")
+	}
+	if sets[0].token.parent == nil {
+		t.Fatal("binding set token parent is nil")
+	}
+	if got, want := sets[0].token.size, 2; got != want {
+		t.Fatalf("binding set token size = %d, want %d", got, want)
+	}
+	if got, want := sets[0].token.pathLen, 2; got != want {
+		t.Fatalf("binding set token path length = %d, want %d", got, want)
+	}
+
+	candidate, err := buildMatchCandidate(rule, snapshot, sets[0])
+	if err != nil {
+		t.Fatalf("buildMatchCandidate: %v", err)
+	}
+	if got, want := candidate.path, []int{0, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("linked token candidate path = %#v, want %#v", got, want)
+	}
+}
+
+func TestLinkedMatchTokenEqualityUsesFactIdentity(t *testing.T) {
+	revision, snapshot := mustMatcherJoinFixture(t)
+	rule := revision.rules["age-pairs"]
+
+	sets, err := rule.matchBindingSets(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("matchBindingSets: %v", err)
+	}
+	if len(sets) < 2 {
+		t.Fatalf("binding set count = %d, want at least 2", len(sets))
+	}
+
+	var rebuilt *matchToken
+	for i, match := range sets[0].matches {
+		entry := rule.conditionPlans[i].bindingTupleEntry(match)
+		rebuilt = newMatchToken(rebuilt, entry, match.fact.Recency(), snapshot.Generation())
+	}
+	if !matchTokenEqual(sets[0].token, rebuilt) {
+		t.Fatalf("rebuilt token is not equal:\nleft=%#v\nright=%#v", sets[0].token, rebuilt)
+	}
+	if matchTokenEqual(sets[0].token, sets[1].token) {
+		t.Fatalf("different token chains compare equal:\nleft=%#v\nright=%#v", sets[0].token, sets[1].token)
 	}
 }
 

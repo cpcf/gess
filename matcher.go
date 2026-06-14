@@ -37,6 +37,16 @@ type matchCandidate struct {
 	path             []int
 }
 
+type matchToken struct {
+	parent           *matchToken
+	entry            bindingTupleEntry
+	size             int
+	pathLen          int
+	maxRecency       Recency
+	aggregateRecency Recency
+	identityState    uint64
+}
+
 type bindingTupleEntry struct {
 	binding        string
 	bindingSlot    int
@@ -138,6 +148,9 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 }
 
 func buildMatchCandidate(rule compiledRule, snapshot Snapshot, set bindingSet) (matchCandidate, error) {
+	if set.token != nil {
+		return buildMatchCandidateFromToken(rule, snapshot, set.token)
+	}
 	return buildMatchCandidateFromMatches(rule, snapshot, set.matches)
 }
 
@@ -163,7 +176,7 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 			bindingSlot:    match.bindingSlot,
 			conditionOrder: condition.order,
 			conditionID:    condition.id,
-			conditionPath:  cloneIntPath(plan.path),
+			conditionPath:  plan.path,
 			factID:         match.fact.ID(),
 			factVersion:    match.fact.Version(),
 		}
@@ -218,6 +231,58 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 	}, nil
 }
 
+func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *matchToken) (matchCandidate, error) {
+	if token == nil {
+		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
+	}
+	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
+		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
+	}
+
+	entries := make([]bindingTupleEntry, token.size)
+	factIDs := make([]FactID, token.size)
+	factVersions := make([]FactVersion, token.size)
+	path := make([]int, token.pathLen)
+	fillMatchToken(entries, factIDs, factVersions, path, 0, 0, token)
+
+	identity := candidateIdentity{
+		generation: snapshot.Generation(),
+		count:      token.size,
+		key: candidateIdentityKey{
+			scopeHash: rule.identityScopeHash,
+			hash:      candidateIdentityHashFinish(token.identityState, token.size),
+		},
+	}
+	if identity.key.scopeHash == 0 {
+		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+	}
+
+	return matchCandidate{
+		ruleID:           rule.id,
+		ruleRevisionID:   rule.revisionID,
+		identity:         identity,
+		bindingTuple:     entries,
+		factIDs:          factIDs,
+		factVersions:     factVersions,
+		generation:       snapshot.Generation(),
+		maxRecency:       token.maxRecency,
+		aggregateRecency: token.aggregateRecency,
+		path:             path,
+	}, nil
+}
+
+func fillMatchToken(entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token *matchToken) (int, int) {
+	if token == nil {
+		return entryIndex, pathIndex
+	}
+	entryIndex, pathIndex = fillMatchToken(entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent)
+	entries[entryIndex] = token.entry
+	factIDs[entryIndex] = token.entry.factID
+	factVersions[entryIndex] = token.entry.factVersion
+	copy(path[pathIndex:], token.entry.conditionPath)
+	return entryIndex + 1, pathIndex + len(token.entry.conditionPath)
+}
+
 func candidateIdentityFor(ruleID RuleID, revisionID RuleRevisionID, scopeHash uint64, generation Generation, bindings []bindingTupleEntry) candidateIdentity {
 	orderedBindings := bindings
 	if !bindingTupleEntriesSorted(bindings) {
@@ -250,17 +315,29 @@ func candidateIdentityScopeHash(ruleID RuleID, revisionID RuleRevisionID) uint64
 }
 
 func candidateIdentityHash(generation Generation, orderedBindings []bindingTupleEntry) uint64 {
+	hash := candidateIdentityHashStart(generation)
+	for _, entry := range orderedBindings {
+		hash = candidateIdentityHashStep(hash, entry)
+	}
+	return candidateIdentityHashFinish(hash, len(orderedBindings))
+}
+
+func candidateIdentityHashStart(generation Generation) uint64 {
 	hash := uint64(1469598103934665603)
 	hash = fnvMixUint64(hash, 4)
 	hash = fnvMixUint64(hash, uint64(generation))
-	hash = fnvMixUint64(hash, uint64(len(orderedBindings)))
-	for _, entry := range orderedBindings {
-		hash = fnvMixUint64(hash, uint64(entry.factID.generation))
-		hash = fnvMixUint64(hash, entry.factID.sequence)
-		hash = fnvMixUint64(hash, uint64(entry.factVersion))
-	}
-
 	return hash
+}
+
+func candidateIdentityHashStep(hash uint64, entry bindingTupleEntry) uint64 {
+	hash = fnvMixUint64(hash, uint64(entry.factID.generation))
+	hash = fnvMixUint64(hash, entry.factID.sequence)
+	hash = fnvMixUint64(hash, uint64(entry.factVersion))
+	return hash
+}
+
+func candidateIdentityHashFinish(hash uint64, count int) uint64 {
+	return fnvMixUint64(hash, uint64(count))
 }
 
 func fnvMixString(hash uint64, value string) uint64 {
@@ -410,4 +487,63 @@ func addRecency(total Recency, next Recency) Recency {
 		return Recency(^uint64(0))
 	}
 	return Recency(sum)
+}
+
+func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTupleEntry {
+	return bindingTupleEntry{
+		binding:        p.binding,
+		bindingSlot:    match.bindingSlot,
+		conditionOrder: p.bindingSlot,
+		conditionID:    p.id,
+		conditionPath:  p.path,
+		factID:         match.fact.ID(),
+		factVersion:    match.fact.Version(),
+	}
+}
+
+func newMatchToken(parent *matchToken, entry bindingTupleEntry, recency Recency, generation Generation) *matchToken {
+	token := makeMatchToken(parent, entry, recency, generation)
+	return &token
+}
+
+func makeMatchToken(parent *matchToken, entry bindingTupleEntry, recency Recency, generation Generation) matchToken {
+	token := matchToken{
+		parent: parent,
+		entry:  entry,
+	}
+	if parent == nil {
+		token.size = 1
+		token.pathLen = len(entry.conditionPath)
+		token.maxRecency = recency
+		token.aggregateRecency = recency
+		token.identityState = candidateIdentityHashStart(generation)
+	} else {
+		token.size = parent.size + 1
+		token.pathLen = parent.pathLen + len(entry.conditionPath)
+		token.maxRecency = max(recency, parent.maxRecency)
+		token.aggregateRecency = addRecency(parent.aggregateRecency, recency)
+		token.identityState = parent.identityState
+	}
+	token.identityState = candidateIdentityHashStep(token.identityState, entry)
+	return token
+}
+
+func matchTokenEqual(left, right *matchToken) bool {
+	if left == right {
+		return true
+	}
+	if left == nil || right == nil {
+		return false
+	}
+	if left.size != right.size || left.identityState != right.identityState {
+		return false
+	}
+	for left != nil && right != nil {
+		if left.entry.factID != right.entry.factID || left.entry.factVersion != right.entry.factVersion {
+			return false
+		}
+		left = left.parent
+		right = right.parent
+	}
+	return left == nil && right == nil
 }

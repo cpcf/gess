@@ -49,6 +49,7 @@ type conditionMatch struct {
 
 type bindingSet struct {
 	matches []conditionMatch
+	token   *matchToken
 }
 
 func isValidBindingName(name string) bool {
@@ -258,15 +259,15 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 	}
 
 	var sets []bindingSet
-	var walk func(conditionIndex int, selected []conditionMatch) error
-	walk = func(conditionIndex int, selected []conditionMatch) error {
+	var walk func(conditionIndex int, selected []conditionMatch, token *matchToken) error
+	walk = func(conditionIndex int, selected []conditionMatch, token *matchToken) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if conditionIndex == len(r.conditionPlans) {
 			matches := make([]conditionMatch, len(selected))
 			copy(matches, selected)
-			sets = append(sets, bindingSet{matches: matches})
+			sets = append(sets, bindingSet{matches: matches, token: token})
 			return nil
 		}
 
@@ -278,14 +279,16 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 			next := make([]conditionMatch, len(selected)+1)
 			copy(next, selected)
 			next[len(selected)] = match
-			if err := walk(conditionIndex+1, next); err != nil {
+			entry := r.conditionPlans[conditionIndex].bindingTupleEntry(match)
+			nextToken := newMatchToken(token, entry, match.fact.Recency(), snapshot.Generation())
+			if err := walk(conditionIndex+1, next, nextToken); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 
-	if err := walk(0, nil); err != nil {
+	if err := walk(0, nil, nil); err != nil {
 		return nil, err
 	}
 	return sets, nil

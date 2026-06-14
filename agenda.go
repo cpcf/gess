@@ -182,10 +182,10 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 				ruleRevisionID:   result.ruleRevisionID,
 				generation:       candidate.generation,
 				identity:         candidate.identity,
-				bindings:         cloneBindingTupleEntries(candidate.bindingTuple),
-				factIDs:          cloneFactIDs(candidate.factIDs),
-				factVersions:     cloneFactVersions(candidate.factVersions),
-				path:             cloneIntPath(candidate.path),
+				bindings:         candidate.bindingTuple,
+				factIDs:          candidate.factIDs,
+				factVersions:     candidate.factVersions,
+				path:             candidate.path,
 				salience:         rule.salience,
 				maxRecency:       candidate.maxRecency,
 				aggregateRecency: candidate.aggregateRecency,
@@ -542,7 +542,6 @@ func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {
 	out := make([]bindingTupleEntry, len(entries))
 	for i, entry := range entries {
 		out[i] = entry
-		out[i].conditionPath = cloneIntPath(entry.conditionPath)
 	}
 	return out
 }
