@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -110,15 +111,15 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 type agenda struct {
 	activations map[candidateIdentityKey]activationBucket
 	pending     []activationKey
-	byFactID    map[FactID]map[activationKey]struct{}
-	byRevision  map[RuleRevisionID]map[activationKey]struct{}
+	byFactID    map[FactID][]activationKey
+	byRevision  map[RuleRevisionID][]activationKey
 }
 
 func newAgenda() *agenda {
 	return &agenda{
 		activations: make(map[candidateIdentityKey]activationBucket),
-		byFactID:    make(map[FactID]map[activationKey]struct{}),
-		byRevision:  make(map[RuleRevisionID]map[activationKey]struct{}),
+		byFactID:    make(map[FactID][]activationKey),
+		byRevision:  make(map[RuleRevisionID][]activationKey),
 	}
 }
 
@@ -128,8 +129,8 @@ func (a *agenda) reset() {
 	}
 	a.activations = make(map[candidateIdentityKey]activationBucket)
 	a.pending = nil
-	a.byFactID = make(map[FactID]map[activationKey]struct{})
-	a.byRevision = make(map[RuleRevisionID]map[activationKey]struct{})
+	a.byFactID = make(map[FactID][]activationKey)
+	a.byRevision = make(map[RuleRevisionID][]activationKey)
 }
 
 func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []ruleMatchResult) ([]agendaChange, error) {
@@ -192,9 +193,8 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 				status:           activationStatusPending,
 			}
 
-			copyActivation := created.clone()
-			key = a.storeActivation(&copyActivation)
-			indexActivation(a.byFactID, a.byRevision, copyActivation)
+			key = a.storeActivation(&created)
+			indexActivation(a.byFactID, a.byRevision, created)
 
 			if _, seenBefore := seen[key]; !seenBefore {
 				seen[key] = struct{}{}
@@ -202,7 +202,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			}
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
-				activation: copyActivation.clone(),
+				activation: created.clone(),
 			})
 		}
 	}
@@ -261,8 +261,8 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	}
 
 	nextActivations := make(map[candidateIdentityKey]activationBucket, len(a.activations))
-	nextByFactID := make(map[FactID]map[activationKey]struct{}, len(a.byFactID))
-	nextByRevision := make(map[RuleRevisionID]map[activationKey]struct{}, len(a.byRevision))
+	nextByFactID := make(map[FactID][]activationKey, len(a.byFactID))
+	nextByRevision := make(map[RuleRevisionID][]activationKey, len(a.byRevision))
 	nextPending := make([]activationKey, 0, len(a.pending))
 
 	for identityKey, bucket := range a.activations {
@@ -381,7 +381,7 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 		return nil
 	}
 	out := make([]activation, 0, len(keys))
-	for key := range keys {
+	for _, key := range keys {
 		if current, ok := a.activationByKeyPtr(key); ok {
 			out = append(out, current.clone())
 		}
@@ -401,7 +401,7 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 		return nil
 	}
 	out := make([]activation, 0, len(keys))
-	for key := range keys {
+	for _, key := range keys {
 		if current, ok := a.activationByKeyPtr(key); ok {
 			out = append(out, current.clone())
 		}
@@ -412,22 +412,24 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 	return out
 }
 
-func indexActivation(byFactID map[FactID]map[activationKey]struct{}, byRevision map[RuleRevisionID]map[activationKey]struct{}, act activation) {
+func indexActivation(byFactID map[FactID][]activationKey, byRevision map[RuleRevisionID][]activationKey, act activation) {
 	for _, factID := range act.factIDs {
 		keys := byFactID[factID]
-		if keys == nil {
-			keys = make(map[activationKey]struct{})
-			byFactID[factID] = keys
+		if activationKeyInSlice(keys, act.key) {
+			continue
 		}
-		keys[act.key] = struct{}{}
+		byFactID[factID] = append(keys, act.key)
 	}
 
 	keys := byRevision[act.ruleRevisionID]
-	if keys == nil {
-		keys = make(map[activationKey]struct{})
-		byRevision[act.ruleRevisionID] = keys
+	if activationKeyInSlice(keys, act.key) {
+		return
 	}
-	keys[act.key] = struct{}{}
+	byRevision[act.ruleRevisionID] = append(keys, act.key)
+}
+
+func activationKeyInSlice(keys []activationKey, key activationKey) bool {
+	return slices.Contains(keys, key)
 }
 
 func activationLess(left, right *activation) bool {

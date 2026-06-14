@@ -191,6 +191,41 @@ func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	}
 }
 
+func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
+	agenda := newAgenda()
+	factID := newFactID(1, 1)
+	activation := activation{
+		ruleRevisionID: RuleRevisionID("revision"),
+		identity: candidateIdentity{
+			generation: 1,
+			count:      2,
+			key: candidateIdentityKey{
+				scopeHash: 1,
+				hash:      2,
+			},
+		},
+		factIDs:      []FactID{factID, factID},
+		factVersions: []FactVersion{1, 1},
+		status:       activationStatusPending,
+	}
+
+	agenda.storeActivation(&activation)
+	indexActivation(agenda.byFactID, agenda.byRevision, activation)
+
+	if got, want := len(agenda.byFactID[factID]), 1; got != want {
+		t.Fatalf("fact index keys = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.activationsByFactID(factID)), 1; got != want {
+		t.Fatalf("fact index activations = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.byRevision[activation.ruleRevisionID]), 1; got != want {
+		t.Fatalf("revision index keys = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.activationsByRuleRevisionID(activation.ruleRevisionID)), 1; got != want {
+		t.Fatalf("revision index activations = %d, want %d", got, want)
+	}
+}
+
 func TestAgendaReconcileDeactivatesMissingPendingActivation(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-missing-session")
