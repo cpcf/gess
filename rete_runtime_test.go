@@ -406,6 +406,43 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	_ = noise2
 }
 
+func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-agenda-delta-session"),
+		WithInitialFacts(mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
+		t.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate(Ben): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
+	if _, err := session.Modify(ctx, employee.ID(), FactPatch{Set: mustFields(t, map[string]any{"dept": "Sales"})}); err != nil {
+		t.Fatalf("Modify(Ada): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	salesDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Sales")
+	if _, err := session.Retract(ctx, salesDepartment.ID()); err != nil {
+		t.Fatalf("Retract(Sales department): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
 func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	runtime, err := newReteRuntime(nil)
 	if err != ErrInvalidRuleset {
@@ -614,6 +651,48 @@ func TestReteRuntimeResetBelowThresholdClearsBetaMemory(t *testing.T) {
 	}
 	if session.rete.alpha != nil || session.rete.beta != nil {
 		t.Fatalf("Rete memories after small reset = alpha:%#v beta:%#v, want cleared", session.rete.alpha, session.rete.beta)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeRetractBelowThresholdFallsBackFromAgendaDeltas(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts)
+	for i := range reteAlphaMinimumFacts - 3 {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noiseKey,
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials,
+		SessionInitialFact{TemplateKey: employeeKey, Fields: mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})},
+		SessionInitialFact{TemplateKey: departmentKey, Fields: mustFields(t, map[string]any{"id": "Engineering"})},
+		SessionInitialFact{TemplateKey: departmentKey, Fields: mustFields(t, map[string]any{"id": "Sales"})},
+	)
+	session, err := NewSession(revision, WithSessionID("beta-retract-small-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatal("expected beta memory at threshold")
+	}
+	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
+		t.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before retract = %d, want %d", got, want)
+	}
+
+	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	if _, err := session.Retract(ctx, department.ID()); err != nil {
+		t.Fatalf("Retract(Engineering department): %v", err)
+	}
+	if session.rete.alpha != nil || session.rete.beta != nil {
+		t.Fatalf("Rete memories after below-threshold retract = alpha:%#v beta:%#v, want cleared", session.rete.alpha, session.rete.beta)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after below-threshold retract = %d, want 0", got)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
@@ -863,6 +942,49 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 		t.Fatalf("agenda reconcile: %v", err)
 	}
 	activations := agenda.pendingActivations()
+	records := make([]activationParityRecord, len(activations))
+	for i, activation := range activations {
+		records[i] = activationParityRecord{
+			id:               activation.id,
+			ruleID:           activation.ruleID,
+			ruleRevisionID:   activation.ruleRevisionID,
+			generation:       activation.generation,
+			identity:         activation.identity,
+			bindings:         activation.bindings,
+			factIDs:          activation.factIDs,
+			factVersions:     activation.factVersions,
+			path:             activation.path,
+			maxRecency:       activation.maxRecency,
+			aggregateRecency: activation.aggregateRecency,
+			declarationOrder: activation.declarationOrder,
+			salience:         activation.salience,
+		}
+	}
+	return records
+}
+
+func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session) {
+	t.Helper()
+	if session == nil || session.rete == nil {
+		t.Fatal("session has no Rete runtime")
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	results, err := session.rete.match(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("Rete match: %v", err)
+	}
+	oracle := newAgenda()
+	if _, err := oracle.reconcile(context.Background(), session.revision, results); err != nil {
+		t.Fatalf("oracle reconcile: %v", err)
+	}
+	got := activationParityRecordsFromActivations(session.agenda.pendingActivations())
+	want := activationParityRecordsFromActivations(oracle.pendingActivations())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("incremental agenda differs from full reconcile:\nincremental=%#v\nfull=%#v", got, want)
+	}
+}
+
+func activationParityRecordsFromActivations(activations []activation) []activationParityRecord {
 	records := make([]activationParityRecord, len(activations))
 	for i, activation := range activations {
 		records[i] = activationParityRecord{

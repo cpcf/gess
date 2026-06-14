@@ -262,7 +262,8 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
 			apply: func(mutationCtx context.Context) (any, error) {
-				return s.insertFactImmediate(mutationCtx, name, templateKey, fields, origin)
+				result, _, err := s.insertFactImmediate(mutationCtx, name, templateKey, fields, origin)
+				return result, err
 			},
 			result: resultCh,
 		}) {
@@ -292,13 +293,13 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 		defer s.endMutation()
 	}
 
-	result, err := s.insertFactImmediate(ctx, name, templateKey, fields, origin)
+	result, agendaDelta, err := s.insertFactImmediate(ctx, name, templateKey, fields, origin)
 	if err != nil {
 		return result, err
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
+			if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
 				return result, err
 			}
 		} else {
@@ -308,9 +309,9 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	return result, nil
 }
 
-func (s *Session) insertFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin) (AssertResult, error) {
+func (s *Session) insertFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin) (AssertResult, reteAgendaDelta, error) {
 	if s == nil || s.closed {
-		return AssertResult{Status: AssertClosed}, ErrClosedSession
+		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
 	state := factWorkspace{
@@ -324,18 +325,18 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
 	if err != nil {
-		return AssertResult{Status: AssertValidationFailure}, err
+		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
 	if !inserted {
 		return AssertResult{
 			Status:       AssertExisting,
 			Fact:         fact.snapshot(),
 			DuplicateKey: duplicateKey,
-		}, nil
+		}, reteAgendaDelta{}, nil
 	}
 
 	snapshot := fact.snapshot()
-	s.updateReteAlphaAfterAssert(snapshot)
+	agendaDelta := s.updateReteAlphaAfterAssert(snapshot)
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
@@ -374,7 +375,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.nextEventSequence++
 	}
 
-	return result, nil
+	return result, agendaDelta, nil
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
@@ -396,7 +397,8 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
 			apply: func(mutationCtx context.Context) (any, error) {
-				return s.retractImmediate(mutationCtx, id, origin)
+				result, _, err := s.retractImmediate(mutationCtx, id, origin)
+				return result, err
 			},
 			result: resultCh,
 		}) {
@@ -425,13 +427,13 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 		defer s.endMutation()
 	}
 
-	result, err := s.retractImmediate(ctx, id, origin)
+	result, agendaDelta, err := s.retractImmediate(ctx, id, origin)
 	if err != nil {
 		return result, err
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
+			if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
 				return result, err
 			}
 		} else {
@@ -441,21 +443,21 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 	return result, nil
 }
 
-func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutationOrigin) (RetractResult, error) {
+func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutationOrigin) (RetractResult, reteAgendaDelta, error) {
 	if s.closed {
-		return RetractResult{Status: RetractClosed}, ErrClosedSession
+		return RetractResult{Status: RetractClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
 	if id.Generation() != s.generation {
 		if id.Generation() != 0 && id.Generation() < s.generation {
-			return RetractResult{Status: RetractStale}, ErrStaleFactID
+			return RetractResult{Status: RetractStale}, reteAgendaDelta{}, ErrStaleFactID
 		}
-		return RetractResult{Status: RetractMissing}, ErrFactNotFound
+		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
 	fact, ok := s.factsByID[id]
 	if !ok {
-		return RetractResult{Status: RetractMissing}, ErrFactNotFound
+		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
 	before := fact.snapshot()
@@ -477,7 +479,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		delete(s.factsByName, fact.name)
 	}
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
-	s.updateReteAlphaAfterRetract(before.ID())
+	agendaDelta := s.updateReteAlphaAfterRetract(before.ID())
 
 	delta := MutationDelta{
 		Kind:           MutationRetract,
@@ -516,7 +518,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		s.nextEventSequence++
 	}
 
-	return result, nil
+	return result, agendaDelta, nil
 }
 
 func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
@@ -783,6 +785,54 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	return changes, nil
 }
 
+func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
+	if changes, ok, err := s.applyReteAgendaDelta(ctx, delta); ok || err != nil {
+		return changes, err
+	}
+	return s.reconcileAgenda(ctx, s.indexedSnapshotLocked())
+}
+
+func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {
+	if s == nil || s.closed {
+		return nil, true, ErrClosedSession
+	}
+	if s.revision == nil {
+		return nil, true, ErrInvalidRuleset
+	}
+	if s.agenda == nil {
+		s.agenda = newAgenda()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
+		return nil, false, nil
+	}
+	if len(s.insertionOrder) < reteAlphaMinimumFacts {
+		return nil, false, nil
+	}
+
+	removed, err := s.rete.candidatesForTerminalDeltas(delta.removed)
+	if err != nil {
+		return nil, true, err
+	}
+	added, err := s.rete.candidatesForTerminalDeltas(delta.added)
+	if err != nil {
+		return nil, true, err
+	}
+	changes, err := s.agenda.applyCandidateDeltas(ctx, s.revision, removed, added)
+	if err != nil {
+		return nil, true, err
+	}
+	s.agendaReady = true
+	s.agendaDirty = false
+	s.emitAgendaEvents(ctx, changes)
+	return changes, true, nil
+}
+
 func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
 	if s == nil || revision == nil {
 		return
@@ -796,41 +846,45 @@ func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
 	s.rete = rete
 }
 
-func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) {
+func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) reteAgendaDelta {
 	if s == nil {
-		return
+		return reteAgendaDelta{}
 	}
 	if s.rete == nil {
 		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
 			s.rebuildReteRuntime(s.revision, s.detachedFactsByInsertionOrder())
 		}
-		return
+		return reteAgendaDelta{}
 	}
 	if s.rete.alpha == nil {
 		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
 			s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
-			return
+			return reteAgendaDelta{}
 		}
-		return
+		return reteAgendaDelta{}
 	}
 	s.rete.insertAlphaFact(fact)
-	s.rete.insertBetaFact(fact)
+	return s.rete.insertBetaFact(fact)
 }
 
-func (s *Session) updateReteAlphaAfterRetract(id FactID) {
+func (s *Session) updateReteAlphaAfterRetract(id FactID) reteAgendaDelta {
 	if s == nil || s.rete == nil {
-		return
+		return reteAgendaDelta{}
+	}
+	if len(s.insertionOrder) < reteAlphaMinimumFacts {
+		s.rete.clearMemories()
+		return reteAgendaDelta{}
 	}
 	s.rete.removeAlphaFact(id)
-	s.rete.removeBetaFact(id)
+	return s.rete.removeBetaFact(id)
 }
 
-func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) {
+func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAgendaDelta {
 	if s == nil || s.rete == nil {
-		return
+		return reteAgendaDelta{}
 	}
 	s.rete.updateAlphaFact(before, after)
-	s.rete.updateBetaFact(before, after)
+	return s.rete.updateBetaFact(before, after)
 }
 
 func (s *Session) rebuildFieldSlots(revision *Ruleset) {
@@ -1019,7 +1073,8 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
 			apply: func(mutationCtx context.Context) (any, error) {
-				return s.modifyImmediate(mutationCtx, id, patch, origin)
+				result, _, err := s.modifyImmediate(mutationCtx, id, patch, origin)
+				return result, err
 			},
 			result: resultCh,
 		}) {
@@ -1047,13 +1102,13 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	if locked {
 		defer s.endMutation()
 	}
-	result, err := s.modifyImmediate(ctx, id, patch, origin)
+	result, agendaDelta, err := s.modifyImmediate(ctx, id, patch, origin)
 	if err != nil {
 		return result, err
 	}
 	if mutationResultNeedsReconcile(result, s.revision) {
 		if origin.isZero() || !s.runGuardHeld() {
-			if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
+			if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
 				return result, err
 			}
 		} else {
@@ -1063,21 +1118,21 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 	return result, nil
 }
 
-func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatch, origin mutationOrigin) (ModifyResult, error) {
+func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatch, origin mutationOrigin) (ModifyResult, reteAgendaDelta, error) {
 	if s.closed {
-		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
+		return ModifyResult{Status: ModifyClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
 	if id.Generation() != s.generation {
 		if id.Generation() != 0 && id.Generation() < s.generation {
-			return ModifyResult{Status: ModifyStale}, ErrStaleFactID
+			return ModifyResult{Status: ModifyStale}, reteAgendaDelta{}, ErrStaleFactID
 		}
-		return ModifyResult{Status: ModifyMissing}, ErrFactNotFound
+		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
 	fact, ok := s.factsByID[id]
 	if !ok {
-		return ModifyResult{Status: ModifyMissing}, ErrFactNotFound
+		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
 	before := fact.snapshot()
@@ -1103,7 +1158,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	if templateExists {
 		proposedFields, proposedPresence, err = template.applyDefaultsAndValidate(proposedFields)
 		if err != nil {
-			return ModifyResult{Status: ModifyValidationFailure, Fact: before}, err
+			return ModifyResult{Status: ModifyValidationFailure, Fact: before}, reteAgendaDelta{}, err
 		}
 	}
 
@@ -1114,12 +1169,12 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 
 	if duplicatePolicy != DuplicateAllow {
 		if existingID, ok := s.factsByDuplicate[newDuplicate]; ok && existingID != fact.id {
-			return ModifyResult{Status: ModifyDuplicate, Fact: before}, ErrDuplicateFact
+			return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 		}
 	}
 
 	if fieldsAndPresenceEqual(beforeFields, beforePresence, proposedFields, proposedPresence) {
-		return ModifyResult{Status: ModifyNoOp, Fact: before}, nil
+		return ModifyResult{Status: ModifyNoOp, Fact: before}, reteAgendaDelta{}, nil
 	}
 
 	s.nextRecency++
@@ -1146,7 +1201,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.dupKey = newDuplicate
 
 	after := fact.snapshot()
-	s.updateReteAlphaAfterModify(before, after)
+	agendaDelta := s.updateReteAlphaAfterModify(before, after)
 	delta := MutationDelta{
 		Kind:           MutationModify,
 		Generation:     s.generation,
@@ -1188,7 +1243,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		s.nextEventSequence++
 	}
 
-	return result, nil
+	return result, agendaDelta, nil
 }
 
 func setField(fields Fields, field string, value Value) Fields {

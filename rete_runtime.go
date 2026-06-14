@@ -217,25 +217,78 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 	r.beta = newReteBetaMemory(r.revision, r.plan, facts)
 }
 
-func (r *reteRuntime) insertBetaFact(fact FactSnapshot) {
+func (r *reteRuntime) insertBetaFact(fact FactSnapshot) reteAgendaDelta {
 	if r == nil || r.beta == nil {
-		return
+		return reteAgendaDelta{}
 	}
-	r.beta.insertFact(fact)
+	delta := r.beta.insertFact(fact)
+	delta.supported = delta.supported && r.supportsIncrementalAgenda()
+	return delta
 }
 
-func (r *reteRuntime) removeBetaFact(id FactID) {
+func (r *reteRuntime) removeBetaFact(id FactID) reteAgendaDelta {
 	if r == nil || r.beta == nil {
-		return
+		return reteAgendaDelta{}
 	}
-	r.beta.removeFact(id)
+	delta := r.beta.removeFact(id)
+	delta.supported = delta.supported && r.supportsIncrementalAgenda()
+	return delta
 }
 
-func (r *reteRuntime) updateBetaFact(before, after FactSnapshot) {
+func (r *reteRuntime) updateBetaFact(before, after FactSnapshot) reteAgendaDelta {
 	if r == nil || r.beta == nil {
-		return
+		return reteAgendaDelta{}
 	}
-	r.beta.updateFact(before, after)
+	delta := r.beta.updateFact(before, after)
+	delta.supported = delta.supported && r.supportsIncrementalAgenda()
+	return delta
+}
+
+func (r *reteRuntime) supportsIncrementalAgenda() bool {
+	if r == nil || r.beta == nil || len(r.plan.rules) == 0 {
+		return false
+	}
+	for _, rule := range r.plan.rules {
+		if !rule.supported || !rule.betaSupported {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelta) ([]matchCandidate, error) {
+	if r == nil || r.revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if len(deltas) == 0 {
+		return nil, nil
+	}
+	candidates := make([]matchCandidate, 0, len(deltas))
+	for _, delta := range deltas {
+		if delta.token == nil {
+			continue
+		}
+		rule, ok := r.revision.rulesByRevisionID[delta.ruleRevisionID]
+		if !ok {
+			return nil, ErrMatcher
+		}
+		candidate, err := buildMatchCandidateFromTokenGeneration(rule, matchTokenGeneration(delta.token), delta.token)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
+}
+
+func matchTokenGeneration(token *matchToken) Generation {
+	for token != nil {
+		if !token.entry.factID.IsZero() {
+			return token.entry.factID.Generation()
+		}
+		token = token.parent
+	}
+	return 0
 }
 
 func (r *reteRuntime) insertAlphaFact(fact FactSnapshot) {

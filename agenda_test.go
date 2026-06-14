@@ -139,6 +139,44 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	}
 }
 
+func TestAgendaCandidateDeltasDoNotRequeueConsumedActivation(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-delta-refraction-session")
+
+	if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	agenda := newAgenda()
+	results := mustAgendaMatchResults(t, revision, session)
+	if _, err := agenda.reconcile(context.Background(), revision, results); err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if selected.status != activationStatusConsumed {
+		t.Fatalf("selected status = %v, want consumed", selected.status)
+	}
+
+	changes, err := agenda.applyCandidateDeltas(context.Background(), revision, nil, results[0].candidates)
+	if err != nil {
+		t.Fatalf("applyCandidateDeltas: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("repeat delta changes = %#v, want none", changes)
+	}
+	if got := agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after repeat delta = %#v, want none", got)
+	}
+	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
+		t.Fatalf("consumed activation after repeat delta = %#v, ok=%v", got, ok)
+	}
+}
+
 func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	revision, _ := mustAgendaRevision(t, 10)
 	rule := revision.rules["match-person"]

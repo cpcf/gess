@@ -234,6 +234,129 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	return changes, nil
 }
 
+func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, removed []matchCandidate, added []matchCandidate) ([]agendaChange, error) {
+	if a == nil || revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	removedKeys := make(map[activationKey]struct{}, len(removed))
+	for _, candidate := range removed {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		existing, key, ok := a.activationForCandidate(candidate)
+		if !ok || existing.status != activationStatusPending {
+			continue
+		}
+		removedKeys[key] = struct{}{}
+	}
+
+	changes := make([]agendaChange, 0, len(removedKeys)+len(added))
+	if len(removedKeys) > 0 {
+		nextPending := make([]activationKey, 0, len(a.pending))
+		for _, key := range a.pending {
+			existing, ok := a.activationByKeyPtr(key)
+			if !ok || existing.status != activationStatusPending {
+				continue
+			}
+			if _, remove := removedKeys[key]; remove {
+				existing.status = activationStatusDeactivated
+				changes = append(changes, agendaChange{
+					kind:       agendaChangeDeactivated,
+					activation: existing.clone(),
+				})
+				continue
+			}
+			nextPending = append(nextPending, key)
+		}
+		a.pending = nextPending
+	}
+
+	activated := make([]agendaChange, 0)
+	sort.SliceStable(added, func(i, j int) bool {
+		return agendaDeltaCandidateLess(revision, added[i], added[j])
+	})
+	for _, candidate := range added {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rule, ok := revision.rulesByRevisionID[candidate.ruleRevisionID]
+		if !ok {
+			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, candidate.ruleRevisionID)
+		}
+		if candidate.ruleID != rule.id {
+			return nil, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, candidate.ruleRevisionID)
+		}
+		if _, _, ok := a.activationForCandidate(candidate); ok {
+			continue
+		}
+
+		created := activation{
+			ruleID:           candidate.ruleID,
+			ruleRevisionID:   candidate.ruleRevisionID,
+			generation:       candidate.generation,
+			identity:         candidate.identity,
+			bindings:         candidate.bindingTuple,
+			factIDs:          candidate.factIDs,
+			factVersions:     candidate.factVersions,
+			path:             candidate.path,
+			salience:         rule.salience,
+			maxRecency:       candidate.maxRecency,
+			aggregateRecency: candidate.aggregateRecency,
+			declarationOrder: rule.declarationOrder,
+			status:           activationStatusPending,
+		}
+
+		key := a.storeActivation(&created)
+		indexActivation(a.byFactID, a.byRevision, created)
+		a.pending = append(a.pending, key)
+		activated = append(activated, agendaChange{
+			kind:       agendaChangeActivated,
+			activation: created.clone(),
+		})
+	}
+	changes = append(changes, activated...)
+
+	sort.SliceStable(a.pending, func(i, j int) bool {
+		left, _ := a.activationByKeyPtr(a.pending[i])
+		right, _ := a.activationByKeyPtr(a.pending[j])
+		return activationLess(left, right)
+	})
+
+	return changes, nil
+}
+
+func agendaDeltaCandidateLess(revision *Ruleset, left, right matchCandidate) bool {
+	if revision != nil {
+		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]
+		rightRule, rightOK := revision.rulesByRevisionID[right.ruleRevisionID]
+		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
+			return leftRule.declarationOrder < rightRule.declarationOrder
+		}
+	}
+	for i := 0; i < len(left.factIDs) && i < len(right.factIDs); i++ {
+		if left.factIDs[i] != right.factIDs[i] {
+			return factIDLess(left.factIDs[i], right.factIDs[i])
+		}
+		if left.factVersions[i] != right.factVersions[i] {
+			return left.factVersions[i] < right.factVersions[i]
+		}
+	}
+	if len(left.factIDs) != len(right.factIDs) {
+		return len(left.factIDs) < len(right.factIDs)
+	}
+	if left.ruleID != right.ruleID {
+		return left.ruleID < right.ruleID
+	}
+	return left.ruleRevisionID < right.ruleRevisionID
+}
+
 func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []agendaChange {
 	if a == nil || len(revisionIDs) == 0 {
 		return nil

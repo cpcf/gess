@@ -232,6 +232,10 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 }
 
 func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *matchToken) (matchCandidate, error) {
+	return buildMatchCandidateFromTokenGeneration(rule, snapshot.Generation(), token)
+}
+
+func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {
 	if token == nil {
 		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
@@ -246,7 +250,7 @@ func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *m
 	fillMatchToken(entries, factIDs, factVersions, path, 0, 0, token)
 
 	identity := candidateIdentity{
-		generation: snapshot.Generation(),
+		generation: generation,
 		count:      token.size,
 		key: candidateIdentityKey{
 			scopeHash: rule.identityScopeHash,
@@ -264,7 +268,7 @@ func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *m
 		bindingTuple:     entries,
 		factIDs:          factIDs,
 		factVersions:     factVersions,
-		generation:       snapshot.Generation(),
+		generation:       generation,
 		maxRecency:       token.maxRecency,
 		aggregateRecency: token.aggregateRecency,
 		path:             path,
