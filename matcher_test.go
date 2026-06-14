@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -267,6 +268,28 @@ func TestCollectMatchCandidatesSuppressesDuplicateBindingTuples(t *testing.T) {
 	}
 }
 
+func TestMatchCandidatesMatchesMaterializedBindingSets(t *testing.T) {
+	revision, snapshot := mustMatcherJoinFixture(t)
+	rule := revision.rules["age-pairs"]
+
+	streamed, err := rule.matchCandidates(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("matchCandidates: %v", err)
+	}
+	sets, err := rule.matchBindingSets(context.Background(), snapshot)
+	if err != nil {
+		t.Fatalf("matchBindingSets: %v", err)
+	}
+	materialized, err := collectMatchCandidates(context.Background(), rule, snapshot, sets)
+	if err != nil {
+		t.Fatalf("collectMatchCandidates: %v", err)
+	}
+
+	if !reflect.DeepEqual(streamed, materialized) {
+		t.Fatalf("streamed candidates differ from materialized candidates:\nstreamed=%#v\nmaterialized=%#v", streamed, materialized)
+	}
+}
+
 func TestCollectMatchCandidatesObservesCancellation(t *testing.T) {
 	rule := compiledRule{
 		id:         RuleID("rule"),
@@ -308,6 +331,74 @@ func TestCollectMatchCandidatesObservesCancellation(t *testing.T) {
 	if candidates != nil {
 		t.Fatalf("candidates = %#v, want nil after cancellation", candidates)
 	}
+}
+
+func BenchmarkNaiveMatcherJoinCandidates(b *testing.B) {
+	revision, snapshot := mustMatcherJoinFixture(b)
+	rule := revision.rules["age-pairs"]
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		candidates, err := rule.matchCandidates(context.Background(), snapshot)
+		if err != nil {
+			b.Fatalf("matchCandidates: %v", err)
+		}
+		if len(candidates) != 6 {
+			b.Fatalf("candidate count = %d, want 6", len(candidates))
+		}
+	}
+}
+
+func mustMatcherJoinFixture(tb testing.TB) (*Ruleset, Snapshot) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	personTemplate := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "age-pairs",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: personTemplate.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: personTemplate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		tb.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("matcher-benchmark-session"))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	for i, age := range []any{20, 21, 22, 23} {
+		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(tb, map[string]any{
+			"age":  age,
+			"name": string(rune('a' + i)),
+		})); err != nil {
+			tb.Fatalf("AssertTemplate(%v): %v", age, err)
+		}
+	}
+
+	return revision, session.indexedSnapshotLocked()
 }
 
 func TestNaiveMatcherCancellationReturnsContextError(t *testing.T) {

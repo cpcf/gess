@@ -117,34 +117,60 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 		return nil, nil
 	}
 
+	matches := make([]conditionMatch, 0)
+	err := p.forEachMatchWithBindings(ctx, snapshot, bindings, func(match conditionMatch) error {
+		matches = append(matches, match)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return matches, nil
+}
+
+func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, snapshot Snapshot, bindings []conditionMatch, yield func(conditionMatch) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.target.kind == conditionTargetUnknown {
+		return nil
+	}
+
 	indexes := snapshot.indexesForTarget(p.target)
-	matches := make([]conditionMatch, 0, len(indexes))
 	for _, idx := range indexes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if idx < 0 || idx >= len(snapshot.facts) {
 			continue
 		}
 		fact := snapshot.facts[idx]
 		ok, err := p.matchesConstraints(ctx, fact)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !ok {
 			continue
 		}
 		ok, err = p.matchesJoins(ctx, fact, bindings)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !ok {
 			continue
 		}
-		matches = append(matches, conditionMatch{
+		if err := yield(conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
 			fact:        fact,
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return matches, nil
+	return nil
 }
 
 func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact FactSnapshot, bindings []conditionMatch) (bool, error) {
@@ -265,17 +291,10 @@ func (r compiledRule) matchCandidates(ctx context.Context, snapshot Snapshot) ([
 			return nil
 		}
 
-		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, snapshot, selected[:conditionIndex])
-		if err != nil {
-			return err
-		}
-		for _, match := range matches {
+		return r.conditionPlans[conditionIndex].forEachMatchWithBindings(ctx, snapshot, selected[:conditionIndex], func(match conditionMatch) error {
 			selected[conditionIndex] = match
-			if err := walk(conditionIndex + 1); err != nil {
-				return err
-			}
-		}
-		return nil
+			return walk(conditionIndex + 1)
+		})
 	}
 
 	if err := walk(0); err != nil {
