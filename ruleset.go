@@ -353,14 +353,14 @@ func (r *Ruleset) templateByKey(key TemplateKey) (Template, bool) {
 	return template, ok
 }
 
-func (r *Ruleset) buildFieldSlots(template Template, fields Fields) []factSlot {
+func (r *Ruleset) buildFieldSlots(template Template, fields Fields, presence map[string]FieldPresence) []factSlot {
 	if r == nil || template.key == "" {
 		return nil
 	}
 	if _, ok := r.conditionTemplateKeys[template.key]; !ok {
 		return nil
 	}
-	return template.buildFieldSlots(fields)
+	return template.buildFieldSlots(fields, presence)
 }
 
 func (r *Ruleset) Templates() []Template {

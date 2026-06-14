@@ -352,6 +352,87 @@ func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
 	}
 }
 
+func TestSnapshotSlotBackedAccessorsReturnDefensiveCopies(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "profile", Kind: ValueMap},
+			{Name: "status", Kind: ValueString, Default: "active"},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-person",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "slot-snapshot-defensive-session")
+
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"id":      "p-1",
+		"profile": map[string]any{"likes": "jazz"},
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	internal := session.factsByID[inserted.Fact.ID()]
+	if internal.fields != nil || internal.fieldPresence != nil || len(internal.fieldSlots) == 0 {
+		t.Fatalf("slot-backed storage = fields:%v presence:%v slots:%d", internal.fields, internal.fieldPresence, len(internal.fieldSlots))
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	fact, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot missing inserted fact %q", inserted.Fact.ID())
+	}
+
+	rendered := snapshot.String()
+	if rendered != snapshot.String() {
+		t.Fatalf("slot-backed snapshot rendering changed between reads: %q", rendered)
+	}
+
+	fields := fact.Fields()
+	fields["id"] = mustValue(t, "MUT")
+	profile, ok := fact.Field("profile")
+	if !ok {
+		t.Fatal("fact missing profile field")
+	}
+	profile.data.(map[string]Value)["likes"] = mustValue(t, "rock")
+	presence := fact.FieldPresenceMap()
+	presence["status"] = FieldPresenceExplicit
+	snapshot.FactsByTemplateKey(template.Key())[0].Fields()["status"] = mustValue(t, "MUT")
+
+	fresh, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot missing inserted fact after mutations")
+	}
+	if got, ok := fresh.Field("id"); !ok || !got.Equal(mustValue(t, "p-1")) {
+		t.Fatalf("slot-backed id changed through returned fields: (%v, %v)", got, ok)
+	}
+	if got, ok := fresh.Field("profile"); !ok || !got.Equal(mustValue(t, map[string]any{"likes": "jazz"})) {
+		t.Fatalf("slot-backed profile changed through returned value: (%v, %v)", got, ok)
+	}
+	if got, ok := fresh.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("slot-backed presence changed through returned map: (%v, %v)", got, ok)
+	}
+	if got := snapshot.FactsByTemplateKey(template.Key())[0].Fields()["status"]; !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("slot-backed facts-by-template result changed snapshot: %v", got)
+	}
+}
+
 func TestSnapshotRenderingIsDeterministic(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name: "payload",

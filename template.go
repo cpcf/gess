@@ -127,18 +127,25 @@ func (t Template) fieldSlot(field string) (int, bool) {
 	return slot, ok
 }
 
-func (t Template) buildFieldSlots(fields Fields) []factSlot {
+func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresence) []factSlot {
 	if !t.closed || len(t.fields) == 0 {
 		return nil
 	}
 
 	slots := make([]factSlot, len(t.fields))
 	for i, field := range t.fields {
+		slots[i].presence = FieldPresenceOmitted
+		if presence != nil {
+			if next, ok := presence[field.Name]; ok {
+				slots[i].presence = next
+			}
+		}
 		value, ok := fields[field.Name]
 		if !ok {
 			continue
 		}
-		slots[i] = factSlot{value: cloneValue(value), ok: true}
+		slots[i].value = cloneValue(value)
+		slots[i].ok = true
 	}
 	return slots
 }

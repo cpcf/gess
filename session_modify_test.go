@@ -432,6 +432,143 @@ func TestSessionModifyTemplateUnsetDefaultAndOptionalBehavior(t *testing.T) {
 	}
 }
 
+func TestSessionModifySlotBackedClosedTemplateSetUnsetDefaultRequiredAndDuplicateCollision(t *testing.T) {
+	workspace := NewWorkspace()
+	targeted := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "event",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Default: "active"},
+			{Name: "tag", Kind: ValueString},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "targeted-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "fact", TemplateKey: targeted.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("modify-slot-backed-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	template, ok := revision.Template("event")
+	if !ok {
+		t.Fatal("expected template event")
+	}
+
+	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"id":  "evt-1",
+		"tag": "blue",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if internal := session.factsByID[first.Fact.ID()]; internal.fields != nil || len(internal.fieldSlots) == 0 {
+		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fields, len(internal.fieldSlots))
+	}
+
+	result, err := session.Modify(context.Background(), first.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "paused"}),
+	})
+	if err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("set status result = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, ok := result.Fact.Field("status"); !ok || !got.Equal(mustValue(t, "paused")) {
+		t.Fatalf("status after set = (%v, %v), want paused", got, ok)
+	}
+	if internal := session.factsByID[first.Fact.ID()]; internal.fields != nil {
+		t.Fatal("slot-backed fact should remain slot-backed after modify")
+	}
+
+	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{
+		Unset: []string{"status"},
+	})
+	if err != nil {
+		t.Fatalf("unset defaulted status: %v", err)
+	}
+	if got, ok := result.Fact.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("status presence after unset = (%v, %v), want default", got, ok)
+	}
+	if got, ok := result.Fact.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("status after unset = (%v, %v), want active", got, ok)
+	}
+
+	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{
+		Unset: []string{"tag"},
+	})
+	if err != nil {
+		t.Fatalf("unset optional tag: %v", err)
+	}
+	if _, ok := result.Fact.Field("tag"); ok {
+		t.Fatal("tag should be removed after unset")
+	}
+	if got, ok := result.Fact.FieldPresence("tag"); !ok || got != FieldPresenceOmitted {
+		t.Fatalf("tag presence after unset = (%v, %v), want omitted", got, ok)
+	}
+
+	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "active"}),
+	})
+	if err != nil {
+		t.Fatalf("no-op modify: %v", err)
+	}
+	if result.Status != ModifyNoOp {
+		t.Fatalf("no-op status = %v, want %v", result.Status, ModifyNoOp)
+	}
+
+	before := mustSnapshot(t, context.Background(), session)
+	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{
+		Unset: []string{"id"},
+	})
+	if err == nil {
+		t.Fatal("expected required-field validation failure")
+	}
+	if result.Status != ModifyValidationFailure {
+		t.Fatalf("required-field failure status = %v, want %v", result.Status, ModifyValidationFailure)
+	}
+	after := mustSnapshot(t, context.Background(), session)
+	if after.String() != before.String() {
+		t.Fatal("session changed after failed required-field modify")
+	}
+
+	second, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"id":     "evt-2",
+		"status": "open",
+	}))
+	if err != nil {
+		t.Fatalf("second assert: %v", err)
+	}
+	result, err = session.Modify(context.Background(), second.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"id": "evt-1"}),
+	})
+	if err == nil {
+		t.Fatal("expected duplicate collision")
+	}
+	if result.Status != ModifyDuplicate {
+		t.Fatalf("duplicate collision status = %v, want %v", result.Status, ModifyDuplicate)
+	}
+	if got, ok := session.factIDForDuplicateKey(makeDuplicateKeyForTemplateWithSlots("event", template, second.Fact.Fields(), session.factsByID[second.Fact.ID()].fieldSlots)); !ok || got != second.Fact.ID() {
+		t.Fatalf("duplicate index changed after failed modify: (%q, %t)", got, ok)
+	}
+}
+
 func TestSessionModifyTemplateUnsetRequiredFieldFailsAndLeavesWorkingMemory(t *testing.T) {
 	collector := &testEventCollector{}
 	revision := mustCompile(t, TemplateSpec{

@@ -24,6 +24,7 @@ type FactSnapshot struct {
 	generation    Generation
 	fields        Fields
 	fieldSlots    []factSlot
+	fieldSpecs    []FieldSpec
 	fieldPresence map[string]FieldPresence
 	support       FactSupportProvenance
 }
@@ -54,12 +55,15 @@ func (f FactSnapshot) Generation() Generation {
 
 // Fields returns a defensive copy of the fact fields.
 func (f FactSnapshot) Fields() Fields {
-	return cloneFields(f.fields)
+	if f.fields != nil {
+		return cloneFields(f.fields)
+	}
+	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
 }
 
 // Field returns a defensive copy of one fact field.
 func (f FactSnapshot) Field(name string) (Value, bool) {
-	value, ok := f.fields[name]
+	value, ok := f.fieldValue(name)
 	if !ok {
 		return Value{}, false
 	}
@@ -72,8 +76,7 @@ func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
 		return resolved.value, resolved.ok
 	}
 
-	value, ok := f.fields[field]
-	return value, ok
+	return f.fieldValue(field)
 }
 
 func (f FactSnapshot) Support() FactSupportProvenance {
@@ -89,6 +92,7 @@ type workingFact struct {
 	generation    Generation
 	fields        Fields
 	fieldSlots    []factSlot
+	fieldSpecs    []FieldSpec
 	fieldPresence map[string]FieldPresence
 	dupKey        DuplicateKey
 	support       FactSupportProvenance
@@ -96,8 +100,9 @@ type workingFact struct {
 }
 
 type factSlot struct {
-	value Value
-	ok    bool
+	value    Value
+	presence FieldPresence
+	ok       bool
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
@@ -109,6 +114,8 @@ func (f *workingFact) snapshot() FactSnapshot {
 		recency:       f.recency,
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
+		fieldSlots:    cloneFactSlots(f.fieldSlots),
+		fieldSpecs:    f.fieldSpecs,
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
 		support:       f.support,
 	}
@@ -124,6 +131,7 @@ func (f *workingFact) detachedSnapshot() FactSnapshot {
 		generation:    f.generation,
 		fields:        f.fields,
 		fieldSlots:    f.fieldSlots,
+		fieldSpecs:    f.fieldSpecs,
 		fieldPresence: f.fieldPresence,
 		support:       f.support,
 	}
@@ -138,12 +146,17 @@ func (f FactSnapshot) clone() FactSnapshot {
 		recency:       f.recency,
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
+		fieldSlots:    cloneFactSlots(f.fieldSlots),
+		fieldSpecs:    f.fieldSpecs,
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
 		support:       f.support,
 	}
 }
 
 func (f FactSnapshot) String() string {
+	fields := f.Fields()
+	presence := f.FieldPresenceMap()
+
 	var b strings.Builder
 	b.WriteString("Fact{")
 	b.WriteString("id:")
@@ -159,9 +172,9 @@ func (f FactSnapshot) String() string {
 	b.WriteString(", generation:")
 	b.WriteString(strconv.FormatUint(uint64(f.generation), 10))
 	b.WriteString(", fields:{")
-	emitOrderedFieldsString(&b, f.fields)
+	emitOrderedFieldsString(&b, fields)
 	b.WriteString("}, presence:{")
-	emitOrderedPresenceString(&b, f.fieldPresence)
+	emitOrderedPresenceString(&b, presence)
 	b.WriteString("}}")
 	return b.String()
 }
@@ -204,13 +217,27 @@ func makeDuplicateKey(name string, templateKey TemplateKey, fields Fields) Dupli
 }
 
 func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) DuplicateKey {
+	return makeDuplicateKeyForTemplateWithSlots(name, template, fields, nil)
+}
+
+func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+	if template.duplicatePolicy == DuplicateAllow {
+		return ""
+	}
+	if len(slots) > 0 {
+		return makeDuplicateKeyForTemplateWithSlots(name, template, fields, slots)
+	}
+	return makeDuplicateKeyForTemplate(name, template, fields)
+}
+
+func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
 	var b strings.Builder
 	b.WriteString("name:")
 	b.WriteString(name)
 	b.WriteString("|template:")
 	b.WriteString(template.key.String())
 	b.WriteString("|fields:")
-	b.WriteString(duplicateFields(fields, template).duplicateKey())
+	emitDuplicateKeyFields(&b, template, fields, slots)
 	return DuplicateKey(b.String())
 }
 
@@ -232,14 +259,23 @@ func duplicateFields(values Fields, template Template) Fields {
 }
 
 func (f FactSnapshot) FieldPresence(field string) (FieldPresence, bool) {
-	presence, ok := f.fieldPresence[field]
-	return presence, ok
+	if f.fieldPresence != nil {
+		presence, ok := f.fieldPresence[field]
+		if ok {
+			return presence, true
+		}
+	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		return f.fieldSlots[slot].presence, true
+	}
+	return FieldPresence(""), false
 }
 
 func (f FactSnapshot) FieldPresenceMap() map[string]FieldPresence {
-	out := make(map[string]FieldPresence, len(f.fieldPresence))
-	maps.Copy(out, f.fieldPresence)
-	return out
+	if f.fieldPresence != nil {
+		return cloneFieldPresence(f.fieldPresence)
+	}
+	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
 }
 
 func cloneFieldPresence(in map[string]FieldPresence) map[string]FieldPresence {
@@ -249,4 +285,151 @@ func cloneFieldPresence(in map[string]FieldPresence) map[string]FieldPresence {
 	out := make(map[string]FieldPresence, len(in))
 	maps.Copy(out, in)
 	return out
+}
+
+func (f FactSnapshot) fieldValue(name string) (Value, bool) {
+	if f.fields != nil {
+		value, ok := f.fields[name]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		if resolved.ok {
+			return resolved.value, true
+		}
+	}
+	return Value{}, false
+}
+
+func (f FactSnapshot) fieldSlot(name string) (int, bool) {
+	for i, spec := range f.fieldSpecs {
+		if spec.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func materializeFieldsFromSlots(slots []factSlot, specs []FieldSpec) Fields {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(Fields, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			continue
+		}
+		out[spec.Name] = cloneValue(slot.value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func materializePresenceFromSlots(slots []factSlot, specs []FieldSpec) map[string]FieldPresence {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(map[string]FieldPresence, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		out[spec.Name] = slots[i].presence
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneFactSlots(in []factSlot) []factSlot {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]factSlot, len(in))
+	for i, slot := range in {
+		out[i] = factSlot{
+			value:    cloneValue(slot.value),
+			presence: slot.presence,
+			ok:       slot.ok,
+		}
+	}
+	return out
+}
+
+func emitDuplicateKeyFields(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+	if template.duplicatePolicy == DuplicateAllow {
+		return
+	}
+
+	if template.duplicatePolicy == DuplicateUniqueKey {
+		emitDuplicateKeyFieldsByNames(b, template, fields, slots)
+		return
+	}
+
+	if len(slots) > 0 && len(template.fields) > 0 {
+		emitDuplicateKeyFieldsByTemplateOrder(b, template.fields, slots)
+		return
+	}
+
+	if fields == nil {
+		return
+	}
+	b.WriteString(fields.duplicateKey())
+}
+
+func emitDuplicateKeyFieldsByNames(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+	if len(template.duplicateKeyNames) == 0 {
+		return
+	}
+
+	for _, fieldName := range template.duplicateKeyNames {
+		if value, ok := duplicateFieldValue(fieldName, template, fields, slots); ok {
+			writeDuplicateKeyEntry(b, fieldName, value)
+		}
+	}
+}
+
+func emitDuplicateKeyFieldsByTemplateOrder(b *strings.Builder, specs []FieldSpec, slots []factSlot) {
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			continue
+		}
+		writeDuplicateKeyEntry(b, spec.Name, slot.value)
+	}
+}
+
+func duplicateFieldValue(fieldName string, template Template, fields Fields, slots []factSlot) (Value, bool) {
+	if len(slots) > 0 {
+		if slot, ok := template.fieldSlot(fieldName); ok && slot >= 0 && slot < len(slots) {
+			resolved := slots[slot]
+			if resolved.ok {
+				return resolved.value, true
+			}
+			return Value{}, false
+		}
+	}
+	value, ok := fields[fieldName]
+	return value, ok
+}
+
+func writeDuplicateKeyEntry(b *strings.Builder, fieldName string, value Value) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	encodeValueForDuplicateKey(b, value)
+	b.WriteByte(';')
 }

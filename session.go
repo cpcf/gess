@@ -764,10 +764,38 @@ func (s *Session) rebuildFieldSlots(revision *Ruleset) {
 		}
 		template, ok := revision.templateByKey(fact.templateKey)
 		if !ok {
+			if fact.fields == nil {
+				fact.fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecs)
+			}
+			if fact.fieldPresence == nil {
+				fact.fieldPresence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecs)
+			}
 			fact.fieldSlots = nil
+			fact.fieldSpecs = nil
 			continue
 		}
-		fact.fieldSlots = revision.buildFieldSlots(template, fact.fields)
+		fields := fact.fields
+		if fields == nil {
+			fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecs)
+		}
+		presence := fact.fieldPresence
+		if presence == nil {
+			presence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecs)
+		}
+		fieldSlots := revision.buildFieldSlots(template, fields, presence)
+		if len(fieldSlots) > 0 {
+			fact.fields = nil
+			fact.fieldSlots = fieldSlots
+			fact.fieldSpecs = template.fields
+			fact.fieldPresence = nil
+		} else {
+			fact.fieldSlots = nil
+			fact.fieldSpecs = nil
+			if fields != nil {
+				fact.fields = fields
+			}
+			fact.fieldPresence = cloneFieldPresence(presence)
+		}
 	}
 }
 
@@ -976,7 +1004,22 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	before := fact.snapshot()
 	template, templateExists := s.revision.templateByKey(fact.templateKey)
 
-	proposedFields, proposedPresence := applyPatchToFact(fact, patch)
+	beforeFields := before.Fields()
+	beforePresence := before.FieldPresenceMap()
+	proposedFields := cloneFields(beforeFields)
+	proposedPresence := cloneFieldPresence(beforePresence)
+	for _, field := range patch.Unset {
+		delete(proposedFields, field)
+		delete(proposedPresence, field)
+	}
+	for field, value := range patch.Set {
+		proposedFields = setField(proposedFields, field, value)
+		if proposedPresence == nil {
+			proposedPresence = make(map[string]FieldPresence)
+		}
+		proposedPresence[field] = FieldPresenceExplicit
+	}
+
 	var err error
 	if templateExists {
 		proposedFields, proposedPresence, err = template.applyDefaultsAndValidate(proposedFields)
@@ -985,11 +1028,9 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		}
 	}
 
-	newDuplicate := makeDuplicateKeyForTemplate(fact.name, template, proposedFields)
 	duplicatePolicy := template.duplicatePolicy
-	if templateExists && duplicatePolicy == DuplicateAllow {
-		newDuplicate = ""
-	}
+	proposedFieldSlots := s.revision.buildFieldSlots(template, proposedFields, proposedPresence)
+	newDuplicate := makeDuplicateKeyForValidatedFact(fact.name, template, proposedFields, proposedFieldSlots)
 	oldDuplicate := fact.dupKey
 
 	if duplicatePolicy != DuplicateAllow {
@@ -998,7 +1039,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		}
 	}
 
-	if fieldsAndPresenceEqual(before.fields, before.fieldPresence, proposedFields, proposedPresence) {
+	if fieldsAndPresenceEqual(beforeFields, beforePresence, proposedFields, proposedPresence) {
 		return ModifyResult{Status: ModifyNoOp, Fact: before}, nil
 	}
 
@@ -1012,9 +1053,17 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	oldVersion := fact.version
 	fact.version++
 	fact.recency = s.nextRecency
-	fact.fields = proposedFields
-	fact.fieldSlots = s.revision.buildFieldSlots(template, proposedFields)
-	fact.fieldPresence = proposedPresence
+	if len(proposedFieldSlots) > 0 {
+		fact.fields = nil
+		fact.fieldSlots = cloneFactSlots(proposedFieldSlots)
+		fact.fieldSpecs = template.fields
+		fact.fieldPresence = nil
+	} else {
+		fact.fields = proposedFields
+		fact.fieldSlots = nil
+		fact.fieldSpecs = nil
+		fact.fieldPresence = proposedPresence
+	}
 	fact.dupKey = newDuplicate
 
 	after := fact.snapshot()
@@ -1034,7 +1083,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		After:          &after,
 		OldDuplicate:   oldDuplicate,
 		NewDuplicate:   newDuplicate,
-		ChangedFields:  changedFields(before.fields, before.fieldPresence, proposedFields, proposedPresence),
+		ChangedFields:  changedFields(beforeFields, beforePresence, proposedFields, proposedPresence),
 	}
 	result := ModifyResult{
 		Status: ModifyChanged,
@@ -1060,26 +1109,6 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	}
 
 	return result, nil
-}
-
-func applyPatchToFact(fact *workingFact, patch FactPatch) (Fields, map[string]FieldPresence) {
-	nextFields := cloneFields(fact.fields)
-	nextPresence := cloneFieldPresence(fact.fieldPresence)
-
-	for _, field := range patch.Unset {
-		delete(nextFields, field)
-		delete(nextPresence, field)
-	}
-
-	for field, value := range patch.Set {
-		nextFields = setField(nextFields, field, value)
-		if nextPresence == nil {
-			nextPresence = make(map[string]FieldPresence)
-		}
-		nextPresence[field] = FieldPresenceExplicit
-	}
-
-	return nextFields, nextPresence
 }
 
 func setField(fields Fields, field string, value Value) Fields {
@@ -1313,11 +1342,8 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 
 	templateDuplicatePolicy := template.duplicatePolicy
-	duplicateKey := makeDuplicateKeyForTemplate(name, template, canonical)
-	if templateExists && templateDuplicatePolicy == DuplicateAllow {
-		duplicateKey = ""
-	}
-	fieldSlots := revision.buildFieldSlots(template, canonical)
+	fieldSlots := revision.buildFieldSlots(template, canonical, presence)
+	duplicateKey := makeDuplicateKeyForValidatedFact(name, template, canonical, fieldSlots)
 
 	if templateDuplicatePolicy != DuplicateAllow {
 		existingID, ok := w.factsByDuplicate[duplicateKey]
@@ -1333,6 +1359,11 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	*w.sequence++
 	*w.recency++
 	id := newFactID(generation, *w.sequence)
+	var fieldSpecs []FieldSpec
+	if len(fieldSlots) > 0 {
+		fieldSpecs = template.fields
+	}
+
 	fact := &workingFact{
 		id:            id,
 		name:          name,
@@ -1342,10 +1373,16 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		generation:    generation,
 		fields:        canonical,
 		fieldSlots:    fieldSlots,
+		fieldSpecs:    fieldSpecs,
 		fieldPresence: presence,
 		dupKey:        duplicateKey,
 		support:       FactSupportProvenance{State: FactSupportStated},
 		isTransient:   false,
+	}
+
+	if len(fieldSlots) > 0 {
+		fact.fields = nil
+		fact.fieldPresence = nil
 	}
 
 	w.factsByID[id] = fact
@@ -1380,6 +1417,7 @@ type compiledSessionInitialFact struct {
 	templateKey     TemplateKey
 	fields          Fields
 	fieldSlots      []factSlot
+	fieldSpecs      []FieldSpec
 	fieldPresence   map[string]FieldPresence
 	duplicatePolicy DuplicatePolicy
 	duplicateKey    DuplicateKey
@@ -1461,16 +1499,21 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 	}
 
 	duplicatePolicy := template.duplicatePolicy
-	duplicateKey := makeDuplicateKeyForTemplate(name, template, fields)
-	if templateExists && duplicatePolicy == DuplicateAllow {
-		duplicateKey = ""
+	fieldSlots := revision.buildFieldSlots(template, fields, presence)
+	duplicateKey := makeDuplicateKeyForValidatedFact(name, template, fields, fieldSlots)
+	var fieldSpecs []FieldSpec
+	if len(fieldSlots) > 0 {
+		fields = nil
+		presence = nil
+		fieldSpecs = template.fields
 	}
 
 	return compiledSessionInitialFact{
 		name:            name,
 		templateKey:     templateKey,
 		fields:          fields,
-		fieldSlots:      revision.buildFieldSlots(template, fields),
+		fieldSlots:      fieldSlots,
+		fieldSpecs:      fieldSpecs,
 		fieldPresence:   presence,
 		duplicatePolicy: duplicatePolicy,
 		duplicateKey:    duplicateKey,
@@ -1495,11 +1538,17 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		recency:       *w.recency,
 		generation:    w.generation,
 		fields:        cloneFields(initial.fields),
-		fieldSlots:    initial.fieldSlots,
+		fieldSlots:    cloneFactSlots(initial.fieldSlots),
+		fieldSpecs:    initial.fieldSpecs,
 		fieldPresence: cloneFieldPresence(initial.fieldPresence),
 		dupKey:        initial.duplicateKey,
 		support:       FactSupportProvenance{State: FactSupportStated},
 		isTransient:   false,
+	}
+
+	if len(fact.fieldSlots) > 0 {
+		fact.fields = nil
+		fact.fieldPresence = nil
 	}
 
 	w.factsByID[id] = fact

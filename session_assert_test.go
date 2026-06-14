@@ -34,6 +34,12 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	if dynamic.Delta == nil || dynamic.Delta.Kind != MutationAssert {
 		t.Fatalf("dynamic assert missing mutation delta")
 	}
+	if got := len(session.factsByID[dynamic.Fact.ID()].fieldSlots); got != 0 {
+		t.Fatalf("dynamic field slots = %d, want zero", got)
+	}
+	if session.factsByID[dynamic.Fact.ID()].fields == nil {
+		t.Fatal("dynamic fact should remain map-backed")
+	}
 
 	revision := mustCompile(t, TemplateSpec{
 		Name:            "event",
@@ -61,6 +67,151 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	}
 	if templateResult.Fact.TemplateKey() != template.Key() {
 		t.Fatalf("template key = %q, want %q", templateResult.Fact.TemplateKey(), template.Key())
+	}
+}
+
+func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
+	workspace := NewWorkspace()
+	targeted := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "targeted",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Default: "active"},
+			{Name: "tag", Kind: ValueString},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "targeted-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "fact", TemplateKey: targeted.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("targeted-slot-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	inserted, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"tag": "blue",
+		"id":  "evt-1",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	internal := session.factsByID[inserted.Fact.ID()]
+	if internal.fields != nil {
+		t.Fatal("targeted closed fact should not keep canonical fields")
+	}
+	if got := len(internal.fieldSlots); got == 0 {
+		t.Fatal("targeted closed fact should have slot storage")
+	}
+	if internal.fieldPresence != nil {
+		t.Fatal("targeted closed fact should store presence in slots")
+	}
+
+	fields := inserted.Fact.Fields()
+	if got, ok := fields["status"]; !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("defaulted status = (%v, %v), want active", got, ok)
+	}
+	if got, ok := inserted.Fact.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("status presence = (%v, %v), want default", got, ok)
+	}
+	if got, ok := inserted.Fact.FieldPresence("tag"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("tag presence = (%v, %v), want explicit", got, ok)
+	}
+	presence := inserted.Fact.FieldPresenceMap()
+	presence["status"] = FieldPresenceExplicit
+	if got, ok := inserted.Fact.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("field presence map was not defensive: (%v, %v)", got, ok)
+	}
+	rendered := inserted.Fact.String()
+	if rendered != inserted.Fact.String() {
+		t.Fatalf("slot-backed fact rendering changed between reads: %q != %q", rendered, inserted.Fact.String())
+	}
+
+	duplicate, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"id":     "evt-1",
+		"status": "active",
+		"tag":    "blue",
+	}))
+	if err != nil {
+		t.Fatalf("duplicate assert: %v", err)
+	}
+	if duplicate.Status != AssertExisting {
+		t.Fatalf("duplicate assert status = %v, want %v", duplicate.Status, AssertExisting)
+	}
+	if duplicate.DuplicateKey != inserted.DuplicateKey {
+		t.Fatalf("duplicate key changed: %q != %q", duplicate.DuplicateKey, inserted.DuplicateKey)
+	}
+}
+
+func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
+	workspace := NewWorkspace()
+	targeted := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "event",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "targeted-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "fact", TemplateKey: targeted.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("unique-slot-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	first, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"status": "open",
+		"id":     "evt-1",
+	}))
+	if err != nil {
+		t.Fatalf("first assert: %v", err)
+	}
+	second, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"id":     "evt-1",
+		"status": "closed",
+	}))
+	if err != nil {
+		t.Fatalf("duplicate assert: %v", err)
+	}
+	if second.Status != AssertExisting {
+		t.Fatalf("duplicate status = %v, want %v", second.Status, AssertExisting)
+	}
+	if second.Fact.ID() != first.Fact.ID() {
+		t.Fatalf("duplicate fact id = %q, want %q", second.Fact.ID(), first.Fact.ID())
+	}
+	if second.DuplicateKey == "" {
+		t.Fatal("expected unique-key duplicate key")
 	}
 }
 
@@ -115,6 +266,9 @@ func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
 	}
 	if got := len(session.factsByID[untargetedResult.Fact.ID()].fieldSlots); got != 0 {
 		t.Fatalf("untargeted field slots = %d, want zero", got)
+	}
+	if session.factsByID[untargetedResult.Fact.ID()].fieldPresence == nil {
+		t.Fatal("untargeted fact should remain map-backed for presence")
 	}
 }
 
