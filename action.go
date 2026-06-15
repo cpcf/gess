@@ -4,13 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type ActionFunc func(ActionContext) error
 
-type actionContextBinding struct {
-	name string
-	fact FactSnapshot
+const inlineActionContextBindingSnapshots = 2
+
+type actionContextBindingState struct {
+	mu              sync.Mutex
+	entries         []bindingTupleEntry
+	snapshots       []FactSnapshot
+	inlineSnapshots [inlineActionContextBindingSnapshots]FactSnapshot
 }
 
 type ActionContext struct {
@@ -22,10 +27,10 @@ type ActionContext struct {
 	ruleID         RuleID
 	ruleRevisionID RuleRevisionID
 	generation     Generation
-	bindings       []actionContextBinding
+	bindings       *actionContextBindingState
 }
 
-func newActionContext(ctx context.Context, session *Session, activation activation, bindings []actionContextBinding) ActionContext {
+func newActionContext(ctx context.Context, session *Session, activation activation) ActionContext {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -37,7 +42,11 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 		ruleID:         activation.ruleID,
 		ruleRevisionID: activation.ruleRevisionID,
 		generation:     activation.generation,
-		bindings:       bindings,
+	}
+	if len(activation.bindings) > 0 {
+		out.bindings = &actionContextBindingState{
+			entries: activation.bindings,
+		}
 	}
 	if session != nil {
 		out.sessionID = session.id
@@ -80,25 +89,26 @@ func (c ActionContext) Generation() Generation {
 }
 
 func (c ActionContext) BoundFacts() []FactSnapshot {
-	if len(c.bindings) == 0 {
+	if c.bindings == nil || len(c.bindings.entries) == 0 {
 		return nil
 	}
-	out := make([]FactSnapshot, len(c.bindings))
-	for i, binding := range c.bindings {
-		out[i] = binding.fact
+	if err := c.materializeAllBindings(); err != nil {
+		return nil
 	}
+	out := make([]FactSnapshot, len(c.bindings.entries))
+	copy(out, c.bindings.snapshots)
 	return out
 }
 
 func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
-	if name == "" {
+	if name == "" || c.bindings == nil {
 		return FactSnapshot{}, false
 	}
-	for _, binding := range c.bindings {
-		if binding.name != name {
+	for i, binding := range c.bindings.entries {
+		if binding.binding != name {
 			continue
 		}
-		return binding.fact, true
+		return c.materializeBinding(i)
 	}
 	return FactSnapshot{}, false
 }
@@ -121,12 +131,18 @@ func (c ActionContext) Modify(id FactID, patch FactPatch) (ModifyResult, error) 
 	if c.session == nil {
 		return ModifyResult{Status: ModifyClosed}, ErrClosedSession
 	}
+	if err := c.materializeAllBindings(); err != nil {
+		return ModifyResult{Status: ModifyMissing}, err
+	}
 	return c.session.modifyWithContextAndOrigin(c.Context(), id, patch, c.mutationOrigin())
 }
 
 func (c ActionContext) Retract(id FactID) (RetractResult, error) {
 	if c.session == nil {
 		return RetractResult{Status: RetractClosed}, ErrClosedSession
+	}
+	if err := c.materializeAllBindings(); err != nil {
+		return RetractResult{Status: RetractMissing}, err
 	}
 	return c.session.retractWithContextAndOrigin(c.Context(), id, c.mutationOrigin())
 }
@@ -137,6 +153,56 @@ func (c ActionContext) mutationOrigin() mutationOrigin {
 		RuleID:         c.ruleID,
 		RuleRevisionID: c.ruleRevisionID,
 	}
+}
+
+func (c ActionContext) materializeAllBindings() error {
+	if c.bindings == nil || len(c.bindings.entries) == 0 {
+		return nil
+	}
+	c.bindings.mu.Lock()
+	defer c.bindings.mu.Unlock()
+	for i, entry := range c.bindings.entries {
+		if _, ok := c.materializeBindingLocked(i); !ok {
+			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.activationID)
+		}
+	}
+	return nil
+}
+
+func (c ActionContext) materializeBinding(index int) (FactSnapshot, bool) {
+	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+		return FactSnapshot{}, false
+	}
+	c.bindings.mu.Lock()
+	defer c.bindings.mu.Unlock()
+	return c.materializeBindingLocked(index)
+}
+
+func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) {
+	if len(c.bindings.snapshots) == 0 {
+		if len(c.bindings.entries) <= len(c.bindings.inlineSnapshots) {
+			c.bindings.snapshots = c.bindings.inlineSnapshots[:len(c.bindings.entries)]
+		} else {
+			c.bindings.snapshots = make([]FactSnapshot, len(c.bindings.entries))
+		}
+	}
+	if snapshot := c.bindings.snapshots[index]; !snapshot.id.IsZero() {
+		return snapshot, true
+	}
+	if c.session == nil {
+		return FactSnapshot{}, false
+	}
+	entry := c.bindings.entries[index]
+	fact, ok := c.session.factsByID[entry.factID]
+	if !ok {
+		return FactSnapshot{}, false
+	}
+	if fact.generation != c.generation || fact.version != entry.factVersion {
+		return FactSnapshot{}, false
+	}
+	snapshot := fact.detachedSnapshot()
+	c.bindings.snapshots[index] = snapshot
+	return snapshot, true
 }
 
 type ActionSpec struct {
@@ -212,7 +278,7 @@ func (a compiledAction) clone() compiledAction {
 	return a
 }
 
-func (s *Session) executeActivationActions(ctx context.Context, runID RunID, activation activation) error {
+func (s *Session) executeActivationActions(ctx context.Context, runID RunID, activation activation) (err error) {
 	if s == nil {
 		return ErrClosedSession
 	}
@@ -241,6 +307,11 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if freezeErr := actionCtx.materializeAllBindings(); err == nil && freezeErr != nil {
+			err = freezeErr
+		}
+	}()
 
 	for _, actionSpec := range rule.actions {
 		if err := ctx.Err(); err != nil {
@@ -277,7 +348,6 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		return ActionContext{}, ErrInvalidRuleset
 	}
 
-	bindings := make([]actionContextBinding, 0, len(activation.bindings))
 	for _, entry := range activation.bindings {
 		fact, ok := s.factsByID[entry.factID]
 		if !ok {
@@ -286,12 +356,7 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		if fact.generation != activation.generation || fact.version != entry.factVersion {
 			return ActionContext{}, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.id)
 		}
-		snapshot := fact.detachedSnapshot()
-		bindings = append(bindings, actionContextBinding{
-			name: entry.binding,
-			fact: snapshot,
-		})
 	}
 
-	return newActionContext(ctx, s, activation, bindings), nil
+	return newActionContext(ctx, s, activation), nil
 }

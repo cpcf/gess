@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -122,6 +123,373 @@ func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.
 	}
 	if !inserted.Inserted() {
 		t.Fatalf("initial assert status = %v, want inserted", inserted.Status)
+	}
+}
+
+func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	}); err != nil {
+		t.Fatalf("AddAction(noop): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-lazy-binding-session")
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	ctx, err := session.actionContextForActivation(context.Background(), selected)
+	if err != nil {
+		t.Fatalf("actionContextForActivation: %v", err)
+	}
+	if ctx.bindings == nil || len(ctx.bindings.entries) != 1 {
+		t.Fatalf("lazy binding entries = %#v, want one entry", ctx.bindings)
+	}
+	if ctx.bindings.snapshots != nil {
+		t.Fatal("action context materialized binding snapshots before they were read")
+	}
+	if got := ctx.ActivationID(); got != selected.id {
+		t.Fatalf("activation ID = %q, want %q", got, selected.id)
+	}
+	if ctx.bindings.snapshots != nil {
+		t.Fatal("metadata access materialized binding snapshots")
+	}
+
+	binding, ok := ctx.Binding("person")
+	if !ok {
+		t.Fatal("Binding(person) did not resolve")
+	}
+	if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("binding name = %v, want Ada", got)
+	}
+	if got, want := len(ctx.bindings.snapshots), 1; got != want {
+		t.Fatalf("materialized snapshots = %d, want %d", got, want)
+	}
+
+	fields := binding.Fields()
+	fields["name"] = mustValue(t, "MUT")
+	if again, ok := ctx.Binding("person"); !ok || !again.Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("cached binding after returned field mutation = (%v, %v), want Ada", again, ok)
+	}
+	boundFacts := ctx.BoundFacts()
+	if len(boundFacts) != 1 {
+		t.Fatalf("bound facts = %d, want 1", len(boundFacts))
+	}
+	boundFields := boundFacts[0].Fields()
+	boundFields["name"] = mustValue(t, "MUT")
+	if got := ctx.BoundFacts(); len(got) != 1 || !got[0].Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("bound facts after returned field mutation = %#v, want Ada", got)
+	}
+}
+
+func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	var personID FactID
+	if err := workspace.AddAction(ActionSpec{
+		Name: "mutate-before-read",
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing lazy binding state")
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("binding snapshots materialized before action read")
+			}
+
+			if _, err := ctx.Modify(personID, FactPatch{
+				Set: mustFields(t, map[string]any{"name": "Grace"}),
+			}); err != nil {
+				return err
+			}
+			if got, want := len(ctx.bindings.snapshots), 1; got != want {
+				return fmt.Errorf("snapshots after modify = %d, want %d", got, want)
+			}
+
+			binding, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("missing person binding after modify")
+			}
+			if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return fmt.Errorf("binding after modify = %v, want Ada", got)
+			}
+			boundFacts := ctx.BoundFacts()
+			if len(boundFacts) != 1 {
+				return fmt.Errorf("bound facts after modify = %d, want 1", len(boundFacts))
+			}
+			if got := boundFacts[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return fmt.Errorf("bound fact after modify = %v, want Ada", got)
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(mutate-before-read): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "mutate-before-read"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-lazy-freeze-session")
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	personID = inserted.Fact.ID()
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-lazy-freeze"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+
+	after := mustSnapshot(t, context.Background(), session)
+	person, ok := after.Fact(personID)
+	if !ok {
+		t.Fatalf("snapshot missing person fact %q", personID)
+	}
+	if got := person.Fields()["name"]; !got.Equal(mustValue(t, "Grace")) {
+		t.Fatalf("session fact name after action = %v, want Grace", got)
+	}
+}
+
+func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	var saved ActionContext
+	if err := workspace.AddAction(ActionSpec{
+		Name: "save-without-read",
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing lazy binding state")
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("binding snapshots materialized before action read")
+			}
+			saved = ctx
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(save-without-read): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "save-without-read"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-escaped-context-session")
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-escaped-context"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+	if saved.bindings == nil || len(saved.bindings.snapshots) != 1 {
+		t.Fatalf("saved context snapshots = %#v, want one frozen snapshot", saved.bindings)
+	}
+
+	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Grace"}),
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+
+	binding, ok := saved.Binding("person")
+	if !ok {
+		t.Fatal("saved Binding(person) did not resolve after later modify")
+	}
+	if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("saved binding after later modify = %v, want Ada", got)
+	}
+	boundFacts := saved.BoundFacts()
+	if len(boundFacts) != 1 {
+		t.Fatalf("saved bound facts = %d, want 1", len(boundFacts))
+	}
+	if got := boundFacts[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("saved bound fact after later modify = %v, want Ada", got)
+	}
+}
+
+func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	var (
+		saved        ActionContext
+		secondCalled bool
+	)
+	runCtx, cancel := context.WithCancel(context.Background())
+	if err := workspace.AddAction(ActionSpec{
+		Name: "save-cancel-without-read",
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing lazy binding state")
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("binding snapshots materialized before action read")
+			}
+			saved = ctx
+			cancel()
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(save-cancel-without-read): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "unexpected",
+		Fn: func(ActionContext) error {
+			secondCalled = true
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(unexpected): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "save-cancel-without-read"}, {Name: "unexpected"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-escaped-context-cancel-session")
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	err = session.executeActivationActions(runCtx, RunID("run:test-escaped-context-cancel"), selected)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("executeActivationActions error = %v, want context canceled", err)
+	}
+	if secondCalled {
+		t.Fatal("second action ran after cancellation")
+	}
+	if saved.bindings == nil || len(saved.bindings.snapshots) != 1 {
+		t.Fatalf("saved context snapshots after cancellation = %#v, want one frozen snapshot", saved.bindings)
+	}
+
+	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Grace"}),
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+
+	binding, ok := saved.Binding("person")
+	if !ok {
+		t.Fatal("saved Binding(person) did not resolve after cancellation and later modify")
+	}
+	if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+		t.Fatalf("saved binding after cancellation and later modify = %v, want Ada", got)
 	}
 }
 
