@@ -1389,6 +1389,7 @@ type factWorkspace struct {
 	sequence         uint64
 	recency          Recency
 	insertionOrder   []FactID
+	facts            []workingFact
 	factsByID        map[FactID]*workingFact
 	factsByDuplicate map[DuplicateKey]FactID
 	factsByTemplate  map[TemplateKey][]FactID
@@ -1433,8 +1434,17 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	}
 	if w.insertionOrder == nil {
 		w.insertionOrder = make([]FactID, 0, initialCapacity)
+	} else if cap(w.insertionOrder) < initialCapacity {
+		w.insertionOrder = make([]FactID, 0, initialCapacity)
 	} else {
 		w.insertionOrder = w.insertionOrder[:0]
+	}
+	if w.facts == nil {
+		w.facts = make([]workingFact, 0, initialCapacity)
+	} else if cap(w.facts) < initialCapacity {
+		w.facts = make([]workingFact, 0, initialCapacity)
+	} else {
+		w.facts = w.facts[:0]
 	}
 }
 
@@ -1767,7 +1777,7 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	w.sequence++
 	w.recency++
 	id := newFactID(w.generation, w.sequence)
-	fact := &workingFact{
+	fact := workingFact{
 		id:          id,
 		name:        initial.name,
 		templateKey: initial.templateKey,
@@ -1796,7 +1806,9 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		fact.fieldPresence = nil
 	}
 
-	w.factsByID[id] = fact
+	w.facts = append(w.facts, fact)
+	stored := &w.facts[len(w.facts)-1]
+	w.factsByID[id] = stored
 	if initial.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate[initial.duplicateKey] = id
 	}
