@@ -535,7 +535,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if _, err := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); err != nil {
+	if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -767,11 +767,52 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	return changes, nil
 }
 
+func (s *Session) reconcileAgendaInternal(ctx context.Context) ([]agendaChange, error) {
+	if changes, ok, err := s.reconcileAgendaWithoutSnapshot(ctx); ok || err != nil {
+		return changes, err
+	}
+	return s.reconcileAgenda(ctx, s.indexedSnapshotLocked())
+}
+
+func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaChange, bool, error) {
+	if s == nil || s.closed {
+		return nil, true, ErrClosedSession
+	}
+	if s.revision == nil {
+		return nil, true, ErrInvalidRuleset
+	}
+	if s.agenda == nil {
+		s.agenda = newAgenda()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if s.rete == nil {
+		return nil, false, nil
+	}
+
+	results, ok, err := s.rete.matchWithoutSnapshot(ctx, s.generation)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	changes, err := s.agenda.reconcile(ctx, s.revision, results)
+	if err != nil {
+		return nil, true, err
+	}
+	s.agendaReady = true
+	s.agendaDirty = false
+	s.emitAgendaEvents(ctx, changes)
+	return changes, true, nil
+}
+
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
 	if changes, ok, err := s.applyReteAgendaDelta(ctx, delta); ok || err != nil {
 		return changes, err
 	}
-	return s.reconcileAgenda(ctx, s.indexedSnapshotLocked())
+	return s.reconcileAgendaInternal(ctx)
 }
 
 func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {
@@ -1978,7 +2019,7 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 			value, err := req.apply(mutationCtx)
 			s.endMutation()
 			if err == nil && mutationResultNeedsReconcile(value, s.revision) {
-				if _, reconcileErr := s.reconcileAgenda(ctx, s.indexedSnapshotLocked()); reconcileErr != nil {
+				if _, reconcileErr := s.reconcileAgendaInternal(ctx); reconcileErr != nil {
 					err = reconcileErr
 				}
 			}

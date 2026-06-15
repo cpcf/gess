@@ -126,6 +126,48 @@ func (m *reteBetaMemory) match(ctx context.Context, snapshot Snapshot, source al
 	return results, nil
 }
 
+func (m *reteBetaMemory) matchWithoutSnapshot(ctx context.Context, generation Generation) ([]ruleMatchResult, bool, error) {
+	if m == nil || m.revision == nil {
+		return nil, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	results := make([]ruleMatchResult, 0, len(m.revision.ruleOrder))
+	for _, ruleName := range m.revision.ruleOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		rule, ok := m.revision.rules[ruleName]
+		if !ok {
+			return nil, false, nil
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return nil, false, nil
+		}
+
+		candidates, err := collectMatchCandidatesFromPrefixes(ctx, rule, generation, ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
+		if err != nil {
+			return nil, false, err
+		}
+		results = append(results, ruleMatchResult{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates:       candidates,
+		})
+	}
+
+	return results, true, nil
+}
+
 func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) {
 	if m == nil || m.revision == nil {
 		return

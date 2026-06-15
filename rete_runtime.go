@@ -151,6 +151,13 @@ func (r *reteRuntime) match(ctx context.Context, snapshot Snapshot) ([]ruleMatch
 	return (&alphaMatcher{revision: r.revision, source: r.alpha}).match(ctx, snapshot)
 }
 
+func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Generation) ([]ruleMatchResult, bool, error) {
+	if r == nil || r.revision == nil || r.beta == nil {
+		return nil, false, nil
+	}
+	return r.beta.matchWithoutSnapshot(ctx, generation)
+}
+
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
 	if r == nil {
 		return reteRuntimeMetrics{}

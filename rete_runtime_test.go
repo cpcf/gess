@@ -316,6 +316,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	betaMemory := session.rete.beta
 
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 	assertBetaTokenPointersUseBacking(t, betaMemory.rules[revision1.rules["employee-department"].revisionID])
 
 	betaRuleMemory := betaMemory.rules[revision1.rules["employee-department"].revisionID]
@@ -335,6 +336,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 		t.Fatalf("terminal beta token pointer changed after append: got %#x want %#x", got, trackedTokenPtr)
 	}
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 
 	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
 	if _, err := session.Modify(ctx, employee.ID(), FactPatch{Set: mustFields(t, map[string]any{"dept": "Sales"})}); err != nil {
@@ -344,6 +346,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 		t.Fatal("modify rebuilt beta memory, want incremental update")
 	}
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 
 	salesDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Sales")
 	if _, err := session.Retract(ctx, salesDepartment.ID()); err != nil {
@@ -353,6 +356,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 		t.Fatal("retract rebuilt beta memory, want incremental update")
 	}
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 
 	resetResult, err := session.Reset(ctx)
 	if err != nil {
@@ -362,6 +366,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 		t.Fatalf("reset status = %v, want %v", resetResult.Status, ResetApplied)
 	}
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 
 	workspace2 := NewWorkspace()
 	noise2 := mustAddTemplate(t, workspace2, TemplateSpec{
@@ -683,6 +688,11 @@ func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
 	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	if results, ok, err := session.rete.matchWithoutSnapshot(ctx, session.Generation()); err != nil {
+		t.Fatalf("matchWithoutSnapshot: %v", err)
+	} else if ok {
+		t.Fatalf("matchWithoutSnapshot unexpectedly supported mixed fallback plan: %#v", results)
+	}
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
@@ -694,6 +704,39 @@ func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
 		t.Fatal("numeric join rule unexpectedly got beta memory after reset")
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeMatchWithoutSnapshotMatchesSnapshotForFullBetaMemory(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-no-snapshot-session"),
+		WithInitialFacts(mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("full beta session runtime = %#v, want populated beta memory", session.rete)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	snapshotResults, err := session.rete.match(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("snapshot match: %v", err)
+	}
+	snapshotResults = cloneRuleMatchResults(snapshotResults)
+	noSnapshotResults, ok, err := session.rete.matchWithoutSnapshot(ctx, session.Generation())
+	if err != nil {
+		t.Fatalf("matchWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("matchWithoutSnapshot unexpectedly unavailable for full beta-backed session")
+	}
+	if !ruleMatchResultsEqual(noSnapshotResults, snapshotResults) {
+		t.Fatalf("matchWithoutSnapshot results differ from snapshot match:\nno-snapshot=%#v\nsnapshot=%#v", noSnapshotResults, snapshotResults)
+	}
 }
 
 func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T) {
@@ -1497,6 +1540,76 @@ func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("incremental agenda differs from full reconcile:\nincremental=%#v\nfull=%#v", got, want)
 	}
+}
+
+func assertReteRuntimeMatchWithoutSnapshotParity(t *testing.T, session *Session) {
+	t.Helper()
+	if session == nil || session.rete == nil {
+		t.Fatal("session has no Rete runtime")
+	}
+
+	ctx := context.Background()
+	snapshot := mustSnapshot(t, ctx, session)
+	snapshotResults, err := session.rete.match(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("snapshot match: %v", err)
+	}
+	snapshotResults = cloneRuleMatchResults(snapshotResults)
+	noSnapshotResults, ok, err := session.rete.matchWithoutSnapshot(ctx, session.Generation())
+	if err != nil {
+		t.Fatalf("matchWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("matchWithoutSnapshot unexpectedly unavailable for full beta-backed session")
+	}
+	if !ruleMatchResultsEqual(noSnapshotResults, snapshotResults) {
+		t.Fatalf("matchWithoutSnapshot results differ from snapshot match:\nno-snapshot=%#v\nsnapshot=%#v", noSnapshotResults, snapshotResults)
+	}
+}
+
+func ruleMatchResultsEqual(left, right []ruleMatchResult) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].ruleID != right[i].ruleID ||
+			left[i].ruleRevisionID != right[i].ruleRevisionID ||
+			left[i].salience != right[i].salience ||
+			left[i].declarationOrder != right[i].declarationOrder {
+			return false
+		}
+		if len(left[i].candidates) != len(right[i].candidates) {
+			return false
+		}
+		for j := range left[i].candidates {
+			if !reflect.DeepEqual(left[i].candidates[j], right[i].candidates[j]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cloneRuleMatchResults(results []ruleMatchResult) []ruleMatchResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]ruleMatchResult, len(results))
+	for i, result := range results {
+		out[i] = result
+		if len(result.candidates) == 0 {
+			continue
+		}
+		out[i].candidates = make([]matchCandidate, len(result.candidates))
+		for j, candidate := range result.candidates {
+			out[i].candidates[j] = candidate
+			out[i].candidates[j].bindingTuple = cloneBindingTupleEntries(candidate.bindingTuple)
+			out[i].candidates[j].factIDs = cloneFactIDs(candidate.factIDs)
+			out[i].candidates[j].factVersions = cloneFactVersions(candidate.factVersions)
+			out[i].candidates[j].path = cloneIntPath(candidate.path)
+		}
+	}
+	return out
 }
 
 func activationParityRecordsFromActivations(activations []activation) []activationParityRecord {
