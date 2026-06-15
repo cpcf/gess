@@ -188,13 +188,9 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 	if r == nil {
 		return
 	}
-	if len(facts) < reteAlphaMinimumFacts {
-		r.clearMemories()
-	} else {
-		alpha := newReteAlphaMemory(r.plan)
-		alpha.reset(r.plan, facts)
-		r.alpha = alpha
-	}
+	alpha := newReteAlphaMemory(r.plan)
+	alpha.reset(r.plan, facts)
+	r.alpha = alpha
 	r.rebuildBeta(facts)
 }
 
@@ -210,7 +206,7 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 	if r == nil {
 		return
 	}
-	if !r.plan.betaSupported || len(facts) < reteAlphaMinimumFacts {
+	if !r.plan.betaSupported {
 		r.beta = nil
 		return
 	}

@@ -132,9 +132,13 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
 		}
 	}
+	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+		t.Fatalf("session Rete runtime = %#v, want populated alpha and beta memories", session.rete)
+	}
 	snapshot := mustSnapshot(t, ctx, session)
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
+	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), session.rete)
 }
 
 func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) {
@@ -443,6 +447,45 @@ func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
+func TestReteRuntimeAgendaDeltasMaintainParityForSmallSupportedSession(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-small-agenda-delta-session"),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: employeeKey, Fields: mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})},
+			SessionInitialFact{TemplateKey: departmentKey, Fields: mustFields(t, map[string]any{"id": "Engineering"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
+		t.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate(Ben): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	ben := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ben")
+	if _, err := session.Modify(ctx, ben.ID(), FactPatch{Set: mustFields(t, map[string]any{"dept": "Sales"})}); err != nil {
+		t.Fatalf("Modify(Ben): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate(Sales department): %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
 func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	runtime, err := newReteRuntime(nil)
 	if err != ErrInvalidRuleset {
@@ -613,7 +656,38 @@ func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
-func TestReteRuntimeResetBelowThresholdClearsBetaMemory(t *testing.T) {
+func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	if err := workspace.AddAction(ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	}); err != nil {
+		t.Fatalf("AddAction(mark): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name:       "dynamic-event",
+		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	}); err != nil {
+		t.Fatalf("AddRule(dynamic-event): %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "small-unsupported-fallback-session")
+	if session.rete == nil {
+		t.Fatal("expected default Rete runtime")
+	}
+	if len(session.rete.plan.unsupported) == 0 {
+		t.Fatalf("unsupported plan reasons = %#v, want fallback reason", session.rete.plan.unsupported)
+	}
+	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "queued"})); err != nil {
+		t.Fatalf("Assert(event): %v", err)
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	session, err := NewSession(
@@ -626,8 +700,8 @@ func TestReteRuntimeResetBelowThresholdClearsBetaMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete != nil {
-		t.Fatal("small initial session unexpectedly has Rete runtime")
+	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+		t.Fatalf("small initial Rete runtime = %#v, want populated memories", session.rete)
 	}
 
 	for i := range reteAlphaMinimumFacts {
@@ -646,16 +720,13 @@ func TestReteRuntimeResetBelowThresholdClearsBetaMemory(t *testing.T) {
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.rete == nil {
-		t.Fatal("expected Rete runtime object to remain after reset")
-	}
-	if session.rete.alpha != nil || session.rete.beta != nil {
-		t.Fatalf("Rete memories after small reset = alpha:%#v beta:%#v, want cleared", session.rete.alpha, session.rete.beta)
+	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+		t.Fatalf("Rete memories after small reset = %#v, want populated memories", session.rete)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
-func TestReteRuntimeRetractBelowThresholdFallsBackFromAgendaDeltas(t *testing.T) {
+func TestReteRuntimeRetractKeepsAgendaDeltaPathForSmallSupportedSession(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts)
@@ -688,11 +759,11 @@ func TestReteRuntimeRetractBelowThresholdFallsBackFromAgendaDeltas(t *testing.T)
 	if _, err := session.Retract(ctx, department.ID()); err != nil {
 		t.Fatalf("Retract(Engineering department): %v", err)
 	}
-	if session.rete.alpha != nil || session.rete.beta != nil {
-		t.Fatalf("Rete memories after below-threshold retract = alpha:%#v beta:%#v, want cleared", session.rete.alpha, session.rete.beta)
+	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+		t.Fatalf("Rete memories after retract = %#v, want populated memories", session.rete)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
-		t.Fatalf("pending activations after below-threshold retract = %d, want 0", got)
+		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }

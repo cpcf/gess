@@ -132,14 +132,11 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
-	var rete *reteRuntime
-	if len(*state.insertionOrder) >= reteAlphaMinimumFacts {
-		rete, err = newReteRuntime(revision)
-		if err != nil {
-			return nil, err
-		}
-		rete.resetAlpha(state.detachedFactsByInsertionOrder())
+	rete, err := newReteRuntime(revision)
+	if err != nil {
+		return nil, err
 	}
+	rete.resetAlpha(state.detachedFactsByInsertionOrder())
 
 	session := &Session{
 		id:               cfg.id,
@@ -621,17 +618,11 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.factsByTemplate = next.factsByTemplate
 	s.factsByName = next.factsByName
 	s.insertionOrder = next.factsByInsertionOrder()
-	if len(s.insertionOrder) >= reteAlphaMinimumFacts {
-		facts := next.detachedFactsByInsertionOrder()
-		if s.rete == nil {
-			s.rebuildReteRuntime(s.revision, facts)
-		} else {
-			s.rete.resetAlpha(facts)
-		}
+	facts := next.detachedFactsByInsertionOrder()
+	if s.rete == nil {
+		s.rebuildReteRuntime(s.revision, facts)
 	} else {
-		if s.rete != nil {
-			s.rete.clearMemories()
-		}
+		s.rete.resetAlpha(facts)
 	}
 	s.emitAgendaEvents(ctx, s.agenda.clear())
 
@@ -811,10 +802,6 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
 		return nil, false, nil
 	}
-	if len(s.insertionOrder) < reteAlphaMinimumFacts {
-		return nil, false, nil
-	}
-
 	removed, err := s.rete.candidatesForTerminalDeltas(delta.removed)
 	if err != nil {
 		return nil, true, err
@@ -851,16 +838,11 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) reteAgendaDelta 
 		return reteAgendaDelta{}
 	}
 	if s.rete == nil {
-		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
-			s.rebuildReteRuntime(s.revision, s.detachedFactsByInsertionOrder())
-		}
+		s.rebuildReteRuntime(s.revision, s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
 	}
 	if s.rete.alpha == nil {
-		if len(s.insertionOrder) >= reteAlphaMinimumFacts {
-			s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
-			return reteAgendaDelta{}
-		}
+		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
 	}
 	s.rete.insertAlphaFact(fact)
@@ -869,10 +851,6 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) reteAgendaDelta 
 
 func (s *Session) updateReteAlphaAfterRetract(id FactID) reteAgendaDelta {
 	if s == nil || s.rete == nil {
-		return reteAgendaDelta{}
-	}
-	if len(s.insertionOrder) < reteAlphaMinimumFacts {
-		s.rete.clearMemories()
 		return reteAgendaDelta{}
 	}
 	s.rete.removeAlphaFact(id)

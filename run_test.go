@@ -1090,6 +1090,10 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	if runResult.Fired != 3 {
 		t.Fatalf("run fired = %d, want 3", runResult.Fired)
 	}
+	if session.rete == nil {
+		t.Fatal("session Rete runtime is nil")
+	}
+	assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.rete)
 	if got, want := actionsSeen, []string{"pause", "done", "audit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("action order = %#v, want %#v", got, want)
 	}
