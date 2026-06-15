@@ -135,6 +135,55 @@ func TestSnapshotRemainsUnchangedAfterReset(t *testing.T) {
 	}
 }
 
+func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
+	session, err := NewSession(
+		mustCompile(t),
+		WithInitialFacts(SessionInitialFact{
+			Name: "settings",
+			Fields: mustFields(t, map[string]any{
+				"name": "Ada",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	result, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("first reset: %v", err)
+	}
+	before := result.Before
+	if got, want := before.Generation(), Generation(1); got != want {
+		t.Fatalf("before generation = %d, want %d", got, want)
+	}
+	if got, want := before.Len(), 1; got != want {
+		t.Fatalf("before length = %d, want %d", got, want)
+	}
+
+	fact := before.Facts()[0]
+	fields := fact.Fields()
+	fields["name"] = mustValue(t, "mutated")
+	if got, ok := before.Fact(fact.ID()); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("before snapshot changed through returned fields: (%v, %v)", got, ok)
+	}
+
+	session.initials = nil
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("second reset: %v", err)
+	}
+
+	if got, want := before.Generation(), Generation(1); got != want {
+		t.Fatalf("before generation after later reset = %d, want %d", got, want)
+	}
+	if got, want := before.Len(), 1; got != want {
+		t.Fatalf("before length after later reset = %d, want %d", got, want)
+	}
+	if got, ok := before.Fact(fact.ID()); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("before snapshot changed after later reset: (%v, %v)", got, ok)
+	}
+}
+
 func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:   "person",

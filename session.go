@@ -85,6 +85,8 @@ type Session struct {
 	factsByTemplate   map[TemplateKey][]FactID
 	factsByName       map[string][]FactID
 	insertionOrder    []FactID
+	resetWorkspace    factWorkspace
+	resetFactsScratch []FactSnapshot
 	nextEventSequence uint64
 }
 
@@ -311,19 +313,12 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
-	state := factWorkspace{
-		sequence:         &s.nextFactSequence,
-		recency:          &s.nextRecency,
-		insertionOrder:   &s.insertionOrder,
-		factsByID:        s.factsByID,
-		factsByDuplicate: s.factsByDuplicate,
-		factsByTemplate:  s.factsByTemplate,
-		factsByName:      s.factsByName,
-	}
+	state := s.activeFactWorkspace()
 	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
 	if err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
+	s.commitFactWorkspace(state)
 	if !inserted {
 		return AssertResult{
 			Status:       AssertExisting,
@@ -604,21 +599,17 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 
 	before := s.detachedSnapshotLocked()
-	next := newFactWorkspace(s.generation+1, len(compiledInitials))
+	next := &s.resetWorkspace
+	next.reset(s.generation+1, len(compiledInitials))
 	next.applyCompiledInitialFacts(compiledInitials)
+	facts := next.detachedFactsByInsertionOrderInto(s.resetFactsScratch[:0])
+	s.resetFactsScratch = facts
 
 	oldGeneration := s.generation
-	s.generation = s.generation + 1
 	s.agendaReady = false
 	s.agendaDirty = false
-	s.nextFactSequence = next.nextFactSequence()
-	s.nextRecency = next.nextRecency()
-	s.factsByID = next.factsByID
-	s.factsByDuplicate = next.factsByDuplicate
-	s.factsByTemplate = next.factsByTemplate
-	s.factsByName = next.factsByName
-	s.insertionOrder = next.factsByInsertionOrder()
-	facts := next.detachedFactsByInsertionOrder()
+	s.swapFactWorkspace(next)
+	s.generation = next.generation
 	if s.rete == nil {
 		s.rebuildReteRuntime(s.revision, facts)
 	} else {
@@ -1395,9 +1386,9 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 
 type factWorkspace struct {
 	generation       Generation
-	sequence         *uint64
-	recency          *Recency
-	insertionOrder   *[]FactID
+	sequence         uint64
+	recency          Recency
+	insertionOrder   []FactID
 	factsByID        map[FactID]*workingFact
 	factsByDuplicate map[DuplicateKey]FactID
 	factsByTemplate  map[TemplateKey][]FactID
@@ -1405,58 +1396,90 @@ type factWorkspace struct {
 }
 
 func newFactWorkspace(generation Generation, initialCapacity int) *factWorkspace {
-	var sequence uint64
-	var recency Recency
+	w := &factWorkspace{}
+	w.reset(generation, initialCapacity)
+	return w
+}
+
+func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
+	if w == nil {
+		return
+	}
 	if initialCapacity < 0 {
 		initialCapacity = 0
 	}
-	insertionOrder := make([]FactID, 0, initialCapacity)
-	return &factWorkspace{
-		generation:       generation,
-		sequence:         &sequence,
-		recency:          &recency,
-		insertionOrder:   &insertionOrder,
-		factsByID:        make(map[FactID]*workingFact, initialCapacity),
-		factsByDuplicate: make(map[DuplicateKey]FactID, initialCapacity),
-		factsByTemplate:  make(map[TemplateKey][]FactID, initialCapacity),
-		factsByName:      make(map[string][]FactID, initialCapacity),
+	w.generation = generation
+	w.sequence = 0
+	w.recency = 0
+	if w.factsByID == nil {
+		w.factsByID = make(map[FactID]*workingFact, initialCapacity)
+	} else {
+		clear(w.factsByID)
+	}
+	if w.factsByDuplicate == nil {
+		w.factsByDuplicate = make(map[DuplicateKey]FactID, initialCapacity)
+	} else {
+		clear(w.factsByDuplicate)
+	}
+	if w.factsByTemplate == nil {
+		w.factsByTemplate = make(map[TemplateKey][]FactID, initialCapacity)
+	} else {
+		clear(w.factsByTemplate)
+	}
+	if w.factsByName == nil {
+		w.factsByName = make(map[string][]FactID, initialCapacity)
+	} else {
+		clear(w.factsByName)
+	}
+	if w.insertionOrder == nil {
+		w.insertionOrder = make([]FactID, 0, initialCapacity)
+	} else {
+		w.insertionOrder = w.insertionOrder[:0]
 	}
 }
 
 func (w *factWorkspace) nextFactSequence() uint64 {
-	if w == nil || w.sequence == nil {
+	if w == nil {
 		return 0
 	}
-	return *w.sequence
+	return w.sequence
 }
 
 func (w *factWorkspace) nextRecency() Recency {
-	if w == nil || w.recency == nil {
+	if w == nil {
 		return 0
 	}
-	return *w.recency
+	return w.recency
 }
 
 func (w *factWorkspace) factsByInsertionOrder() []FactID {
 	if w == nil || w.insertionOrder == nil {
 		return nil
 	}
-	return *w.insertionOrder
+	return w.insertionOrder
 }
 
 func (w *factWorkspace) detachedFactsByInsertionOrder() []FactSnapshot {
-	if w == nil || w.insertionOrder == nil || len(*w.insertionOrder) == 0 {
-		return nil
+	return w.detachedFactsByInsertionOrderInto(nil)
+}
+
+func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot) []FactSnapshot {
+	if w == nil || w.insertionOrder == nil || len(w.insertionOrder) == 0 {
+		return dst[:0]
 	}
-	facts := make([]FactSnapshot, 0, len(*w.insertionOrder))
-	for _, id := range *w.insertionOrder {
+	if cap(dst) < len(w.insertionOrder) {
+		dst = make([]FactSnapshot, 0, len(w.insertionOrder))
+	} else {
+		dst = dst[:0]
+	}
+	for _, id := range w.insertionOrder {
 		fact, ok := w.factsByID[id]
 		if !ok || fact == nil || fact.isTransient {
 			continue
 		}
-		facts = append(facts, fact.detachedSnapshot())
+		dst = append(dst, fact.detachedSnapshot())
 	}
-	return facts
+	return dst
 }
 
 func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {
@@ -1502,9 +1525,9 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		}
 	}
 
-	*w.sequence++
-	*w.recency++
-	id := newFactID(generation, *w.sequence)
+	w.sequence++
+	w.recency++
+	id := newFactID(generation, w.sequence)
 	var fieldSpecs []FieldSpec
 	if len(fieldSlots) > 0 {
 		fieldSpecs = template.fields
@@ -1515,7 +1538,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		name:          name,
 		templateKey:   templateKey,
 		version:       1,
-		recency:       *w.recency,
+		recency:       w.recency,
 		generation:    generation,
 		fields:        canonical,
 		fieldSlots:    fieldSlots,
@@ -1537,7 +1560,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
 	w.factsByName[name] = append(w.factsByName[name], id)
-	*w.insertionOrder = append(*w.insertionOrder, id)
+	w.insertionOrder = append(w.insertionOrder, id)
 
 	return fact, duplicateKey, true, nil
 }
@@ -1695,15 +1718,15 @@ func (w *factWorkspace) applyCompiledInitialFacts(initials []compiledSessionInit
 }
 
 func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitialFact) {
-	*w.sequence++
-	*w.recency++
-	id := newFactID(w.generation, *w.sequence)
+	w.sequence++
+	w.recency++
+	id := newFactID(w.generation, w.sequence)
 	fact := &workingFact{
 		id:          id,
 		name:        initial.name,
 		templateKey: initial.templateKey,
 		version:     1,
-		recency:     *w.recency,
+		recency:     w.recency,
 		generation:  w.generation,
 		fieldSpecs:  initial.fieldSpecs,
 		dupKey:      initial.duplicateKey,
@@ -1733,7 +1756,7 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	}
 	w.factsByTemplate[initial.templateKey] = append(w.factsByTemplate[initial.templateKey], id)
 	w.factsByName[initial.name] = append(w.factsByName[initial.name], id)
-	*w.insertionOrder = append(*w.insertionOrder, id)
+	w.insertionOrder = append(w.insertionOrder, id)
 }
 
 func (s *Session) currentRunState() runGuardState {
@@ -2041,6 +2064,45 @@ func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
 func (s *Session) factIDForDuplicateKey(key DuplicateKey) (FactID, bool) {
 	factID, ok := s.factsByDuplicate[key]
 	return factID, ok
+}
+
+func (s *Session) activeFactWorkspace() factWorkspace {
+	return factWorkspace{
+		generation:       s.generation,
+		sequence:         s.nextFactSequence,
+		recency:          s.nextRecency,
+		insertionOrder:   s.insertionOrder,
+		factsByID:        s.factsByID,
+		factsByDuplicate: s.factsByDuplicate,
+		factsByTemplate:  s.factsByTemplate,
+		factsByName:      s.factsByName,
+	}
+}
+
+func (s *Session) commitFactWorkspace(state factWorkspace) {
+	if s == nil {
+		return
+	}
+	s.nextFactSequence = state.sequence
+	s.nextRecency = state.recency
+	s.factsByID = state.factsByID
+	s.factsByDuplicate = state.factsByDuplicate
+	s.factsByTemplate = state.factsByTemplate
+	s.factsByName = state.factsByName
+	s.insertionOrder = state.insertionOrder
+}
+
+func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
+	if s == nil || workspace == nil {
+		return
+	}
+	s.nextFactSequence, workspace.sequence = workspace.sequence, s.nextFactSequence
+	s.nextRecency, workspace.recency = workspace.recency, s.nextRecency
+	s.factsByID, workspace.factsByID = workspace.factsByID, s.factsByID
+	s.factsByDuplicate, workspace.factsByDuplicate = workspace.factsByDuplicate, s.factsByDuplicate
+	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
+	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
+	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
 }
 
 func (s *Session) resetWorkingMemory() {

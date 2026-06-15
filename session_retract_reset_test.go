@@ -412,6 +412,163 @@ func TestSessionResetFailureLeavesStateIntact(t *testing.T) {
 	}
 }
 
+func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:              "person",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString},
+		},
+	})
+	template, ok := revision.Template("person")
+	if !ok {
+		t.Fatal("expected template person")
+	}
+
+	session, err := NewSession(
+		revision,
+		WithSessionID("reset-reuse-failure-session"),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-1", "status": "active"})},
+			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-2", "status": "inactive"})},
+			SessionInitialFact{Name: "note", Fields: mustFields(t, map[string]any{"value": "baseline"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("initial Reset: %v", err)
+	}
+	baseline := mustSnapshot(t, context.Background(), session)
+	if baseline.Len() != 3 {
+		t.Fatalf("baseline length after reused reset = %d, want 3", baseline.Len())
+	}
+
+	session.initials = append(session.initials, SessionInitialFact{
+		TemplateKey: template.Key(),
+		Fields:      mustFields(t, map[string]any{}),
+	})
+
+	result, err := session.Reset(context.Background())
+	if err == nil {
+		t.Fatal("expected reset failure")
+	}
+	if result.Status != ResetValidationFailure {
+		t.Fatalf("reset failure status = %v, want %v", result.Status, ResetValidationFailure)
+	}
+
+	after := mustSnapshot(t, context.Background(), session)
+	if after.String() != baseline.String() {
+		t.Fatalf("snapshot changed after failed reused reset: before=%q after=%q", baseline, after)
+	}
+	if got, want := session.Generation(), Generation(2); got != want {
+		t.Fatalf("session generation after failed reused reset = %d, want %d", got, want)
+	}
+	if got, want := len(session.factsByID), baseline.Len(); got != want {
+		t.Fatalf("factsByID len after failed reused reset = %d, want %d", got, want)
+	}
+	if got, want := len(session.insertionOrder), baseline.Len(); got != want {
+		t.Fatalf("insertion order len after failed reused reset = %d, want %d", got, want)
+	}
+	if got := len(session.factIDsByTemplate(template.Key())); got != 2 {
+		t.Fatalf("template index len after failed reused reset = %d, want 2", got)
+	}
+	if got := len(session.factIDsByName(template.Name())); got != 2 {
+		t.Fatalf("name index len after failed reused reset = %d, want 2", got)
+	}
+	if got := len(session.factIDsByName("note")); got != 1 {
+		t.Fatalf("dynamic name index len after failed reused reset = %d, want 1", got)
+	}
+	first := baseline.Facts()[0]
+	key := makeDuplicateKeyForTemplate(template.Name(), template, first.Fields())
+	if got, ok := session.factIDForDuplicateKey(key); !ok || got != first.ID() {
+		t.Fatalf("duplicate key after failed reused reset = (%q, %t), want (%q, true)", got, ok, first.ID())
+	}
+}
+
+func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:              "person",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString},
+		},
+	})
+	template, ok := revision.Template("person")
+	if !ok {
+		t.Fatal("expected template person")
+	}
+
+	session, err := NewSession(
+		revision,
+		WithSessionID("reset-shrink-session"),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-1", "status": "active"})},
+			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-2", "status": "inactive"})},
+			SessionInitialFact{Name: "note", Fields: mustFields(t, map[string]any{"value": "baseline"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("initial Reset: %v", err)
+	}
+	firstReset := mustSnapshot(t, context.Background(), session)
+
+	session.initials = session.initials[:1]
+	result, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("Reset with fewer initials: %v", err)
+	}
+	if result.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
+	}
+	if got, want := session.Generation(), Generation(3); got != want {
+		t.Fatalf("session generation after shrinking reset = %d, want %d", got, want)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if got, want := snapshot.Len(), 1; got != want {
+		t.Fatalf("snapshot length after shrinking reset = %d, want %d", got, want)
+	}
+	remaining := snapshot.Facts()[0]
+	if got, ok := remaining.Field("id"); !ok || !got.Equal(mustValue(t, "person-1")) {
+		t.Fatalf("remaining fact id = (%v, %v), want person-1", got, ok)
+	}
+
+	if got, want := len(session.factsByID), 1; got != want {
+		t.Fatalf("factsByID len after shrinking reset = %d, want %d", got, want)
+	}
+	if got, want := len(session.insertionOrder), 1; got != want {
+		t.Fatalf("insertion order len after shrinking reset = %d, want %d", got, want)
+	}
+	if got, want := len(session.factIDsByTemplate(template.Key())), 1; got != want {
+		t.Fatalf("template index len after shrinking reset = %d, want %d", got, want)
+	}
+	if got, want := len(session.factIDsByName(template.Name())), 1; got != want {
+		t.Fatalf("name index len after shrinking reset = %d, want %d", got, want)
+	}
+	if got := len(session.factIDsByName("note")); got != 0 {
+		t.Fatalf("stale dynamic name index len after shrinking reset = %d, want 0", got)
+	}
+	if got, want := len(session.factsByDuplicate), 1; got != want {
+		t.Fatalf("duplicate index len after shrinking reset = %d, want %d", got, want)
+	}
+	for _, fact := range firstReset.Facts() {
+		if _, ok := session.factByID(fact.ID()); ok {
+			t.Fatalf("stale fact id retained after shrinking reset: %q", fact.ID())
+		}
+	}
+}
+
 func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T) {
 	session, err := NewSession(
 		mustCompile(t),
