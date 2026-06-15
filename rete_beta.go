@@ -32,6 +32,7 @@ type reteBetaRuleMemory struct {
 	prefixBacking    [][][]conditionMatch
 	tokenBacking     [][]matchToken
 	lookupScratch    [][]conditionMatch
+	candidateScratch candidateScratch
 }
 
 type betaPrefix struct {
@@ -156,7 +157,7 @@ func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, snapshot Snaps
 	if ruleMemory == nil {
 		return rule.matchCandidatesWithAlpha(ctx, snapshot, source)
 	}
-	return collectMatchCandidatesFromPrefixes(ctx, rule, snapshot.Generation(), ruleMemory.terminalPrefixes())
+	return collectMatchCandidatesFromPrefixes(ctx, rule, snapshot.Generation(), ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
 }
 
 func (m *reteBetaMemory) insertFact(fact FactSnapshot) reteAgendaDelta {
@@ -316,6 +317,7 @@ func (m *reteBetaRuleMemory) clear() {
 		}
 		m.tokenBacking[chunkIndex] = chunk[:0]
 	}
+	m.candidateScratch.reset(0, 0, 0)
 }
 
 func (m *reteBetaRuleMemory) insertFact(fact FactSnapshot) []*matchToken {
@@ -645,7 +647,7 @@ func terminalTokensForPrefixes(prefixes []betaPrefix) []*matchToken {
 	return tokens
 }
 
-func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, generation Generation, prefixes []betaPrefix) ([]matchCandidate, error) {
+func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, generation Generation, prefixes []betaPrefix, scratch *candidateScratch) ([]matchCandidate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -653,8 +655,21 @@ func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, 
 		return nil, nil
 	}
 
-	candidates := make([]matchCandidate, 0, len(prefixes))
-	seen := newCandidateSeenSet(len(prefixes))
+	candidateCount, entryCount, pathCount := countPrefixCandidateSpace(prefixes)
+	var candidates []matchCandidate
+	if scratch != nil {
+		scratch.reset(candidateCount, entryCount, pathCount)
+		candidates = scratch.candidates[:0]
+	} else {
+		candidates = make([]matchCandidate, 0, candidateCount)
+	}
+	var seen *candidateSeenSet
+	if scratch != nil {
+		seen = &scratch.seen
+	} else {
+		localSeen := newCandidateSeenSet(candidateCount)
+		seen = &localSeen
+	}
 	for _, prefix := range prefixes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -662,7 +677,7 @@ func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, 
 		if prefix.token == nil {
 			continue
 		}
-		candidate, err := buildMatchCandidateFromTokenGeneration(rule, generation, prefix.token)
+		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, prefix.token, scratch)
 		if err != nil {
 			return nil, err
 		}
@@ -671,7 +686,22 @@ func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, 
 		}
 		candidates = append(candidates, candidate)
 	}
+	if scratch != nil {
+		scratch.candidates = candidates
+	}
 	return candidates, nil
+}
+
+func countPrefixCandidateSpace(prefixes []betaPrefix) (candidateCount, entryCount, pathCount int) {
+	for _, prefix := range prefixes {
+		if prefix.token == nil {
+			continue
+		}
+		candidateCount++
+		entryCount += prefix.token.size
+		pathCount += prefix.token.pathLen
+	}
+	return candidateCount, entryCount, pathCount
 }
 
 func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex, matchIndex int, match conditionMatch) {

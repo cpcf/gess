@@ -73,8 +73,67 @@ type candidateSeenSet struct {
 	overflow map[candidateIdentityKey][]int
 }
 
+type candidateScratch struct {
+	candidates          []matchCandidate
+	seen                candidateSeenSet
+	bindingTupleEntries []bindingTupleEntry
+	factIDs             []FactID
+	factVersions        []FactVersion
+	path                []int
+}
+
 func newCandidateSeenSet(size int) candidateSeenSet {
 	return candidateSeenSet{first: make(map[candidateIdentityKey]int, size)}
+}
+
+func (s *candidateScratch) reset(candidateCount, entryCount, pathCount int) {
+	if s == nil {
+		return
+	}
+	s.candidates = resetCandidateBuffer(s.candidates, candidateCount)
+	s.bindingTupleEntries = resetCandidateBuffer(s.bindingTupleEntries, entryCount)
+	s.factIDs = resetCandidateBuffer(s.factIDs, entryCount)
+	s.factVersions = resetCandidateBuffer(s.factVersions, entryCount)
+	s.path = resetCandidateBuffer(s.path, pathCount)
+	s.seen.reset(candidateCount)
+}
+
+func (s *candidateScratch) tokenBuffers(size, pathLen int) ([]bindingTupleEntry, []FactID, []FactVersion, []int) {
+	if s == nil {
+		return make([]bindingTupleEntry, size), make([]FactID, size), make([]FactVersion, size), make([]int, pathLen)
+	}
+
+	entryStart := len(s.bindingTupleEntries)
+	s.bindingTupleEntries = s.bindingTupleEntries[:entryStart+size]
+	factIDStart := len(s.factIDs)
+	s.factIDs = s.factIDs[:factIDStart+size]
+	factVersionStart := len(s.factVersions)
+	s.factVersions = s.factVersions[:factVersionStart+size]
+	pathStart := len(s.path)
+	s.path = s.path[:pathStart+pathLen]
+
+	return s.bindingTupleEntries[entryStart : entryStart+size],
+		s.factIDs[factIDStart : factIDStart+size],
+		s.factVersions[factVersionStart : factVersionStart+size],
+		s.path[pathStart : pathStart+pathLen]
+}
+
+func (s *candidateSeenSet) reset(candidateCount int) {
+	if s == nil {
+		return
+	}
+	if s.first == nil {
+		s.first = make(map[candidateIdentityKey]int, candidateCount)
+	} else {
+		clear(s.first)
+	}
+	if s.overflow == nil {
+		if candidateCount > 1 {
+			s.overflow = make(map[candidateIdentityKey][]int, candidateCount)
+		}
+		return
+	}
+	clear(s.overflow)
 }
 
 func newNaiveMatcher(revision *Ruleset) matcher {
@@ -236,6 +295,10 @@ func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *m
 }
 
 func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {
+	return buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, token, nil)
+}
+
+func buildMatchCandidateFromTokenGenerationWithScratch(rule compiledRule, generation Generation, token *matchToken, scratch *candidateScratch) (matchCandidate, error) {
 	if token == nil {
 		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
@@ -243,10 +306,18 @@ func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Genera
 		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
 
-	entries := make([]bindingTupleEntry, token.size)
-	factIDs := make([]FactID, token.size)
-	factVersions := make([]FactVersion, token.size)
-	path := make([]int, token.pathLen)
+	var entries []bindingTupleEntry
+	var factIDs []FactID
+	var factVersions []FactVersion
+	var path []int
+	if scratch != nil {
+		entries, factIDs, factVersions, path = scratch.tokenBuffers(token.size, token.pathLen)
+	} else {
+		entries = make([]bindingTupleEntry, token.size)
+		factIDs = make([]FactID, token.size)
+		factVersions = make([]FactVersion, token.size)
+		path = make([]int, token.pathLen)
+	}
 	fillMatchToken(entries, factIDs, factVersions, path, 0, 0, token)
 
 	identity := candidateIdentity{
@@ -474,6 +545,13 @@ func candidatePathFor(entries []bindingTupleEntry) []int {
 		out = append(out, entry.conditionPath...)
 	}
 	return out
+}
+
+func resetCandidateBuffer[T any](buf []T, size int) []T {
+	if cap(buf) < size {
+		return make([]T, 0, size)
+	}
+	return buf[:0]
 }
 
 func cloneIntPath(path []int) []int {

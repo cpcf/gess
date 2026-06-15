@@ -8,11 +8,13 @@ import (
 const reteAlphaMinimumFacts = 32
 
 type reteRuntime struct {
-	revision *Ruleset
-	plan     reteNetworkPlan
-	oracle   matcher
-	alpha    *reteAlphaMemory
-	beta     *reteBetaMemory
+	revision               *Ruleset
+	plan                   reteNetworkPlan
+	oracle                 matcher
+	alpha                  *reteAlphaMemory
+	beta                   *reteBetaMemory
+	terminalRemovedScratch candidateScratch
+	terminalAddedScratch   candidateScratch
 }
 
 type reteNetworkPlan struct {
@@ -261,14 +263,28 @@ func (r *reteRuntime) supportsIncrementalAgenda() bool {
 	return true
 }
 
-func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelta) ([]matchCandidate, error) {
+func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelta, scratch *candidateScratch) ([]matchCandidate, error) {
 	if r == nil || r.revision == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if len(deltas) == 0 {
 		return nil, nil
 	}
-	candidates := make([]matchCandidate, 0, len(deltas))
+	candidateCount, entryCount, pathCount := countTerminalDeltaCandidateSpace(deltas)
+	var candidates []matchCandidate
+	if scratch != nil {
+		scratch.reset(candidateCount, entryCount, pathCount)
+		candidates = scratch.candidates[:0]
+	} else {
+		candidates = make([]matchCandidate, 0, candidateCount)
+	}
+	var seen *candidateSeenSet
+	if scratch != nil {
+		seen = &scratch.seen
+	} else {
+		localSeen := newCandidateSeenSet(candidateCount)
+		seen = &localSeen
+	}
 	for _, delta := range deltas {
 		if delta.token == nil {
 			continue
@@ -277,13 +293,31 @@ func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelt
 		if !ok {
 			return nil, ErrMatcher
 		}
-		candidate, err := buildMatchCandidateFromTokenGeneration(rule, matchTokenGeneration(delta.token), delta.token)
+		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, matchTokenGeneration(delta.token), delta.token, scratch)
 		if err != nil {
 			return nil, err
 		}
+		if seen.seen(candidates, candidate) {
+			continue
+		}
 		candidates = append(candidates, candidate)
 	}
+	if scratch != nil {
+		scratch.candidates = candidates
+	}
 	return candidates, nil
+}
+
+func countTerminalDeltaCandidateSpace(deltas []reteTerminalTokenDelta) (candidateCount, entryCount, pathCount int) {
+	for _, delta := range deltas {
+		if delta.token == nil {
+			continue
+		}
+		candidateCount++
+		entryCount += delta.token.size
+		pathCount += delta.token.pathLen
+	}
+	return candidateCount, entryCount, pathCount
 }
 
 func matchTokenGeneration(token *matchToken) Generation {

@@ -793,11 +793,11 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
 		return nil, false, nil
 	}
-	removed, err := s.rete.candidatesForTerminalDeltas(delta.removed)
+	removed, err := s.rete.candidatesForTerminalDeltas(delta.removed, &s.rete.terminalRemovedScratch)
 	if err != nil {
 		return nil, true, err
 	}
-	added, err := s.rete.candidatesForTerminalDeltas(delta.added)
+	added, err := s.rete.candidatesForTerminalDeltas(delta.added, &s.rete.terminalAddedScratch)
 	if err != nil {
 		return nil, true, err
 	}

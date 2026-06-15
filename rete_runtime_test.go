@@ -898,6 +898,126 @@ func TestReteRuntimeBetaJoinLookupReusesScratchAcrossCalls(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
+func TestReteRuntimeTerminalDeltaCandidatesUseIndependentScratchLanes(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	session := mustSession(t, revision, "terminal-delta-scratch-session")
+
+	inserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"age":    20,
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	before, ok := session.factByID(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("fact %q not found before modify", inserted.Fact.ID())
+	}
+
+	_, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"age": 21}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if session.rete == nil {
+		t.Fatal("expected Rete runtime")
+	}
+
+	removed, err := session.rete.candidatesForTerminalDeltas(delta.removed, &session.rete.terminalRemovedScratch)
+	if err != nil {
+		t.Fatalf("removed candidates: %v", err)
+	}
+	if got, want := len(removed), 1; got != want {
+		t.Fatalf("removed candidate count = %d, want %d", got, want)
+	}
+	if removed[0].factIDs[0] != before.ID() {
+		t.Fatalf("removed candidate fact ID = %q, want %q", removed[0].factIDs[0], before.ID())
+	}
+	removedPath := append([]int(nil), removed[0].path...)
+	removedVersion := removed[0].factVersions[0]
+
+	added, err := session.rete.candidatesForTerminalDeltas(delta.added, &session.rete.terminalAddedScratch)
+	if err != nil {
+		t.Fatalf("added candidates: %v", err)
+	}
+	if got, want := len(added), 1; got != want {
+		t.Fatalf("added candidate count = %d, want %d", got, want)
+	}
+	added[0].factIDs[0] = newFactID(9, 9)
+	added[0].factVersions[0]++
+	if len(added[0].path) > 0 {
+		added[0].path[0] = 99
+	}
+
+	if removed[0].factIDs[0] != before.ID() {
+		t.Fatalf("removed candidate fact ID changed after added conversion: got %q want %q", removed[0].factIDs[0], before.ID())
+	}
+	if removed[0].factVersions[0] != removedVersion {
+		t.Fatalf("removed candidate version changed after added conversion: got %d want %d", removed[0].factVersions[0], removedVersion)
+	}
+	if !reflect.DeepEqual(removed[0].path, removedPath) {
+		t.Fatalf("removed candidate path changed after added conversion: got %#v want %#v", removed[0].path, removedPath)
+	}
+}
+
+func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("candidate-scratch-activation-session"),
+		WithInitialFacts(mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	if _, err := session.reconcileAgenda(ctx, snapshot); err != nil {
+		t.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if len(pending) == 0 {
+		t.Fatal("expected pending activation after initial reconcile")
+	}
+	before := pending[0]
+	beforeBindings := cloneBindingTupleEntries(before.bindings)
+	beforeFactIDs := cloneFactIDs(before.factIDs)
+	beforeVersions := cloneFactVersions(before.factVersions)
+	beforePath := cloneIntPath(before.path)
+
+	if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": 99})); err != nil {
+		t.Fatalf("AssertTemplate noise: %v", err)
+	}
+	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
+		t.Fatalf("second reconcileAgenda: %v", err)
+	}
+	after, ok := session.agenda.activationByKey(before.key)
+	if !ok {
+		t.Fatalf("activation %v disappeared after second reconcile", before.key)
+	}
+	if !reflect.DeepEqual(after.bindings, beforeBindings) {
+		t.Fatalf("activation bindings changed after candidate scratch reuse: got %#v want %#v", after.bindings, beforeBindings)
+	}
+	if !reflect.DeepEqual(after.factIDs, beforeFactIDs) {
+		t.Fatalf("activation fact IDs changed after candidate scratch reuse: got %#v want %#v", after.factIDs, beforeFactIDs)
+	}
+	if !reflect.DeepEqual(after.factVersions, beforeVersions) {
+		t.Fatalf("activation fact versions changed after candidate scratch reuse: got %#v want %#v", after.factVersions, beforeVersions)
+	}
+	if !reflect.DeepEqual(after.path, beforePath) {
+		t.Fatalf("activation path changed after candidate scratch reuse: got %#v want %#v", after.path, beforePath)
+	}
+}
+
 func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
