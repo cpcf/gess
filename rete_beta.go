@@ -99,6 +99,32 @@ func (m *reteBetaMemory) match(ctx context.Context, snapshot Snapshot, source al
 	return results, nil
 }
 
+func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) {
+	if m == nil || m.revision == nil {
+		return
+	}
+	if m.rules == nil {
+		m.rules = make(map[RuleRevisionID]*reteBetaRuleMemory, len(plan.rules))
+	}
+	for _, rulePlan := range plan.rules {
+		if !rulePlan.supported || !rulePlan.betaSupported {
+			delete(m.rules, rulePlan.ruleRevisionID)
+			continue
+		}
+		rule, ok := m.revision.rulesByRevisionID[rulePlan.ruleRevisionID]
+		if !ok {
+			delete(m.rules, rulePlan.ruleRevisionID)
+			continue
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			ruleMemory = newReteBetaRuleMemory(rule)
+			m.rules[rule.revisionID] = ruleMemory
+		}
+		ruleMemory.resetFacts(facts)
+	}
+}
+
 func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, snapshot Snapshot, rule compiledRule, source alphaFactSource) ([]matchCandidate, error) {
 	ruleMemory := m.rules[rule.revisionID]
 	if ruleMemory == nil {
@@ -195,8 +221,9 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 	if m == nil {
 		return
 	}
+	m.clear()
 	for conditionIndex, plan := range m.rule.conditionPlans {
-		matches := make([]conditionMatch, 0)
+		matches := m.conditionMatches[conditionIndex][:0]
 		for _, fact := range facts {
 			match, ok, err := betaConditionMatch(plan, fact)
 			if err != nil || !ok {
@@ -211,10 +238,9 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 		if len(matches) == 0 {
 			return
 		}
-		var prefixes []betaPrefix
+		prefixes := m.prefixes[conditionIndex][:0]
 		if conditionIndex == 0 {
 			plan := m.rule.conditionPlans[conditionIndex]
-			prefixes = make([]betaPrefix, 0, len(matches))
 			for _, match := range matches {
 				prefixes = append(prefixes, betaPrefix{
 					matches: []conditionMatch{match},
@@ -223,7 +249,7 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 			}
 		} else {
 			var err error
-			prefixes, err = m.joinExistingPrefixes(conditionIndex)
+			prefixes, err = m.joinExistingPrefixes(conditionIndex, prefixes)
 			if err != nil {
 				return
 			}
@@ -233,6 +259,25 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 		}
 		m.prefixes[conditionIndex] = prefixes
 		m.rebuildPrefixIndex(conditionIndex)
+	}
+}
+
+func (m *reteBetaRuleMemory) clear() {
+	if m == nil {
+		return
+	}
+	for conditionIndex := range m.conditionMatches {
+		for i := range m.conditionMatches[conditionIndex] {
+			m.conditionMatches[conditionIndex][i] = conditionMatch{}
+		}
+		m.conditionMatches[conditionIndex] = m.conditionMatches[conditionIndex][:0]
+		clear(m.conditionIndexes[conditionIndex])
+
+		for i := range m.prefixes[conditionIndex] {
+			m.prefixes[conditionIndex][i] = betaPrefix{}
+		}
+		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
+		clear(m.prefixIndexes[conditionIndex])
 	}
 }
 
@@ -258,9 +303,9 @@ func (m *reteBetaRuleMemory) insertFact(fact FactSnapshot) []*matchToken {
 	return added
 }
 
-func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) ([]betaPrefix, error) {
+func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes []betaPrefix) ([]betaPrefix, error) {
 	plan := m.rule.conditionPlans[conditionIndex]
-	out := make([]betaPrefix, 0)
+	out := prefixes[:0]
 	for _, prefix := range m.prefixes[conditionIndex-1] {
 		matches, err := m.matchesForLeftPrefix(conditionIndex, prefix)
 		if err != nil {
@@ -535,7 +580,7 @@ func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex, matchIndex int,
 }
 
 func (m *reteBetaRuleMemory) rebuildConditionIndex(conditionIndex int) {
-	m.conditionIndexes[conditionIndex] = nil
+	clear(m.conditionIndexes[conditionIndex])
 	for i, match := range m.conditionMatches[conditionIndex] {
 		m.indexConditionMatch(conditionIndex, i, match)
 	}
@@ -561,7 +606,7 @@ func (m *reteBetaRuleMemory) indexPrefix(conditionIndex, prefixIndex int, prefix
 }
 
 func (m *reteBetaRuleMemory) rebuildPrefixIndex(conditionIndex int) {
-	m.prefixIndexes[conditionIndex] = nil
+	clear(m.prefixIndexes[conditionIndex])
 	for i, prefix := range m.prefixes[conditionIndex] {
 		m.indexPrefix(conditionIndex, i, prefix)
 	}

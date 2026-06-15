@@ -196,6 +196,7 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 	})
+	conditionID := revision.rules["adult-active"].conditionPlans[0].id
 	initials := []SessionInitialFact{
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 18, "status": "active"})},
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 22, "status": "active"})},
@@ -214,9 +215,25 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		t.Fatalf("AssertTemplate extra: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 3)
+	alphaMemory := session.rete.alpha
+	alphaConditionMemory := alphaMemory.conditions[conditionID]
+	alphaFactsPtr := reflect.ValueOf(alphaConditionMemory.facts).Pointer()
+	alphaIndexesPtr := reflect.ValueOf(alphaConditionMemory.indexes).Pointer()
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
+	}
+	if session.rete.alpha != alphaMemory {
+		t.Fatalf("alpha memory pointer changed across reset: got %p want %p", session.rete.alpha, alphaMemory)
+	}
+	if session.rete.alpha.conditions[conditionID] != alphaConditionMemory {
+		t.Fatalf("alpha condition memory pointer changed across reset: got %p want %p", session.rete.alpha.conditions[conditionID], alphaConditionMemory)
+	}
+	if got := reflect.ValueOf(session.rete.alpha.conditions[conditionID].facts).Pointer(); got != alphaFactsPtr {
+		t.Fatalf("alpha facts backing array pointer changed across reset: got %#x want %#x", got, alphaFactsPtr)
+	}
+	if got := reflect.ValueOf(session.rete.alpha.conditions[conditionID].indexes).Pointer(); got != alphaIndexesPtr {
+		t.Fatalf("alpha index map pointer changed across reset: got %#x want %#x", got, alphaIndexesPtr)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
 	assertAlphaMemoryGeneration(t, session, "adult-active", session.Generation())
@@ -654,6 +671,17 @@ func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
 	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if session.rete.beta.rules[equalityRule.revisionID] == nil {
+		t.Fatal("equality join rule lost beta memory after reset")
+	}
+	if session.rete.beta.rules[numericRule.revisionID] != nil {
+		t.Fatal("numeric join rule unexpectedly got beta memory after reset")
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
 func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T) {
@@ -690,6 +718,7 @@ func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T)
 func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	rule := revision.rules["employee-department"]
 	session, err := NewSession(
 		revision,
 		WithSessionID("beta-reset-small-session"),
@@ -703,6 +732,12 @@ func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
 		t.Fatalf("small initial Rete runtime = %#v, want populated memories", session.rete)
 	}
+	betaMemory := session.rete.beta
+	betaRuleMemory := betaMemory.rules[rule.revisionID]
+	betaConditionMatchesPtr := reflect.ValueOf(betaRuleMemory.conditionMatches[0]).Pointer()
+	betaConditionIndexesPtr := reflect.ValueOf(betaRuleMemory.conditionIndexes[0]).Pointer()
+	betaPrefixesPtr := reflect.ValueOf(betaRuleMemory.prefixes[0]).Pointer()
+	betaPrefixIndexesPtr := reflect.ValueOf(betaRuleMemory.prefixIndexes[0]).Pointer()
 
 	for i := range reteAlphaMinimumFacts {
 		if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": i})); err != nil {
@@ -722,6 +757,24 @@ func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	}
 	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
 		t.Fatalf("Rete memories after small reset = %#v, want populated memories", session.rete)
+	}
+	if session.rete.beta != betaMemory {
+		t.Fatalf("beta memory pointer changed across reset: got %p want %p", session.rete.beta, betaMemory)
+	}
+	if session.rete.beta.rules[rule.revisionID] != betaRuleMemory {
+		t.Fatalf("beta rule memory pointer changed across reset: got %p want %p", session.rete.beta.rules[rule.revisionID], betaRuleMemory)
+	}
+	if got := reflect.ValueOf(session.rete.beta.rules[rule.revisionID].conditionMatches[0]).Pointer(); got != betaConditionMatchesPtr {
+		t.Fatalf("beta condition matches backing array changed across reset: got %#x want %#x", got, betaConditionMatchesPtr)
+	}
+	if got := reflect.ValueOf(session.rete.beta.rules[rule.revisionID].conditionIndexes[0]).Pointer(); got != betaConditionIndexesPtr {
+		t.Fatalf("beta condition index map changed across reset: got %#x want %#x", got, betaConditionIndexesPtr)
+	}
+	if got := reflect.ValueOf(session.rete.beta.rules[rule.revisionID].prefixes[0]).Pointer(); got != betaPrefixesPtr {
+		t.Fatalf("beta prefix backing array changed across reset: got %#x want %#x", got, betaPrefixesPtr)
+	}
+	if got := reflect.ValueOf(session.rete.beta.rules[rule.revisionID].prefixIndexes[0]).Pointer(); got != betaPrefixIndexesPtr {
+		t.Fatalf("beta prefix index map changed across reset: got %#x want %#x", got, betaPrefixIndexesPtr)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }

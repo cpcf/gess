@@ -188,10 +188,19 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 	if r == nil {
 		return
 	}
-	alpha := newReteAlphaMemory(r.plan)
-	alpha.reset(r.plan, facts)
-	r.alpha = alpha
-	r.rebuildBeta(facts)
+	if r.alpha == nil {
+		r.alpha = newReteAlphaMemory(r.plan)
+	}
+	r.alpha.reset(r.plan, facts)
+	if !r.plan.betaSupported {
+		r.beta = nil
+		return
+	}
+	if r.beta == nil {
+		r.beta = newReteBetaMemory(r.revision, r.plan, facts)
+		return
+	}
+	r.beta.resetFacts(r.plan, facts)
 }
 
 func (r *reteRuntime) clearMemories() {
@@ -522,6 +531,11 @@ func (m *reteAlphaMemory) reset(plan reteNetworkPlan, facts []FactSnapshot) {
 	if m == nil {
 		return
 	}
+	for _, conditionMemory := range m.conditions {
+		if conditionMemory != nil {
+			conditionMemory.clear()
+		}
+	}
 	for _, fact := range facts {
 		m.insert(plan, fact)
 	}
@@ -626,6 +640,17 @@ func (m *reteAlphaConditionMemory) upsert(fact FactSnapshot) bool {
 	m.facts[idx] = fact
 	m.reindexFrom(idx)
 	return true
+}
+
+func (m *reteAlphaConditionMemory) clear() {
+	if m == nil {
+		return
+	}
+	for i := range m.facts {
+		m.facts[i] = FactSnapshot{}
+	}
+	clear(m.indexes)
+	m.facts = m.facts[:0]
 }
 
 func (m *reteAlphaConditionMemory) remove(id FactID) {
