@@ -29,6 +29,8 @@ type reteBetaRuleMemory struct {
 	conditionIndexes []map[betaJoinKey][]int
 	prefixes         [][]betaPrefix
 	prefixIndexes    []map[betaJoinKey][]int
+	prefixBacking    [][][]conditionMatch
+	lookupScratch    [][]conditionMatch
 }
 
 type betaPrefix struct {
@@ -230,6 +232,8 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 		conditionIndexes: make([]map[betaJoinKey][]int, conditions),
 		prefixes:         make([][]betaPrefix, conditions),
 		prefixIndexes:    make([]map[betaJoinKey][]int, conditions),
+		prefixBacking:    make([][][]conditionMatch, conditions),
+		lookupScratch:    make([][]conditionMatch, conditions),
 	}
 }
 
@@ -259,7 +263,7 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 			plan := m.rule.conditionPlans[conditionIndex]
 			for _, match := range matches {
 				prefixes = append(prefixes, betaPrefix{
-					matches: []conditionMatch{match},
+					matches: m.copyPrefixMatches(conditionIndex, nil, match),
 					token:   newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
 				})
 			}
@@ -294,6 +298,13 @@ func (m *reteBetaRuleMemory) clear() {
 		}
 		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
 		resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
+		for chunkIndex, chunk := range m.prefixBacking[conditionIndex] {
+			for i := range chunk {
+				chunk[i] = conditionMatch{}
+			}
+			m.prefixBacking[conditionIndex][chunkIndex] = chunk[:0]
+		}
+		m.lookupScratch[conditionIndex] = m.lookupScratch[conditionIndex][:0]
 	}
 }
 
@@ -336,7 +347,7 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes [
 				continue
 			}
 			out = append(out, betaPrefix{
-				matches: append(cloneConditionMatchSlice(prefix.matches), match),
+				matches: m.copyPrefixMatches(conditionIndex, prefix.matches, match),
 				token:   newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
 			})
 		}
@@ -384,7 +395,7 @@ func (m *reteBetaRuleMemory) propagatePrefix(conditionIndex int, prefix betaPref
 			continue
 		}
 		nextPrefix := betaPrefix{
-			matches: append(cloneConditionMatchSlice(prefix.matches), match),
+			matches: m.copyPrefixMatches(nextCondition, prefix.matches, match),
 			token:   newMatchToken(prefix.token, m.rule.conditionPlans[nextCondition].bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
 		}
 		added = append(added, m.addAndPropagatePrefix(nextCondition, nextPrefix)...)
@@ -396,7 +407,7 @@ func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match con
 	plan := m.rule.conditionPlans[conditionIndex]
 	if conditionIndex == 0 {
 		return []betaPrefix{{
-			matches: []conditionMatch{match},
+			matches: m.copyPrefixMatches(conditionIndex, nil, match),
 			token:   newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
 		}}, nil
 	}
@@ -426,7 +437,7 @@ func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match con
 			continue
 		}
 		out = append(out, betaPrefix{
-			matches: append(cloneConditionMatchSlice(prefix.matches), match),
+			matches: m.copyPrefixMatches(conditionIndex, prefix.matches, match),
 			token:   newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
 		})
 	}
@@ -443,12 +454,13 @@ func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix bet
 		return nil, nil
 	}
 	indexes := m.conditionIndexes[conditionIndex][key]
-	matches := make([]conditionMatch, 0, len(indexes))
+	matches := m.lookupScratch[conditionIndex][:0]
 	for _, idx := range indexes {
 		if idx >= 0 && idx < len(m.conditionMatches[conditionIndex]) {
 			matches = append(matches, m.conditionMatches[conditionIndex][idx])
 		}
 	}
+	m.lookupScratch[conditionIndex] = matches
 	return matches, nil
 }
 
@@ -565,6 +577,32 @@ func (m *reteBetaRuleMemory) terminalPrefixesContainingFact(id FactID) []betaPre
 		}
 	}
 	return out
+}
+
+func (m *reteBetaRuleMemory) copyPrefixMatches(conditionIndex int, prefixMatches []conditionMatch, match conditionMatch) []conditionMatch {
+	storage := m.prefixMatchStorage(conditionIndex, len(prefixMatches)+1)
+	copy(storage, prefixMatches)
+	storage[len(prefixMatches)] = match
+	return storage
+}
+
+func (m *reteBetaRuleMemory) prefixMatchStorage(conditionIndex, size int) []conditionMatch {
+	if size <= 0 {
+		return nil
+	}
+	chunks := m.prefixBacking[conditionIndex]
+	last := len(chunks) - 1
+	if last < 0 || cap(chunks[last])-len(chunks[last]) < size {
+		capacity := max(size, 16)
+		chunks = append(chunks, make([]conditionMatch, 0, capacity))
+		last = len(chunks) - 1
+	}
+	chunk := chunks[last]
+	start := len(chunk)
+	chunk = chunk[:start+size]
+	chunks[last] = chunk
+	m.prefixBacking[conditionIndex] = chunks
+	return chunk[start : start+size : start+size]
 }
 
 func terminalTokensForPrefixes(prefixes []betaPrefix) []*matchToken {
@@ -825,13 +863,4 @@ func betaJoinIntFromFloat(floating float64) (int64, bool) {
 		return 0, false
 	}
 	return int64(floating), true
-}
-
-func cloneConditionMatchSlice(in []conditionMatch) []conditionMatch {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]conditionMatch, len(in))
-	copy(out, in)
-	return out
 }

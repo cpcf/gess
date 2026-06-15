@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"unsafe"
 )
 
 func TestReteNetworkPlanDescribesClosedTemplateRules(t *testing.T) {
@@ -807,6 +808,10 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	if got, want := len(before), 2; got != want {
 		t.Fatalf("prefix bucket len before reset = %d, want %d", got, want)
 	}
+	if got := len(betaRuleMemory.prefixes[1]); got == 0 {
+		t.Fatal("expected joined beta prefixes before reset")
+	}
+	assertBetaPrefixMatchesUseBacking(t, betaRuleMemory, 1)
 	beforePtr := reflect.ValueOf(before).Pointer()
 	beforeCap := cap(before)
 
@@ -826,6 +831,49 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	if got := cap(after); got != beforeCap {
 		t.Fatalf("prefix bucket capacity changed across reset: got %d want %d", got, beforeCap)
 	}
+	assertBetaPrefixMatchesUseBacking(t, session.rete.beta.rules[rule.revisionID], 1)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeBetaJoinLookupReusesScratchAcrossCalls(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	initials := mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-lookup-scratch-session"),
+		WithInitialFacts(initials...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	rule := revision.rules["employee-department"]
+	betaRuleMemory := session.rete.beta.rules[rule.revisionID]
+	if betaRuleMemory == nil {
+		t.Fatal("expected beta rule memory")
+	}
+	if len(betaRuleMemory.prefixes[0]) == 0 {
+		t.Fatal("expected left-side prefixes")
+	}
+
+	matches1, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0])
+	if err != nil {
+		t.Fatalf("matchesForLeftPrefix first call: %v", err)
+	}
+	matches2, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0])
+	if err != nil {
+		t.Fatalf("matchesForLeftPrefix second call: %v", err)
+	}
+	if got, want := reflect.ValueOf(matches1).Pointer(), reflect.ValueOf(matches2).Pointer(); got != want {
+		t.Fatalf("lookup scratch backing changed between calls: got %#x want %#x", got, want)
+	}
+	if len(matches1) != len(matches2) {
+		t.Fatalf("lookup results changed between calls: %d vs %d", len(matches1), len(matches2))
+	}
+
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
@@ -1080,6 +1128,54 @@ func assertAlphaMemoryGeneration(t testing.TB, session *Session, ruleName string
 			t.Fatalf("alpha fact %d generation = %d, want %d", i, fact.Generation(), want)
 		}
 	}
+}
+
+func sliceDataPtr[T any](slice []T) uintptr {
+	if len(slice) == 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&slice[0]))
+}
+
+func assertBetaPrefixMatchesUseBacking(t testing.TB, memory *reteBetaRuleMemory, conditionIndex int) {
+	t.Helper()
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+	if conditionIndex < 0 || conditionIndex >= len(memory.prefixes) || conditionIndex >= len(memory.prefixBacking) {
+		t.Fatalf("condition index %d out of range", conditionIndex)
+	}
+	chunks := memory.prefixBacking[conditionIndex]
+	if len(chunks) == 0 {
+		t.Fatalf("prefix backing for condition %d is empty", conditionIndex)
+	}
+	for i, prefix := range memory.prefixes[conditionIndex] {
+		if len(prefix.matches) == 0 {
+			t.Fatalf("prefix %d has empty matches", i)
+		}
+		if cap(prefix.matches) != len(prefix.matches) {
+			t.Fatalf("prefix %d matches capacity = %d, want %d", i, cap(prefix.matches), len(prefix.matches))
+		}
+		if !conditionMatchesInAnyChunk(prefix.matches, chunks) {
+			t.Fatalf("prefix %d matches are outside backing storage", i)
+		}
+	}
+}
+
+func conditionMatchesInAnyChunk(matches []conditionMatch, chunks [][]conditionMatch) bool {
+	matchStart := sliceDataPtr(matches)
+	matchEnd := matchStart + uintptr(len(matches))*unsafe.Sizeof(matches[0])
+	for _, chunk := range chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		chunkStart := sliceDataPtr(chunk)
+		chunkEnd := chunkStart + uintptr(len(chunk))*unsafe.Sizeof(chunk[0])
+		if matchStart >= chunkStart && matchEnd <= chunkEnd {
+			return true
+		}
+	}
+	return false
 }
 
 func assertMatcherParity(t testing.TB, revision *Ruleset, snapshot Snapshot, oracle matcher, candidate matcher) {
