@@ -779,6 +779,100 @@ func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
+func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	rule := revision.rules["employee-department"]
+	initials := mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)
+	initials = append(initials, SessionInitialFact{
+		TemplateKey: employeeKey,
+		Fields:      mustFields(t, map[string]any{"name": "Grace", "dept": "Engineering"}),
+	})
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-reset-bucket-session"),
+		WithInitialFacts(initials...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	betaRuleMemory := session.rete.beta.rules[rule.revisionID]
+	key := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
+	before := betaRuleMemory.prefixIndexes[0][key]
+	if got, want := len(before), 2; got != want {
+		t.Fatalf("prefix bucket len before reset = %d, want %d", got, want)
+	}
+	beforePtr := reflect.ValueOf(before).Pointer()
+	beforeCap := cap(before)
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after reset = %#v, want populated memories", session.rete)
+	}
+	after := session.rete.beta.rules[rule.revisionID].prefixIndexes[0][key]
+	if got, want := len(after), 2; got != want {
+		t.Fatalf("prefix bucket len after reset = %d, want %d", got, want)
+	}
+	if got := reflect.ValueOf(after).Pointer(); got != beforePtr {
+		t.Fatalf("prefix bucket backing array changed across reset: got %#x want %#x", got, beforePtr)
+	}
+	if got := cap(after); got != beforeCap {
+		t.Fatalf("prefix bucket capacity changed across reset: got %d want %d", got, beforeCap)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueFloat, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "int-float-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "bucket", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "bucket"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "beta-int-float-session")
+
+	if _, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"bucket": 7})); err != nil {
+		t.Fatalf("AssertTemplate left: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"bucket": 7.0})); err != nil {
+		t.Fatalf("AssertTemplate right: %v", err)
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
 func TestReteRuntimeRetractKeepsAgendaDeltaPathForSmallSupportedSession(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)

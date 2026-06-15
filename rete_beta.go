@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -25,14 +26,34 @@ type reteTerminalTokenDelta struct {
 type reteBetaRuleMemory struct {
 	rule             compiledRule
 	conditionMatches [][]conditionMatch
-	conditionIndexes []map[string][]int
+	conditionIndexes []map[betaJoinKey][]int
 	prefixes         [][]betaPrefix
-	prefixIndexes    []map[string][]int
+	prefixIndexes    []map[betaJoinKey][]int
 }
 
 type betaPrefix struct {
 	matches []conditionMatch
 	token   *matchToken
+}
+
+type betaJoinKeyKind uint8
+
+const (
+	betaJoinKeyUnknown betaJoinKeyKind = iota
+	betaJoinKeyNull
+	betaJoinKeyBool
+	betaJoinKeyInt
+	betaJoinKeyFloat
+	betaJoinKeyString
+	betaJoinKeyFallback
+)
+
+type betaJoinKey struct {
+	kind        betaJoinKeyKind
+	boolValue   bool
+	intValue    int64
+	floatBits   uint64
+	stringValue string
 }
 
 func newReteBetaMemory(revision *Ruleset, plan reteNetworkPlan, facts []FactSnapshot) *reteBetaMemory {
@@ -211,9 +232,9 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 	return &reteBetaRuleMemory{
 		rule:             rule,
 		conditionMatches: make([][]conditionMatch, conditions),
-		conditionIndexes: make([]map[string][]int, conditions),
+		conditionIndexes: make([]map[betaJoinKey][]int, conditions),
 		prefixes:         make([][]betaPrefix, conditions),
-		prefixIndexes:    make([]map[string][]int, conditions),
+		prefixIndexes:    make([]map[betaJoinKey][]int, conditions),
 	}
 }
 
@@ -271,13 +292,13 @@ func (m *reteBetaRuleMemory) clear() {
 			m.conditionMatches[conditionIndex][i] = conditionMatch{}
 		}
 		m.conditionMatches[conditionIndex] = m.conditionMatches[conditionIndex][:0]
-		clear(m.conditionIndexes[conditionIndex])
+		resetJoinIndexBuckets(m.conditionIndexes[conditionIndex])
 
 		for i := range m.prefixes[conditionIndex] {
 			m.prefixes[conditionIndex][i] = betaPrefix{}
 		}
 		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
-		clear(m.prefixIndexes[conditionIndex])
+		resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
 	}
 }
 
@@ -574,16 +595,20 @@ func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex, matchIndex int,
 		return
 	}
 	if m.conditionIndexes[conditionIndex] == nil {
-		m.conditionIndexes[conditionIndex] = make(map[string][]int)
+		m.conditionIndexes[conditionIndex] = make(map[betaJoinKey][]int)
 	}
 	m.conditionIndexes[conditionIndex][key] = append(m.conditionIndexes[conditionIndex][key], matchIndex)
 }
 
 func (m *reteBetaRuleMemory) rebuildConditionIndex(conditionIndex int) {
-	clear(m.conditionIndexes[conditionIndex])
+	if m.conditionIndexes[conditionIndex] == nil {
+		m.conditionIndexes[conditionIndex] = make(map[betaJoinKey][]int)
+	}
+	resetJoinIndexBuckets(m.conditionIndexes[conditionIndex])
 	for i, match := range m.conditionMatches[conditionIndex] {
 		m.indexConditionMatch(conditionIndex, i, match)
 	}
+	pruneEmptyJoinIndexBuckets(m.conditionIndexes[conditionIndex])
 }
 
 func (m *reteBetaRuleMemory) indexPrefix(conditionIndex, prefixIndex int, prefix betaPrefix) {
@@ -600,16 +625,20 @@ func (m *reteBetaRuleMemory) indexPrefix(conditionIndex, prefixIndex int, prefix
 		return
 	}
 	if m.prefixIndexes[conditionIndex] == nil {
-		m.prefixIndexes[conditionIndex] = make(map[string][]int)
+		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey][]int)
 	}
 	m.prefixIndexes[conditionIndex][key] = append(m.prefixIndexes[conditionIndex][key], prefixIndex)
 }
 
 func (m *reteBetaRuleMemory) rebuildPrefixIndex(conditionIndex int) {
-	clear(m.prefixIndexes[conditionIndex])
+	if m.prefixIndexes[conditionIndex] == nil {
+		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey][]int)
+	}
+	resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
 	for i, prefix := range m.prefixes[conditionIndex] {
 		m.indexPrefix(conditionIndex, i, prefix)
 	}
+	pruneEmptyJoinIndexBuckets(m.prefixIndexes[conditionIndex])
 }
 
 func betaConditionMatch(plan compiledConditionPlan, fact FactSnapshot) (conditionMatch, bool, error) {
@@ -674,49 +703,104 @@ func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
 	return false
 }
 
-func betaJoinKeyForFact(plan compiledConditionPlan, fact FactSnapshot) (string, bool) {
-	if len(plan.joins) == 0 {
-		return "", true
+func resetJoinIndexBuckets(index map[betaJoinKey][]int) {
+	for key, bucket := range index {
+		index[key] = bucket[:0]
 	}
-
-	var b strings.Builder
-	b.WriteString(plan.id.String())
-	for _, join := range plan.joins {
-		if join.indexKind != joinIndexEquality {
-			return "", false
-		}
-		value, ok := fact.compiledFieldValue(join.field, join.fieldSlot)
-		if !ok {
-			return "", false
-		}
-		b.WriteByte('|')
-		b.WriteString(value.canonicalKey())
-	}
-	return b.String(), true
 }
 
-func betaJoinKeyForPrefix(plan compiledConditionPlan, matches []conditionMatch) (string, bool) {
+func pruneEmptyJoinIndexBuckets(index map[betaJoinKey][]int) {
+	for key, bucket := range index {
+		if len(bucket) == 0 {
+			delete(index, key)
+		}
+	}
+}
+
+func betaJoinKeyForFact(plan compiledConditionPlan, fact FactSnapshot) (betaJoinKey, bool) {
+	return betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
+		return fact.compiledFieldValue(join.field, join.fieldSlot)
+	})
+}
+
+func betaJoinKeyForPrefix(plan compiledConditionPlan, matches []conditionMatch) (betaJoinKey, bool) {
+	return betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
+		if join.refBindingSlot < 0 || join.refBindingSlot >= len(matches) {
+			return Value{}, false
+		}
+		return matches[join.refBindingSlot].fact.compiledFieldValue(join.refField, join.refFieldSlot)
+	})
+}
+
+func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compiledJoinConstraint) (Value, bool)) (betaJoinKey, bool) {
 	if len(plan.joins) == 0 {
-		return "", true
+		return betaJoinKey{}, true
+	}
+
+	if len(plan.joins) == 1 {
+		join := plan.joins[0]
+		if join.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false
+		}
+		value, ok := valueForJoin(join)
+		if !ok {
+			return betaJoinKey{}, false
+		}
+		if key, ok := betaJoinKeyForValue(value); ok {
+			return key, true
+		}
+		return betaJoinKey{
+			kind:        betaJoinKeyFallback,
+			stringValue: value.canonicalKey(),
+		}, true
 	}
 
 	var b strings.Builder
-	b.WriteString(plan.id.String())
 	for _, join := range plan.joins {
 		if join.indexKind != joinIndexEquality {
-			return "", false
+			return betaJoinKey{}, false
 		}
-		if join.refBindingSlot < 0 || join.refBindingSlot >= len(matches) {
-			return "", false
-		}
-		value, ok := matches[join.refBindingSlot].fact.compiledFieldValue(join.refField, join.refFieldSlot)
+		value, ok := valueForJoin(join)
 		if !ok {
-			return "", false
+			return betaJoinKey{}, false
 		}
 		b.WriteByte('|')
 		b.WriteString(value.canonicalKey())
 	}
-	return b.String(), true
+	return betaJoinKey{
+		kind:        betaJoinKeyFallback,
+		stringValue: b.String(),
+	}, true
+}
+
+func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {
+	switch value.Kind() {
+	case ValueNull:
+		return betaJoinKey{kind: betaJoinKeyNull}, true
+	case ValueBool:
+		return betaJoinKey{kind: betaJoinKeyBool, boolValue: value.data.(bool)}, true
+	case ValueInt:
+		return betaJoinKey{kind: betaJoinKeyInt, intValue: value.data.(int64)}, true
+	case ValueFloat:
+		if integer, ok := betaJoinIntFromFloat(value.data.(float64)); ok {
+			return betaJoinKey{kind: betaJoinKeyInt, intValue: integer}, true
+		}
+		return betaJoinKey{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.data.(float64))}, true
+	case ValueString:
+		return betaJoinKey{kind: betaJoinKeyString, stringValue: value.data.(string)}, true
+	default:
+		return betaJoinKey{}, false
+	}
+}
+
+func betaJoinIntFromFloat(floating float64) (int64, bool) {
+	if floating > float64(maxExactFloatInt) || floating < float64(-maxExactFloatInt) {
+		return 0, false
+	}
+	if math.Trunc(floating) != floating {
+		return 0, false
+	}
+	return int64(floating), true
 }
 
 func cloneConditionMatchSlice(in []conditionMatch) []conditionMatch {
