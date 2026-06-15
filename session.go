@@ -1483,7 +1483,6 @@ func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot) []
 }
 
 func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {
-	canonical := normalizeFields(fields)
 	template, templateExists := revision.templateByKey(templateKey)
 	if templateKey != "" && !templateExists {
 		return nil, "", false, &ValidationError{
@@ -1496,6 +1495,53 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		name = template.Name()
 	}
 
+	if templateExists && revision.usesFieldSlots(template) {
+		fieldSlots, err := template.buildValidatedFieldSlots(fields)
+		if err != nil {
+			return nil, "", false, err
+		}
+
+		duplicateKey := makeDuplicateKeyForValidatedFact(name, template, nil, fieldSlots)
+		if template.duplicatePolicy != DuplicateAllow {
+			existingID, ok := w.factsByDuplicate[duplicateKey]
+			if ok {
+				existing, ok := w.factsByID[existingID]
+				if ok {
+					return existing, duplicateKey, false, nil
+				}
+				delete(w.factsByDuplicate, duplicateKey)
+			}
+		}
+
+		w.sequence++
+		w.recency++
+		id := newFactID(generation, w.sequence)
+		fact := &workingFact{
+			id:          id,
+			name:        name,
+			templateKey: templateKey,
+			version:     1,
+			recency:     w.recency,
+			generation:  generation,
+			fieldSlots:  fieldSlots,
+			fieldSpecs:  template.fields,
+			dupKey:      duplicateKey,
+			support:     FactSupportProvenance{State: FactSupportStated},
+			isTransient: false,
+		}
+
+		w.factsByID[id] = fact
+		if template.duplicatePolicy != DuplicateAllow {
+			w.factsByDuplicate[duplicateKey] = id
+		}
+		w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
+		w.factsByName[name] = append(w.factsByName[name], id)
+		w.insertionOrder = append(w.insertionOrder, id)
+
+		return fact, duplicateKey, true, nil
+	}
+
+	canonical := normalizeFields(fields)
 	var presence map[string]FieldPresence
 	var err error
 	if templateExists {

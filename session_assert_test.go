@@ -77,7 +77,7 @@ func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *tes
 		Closed: true,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
-			{Name: "status", Kind: ValueString, Default: "active"},
+			{Name: "status", Kind: ValueString, Default: "active", AllowedValues: []any{"active", "pending"}},
 			{Name: "tag", Kind: ValueString},
 		},
 	})
@@ -125,6 +125,10 @@ func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *tes
 	if got, ok := fields["status"]; !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("defaulted status = (%v, %v), want active", got, ok)
 	}
+	fields["status"] = mustValue(t, "mutated")
+	if got, ok := inserted.Fact.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("fact fields map was not defensive: (%v, %v)", got, ok)
+	}
 	if got, ok := inserted.Fact.FieldPresence("status"); !ok || got != FieldPresenceDefault {
 		t.Fatalf("status presence = (%v, %v), want default", got, ok)
 	}
@@ -154,6 +158,142 @@ func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *tes
 	}
 	if duplicate.DuplicateKey != inserted.DuplicateKey {
 		t.Fatalf("duplicate key changed: %q != %q", duplicate.DuplicateKey, inserted.DuplicateKey)
+	}
+
+	_, err = session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"status": "active",
+		"tag":    "blue",
+	}))
+	if err == nil {
+		t.Fatal("missing required field should fail for slot-backed template")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError for missing required field, got %T: %v", err, err)
+	}
+	if validation.FieldName != "id" {
+		t.Fatalf("required field validation error = %q, want id", validation.FieldName)
+	}
+
+	_, err = session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+		"id":     "evt-2",
+		"status": "blocked",
+	}))
+	if err == nil {
+		t.Fatal("disallowed value should fail for slot-backed template")
+	}
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError for disallowed value, got %T: %v", err, err)
+	}
+	if validation.FieldName != "status" {
+		t.Fatalf("disallowed field validation error = %q, want status", validation.FieldName)
+	}
+	if got := mustSnapshot(t, context.Background(), session).Len(); got != 1 {
+		t.Fatalf("snapshot length after validation failures = %d, want 1", got)
+	}
+}
+
+func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testing.T) {
+	type duplicateParityCase struct {
+		name            string
+		duplicatePolicy  DuplicatePolicy
+		duplicateKey    []string
+	}
+
+	cases := []duplicateParityCase{
+		{
+			name:           "structural",
+			duplicatePolicy: DuplicateStructural,
+		},
+		{
+			name:           "unique-key",
+			duplicatePolicy: DuplicateUniqueKey,
+			duplicateKey:   []string{"id"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseSpec := TemplateSpec{
+				Name:            "event",
+				DuplicatePolicy: tc.duplicatePolicy,
+				DuplicateKeyNames: tc.duplicateKey,
+				Fields: []FieldSpec{
+					{Name: "id", Kind: ValueString, Required: true},
+					{Name: "status", Kind: ValueString, Default: "active"},
+				},
+			}
+
+			mapRevision := mustCompile(t, baseSpec)
+			mapSession := mustSession(t, mapRevision, "map-duplicate-parity-session")
+			mapTemplate, ok := mapRevision.Template("event")
+			if !ok {
+				t.Fatal("expected map-backed event template")
+			}
+
+			slotWorkspace := NewWorkspace()
+			if err := slotWorkspace.AddTemplate(TemplateSpec{
+				Name:            "gate",
+				Fields:          []FieldSpec{{Name: "id", Kind: ValueString}},
+				DuplicatePolicy: DuplicateAllow,
+			}); err != nil {
+				t.Fatalf("AddTemplate(gate): %v", err)
+			}
+			if err := slotWorkspace.AddTemplate(TemplateSpec{
+				Name:             "event",
+				Closed:           true,
+				DuplicatePolicy:  tc.duplicatePolicy,
+				DuplicateKeyNames: tc.duplicateKey,
+				Fields:           baseSpec.Fields,
+			}); err != nil {
+				t.Fatalf("AddTemplate(event): %v", err)
+			}
+			if err := slotWorkspace.AddAction(ActionSpec{
+				Name: "mark",
+				Fn:   func(ActionContext) error { return nil },
+			}); err != nil {
+				t.Fatalf("AddAction(mark): %v", err)
+			}
+			if err := slotWorkspace.AddRule(RuleSpec{
+				Name: "slot-event-rule",
+				Conditions: []RuleConditionSpec{
+					{Binding: "event", TemplateKey: TemplateKey("event")},
+					{Binding: "gate", TemplateKey: TemplateKey("gate")},
+				},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			}); err != nil {
+				t.Fatalf("AddRule(slot-event-rule): %v", err)
+			}
+			slotRevision, err := slotWorkspace.Compile(context.Background())
+			if err != nil {
+				t.Fatalf("Compile(slot revision): %v", err)
+			}
+			slotSession := mustSession(t, slotRevision, "slot-duplicate-parity-session")
+			slotTemplate, ok := slotRevision.Template("event")
+			if !ok {
+				t.Fatal("expected slot-backed event template")
+			}
+
+			fields := mustFields(t, map[string]any{"id": "evt-1"})
+			mapResult, err := mapSession.AssertTemplate(context.Background(), mapTemplate.Key(), fields)
+			if err != nil {
+				t.Fatalf("map-backed AssertTemplate: %v", err)
+			}
+			slotResult, err := slotSession.AssertTemplate(context.Background(), slotTemplate.Key(), fields)
+			if err != nil {
+				t.Fatalf("slot-backed AssertTemplate: %v", err)
+			}
+
+			if mapResult.DuplicateKey != slotResult.DuplicateKey {
+				t.Fatalf("duplicate key mismatch: map=%q slot=%q", mapResult.DuplicateKey, slotResult.DuplicateKey)
+			}
+			if got, want := mapResult.Fact.Fields()["status"], slotResult.Fact.Fields()["status"]; !got.Equal(want) {
+				t.Fatalf("defaulted status mismatch: map=%v slot=%v", got, want)
+			}
+			if tc.duplicatePolicy == DuplicateUniqueKey && mapResult.DuplicateKey == "" {
+				t.Fatal("expected unique-key duplicate key to be set")
+			}
+		})
 	}
 }
 

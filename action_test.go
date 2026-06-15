@@ -345,6 +345,158 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	}
 }
 
+func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t *testing.T) {
+	collector := &testEventCollector{}
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:            "gate",
+		Fields:          []FieldSpec{{Name: "id", Kind: ValueString}},
+		DuplicatePolicy: DuplicateAllow,
+	}); err != nil {
+		t.Fatalf("AddTemplate(gate): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:              "audit",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Default: "active", AllowedValues: []any{"active", "pending"}},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(audit): %v", err)
+	}
+
+	var (
+		firstResult  AssertResult
+		secondResult AssertResult
+	)
+
+	if err := workspace.AddAction(ActionSpec{
+		Name: "assert-audit",
+		Fn: func(ctx ActionContext) error {
+			result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "audit-1"}))
+			firstResult = result
+			if err != nil {
+				return err
+			}
+			duplicate, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{
+				"id":     "audit-1",
+				"status": "active",
+			}))
+			secondResult = duplicate
+			return err
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(assert-audit): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	}); err != nil {
+		t.Fatalf("AddAction(noop): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "noop"}},
+	}); err != nil {
+		t.Fatalf("AddRule(person-rule): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "audit-gate-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "audit", TemplateKey: TemplateKey("audit")},
+			{Binding: "gate", TemplateKey: TemplateKey("gate")},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	}); err != nil {
+		t.Fatalf("AddRule(audit-gate-rule): %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("action-slot-assert-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	eventsBefore := len(collector.Events())
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-slot-assert"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+
+	if got, want := len(collector.Events()), eventsBefore+1; got != want {
+		t.Fatalf("events after action assert = %d, want %d", got, want)
+	}
+	createdEvent := collector.Events()[eventsBefore]
+	if createdEvent.Type != EventFactAsserted {
+		t.Fatalf("created event type = %v, want %v", createdEvent.Type, EventFactAsserted)
+	}
+	if createdEvent.Delta == nil || createdEvent.Delta.ActivationID != selected.id || createdEvent.Delta.RuleID != selected.ruleID || createdEvent.Delta.RuleRevisionID != selected.ruleRevisionID {
+		t.Fatalf("created event delta origin = %#v", createdEvent.Delta)
+	}
+
+	if !firstResult.Inserted() {
+		t.Fatalf("first assert result = %v, want inserted", firstResult.Status)
+	}
+	if firstResult.Delta == nil || firstResult.Delta.ActivationID != selected.id || firstResult.Delta.RuleID != selected.ruleID || firstResult.Delta.RuleRevisionID != selected.ruleRevisionID {
+		t.Fatalf("first assert delta origin = %#v", firstResult.Delta)
+	}
+	if secondResult.Status != AssertExisting {
+		t.Fatalf("duplicate assert status = %v, want %v", secondResult.Status, AssertExisting)
+	}
+	if secondResult.DuplicateKey != firstResult.DuplicateKey {
+		t.Fatalf("duplicate key mismatch: %q != %q", secondResult.DuplicateKey, firstResult.DuplicateKey)
+	}
+
+	internal := session.factsByID[firstResult.Fact.ID()]
+	if internal.fields != nil {
+		t.Fatal("slot-backed action fact should not retain canonical fields")
+	}
+	if got := len(internal.fieldSlots); got == 0 {
+		t.Fatal("slot-backed action fact should have slot storage")
+	}
+
+	fields := firstResult.Fact.Fields()
+	fields["status"] = mustValue(t, "mutated")
+	if got, ok := firstResult.Fact.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("action fact fields map was not defensive: (%v, %v)", got, ok)
+	}
+	if got, ok := firstResult.Fact.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("action fact status presence = (%v, %v), want default", got, ok)
+	}
+	if personFact.Fact.ID().IsZero() {
+		t.Fatal("person fact should have been inserted")
+	}
+}
+
 func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()
