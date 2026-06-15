@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -219,6 +220,63 @@ func TestAgendaCandidateDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
 		t.Fatalf("consumed activation after repeat delta = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-delta-scratch-session")
+
+	first, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Ada): %v", err)
+	}
+	second, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Bob",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Bob): %v", err)
+	}
+
+	agenda := newAgenda()
+	results := mustAgendaMatchResults(t, revision, session)
+	if _, err := agenda.reconcile(context.Background(), revision, results); err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	if len(results) != 1 || len(results[0].candidates) != 2 {
+		t.Fatalf("match results = %#v, want two candidates", results)
+	}
+
+	firstCandidate := mustCandidateForFactID(t, results[0].candidates, first.Fact.ID())
+	secondCandidate := mustCandidateForFactID(t, results[0].candidates, second.Fact.ID())
+	firstChanges, err := agenda.applyCandidateDeltas(context.Background(), revision, []matchCandidate{firstCandidate}, nil)
+	if err != nil {
+		t.Fatalf("apply first delta: %v", err)
+	}
+	if got, want := len(firstChanges), 1; got != want {
+		t.Fatalf("first delta changes = %d, want %d", got, want)
+	}
+	if firstChanges[0].activation.factIDs[0] != first.Fact.ID() {
+		t.Fatalf("first change fact ID = %q, want %q", firstChanges[0].activation.factIDs[0], first.Fact.ID())
+	}
+	if agenda.deltaRemovedKeys == nil || cap(agenda.deltaChanges) == 0 || cap(agenda.deltaNextPending) == 0 {
+		t.Fatalf("agenda delta scratch not retained: removed=%#v changesCap=%d pendingCap=%d", agenda.deltaRemovedKeys, cap(agenda.deltaChanges), cap(agenda.deltaNextPending))
+	}
+
+	secondChanges, err := agenda.applyCandidateDeltas(context.Background(), revision, []matchCandidate{secondCandidate}, nil)
+	if err != nil {
+		t.Fatalf("apply second delta: %v", err)
+	}
+	if got, want := len(secondChanges), 1; got != want {
+		t.Fatalf("second delta changes = %d, want %d", got, want)
+	}
+	if secondChanges[0].activation.factIDs[0] != second.Fact.ID() {
+		t.Fatalf("second change fact ID = %q, want %q", secondChanges[0].activation.factIDs[0], second.Fact.ID())
+	}
+	if firstChanges[0].activation.factIDs[0] != first.Fact.ID() {
+		t.Fatalf("first returned change was mutated after scratch reuse: got %q want %q", firstChanges[0].activation.factIDs[0], first.Fact.ID())
 	}
 }
 
@@ -805,6 +863,17 @@ func mustAgendaMatchResults(t *testing.T, revision *Ruleset, session *Session) [
 		t.Fatalf("match: %v", err)
 	}
 	return results
+}
+
+func mustCandidateForFactID(t testing.TB, candidates []matchCandidate, id FactID) matchCandidate {
+	t.Helper()
+	for _, candidate := range candidates {
+		if slices.Contains(candidate.factIDs, id) {
+			return candidate
+		}
+	}
+	t.Fatalf("did not find candidate for fact %q", id)
+	return matchCandidate{}
 }
 
 func mustCollisionCandidate(ruleID RuleID, revisionID RuleRevisionID, identity candidateIdentity, factID FactID, version FactVersion, recency Recency) matchCandidate {

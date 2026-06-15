@@ -118,6 +118,11 @@ type agenda struct {
 	reconcileNextPending []activationKey
 	reconcileChanges     []agendaChange
 	reconcileActivated   []agendaChange
+
+	deltaRemovedKeys map[activationKey]struct{}
+	deltaNextPending []activationKey
+	deltaChanges     []agendaChange
+	deltaActivated   []agendaChange
 }
 
 func newAgenda() *agenda {
@@ -132,10 +137,22 @@ func (a *agenda) reset() {
 	if a == nil {
 		return
 	}
-	a.activations = make(map[candidateIdentityKey]activationBucket)
-	a.pending = nil
-	a.byFactID = make(map[FactID][]activationKey)
-	a.byRevision = make(map[RuleRevisionID][]activationKey)
+	if a.activations == nil {
+		a.activations = make(map[candidateIdentityKey]activationBucket)
+	} else {
+		clear(a.activations)
+	}
+	a.pending = a.pending[:0]
+	if a.byFactID == nil {
+		a.byFactID = make(map[FactID][]activationKey)
+	} else {
+		clear(a.byFactID)
+	}
+	if a.byRevision == nil {
+		a.byRevision = make(map[RuleRevisionID][]activationKey)
+	} else {
+		clear(a.byRevision)
+	}
 }
 
 func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []ruleMatchResult) ([]agendaChange, error) {
@@ -246,7 +263,12 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		return nil, err
 	}
 
-	removedKeys := make(map[activationKey]struct{}, len(removed))
+	removedKeys := a.deltaRemovedKeys
+	if removedKeys == nil {
+		removedKeys = make(map[activationKey]struct{}, len(removed))
+	} else {
+		clear(removedKeys)
+	}
 	for _, candidate := range removed {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -258,9 +280,9 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		removedKeys[key] = struct{}{}
 	}
 
-	changes := make([]agendaChange, 0, len(removedKeys)+len(added))
+	changes := a.deltaChanges[:0]
 	if len(removedKeys) > 0 {
-		nextPending := make([]activationKey, 0, len(a.pending))
+		nextPending := a.deltaNextPending[:0]
 		for _, key := range a.pending {
 			existing, ok := a.activationByKeyPtr(key)
 			if !ok || existing.status != activationStatusPending {
@@ -276,10 +298,11 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 			}
 			nextPending = append(nextPending, key)
 		}
+		a.deltaNextPending = a.pending[:0]
 		a.pending = nextPending
 	}
 
-	activated := make([]agendaChange, 0)
+	activated := a.deltaActivated[:0]
 	sort.SliceStable(added, func(i, j int) bool {
 		return agendaDeltaCandidateLess(revision, added[i], added[j])
 	})
@@ -316,7 +339,10 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		return activationLess(left, right)
 	})
 
-	return changes, nil
+	a.deltaRemovedKeys = removedKeys
+	a.deltaChanges = changes[:0]
+	a.deltaActivated = activated[:0]
+	return append([]agendaChange(nil), changes...), nil
 }
 
 func agendaDeltaCandidateLess(revision *Ruleset, left, right matchCandidate) bool {
