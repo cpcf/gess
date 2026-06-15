@@ -29,15 +29,14 @@ type reteBetaRuleMemory struct {
 	conditionIndexes []map[betaJoinKey][]int
 	prefixes         [][]betaPrefix
 	prefixIndexes    []map[betaJoinKey][]int
-	prefixBacking    [][][]conditionMatch
 	tokenBacking     [][]matchToken
 	lookupScratch    [][]conditionMatch
+	prefixScratch    [][]conditionMatch
 	candidateScratch candidateScratch
 }
 
 type betaPrefix struct {
-	matches []conditionMatch
-	token   *matchToken
+	token *matchToken
 }
 
 type betaJoinKeyKind uint8
@@ -281,9 +280,9 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 		conditionIndexes: make([]map[betaJoinKey][]int, conditions),
 		prefixes:         make([][]betaPrefix, conditions),
 		prefixIndexes:    make([]map[betaJoinKey][]int, conditions),
-		prefixBacking:    make([][][]conditionMatch, conditions),
 		tokenBacking:     make([][]matchToken, 0, conditions),
 		lookupScratch:    make([][]conditionMatch, conditions),
+		prefixScratch:    make([][]conditionMatch, conditions),
 	}
 }
 
@@ -313,8 +312,7 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 			plan := m.rule.conditionPlans[conditionIndex]
 			for _, match := range matches {
 				prefixes = append(prefixes, betaPrefix{
-					matches: m.copyPrefixMatches(conditionIndex, nil, match),
-					token:   m.newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+					token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
 				})
 			}
 		} else {
@@ -348,13 +346,11 @@ func (m *reteBetaRuleMemory) clear() {
 		}
 		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
 		resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
-		for chunkIndex, chunk := range m.prefixBacking[conditionIndex] {
-			for i := range chunk {
-				chunk[i] = conditionMatch{}
-			}
-			m.prefixBacking[conditionIndex][chunkIndex] = chunk[:0]
+		for i := range m.prefixScratch[conditionIndex] {
+			m.prefixScratch[conditionIndex][i] = conditionMatch{}
 		}
 		m.lookupScratch[conditionIndex] = m.lookupScratch[conditionIndex][:0]
+		m.prefixScratch[conditionIndex] = m.prefixScratch[conditionIndex][:0]
 	}
 	for chunkIndex, chunk := range m.tokenBacking {
 		for i := range chunk {
@@ -391,12 +387,13 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes [
 	plan := m.rule.conditionPlans[conditionIndex]
 	out := prefixes[:0]
 	for _, prefix := range m.prefixes[conditionIndex-1] {
+		prefixMatches := m.prefixMatches(conditionIndex, prefix)
 		matches, err := m.matchesForLeftPrefix(conditionIndex, prefix)
 		if err != nil {
 			return nil, err
 		}
 		for _, match := range matches {
-			ok, err := plan.matchesJoins(context.Background(), match.fact, prefix.matches)
+			ok, err := plan.matchesJoins(context.Background(), match.fact, prefixMatches)
 			if err != nil {
 				return nil, err
 			}
@@ -404,8 +401,7 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes [
 				continue
 			}
 			out = append(out, betaPrefix{
-				matches: m.copyPrefixMatches(conditionIndex, prefix.matches, match),
-				token:   m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
 			})
 		}
 	}
@@ -445,15 +441,15 @@ func (m *reteBetaRuleMemory) propagatePrefix(conditionIndex int, prefix betaPref
 	if err != nil {
 		return nil
 	}
+	prefixMatches := m.prefixMatches(nextCondition, prefix)
 	var added []betaPrefix
 	for _, match := range matches {
-		ok, err := m.rule.conditionPlans[nextCondition].matchesJoins(context.Background(), match.fact, prefix.matches)
+		ok, err := m.rule.conditionPlans[nextCondition].matchesJoins(context.Background(), match.fact, prefixMatches)
 		if err != nil || !ok {
 			continue
 		}
 		nextPrefix := betaPrefix{
-			matches: m.copyPrefixMatches(nextCondition, prefix.matches, match),
-			token:   m.newMatchToken(prefix.token, m.rule.conditionPlans[nextCondition].bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(prefix.token, m.rule.conditionPlans[nextCondition].bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
 		}
 		added = append(added, m.addAndPropagatePrefix(nextCondition, nextPrefix)...)
 	}
@@ -464,8 +460,7 @@ func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match con
 	plan := m.rule.conditionPlans[conditionIndex]
 	if conditionIndex == 0 {
 		return []betaPrefix{{
-			matches: m.copyPrefixMatches(conditionIndex, nil, match),
-			token:   m.newMatchToken(nil, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
 		}}, nil
 	}
 
@@ -486,7 +481,8 @@ func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match con
 
 	out := make([]betaPrefix, 0, len(prefixes))
 	for _, prefix := range prefixes {
-		ok, err := plan.matchesJoins(context.Background(), match.fact, prefix.matches)
+		prefixMatches := m.prefixMatches(conditionIndex, prefix)
+		ok, err := plan.matchesJoins(context.Background(), match.fact, prefixMatches)
 		if err != nil {
 			return nil, err
 		}
@@ -494,18 +490,17 @@ func (m *reteBetaRuleMemory) prefixesForRightMatch(conditionIndex int, match con
 			continue
 		}
 		out = append(out, betaPrefix{
-			matches: m.copyPrefixMatches(conditionIndex, prefix.matches, match),
-			token:   m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
 		})
 	}
 	return out, nil
 }
 
-func (m *reteBetaRuleMemory) newMatchToken(parent *matchToken, entry bindingTupleEntry, recency Recency, generation Generation) *matchToken {
+func (m *reteBetaRuleMemory) newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
 	if m == nil {
 		return nil
 	}
-	token := makeMatchToken(parent, entry, recency, generation)
+	token := makeMatchToken(parent, entry, match, recency, generation)
 	chunks := m.tokenBacking
 	last := len(chunks) - 1
 	if last < 0 || len(chunks[last]) == cap(chunks[last]) {
@@ -523,7 +518,7 @@ func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix bet
 	if len(plan.joins) == 0 {
 		return m.conditionMatches[conditionIndex], nil
 	}
-	key, ok := betaJoinKeyForPrefix(plan, prefix.matches)
+	key, ok := betaJoinKeyForPrefix(plan, m.prefixMatches(conditionIndex, prefix))
 	if !ok {
 		return nil, nil
 	}
@@ -653,30 +648,20 @@ func (m *reteBetaRuleMemory) terminalPrefixesContainingFact(id FactID) []betaPre
 	return out
 }
 
-func (m *reteBetaRuleMemory) copyPrefixMatches(conditionIndex int, prefixMatches []conditionMatch, match conditionMatch) []conditionMatch {
-	storage := m.prefixMatchStorage(conditionIndex, len(prefixMatches)+1)
-	copy(storage, prefixMatches)
-	storage[len(prefixMatches)] = match
-	return storage
-}
-
-func (m *reteBetaRuleMemory) prefixMatchStorage(conditionIndex, size int) []conditionMatch {
-	if size <= 0 {
+func (m *reteBetaRuleMemory) prefixMatches(conditionIndex int, prefix betaPrefix) []conditionMatch {
+	if m == nil || prefix.token == nil || conditionIndex <= 0 {
 		return nil
 	}
-	chunks := m.prefixBacking[conditionIndex]
-	last := len(chunks) - 1
-	if last < 0 || cap(chunks[last])-len(chunks[last]) < size {
-		capacity := max(size, 16)
-		chunks = append(chunks, make([]conditionMatch, 0, capacity))
-		last = len(chunks) - 1
+	size := min(conditionIndex, prefix.token.size)
+	scratch := m.prefixScratch[conditionIndex]
+	if cap(scratch) < size {
+		scratch = make([]conditionMatch, size)
+	} else {
+		scratch = scratch[:size]
 	}
-	chunk := chunks[last]
-	start := len(chunk)
-	chunk = chunk[:start+size]
-	chunks[last] = chunk
-	m.prefixBacking[conditionIndex] = chunks
-	return chunk[start : start+size : start+size]
+	fillConditionMatchesFromToken(scratch, prefix.token, size)
+	m.prefixScratch[conditionIndex] = scratch
+	return scratch
 }
 
 func terminalTokensForPrefixes(prefixes []betaPrefix) []*matchToken {
@@ -784,7 +769,7 @@ func (m *reteBetaRuleMemory) indexPrefix(conditionIndex, prefixIndex int, prefix
 	if len(nextPlan.joins) == 0 {
 		return
 	}
-	key, ok := betaJoinKeyForPrefix(nextPlan, prefix.matches)
+	key, ok := betaJoinKeyForPrefix(nextPlan, m.prefixMatches(nextCondition, prefix))
 	if !ok {
 		return
 	}
@@ -835,27 +820,48 @@ func conditionMatchEqual(left, right conditionMatch) bool {
 }
 
 func betaPrefixLess(left, right betaPrefix) bool {
-	for i := 0; i < len(left.matches) && i < len(right.matches); i++ {
-		if left.matches[i].fact.ID() != right.matches[i].fact.ID() {
-			return factIDLess(left.matches[i].fact.ID(), right.matches[i].fact.ID())
-		}
-		if left.matches[i].fact.Version() != right.matches[i].fact.Version() {
-			return left.matches[i].fact.Version() < right.matches[i].fact.Version()
-		}
+	if left.token == nil || right.token == nil {
+		return left.token == nil && right.token != nil
 	}
-	return len(left.matches) < len(right.matches)
+	if left.token.size != right.token.size {
+		return left.token.size < right.token.size
+	}
+	return compareMatchToken(left.token, right.token) < 0
 }
 
 func betaPrefixEqual(left, right betaPrefix) bool {
-	if len(left.matches) != len(right.matches) {
-		return false
-	}
-	for i := range left.matches {
-		if !conditionMatchEqual(left.matches[i], right.matches[i]) {
-			return false
+	return matchTokenEqual(left.token, right.token)
+}
+
+func compareMatchToken(left, right *matchToken) int {
+	if left == nil || right == nil {
+		switch {
+		case left == nil && right != nil:
+			return -1
+		case left != nil && right == nil:
+			return 1
+		default:
+			return 0
 		}
 	}
-	return matchTokenEqual(left.token, right.token)
+	if left.parent != nil || right.parent != nil {
+		if cmp := compareMatchToken(left.parent, right.parent); cmp != 0 {
+			return cmp
+		}
+	}
+	if left.entry.factID != right.entry.factID {
+		if factIDLess(left.entry.factID, right.entry.factID) {
+			return -1
+		}
+		return 1
+	}
+	if left.entry.factVersion != right.entry.factVersion {
+		if left.entry.factVersion < right.entry.factVersion {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
@@ -865,6 +871,18 @@ func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
 		}
 	}
 	return false
+}
+
+func fillConditionMatchesFromToken(out []conditionMatch, token *matchToken, limit int) int {
+	if token == nil || limit <= 0 {
+		return 0
+	}
+	written := fillConditionMatchesFromToken(out, token.parent, limit)
+	if written >= limit {
+		return written
+	}
+	out[written] = token.match
+	return written + 1
 }
 
 func resetJoinIndexBuckets(index map[betaJoinKey][]int) {

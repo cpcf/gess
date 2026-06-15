@@ -279,7 +279,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			copy(next, selected)
 			next[len(selected)] = match
 			entry := r.conditionPlans[conditionIndex].bindingTupleEntry(match)
-			nextToken := newMatchToken(token, entry, match.fact.Recency(), source.sourceGeneration())
+			nextToken := newMatchToken(token, entry, match, match.fact.Recency(), source.sourceGeneration())
 			if err := walk(conditionIndex+1, next, nextToken); err != nil {
 				return err
 			}

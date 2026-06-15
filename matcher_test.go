@@ -342,7 +342,7 @@ func TestLinkedMatchTokenEqualityUsesFactIdentity(t *testing.T) {
 	var rebuilt *matchToken
 	for i, match := range sets[0].matches {
 		entry := rule.conditionPlans[i].bindingTupleEntry(match)
-		rebuilt = newMatchToken(rebuilt, entry, match.fact.Recency(), snapshot.Generation())
+		rebuilt = newMatchToken(rebuilt, entry, match, match.fact.Recency(), snapshot.Generation())
 	}
 	if !matchTokenEqual(sets[0].token, rebuilt) {
 		t.Fatalf("rebuilt token is not equal:\nleft=%#v\nright=%#v", sets[0].token, rebuilt)

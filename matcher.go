@@ -40,6 +40,7 @@ type matchCandidate struct {
 type matchToken struct {
 	parent           *matchToken
 	entry            bindingTupleEntry
+	match            conditionMatch
 	size             int
 	pathLen          int
 	maxRecency       Recency
@@ -586,15 +587,16 @@ func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTu
 	}
 }
 
-func newMatchToken(parent *matchToken, entry bindingTupleEntry, recency Recency, generation Generation) *matchToken {
-	token := makeMatchToken(parent, entry, recency, generation)
+func newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
+	token := makeMatchToken(parent, entry, match, recency, generation)
 	return &token
 }
 
-func makeMatchToken(parent *matchToken, entry bindingTupleEntry, recency Recency, generation Generation) matchToken {
+func makeMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) matchToken {
 	token := matchToken{
 		parent: parent,
 		entry:  entry,
+		match:  match,
 	}
 	if parent == nil {
 		token.size = 1
