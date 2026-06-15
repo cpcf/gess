@@ -151,12 +151,7 @@ func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, snapshot Snaps
 	if ruleMemory == nil {
 		return rule.matchCandidatesWithAlpha(ctx, snapshot, source)
 	}
-	terminal := ruleMemory.terminalPrefixes()
-	bindingSets := make([]bindingSet, 0, len(terminal))
-	for _, prefix := range terminal {
-		bindingSets = append(bindingSets, bindingSet{token: prefix.token})
-	}
-	return collectMatchCandidates(ctx, rule, snapshot, bindingSets)
+	return collectMatchCandidatesFromPrefixes(ctx, rule, snapshot.Generation(), ruleMemory.terminalPrefixes())
 }
 
 func (m *reteBetaMemory) insertFact(fact FactSnapshot) reteAgendaDelta {
@@ -583,6 +578,35 @@ func terminalTokensForPrefixes(prefixes []betaPrefix) []*matchToken {
 		}
 	}
 	return tokens
+}
+
+func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, generation Generation, prefixes []betaPrefix) ([]matchCandidate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if len(prefixes) == 0 {
+		return nil, nil
+	}
+
+	candidates := make([]matchCandidate, 0, len(prefixes))
+	seen := newCandidateSeenSet(len(prefixes))
+	for _, prefix := range prefixes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if prefix.token == nil {
+			continue
+		}
+		candidate, err := buildMatchCandidateFromTokenGeneration(rule, generation, prefix.token)
+		if err != nil {
+			return nil, err
+		}
+		if seen.seen(candidates, candidate) {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, nil
 }
 
 func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex, matchIndex int, match conditionMatch) {

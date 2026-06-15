@@ -76,6 +76,51 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	}
 }
 
+func TestAgendaReconcileCopiesCandidateSlices(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-candidate-ownership-session")
+
+	if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	agenda := newAgenda()
+	results := mustAgendaMatchResults(t, revision, session)
+	if len(results) != 1 || len(results[0].candidates) != 1 {
+		t.Fatalf("match results = %#v, want one candidate", results)
+	}
+	candidate := results[0].candidates[0]
+	if len(candidate.path) == 0 {
+		t.Fatal("candidate path is empty")
+	}
+
+	if _, err := agenda.reconcile(context.Background(), revision, results); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	before := agenda.pendingActivations()[0]
+
+	candidate.bindingTuple[0].binding = "mutated"
+	candidate.factIDs[0] = newFactID(9, 9)
+	candidate.factVersions[0] = 99
+	candidate.path[0] = 42
+
+	after := agenda.pendingActivations()[0]
+	if after.bindings[0].binding != before.bindings[0].binding {
+		t.Fatalf("activation binding tuple binding changed: got %q want %q", after.bindings[0].binding, before.bindings[0].binding)
+	}
+	if after.factIDs[0] != before.factIDs[0] {
+		t.Fatalf("activation fact ID changed: got %q want %q", after.factIDs[0], before.factIDs[0])
+	}
+	if after.factVersions[0] != before.factVersions[0] {
+		t.Fatalf("activation fact version changed: got %d want %d", after.factVersions[0], before.factVersions[0])
+	}
+	if len(after.path) != len(before.path) || after.path[0] != before.path[0] {
+		t.Fatalf("activation path changed: got %#v want %#v", after.path, before.path)
+	}
+}
+
 func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-version-session")

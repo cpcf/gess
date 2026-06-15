@@ -113,6 +113,11 @@ type agenda struct {
 	pending     []activationKey
 	byFactID    map[FactID][]activationKey
 	byRevision  map[RuleRevisionID][]activationKey
+
+	reconcileSeen        map[activationKey]struct{}
+	reconcileNextPending []activationKey
+	reconcileChanges     []agendaChange
+	reconcileActivated   []agendaChange
 }
 
 func newAgenda() *agenda {
@@ -144,10 +149,16 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		return nil, err
 	}
 
-	seen := make(map[activationKey]struct{}, len(a.pending))
-	nextPending := make([]activationKey, 0, len(a.pending))
-	changes := make([]agendaChange, 0)
-	activated := make([]agendaChange, 0)
+	seen := a.reconcileSeen
+	if seen == nil {
+		seen = make(map[activationKey]struct{}, len(a.pending))
+	} else {
+		clear(seen)
+	}
+	nextPending := a.reconcileNextPending[:0]
+	changes := a.reconcileChanges[:0]
+	activated := a.reconcileActivated[:0]
+	oldPending := a.pending
 
 	for _, result := range results {
 		if err := ctx.Err(); err != nil {
@@ -177,21 +188,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 				continue
 			}
 
-			created := activation{
-				ruleID:           result.ruleID,
-				ruleRevisionID:   result.ruleRevisionID,
-				generation:       candidate.generation,
-				identity:         candidate.identity,
-				bindings:         candidate.bindingTuple,
-				factIDs:          candidate.factIDs,
-				factVersions:     candidate.factVersions,
-				path:             candidate.path,
-				salience:         rule.salience,
-				maxRecency:       candidate.maxRecency,
-				aggregateRecency: candidate.aggregateRecency,
-				declarationOrder: rule.declarationOrder,
-				status:           activationStatusPending,
-			}
+			created := activationFromCandidate(rule, candidate)
 
 			key = a.storeActivation(&created)
 			indexActivation(a.byFactID, a.byRevision, created)
@@ -207,7 +204,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		}
 	}
 
-	for _, key := range a.pending {
+	for _, key := range oldPending {
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -230,8 +227,12 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		return activationLess(left, right)
 	})
 
+	a.reconcileSeen = seen
+	a.reconcileNextPending = oldPending[:0]
+	a.reconcileChanges = changes[:0]
+	a.reconcileActivated = activated[:0]
 	a.pending = nextPending
-	return changes, nil
+	return append([]agendaChange(nil), changes...), nil
 }
 
 func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, removed []matchCandidate, added []matchCandidate) ([]agendaChange, error) {
@@ -297,21 +298,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 			continue
 		}
 
-		created := activation{
-			ruleID:           candidate.ruleID,
-			ruleRevisionID:   candidate.ruleRevisionID,
-			generation:       candidate.generation,
-			identity:         candidate.identity,
-			bindings:         candidate.bindingTuple,
-			factIDs:          candidate.factIDs,
-			factVersions:     candidate.factVersions,
-			path:             candidate.path,
-			salience:         rule.salience,
-			maxRecency:       candidate.maxRecency,
-			aggregateRecency: candidate.aggregateRecency,
-			declarationOrder: rule.declarationOrder,
-			status:           activationStatusPending,
-		}
+		created := activationFromCandidate(rule, candidate)
 
 		key := a.storeActivation(&created)
 		indexActivation(a.byFactID, a.byRevision, created)
@@ -676,6 +663,24 @@ func cloneFactIDs(ids []FactID) []FactID {
 	out := make([]FactID, len(ids))
 	copy(out, ids)
 	return out
+}
+
+func activationFromCandidate(rule compiledRule, candidate matchCandidate) activation {
+	return activation{
+		ruleID:           candidate.ruleID,
+		ruleRevisionID:   candidate.ruleRevisionID,
+		generation:       candidate.generation,
+		identity:         candidate.identity,
+		bindings:         cloneBindingTupleEntries(candidate.bindingTuple),
+		factIDs:          cloneFactIDs(candidate.factIDs),
+		factVersions:     cloneFactVersions(candidate.factVersions),
+		path:             cloneIntPath(candidate.path),
+		salience:         rule.salience,
+		maxRecency:       candidate.maxRecency,
+		aggregateRecency: candidate.aggregateRecency,
+		declarationOrder: rule.declarationOrder,
+		status:           activationStatusPending,
+	}
 }
 
 func cloneFactVersions(versions []FactVersion) []FactVersion {
