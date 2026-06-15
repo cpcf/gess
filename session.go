@@ -1631,6 +1631,24 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		name = template.Name()
 	}
 
+	if templateExists && revision.usesFieldSlots(template) {
+		fieldSlots, err := template.buildValidatedFieldSlots(initial.Fields)
+		if err != nil {
+			return compiledSessionInitialFact{}, err
+		}
+
+		duplicateKey := makeDuplicateKeyForValidatedFact(name, template, nil, fieldSlots)
+		return compiledSessionInitialFact{
+			name:            name,
+			templateKey:     templateKey,
+			fieldSlots:      fieldSlots,
+			fieldSpecs:      template.fields,
+			duplicatePolicy: template.duplicatePolicy,
+			duplicateKey:    duplicateKey,
+			shareSlots:      factSlotsShareable(fieldSlots),
+		}, nil
+	}
+
 	fields := normalizeFields(initial.Fields)
 	var presence map[string]FieldPresence
 	var err error

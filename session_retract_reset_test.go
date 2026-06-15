@@ -501,6 +501,356 @@ func TestSessionResetDoesNotReemitInitializersAsAsserts(t *testing.T) {
 	}
 }
 
+func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "settings",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "labels", Kind: ValueList},
+			{Name: "meta", Kind: ValueMap},
+			{Name: "status", Kind: ValueString, Default: "active", AllowedValues: []any{"active", "inactive"}},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-settings",
+		Conditions: []RuleConditionSpec{
+			{Binding: "settings", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(
+		revision,
+		WithSessionID("reset-slot-session"),
+		WithInitialFacts(
+			SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":     "settings-1",
+					"labels": []any{"stable"},
+					"meta":   map[string]any{"tier": "gold"},
+				}),
+			},
+			SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":     "settings-1",
+					"labels": []any{"duplicate"},
+					"meta":   map[string]any{"tier": "silver"},
+					"status": "inactive",
+				}),
+			},
+			SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":     "settings-2",
+					"labels": []any{"beta"},
+					"meta":   map[string]any{"tier": "silver"},
+					"status": "inactive",
+				}),
+			},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if got, want := len(session.compiledInitials), 2; got != want {
+		t.Fatalf("compiled initial facts = %d, want %d", got, want)
+	}
+	for i, compiled := range session.compiledInitials {
+		if len(compiled.fieldSlots) == 0 {
+			t.Fatalf("compiled initial %d missing slot storage", i)
+		}
+		if compiled.fields != nil || compiled.fieldPresence != nil {
+			t.Fatalf("compiled initial %d retained map-backed storage: fields=%v presence=%v", i, compiled.fields, compiled.fieldPresence)
+		}
+	}
+
+	if got := len(mustSnapshot(t, context.Background(), session).FactsByTemplateKey(template.Key())); got != 2 {
+		t.Fatalf("snapshot facts by template = %d, want 2", got)
+	}
+
+	resetFact := func(id string) *workingFact {
+		t.Helper()
+		for _, fact := range session.factsByID {
+			if fact == nil {
+				continue
+			}
+			if value, ok := fact.snapshot().Field("id"); ok && value.data.(string) == id {
+				return fact
+			}
+		}
+		t.Fatalf("missing fact with id %q", id)
+		return nil
+	}
+
+	firstFact := resetFact("settings-1")
+	labelsSlot := -1
+	metaSlot := -1
+	for i, spec := range firstFact.fieldSpecs {
+		switch spec.Name {
+		case "labels":
+			labelsSlot = i
+		case "meta":
+			metaSlot = i
+		}
+	}
+	if labelsSlot < 0 || metaSlot < 0 {
+		t.Fatalf("missing labels/meta slots: labels=%d meta=%d", labelsSlot, metaSlot)
+	}
+	firstFact.fieldSlots[labelsSlot].value.data.([]Value)[0] = mustValue(t, "mutated")
+	firstFact.fieldSlots[metaSlot].value.data.(map[string]Value)["tier"] = mustValue(t, "mutated")
+
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("Reset after mutation: %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	byID := make(map[string]FactSnapshot, snapshot.Len())
+	for _, fact := range snapshot.Facts() {
+		id, ok := fact.Field("id")
+		if !ok {
+			t.Fatal("reset snapshot fact missing id")
+		}
+		byID[id.data.(string)] = fact
+	}
+
+	first, ok := byID["settings-1"]
+	if !ok {
+		t.Fatal("reset snapshot missing first fact")
+	}
+	if got, ok := first.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("default status presence = (%v, %v), want default", got, ok)
+	}
+	if got, ok := first.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("default status value = (%v, %v), want active", got, ok)
+	}
+	if got, ok := first.FieldPresence("labels"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("labels presence = (%v, %v), want explicit", got, ok)
+	}
+	if got, ok := first.Field("labels"); !ok || !got.Equal(mustValue(t, []any{"stable"})) {
+		t.Fatalf("labels value = (%v, %v), want stable", got, ok)
+	}
+	if got, ok := first.Field("meta"); !ok || !got.Equal(mustValue(t, map[string]any{"tier": "gold"})) {
+		t.Fatalf("meta value = (%v, %v), want gold", got, ok)
+	}
+	labels := first.Fields()["labels"].data.([]Value)
+	labels[0] = mustValue(t, "changed")
+	meta := first.Fields()["meta"].data.(map[string]Value)
+	meta["tier"] = mustValue(t, "changed")
+	if got, ok := first.Field("labels"); !ok || !got.Equal(mustValue(t, []any{"stable"})) {
+		t.Fatalf("labels accessor was not defensive: (%v, %v)", got, ok)
+	}
+	if got, ok := first.Field("meta"); !ok || !got.Equal(mustValue(t, map[string]any{"tier": "gold"})) {
+		t.Fatalf("meta accessor was not defensive: (%v, %v)", got, ok)
+	}
+
+	second, ok := byID["settings-2"]
+	if !ok {
+		t.Fatal("reset snapshot missing second fact")
+	}
+	if got, ok := second.FieldPresence("status"); !ok || got != FieldPresenceExplicit {
+		t.Fatalf("explicit status presence = (%v, %v), want explicit", got, ok)
+	}
+	if got, ok := second.Field("status"); !ok || !got.Equal(mustValue(t, "inactive")) {
+		t.Fatalf("explicit status value = (%v, %v), want inactive", got, ok)
+	}
+}
+
+func TestSessionResetUntargetedClosedTemplateKeepsMapBackedInitial(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "settings",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Default: "active"},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "dynamic-event",
+		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	session, err := NewSession(
+		revision,
+		WithSessionID("reset-untargeted-closed-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: template.Key(),
+			Fields:      mustFields(t, map[string]any{"id": "settings-1"}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if got, want := len(session.compiledInitials), 1; got != want {
+		t.Fatalf("compiled initial facts = %d, want %d", got, want)
+	}
+	compiled := session.compiledInitials[0]
+	if len(compiled.fieldSlots) != 0 {
+		t.Fatalf("untargeted initial used slot storage: %#v", compiled.fieldSlots)
+	}
+	if compiled.fields == nil || compiled.fieldPresence == nil {
+		t.Fatalf("untargeted initial lost map-backed storage: fields=%#v presence=%#v", compiled.fields, compiled.fieldPresence)
+	}
+	if _, err := session.Reset(context.Background()); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	fact := mustOnlyFact(t, session)
+	if len(fact.fieldSlots) != 0 {
+		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlots)
+	}
+	if got, ok := fact.snapshot().Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("default status = (%v, %v), want active", got, ok)
+	}
+}
+
+func TestSessionResetSlotBackedValidationFailureLeavesStateIntact(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "settings",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, AllowedValues: []any{"active", "inactive"}},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-settings",
+		Conditions: []RuleConditionSpec{
+			{Binding: "settings", TemplateKey: template.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	cases := []struct {
+		name        string
+		initializer SessionInitialFact
+	}{
+		{
+			name: "missing required",
+			initializer: SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"status": "active",
+				}),
+			},
+		},
+		{
+			name: "invalid kind",
+			initializer: SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":     "settings-2",
+					"status": 1,
+				}),
+			},
+		},
+		{
+			name: "invalid allowed",
+			initializer: SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":     "settings-3",
+					"status": "pending",
+				}),
+			},
+		},
+		{
+			name: "unknown field",
+			initializer: SessionInitialFact{
+				TemplateKey: template.Key(),
+				Fields: mustFields(t, map[string]any{
+					"id":      "settings-4",
+					"status":  "active",
+					"unknown": "value",
+				}),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			session, err := NewSession(
+				revision,
+				WithSessionID(SessionID("reset-slot-failure-"+tc.name)),
+				WithInitialFacts(SessionInitialFact{
+					TemplateKey: template.Key(),
+					Fields: mustFields(t, map[string]any{
+						"id":     "baseline",
+						"status": "active",
+					}),
+				}),
+			)
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+
+			baseline := mustSnapshot(t, context.Background(), session)
+			if baseline.Len() != 1 {
+				t.Fatalf("baseline length = %d, want 1", baseline.Len())
+			}
+
+			session.initials = append(session.initials, tc.initializer)
+
+			result, err := session.Reset(context.Background())
+			if err == nil {
+				t.Fatal("expected reset failure")
+			}
+			if result.Status != ResetValidationFailure {
+				t.Fatalf("reset failure status = %v, want %v", result.Status, ResetValidationFailure)
+			}
+
+			after := mustSnapshot(t, context.Background(), session)
+			if after.Len() != 1 {
+				t.Fatalf("snapshot length after failed reset = %d, want 1", after.Len())
+			}
+			if got, want := session.Generation(), Generation(1); got != want {
+				t.Fatalf("session generation after failed reset = %d, want %d", got, want)
+			}
+			beforeFact := baseline.Facts()[0]
+			afterFact := after.Facts()[0]
+			if got, ok := afterFact.Field("id"); !ok || !got.Equal(beforeFact.Fields()["id"]) {
+				t.Fatalf("snapshot fact changed after failed reset: (%v, %v)", got, ok)
+			}
+		})
+	}
+}
+
 func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	t.Helper()
 	if session == nil {

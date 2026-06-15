@@ -150,6 +150,72 @@ func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresen
 	return slots
 }
 
+func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
+	if !t.closed || len(t.fields) == 0 {
+		return nil, nil
+	}
+
+	slots := make([]factSlot, len(t.fields))
+	for i := range t.fields {
+		slots[i].presence = FieldPresenceOmitted
+	}
+
+	for fieldName, value := range fields {
+		slot, ok := t.fieldSlot(fieldName)
+		if !ok {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "unknown field",
+			}
+		}
+
+		field := t.fields[slot]
+		if field.Kind != ValueAny && !isValueCompatibleWithKind(field.Kind, value) {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "invalid type",
+			}
+		}
+		if allowed, ok := t.fieldAllowed[fieldName]; ok && !valueAllowed(allowed, value) {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "value not in allowed set",
+			}
+		}
+
+		slots[slot].value = cloneValue(value)
+		slots[slot].ok = true
+		slots[slot].presence = FieldPresenceExplicit
+	}
+
+	for i, field := range t.fields {
+		if slots[i].ok {
+			continue
+		}
+
+		if defaultValue, hasDefault := t.fieldDefaults[field.Name]; hasDefault {
+			slots[i].value = cloneValue(defaultValue)
+			slots[i].ok = true
+			slots[i].presence = FieldPresenceDefault
+			continue
+		}
+
+		slots[i].presence = FieldPresenceOmitted
+		if field.Required {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    field.Name,
+				Reason:       "required field is missing",
+			}
+		}
+	}
+
+	return slots, nil
+}
+
 func (t Template) clone() Template {
 	out := t
 	out.fields = make([]FieldSpec, len(t.fields))
