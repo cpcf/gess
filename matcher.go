@@ -9,7 +9,7 @@ import (
 )
 
 type matcher interface {
-	match(context.Context, Snapshot) ([]ruleMatchResult, error)
+	match(context.Context, factSource) ([]ruleMatchResult, error)
 }
 
 type naiveMatcher struct {
@@ -140,8 +140,8 @@ func newNaiveMatcher(revision *Ruleset) matcher {
 	return &naiveMatcher{revision: revision}
 }
 
-func (m *naiveMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatchResult, error) {
-	if m == nil || m.revision == nil {
+func (m *naiveMatcher) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {
+	if m == nil || m.revision == nil || source == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if ctx == nil {
@@ -162,7 +162,7 @@ func (m *naiveMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatc
 			return nil, fmt.Errorf("%w: missing compiled rule %q", ErrMatcher, ruleName)
 		}
 
-		candidates, err := rule.matchCandidates(ctx, snapshot)
+		candidates, err := rule.matchCandidates(ctx, source)
 		if err != nil {
 			return nil, err
 		}
@@ -179,9 +179,12 @@ func (m *naiveMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatc
 	return results, nil
 }
 
-func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Snapshot, bindingSets []bindingSet) ([]matchCandidate, error) {
+func collectMatchCandidates(ctx context.Context, rule compiledRule, source factSource, bindingSets []bindingSet) ([]matchCandidate, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if source == nil {
+		return nil, ErrInvalidRuleset
 	}
 	if len(bindingSets) == 0 {
 		return nil, nil
@@ -193,7 +196,7 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		candidate, err := buildMatchCandidate(rule, snapshot, set)
+		candidate, err := buildMatchCandidate(rule, source.sourceGeneration(), set)
 		if err != nil {
 			return nil, err
 		}
@@ -206,14 +209,14 @@ func collectMatchCandidates(ctx context.Context, rule compiledRule, snapshot Sna
 	return candidates, nil
 }
 
-func buildMatchCandidate(rule compiledRule, snapshot Snapshot, set bindingSet) (matchCandidate, error) {
+func buildMatchCandidate(rule compiledRule, generation Generation, set bindingSet) (matchCandidate, error) {
 	if set.token != nil {
-		return buildMatchCandidateFromToken(rule, snapshot, set.token)
+		return buildMatchCandidateFromTokenGeneration(rule, generation, set.token)
 	}
-	return buildMatchCandidateFromMatches(rule, snapshot, set.matches)
+	return buildMatchCandidateFromMatches(rule, generation, set.matches)
 }
 
-func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matches []conditionMatch) (matchCandidate, error) {
+func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, matches []conditionMatch) (matchCandidate, error) {
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
@@ -274,7 +277,7 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 	}
 
 	path := candidatePathFor(entries)
-	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, snapshot.Generation(), entries)
+	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
 
 	return matchCandidate{
 		ruleID:           rule.id,
@@ -283,15 +286,15 @@ func buildMatchCandidateFromMatches(rule compiledRule, snapshot Snapshot, matche
 		bindingTuple:     entries,
 		factIDs:          factIDs,
 		factVersions:     factVersions,
-		generation:       snapshot.Generation(),
+		generation:       generation,
 		maxRecency:       maxRecency,
 		aggregateRecency: aggregateRecency,
 		path:             path,
 	}, nil
 }
 
-func buildMatchCandidateFromToken(rule compiledRule, snapshot Snapshot, token *matchToken) (matchCandidate, error) {
-	return buildMatchCandidateFromTokenGeneration(rule, snapshot.Generation(), token)
+func buildMatchCandidateFromToken(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {
+	return buildMatchCandidateFromTokenGeneration(rule, generation, token)
 }
 
 func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {

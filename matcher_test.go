@@ -318,7 +318,7 @@ func TestMatchBindingSetsIncludeLinkedTokens(t *testing.T) {
 		t.Fatalf("binding set token path length = %d, want %d", got, want)
 	}
 
-	candidate, err := buildMatchCandidate(rule, snapshot, sets[0])
+	candidate, err := buildMatchCandidate(rule, snapshot.Generation(), sets[0])
 	if err != nil {
 		t.Fatalf("buildMatchCandidate: %v", err)
 	}

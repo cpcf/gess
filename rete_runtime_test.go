@@ -116,6 +116,61 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	}
 }
 
+func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "event",
+		Closed: false,
+		Fields: []FieldSpec{{Name: "kind", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "by-name",
+		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "by-template",
+		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: openTemplate.Key()}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+
+	initials := []SessionInitialFact{
+		{TemplateKey: openTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "alpha"})},
+		{TemplateKey: openTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "beta"})},
+	}
+	sessionInternal, err := NewSession(revision, WithSessionID("fallback-source-internal"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession(internal): %v", err)
+	}
+	sessionSnapshot, err := NewSession(revision, WithSessionID("fallback-source-snapshot"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession(snapshot): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, ctx, sessionSnapshot)
+	snapshotChanges, err := sessionSnapshot.reconcileAgenda(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("snapshot reconcileAgenda: %v", err)
+	}
+	internalChanges, err := sessionInternal.reconcileAgendaInternal(ctx)
+	if err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+
+	if !reflect.DeepEqual(internalChanges, snapshotChanges) {
+		t.Fatalf("internal reconcile changes differ from snapshot reconcile:\ninternal=%#v\nsnapshot=%#v", internalChanges, snapshotChanges)
+	}
+	if !reflect.DeepEqual(sessionInternal.agenda.pendingActivations(), sessionSnapshot.agenda.pendingActivations()) {
+		t.Fatalf("internal pending activations differ from snapshot reconcile:\ninternal=%#v\nsnapshot=%#v", sessionInternal.agenda.pendingActivations(), sessionSnapshot.agenda.pendingActivations())
+	}
+}
+
 func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)

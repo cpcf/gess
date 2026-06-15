@@ -206,6 +206,53 @@ func (s *Session) Generation() Generation {
 	return s.generation
 }
 
+func (s *Session) sourceGeneration() Generation {
+	if s == nil {
+		return 0
+	}
+	return s.generation
+}
+
+// factsForTarget is an internal matcher view. Callers must hold session
+// ownership; returned detached snapshots may share session-owned backing.
+func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) {
+	if s == nil {
+		return nil, false
+	}
+	switch target.kind {
+	case conditionTargetName:
+		ids := s.factsByName[target.name]
+		if len(ids) == 0 {
+			return nil, true
+		}
+		out := make([]FactSnapshot, 0, len(ids))
+		for _, id := range ids {
+			fact, ok := s.factsByID[id]
+			if !ok || fact == nil || fact.isTransient {
+				continue
+			}
+			out = append(out, fact.detachedSnapshot())
+		}
+		return out, true
+	case conditionTargetTemplateKey:
+		ids := s.factsByTemplate[target.templateKey]
+		if len(ids) == 0 {
+			return nil, true
+		}
+		out := make([]FactSnapshot, 0, len(ids))
+		for _, id := range ids {
+			fact, ok := s.factsByID[id]
+			if !ok || fact == nil || fact.isTransient {
+				continue
+			}
+			out = append(out, fact.detachedSnapshot())
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 	if s == nil || s.closed {
 		return Snapshot{}, ErrClosedSession
@@ -732,11 +779,14 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	}, nil
 }
 
-func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]agendaChange, error) {
+func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]agendaChange, error) {
 	if s == nil || s.closed {
 		return nil, ErrClosedSession
 	}
 	if s.revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if source == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if s.agenda == nil {
@@ -753,7 +803,7 @@ func (s *Session) reconcileAgenda(ctx context.Context, snapshot Snapshot) ([]age
 	if s.rete != nil {
 		runtimeMatcher = s.rete
 	}
-	results, err := runtimeMatcher.match(ctx, snapshot)
+	results, err := runtimeMatcher.match(ctx, source)
 	if err != nil {
 		return nil, err
 	}
@@ -771,7 +821,7 @@ func (s *Session) reconcileAgendaInternal(ctx context.Context) ([]agendaChange, 
 	if changes, ok, err := s.reconcileAgendaWithoutSnapshot(ctx); ok || err != nil {
 		return changes, err
 	}
-	return s.reconcileAgenda(ctx, s.indexedSnapshotLocked())
+	return s.reconcileAgenda(ctx, s)
 }
 
 func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaChange, bool, error) {

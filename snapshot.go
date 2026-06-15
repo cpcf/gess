@@ -16,6 +16,43 @@ type Snapshot struct {
 	byTemplate map[TemplateKey][]int
 }
 
+func (s Snapshot) sourceGeneration() Generation {
+	return s.generation
+}
+
+func (s Snapshot) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) {
+	switch target.kind {
+	case conditionTargetName:
+		indexes := s.indexesForTarget(target)
+		if len(indexes) == 0 {
+			return nil, true
+		}
+		out := make([]FactSnapshot, 0, len(indexes))
+		for _, idx := range indexes {
+			if idx < 0 || idx >= len(s.facts) {
+				continue
+			}
+			out = append(out, s.facts[idx])
+		}
+		return out, true
+	case conditionTargetTemplateKey:
+		indexes := s.indexesForTarget(target)
+		if len(indexes) == 0 {
+			return nil, true
+		}
+		out := make([]FactSnapshot, 0, len(indexes))
+		for _, idx := range indexes {
+			if idx < 0 || idx >= len(s.facts) {
+				continue
+			}
+			out = append(out, s.facts[idx])
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
 func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation, facts []FactSnapshot) Snapshot {
 	copied := make([]FactSnapshot, len(facts))
 	for i, fact := range facts {

@@ -103,11 +103,11 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 	return ConditionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
 }
 
-func (p compiledConditionPlan) scan(ctx context.Context, snapshot Snapshot) ([]conditionMatch, error) {
-	return p.scanWithBindings(ctx, snapshot, nil)
+func (p compiledConditionPlan) scan(ctx context.Context, source factSource) ([]conditionMatch, error) {
+	return p.scanWithBindings(ctx, source, nil)
 }
 
-func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Snapshot, bindings []conditionMatch) ([]conditionMatch, error) {
+func (p compiledConditionPlan) scanWithBindings(ctx context.Context, source factSource, bindings []conditionMatch) ([]conditionMatch, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -119,7 +119,7 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 	}
 
 	matches := make([]conditionMatch, 0)
-	err := p.forEachMatchWithBindings(ctx, snapshot, bindings, func(match conditionMatch) error {
+	err := p.forEachMatchWithBindings(ctx, source, bindings, func(match conditionMatch) error {
 		matches = append(matches, match)
 		return nil
 	})
@@ -129,7 +129,7 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, snapshot Sn
 	return matches, nil
 }
 
-func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, snapshot Snapshot, bindings []conditionMatch, yield func(conditionMatch) error) error {
+func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, source factSource, bindings []conditionMatch, yield func(conditionMatch) error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -140,15 +140,14 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sna
 		return nil
 	}
 
-	indexes := snapshot.indexesForTarget(p.target)
-	for _, idx := range indexes {
+	facts, ok := source.factsForTarget(p.target)
+	if !ok {
+		return nil
+	}
+	for _, fact := range facts {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if idx < 0 || idx >= len(snapshot.facts) {
-			continue
-		}
-		fact := snapshot.facts[idx]
 		ok, err := p.matchesConstraints(ctx, fact)
 		if err != nil {
 			return err
@@ -240,14 +239,14 @@ func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact Fact
 	return true, nil
 }
 
-func (r compiledRule) scanCondition(ctx context.Context, snapshot Snapshot, conditionIndex int) ([]conditionMatch, error) {
+func (r compiledRule) scanCondition(ctx context.Context, source factSource, conditionIndex int) ([]conditionMatch, error) {
 	if conditionIndex < 0 || conditionIndex >= len(r.conditionPlans) {
 		return nil, nil
 	}
-	return r.conditionPlans[conditionIndex].scan(ctx, snapshot)
+	return r.conditionPlans[conditionIndex].scan(ctx, source)
 }
 
-func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) ([]bindingSet, error) {
+func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) ([]bindingSet, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -271,7 +270,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 			return nil
 		}
 
-		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, snapshot, selected)
+		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, source, selected)
 		if err != nil {
 			return err
 		}
@@ -280,7 +279,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 			copy(next, selected)
 			next[len(selected)] = match
 			entry := r.conditionPlans[conditionIndex].bindingTupleEntry(match)
-			nextToken := newMatchToken(token, entry, match.fact.Recency(), snapshot.Generation())
+			nextToken := newMatchToken(token, entry, match.fact.Recency(), source.sourceGeneration())
 			if err := walk(conditionIndex+1, next, nextToken); err != nil {
 				return err
 			}
@@ -294,16 +293,19 @@ func (r compiledRule) matchBindingSets(ctx context.Context, snapshot Snapshot) (
 	return sets, nil
 }
 
-func (r compiledRule) matchCandidates(ctx context.Context, snapshot Snapshot) ([]matchCandidate, error) {
-	return r.matchCandidatesWithAlpha(ctx, snapshot, nil)
+func (r compiledRule) matchCandidates(ctx context.Context, source factSource) ([]matchCandidate, error) {
+	return r.matchCandidatesWithAlpha(ctx, source, nil)
 }
 
-func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, snapshot Snapshot, source alphaFactSource) ([]matchCandidate, error) {
+func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]matchCandidate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if source == nil {
+		return nil, ErrInvalidRuleset
 	}
 	if len(r.conditionPlans) == 0 {
 		return nil, nil
@@ -319,7 +321,7 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, snapshot Sna
 			return err
 		}
 		if conditionIndex == len(r.conditionPlans) {
-			candidate, err := buildMatchCandidateFromMatches(r, snapshot, selected[:conditionIndex])
+			candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected[:conditionIndex])
 			if err != nil {
 				return err
 			}
@@ -335,12 +337,12 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, snapshot Sna
 			selected[conditionIndex] = match
 			return walk(conditionIndex + 1)
 		}
-		if source != nil {
-			if facts, ok := source.factsForCondition(plan.id); ok {
+		if alphaSource != nil {
+			if facts, ok := alphaSource.factsForCondition(plan.id); ok {
 				return plan.forEachAlphaMatchWithBindings(ctx, facts, selected[:conditionIndex], yield)
 			}
 		}
-		return plan.forEachMatchWithBindings(ctx, snapshot, selected[:conditionIndex], yield)
+		return plan.forEachMatchWithBindings(ctx, source, selected[:conditionIndex], yield)
 	}
 
 	if err := walk(0); err != nil {

@@ -138,17 +138,17 @@ func newReteRuntime(revision *Ruleset) (*reteRuntime, error) {
 	}, nil
 }
 
-func (r *reteRuntime) match(ctx context.Context, snapshot Snapshot) ([]ruleMatchResult, error) {
-	if r == nil || r.revision == nil || r.oracle == nil {
+func (r *reteRuntime) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {
+	if r == nil || r.revision == nil || r.oracle == nil || source == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if r.plan.betaSupported && r.beta != nil {
-		return r.beta.match(ctx, snapshot, r.alpha)
+		return r.beta.match(ctx, source, r.alpha)
 	}
 	if len(r.plan.unsupported) > 0 || r.alpha == nil {
-		return r.oracle.match(ctx, snapshot)
+		return r.oracle.match(ctx, source)
 	}
-	return (&alphaMatcher{revision: r.revision, source: r.alpha}).match(ctx, snapshot)
+	return (&alphaMatcher{revision: r.revision, source: r.alpha}).match(ctx, source)
 }
 
 func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Generation) ([]ruleMatchResult, bool, error) {
@@ -504,12 +504,17 @@ type alphaMatcher struct {
 	source   alphaFactSource
 }
 
+type factSource interface {
+	sourceGeneration() Generation
+	factsForTarget(conditionTarget) ([]FactSnapshot, bool)
+}
+
 type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
 }
 
-func (m *alphaMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatchResult, error) {
-	if m == nil || m.revision == nil || m.source == nil {
+func (m *alphaMatcher) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {
+	if m == nil || m.revision == nil || m.source == nil || source == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if ctx == nil {
@@ -530,7 +535,7 @@ func (m *alphaMatcher) match(ctx context.Context, snapshot Snapshot) ([]ruleMatc
 			return nil, ErrMatcher
 		}
 
-		candidates, err := rule.matchCandidatesWithAlpha(ctx, snapshot, m.source)
+		candidates, err := rule.matchCandidatesWithAlpha(ctx, source, m.source)
 		if err != nil {
 			return nil, err
 		}

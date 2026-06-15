@@ -87,8 +87,8 @@ func newReteBetaMemory(revision *Ruleset, plan reteNetworkPlan, facts []FactSnap
 	return memory
 }
 
-func (m *reteBetaMemory) match(ctx context.Context, snapshot Snapshot, source alphaFactSource) ([]ruleMatchResult, error) {
-	if m == nil || m.revision == nil {
+func (m *reteBetaMemory) match(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]ruleMatchResult, error) {
+	if m == nil || m.revision == nil || source == nil {
 		return nil, ErrInvalidRuleset
 	}
 	if ctx == nil {
@@ -109,7 +109,7 @@ func (m *reteBetaMemory) match(ctx context.Context, snapshot Snapshot, source al
 			return nil, fmt.Errorf("%w: missing compiled rule %q", ErrMatcher, ruleName)
 		}
 
-		candidates, err := m.matchRuleCandidates(ctx, snapshot, rule, source)
+		candidates, err := m.matchRuleCandidates(ctx, source, rule, alphaSource)
 		if err != nil {
 			return nil, err
 		}
@@ -194,12 +194,15 @@ func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) 
 	}
 }
 
-func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, snapshot Snapshot, rule compiledRule, source alphaFactSource) ([]matchCandidate, error) {
+func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, source factSource, rule compiledRule, alphaSource alphaFactSource) ([]matchCandidate, error) {
+	if source == nil {
+		return nil, ErrInvalidRuleset
+	}
 	ruleMemory := m.rules[rule.revisionID]
 	if ruleMemory == nil {
-		return rule.matchCandidatesWithAlpha(ctx, snapshot, source)
+		return rule.matchCandidatesWithAlpha(ctx, source, alphaSource)
 	}
-	return collectMatchCandidatesFromPrefixes(ctx, rule, snapshot.Generation(), ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
+	return collectMatchCandidatesFromPrefixes(ctx, rule, source.sourceGeneration(), ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
 }
 
 func (m *reteBetaMemory) insertFact(fact FactSnapshot) reteAgendaDelta {
