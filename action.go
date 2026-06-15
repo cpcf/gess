@@ -8,6 +8,11 @@ import (
 
 type ActionFunc func(ActionContext) error
 
+type actionContextBinding struct {
+	name string
+	fact FactSnapshot
+}
+
 type ActionContext struct {
 	ctx            context.Context
 	session        *Session
@@ -17,11 +22,10 @@ type ActionContext struct {
 	ruleID         RuleID
 	ruleRevisionID RuleRevisionID
 	generation     Generation
-	boundFacts     []FactSnapshot
-	bindings       []string
+	bindings       []actionContextBinding
 }
 
-func newActionContext(ctx context.Context, session *Session, activation activation, boundFacts []FactSnapshot, bindings []string) ActionContext {
+func newActionContext(ctx context.Context, session *Session, activation activation, bindings []actionContextBinding) ActionContext {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -33,7 +37,6 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 		ruleID:         activation.ruleID,
 		ruleRevisionID: activation.ruleRevisionID,
 		generation:     activation.generation,
-		boundFacts:     boundFacts,
 		bindings:       bindings,
 	}
 	if session != nil {
@@ -77,11 +80,13 @@ func (c ActionContext) Generation() Generation {
 }
 
 func (c ActionContext) BoundFacts() []FactSnapshot {
-	if len(c.boundFacts) == 0 {
+	if len(c.bindings) == 0 {
 		return nil
 	}
-	out := make([]FactSnapshot, len(c.boundFacts))
-	copy(out, c.boundFacts)
+	out := make([]FactSnapshot, len(c.bindings))
+	for i, binding := range c.bindings {
+		out[i] = binding.fact
+	}
 	return out
 }
 
@@ -89,14 +94,11 @@ func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
 	if name == "" {
 		return FactSnapshot{}, false
 	}
-	for idx, binding := range c.bindings {
-		if binding != name {
+	for _, binding := range c.bindings {
+		if binding.name != name {
 			continue
 		}
-		if idx < 0 || idx >= len(c.boundFacts) {
-			return FactSnapshot{}, false
-		}
-		return c.boundFacts[idx], true
+		return binding.fact, true
 	}
 	return FactSnapshot{}, false
 }
@@ -275,8 +277,7 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		return ActionContext{}, ErrInvalidRuleset
 	}
 
-	boundFacts := make([]FactSnapshot, 0, len(activation.bindings))
-	bindings := make([]string, 0, len(activation.bindings))
+	bindings := make([]actionContextBinding, 0, len(activation.bindings))
 	for _, entry := range activation.bindings {
 		fact, ok := s.factsByID[entry.factID]
 		if !ok {
@@ -286,9 +287,11 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 			return ActionContext{}, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.id)
 		}
 		snapshot := fact.detachedSnapshot()
-		boundFacts = append(boundFacts, snapshot)
-		bindings = append(bindings, entry.binding)
+		bindings = append(bindings, actionContextBinding{
+			name: entry.binding,
+			fact: snapshot,
+		})
 	}
 
-	return newActionContext(ctx, s, activation, boundFacts, bindings), nil
+	return newActionContext(ctx, s, activation, bindings), nil
 }

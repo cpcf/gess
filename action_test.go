@@ -150,6 +150,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 		initialBoundFacts []FactSnapshot
 		laterBinding      FactSnapshot
 		laterBoundFacts   []FactSnapshot
+		storedContext     ActionContext
 	)
 
 	if err := workspace.AddAction(ActionSpec{
@@ -168,6 +169,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 				return errors.New("expected one bound fact")
 			}
 			initialBoundFacts = boundFacts
+			storedContext = ctx
 
 			binding, ok := ctx.Binding("person")
 			if !ok {
@@ -305,6 +307,12 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	}
 	if got := laterBinding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
 		t.Fatalf("later binding name = %v, want Ada", got)
+	}
+	if got, ok := storedContext.Binding("person"); !ok || !got.Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("stored context binding = (%v, %v), want Ada", got, ok)
+	}
+	if got := storedContext.BoundFacts(); len(got) != 1 || !got[0].Fields()["name"].Equal(mustValue(t, "Ada")) {
+		t.Fatalf("stored context bound facts = %#v, want Ada", got)
 	}
 
 	after := mustSnapshot(t, context.Background(), session)
