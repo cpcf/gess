@@ -589,9 +589,9 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 		t.Fatalf("Reset: %v", err)
 	}
 	resetFact := mustOnlyFact(t, session)
-	firstStorage := session.resetWorkspace.facts
+	firstStorage := session.facts
 	if len(firstStorage) == 0 {
-		t.Fatal("reset workspace fact storage missing after reset")
+		t.Fatal("session fact storage missing after reset")
 	}
 	resetLabels := resetFact.fields["labels"].data.([]Value)
 	resetLabels[0] = mustValue(t, "mutated")
@@ -611,9 +611,9 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
 	if got := session.resetWorkspace.facts; len(got) == 0 {
-		t.Fatal("reset workspace fact storage missing after reused reset")
+		t.Fatal("reset workspace did not retain previous live fact storage")
 	} else if &firstStorage[0] != &got[0] {
-		t.Fatal("reset workspace fact storage was not reused")
+		t.Fatal("previous live fact storage was not returned to reset workspace")
 	}
 
 	snapshotFact := firstSnapshot.Facts()[0]

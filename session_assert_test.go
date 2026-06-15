@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -67,6 +68,65 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	}
 	if templateResult.Fact.TemplateKey() != template.Key() {
 		t.Fatalf("template key = %q, want %q", templateResult.Fact.TemplateKey(), template.Key())
+	}
+}
+
+func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testing.T) {
+	session := mustSession(t, mustCompile(t), "workspace-fact-storage-session")
+
+	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("first assert: %v", err)
+	}
+	if got, want := len(session.facts), 1; got != want {
+		t.Fatalf("facts slice length after first assert = %d, want %d", got, want)
+	}
+	if got, want := session.factsByID[first.Fact.ID()], &session.facts[0]; got != want {
+		t.Fatalf("first fact pointer = %p, want %p", got, want)
+	}
+
+	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		"name": "Bob",
+	}))
+	if err != nil {
+		t.Fatalf("second assert: %v", err)
+	}
+	if got, want := len(session.facts), 2; got != want {
+		t.Fatalf("facts slice length after second assert = %d, want %d", got, want)
+	}
+	if got, want := session.factsByID[first.Fact.ID()], &session.facts[0]; got != want {
+		t.Fatalf("first fact pointer after growth = %p, want %p", got, want)
+	}
+	if got, want := session.factsByID[second.Fact.ID()], &session.facts[1]; got != want {
+		t.Fatalf("second fact pointer = %p, want %p", got, want)
+	}
+
+	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
+		t.Fatalf("retract first fact: %v", err)
+	}
+	if _, ok := session.factsByID[first.Fact.ID()]; ok {
+		t.Fatalf("retracted fact %q remained in factsByID", first.Fact.ID())
+	}
+	if got, want := len(session.facts), 1; got != want {
+		t.Fatalf("facts slice length after retract = %d, want %d", got, want)
+	}
+	for i := range 8 {
+		if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+			"name": fmt.Sprintf("person-%d", i),
+		})); err != nil {
+			t.Fatalf("growth assert %d: %v", i, err)
+		}
+	}
+	if _, ok := session.factsByID[first.Fact.ID()]; ok {
+		t.Fatalf("retracted fact %q was resurrected after slice growth", first.Fact.ID())
+	}
+	for i := range session.facts {
+		fact := &session.facts[i]
+		if got := session.factsByID[fact.id]; got != fact {
+			t.Fatalf("fact %q pointer after growth = %p, want %p", fact.id, got, fact)
+		}
 	}
 }
 
@@ -196,27 +256,27 @@ func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *tes
 func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testing.T) {
 	type duplicateParityCase struct {
 		name            string
-		duplicatePolicy  DuplicatePolicy
+		duplicatePolicy DuplicatePolicy
 		duplicateKey    []string
 	}
 
 	cases := []duplicateParityCase{
 		{
-			name:           "structural",
+			name:            "structural",
 			duplicatePolicy: DuplicateStructural,
 		},
 		{
-			name:           "unique-key",
+			name:            "unique-key",
 			duplicatePolicy: DuplicateUniqueKey,
-			duplicateKey:   []string{"id"},
+			duplicateKey:    []string{"id"},
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			baseSpec := TemplateSpec{
-				Name:            "event",
-				DuplicatePolicy: tc.duplicatePolicy,
+				Name:              "event",
+				DuplicatePolicy:   tc.duplicatePolicy,
 				DuplicateKeyNames: tc.duplicateKey,
 				Fields: []FieldSpec{
 					{Name: "id", Kind: ValueString, Required: true},
@@ -240,11 +300,11 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 				t.Fatalf("AddTemplate(gate): %v", err)
 			}
 			if err := slotWorkspace.AddTemplate(TemplateSpec{
-				Name:             "event",
-				Closed:           true,
-				DuplicatePolicy:  tc.duplicatePolicy,
+				Name:              "event",
+				Closed:            true,
+				DuplicatePolicy:   tc.duplicatePolicy,
 				DuplicateKeyNames: tc.duplicateKey,
-				Fields:           baseSpec.Fields,
+				Fields:            baseSpec.Fields,
 			}); err != nil {
 				t.Fatalf("AddTemplate(event): %v", err)
 			}
