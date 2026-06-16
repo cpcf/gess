@@ -3,7 +3,9 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -69,6 +71,11 @@ type Session struct {
 	runGuard         chan struct{}
 	runState         atomic.Value
 	runAgendaDelta   reteAgendaDelta
+	runAgendaDeltas  []reteAgendaDelta
+	runAgendaStates  []runAgendaDeltaState
+	runAgendaBuckets map[candidateIdentity]int
+	runAgendaAdded   []reteTerminalTokenDelta
+	runAgendaRemoved []reteTerminalTokenDelta
 	runAgendaPending bool
 	agendaReady      bool
 	agendaDirty      bool
@@ -2082,9 +2089,10 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 		return
 	}
 	if s.runAgendaPending {
-		s.markAgendaDirty()
+		s.runAgendaDeltas = append(s.runAgendaDeltas, delta)
 		return
 	}
+	s.runAgendaDeltas = s.runAgendaDeltas[:0]
 	added := s.runAgendaDelta.added[:0]
 	removed := s.runAgendaDelta.removed[:0]
 	s.runAgendaDelta = reteAgendaDelta{
@@ -2099,7 +2107,12 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 	if s == nil || !s.runAgendaPending {
 		return nil
 	}
-	delta := s.runAgendaDelta
+	delta, err := s.coalesceRunAgendaDeltas()
+	if err != nil {
+		s.clearRunAgendaDelta()
+		s.markAgendaDirty()
+		return err
+	}
 	if _, ok, err := s.applyReteAgendaDelta(ctx, delta); err != nil {
 		s.clearRunAgendaDelta()
 		s.markAgendaDirty()
@@ -2129,7 +2142,140 @@ func (s *Session) clearRunAgendaDelta() {
 	s.runAgendaDelta.added = s.runAgendaDelta.added[:0]
 	s.runAgendaDelta.removed = s.runAgendaDelta.removed[:0]
 	s.runAgendaDelta.supported = false
+	for i := range s.runAgendaDeltas {
+		clear(s.runAgendaDeltas[i].added)
+		clear(s.runAgendaDeltas[i].removed)
+		s.runAgendaDeltas[i].added = s.runAgendaDeltas[i].added[:0]
+		s.runAgendaDeltas[i].removed = s.runAgendaDeltas[i].removed[:0]
+		s.runAgendaDeltas[i].supported = false
+	}
+	s.runAgendaDeltas = s.runAgendaDeltas[:0]
+	for i := range s.runAgendaStates {
+		s.runAgendaStates[i] = runAgendaDeltaState{}
+	}
+	s.runAgendaStates = s.runAgendaStates[:0]
+	if s.runAgendaBuckets != nil {
+		clear(s.runAgendaBuckets)
+	}
+	clear(s.runAgendaAdded)
+	clear(s.runAgendaRemoved)
+	s.runAgendaAdded = s.runAgendaAdded[:0]
+	s.runAgendaRemoved = s.runAgendaRemoved[:0]
 	s.runAgendaPending = false
+}
+
+type runAgendaDeltaState struct {
+	initial bool
+	present bool
+	token   reteTerminalTokenDelta
+	next    int
+}
+
+func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
+	if s == nil || !s.runAgendaPending {
+		return reteAgendaDelta{}, nil
+	}
+	if len(s.runAgendaDeltas) == 0 {
+		return s.runAgendaDelta, nil
+	}
+	if s.revision == nil {
+		return reteAgendaDelta{}, ErrInvalidRuleset
+	}
+
+	total := len(s.runAgendaDelta.added) + len(s.runAgendaDelta.removed)
+	for _, delta := range s.runAgendaDeltas {
+		total += len(delta.added) + len(delta.removed)
+	}
+	if s.runAgendaBuckets == nil {
+		s.runAgendaBuckets = make(map[candidateIdentity]int, total)
+	} else {
+		clear(s.runAgendaBuckets)
+	}
+	for i := range s.runAgendaStates {
+		s.runAgendaStates[i] = runAgendaDeltaState{}
+	}
+	s.runAgendaStates = slices.Grow(s.runAgendaStates[:0], total)
+	processDelta := func(delta reteAgendaDelta) error {
+		for _, token := range delta.removed {
+			if err := s.recordCoalescedRunAgendaToken(token, false); err != nil {
+				return err
+			}
+		}
+		for _, token := range delta.added {
+			if err := s.recordCoalescedRunAgendaToken(token, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := processDelta(s.runAgendaDelta); err != nil {
+		return reteAgendaDelta{}, err
+	}
+	for _, delta := range s.runAgendaDeltas {
+		if err := processDelta(delta); err != nil {
+			return reteAgendaDelta{}, err
+		}
+	}
+
+	added := slices.Grow(s.runAgendaAdded[:0], total)
+	removed := slices.Grow(s.runAgendaRemoved[:0], total)
+	for i := range s.runAgendaStates {
+		state := &s.runAgendaStates[i]
+		if state.present == state.initial {
+			continue
+		}
+		if state.present {
+			added = append(added, state.token)
+			continue
+		}
+		removed = append(removed, state.token)
+	}
+	s.runAgendaAdded = added
+	s.runAgendaRemoved = removed
+	sort.SliceStable(removed, func(i, j int) bool {
+		return agendaDeltaTerminalTokenLess(s.revision, removed[i], removed[j])
+	})
+	sort.SliceStable(added, func(i, j int) bool {
+		return agendaDeltaTerminalTokenLess(s.revision, added[i], added[j])
+	})
+
+	return reteAgendaDelta{
+		supported: true,
+		added:     added,
+		removed:   removed,
+	}, nil
+}
+
+func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, present bool) error {
+	if s == nil || token.token == nil {
+		return nil
+	}
+	rule, ok := s.revision.rulesByRevisionID[token.ruleRevisionID]
+	if !ok {
+		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, token.ruleRevisionID)
+	}
+	identity := candidateIdentityForTerminalToken(rule, token.token)
+	for index := s.runAgendaBuckets[identity]; index != 0; {
+		state := &s.runAgendaStates[index-1]
+		if terminalTokenDeltasEqual(s.revision, state.token, token) {
+			state.present = present
+			state.token = token
+			return nil
+		}
+		index = state.next
+	}
+	existing, _, ok := s.agenda.activationForTerminalToken(rule, token.token)
+	state := runAgendaDeltaState{
+		initial: ok && existing.status == activationStatusPending,
+		present: ok && existing.status == activationStatusPending,
+		token:   token,
+		next:    s.runAgendaBuckets[identity],
+	}
+	state.present = present
+	s.runAgendaStates = append(s.runAgendaStates, state)
+	s.runAgendaBuckets[identity] = len(s.runAgendaStates)
+	return nil
 }
 
 func (s *Session) drainQueuedMutations(ctx context.Context) error {

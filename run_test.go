@@ -932,7 +932,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 		}
 	})
 
-	t.Run("supported multi mutation fallback", func(t *testing.T) {
+	t.Run("supported multi mutation coalesces", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
 			Name:   "person",
@@ -985,6 +985,15 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 				if err == nil {
 					auditID = result.Fact.ID()
 				}
+				if session.agendaDirty {
+					return errors.New("supported assert dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported assert cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported assert did not record run delta")
+				}
 				return err
 			},
 		}); err != nil {
@@ -1003,6 +1012,15 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 					Set: mustFields(t, map[string]any{"status": "done"}),
 				})
 				modifyResult = result
+				if session.agendaDirty {
+					return errors.New("supported modify dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported modify cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported modify did not record run delta")
+				}
 				return err
 			},
 		}); err != nil {
@@ -1019,6 +1037,15 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 				obsoleteID = binding.ID()
 				result, err := ctx.Retract(binding.ID())
 				retractResult = result
+				if session.agendaDirty {
+					return errors.New("supported retract dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported retract cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported retract did not record run delta")
+				}
 				return err
 			},
 		}); err != nil {
@@ -1193,6 +1220,161 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			if factEvents[i] != wantFactEvents[i] {
 				t.Fatalf("fact event order = %#v, want %#v", factEvents, wantFactEvents)
 			}
+		}
+	})
+
+	t.Run("supported transient add-remove pair", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "trigger",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(trigger): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "temp",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(temp): %v", err)
+		}
+
+		var (
+			session      *Session
+			tempID       FactID
+			actionsSeen  []string
+			tempFired    bool
+			tempFireSeen int
+		)
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-temp",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "assert-temp")
+				result, err := ctx.AssertTemplate(TemplateKey("temp"), mustFields(t, map[string]any{"id": "tmp-1"}))
+				if err != nil {
+					return err
+				}
+				if result.Status != AssertInserted {
+					return errors.New("temp was not inserted")
+				}
+				tempID = result.Fact.ID()
+				if session.agendaDirty {
+					return errors.New("supported assert dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported assert cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported assert did not record run delta")
+				}
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(assert-temp): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "retract-temp",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "retract-temp")
+				if tempID.IsZero() {
+					return errors.New("temp ID is zero")
+				}
+				result, err := ctx.Retract(tempID)
+				if err != nil {
+					return err
+				}
+				if result.Status != RetractRemoved {
+					return errors.New("temp was not retracted")
+				}
+				if session.agendaDirty {
+					return errors.New("supported retract dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported retract cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported retract did not record run delta")
+				}
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(retract-temp): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record-temp",
+			Fn: func(ActionContext) error {
+				tempFired = true
+				tempFireSeen++
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(record-temp): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "trigger-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "trigger", TemplateKey: TemplateKey("trigger")},
+			},
+			Actions: []RuleActionSpec{{Name: "assert-temp"}, {Name: "retract-temp"}},
+		}); err != nil {
+			t.Fatalf("AddRule(trigger-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "temp-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "temp", TemplateKey: TemplateKey("temp")},
+			},
+			Actions: []RuleActionSpec{{Name: "record-temp"}},
+		}); err != nil {
+			t.Fatalf("AddRule(temp-rule): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		session, err = NewSession(
+			revision,
+			WithSessionID("run-supported-transient-add-remove-session"),
+			WithInitialFacts(SessionInitialFact{
+				TemplateKey: TemplateKey("trigger"),
+				Fields:      mustFields(t, map[string]any{"id": "trigger-1"}),
+			}),
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 1 {
+			t.Fatalf("run fired = %d, want 1", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"assert-temp", "retract-temp"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+		if tempFired || tempFireSeen != 0 {
+			t.Fatalf("temp rule fired unexpectedly: fired=%v count=%d", tempFired, tempFireSeen)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after successful run")
+		}
+		if session.agendaDirty || !session.agendaReady {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		}
+		after := mustSnapshot(t, context.Background(), session)
+		if _, ok := after.Fact(tempID); ok {
+			t.Fatalf("temp fact %q remained after retract", tempID)
 		}
 	})
 

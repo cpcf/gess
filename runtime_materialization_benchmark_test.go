@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -33,6 +34,7 @@ var (
 	benchmarkAssertResult     AssertResult
 	benchmarkModifyResult     ModifyResult
 	benchmarkRetractResult    RetractResult
+	benchmarkRunResult        RunResult
 )
 
 func BenchmarkSnapshotConstructionLoanPublic(b *testing.B) {
@@ -119,6 +121,168 @@ func BenchmarkActionContextCreationClaims(b *testing.B) {
 	if benchmarkActionContext.ActivationID() != activation.id {
 		b.Fatalf("activation context ID = %q, want %q", benchmarkActionContext.ActivationID(), activation.id)
 	}
+}
+
+func BenchmarkRunActionOriginMultiDelta(b *testing.B) {
+	revision := mustCompileActionOriginMultiDeltaRuleset(b)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		session := mustActionOriginMultiDeltaSession(b, revision)
+		b.StartTimer()
+		result, err := session.Run(ctx)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 3 {
+			b.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+		}
+		if session.agendaDirty || !session.agendaReady || session.runAgendaPending {
+			b.Fatalf("agenda state = dirty %v ready %v pending %v, want clean ready no pending", session.agendaDirty, session.agendaReady, session.runAgendaPending)
+		}
+		benchmarkRunResult = result
+	}
+}
+
+func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	trigger := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "trigger",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	audit := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "audit",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	obsolete := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "obsolete",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "assert-audit",
+		Fn: func(ctx ActionContext) error {
+			_, err := ctx.AssertTemplate(audit.Key(), Fields{"id": mustValue(t, "audit-1")})
+			return err
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "promote-person",
+		Fn: func(ctx ActionContext) error {
+			binding, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("missing person binding")
+			}
+			_, err := ctx.Modify(binding.ID(), FactPatch{
+				Set: Fields{"status": mustValue(t, "done")},
+			})
+			return err
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "retire-obsolete",
+		Fn: func(ctx ActionContext) error {
+			binding, ok := ctx.Binding("obsolete")
+			if !ok {
+				return errors.New("missing obsolete binding")
+			}
+			_, err := ctx.Retract(binding.ID())
+			return err
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ActionContext) error { return nil }})
+
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "advance",
+		Salience: 10,
+		Conditions: []RuleConditionSpec{
+			{Binding: "trigger", TemplateKey: trigger.Key()},
+			{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
+				},
+			},
+			{Binding: "obsolete", TemplateKey: obsolete.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "promote-person"}, {Name: "retire-obsolete"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "audit-created",
+		Conditions: []RuleConditionSpec{
+			{Binding: "audit", TemplateKey: audit.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "person-done",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "done"},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return revision
+}
+
+func mustActionOriginMultiDeltaSession(t testing.TB, revision *Ruleset) *Session {
+	t.Helper()
+
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{
+			TemplateKey: TemplateKey("trigger"),
+			Fields:      Fields{"id": mustValue(t, "trigger-1")},
+		},
+		SessionInitialFact{
+			TemplateKey: TemplateKey("person"),
+			Fields: Fields{
+				"id":     mustValue(t, "person-1"),
+				"status": mustValue(t, "pending"),
+			},
+		},
+		SessionInitialFact{
+			TemplateKey: TemplateKey("obsolete"),
+			Fields:      Fields{"id": mustValue(t, "obsolete-1")},
+		},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	return session
 }
 
 func BenchmarkTemplateDefaultsValidationAndDuplicateKeyMap(b *testing.B) {
