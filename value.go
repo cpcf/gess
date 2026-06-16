@@ -365,6 +365,17 @@ func cloneValue(v Value) Value {
 	}
 }
 
+func cloneValueSlice(in []Value) []Value {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Value, len(in))
+	for i, value := range in {
+		out[i] = cloneValue(value)
+	}
+	return out
+}
+
 func valueShareable(v Value) bool {
 	switch v.Kind() {
 	case ValueList, ValueMap:
@@ -573,6 +584,60 @@ func numericDuplicateKey(value Value) string {
 	default:
 		return "number:invalid"
 	}
+}
+
+func duplicateKeyValueCapacity(value Value) int {
+	switch value.Kind() {
+	case ValueNull:
+		return len("null")
+	case ValueBool:
+		if value.data.(bool) {
+			return len("bool:true")
+		}
+		return len("bool:false")
+	case ValueInt:
+		return len("number:") + int64Len(value.data.(int64))
+	case ValueFloat:
+		floating := value.data.(float64)
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return len("number:") + int64Len(int64(floating))
+		}
+		var buf [32]byte
+		return len("number:") + len(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
+	case ValueString:
+		return len("string:") + len(value.data.(string)) + len(`""`) + len(`\u0000`)
+	case ValueList:
+		list := value.data.([]Value)
+		size := len("list[")
+		for i, item := range list {
+			if i > 0 {
+				size++
+			}
+			size += duplicateKeyValueCapacity(item)
+		}
+		return size + len("]")
+	case ValueMap:
+		rawMap := value.data.(map[string]Value)
+		size := len("map{")
+		first := true
+		for key, value := range rawMap {
+			if !first {
+				size++
+			}
+			first = false
+			size += len(key) + 1 + duplicateKeyValueCapacity(value)
+		}
+		return size + len("}")
+	default:
+		return len("any")
+	}
+}
+
+func int64Len(value int64) int {
+	var buf [20]byte
+	return len(strconv.AppendInt(buf[:0], value, 10))
 }
 
 func (v Value) String() string {

@@ -101,8 +101,38 @@ type workingFact struct {
 
 type factSlot struct {
 	value    Value
-	presence FieldPresence
+	presence fieldPresenceCode
 	ok       bool
+}
+
+type fieldPresenceCode uint8
+
+const (
+	fieldPresenceOmitted fieldPresenceCode = iota
+	fieldPresenceDefault
+	fieldPresenceExplicit
+)
+
+func encodeFieldPresence(presence FieldPresence) fieldPresenceCode {
+	switch presence {
+	case FieldPresenceDefault:
+		return fieldPresenceDefault
+	case FieldPresenceExplicit:
+		return fieldPresenceExplicit
+	default:
+		return fieldPresenceOmitted
+	}
+}
+
+func (p fieldPresenceCode) fieldPresence() FieldPresence {
+	switch p {
+	case fieldPresenceDefault:
+		return FieldPresenceDefault
+	case fieldPresenceExplicit:
+		return FieldPresenceExplicit
+	default:
+		return FieldPresenceOmitted
+	}
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
@@ -217,7 +247,14 @@ func makeDuplicateKey(name string, templateKey TemplateKey, fields Fields) Dupli
 }
 
 func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) DuplicateKey {
-	return makeDuplicateKeyForTemplateWithSlots(name, template, fields, nil)
+	var b strings.Builder
+	b.WriteString("name:")
+	b.WriteString(name)
+	b.WriteString("|template:")
+	b.WriteString(template.key.String())
+	b.WriteString("|fields:")
+	emitDuplicateKeyFields(&b, template, fields, nil)
+	return DuplicateKey(b.String())
 }
 
 func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
@@ -232,6 +269,9 @@ func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fie
 
 func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
 	var b strings.Builder
+	if len(slots) > 0 {
+		b.Grow(duplicateKeyCapacity(name, template, fields, slots))
+	}
 	b.WriteString("name:")
 	b.WriteString(name)
 	b.WriteString("|template:")
@@ -266,7 +306,7 @@ func (f FactSnapshot) FieldPresence(field string) (FieldPresence, bool) {
 		}
 	}
 	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
-		return f.fieldSlots[slot].presence, true
+		return f.fieldSlots[slot].presence.fieldPresence(), true
 	}
 	return FieldPresence(""), false
 }
@@ -344,7 +384,7 @@ func materializePresenceFromSlots(slots []factSlot, specs []FieldSpec) map[strin
 		if i >= len(slots) {
 			break
 		}
-		out[spec.Name] = slots[i].presence
+		out[spec.Name] = slots[i].presence.fieldPresence()
 	}
 	if len(out) == 0 {
 		return nil
@@ -393,6 +433,19 @@ func emitDuplicateKeyFieldsByNames(b *strings.Builder, template Template, fields
 		return
 	}
 
+	if len(slots) > 0 && len(template.duplicateKeySlots) == len(template.duplicateKeyNames) {
+		for i, slot := range template.duplicateKeySlots {
+			if slot < 0 || slot >= len(slots) {
+				continue
+			}
+			resolved := slots[slot]
+			if resolved.ok {
+				writeDuplicateKeyEntry(b, template.duplicateKeyNames[i], resolved.value)
+			}
+		}
+		return
+	}
+
 	for _, fieldName := range template.duplicateKeyNames {
 		if value, ok := duplicateFieldValue(fieldName, template, fields, slots); ok {
 			writeDuplicateKeyEntry(b, fieldName, value)
@@ -432,4 +485,53 @@ func writeDuplicateKeyEntry(b *strings.Builder, fieldName string, value Value) {
 	b.WriteByte('=')
 	encodeValueForDuplicateKey(b, value)
 	b.WriteByte(';')
+}
+
+func duplicateKeyCapacity(name string, template Template, fields Fields, slots []factSlot) int {
+	size := len("name:") + len(name) + len("|template:") + len(template.key) + len("|fields:")
+	if template.duplicatePolicy == DuplicateAllow {
+		return size
+	}
+	if len(slots) > 0 {
+		if template.duplicatePolicy == DuplicateUniqueKey {
+			if len(template.duplicateKeySlots) == len(template.duplicateKeyNames) {
+				for i, slot := range template.duplicateKeySlots {
+					if slot < 0 || slot >= len(slots) {
+						continue
+					}
+					resolved := slots[slot]
+					if resolved.ok {
+						size += len(template.duplicateKeyNames[i]) + 2 + duplicateKeyValueCapacity(resolved.value)
+					}
+				}
+				return size
+			}
+		} else if len(template.fields) > 0 {
+			for i, spec := range template.fields {
+				if i >= len(slots) {
+					break
+				}
+				if !slots[i].ok {
+					continue
+				}
+				size += len(spec.Name) + 2 + duplicateKeyValueCapacity(slots[i].value)
+			}
+			return size
+		}
+	}
+	if template.duplicatePolicy == DuplicateUniqueKey {
+		for _, fieldName := range template.duplicateKeyNames {
+			if value, ok := fields[fieldName]; ok {
+				size += len(fieldName) + 2 + duplicateKeyValueCapacity(value)
+			}
+		}
+		return size
+	}
+	if fields == nil {
+		return size
+	}
+	for key, value := range fields {
+		size += len(key) + 2 + duplicateKeyValueCapacity(value)
+	}
+	return size
 }

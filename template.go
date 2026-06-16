@@ -51,9 +51,19 @@ type Template struct {
 	fieldIndexes      map[string]int
 	fieldDefaults     map[string]Value
 	fieldAllowed      map[string][]Value
+	fieldValidation   []fieldValidationSpec
 	duplicatePolicy   DuplicatePolicy
 	duplicateKeyNames []string
+	duplicateKeySlots []int
 	closed            bool
+}
+
+type fieldValidationSpec struct {
+	kind          ValueKind
+	required      bool
+	hasDefault    bool
+	defaultValue  Value
+	allowedValues []Value
 }
 
 func (s TemplateSpec) clone() TemplateSpec {
@@ -134,10 +144,10 @@ func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresen
 
 	slots := make([]factSlot, len(t.fields))
 	for i, field := range t.fields {
-		slots[i].presence = FieldPresenceOmitted
+		slots[i].presence = fieldPresenceOmitted
 		if presence != nil {
 			if next, ok := presence[field.Name]; ok {
-				slots[i].presence = next
+				slots[i].presence = encodeFieldPresence(next)
 			}
 		}
 		value, ok := fields[field.Name]
@@ -154,10 +164,75 @@ func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 	if !t.closed || len(t.fields) == 0 {
 		return nil, nil
 	}
+	if len(t.fieldValidation) != len(t.fields) {
+		return t.buildValidatedFieldSlotsFromSpecs(fields)
+	}
 
 	slots := make([]factSlot, len(t.fields))
 	for i := range t.fields {
-		slots[i].presence = FieldPresenceOmitted
+		slots[i].presence = fieldPresenceOmitted
+	}
+
+	for fieldName, value := range fields {
+		slot, ok := t.fieldSlot(fieldName)
+		if !ok {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "unknown field",
+			}
+		}
+
+		validation := t.fieldValidation[slot]
+		if validation.kind != ValueAny && !isValueCompatibleWithKind(validation.kind, value) {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "invalid type",
+			}
+		}
+		if len(validation.allowedValues) > 0 && !valueAllowed(validation.allowedValues, value) {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    fieldName,
+				Reason:       "value not in allowed set",
+			}
+		}
+
+		slots[slot].value = cloneValue(value)
+		slots[slot].ok = true
+		slots[slot].presence = fieldPresenceExplicit
+	}
+
+	for i, validation := range t.fieldValidation {
+		if slots[i].ok {
+			continue
+		}
+
+		if validation.hasDefault {
+			slots[i].value = cloneValue(validation.defaultValue)
+			slots[i].ok = true
+			slots[i].presence = fieldPresenceDefault
+			continue
+		}
+
+		slots[i].presence = fieldPresenceOmitted
+		if validation.required {
+			return nil, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    t.fields[i].Name,
+				Reason:       "required field is missing",
+			}
+		}
+	}
+
+	return slots, nil
+}
+
+func (t Template) buildValidatedFieldSlotsFromSpecs(fields Fields) ([]factSlot, error) {
+	slots := make([]factSlot, len(t.fields))
+	for i := range t.fields {
+		slots[i].presence = fieldPresenceOmitted
 	}
 
 	for fieldName, value := range fields {
@@ -188,7 +263,7 @@ func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 
 		slots[slot].value = cloneValue(value)
 		slots[slot].ok = true
-		slots[slot].presence = FieldPresenceExplicit
+		slots[slot].presence = fieldPresenceExplicit
 	}
 
 	for i, field := range t.fields {
@@ -199,11 +274,11 @@ func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 		if defaultValue, hasDefault := t.fieldDefaults[field.Name]; hasDefault {
 			slots[i].value = cloneValue(defaultValue)
 			slots[i].ok = true
-			slots[i].presence = FieldPresenceDefault
+			slots[i].presence = fieldPresenceDefault
 			continue
 		}
 
-		slots[i].presence = FieldPresenceOmitted
+		slots[i].presence = fieldPresenceOmitted
 		if field.Required {
 			return nil, &ValidationError{
 				TemplateName: t.name,
@@ -234,7 +309,9 @@ func (t Template) clone() Template {
 
 	out.fieldDefaults = cloneFieldDefaults(t.fieldDefaults)
 	out.fieldAllowed = cloneFieldAllowed(t.fieldAllowed)
+	out.fieldValidation = cloneFieldValidation(t.fieldValidation)
 	out.duplicateKeyNames = append(out.duplicateKeyNames[:0:0], t.duplicateKeyNames...)
+	out.duplicateKeySlots = append(out.duplicateKeySlots[:0:0], t.duplicateKeySlots...)
 
 	return out
 }
@@ -437,6 +514,21 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	for i, field := range fields {
 		fieldIndexes[field.Name] = i
 	}
+	fieldValidation := make([]fieldValidationSpec, len(fields))
+	for i, field := range fields {
+		validation := fieldValidationSpec{
+			kind:     field.Kind,
+			required: field.Required,
+		}
+		if field.HasDefault {
+			validation.hasDefault = true
+			validation.defaultValue = fieldDefaults[field.Name]
+		}
+		if allowed := fieldAllowed[field.Name]; len(allowed) > 0 {
+			validation.allowedValues = allowed
+		}
+		fieldValidation[i] = validation
+	}
 
 	duplicateKeyNames, err := normalizeTemplateDuplicateFields(spec.DuplicateKeyNames, fieldsByName)
 	if err != nil {
@@ -459,6 +551,13 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			Reason:       "duplicate unique-key policy requires duplicate key fields",
 		}
 	}
+	var duplicateKeySlots []int
+	if len(duplicateKeyNames) > 0 {
+		duplicateKeySlots = make([]int, len(duplicateKeyNames))
+		for i, fieldName := range duplicateKeyNames {
+			duplicateKeySlots[i] = fieldIndexes[fieldName]
+		}
+	}
 
 	return Template{
 		name:              name,
@@ -469,8 +568,10 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		fieldIndexes:      fieldIndexes,
 		fieldDefaults:     fieldDefaults,
 		fieldAllowed:      fieldAllowed,
+		fieldValidation:   fieldValidation,
 		duplicatePolicy:   spec.DuplicatePolicy,
 		duplicateKeyNames: duplicateKeyNames,
+		duplicateKeySlots: duplicateKeySlots,
 		closed:            spec.Closed,
 	}, nil
 }
@@ -597,6 +698,23 @@ func cloneFieldAllowed(in map[string][]Value) map[string][]Value {
 			cloned[i] = cloneValue(value)
 		}
 		out[fieldName] = cloned
+	}
+	return out
+}
+
+func cloneFieldValidation(in []fieldValidationSpec) []fieldValidationSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]fieldValidationSpec, len(in))
+	for i, validation := range in {
+		out[i] = fieldValidationSpec{
+			kind:          validation.kind,
+			required:      validation.required,
+			hasDefault:    validation.hasDefault,
+			defaultValue:  cloneValue(validation.defaultValue),
+			allowedValues: cloneValueSlice(validation.allowedValues),
+		}
 	}
 	return out
 }
