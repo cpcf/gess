@@ -374,6 +374,136 @@ func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	}
 }
 
+func TestAgendaActivationFingerprintCollisionKeepsFullIdentity(t *testing.T) {
+	revision, _ := mustAgendaRevision(t, 10)
+	rule := revision.rules["match-person"]
+	firstIdentity := candidateIdentity{
+		generation: 1,
+		count:      1,
+		key: candidateIdentityKey{
+			scopeHash: 100,
+			hash:      42,
+		},
+	}
+	secondIdentity := candidateIdentity{
+		generation: 1,
+		count:      1,
+		key: candidateIdentityKey{
+			scopeHash: 200,
+			hash:      42,
+		},
+	}
+	firstID := newFactID(1, 1)
+	secondID := newFactID(1, 2)
+	results := []ruleMatchResult{
+		{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates: []matchCandidate{
+				mustCollisionCandidate(rule.id, rule.revisionID, firstIdentity, firstID, 1, 1),
+				mustCollisionCandidate(rule.id, rule.revisionID, secondIdentity, secondID, 1, 2),
+			},
+		},
+	}
+
+	agenda := newAgenda()
+	changes, err := agenda.reconcile(context.Background(), revision, results)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got, want := len(changes), 2; got != want {
+		t.Fatalf("fingerprint collision changes = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.activations), 1; got != want {
+		t.Fatalf("activation fingerprint buckets = %d, want %d", got, want)
+	}
+	pending := agenda.pendingActivations()
+	if got, want := len(pending), 2; got != want {
+		t.Fatalf("pending fingerprint collision activations = %d, want %d", got, want)
+	}
+	if pending[0].id == pending[1].id {
+		t.Fatalf("fingerprint collision reused public activation ID %q", pending[0].id)
+	}
+	if pending[0].identity.key == pending[1].identity.key {
+		t.Fatalf("test did not create distinct full identities: %#v", pending)
+	}
+
+	changes, err = agenda.reconcile(context.Background(), revision, results)
+	if err != nil {
+		t.Fatalf("duplicate reconcile: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("duplicate fingerprint collision changes = %#v, want none", changes)
+	}
+}
+
+func TestAgendaActivationFingerprintCollisionDoesNotRequeueConsumedActivation(t *testing.T) {
+	revision, _ := mustAgendaRevision(t, 10)
+	rule := revision.rules["match-person"]
+	firstIdentity := candidateIdentity{
+		generation: 1,
+		count:      1,
+		key: candidateIdentityKey{
+			scopeHash: 100,
+			hash:      42,
+		},
+	}
+	secondIdentity := candidateIdentity{
+		generation: 1,
+		count:      1,
+		key: candidateIdentityKey{
+			scopeHash: 200,
+			hash:      42,
+		},
+	}
+	firstID := newFactID(1, 1)
+	secondID := newFactID(1, 2)
+	results := []ruleMatchResult{
+		{
+			ruleID:           rule.id,
+			ruleRevisionID:   rule.revisionID,
+			salience:         rule.salience,
+			declarationOrder: rule.declarationOrder,
+			candidates: []matchCandidate{
+				mustCollisionCandidate(rule.id, rule.revisionID, firstIdentity, firstID, 1, 1),
+				mustCollisionCandidate(rule.id, rule.revisionID, secondIdentity, secondID, 1, 2),
+			},
+		},
+	}
+
+	agenda := newAgenda()
+	if _, err := agenda.reconcile(context.Background(), revision, results); err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if selected.status != activationStatusConsumed {
+		t.Fatalf("selected status = %v, want consumed", selected.status)
+	}
+
+	changes, err := agenda.reconcile(context.Background(), revision, results)
+	if err != nil {
+		t.Fatalf("reconcile after consume: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("reconcile after consume changes = %#v, want none", changes)
+	}
+	pending := agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending after consumed fingerprint collision = %d, want %d", got, want)
+	}
+	if pending[0].id == selected.id {
+		t.Fatalf("consumed activation was requeued: %q", selected.id)
+	}
+	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
+		t.Fatalf("consumed activation after fingerprint collision reconcile = %#v, ok=%v", got, ok)
+	}
+}
+
 func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	agenda := newAgenda()
 	factID := newFactID(1, 1)

@@ -10,9 +10,11 @@ import (
 )
 
 type activationKey struct {
-	identity candidateIdentityKey
-	index    int
+	fingerprint activationFingerprint
+	ordinal     uint64
 }
+
+type activationFingerprint uint64
 
 type activationBucket struct {
 	first    *activation
@@ -109,10 +111,11 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 }
 
 type agenda struct {
-	activations map[candidateIdentityKey]activationBucket
+	activations map[activationFingerprint]activationBucket
 	pending     []activationKey
 	byFactID    map[FactID][]activationKey
 	byRevision  map[RuleRevisionID][]activationKey
+	nextOrdinal uint64
 
 	reconcileSeen        map[activationKey]struct{}
 	reconcileNextPending []activationKey
@@ -127,7 +130,7 @@ type agenda struct {
 
 func newAgenda() *agenda {
 	return &agenda{
-		activations: make(map[candidateIdentityKey]activationBucket),
+		activations: make(map[activationFingerprint]activationBucket),
 		byFactID:    make(map[FactID][]activationKey),
 		byRevision:  make(map[RuleRevisionID][]activationKey),
 	}
@@ -138,7 +141,7 @@ func (a *agenda) reset() {
 		return
 	}
 	if a.activations == nil {
-		a.activations = make(map[candidateIdentityKey]activationBucket)
+		a.activations = make(map[activationFingerprint]activationBucket)
 	} else {
 		clear(a.activations)
 	}
@@ -153,6 +156,7 @@ func (a *agenda) reset() {
 	} else {
 		clear(a.byRevision)
 	}
+	a.nextOrdinal = 0
 }
 
 func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []ruleMatchResult) ([]agendaChange, error) {
@@ -546,7 +550,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 		})
 	}
 
-	nextActivations := make(map[candidateIdentityKey]activationBucket, len(a.activations))
+	nextActivations := make(map[activationFingerprint]activationBucket, len(a.activations))
 	nextByFactID := make(map[FactID][]activationKey, len(a.byFactID))
 	nextByRevision := make(map[RuleRevisionID][]activationKey, len(a.byRevision))
 	nextPending := make([]activationKey, 0, len(a.pending))
@@ -741,13 +745,14 @@ func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, 
 	if a == nil {
 		return nil, activationKey{}, false
 	}
-	bucket := a.activations[candidate.identity.key]
+	fingerprint := activationFingerprintForIdentityKey(candidate.identity.key)
+	bucket := a.activations[fingerprint]
 	if current := bucket.first; current != nil && activationMatchesCandidate(current, candidate) {
-		return current, activationKey{identity: candidate.identity.key}, true
+		return current, current.key, true
 	}
-	for i, current := range bucket.overflow {
+	for _, current := range bucket.overflow {
 		if current != nil && activationMatchesCandidate(current, candidate) {
-			return current, activationKey{identity: candidate.identity.key, index: i + 1}, true
+			return current, current.key, true
 		}
 	}
 	return nil, activationKey{}, false
@@ -758,13 +763,14 @@ func (a *agenda) activationForTerminalToken(rule compiledRule, token *matchToken
 		return nil, activationKey{}, false
 	}
 	identity := candidateIdentityForTerminalToken(rule, token)
-	bucket := a.activations[identity.key]
+	fingerprint := activationFingerprintForIdentityKey(identity.key)
+	bucket := a.activations[fingerprint]
 	if current := bucket.first; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
-		return current, activationKey{identity: identity.key}, true
+		return current, current.key, true
 	}
-	for i, current := range bucket.overflow {
+	for _, current := range bucket.overflow {
 		if current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
-			return current, activationKey{identity: identity.key, index: i + 1}, true
+			return current, current.key, true
 		}
 	}
 	return nil, activationKey{}, false
@@ -798,19 +804,22 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 }
 
 func (a *agenda) storeActivation(act *activation) activationKey {
-	bucket := a.activations[act.identity.key]
+	fingerprint := activationFingerprintForIdentityKey(act.identity.key)
+	bucket := a.activations[fingerprint]
 	key := activationKey{
-		identity: act.identity.key,
+		fingerprint: fingerprint,
+		ordinal:     a.nextOrdinal,
 	}
+	a.nextOrdinal++
+	publicIndex := activationIdentityIndex(bucket, act.identity.key)
 	if bucket.first == nil {
 		bucket.first = act
 	} else {
-		key.index = len(bucket.overflow) + 1
 		bucket.overflow = append(bucket.overflow, act)
 	}
 	act.key = key
-	act.id = activationIDForKey(key)
-	a.activations[act.identity.key] = bucket
+	act.id = activationIDForIdentityKey(act.identity.key, publicIndex)
+	a.activations[fingerprint] = bucket
 	return key
 }
 
@@ -821,37 +830,48 @@ func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
 	return activationFromBuckets(a.activations, key)
 }
 
-func activationFromBuckets(buckets map[candidateIdentityKey]activationBucket, key activationKey) (*activation, bool) {
-	bucket := buckets[key.identity]
-	if key.index == 0 {
-		if bucket.first == nil {
-			return nil, false
-		}
+func activationFromBuckets(buckets map[activationFingerprint]activationBucket, key activationKey) (*activation, bool) {
+	bucket := buckets[key.fingerprint]
+	if bucket.first != nil && bucket.first.key == key {
 		return bucket.first, true
 	}
-	overflowIndex := key.index - 1
-	if overflowIndex < 0 || overflowIndex >= len(bucket.overflow) {
-		return nil, false
+	for _, current := range bucket.overflow {
+		if current != nil && current.key == key {
+			return current, true
+		}
 	}
-	current := bucket.overflow[overflowIndex]
-	if current == nil {
-		return nil, false
-	}
-	return current, true
+	return nil, false
 }
 
-func activationIDForKey(key activationKey) ActivationID {
-	if key.identity == (candidateIdentityKey{}) {
+func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFingerprint {
+	return activationFingerprint(key.hash)
+}
+
+func activationIdentityIndex(bucket activationBucket, identity candidateIdentityKey) uint64 {
+	index := uint64(0)
+	if bucket.first != nil && bucket.first.identity.key == identity {
+		index++
+	}
+	for _, current := range bucket.overflow {
+		if current != nil && current.identity.key == identity {
+			index++
+		}
+	}
+	return index
+}
+
+func activationIDForIdentityKey(identity candidateIdentityKey, index uint64) ActivationID {
+	if identity == (candidateIdentityKey{}) {
 		return ""
 	}
 	var b strings.Builder
 	b.Grow(64)
 	b.WriteString("activation:v1:")
-	writeUintToBuilder(&b, key.identity.scopeHash)
+	writeUintToBuilder(&b, identity.scopeHash)
 	b.WriteByte(':')
-	writeUintToBuilder(&b, key.identity.hash)
+	writeUintToBuilder(&b, identity.hash)
 	b.WriteByte(':')
-	writeUintToBuilder(&b, uint64(key.index))
+	writeUintToBuilder(&b, index)
 	return ActivationID(b.String())
 }
 
