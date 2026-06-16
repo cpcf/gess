@@ -68,6 +68,8 @@ type Session struct {
 	closed           bool
 	runGuard         chan struct{}
 	runState         atomic.Value
+	runAgendaDelta   reteAgendaDelta
+	runAgendaPending bool
 	agendaReady      bool
 	agendaDirty      bool
 	mutationQueueMu  sync.Mutex
@@ -380,7 +382,7 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 				return result, err
 			}
 		} else {
-			s.markAgendaDirty()
+			s.recordRunAgendaDelta(agendaDelta)
 		}
 	}
 	return result, nil
@@ -507,7 +509,7 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 				return result, err
 			}
 		} else {
-			s.markAgendaDirty()
+			s.recordRunAgendaDelta(agendaDelta)
 		}
 	}
 	return result, nil
@@ -1200,7 +1202,7 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 				return result, err
 			}
 		} else {
-			s.markAgendaDirty()
+			s.recordRunAgendaDelta(agendaDelta)
 		}
 	}
 	return result, nil
@@ -2057,6 +2059,7 @@ func (s *Session) failQueuedMutations(err error) {
 
 func (s *Session) markAgendaDirty() {
 	if s != nil {
+		s.clearRunAgendaDelta()
 		s.agendaDirty = true
 		s.agendaReady = false
 	}
@@ -2068,6 +2071,65 @@ func (s *Session) consumeAgendaDirty() bool {
 	}
 	s.agendaDirty = false
 	return true
+}
+
+func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
+	if s == nil {
+		return
+	}
+	if !delta.supported || s.agendaDirty {
+		s.markAgendaDirty()
+		return
+	}
+	if s.runAgendaPending {
+		s.markAgendaDirty()
+		return
+	}
+	added := s.runAgendaDelta.added[:0]
+	removed := s.runAgendaDelta.removed[:0]
+	s.runAgendaDelta = reteAgendaDelta{
+		supported: true,
+		added:     append(added, delta.added...),
+		removed:   append(removed, delta.removed...),
+	}
+	s.runAgendaPending = true
+}
+
+func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
+	if s == nil || !s.runAgendaPending {
+		return nil
+	}
+	delta := s.runAgendaDelta
+	if _, ok, err := s.applyReteAgendaDelta(ctx, delta); err != nil {
+		s.clearRunAgendaDelta()
+		s.markAgendaDirty()
+		return err
+	} else if !ok {
+		s.clearRunAgendaDelta()
+		s.markAgendaDirty()
+		return nil
+	}
+	s.clearRunAgendaDelta()
+	return nil
+}
+
+func (s *Session) abandonRunAgendaDelta() {
+	if s == nil || !s.runAgendaPending {
+		return
+	}
+	s.markAgendaDirty()
+}
+
+func (s *Session) clearRunAgendaDelta() {
+	if s == nil || !s.runAgendaPending {
+		return
+	}
+	clear(s.runAgendaDelta.added)
+	clear(s.runAgendaDelta.removed)
+	s.runAgendaDelta.added = s.runAgendaDelta.added[:0]
+	s.runAgendaDelta.removed = s.runAgendaDelta.removed[:0]
+	s.runAgendaDelta.supported = false
+	s.runAgendaPending = false
 }
 
 func (s *Session) drainQueuedMutations(ctx context.Context) error {

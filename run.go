@@ -112,6 +112,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			active: true,
 		})
 		if err != nil {
+			s.abandonRunAgendaDelta()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return abort(RunCanceled, fired, err)
 			}
@@ -123,6 +124,12 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			return abort(RunFailed, fired, err)
 		}
 
+		if err := s.reconcileRunAgendaDelta(ctx); err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return abort(RunCanceled, fired, err)
+			}
+			return abort(RunFailed, fired, err)
+		}
 		if s.consumeAgendaDirty() {
 			if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -395,6 +395,894 @@ func TestSessionRunActionContextMutationAdvancesNextActivation(t *testing.T) {
 	}
 }
 
+func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupportedShapes(t *testing.T) {
+	t.Run("supported single delta", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "input",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(input): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "audit",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(audit): %v", err)
+		}
+
+		var session *Session
+		var actionsSeen []string
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-audit",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "assert-audit")
+				result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				if err != nil {
+					return err
+				}
+				if result.Status != AssertInserted {
+					return errors.New("audit was not inserted")
+				}
+				if session.agendaDirty {
+					return errors.New("single supported assert dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("single supported assert cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("single supported assert did not record run delta")
+				}
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(assert-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "record")
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(record): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "input-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "input", TemplateKey: TemplateKey("input")},
+			},
+			Actions: []RuleActionSpec{{Name: "assert-audit"}},
+		}); err != nil {
+			t.Fatalf("AddRule(input-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "audit-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+			},
+			Actions: []RuleActionSpec{{Name: "record"}},
+		}); err != nil {
+			t.Fatalf("AddRule(audit-rule): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		session, err = NewSession(
+			revision,
+			WithSessionID("run-supported-single-delta-session"),
+			WithInitialFacts(SessionInitialFact{
+				TemplateKey: TemplateKey("input"),
+				Fields:      mustFields(t, map[string]any{"id": "i-1"}),
+			}),
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 2 {
+			t.Fatalf("run fired = %d, want 2", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"assert-audit", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after successful run")
+		}
+		if session.agendaDirty || !session.agendaReady {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		}
+	})
+
+	t.Run("supported single removed delta", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "trigger",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(trigger): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "task",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "status", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(task): %v", err)
+		}
+
+		var (
+			session     *Session
+			taskID      FactID
+			actionsSeen []string
+		)
+		if err := workspace.AddAction(ActionSpec{
+			Name: "close-task",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "close-task")
+				result, err := ctx.Modify(taskID, FactPatch{
+					Set: mustFields(t, map[string]any{"status": "done"}),
+				})
+				if err != nil {
+					return err
+				}
+				if result.Status != ModifyChanged {
+					return errors.New("task was not modified")
+				}
+				if session.agendaDirty {
+					return errors.New("single supported modify dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("single supported modify cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("single supported modify did not record run delta")
+				}
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(close-task): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "unexpected-open",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "unexpected-open")
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(unexpected-open): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record-done",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "record-done")
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(record-done): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name:     "close-rule",
+			Salience: 20,
+			Conditions: []RuleConditionSpec{
+				{Binding: "trigger", TemplateKey: TemplateKey("trigger")},
+			},
+			Actions: []RuleActionSpec{{Name: "close-task"}},
+		}); err != nil {
+			t.Fatalf("AddRule(close-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "open-task",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "task",
+					TemplateKey: TemplateKey("task"),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "open")},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "unexpected-open"}},
+		}); err != nil {
+			t.Fatalf("AddRule(open-task): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "done-task",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "task",
+					TemplateKey: TemplateKey("task"),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "record-done"}},
+		}); err != nil {
+			t.Fatalf("AddRule(done-task): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		collector := &testEventCollector{}
+		session, err = NewSession(revision, WithSessionID("run-supported-single-removed-delta-session"), WithEventListener(collector))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		task, err := session.AssertTemplate(context.Background(), TemplateKey("task"), mustFields(t, map[string]any{
+			"id":     "task-1",
+			"status": "open",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate(task): %v", err)
+		}
+		taskID = task.Fact.ID()
+		if _, err := session.AssertTemplate(context.Background(), TemplateKey("trigger"), mustFields(t, map[string]any{"id": "trigger-1"})); err != nil {
+			t.Fatalf("AssertTemplate(trigger): %v", err)
+		}
+
+		runEventOffset := len(collector.Events())
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 2 {
+			t.Fatalf("run fired = %d, want 2", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"close-task", "record-done"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after successful run")
+		}
+		if session.agendaDirty || !session.agendaReady {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		}
+
+		events := collector.Events()[runEventOffset:]
+		modifiedIndex := -1
+		deactivatedIndex := -1
+		secondFiredIndex := -1
+		for i, event := range events {
+			switch event.Type {
+			case EventFactModified:
+				if modifiedIndex == -1 {
+					modifiedIndex = i
+				}
+			case EventRuleDeactivated:
+				if event.RuleID == RuleID("open-task") && deactivatedIndex == -1 {
+					deactivatedIndex = i
+				}
+			case EventRuleFired:
+				if i > 0 {
+					secondFiredIndex = i
+				}
+			}
+		}
+		if modifiedIndex == -1 {
+			t.Fatal("modify event missing")
+		}
+		if deactivatedIndex == -1 {
+			t.Fatal("open-task deactivation event missing")
+		}
+		if secondFiredIndex == -1 {
+			t.Fatal("second fired event missing")
+		}
+		if !(modifiedIndex < deactivatedIndex && deactivatedIndex < secondFiredIndex) {
+			t.Fatalf("event indexes modify=%d deactivated=%d second-fired=%d, want modify < deactivated < second-fired", modifiedIndex, deactivatedIndex, secondFiredIndex)
+		}
+	})
+
+	t.Run("supported single delta abandoned after action failure", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "input",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(input): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "audit",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(audit): %v", err)
+		}
+
+		var actionsSeen []string
+		terminalErr := errors.New("stop after delta")
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-audit",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "assert-audit")
+				_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(assert-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "fail",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "fail")
+				return terminalErr
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(fail): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "record")
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(record): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "input-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "input", TemplateKey: TemplateKey("input")},
+			},
+			Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "fail"}},
+		}); err != nil {
+			t.Fatalf("AddRule(input-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "audit-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+			},
+			Actions: []RuleActionSpec{{Name: "record"}},
+		}); err != nil {
+			t.Fatalf("AddRule(audit-rule): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		session, err := NewSession(
+			revision,
+			WithSessionID("run-supported-delta-failure-session"),
+			WithInitialFacts(SessionInitialFact{
+				TemplateKey: TemplateKey("input"),
+				Fields:      mustFields(t, map[string]any{"id": "i-1"}),
+			}),
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		result, err := session.Run(context.Background())
+		if !errors.Is(err, ErrActionFailed) || !errors.Is(err, terminalErr) {
+			t.Fatalf("Run error = %v, want ErrActionFailed wrapping terminal error", err)
+		}
+		if result.Status != RunActionFailed {
+			t.Fatalf("run status = %v, want %v", result.Status, RunActionFailed)
+		}
+		if result.Fired != 1 {
+			t.Fatalf("run fired = %d, want 1", result.Fired)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after action failure")
+		}
+		if !session.agendaDirty || session.agendaReady {
+			t.Fatalf("agenda state after action failure = dirty %v ready %v, want dirty not ready", session.agendaDirty, session.agendaReady)
+		}
+
+		result, err = session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("second Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("second run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 1 {
+			t.Fatalf("second run fired = %d, want 1", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"assert-audit", "fail", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("supported single delta canceled during delta apply", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "input",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(input): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "audit",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(audit): %v", err)
+		}
+
+		var actionsSeen []string
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-audit",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "assert-audit")
+				_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(assert-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record",
+			Fn: func(ActionContext) error {
+				actionsSeen = append(actionsSeen, "record")
+				return nil
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(record): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "input-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "input", TemplateKey: TemplateKey("input")},
+			},
+			Actions: []RuleActionSpec{{Name: "assert-audit"}},
+		}); err != nil {
+			t.Fatalf("AddRule(input-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "audit-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+			},
+			Actions: []RuleActionSpec{{Name: "record"}},
+		}); err != nil {
+			t.Fatalf("AddRule(audit-rule): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		runCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		session, err := NewSession(
+			revision,
+			WithSessionID("run-supported-delta-cancel-session"),
+			WithInitialFacts(SessionInitialFact{
+				TemplateKey: TemplateKey("input"),
+				Fields:      mustFields(t, map[string]any{"id": "i-1"}),
+			}),
+			WithEventListener(EventFunc(func(_ context.Context, event Event) error {
+				if event.Type == EventFactAsserted && event.RuleID == RuleID("input-rule") {
+					cancel()
+				}
+				return nil
+			})),
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+
+		result, err := session.Run(runCtx)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context canceled", err)
+		}
+		if result.Status != RunCanceled {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCanceled)
+		}
+		if result.Fired != 1 {
+			t.Fatalf("run fired = %d, want 1", result.Fired)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after cancellation")
+		}
+		if !session.agendaDirty || session.agendaReady {
+			t.Fatalf("agenda state after cancellation = dirty %v ready %v, want dirty not ready", session.agendaDirty, session.agendaReady)
+		}
+
+		result, err = session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("second Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("second run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 1 {
+			t.Fatalf("second run fired = %d, want 1", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"assert-audit", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("supported multi mutation fallback", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "name", Kind: ValueString, Required: true},
+				{Name: "status", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(person): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "audit",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "kind", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(audit): %v", err)
+		}
+		if err := workspace.AddTemplate(TemplateSpec{
+			Name:   "obsolete",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "kind", Kind: ValueString, Required: true},
+			},
+		}); err != nil {
+			t.Fatalf("AddTemplate(obsolete): %v", err)
+		}
+
+		var (
+			session       *Session
+			actionsSeen   []string
+			assertResult  AssertResult
+			modifyResult  ModifyResult
+			retractResult RetractResult
+			personID      FactID
+			obsoleteID    FactID
+			auditID       FactID
+		)
+
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-audit",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "assert-audit")
+				result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{
+					"kind": "created",
+				}))
+				assertResult = result
+				if err == nil {
+					auditID = result.Fact.ID()
+				}
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(assert-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "promote-person",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "promote-person")
+				binding, ok := ctx.Binding("person")
+				if !ok {
+					return errors.New("missing person binding")
+				}
+				personID = binding.ID()
+				result, err := ctx.Modify(binding.ID(), FactPatch{
+					Set: mustFields(t, map[string]any{"status": "done"}),
+				})
+				modifyResult = result
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(promote-person): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "retire-obsolete",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "retire-obsolete")
+				binding, ok := ctx.Binding("obsolete")
+				if !ok {
+					return errors.New("missing obsolete binding")
+				}
+				obsoleteID = binding.ID()
+				result, err := ctx.Retract(binding.ID())
+				retractResult = result
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(retire-obsolete): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record-audit",
+			Fn:   func(ActionContext) error { actionsSeen = append(actionsSeen, "record-audit"); return nil },
+		}); err != nil {
+			t.Fatalf("AddAction(record-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record-done",
+			Fn:   func(ActionContext) error { actionsSeen = append(actionsSeen, "record-done"); return nil },
+		}); err != nil {
+			t.Fatalf("AddAction(record-done): %v", err)
+		}
+
+		if err := workspace.AddRule(RuleSpec{
+			Name: "pending-person",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "person",
+					TemplateKey: TemplateKey("person"),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
+					},
+				},
+				{
+					Binding:     "obsolete",
+					TemplateKey: TemplateKey("obsolete"),
+				},
+			},
+			Actions: []RuleActionSpec{
+				{Name: "assert-audit"},
+				{Name: "promote-person"},
+				{Name: "retire-obsolete"},
+			},
+		}); err != nil {
+			t.Fatalf("AddRule(pending-person): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "audit-created",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "audit",
+					TemplateKey: TemplateKey("audit"),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "kind", Operator: FieldConstraintEqual, Value: mustValue(t, "created")},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "record-audit"}},
+		}); err != nil {
+			t.Fatalf("AddRule(audit-created): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "person-done",
+			Conditions: []RuleConditionSpec{
+				{
+					Binding:     "person",
+					TemplateKey: TemplateKey("person"),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
+					},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "record-done"}},
+		}); err != nil {
+			t.Fatalf("AddRule(person-done): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		collector := &testEventCollector{}
+		session, err = NewSession(revision, WithSessionID("run-supported-delta-session"), WithEventListener(collector))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+			"name":   "Ada",
+			"status": "pending",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate(person): %v", err)
+		}
+		if _, err := session.AssertTemplate(context.Background(), TemplateKey("obsolete"), mustFields(t, map[string]any{
+			"kind": "stale",
+		})); err != nil {
+			t.Fatalf("AssertTemplate(obsolete): %v", err)
+		}
+
+		runEventOffset := len(collector.Events())
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 3 {
+			t.Fatalf("run fired = %d, want 3", result.Fired)
+		}
+		if got, want := actionsSeen, []string{"assert-audit", "promote-person", "retire-obsolete"}; len(got) < len(want) {
+			t.Fatalf("action count = %d, want at least %d (%#v)", len(got), len(want), got)
+		} else {
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("leading action order = %#v, want prefix %#v", got, want)
+				}
+			}
+			remaining := map[string]int{}
+			for _, name := range got[len(want):] {
+				remaining[name]++
+			}
+			if len(remaining) != 2 || remaining["record-audit"] != 1 || remaining["record-done"] != 1 {
+				t.Fatalf("follow-on actions = %#v, want record-audit and record-done once each", got[len(want):])
+			}
+		}
+		if assertResult.Status != AssertInserted {
+			t.Fatalf("assert result status = %v, want %v", assertResult.Status, AssertInserted)
+		}
+		if modifyResult.Status != ModifyChanged {
+			t.Fatalf("modify result status = %v, want %v", modifyResult.Status, ModifyChanged)
+		}
+		if retractResult.Status != RetractRemoved {
+			t.Fatalf("retract result status = %v, want %v", retractResult.Status, RetractRemoved)
+		}
+		if assertResult.Delta == nil || modifyResult.Delta == nil || retractResult.Delta == nil {
+			t.Fatalf("expected action deltas for supported run: %#v %#v %#v", assertResult, modifyResult, retractResult)
+		}
+		if assertResult.Delta.RuleID == "" || modifyResult.Delta.RuleID == "" || retractResult.Delta.RuleID == "" {
+			t.Fatalf("supported action deltas missing rule metadata: %#v %#v %#v", assertResult.Delta, modifyResult.Delta, retractResult.Delta)
+		}
+		if personID != personFact.Fact.ID() {
+			t.Fatalf("person binding ID = %q, want %q", personID, personFact.Fact.ID())
+		}
+		if obsoleteID.IsZero() {
+			t.Fatal("obsolete binding ID is zero")
+		}
+		if auditID.IsZero() {
+			t.Fatal("audit fact ID is zero")
+		}
+
+		after := mustSnapshot(t, context.Background(), session)
+		if got, ok := after.Fact(personFact.Fact.ID()); !ok {
+			t.Fatalf("missing person fact %q", personFact.Fact.ID())
+		} else if value := got.Fields()["status"]; !value.Equal(mustValue(t, "done")) {
+			t.Fatalf("person status = %v, want done", value)
+		}
+		if _, ok := after.Fact(obsoleteID); ok {
+			t.Fatalf("obsolete fact %q remained after retract", obsoleteID)
+		}
+		if _, ok := after.Fact(auditID); !ok {
+			t.Fatalf("audit fact %q missing after assert", auditID)
+		}
+		events := collector.Events()[runEventOffset:]
+		var factEvents []EventType
+		for _, event := range events {
+			switch event.Type {
+			case EventFactAsserted, EventFactModified, EventFactRetracted:
+				factEvents = append(factEvents, event.Type)
+			}
+		}
+		wantFactEvents := []EventType{EventFactAsserted, EventFactModified, EventFactRetracted}
+		if len(factEvents) != len(wantFactEvents) {
+			t.Fatalf("fact event count = %d, want %d (%#v)", len(factEvents), len(wantFactEvents), factEvents)
+		}
+		for i := range wantFactEvents {
+			if factEvents[i] != wantFactEvents[i] {
+				t.Fatalf("fact event order = %#v, want %#v", factEvents, wantFactEvents)
+			}
+		}
+	})
+
+	t.Run("unsupported", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddAction(ActionSpec{
+			Name: "seed-audit",
+			Fn: func(ctx ActionContext) error {
+				_, err := ctx.Assert("audit", mustFields(t, map[string]any{"kind": "created"}))
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(seed-audit): %v", err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "record",
+			Fn:   func(ActionContext) error { return nil },
+		}); err != nil {
+			t.Fatalf("AddAction(record): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "seed-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "seed", Name: "seed"},
+			},
+			Actions: []RuleActionSpec{{Name: "seed-audit"}},
+		}); err != nil {
+			t.Fatalf("AddRule(seed-rule): %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name: "audit-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "audit", Name: "audit"},
+			},
+			Actions: []RuleActionSpec{{Name: "record"}},
+		}); err != nil {
+			t.Fatalf("AddRule(audit-rule): %v", err)
+		}
+
+		revision, err := workspace.Compile(context.Background())
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		collector := &testEventCollector{}
+		session, err := NewSession(revision, WithSessionID("run-unsupported-delta-session"), WithEventListener(collector))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if session.rete == nil || session.rete.supportsIncrementalAgenda() {
+			t.Fatalf("session Rete runtime = %#v, want unsupported incremental agenda", session.rete)
+		}
+		if _, err := session.Assert(context.Background(), "seed", mustFields(t, map[string]any{"kind": "seed"})); err != nil {
+			t.Fatalf("Assert(seed): %v", err)
+		}
+
+		runEventOffset := len(collector.Events())
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted {
+			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+		}
+		if result.Fired != 2 {
+			t.Fatalf("run fired = %d, want 2", result.Fired)
+		}
+		after := mustSnapshot(t, context.Background(), session)
+		if got := len(after.Facts()); got != 2 {
+			t.Fatalf("fact count = %d, want 2", got)
+		}
+		events := collector.Events()[runEventOffset:]
+		fired := 0
+		sawAsserted := false
+		for _, event := range events {
+			switch event.Type {
+			case EventFactAsserted:
+				sawAsserted = true
+			case EventRuleFired:
+				fired++
+			}
+		}
+		if !sawAsserted {
+			t.Fatal("audit assert event missing")
+		}
+		if fired != 2 {
+			t.Fatalf("fired event count = %d, want 2", fired)
+		}
+	})
+}
+
 func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
