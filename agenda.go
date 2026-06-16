@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -45,6 +46,7 @@ func (s activationStatus) String() string {
 type activation struct {
 	id               ActivationID
 	key              activationKey
+	publicOrdinal    uint64
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
@@ -62,14 +64,32 @@ type activation struct {
 
 func (a activation) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
-		ActivationID:   a.id,
+		ActivationID:   a.activationID(),
 		RuleID:         a.ruleID,
 		RuleRevisionID: a.ruleRevisionID,
 	}
 }
 
+func (a activation) activationID() ActivationID {
+	if !a.id.IsZero() {
+		return a.id
+	}
+	return activationIDForIdentityKey(a.identity.key, a.publicOrdinal)
+}
+
+func (a *activation) ensureActivationID() ActivationID {
+	if a == nil {
+		return ""
+	}
+	if a.id.IsZero() {
+		a.id = activationIDForIdentityKey(a.identity.key, a.publicOrdinal)
+	}
+	return a.id
+}
+
 func (a activation) clone() activation {
 	out := a
+	out.id = a.activationID()
 	out.bindings = cloneBindingTupleEntries(a.bindings)
 	out.factIDs = cloneFactIDs(a.factIDs)
 	out.factVersions = cloneFactVersions(a.factVersions)
@@ -105,9 +125,84 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 		Recency:        c.activation.maxRecency,
 		RuleID:         c.activation.ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
-		ActivationID:   c.activation.id,
+		ActivationID:   c.activation.activationID(),
 		FactIDs:        cloneFactIDs(c.activation.factIDs),
 	}
+}
+
+func (a *agenda) publicActivation(act *activation) activation {
+	if act == nil {
+		return activation{}
+	}
+	out := *act
+	out.id = act.ensureActivationID()
+	out.factIDs = cloneFactIDs(act.factIDs)
+	out.factVersions = cloneFactVersions(act.factVersions)
+	if a == nil || a.revision == nil || len(out.factIDs) == 0 {
+		out.bindings = nil
+		out.path = nil
+		return out
+	}
+	rule, ok := a.revision.rulesByRevisionID[out.ruleRevisionID]
+	if !ok {
+		out.bindings = nil
+		out.path = nil
+		return out
+	}
+	out.bindings = activationBindingTupleEntries(rule, out.factIDs, out.factVersions, true)
+	out.path = activationPathForRule(rule)
+	return out
+}
+
+func (a *agenda) compactChangeActivation(act *activation) activation {
+	if act == nil {
+		return activation{}
+	}
+	out := *act
+	out.bindings = nil
+	out.factIDs = cloneFactIDs(act.factIDs)
+	out.factVersions = nil
+	out.path = nil
+	return out
+}
+
+func activationBindingTupleEntries(rule compiledRule, factIDs []FactID, factVersions []FactVersion, includePath bool) []bindingTupleEntry {
+	if len(factIDs) == 0 || len(factIDs) != len(factVersions) || len(rule.conditions) == 0 || len(rule.conditionPlans) == 0 {
+		return nil
+	}
+	n := min(len(rule.conditionPlans), min(len(rule.conditions), len(factIDs)))
+	entries := make([]bindingTupleEntry, n)
+	for i := range n {
+		condition := rule.conditions[i]
+		plan := rule.conditionPlans[i]
+		entries[i] = bindingTupleEntry{
+			binding:        condition.binding,
+			bindingSlot:    i,
+			conditionOrder: condition.order,
+			conditionID:    condition.id,
+			factID:         factIDs[i],
+			factVersion:    factVersions[i],
+		}
+		if includePath {
+			entries[i].conditionPath = cloneIntPath(plan.path)
+		}
+	}
+	return entries
+}
+
+func activationPathForRule(rule compiledRule) []int {
+	if len(rule.conditionPlans) == 0 {
+		return nil
+	}
+	pathLen := 0
+	for _, plan := range rule.conditionPlans {
+		pathLen += len(plan.path)
+	}
+	path := make([]int, 0, pathLen)
+	for _, plan := range rule.conditionPlans {
+		path = append(path, plan.path...)
+	}
+	return path
 }
 
 type agenda struct {
@@ -116,6 +211,7 @@ type agenda struct {
 	byFactID    map[FactID][]activationKey
 	byRevision  map[RuleRevisionID][]activationKey
 	nextOrdinal uint64
+	revision    *Ruleset
 
 	reconcileSeen        map[activationKey]struct{}
 	reconcileNextPending []activationKey
@@ -174,6 +270,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	a.revision = revision
 
 	seen := a.reconcileSeen
 	if seen == nil {
@@ -224,7 +321,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			}
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
-				activation: created.clone(),
+				activation: a.compactChangeActivation(&created),
 			})
 		}
 	}
@@ -240,7 +337,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		existing.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
-			activation: existing.clone(),
+			activation: a.compactChangeActivation(existing),
 		})
 	}
 
@@ -270,6 +367,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	a.revision = revision
 
 	removedKeys := a.deltaRemovedKeys
 	if removedKeys == nil {
@@ -300,7 +398,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 				existing.status = activationStatusDeactivated
 				changes = append(changes, agendaChange{
 					kind:       agendaChangeDeactivated,
-					activation: existing.clone(),
+					activation: a.compactChangeActivation(existing),
 				})
 				continue
 			}
@@ -335,7 +433,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		a.pending = append(a.pending, key)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
-			activation: created.clone(),
+			activation: a.compactChangeActivation(&created),
 		})
 	}
 	changes = append(changes, activated...)
@@ -362,6 +460,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	a.revision = revision
 
 	removedKeys := a.deltaRemovedKeys
 	if removedKeys == nil {
@@ -399,7 +498,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 				existing.status = activationStatusDeactivated
 				changes = append(changes, agendaChange{
 					kind:       agendaChangeDeactivated,
-					activation: existing.clone(),
+					activation: a.compactChangeActivation(existing),
 				})
 				continue
 			}
@@ -443,7 +542,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		a.pending = append(a.pending, key)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
-			activation: created.clone(),
+			activation: a.compactChangeActivation(&created),
 		})
 	}
 	changes = append(changes, activated...)
@@ -470,6 +569,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	a.revision = revision
 
 	seen := a.reconcileSeen
 	if seen == nil {
@@ -526,7 +626,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 		}
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
-			activation: created.clone(),
+			activation: a.compactChangeActivation(&created),
 		})
 	}
 
@@ -541,7 +641,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 		existing.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
-			activation: existing.clone(),
+			activation: a.compactChangeActivation(existing),
 		})
 	}
 
@@ -647,7 +747,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 		current.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
-			activation: current.clone(),
+			activation: a.compactChangeActivation(current),
 		})
 	}
 
@@ -736,7 +836,11 @@ func (a *agenda) next() (activation, bool) {
 			continue
 		}
 		current.status = activationStatusConsumed
-		return *current, true
+		out := *current
+		out.id = current.ensureActivationID()
+		out.factIDs = cloneFactIDs(current.factIDs)
+		out.factVersions = cloneFactVersions(current.factVersions)
+		return out, true
 	}
 	return activation{}, false
 }
@@ -754,7 +858,7 @@ func (a *agenda) clear() []agendaChange {
 		current.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
-			activation: current.clone(),
+			activation: a.compactChangeActivation(current),
 		})
 	}
 	a.reset()
@@ -769,7 +873,7 @@ func (a *agenda) activationByKey(key activationKey) (activation, bool) {
 	if !ok {
 		return activation{}, false
 	}
-	return current.clone(), true
+	return a.publicActivation(current), true
 }
 
 func (a *agenda) pendingActivations() []activation {
@@ -779,7 +883,7 @@ func (a *agenda) pendingActivations() []activation {
 	out := make([]activation, 0, len(a.pending))
 	for _, key := range a.pending {
 		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
-			out = append(out, current.clone())
+			out = append(out, a.publicActivation(current))
 		}
 	}
 	return out
@@ -796,7 +900,7 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 	out := make([]activation, 0, len(keys))
 	for _, key := range keys {
 		if current, ok := a.activationByKeyPtr(key); ok {
-			out = append(out, current.clone())
+			out = append(out, a.publicActivation(current))
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -816,7 +920,7 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 	out := make([]activation, 0, len(keys))
 	for _, key := range keys {
 		if current, ok := a.activationByKeyPtr(key); ok {
-			out = append(out, current.clone())
+			out = append(out, a.publicActivation(current))
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -919,7 +1023,52 @@ func activationLess(left, right *activation) bool {
 	if left.declarationOrder != right.declarationOrder {
 		return left.declarationOrder < right.declarationOrder
 	}
-	return left.id < right.id
+	if !left.id.IsZero() || !right.id.IsZero() {
+		return left.activationID() < right.activationID()
+	}
+	if activationIDSegmentLess(left.identity.key.scopeHash, right.identity.key.scopeHash) {
+		return true
+	}
+	if left.identity.key.scopeHash != right.identity.key.scopeHash {
+		return false
+	}
+	if activationIDSegmentLess(left.identity.key.hash, right.identity.key.hash) {
+		return true
+	}
+	if left.identity.key.hash != right.identity.key.hash {
+		return false
+	}
+	if activationIDFinalSegmentLess(left.publicOrdinal, right.publicOrdinal) {
+		return true
+	}
+	if left.publicOrdinal != right.publicOrdinal {
+		return false
+	}
+	return false
+}
+
+func activationIDSegmentLess(left, right uint64) bool {
+	return activationIDDecimalLess(left, right, true)
+}
+
+func activationIDFinalSegmentLess(left, right uint64) bool {
+	return activationIDDecimalLess(left, right, false)
+}
+
+func activationIDDecimalLess(left, right uint64, followedByColon bool) bool {
+	var leftBuf [20]byte
+	var rightBuf [20]byte
+	leftBytes := strconv.AppendUint(leftBuf[:0], left, 10)
+	rightBytes := strconv.AppendUint(rightBuf[:0], right, 10)
+	for i := 0; i < len(leftBytes) && i < len(rightBytes); i++ {
+		if leftBytes[i] != rightBytes[i] {
+			return leftBytes[i] < rightBytes[i]
+		}
+	}
+	if followedByColon {
+		return len(leftBytes) > len(rightBytes)
+	}
+	return len(leftBytes) < len(rightBytes)
 }
 
 func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, activationKey, bool) {
@@ -993,13 +1142,13 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 	}
 	a.nextOrdinal++
 	publicIndex := activationIdentityIndex(bucket, act.identity.key)
+	act.publicOrdinal = publicIndex
 	if bucket.first == nil {
 		bucket.first = act
 	} else {
 		bucket.overflow = append(bucket.overflow, act)
 	}
 	act.key = key
-	act.id = activationIDForIdentityKey(act.identity.key, publicIndex)
 	a.activations[fingerprint] = bucket
 	a.indexActivation(*act)
 	return key
@@ -1064,6 +1213,7 @@ func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {
 	out := make([]bindingTupleEntry, len(entries))
 	for i, entry := range entries {
 		out[i] = entry
+		out[i].conditionPath = cloneIntPath(entry.conditionPath)
 	}
 	return out
 }
@@ -1083,10 +1233,8 @@ func activationFromCandidate(rule compiledRule, candidate matchCandidate) activa
 		ruleRevisionID:   candidate.ruleRevisionID,
 		generation:       candidate.generation,
 		identity:         candidate.identity,
-		bindings:         cloneBindingTupleEntries(candidate.bindingTuple),
 		factIDs:          cloneFactIDs(candidate.factIDs),
 		factVersions:     cloneFactVersions(candidate.factVersions),
-		path:             cloneIntPath(candidate.path),
 		salience:         rule.salience,
 		maxRecency:       candidate.maxRecency,
 		aggregateRecency: candidate.aggregateRecency,
@@ -1102,20 +1250,16 @@ func activationFromTerminalToken(rule compiledRule, token *matchToken) (activati
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return activation{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
-	entries := make([]bindingTupleEntry, token.size)
 	factIDs := make([]FactID, token.size)
 	factVersions := make([]FactVersion, token.size)
-	path := make([]int, token.pathLen)
-	fillMatchToken(entries, factIDs, factVersions, path, 0, 0, token)
+	fillMatchTokenFacts(factIDs, factVersions, 0, token)
 	return activation{
 		ruleID:           rule.id,
 		ruleRevisionID:   rule.revisionID,
 		generation:       matchTokenGeneration(token),
 		identity:         candidateIdentityForTerminalToken(rule, token),
-		bindings:         entries,
 		factIDs:          factIDs,
 		factVersions:     factVersions,
-		path:             path,
 		salience:         rule.salience,
 		maxRecency:       token.maxRecency,
 		aggregateRecency: token.aggregateRecency,
@@ -1155,6 +1299,16 @@ func tokenSize(token *matchToken) int {
 		return 0
 	}
 	return token.size
+}
+
+func fillMatchTokenFacts(factIDs []FactID, factVersions []FactVersion, index int, token *matchToken) int {
+	if token == nil {
+		return index
+	}
+	index = fillMatchTokenFacts(factIDs, factVersions, index, token.parent)
+	factIDs[index] = token.entry.factID
+	factVersions[index] = token.entry.factVersion
+	return index + 1
 }
 
 func tokenIdentityState(token *matchToken) uint64 {

@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -381,7 +382,8 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
@@ -421,8 +423,21 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if len(result.ReplacedRuleRevisions) != 1 || result.ReplacedRuleRevisions[0].RuleID != change2.ID() || result.ReplacedRuleRevisions[0].NewRevisionID != change2.RevisionID() {
 		t.Fatalf("replaced revisions = %#v, want replacement for %q/%q", result.ReplacedRuleRevisions, change2.ID(), change2.RevisionID())
 	}
-	if got, ok := session.agenda.activationByKey(kept.key); !ok || got.status != activationStatusConsumed {
-		t.Fatalf("unchanged consumed activation after unrelated change = %#v, ok=%v", got, ok)
+	keptAfterApply, ok := session.agenda.activationByKey(kept.key)
+	if !ok || keptAfterApply.status != activationStatusConsumed {
+		t.Fatalf("unchanged consumed activation after unrelated change = %#v, ok=%v", keptAfterApply, ok)
+	}
+	if got, want := keptAfterApply.id, kept.id; got != want {
+		t.Fatalf("unchanged activation ID after unrelated change = %q, want %q", got, want)
+	}
+	if got, want := keptAfterApply.factIDs, []FactID{inserted.Fact.ID()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unchanged activation fact IDs after unrelated change = %#v, want %#v", got, want)
+	}
+	if got, want := keptAfterApply.path, []int{0}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unchanged activation path after unrelated change = %#v, want %#v", got, want)
+	}
+	if got := keptAfterApply.bindings; len(got) != 1 || got[0].binding != "person" || got[0].factID != inserted.Fact.ID() || got[0].conditionPath[0] != 0 {
+		t.Fatalf("unchanged activation binding after unrelated change = %#v", got)
 	}
 	if got := session.agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 {
 		t.Fatalf("unchanged revision activations after unrelated change = %d, want 1", len(got))

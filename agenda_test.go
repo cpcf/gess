@@ -141,7 +141,7 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	}
 	initial := agenda.pendingActivations()[0]
 
-	modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+	_, err = session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
 		Set: mustFields(t, map[string]any{"name": "Grace"}),
 	})
 	if err != nil {
@@ -169,17 +169,20 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	if activated == nil || deactivated == nil {
 		t.Fatalf("missing activation transition kinds: %#v", changes)
 	}
-	if activated.activation.id == initial.id {
-		t.Fatalf("activation ID did not change after fact version changed: %q", activated.activation.id)
+	if activated.activation.activationID() == initial.id {
+		t.Fatalf("activation ID did not change after fact version changed: %q", activated.activation.activationID())
 	}
-	if activated.activation.factVersions[0] != modified.Fact.Version() {
-		t.Fatalf("new activation fact version = %d, want %d", activated.activation.factVersions[0], modified.Fact.Version())
+	if len(activated.activation.factVersions) != 0 || activated.activation.bindings != nil || activated.activation.path != nil {
+		t.Fatalf("activated change should stay compact: %#v", activated.activation)
 	}
-	if deactivated.activation.id != initial.id {
-		t.Fatalf("deactivated activation ID = %q, want %q", deactivated.activation.id, initial.id)
+	if deactivated.activation.activationID() != initial.id {
+		t.Fatalf("deactivated activation ID = %q, want %q", deactivated.activation.activationID(), initial.id)
 	}
 	if deactivated.activation.status != activationStatusDeactivated {
 		t.Fatalf("deactivated status = %v, want deactivated", deactivated.activation.status)
+	}
+	if len(deactivated.activation.factVersions) != 0 || deactivated.activation.bindings != nil || deactivated.activation.path != nil {
+		t.Fatalf("deactivated change should stay compact: %#v", deactivated.activation)
 	}
 	if got := agenda.pendingActivations(); len(got) != 1 || got[0].id == initial.id {
 		t.Fatalf("pending activations after version change = %#v, want one new activation", got)
@@ -710,8 +713,8 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	if changes[0].kind != agendaChangeDeactivated {
 		t.Fatalf("purge change kind = %v, want deactivated", changes[0].kind)
 	}
-	if changes[0].activation.id != remaining[0].id {
-		t.Fatalf("purge deactivated activation = %q, want %q", changes[0].activation.id, remaining[0].id)
+	if changes[0].activation.activationID() != remaining[0].id {
+		t.Fatalf("purge deactivated activation = %q, want %q", changes[0].activation.activationID(), remaining[0].id)
 	}
 	if changes[0].activation.status != activationStatusDeactivated {
 		t.Fatalf("purge deactivated status = %v, want deactivated", changes[0].activation.status)
@@ -865,8 +868,8 @@ func TestAgendaReconcileDeactivatesMissingPendingActivation(t *testing.T) {
 	if changes[0].kind != agendaChangeDeactivated {
 		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
 	}
-	if changes[0].activation.id != initial.id {
-		t.Fatalf("deactivated activation ID = %q, want %q", changes[0].activation.id, initial.id)
+	if changes[0].activation.activationID() != initial.id {
+		t.Fatalf("deactivated activation ID = %q, want %q", changes[0].activation.activationID(), initial.id)
 	}
 	if got := agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after retract = %#v, want none", got)
@@ -1045,7 +1048,7 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 	if changes[0].activation.ruleRevisionID != rule2.RevisionID() {
 		t.Fatalf("new activation revision = %q, want %q", changes[0].activation.ruleRevisionID, rule2.RevisionID())
 	}
-	if changes[0].activation.id == first.id {
+	if changes[0].activation.activationID() == first.id {
 		t.Fatalf("new activation ID reused consumed activation ID %q", first.id)
 	}
 	if got := agenda.pendingActivations(); len(got) != 1 || got[0].ruleRevisionID != rule2.RevisionID() {
@@ -1105,6 +1108,72 @@ func TestActivationLessOrdersBySalienceRecencyDeclarationAndID(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("sorted activation %d = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
+	base := activation{
+		salience:         10,
+		maxRecency:       9,
+		aggregateRecency: 8,
+		declarationOrder: 1,
+	}
+	tests := []struct {
+		name  string
+		left  activation
+		right activation
+	}{
+		{
+			name: "scope prefix segment",
+			left: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 10, hash: 1}
+				return act
+			}(),
+			right: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 1, hash: 1}
+				return act
+			}(),
+		},
+		{
+			name: "hash prefix segment",
+			left: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 10}
+				return act
+			}(),
+			right: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 1}
+				return act
+			}(),
+		},
+		{
+			name: "final ordinal segment",
+			left: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
+				act.publicOrdinal = 1
+				return act
+			}(),
+			right: func() activation {
+				act := base
+				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
+				act.publicOrdinal = 10
+				return act
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := activationLess(&tt.left, &tt.right)
+			want := tt.left.activationID() < tt.right.activationID()
+			if got != want {
+				t.Fatalf("activationLess(%q, %q) = %v, want %v", tt.left.activationID(), tt.right.activationID(), got, want)
+			}
+		})
 	}
 }
 
@@ -1244,7 +1313,7 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if got, want := len(changes), 1; got != want {
 		t.Fatalf("initial changes = %d, want %d", got, want)
 	}
-	initialID := changes[0].activation.id
+	initialID := changes[0].activation.activationID()
 
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)

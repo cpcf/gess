@@ -184,7 +184,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		Recency:        activation.maxRecency,
 		RuleID:         activation.ruleID,
 		RuleRevisionID: activation.ruleRevisionID,
-		ActivationID:   activation.id,
+		ActivationID:   activation.activationID(),
 		FactIDs:        cloneFactIDs(activation.factIDs),
 	})
 }
