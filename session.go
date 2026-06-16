@@ -920,15 +920,7 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
 		return nil, false, nil
 	}
-	removed, err := s.rete.candidatesForTerminalDeltas(delta.removed, &s.rete.terminalRemovedScratch)
-	if err != nil {
-		return nil, true, err
-	}
-	added, err := s.rete.candidatesForTerminalDeltas(delta.added, &s.rete.terminalAddedScratch)
-	if err != nil {
-		return nil, true, err
-	}
-	changes, err := s.agenda.applyCandidateDeltas(ctx, s.revision, removed, added)
+	changes, err := s.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
 	if err != nil {
 		return nil, true, err
 	}

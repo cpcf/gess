@@ -15,6 +15,10 @@ import (
 //     field/default copying, slot validation, and duplicate-key construction.
 //   - AgendaReconcile and AgendaIndexInsertion track activation materialization,
 //     agenda.reconcile, indexActivation, and activation index map growth.
+//   - ReteAgendaDelta tracks incremental assert, modify, and retract after an
+//     agenda has been populated from Rete-generated activations.
+//   - AgendaTerminalTokenDelta tracks direct agenda application of prebuilt
+//     Rete terminal-token deltas without session setup dominating the result.
 var (
 	benchmarkSnapshot         Snapshot
 	benchmarkActionContext    ActionContext
@@ -25,6 +29,9 @@ var (
 	benchmarkAgendaChanges    []agendaChange
 	benchmarkAgendaByFactID   map[FactID][]activationKey
 	benchmarkAgendaByRevision map[RuleRevisionID][]activationKey
+	benchmarkAssertResult     AssertResult
+	benchmarkModifyResult     ModifyResult
+	benchmarkRetractResult    RetractResult
 )
 
 func BenchmarkSnapshotConstructionLoanPublic(b *testing.B) {
@@ -214,6 +221,130 @@ func BenchmarkAgendaIndexInsertion(b *testing.B) {
 	}
 }
 
+func BenchmarkReteAgendaDeltaAssert(b *testing.B) {
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(b)
+	initials := mustBetaMemoryInitialFacts(b, noiseKey, employeeKey, departmentKey)
+	fields := mustFields(b, map[string]any{"name": "Ben", "dept": "Sales"})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustReteAgendaDeltaBenchmarkSession(b, revision, initials)
+		result, err := session.AssertTemplate(context.Background(), employeeKey, fields)
+		if err != nil {
+			b.Fatalf("AssertTemplate: %v", err)
+		}
+		if result.Status != AssertInserted {
+			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
+		}
+		benchmarkAssertResult = result
+	}
+}
+
+func BenchmarkReteAgendaDeltaModify(b *testing.B) {
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(b)
+	initials := mustBetaMemoryInitialFacts(b, noiseKey, employeeKey, departmentKey)
+	patch := FactPatch{Set: mustFields(b, map[string]any{"dept": "Sales"})}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustReteAgendaDeltaBenchmarkSession(b, revision, initials)
+		employee := mustBenchmarkSessionFactByTemplateAndField(b, session, employeeKey, "name", "Ada")
+		result, err := session.Modify(context.Background(), employee.ID(), patch)
+		if err != nil {
+			b.Fatalf("Modify: %v", err)
+		}
+		if result.Status != ModifyChanged {
+			b.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+		}
+		benchmarkModifyResult = result
+	}
+}
+
+func BenchmarkReteAgendaDeltaRetract(b *testing.B) {
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(b)
+	initials := mustBetaMemoryInitialFacts(b, noiseKey, employeeKey, departmentKey)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustReteAgendaDeltaBenchmarkSession(b, revision, initials)
+		department := mustBenchmarkSessionFactByTemplateAndField(b, session, departmentKey, "id", "Engineering")
+		result, err := session.Retract(context.Background(), department.ID())
+		if err != nil {
+			b.Fatalf("Retract: %v", err)
+		}
+		if result.Status != RetractRemoved {
+			b.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+		}
+		benchmarkRetractResult = result
+	}
+}
+
+func BenchmarkAgendaTerminalTokenDeltaAssert(b *testing.B) {
+	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
+	agenda := newAgenda()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		agenda.reset()
+		changes, err := agenda.applyTerminalTokenDeltas(context.Background(), fixture.revision, nil, fixture.assertDelta.added)
+		if err != nil {
+			b.Fatalf("apply assert terminal delta: %v", err)
+		}
+		if got, want := len(changes), 1; got != want {
+			b.Fatalf("assert terminal changes = %d, want %d", got, want)
+		}
+		benchmarkAgendaChanges = changes
+	}
+}
+
+func BenchmarkAgendaTerminalTokenDeltaModify(b *testing.B) {
+	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
+	agenda := newAgenda()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		agenda.reset()
+		if _, err := agenda.applyTerminalTokenDeltas(context.Background(), fixture.revision, nil, fixture.assertDelta.added); err != nil {
+			b.Fatalf("seed terminal delta: %v", err)
+		}
+		changes, err := agenda.applyTerminalTokenDeltas(context.Background(), fixture.revision, fixture.modifyDelta.removed, fixture.modifyDelta.added)
+		if err != nil {
+			b.Fatalf("apply modify terminal delta: %v", err)
+		}
+		if got, want := len(changes), 2; got != want {
+			b.Fatalf("modify terminal changes = %d, want %d", got, want)
+		}
+		benchmarkAgendaChanges = changes
+	}
+}
+
+func BenchmarkAgendaTerminalTokenDeltaRetract(b *testing.B) {
+	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
+	agenda := newAgenda()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		agenda.reset()
+		if _, err := agenda.applyTerminalTokenDeltas(context.Background(), fixture.revision, nil, fixture.modifyDelta.added); err != nil {
+			b.Fatalf("seed terminal delta: %v", err)
+		}
+		changes, err := agenda.applyTerminalTokenDeltas(context.Background(), fixture.revision, fixture.retractDelta.removed, nil)
+		if err != nil {
+			b.Fatalf("apply retract terminal delta: %v", err)
+		}
+		if got, want := len(changes), 1; got != want {
+			b.Fatalf("retract terminal changes = %d, want %d", got, want)
+		}
+		benchmarkAgendaChanges = changes
+	}
+}
+
 func mustBenchmarkTemplate(tb testing.TB) Template {
 	tb.Helper()
 
@@ -261,6 +392,86 @@ func mustLoadedBenchmarkSession(tb testing.TB, revision *Ruleset, id SessionID, 
 		}
 	}
 	return session
+}
+
+func mustReteAgendaDeltaBenchmarkSession(tb testing.TB, revision *Ruleset, facts []SessionInitialFact) *Session {
+	tb.Helper()
+
+	session, err := NewSession(revision, WithInitialFacts(facts...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		tb.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		tb.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		tb.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	return session
+}
+
+type terminalTokenDeltaBenchmarkFixture struct {
+	revision     *Ruleset
+	assertDelta  reteAgendaDelta
+	modifyDelta  reteAgendaDelta
+	retractDelta reteAgendaDelta
+}
+
+func mustTerminalTokenDeltaBenchmarkFixture(tb testing.TB) terminalTokenDeltaBenchmarkFixture {
+	tb.Helper()
+
+	revision, templateKey := mustAgendaRevision(tb, 10)
+	session := mustSession(tb, revision, "terminal-token-delta-benchmark-session")
+	asserted, assertDelta, err := session.insertFactImmediate(context.Background(), "", templateKey, mustFields(tb, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{})
+	if err != nil {
+		tb.Fatalf("insertFactImmediate: %v", err)
+	}
+	_, modifyDelta, err := session.modifyImmediate(context.Background(), asserted.Fact.ID(), FactPatch{
+		Set: mustFields(tb, map[string]any{"name": "Grace"}),
+	}, mutationOrigin{})
+	if err != nil {
+		tb.Fatalf("modifyImmediate: %v", err)
+	}
+	_, retractDelta, err := session.retractImmediate(context.Background(), asserted.Fact.ID(), mutationOrigin{})
+	if err != nil {
+		tb.Fatalf("retractImmediate: %v", err)
+	}
+	return terminalTokenDeltaBenchmarkFixture{
+		revision:     revision,
+		assertDelta:  assertDelta,
+		modifyDelta:  modifyDelta,
+		retractDelta: retractDelta,
+	}
+}
+
+func mustBenchmarkSessionFactByTemplateAndField(tb testing.TB, session *Session, templateKey TemplateKey, field string, want any) FactSnapshot {
+	tb.Helper()
+
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		tb.Fatalf("Snapshot: %v", err)
+	}
+	expected := mustValue(tb, want)
+	for _, fact := range snapshot.Facts() {
+		if fact.TemplateKey() != templateKey {
+			continue
+		}
+		got, ok := fact.Field(field)
+		if !ok {
+			continue
+		}
+		if got.Equal(expected) {
+			return fact
+		}
+	}
+	tb.Fatalf("fact not found for template %q field %q = %v", templateKey, field, want)
+	return FactSnapshot{}
 }
 
 func mustClaimsTriageReteResults(tb testing.TB) (*Ruleset, []ruleMatchResult) {

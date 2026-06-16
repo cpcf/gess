@@ -223,6 +223,48 @@ func TestAgendaCandidateDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
+func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-token-delta-refraction-session")
+
+	_, delta, err := session.insertFactImmediate(context.Background(), "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+
+	agenda := newAgenda()
+	changes, err := agenda.applyTerminalTokenDeltas(context.Background(), revision, nil, cloneTerminalTokenDeltas(delta.added))
+	if err != nil {
+		t.Fatalf("initial applyTerminalTokenDeltas: %v", err)
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("initial terminal delta changes = %d, want %d", got, want)
+	}
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if selected.status != activationStatusConsumed {
+		t.Fatalf("selected status = %v, want consumed", selected.status)
+	}
+
+	changes, err = agenda.applyTerminalTokenDeltas(context.Background(), revision, nil, cloneTerminalTokenDeltas(delta.added))
+	if err != nil {
+		t.Fatalf("repeat applyTerminalTokenDeltas: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("repeat terminal delta changes = %#v, want none", changes)
+	}
+	if got := agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after repeat terminal delta = %#v, want none", got)
+	}
+	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
+		t.Fatalf("consumed activation after repeat terminal delta = %#v, ok=%v", got, ok)
+	}
+}
+
 func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-delta-scratch-session")
@@ -827,7 +869,7 @@ func countingClock() func() time.Time {
 	}
 }
 
-func mustAgendaRevision(t *testing.T, salience int) (*Ruleset, TemplateKey) {
+func mustAgendaRevision(t testing.TB, salience int) (*Ruleset, TemplateKey) {
 	t.Helper()
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{

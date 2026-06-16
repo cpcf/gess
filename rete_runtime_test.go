@@ -575,6 +575,68 @@ func TestReteRuntimeAgendaDeltasMaintainParityForSmallSupportedSession(t *testin
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
+func TestReteRuntimeTerminalTokenDeltasMatchCandidateDeltas(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-terminal-delta-parity-session"),
+		WithInitialFacts(mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+
+	results, err := session.rete.match(ctx, session.indexedSnapshotLocked())
+	if err != nil {
+		t.Fatalf("initial Rete match: %v", err)
+	}
+	candidateAgenda := newAgenda()
+	if _, err := candidateAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("candidate agenda initial reconcile: %v", err)
+	}
+	directAgenda := newAgenda()
+	if _, err := directAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("direct agenda initial reconcile: %v", err)
+	}
+
+	_, assertDelta, err := session.insertFactImmediate(ctx, "", employeeKey, mustFields(t, map[string]any{
+		"name": "Ben",
+		"dept": "Sales",
+	}), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("insertFactImmediate(Ben): %v", err)
+	}
+	firstChanges := assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, assertDelta)
+	if got, want := len(firstChanges), 1; got != want {
+		t.Fatalf("assert direct changes = %d, want %d", got, want)
+	}
+	firstFactID := firstChanges[0].activation.factIDs[0]
+
+	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
+	_, modifyDelta, err := session.modifyImmediate(ctx, employee.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"dept": "Sales"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate(Ada): %v", err)
+	}
+	assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, modifyDelta)
+
+	salesDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Sales")
+	_, retractDelta, err := session.retractImmediate(ctx, salesDepartment.ID(), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("retractImmediate(Sales): %v", err)
+	}
+	assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, retractDelta)
+
+	if firstChanges[0].activation.factIDs[0] != firstFactID {
+		t.Fatalf("returned direct change was mutated after later deltas: got %q want %q", firstChanges[0].activation.factIDs[0], firstFactID)
+	}
+}
+
 func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	runtime, err := newReteRuntime(nil)
 	if err != ErrInvalidRuleset {
@@ -1567,6 +1629,44 @@ func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("incremental agenda differs from full reconcile:\nincremental=%#v\nfull=%#v", got, want)
 	}
+}
+
+func assertTerminalTokenDeltaMatchesCandidateDelta(t *testing.T, revision *Ruleset, session *Session, candidateAgenda, directAgenda *agenda, delta reteAgendaDelta) []agendaChange {
+	t.Helper()
+	removed, err := session.rete.candidatesForTerminalDeltas(delta.removed, &session.rete.terminalRemovedScratch)
+	if err != nil {
+		t.Fatalf("removed candidates: %v", err)
+	}
+	added, err := session.rete.candidatesForTerminalDeltas(delta.added, &session.rete.terminalAddedScratch)
+	if err != nil {
+		t.Fatalf("added candidates: %v", err)
+	}
+	candidateChanges, err := candidateAgenda.applyCandidateDeltas(context.Background(), revision, removed, added)
+	if err != nil {
+		t.Fatalf("applyCandidateDeltas: %v", err)
+	}
+	directChanges, err := directAgenda.applyTerminalTokenDeltas(context.Background(), revision, cloneTerminalTokenDeltas(delta.removed), cloneTerminalTokenDeltas(delta.added))
+	if err != nil {
+		t.Fatalf("applyTerminalTokenDeltas: %v", err)
+	}
+	if !reflect.DeepEqual(directChanges, candidateChanges) {
+		t.Fatalf("direct terminal changes differ from candidate changes:\ndirect=%#v\ncandidate=%#v", directChanges, candidateChanges)
+	}
+	got := activationParityRecordsFromActivations(directAgenda.pendingActivations())
+	want := activationParityRecordsFromActivations(candidateAgenda.pendingActivations())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct terminal pending differs from candidate pending:\ndirect=%#v\ncandidate=%#v", got, want)
+	}
+	return directChanges
+}
+
+func cloneTerminalTokenDeltas(deltas []reteTerminalTokenDelta) []reteTerminalTokenDelta {
+	if len(deltas) == 0 {
+		return nil
+	}
+	out := make([]reteTerminalTokenDelta, len(deltas))
+	copy(out, deltas)
+	return out
 }
 
 func assertReteRuntimeMatchWithoutSnapshotParity(t *testing.T, session *Session) {
