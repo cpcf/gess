@@ -14,7 +14,8 @@ import (
 //   - TemplateDefaultsValidationAndDuplicateKey tracks Template validation,
 //     field/default copying, slot validation, and duplicate-key construction.
 //   - AgendaReconcile and AgendaIndexInsertion track activation materialization,
-//     agenda.reconcile, indexActivation, and activation index map growth.
+//     agenda.reconcile, indexActivation, and cold activation index map growth.
+//   - AgendaIndexRebuild tracks steady-state reuse of activation index storage.
 //   - ReteAgendaDelta tracks incremental assert, modify, and retract after an
 //     agenda has been populated from Rete-generated activations.
 //   - AgendaTerminalTokenDelta tracks direct agenda application of prebuilt
@@ -208,13 +209,41 @@ func BenchmarkAgendaIndexInsertion(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		byFactID := make(map[FactID][]activationKey, len(activations))
-		byRevision := make(map[RuleRevisionID][]activationKey, len(activations))
-		for _, activation := range activations {
-			indexActivation(byFactID, byRevision, activation)
+		agenda := &agenda{
+			byFactID:   make(map[FactID][]activationKey, len(activations)),
+			byRevision: make(map[RuleRevisionID][]activationKey, len(activations)),
 		}
-		benchmarkAgendaByFactID = byFactID
-		benchmarkAgendaByRevision = byRevision
+		for _, activation := range activations {
+			agenda.indexActivation(activation)
+		}
+		benchmarkAgendaByFactID = agenda.byFactID
+		benchmarkAgendaByRevision = agenda.byRevision
+	}
+	if len(benchmarkAgendaByFactID) == 0 || len(benchmarkAgendaByRevision) == 0 {
+		b.Fatal("expected agenda indexes")
+	}
+}
+
+func BenchmarkAgendaIndexRebuild(b *testing.B) {
+	revision, results := mustClaimsTriageReteResults(b)
+	activations := mustAgendaPendingActivations(b, revision, results)
+	agenda := newAgenda()
+	agenda.resetIndexesForRebuild()
+	for _, activation := range activations {
+		agenda.indexActivation(activation)
+	}
+	agenda.pruneEmptyIndexes()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		agenda.resetIndexesForRebuild()
+		for _, activation := range activations {
+			agenda.indexActivation(activation)
+		}
+		agenda.pruneEmptyIndexes()
+		benchmarkAgendaByFactID = agenda.byFactID
+		benchmarkAgendaByRevision = agenda.byRevision
 	}
 	if len(benchmarkAgendaByFactID) == 0 || len(benchmarkAgendaByRevision) == 0 {
 		b.Fatal("expected agenda indexes")

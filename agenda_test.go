@@ -523,7 +523,6 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	}
 
 	agenda.storeActivation(&activation)
-	indexActivation(agenda.byFactID, agenda.byRevision, activation)
 
 	if got, want := len(agenda.byFactID[factID]), 1; got != want {
 		t.Fatalf("fact index keys = %d, want %d", got, want)
@@ -536,6 +535,172 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	}
 	if got, want := len(agenda.activationsByRuleRevisionID(activation.ruleRevisionID)), 1; got != want {
 		t.Fatalf("revision index activations = %d, want %d", got, want)
+	}
+}
+
+func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-purge-session")
+
+	first, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Ada): %v", err)
+	}
+	second, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+		"name": "Bob",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Bob): %v", err)
+	}
+
+	agenda := newAgenda()
+	results := mustAgendaMatchResults(t, revision, session)
+	if _, err := agenda.reconcile(context.Background(), revision, results); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	consumed, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if consumed.status != activationStatusConsumed {
+		t.Fatalf("consumed status = %v, want consumed", consumed.status)
+	}
+	remaining := agenda.pendingActivations()
+	if got, want := len(remaining), 1; got != want {
+		t.Fatalf("remaining pending activations = %d, want %d", got, want)
+	}
+
+	changes := agenda.purgeRuleRevisions(map[RuleRevisionID]struct{}{
+		consumed.ruleRevisionID: {},
+	})
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("purge changes = %d, want %d", got, want)
+	}
+	if changes[0].kind != agendaChangeDeactivated {
+		t.Fatalf("purge change kind = %v, want deactivated", changes[0].kind)
+	}
+	if changes[0].activation.id != remaining[0].id {
+		t.Fatalf("purge deactivated activation = %q, want %q", changes[0].activation.id, remaining[0].id)
+	}
+	if changes[0].activation.status != activationStatusDeactivated {
+		t.Fatalf("purge deactivated status = %v, want deactivated", changes[0].activation.status)
+	}
+	if got := agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after purge = %#v, want none", got)
+	}
+	if got := len(agenda.activations); got != 0 {
+		t.Fatalf("activation map size after purge = %d, want 0", got)
+	}
+	if got := agenda.activationsByRuleRevisionID(consumed.ruleRevisionID); len(got) != 0 {
+		t.Fatalf("rule revision activations after purge = %#v, want none", got)
+	}
+	if got := len(agenda.byFactID); got != 0 {
+		t.Fatalf("fact index map size after purge = %d, want 0", got)
+	}
+	if got := len(agenda.byRevision); got != 0 {
+		t.Fatalf("revision index map size after purge = %d, want 0", got)
+	}
+	if got, ok := agenda.activationByKey(consumed.key); ok {
+		t.Fatalf("consumed activation still reachable after purge: %#v", got)
+	}
+	if got, ok := agenda.activationByKey(remaining[0].key); ok {
+		t.Fatalf("pending activation still reachable after purge: %#v", got)
+	}
+	if got := len(agenda.byFactID[first.Fact.ID()]); got != 0 {
+		t.Fatalf("fact index for %q after purge = %d, want 0", first.Fact.ID(), got)
+	}
+	if got := len(agenda.byFactID[second.Fact.ID()]); got != 0 {
+		t.Fatalf("fact index for %q after purge = %d, want 0", second.Fact.ID(), got)
+	}
+	if got := len(agenda.byRevision[consumed.ruleRevisionID]); got != 0 {
+		t.Fatalf("revision index after purge = %d, want 0", got)
+	}
+}
+
+func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.T) {
+	agenda := newAgenda()
+	removedFactID := newFactID(1, 1)
+	keptFactID := newFactID(1, 2)
+	removed := activation{
+		ruleRevisionID: RuleRevisionID("removed"),
+		identity: candidateIdentity{
+			generation: 1,
+			count:      1,
+			key: candidateIdentityKey{
+				scopeHash: 100,
+				hash:      42,
+			},
+		},
+		factIDs:      []FactID{removedFactID},
+		factVersions: []FactVersion{1},
+		status:       activationStatusPending,
+	}
+	kept := activation{
+		ruleRevisionID: RuleRevisionID("kept"),
+		identity: candidateIdentity{
+			generation: 1,
+			count:      1,
+			key: candidateIdentityKey{
+				scopeHash: 200,
+				hash:      42,
+			},
+		},
+		factIDs:      []FactID{keptFactID},
+		factVersions: []FactVersion{1},
+		status:       activationStatusPending,
+	}
+
+	removedKey := agenda.storeActivation(&removed)
+	keptKey := agenda.storeActivation(&kept)
+	agenda.pending = append(agenda.pending, removedKey, keptKey)
+
+	changes := agenda.purgeRuleRevisions(map[RuleRevisionID]struct{}{
+		removed.ruleRevisionID: {},
+	})
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("purge changes = %d, want %d", got, want)
+	}
+	if changes[0].activation.key != removedKey {
+		t.Fatalf("purged activation key = %#v, want %#v", changes[0].activation.key, removedKey)
+	}
+	if _, ok := agenda.activationByKey(removedKey); ok {
+		t.Fatalf("removed activation key %#v is still reachable", removedKey)
+	}
+	gotKept, ok := agenda.activationByKey(keptKey)
+	if !ok {
+		t.Fatalf("kept activation key %#v is not reachable", keptKey)
+	}
+	if gotKept.status != activationStatusPending {
+		t.Fatalf("kept activation status = %v, want pending", gotKept.status)
+	}
+	pending := agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after purge = %d, want %d", got, want)
+	}
+	if pending[0].key != keptKey {
+		t.Fatalf("pending activation key = %#v, want %#v", pending[0].key, keptKey)
+	}
+	if got := agenda.activationsByFactID(removedFactID); len(got) != 0 {
+		t.Fatalf("removed fact activations after purge = %#v, want none", got)
+	}
+	if got := agenda.activationsByFactID(keptFactID); len(got) != 1 || got[0].key != keptKey {
+		t.Fatalf("kept fact activations after purge = %#v, want kept activation", got)
+	}
+	if got := agenda.activationsByRuleRevisionID(removed.ruleRevisionID); len(got) != 0 {
+		t.Fatalf("removed revision activations after purge = %#v, want none", got)
+	}
+	if got := agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 || got[0].key != keptKey {
+		t.Fatalf("kept revision activations after purge = %#v, want kept activation", got)
+	}
+	bucket := agenda.activations[keptKey.fingerprint]
+	if bucket.first == nil || bucket.first.key != keptKey {
+		t.Fatalf("bucket first after purge = %#v, want kept activation", bucket.first)
+	}
+	if len(bucket.overflow) != 0 {
+		t.Fatalf("bucket overflow after purge = %d, want 0", len(bucket.overflow))
 	}
 }
 
