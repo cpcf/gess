@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sort"
 	"testing"
@@ -262,6 +263,133 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
 		t.Fatalf("consumed activation after repeat terminal delta = %#v, ok=%v", got, ok)
+	}
+}
+
+func TestAgendaTerminalTokenReconcileMatchesCandidateReconcile(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-terminal-token-reconcile-session")
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(Ada): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"name": "Bob",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(Bob): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	results, err := session.rete.match(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+
+	candidateAgenda := newAgenda()
+	candidateChanges, err := candidateAgenda.reconcile(ctx, revision, results)
+	if err != nil {
+		t.Fatalf("candidate reconcile: %v", err)
+	}
+
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
+	}
+
+	terminalAgenda := newAgenda()
+	terminalChanges, err := terminalAgenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
+	if err != nil {
+		t.Fatalf("reconcileTerminalTokens: %v", err)
+	}
+
+	if !reflect.DeepEqual(terminalChanges, candidateChanges) {
+		t.Fatalf("terminal changes differ from candidate changes:\nterminal=%#v\ncandidate=%#v", terminalChanges, candidateChanges)
+	}
+	if !reflect.DeepEqual(terminalAgenda.pendingActivations(), candidateAgenda.pendingActivations()) {
+		t.Fatalf("terminal pending activations differ from candidate reconcile:\nterminal=%#v\ncandidate=%#v", terminalAgenda.pendingActivations(), candidateAgenda.pendingActivations())
+	}
+}
+
+func TestAgendaTerminalTokenReconcilePreservesConsumedAndDeactivatesMissingPending(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-terminal-token-deactivate-session")
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(Ada): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"name": "Bob",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(Bob): %v", err)
+	}
+
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
+	}
+
+	agenda := newAgenda()
+	changes, err := agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
+	if err != nil {
+		t.Fatalf("initial reconcileTerminalTokens: %v", err)
+	}
+	if got, want := len(changes), 2; got != want {
+		t.Fatalf("initial terminal changes = %d, want %d", got, want)
+	}
+
+	consumed, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if consumed.status != activationStatusConsumed {
+		t.Fatalf("consumed status = %v, want consumed", consumed.status)
+	}
+	remaining := agenda.pendingActivations()
+	if got, want := len(remaining), 1; got != want {
+		t.Fatalf("remaining pending activations = %d, want %d", got, want)
+	}
+
+	if _, err := session.Retract(ctx, remaining[0].factIDs[0]); err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+	tokens, ok, err = session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas after retract: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable after retract")
+	}
+
+	changes, err = agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
+	if err != nil {
+		t.Fatalf("reconcileTerminalTokens after retract: %v", err)
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("terminal changes after retract = %d, want %d", got, want)
+	}
+	if changes[0].kind != agendaChangeDeactivated {
+		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
+	}
+	if got, want := changes[0].activation.factIDs[0], remaining[0].factIDs[0]; got != want {
+		t.Fatalf("deactivated fact ID = %q, want %q", got, want)
+	}
+	if got := agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after missing token reconcile = %#v, want none", got)
+	}
+	if got, ok := agenda.activationByKey(consumed.key); !ok || got.status != activationStatusConsumed {
+		t.Fatalf("consumed activation after missing token reconcile = %#v, ok=%v", got, ok)
 	}
 }
 

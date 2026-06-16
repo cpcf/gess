@@ -794,9 +794,17 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	rete.resetAlpha(snapshot.facts)
-	results, err := rete.match(ctx, snapshot)
+
+	tokens, ok, err := rete.currentTerminalTokenDeltas(ctx)
 	if err != nil {
 		return ApplyRulesetResult{}, err
+	}
+	var results []ruleMatchResult
+	if !ok {
+		results, err = rete.match(ctx, snapshot)
+		if err != nil {
+			return ApplyRulesetResult{}, err
+		}
 	}
 
 	s.revision = next
@@ -805,6 +813,25 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		s.agenda = newAgenda()
 	}
 	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
+	if ok {
+		changes, err := s.agenda.reconcileTerminalTokens(context.Background(), next, tokens)
+		if err != nil {
+			return ApplyRulesetResult{}, err
+		}
+		s.agendaReady = true
+		s.agendaDirty = false
+		s.emitAgendaEvents(ctx, changes)
+
+		return ApplyRulesetResult{
+			Status:                 ApplyRulesetApplied,
+			PreviousRulesetID:      previousID,
+			CurrentRulesetID:       nextID,
+			AddedRuleRevisions:     plan.Added,
+			RemovedRuleRevisions:   plan.Removed,
+			ReplacedRuleRevisions:  plan.Replaced,
+			UnchangedRuleRevisions: plan.Unchanged,
+		}, nil
+	}
 	changes, err := s.agenda.reconcile(context.Background(), next, results)
 	if err != nil {
 		return ApplyRulesetResult{}, err
@@ -887,6 +914,21 @@ func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaC
 	}
 	if s.rete == nil {
 		return nil, false, nil
+	}
+
+	tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		return nil, true, err
+	}
+	if ok {
+		changes, err := s.agenda.reconcileTerminalTokens(ctx, s.revision, tokens)
+		if err != nil {
+			return nil, true, err
+		}
+		s.agendaReady = true
+		s.agendaDirty = false
+		s.emitAgendaEvents(ctx, changes)
+		return changes, true, nil
 	}
 
 	results, ok, err := s.rete.matchWithoutSnapshot(ctx, s.generation)

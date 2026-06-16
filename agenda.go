@@ -460,6 +460,107 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 	return append([]agendaChange(nil), changes...), nil
 }
 
+func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) ([]agendaChange, error) {
+	if a == nil || revision == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	seen := a.reconcileSeen
+	if seen == nil {
+		seen = make(map[activationKey]struct{}, max(len(a.pending), len(deltas)))
+	} else {
+		clear(seen)
+	}
+	nextPending := a.reconcileNextPending[:0]
+	changes := a.reconcileChanges[:0]
+	activated := a.reconcileActivated[:0]
+
+	sort.SliceStable(deltas, func(i, j int) bool {
+		return agendaDeltaTerminalTokenLess(revision, deltas[i], deltas[j])
+	})
+
+	var previous reteTerminalTokenDelta
+	havePrevious := false
+	for _, delta := range deltas {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if delta.token == nil {
+			continue
+		}
+		rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+		if !ok {
+			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+		}
+		if havePrevious && terminalTokenDeltasEqual(revision, previous, delta) {
+			continue
+		}
+		previous = delta
+		havePrevious = true
+
+		existing, key, ok := a.activationForTerminalToken(rule, delta.token)
+		if ok {
+			if existing.status == activationStatusPending {
+				if _, seenBefore := seen[key]; !seenBefore {
+					seen[key] = struct{}{}
+					nextPending = append(nextPending, key)
+				}
+			}
+			continue
+		}
+
+		created, err := activationFromTerminalToken(rule, delta.token)
+		if err != nil {
+			return nil, err
+		}
+		key = a.storeActivation(&created)
+		if _, seenBefore := seen[key]; !seenBefore {
+			seen[key] = struct{}{}
+			nextPending = append(nextPending, key)
+		}
+		activated = append(activated, agendaChange{
+			kind:       agendaChangeActivated,
+			activation: created.clone(),
+		})
+	}
+
+	for _, key := range a.pending {
+		existing, ok := a.activationByKeyPtr(key)
+		if !ok || existing.status != activationStatusPending {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		existing.status = activationStatusDeactivated
+		changes = append(changes, agendaChange{
+			kind:       agendaChangeDeactivated,
+			activation: existing.clone(),
+		})
+	}
+
+	changes = append(changes, activated...)
+
+	sort.SliceStable(nextPending, func(i, j int) bool {
+		left, _ := a.activationByKeyPtr(nextPending[i])
+		right, _ := a.activationByKeyPtr(nextPending[j])
+		return activationLess(left, right)
+	})
+
+	a.reconcileSeen = seen
+	a.reconcileNextPending = a.pending[:0]
+	a.reconcileChanges = changes[:0]
+	a.reconcileActivated = activated[:0]
+	a.pending = nextPending
+	return append([]agendaChange(nil), changes...), nil
+}
+
 func agendaDeltaCandidateLess(revision *Ruleset, left, right matchCandidate) bool {
 	if revision != nil {
 		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]

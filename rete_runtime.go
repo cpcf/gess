@@ -158,6 +158,13 @@ func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Gener
 	return r.beta.matchWithoutSnapshot(ctx, generation)
 }
 
+func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
+	if r == nil || r.revision == nil || r.beta == nil || !r.supportsIncrementalAgenda() {
+		return nil, false, nil
+	}
+	return r.beta.currentTerminalTokenDeltas(ctx)
+}
+
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
 	if r == nil {
 		return reteRuntimeMetrics{}

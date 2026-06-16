@@ -17,24 +17,29 @@ import (
 //   - AgendaReconcile and AgendaIndexInsertion track activation materialization,
 //     agenda.reconcile, indexActivation, and cold activation index map growth.
 //   - AgendaIndexRebuild tracks steady-state reuse of activation index storage.
+//   - AgendaTerminalTokenPopulation tracks initial full agenda population from
+//     terminal tokens without candidate materialization.
+//   - AgendaTerminalTokenCollection and AgendaTerminalTokenReconcile split that
+//     path into collection and agenda materialization for scope comparison.
 //   - ReteAgendaDelta tracks incremental assert, modify, and retract after an
 //     agenda has been populated from Rete-generated activations.
 //   - AgendaTerminalTokenDelta tracks direct agenda application of prebuilt
 //     Rete terminal-token deltas without session setup dominating the result.
 var (
-	benchmarkSnapshot         Snapshot
-	benchmarkActionContext    ActionContext
-	benchmarkDuplicateKey     DuplicateKey
-	benchmarkTemplateFields   Fields
-	benchmarkTemplatePresence map[string]FieldPresence
-	benchmarkTemplateSlots    []factSlot
-	benchmarkAgendaChanges    []agendaChange
-	benchmarkAgendaByFactID   map[FactID][]activationKey
-	benchmarkAgendaByRevision map[RuleRevisionID][]activationKey
-	benchmarkAssertResult     AssertResult
-	benchmarkModifyResult     ModifyResult
-	benchmarkRetractResult    RetractResult
-	benchmarkRunResult        RunResult
+	benchmarkSnapshot            Snapshot
+	benchmarkActionContext       ActionContext
+	benchmarkDuplicateKey        DuplicateKey
+	benchmarkTemplateFields      Fields
+	benchmarkTemplatePresence    map[string]FieldPresence
+	benchmarkTemplateSlots       []factSlot
+	benchmarkAgendaChanges       []agendaChange
+	benchmarkTerminalTokenDeltas []reteTerminalTokenDelta
+	benchmarkAgendaByFactID      map[FactID][]activationKey
+	benchmarkAgendaByRevision    map[RuleRevisionID][]activationKey
+	benchmarkAssertResult        AssertResult
+	benchmarkModifyResult        ModifyResult
+	benchmarkRetractResult       RetractResult
+	benchmarkRunResult           RunResult
 )
 
 func BenchmarkSnapshotConstructionLoanPublic(b *testing.B) {
@@ -358,6 +363,79 @@ func BenchmarkAgendaReconcileReteActivationsClaims(b *testing.B) {
 		changes, err := agenda.reconcile(context.Background(), revision, results)
 		if err != nil {
 			b.Fatalf("reconcile: %v", err)
+		}
+		benchmarkAgendaChanges = changes
+	}
+	if len(benchmarkAgendaChanges) == 0 {
+		b.Fatal("expected agenda changes")
+	}
+}
+
+func BenchmarkAgendaTerminalTokenPopulationLoan(b *testing.B) {
+	session := mustLoanUnderwritingBenchmarkSession(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
+		if err != nil {
+			b.Fatalf("currentTerminalTokenDeltas: %v", err)
+		}
+		if !ok {
+			b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
+		}
+		agenda := newAgenda()
+		changes, err := agenda.reconcileTerminalTokens(context.Background(), session.revision, tokens)
+		if err != nil {
+			b.Fatalf("reconcileTerminalTokens: %v", err)
+		}
+		benchmarkAgendaChanges = changes
+	}
+	if len(benchmarkAgendaChanges) == 0 {
+		b.Fatal("expected agenda changes")
+	}
+}
+
+func BenchmarkAgendaTerminalTokenCollectionLoan(b *testing.B) {
+	session := mustLoanUnderwritingBenchmarkSession(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
+		if err != nil {
+			b.Fatalf("currentTerminalTokenDeltas: %v", err)
+		}
+		if !ok {
+			b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
+		}
+		benchmarkTerminalTokenDeltas = tokens
+	}
+	if len(benchmarkTerminalTokenDeltas) == 0 {
+		b.Fatal("expected terminal token deltas")
+	}
+}
+
+func BenchmarkAgendaTerminalTokenReconcileLoan(b *testing.B) {
+	session := mustLoanUnderwritingBenchmarkSession(b)
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
+	if err != nil {
+		b.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
+	}
+	seed := cloneTerminalTokenDeltas(tokens)
+	working := make([]reteTerminalTokenDelta, len(seed))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		copy(working, seed)
+		agenda := newAgenda()
+		changes, err := agenda.reconcileTerminalTokens(context.Background(), session.revision, working)
+		if err != nil {
+			b.Fatalf("reconcileTerminalTokens: %v", err)
 		}
 		benchmarkAgendaChanges = changes
 	}

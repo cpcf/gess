@@ -8,8 +8,9 @@ import (
 )
 
 type reteBetaMemory struct {
-	revision *Ruleset
-	rules    map[RuleRevisionID]*reteBetaRuleMemory
+	revision            *Ruleset
+	rules               map[RuleRevisionID]*reteBetaRuleMemory
+	terminalTokenDeltas []reteTerminalTokenDelta
 }
 
 type reteAgendaDelta struct {
@@ -165,6 +166,46 @@ func (m *reteBetaMemory) matchWithoutSnapshot(ctx context.Context, generation Ge
 	}
 
 	return results, true, nil
+}
+
+func (m *reteBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
+	if m == nil || m.revision == nil {
+		return nil, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	deltas := m.terminalTokenDeltas[:0]
+	for _, ruleName := range m.revision.ruleOrder {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		rule, ok := m.revision.rules[ruleName]
+		if !ok {
+			return nil, false, nil
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return nil, false, nil
+		}
+		for _, prefix := range ruleMemory.terminalPrefixes() {
+			if prefix.token == nil {
+				continue
+			}
+			deltas = append(deltas, reteTerminalTokenDelta{
+				ruleRevisionID: rule.revisionID,
+				token:          prefix.token,
+			})
+		}
+	}
+
+	m.terminalTokenDeltas = deltas
+	return deltas, true, nil
 }
 
 func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) {

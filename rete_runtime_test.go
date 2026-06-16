@@ -171,6 +171,42 @@ func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *t
 	}
 }
 
+func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *testing.T) {
+	ctx := context.Background()
+	revision := mustCompileLoanUnderwritingRuleset(t, nil)
+	initials := loanUnderwritingTemplateInitialFacts(t)
+
+	terminalSession, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession(terminal): %v", err)
+	}
+	snapshotSession, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession(snapshot): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, ctx, snapshotSession)
+	snapshotChanges, err := snapshotSession.reconcileAgenda(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("snapshot reconcileAgenda: %v", err)
+	}
+
+	terminalChanges, ok, err := terminalSession.reconcileAgendaWithoutSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("reconcileAgendaWithoutSnapshot unexpectedly unavailable for beta-backed session")
+	}
+
+	if !reflect.DeepEqual(terminalChanges, snapshotChanges) {
+		t.Fatalf("terminal-token reconcile changes differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalChanges, snapshotChanges)
+	}
+	if !reflect.DeepEqual(terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations()) {
+		t.Fatalf("terminal-token pending activations differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations())
+	}
+}
+
 func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
