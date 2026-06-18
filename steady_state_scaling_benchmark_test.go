@@ -54,6 +54,10 @@ func BenchmarkGessSteadyStateRuleCreatedFacts(b *testing.B) {
 				assertSteadyStateFactMix(b, session, tc)
 				benchmarkSteadyStateRunResult = result
 			}
+			propagation := collectSteadyStateScalingPropagationCounters(b, revision, tc)
+			propagation.reportMetrics(func(name string, value float64) {
+				b.ReportMetric(value, name)
+			})
 		})
 	}
 }
@@ -385,6 +389,15 @@ func mustSeedSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc stead
 	if session.rete == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
+	seedSteadyStateScalingSession(t, session, tc)
+	return session
+}
+
+func seedSteadyStateScalingSession(t testing.TB, session *Session, tc steadyStateScalingCase) {
+	t.Helper()
+	if session == nil {
+		t.Fatal("session is nil")
+	}
 	for stream := 0; stream < tc.streams; stream++ {
 		if _, err := session.AssertTemplate(context.Background(), TemplateKey("step"), Fields{
 			"stream": steadyStateIntValue(stream),
@@ -393,7 +406,6 @@ func mustSeedSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc stead
 			t.Fatalf("AssertTemplate(step stream=%d): %v", stream, err)
 		}
 	}
-	return session
 }
 
 func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
@@ -426,6 +438,36 @@ func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
 	}
 	assertSteadyStateFactMix(t, session, tc)
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestSteadyStateScalingPropagationCountersScale(t *testing.T) {
+	small := steadyStateScalingCase{streams: 4, limit: 32}
+	large := steadyStateScalingCase{streams: 8, limit: 64}
+
+	smallSnapshot := runSteadyStateScalingWithPropagationCounters(t, small)
+	largeSnapshot := runSteadyStateScalingWithPropagationCounters(t, large)
+
+	if largeSnapshot.Totals.Asserts <= smallSnapshot.Totals.Asserts {
+		t.Fatalf("assert totals did not scale: small=%d large=%d", smallSnapshot.Totals.Asserts, largeSnapshot.Totals.Asserts)
+	}
+	if largeSnapshot.Totals.RHSAsserts <= smallSnapshot.Totals.RHSAsserts {
+		t.Fatalf("rhs assert totals did not scale: small=%d large=%d", smallSnapshot.Totals.RHSAsserts, largeSnapshot.Totals.RHSAsserts)
+	}
+	if largeSnapshot.Totals.RuleMemoriesVisited <= smallSnapshot.Totals.RuleMemoriesVisited {
+		t.Fatalf("rule memory visits did not scale: small=%d large=%d", smallSnapshot.Totals.RuleMemoriesVisited, largeSnapshot.Totals.RuleMemoriesVisited)
+	}
+	if largeSnapshot.Totals.TerminalDeltasEmitted <= smallSnapshot.Totals.TerminalDeltasEmitted {
+		t.Fatalf("terminal deltas did not scale: small=%d large=%d", smallSnapshot.Totals.TerminalDeltasEmitted, largeSnapshot.Totals.TerminalDeltasEmitted)
+	}
+	if len(largeSnapshot.ByTemplate) == 0 || len(largeSnapshot.ByOrigin) == 0 {
+		t.Fatalf("counter distributions are empty: %#v", largeSnapshot)
+	}
+	if got := largeSnapshot.ByOrigin[propagationOriginExternal].Asserts; got == 0 {
+		t.Fatalf("external origin distribution is empty: %#v", largeSnapshot.ByOrigin)
+	}
+	if got := largeSnapshot.ByOrigin[propagationOriginRHS].RHSAsserts; got == 0 {
+		t.Fatalf("rhs origin distribution is empty: %#v", largeSnapshot.ByOrigin)
+	}
 }
 
 func TestSteadyStateScalingResetRunReusesTerminalTokenLifetimeAcrossCycles(t *testing.T) {
@@ -468,6 +510,44 @@ func TestSteadyStateScalingResetRunReusesTerminalTokenLifetimeAcrossCycles(t *te
 		assertSteadyStateFactMix(t, session, tc)
 		assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 	}
+}
+
+func runSteadyStateScalingWithPropagationCounters(t testing.TB, tc steadyStateScalingCase) propagationCounterSnapshot {
+	t.Helper()
+
+	ctx := context.Background()
+	revision := mustCompileSteadyStateScalingRuleset(t, tc)
+	session := mustSession(t, revision, SessionID(fmt.Sprintf("steady-state-scaling-counters-%d-%d", tc.streams, tc.limit)))
+	if session.rete == nil {
+		t.Fatal("session Rete runtime is nil")
+	}
+	session.attachPropagationCounters()
+	seedSteadyStateScalingSession(t, session, tc)
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	expectedFired := tc.streams * (4*tc.limit + 5)
+	if result.Status != RunCompleted || result.Fired != expectedFired {
+		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, expectedFired)
+	}
+	return session.propagationCounterSnapshot()
+}
+
+func collectSteadyStateScalingPropagationCounters(t testing.TB, revision *Ruleset, tc steadyStateScalingCase) propagationCounterSnapshot {
+	t.Helper()
+
+	ctx := context.Background()
+	session := mustSeedSteadyStateScalingSession(t, revision, tc)
+	session.attachPropagationCounters()
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	validateSteadyStateHarnessSession(t, session, result, tc, "counter")
+	return session.propagationCounterSnapshot()
 }
 
 func assertSteadyStateFactMix(t testing.TB, session *Session, tc steadyStateScalingCase) {

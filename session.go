@@ -57,31 +57,32 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 type Session struct {
-	id               SessionID
-	revision         *Ruleset
-	agenda           *agenda
-	rete             *reteRuntime
-	generation       Generation
-	initials         []SessionInitialFact
-	initialCount     int
-	compiledInitials []compiledSessionInitialFact
-	listeners        []EventListener
-	eventClock       func() time.Time
-	closed           bool
-	runGuard         chan struct{}
-	runState         atomic.Value
-	runAgendaDelta   reteAgendaDelta
-	runAgendaDeltas  []reteAgendaDelta
-	runAgendaStates  []runAgendaDeltaState
-	runAgendaBuckets map[candidateIdentity]int
-	runAgendaAdded   []reteTerminalTokenDelta
-	runAgendaRemoved []reteTerminalTokenDelta
-	runAgendaPending bool
-	agendaReady      bool
-	agendaDirty      bool
-	mutationQueueMu  sync.Mutex
-	mutationQueue    []queuedMutation
-	mu               struct {
+	id                  SessionID
+	revision            *Ruleset
+	agenda              *agenda
+	propagationCounters *propagationCounterLedger
+	rete                *reteRuntime
+	generation          Generation
+	initials            []SessionInitialFact
+	initialCount        int
+	compiledInitials    []compiledSessionInitialFact
+	listeners           []EventListener
+	eventClock          func() time.Time
+	closed              bool
+	runGuard            chan struct{}
+	runState            atomic.Value
+	runAgendaDelta      reteAgendaDelta
+	runAgendaDeltas     []reteAgendaDelta
+	runAgendaStates     []runAgendaDeltaState
+	runAgendaBuckets    map[candidateIdentity]int
+	runAgendaAdded      []reteTerminalTokenDelta
+	runAgendaRemoved    []reteTerminalTokenDelta
+	runAgendaPending    bool
+	agendaReady         bool
+	agendaDirty         bool
+	mutationQueueMu     sync.Mutex
+	mutationQueue       []queuedMutation
+	mu                  struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -177,6 +178,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		insertionOrder:   state.factsByInsertionOrder(),
 	}
 	session.runState.Store(runGuardState{})
+	session.syncPropagationCounters()
 	return session, nil
 }
 
@@ -222,6 +224,31 @@ func (s *Session) sourceGeneration() Generation {
 		return 0
 	}
 	return s.generation
+}
+
+func (s *Session) attachPropagationCounters() *propagationCounterLedger {
+	if s == nil {
+		return nil
+	}
+	if s.propagationCounters == nil {
+		s.propagationCounters = newPropagationCounterLedger()
+	}
+	s.syncPropagationCounters()
+	return s.propagationCounters
+}
+
+func (s *Session) propagationCounterSnapshot() propagationCounterSnapshot {
+	if s == nil || s.propagationCounters == nil {
+		return propagationCounterSnapshot{}
+	}
+	return s.propagationCounters.snapshot()
+}
+
+func (s *Session) syncPropagationCounters() {
+	if s == nil || s.agenda == nil {
+		return
+	}
+	s.agenda.propagationCounters = s.propagationCounters
 }
 
 func (s *Session) removeStoredFact(id FactID) {
@@ -415,7 +442,15 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 
 	snapshot := fact.snapshot()
-	agendaDelta := s.updateReteAlphaAfterAssert(snapshot)
+	var span *propagationCounterSpan
+	if s.propagationCounters != nil {
+		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
+		span = &counterSpan
+	}
+	agendaDelta := s.updateReteAlphaAfterAssert(snapshot, span)
+	if span != nil {
+		span.finish()
+	}
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
@@ -811,6 +846,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	s.rete = rete
 	if s.agenda == nil {
 		s.agenda = newAgenda()
+		s.syncPropagationCounters()
 	}
 	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
 	if ok {
@@ -863,6 +899,7 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	}
 	if s.agenda == nil {
 		s.agenda = newAgenda()
+		s.syncPropagationCounters()
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -905,6 +942,7 @@ func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaC
 	}
 	if s.agenda == nil {
 		s.agenda = newAgenda()
+		s.syncPropagationCounters()
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -961,6 +999,7 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	}
 	if s.agenda == nil {
 		s.agenda = newAgenda()
+		s.syncPropagationCounters()
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -974,6 +1013,9 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	changes, err := s.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
 	if err != nil {
 		return nil, true, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordAgendaDeltaApplication()
 	}
 	if !s.runAgendaPending {
 		s.compactBetaTokenBackingForDelta(delta)
@@ -997,7 +1039,7 @@ func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
 	s.rete = rete
 }
 
-func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) reteAgendaDelta {
+func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
 	if s == nil {
 		return reteAgendaDelta{}
 	}
@@ -1009,8 +1051,8 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot) reteAgendaDelta 
 		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
 	}
-	s.rete.insertAlphaFact(fact)
-	return s.rete.insertBetaFact(fact)
+	s.rete.insertAlphaFact(fact, span)
+	return s.rete.insertBetaFact(fact, span)
 }
 
 func (s *Session) updateReteAlphaAfterRetract(id FactID) reteAgendaDelta {
@@ -2420,9 +2462,15 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	}
 	s.runAgendaAdded = added
 	s.runAgendaRemoved = removed
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(removed, func(i, j int) bool {
 		return agendaDeltaTerminalTokenLess(s.revision, removed[i], removed[j])
 	})
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(added, func(i, j int) bool {
 		return agendaDeltaTerminalTokenLess(s.revision, added[i], added[j])
 	})

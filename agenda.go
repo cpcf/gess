@@ -206,12 +206,13 @@ func activationPathForRule(rule compiledRule) []int {
 }
 
 type agenda struct {
-	activations map[activationFingerprint]activationBucket
-	pending     []activationKey
-	byFactID    map[FactID][]activationKey
-	byRevision  map[RuleRevisionID][]activationKey
-	nextOrdinal uint64
-	revision    *Ruleset
+	activations         map[activationFingerprint]activationBucket
+	pending             []activationKey
+	byFactID            map[FactID][]activationKey
+	byRevision          map[RuleRevisionID][]activationKey
+	nextOrdinal         uint64
+	revision            *Ruleset
+	propagationCounters *propagationCounterLedger
 
 	reconcileSeen        map[activationKey]struct{}
 	reconcileNextPending []activationKey
@@ -343,6 +344,9 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 
 	changes = append(changes, activated...)
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(nextPending, func(i, j int) bool {
 		left, _ := a.activationByKeyPtr(nextPending[i])
 		right, _ := a.activationByKeyPtr(nextPending[j])
@@ -409,6 +413,9 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	}
 
 	activated := a.deltaActivated[:0]
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(added, func(i, j int) bool {
 		return agendaDeltaCandidateLess(revision, added[i], added[j])
 	})
@@ -438,6 +445,9 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	}
 	changes = append(changes, activated...)
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(a.pending, func(i, j int) bool {
 		left, _ := a.activationByKeyPtr(a.pending[i])
 		right, _ := a.activationByKeyPtr(a.pending[j])
@@ -508,6 +518,9 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		a.pending = nextPending
 	}
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(added, func(i, j int) bool {
 		return agendaDeltaTerminalTokenLess(revision, added[i], added[j])
 	})
@@ -547,6 +560,9 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 	}
 	changes = append(changes, activated...)
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(a.pending, func(i, j int) bool {
 		left, _ := a.activationByKeyPtr(a.pending[i])
 		right, _ := a.activationByKeyPtr(a.pending[j])
@@ -581,6 +597,9 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 	changes := a.reconcileChanges[:0]
 	activated := a.reconcileActivated[:0]
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(deltas, func(i, j int) bool {
 		return agendaDeltaTerminalTokenLess(revision, deltas[i], deltas[j])
 	})
@@ -647,6 +666,9 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 
 	changes = append(changes, activated...)
 
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
 	sort.SliceStable(nextPending, func(i, j int) bool {
 		left, _ := a.activationByKeyPtr(nextPending[i])
 		right, _ := a.activationByKeyPtr(nextPending[j])
@@ -1151,6 +1173,9 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 	act.key = key
 	a.activations[fingerprint] = bucket
 	a.indexActivation(*act)
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordActivationStored()
+	}
 	return key
 }
 

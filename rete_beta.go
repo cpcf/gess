@@ -255,12 +255,15 @@ func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, source factSou
 	return collectMatchCandidatesFromPrefixes(ctx, rule, source.sourceGeneration(), ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
 }
 
-func (m *reteBetaMemory) insertFact(fact FactSnapshot) reteAgendaDelta {
+func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}
 	}
 	delta := reteAgendaDelta{supported: true}
 	for _, ruleName := range m.revision.ruleOrder {
+		if span != nil {
+			span.recordRuleMemoryVisited()
+		}
 		rule, ok := m.revision.rules[ruleName]
 		if !ok {
 			delta.supported = false
@@ -271,7 +274,7 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot) reteAgendaDelta {
 			delta.supported = false
 			continue
 		}
-		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact)
+		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact, span)
 	}
 	return delta
 }
@@ -302,7 +305,7 @@ func (m *reteBetaMemory) updateFact(before, after FactSnapshot) reteAgendaDelta 
 		return reteAgendaDelta{}
 	}
 	removed := m.removeFact(before.ID())
-	added := m.insertFact(after)
+	added := m.insertFact(after, nil)
 	return reteAgendaDelta{
 		supported: removed.supported && added.supported,
 		added:     added.added,
@@ -351,7 +354,7 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 			plan := m.rule.conditionPlans[conditionIndex]
 			for _, match := range matches {
 				prefixes = append(prefixes, betaPrefix{
-					token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+					token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 				})
 			}
 		} else {
@@ -544,17 +547,22 @@ func countLiveTokens(token *matchToken, seen map[*matchToken]struct{}) int {
 	return 1 + countLiveTokens(token.parent, seen)
 }
 
-func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact FactSnapshot) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if m == nil {
 		return out
 	}
 	for conditionIndex, plan := range m.rule.conditionPlans {
+		if span != nil {
+			span.recordConditionPlanTested()
+		}
 		match, ok, err := betaConditionMatch(plan, fact)
 		if err != nil || !ok {
 			continue
 		}
-		m.addConditionMatch(conditionIndex, match)
-		out = m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match)
+		if m.addConditionMatch(conditionIndex, match) && span != nil {
+			span.recordConditionMatchAdded()
+		}
+		out = m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
 	}
 	return out
 }
@@ -577,7 +585,7 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes [
 				continue
 			}
 			out = append(out, betaPrefix{
-				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 			})
 		}
 	}
@@ -606,13 +614,13 @@ func (m *reteBetaRuleMemory) appendRemovedFactDeltas(out []reteTerminalTokenDelt
 	return out
 }
 
-func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, match conditionMatch) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, match conditionMatch, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	plan := m.rule.conditionPlans[conditionIndex]
 	if conditionIndex == 0 {
 		prefix := betaPrefix{
-			token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
-		return m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, prefix)
+		return m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, prefix, span)
 	}
 
 	if len(plan.joins) == 0 {
@@ -623,9 +631,9 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 				continue
 			}
 			nextPrefix := betaPrefix{
-				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
-			out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix)
+			out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix, span)
 		}
 		return out
 	}
@@ -646,19 +654,25 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 			continue
 		}
 		nextPrefix := betaPrefix{
-			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
-		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix)
+		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix, span)
 	}
 	return out
 }
 
-func (m *reteBetaRuleMemory) appendAndPropagatePrefixDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, prefix betaPrefix) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendAndPropagatePrefixDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, prefix betaPrefix, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if !m.addPrefix(conditionIndex, prefix) {
 		return out
 	}
+	if span != nil {
+		span.recordPrefixAdded()
+	}
 	if conditionIndex == len(m.rule.conditionPlans)-1 {
 		if prefix.token != nil {
+			if span != nil {
+				span.recordTerminalDeltaEmitted()
+			}
 			out = append(out, reteTerminalTokenDelta{
 				ruleRevisionID: ruleRevisionID,
 				token:          prefix.token,
@@ -666,13 +680,16 @@ func (m *reteBetaRuleMemory) appendAndPropagatePrefixDeltas(out []reteTerminalTo
 		}
 		return out
 	}
-	return m.appendPropagatedPrefixDeltas(out, ruleRevisionID, conditionIndex, prefix)
+	return m.appendPropagatedPrefixDeltas(out, ruleRevisionID, conditionIndex, prefix, span)
 }
 
-func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, prefix betaPrefix) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, prefix betaPrefix, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	nextCondition := conditionIndex + 1
 	if m == nil || nextCondition >= len(m.rule.conditionPlans) {
 		return out
+	}
+	if span != nil {
+		span.recordBetaSuccessorReached()
 	}
 	matches, err := m.matchesForLeftPrefix(nextCondition, prefix)
 	if err != nil {
@@ -686,16 +703,19 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 			continue
 		}
 		nextPrefix := betaPrefix{
-			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation()),
+			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
-		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, nextCondition, nextPrefix)
+		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, nextCondition, nextPrefix, span)
 	}
 	return out
 }
 
-func (m *reteBetaRuleMemory) newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
+func (m *reteBetaRuleMemory) newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) *matchToken {
 	if m == nil {
 		return nil
+	}
+	if span != nil {
+		span.recordTokenCreated()
 	}
 	token := makeMatchToken(parent, entry, match, recency, generation)
 	chunks := m.tokenBacking

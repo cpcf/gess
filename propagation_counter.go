@@ -1,0 +1,454 @@
+package gess
+
+import (
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type propagationOrigin uint8
+
+const (
+	propagationOriginExternal propagationOrigin = iota
+	propagationOriginRHS
+)
+
+func (o propagationOrigin) String() string {
+	switch o {
+	case propagationOriginExternal:
+		return "external"
+	case propagationOriginRHS:
+		return "rhs"
+	default:
+		return "unknown"
+	}
+}
+
+func propagationOriginFromMutation(origin mutationOrigin) propagationOrigin {
+	if origin.isZero() {
+		return propagationOriginExternal
+	}
+	return propagationOriginRHS
+}
+
+type propagationCounterTotals struct {
+	Asserts                 int
+	RHSAsserts              int
+	RuleMemoriesVisited     int
+	ConditionsTested        int
+	AlphaMatchesAdded       int
+	ConditionPlansTested    int
+	ConditionMatchesAdded   int
+	PrefixesAdded           int
+	BetaSuccessorsReached   int
+	TokensCreated           int
+	TerminalDeltasEmitted   int
+	AgendaDeltaApplications int
+	AgendaSorts             int
+	ActivationsStored       int
+}
+
+func (t *propagationCounterTotals) add(other propagationCounterTotals) {
+	if t == nil {
+		return
+	}
+	t.Asserts += other.Asserts
+	t.RHSAsserts += other.RHSAsserts
+	t.RuleMemoriesVisited += other.RuleMemoriesVisited
+	t.ConditionsTested += other.ConditionsTested
+	t.AlphaMatchesAdded += other.AlphaMatchesAdded
+	t.ConditionPlansTested += other.ConditionPlansTested
+	t.ConditionMatchesAdded += other.ConditionMatchesAdded
+	t.PrefixesAdded += other.PrefixesAdded
+	t.BetaSuccessorsReached += other.BetaSuccessorsReached
+	t.TokensCreated += other.TokensCreated
+	t.TerminalDeltasEmitted += other.TerminalDeltasEmitted
+	t.AgendaDeltaApplications += other.AgendaDeltaApplications
+	t.AgendaSorts += other.AgendaSorts
+	t.ActivationsStored += other.ActivationsStored
+}
+
+type propagationCounterKey struct {
+	templateKey TemplateKey
+	origin      propagationOrigin
+}
+
+type propagationCounterLedger struct {
+	totals           propagationCounterTotals
+	byTemplate       map[TemplateKey]*propagationCounterTotals
+	byOrigin         map[propagationOrigin]*propagationCounterTotals
+	byTemplateOrigin map[propagationCounterKey]*propagationCounterTotals
+}
+
+type propagationCounterSpan struct {
+	ledger      *propagationCounterLedger
+	templateKey TemplateKey
+	origin      propagationOrigin
+	totals      propagationCounterTotals
+}
+
+type propagationCounterSnapshot struct {
+	Totals           propagationCounterTotals
+	ByTemplate       map[TemplateKey]propagationCounterTotals
+	ByOrigin         map[propagationOrigin]propagationCounterTotals
+	ByTemplateOrigin map[propagationCounterKey]propagationCounterTotals
+}
+
+func newPropagationCounterLedger() *propagationCounterLedger {
+	return &propagationCounterLedger{
+		byTemplate:       make(map[TemplateKey]*propagationCounterTotals),
+		byOrigin:         make(map[propagationOrigin]*propagationCounterTotals),
+		byTemplateOrigin: make(map[propagationCounterKey]*propagationCounterTotals),
+	}
+}
+
+func (l *propagationCounterLedger) beginAssert(templateKey TemplateKey, origin mutationOrigin) propagationCounterSpan {
+	if l == nil {
+		return propagationCounterSpan{}
+	}
+	return propagationCounterSpan{
+		ledger:      l,
+		templateKey: templateKey,
+		origin:      propagationOriginFromMutation(origin),
+	}
+}
+
+func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
+	if l == nil {
+		return propagationCounterSnapshot{}
+	}
+	out := propagationCounterSnapshot{
+		Totals:           l.totals,
+		ByTemplate:       make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
+		ByOrigin:         make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
+		ByTemplateOrigin: make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
+	}
+	for key, totals := range l.byTemplate {
+		if totals != nil {
+			out.ByTemplate[key] = *totals
+		}
+	}
+	for key, totals := range l.byOrigin {
+		if totals != nil {
+			out.ByOrigin[key] = *totals
+		}
+	}
+	for key, totals := range l.byTemplateOrigin {
+		if totals != nil {
+			out.ByTemplateOrigin[key] = *totals
+		}
+	}
+	return out
+}
+
+func (s *propagationCounterSpan) recordRuleMemoryVisited() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.RuleMemoriesVisited++
+}
+
+func (s *propagationCounterSpan) recordConditionsTested() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ConditionsTested++
+}
+
+func (s *propagationCounterSpan) recordAlphaMatchAdded() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.AlphaMatchesAdded++
+}
+
+func (s *propagationCounterSpan) recordConditionPlanTested() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ConditionPlansTested++
+}
+
+func (s *propagationCounterSpan) recordConditionMatchAdded() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ConditionMatchesAdded++
+}
+
+func (s *propagationCounterSpan) recordPrefixAdded() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.PrefixesAdded++
+}
+
+func (s *propagationCounterSpan) recordBetaSuccessorReached() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaSuccessorsReached++
+}
+
+func (s *propagationCounterSpan) recordTokenCreated() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.TokensCreated++
+}
+
+func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.TerminalDeltasEmitted++
+}
+
+func (s *propagationCounterSpan) finish() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	ledger := s.ledger
+	s.totals.Asserts++
+	if s.origin == propagationOriginRHS {
+		s.totals.RHSAsserts++
+	}
+	ledger.totals.add(s.totals)
+	ledger.addTemplateTotals(s.templateKey, s.totals)
+	ledger.addOriginTotals(s.origin, s.totals)
+	ledger.addTemplateOriginTotals(s.templateKey, s.origin, s.totals)
+	s.ledger = nil
+}
+
+func (l *propagationCounterLedger) recordAgendaDeltaApplication() {
+	if l == nil {
+		return
+	}
+	l.totals.AgendaDeltaApplications++
+}
+
+func (l *propagationCounterLedger) recordAgendaSort() {
+	if l == nil {
+		return
+	}
+	l.totals.AgendaSorts++
+}
+
+func (l *propagationCounterLedger) recordActivationStored() {
+	if l == nil {
+		return
+	}
+	l.totals.ActivationsStored++
+}
+
+func (l *propagationCounterLedger) addTemplateTotals(templateKey TemplateKey, totals propagationCounterTotals) {
+	if l == nil {
+		return
+	}
+	current := l.byTemplate[templateKey]
+	if current == nil {
+		current = &propagationCounterTotals{}
+		l.byTemplate[templateKey] = current
+	}
+	current.add(totals)
+}
+
+func (l *propagationCounterLedger) addOriginTotals(origin propagationOrigin, totals propagationCounterTotals) {
+	if l == nil {
+		return
+	}
+	current := l.byOrigin[origin]
+	if current == nil {
+		current = &propagationCounterTotals{}
+		l.byOrigin[origin] = current
+	}
+	current.add(totals)
+}
+
+func (l *propagationCounterLedger) addTemplateOriginTotals(templateKey TemplateKey, origin propagationOrigin, totals propagationCounterTotals) {
+	if l == nil {
+		return
+	}
+	key := propagationCounterKey{templateKey: templateKey, origin: origin}
+	current := l.byTemplateOrigin[key]
+	if current == nil {
+		current = &propagationCounterTotals{}
+		l.byTemplateOrigin[key] = current
+	}
+	current.add(totals)
+}
+
+func (s propagationCounterSnapshot) reportMetrics(report func(name string, value float64)) {
+	if report == nil {
+		return
+	}
+	report("propagation-asserts", float64(s.Totals.Asserts))
+	report("propagation-rhs-asserts", float64(s.Totals.RHSAsserts))
+	report("propagation-rule-memories-visited", float64(s.Totals.RuleMemoriesVisited))
+	report("propagation-conditions-tested", float64(s.Totals.ConditionsTested))
+	report("propagation-alpha-matches-added", float64(s.Totals.AlphaMatchesAdded))
+	report("propagation-condition-plans-tested", float64(s.Totals.ConditionPlansTested))
+	report("propagation-condition-matches-added", float64(s.Totals.ConditionMatchesAdded))
+	report("propagation-prefixes-added", float64(s.Totals.PrefixesAdded))
+	report("propagation-beta-successors-reached", float64(s.Totals.BetaSuccessorsReached))
+	report("propagation-tokens-created", float64(s.Totals.TokensCreated))
+	report("propagation-terminal-deltas-emitted", float64(s.Totals.TerminalDeltasEmitted))
+	report("propagation-agenda-delta-applications", float64(s.Totals.AgendaDeltaApplications))
+	report("propagation-agenda-sorts", float64(s.Totals.AgendaSorts))
+	report("propagation-activations-stored", float64(s.Totals.ActivationsStored))
+
+	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
+	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
+	report("propagation-conditions-tested/rhs-assert", float64(s.Totals.ConditionsTested)/rhsAsserts)
+	report("propagation-alpha-matches-added/rhs-assert", float64(s.Totals.AlphaMatchesAdded)/rhsAsserts)
+	report("propagation-condition-plans-tested/rhs-assert", float64(s.Totals.ConditionPlansTested)/rhsAsserts)
+	report("propagation-condition-matches-added/rhs-assert", float64(s.Totals.ConditionMatchesAdded)/rhsAsserts)
+	report("propagation-prefixes-added/rhs-assert", float64(s.Totals.PrefixesAdded)/rhsAsserts)
+	report("propagation-beta-successors-reached/rhs-assert", float64(s.Totals.BetaSuccessorsReached)/rhsAsserts)
+	report("propagation-tokens-created/rhs-assert", float64(s.Totals.TokensCreated)/rhsAsserts)
+	report("propagation-terminal-deltas-emitted/rhs-assert", float64(s.Totals.TerminalDeltasEmitted)/rhsAsserts)
+	report("propagation-agenda-delta-applications/rhs-assert", float64(s.Totals.AgendaDeltaApplications)/rhsAsserts)
+	report("propagation-agenda-sorts/rhs-assert", float64(s.Totals.AgendaSorts)/rhsAsserts)
+	report("propagation-activations-stored/rhs-assert", float64(s.Totals.ActivationsStored)/rhsAsserts)
+	report("propagation-template-count", float64(len(s.ByTemplate)))
+	report("propagation-origin-count", float64(len(s.ByOrigin)))
+	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
+}
+
+func (s propagationCounterSnapshot) runnerFields() []string {
+	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 {
+		return nil
+	}
+	fields := []string{
+		"propagation-asserts=" + strconv.Itoa(s.Totals.Asserts),
+		"propagation-rhs-asserts=" + strconv.Itoa(s.Totals.RHSAsserts),
+		"propagation-rule-memories-visited=" + strconv.Itoa(s.Totals.RuleMemoriesVisited),
+		"propagation-conditions-tested=" + strconv.Itoa(s.Totals.ConditionsTested),
+		"propagation-alpha-matches-added=" + strconv.Itoa(s.Totals.AlphaMatchesAdded),
+		"propagation-condition-plans-tested=" + strconv.Itoa(s.Totals.ConditionPlansTested),
+		"propagation-condition-matches-added=" + strconv.Itoa(s.Totals.ConditionMatchesAdded),
+		"propagation-prefixes-added=" + strconv.Itoa(s.Totals.PrefixesAdded),
+		"propagation-beta-successors-reached=" + strconv.Itoa(s.Totals.BetaSuccessorsReached),
+		"propagation-tokens-created=" + strconv.Itoa(s.Totals.TokensCreated),
+		"propagation-terminal-deltas-emitted=" + strconv.Itoa(s.Totals.TerminalDeltasEmitted),
+		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
+		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
+		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
+		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
+		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
+		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),
+		"propagation-condition-plans-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionPlansTested),
+		"propagation-condition-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionMatchesAdded),
+		"propagation-prefixes-added/rhs-assert=" + s.perRHSAssertField(s.Totals.PrefixesAdded),
+		"propagation-beta-successors-reached/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaSuccessorsReached),
+		"propagation-tokens-created/rhs-assert=" + s.perRHSAssertField(s.Totals.TokensCreated),
+		"propagation-terminal-deltas-emitted/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalDeltasEmitted),
+		"propagation-by-template=" + s.templateSummary(),
+		"propagation-by-origin=" + s.originSummary(),
+	}
+	if summary := s.templateOriginSummary(); summary != "" {
+		fields = append(fields, "propagation-by-template-origin="+summary)
+	}
+	return fields
+}
+
+func (s propagationCounterSnapshot) perRHSAssertField(value int) string {
+	rhsAsserts := max(1, s.Totals.RHSAsserts)
+	return strconv.FormatFloat(float64(value)/float64(rhsAsserts), 'f', 3, 64)
+}
+
+func (s propagationCounterSnapshot) templateSummary() string {
+	if len(s.ByTemplate) == 0 {
+		return "-"
+	}
+	keys := make([]TemplateKey, 0, len(s.ByTemplate))
+	for key := range s.ByTemplate {
+		keys = append(keys, key)
+	}
+	slicesSortTemplateKeys(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		totals := s.ByTemplate[key]
+		parts = append(parts, formatPropagationDistributionEntry(key.String(), totals))
+	}
+	return strings.Join(parts, ";")
+}
+
+func (s propagationCounterSnapshot) originSummary() string {
+	if len(s.ByOrigin) == 0 {
+		return "-"
+	}
+	keys := make([]propagationOrigin, 0, len(s.ByOrigin))
+	for key := range s.ByOrigin {
+		keys = append(keys, key)
+	}
+	slicesSortOrigins(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		totals := s.ByOrigin[key]
+		parts = append(parts, formatPropagationDistributionEntry(key.String(), totals))
+	}
+	return strings.Join(parts, ";")
+}
+
+func (s propagationCounterSnapshot) templateOriginSummary() string {
+	if len(s.ByTemplateOrigin) == 0 {
+		return ""
+	}
+	keys := make([]propagationCounterKey, 0, len(s.ByTemplateOrigin))
+	for key := range s.ByTemplateOrigin {
+		keys = append(keys, key)
+	}
+	slicesSortTemplateOriginKeys(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		totals := s.ByTemplateOrigin[key]
+		parts = append(parts, formatPropagationDistributionEntry(key.templateKey.String()+"/"+key.origin.String(), totals))
+	}
+	return strings.Join(parts, ";")
+}
+
+func formatPropagationDistributionEntry(name string, totals propagationCounterTotals) string {
+	return name + "{" +
+		"asserts=" + strconv.Itoa(totals.Asserts) + "," +
+		"rhs-asserts=" + strconv.Itoa(totals.RHSAsserts) + "," +
+		"rules-visited=" + strconv.Itoa(totals.RuleMemoriesVisited) + "," +
+		"conditions-tested=" + strconv.Itoa(totals.ConditionsTested) + "," +
+		"alpha-matches-added=" + strconv.Itoa(totals.AlphaMatchesAdded) + "," +
+		"condition-plans-tested=" + strconv.Itoa(totals.ConditionPlansTested) + "," +
+		"condition-matches-added=" + strconv.Itoa(totals.ConditionMatchesAdded) + "," +
+		"prefixes-added=" + strconv.Itoa(totals.PrefixesAdded) + "," +
+		"beta-successors-reached=" + strconv.Itoa(totals.BetaSuccessorsReached) + "," +
+		"tokens-created=" + strconv.Itoa(totals.TokensCreated) + "," +
+		"terminal-deltas-emitted=" + strconv.Itoa(totals.TerminalDeltasEmitted) + "," +
+		"agenda-delta-applications=" + strconv.Itoa(totals.AgendaDeltaApplications) + "," +
+		"agenda-sorts=" + strconv.Itoa(totals.AgendaSorts) + "," +
+		"activations-stored=" + strconv.Itoa(totals.ActivationsStored) + "}"
+}
+
+func slicesSortTemplateKeys(keys []TemplateKey) {
+	if len(keys) < 2 {
+		return
+	}
+	slices.Sort(keys)
+}
+
+func slicesSortOrigins(keys []propagationOrigin) {
+	if len(keys) < 2 {
+		return
+	}
+	slices.Sort(keys)
+}
+
+func slicesSortTemplateOriginKeys(keys []propagationCounterKey) {
+	if len(keys) < 2 {
+		return
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].templateKey != keys[j].templateKey {
+			return keys[i].templateKey < keys[j].templateKey
+		}
+		return keys[i].origin < keys[j].origin
+	})
+}

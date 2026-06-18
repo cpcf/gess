@@ -238,11 +238,11 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 	r.beta = newReteBetaMemory(r.revision, r.plan, facts)
 }
 
-func (r *reteRuntime) insertBetaFact(fact FactSnapshot) reteAgendaDelta {
+func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
 	}
-	delta := r.beta.insertFact(fact)
+	delta := r.beta.insertFact(fact, span)
 	delta.supported = delta.supported && r.supportsIncrementalAgenda()
 	return delta
 }
@@ -344,11 +344,11 @@ func matchTokenGeneration(token *matchToken) Generation {
 	return 0
 }
 
-func (r *reteRuntime) insertAlphaFact(fact FactSnapshot) {
+func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounterSpan) {
 	if r == nil || r.alpha == nil {
 		return
 	}
-	r.alpha.insert(r.plan, fact)
+	r.alpha.insert(r.plan, fact, span)
 }
 
 func (r *reteRuntime) removeAlphaFact(id FactID) {
@@ -590,15 +590,18 @@ func (m *reteAlphaMemory) reset(plan reteNetworkPlan, facts []FactSnapshot) {
 		}
 	}
 	for _, fact := range facts {
-		m.insert(plan, fact)
+		m.insert(plan, fact, nil)
 	}
 }
 
-func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot) {
+func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot, span *propagationCounterSpan) {
 	if m == nil {
 		return
 	}
 	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
+		if span != nil {
+			span.recordConditionsTested()
+		}
 		if !condition.matchesAlpha(fact) {
 			return
 		}
@@ -606,7 +609,9 @@ func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot) {
 		if conditionMemory == nil {
 			return
 		}
-		conditionMemory.upsert(fact)
+		if conditionMemory.upsert(fact) && span != nil {
+			span.recordAlphaMatchAdded()
+		}
 	})
 }
 
