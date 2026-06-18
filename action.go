@@ -511,11 +511,12 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 	if rule.id != activation.ruleID {
 		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
-	if len(activation.factIDs) != len(activation.factVersions) || len(activation.factIDs) != len(rule.conditions) || len(activation.factIDs) != len(rule.conditionPlans) {
+	factCount := activationFactCount(&activation)
+	if factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions) || factCount != len(rule.conditionPlans) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 
-	entries := activationBindingTupleEntries(rule, activation.factIDs, activation.factVersions, false)
+	entries := activationBindingTupleEntriesForActivation(rule, &activation, false)
 	for i, entry := range entries {
 		fact, ok := s.factsByID[entry.factID]
 		if !ok {

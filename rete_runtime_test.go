@@ -439,7 +439,7 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 		t.Fatal("reconcileAgendaWithoutSnapshot unexpectedly unavailable for beta-backed session")
 	}
 
-	if !reflect.DeepEqual(terminalChanges, snapshotChanges) {
+	if !agendaChangesPublicEqual(terminalSession.agenda, terminalChanges, snapshotSession.agenda, snapshotChanges) {
 		t.Fatalf("terminal-token reconcile changes differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalChanges, snapshotChanges)
 	}
 	if !reflect.DeepEqual(terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations()) {
@@ -1406,7 +1406,7 @@ func TestReteRuntimeTerminalTokenDeltasMatchCandidateDeltas(t *testing.T) {
 	if got, want := len(firstChanges), 1; got != want {
 		t.Fatalf("assert direct changes = %d, want %d", got, want)
 	}
-	firstFactID := firstChanges[0].activation.factIDs[0]
+	firstFactID := cloneActivationFactIDs(&firstChanges[0].activation)[0]
 
 	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
 	_, modifyDelta, err := session.modifyImmediate(ctx, employee.ID(), FactPatch{
@@ -1424,8 +1424,8 @@ func TestReteRuntimeTerminalTokenDeltasMatchCandidateDeltas(t *testing.T) {
 	}
 	assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, retractDelta)
 
-	if firstChanges[0].activation.factIDs[0] != firstFactID {
-		t.Fatalf("returned direct change was mutated after later deltas: got %q want %q", firstChanges[0].activation.factIDs[0], firstFactID)
+	if got := cloneActivationFactIDs(&firstChanges[0].activation)[0]; got != firstFactID {
+		t.Fatalf("returned direct change was mutated after later deltas: got %q want %q", got, firstFactID)
 	}
 }
 
@@ -2611,7 +2611,7 @@ func assertTerminalTokenDeltaMatchesCandidateDelta(t *testing.T, revision *Rules
 	if err != nil {
 		t.Fatalf("applyTerminalTokenDeltas: %v", err)
 	}
-	if !reflect.DeepEqual(directChanges, candidateChanges) {
+	if !agendaChangesPublicEqual(directAgenda, directChanges, candidateAgenda, candidateChanges) {
 		t.Fatalf("direct terminal changes differ from candidate changes:\ndirect=%#v\ncandidate=%#v", directChanges, candidateChanges)
 	}
 	got := activationParityRecordsFromActivations(directAgenda.pendingActivations())

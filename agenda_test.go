@@ -311,7 +311,7 @@ func TestAgendaTerminalTokenReconcileMatchesCandidateReconcile(t *testing.T) {
 		t.Fatalf("reconcileTerminalTokens: %v", err)
 	}
 
-	if !reflect.DeepEqual(terminalChanges, candidateChanges) {
+	if !agendaChangesPublicEqual(terminalAgenda, terminalChanges, candidateAgenda, candidateChanges) {
 		t.Fatalf("terminal changes differ from candidate changes:\nterminal=%#v\ncandidate=%#v", terminalChanges, candidateChanges)
 	}
 	if !reflect.DeepEqual(terminalAgenda.pendingActivations(), candidateAgenda.pendingActivations()) {
@@ -385,7 +385,8 @@ func TestAgendaTerminalTokenReconcilePreservesConsumedAndDeactivatesMissingPendi
 	if changes[0].kind != agendaChangeDeactivated {
 		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
 	}
-	if got, want := changes[0].activation.factIDs[0], remaining[0].factIDs[0]; got != want {
+	changeActivation := agenda.publicActivation(&changes[0].activation)
+	if got, want := changeActivation.factIDs[0], remaining[0].factIDs[0]; got != want {
 		t.Fatalf("deactivated fact ID = %q, want %q", got, want)
 	}
 	if got := agenda.pendingActivations(); len(got) != 0 {
@@ -431,8 +432,8 @@ func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.
 	if got, want := len(firstChanges), 1; got != want {
 		t.Fatalf("first delta changes = %d, want %d", got, want)
 	}
-	if firstChanges[0].activation.factIDs[0] != first.Fact.ID() {
-		t.Fatalf("first change fact ID = %q, want %q", firstChanges[0].activation.factIDs[0], first.Fact.ID())
+	if got := cloneActivationFactIDs(&firstChanges[0].activation)[0]; got != first.Fact.ID() {
+		t.Fatalf("first change fact ID = %q, want %q", got, first.Fact.ID())
 	}
 	if agenda.deltaRemovedKeys == nil || cap(agenda.deltaChanges) == 0 || cap(agenda.deltaNextPending) == 0 {
 		t.Fatalf("agenda delta scratch not retained: removed=%#v changesCap=%d pendingCap=%d", agenda.deltaRemovedKeys, cap(agenda.deltaChanges), cap(agenda.deltaNextPending))
@@ -445,11 +446,11 @@ func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.
 	if got, want := len(secondChanges), 1; got != want {
 		t.Fatalf("second delta changes = %d, want %d", got, want)
 	}
-	if secondChanges[0].activation.factIDs[0] != second.Fact.ID() {
-		t.Fatalf("second change fact ID = %q, want %q", secondChanges[0].activation.factIDs[0], second.Fact.ID())
+	if got := cloneActivationFactIDs(&secondChanges[0].activation)[0]; got != second.Fact.ID() {
+		t.Fatalf("second change fact ID = %q, want %q", got, second.Fact.ID())
 	}
-	if firstChanges[0].activation.factIDs[0] != first.Fact.ID() {
-		t.Fatalf("first returned change was mutated after scratch reuse: got %q want %q", firstChanges[0].activation.factIDs[0], first.Fact.ID())
+	if got := cloneActivationFactIDs(&firstChanges[0].activation)[0]; got != first.Fact.ID() {
+		t.Fatalf("first returned change was mutated after scratch reuse: got %q want %q", got, first.Fact.ID())
 	}
 }
 
@@ -1408,6 +1409,40 @@ func mustCandidateForFactID(t testing.TB, candidates []matchCandidate, id FactID
 	}
 	t.Fatalf("did not find candidate for fact %q", id)
 	return matchCandidate{}
+}
+
+func agendaChangesPublicEqual(leftAgenda *agenda, left []agendaChange, rightAgenda *agenda, right []agendaChange) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].kind != right[i].kind {
+			return false
+		}
+		leftActivation := compactAgendaChangeActivationForCompare(leftAgenda, &left[i].activation)
+		rightActivation := compactAgendaChangeActivationForCompare(rightAgenda, &right[i].activation)
+		if !reflect.DeepEqual(leftActivation, rightActivation) {
+			return false
+		}
+	}
+	return true
+}
+
+func compactAgendaChangeActivationForCompare(owner *agenda, act *activation) activation {
+	if act == nil {
+		return activation{}
+	}
+	out := *act
+	out.id = act.activationID()
+	out.bindings = nil
+	out.factIDs = cloneActivationFactIDs(act)
+	out.factVersions = nil
+	out.token = nil
+	out.path = nil
+	if owner != nil {
+		out.id = owner.publicActivation(act).id
+	}
+	return out
 }
 
 func mustCollisionCandidate(ruleID RuleID, revisionID RuleRevisionID, identity candidateIdentity, factID FactID, version FactVersion, recency Recency) matchCandidate {

@@ -54,6 +54,7 @@ type activation struct {
 	bindings         []bindingTupleEntry
 	factIDs          []FactID
 	factVersions     []FactVersion
+	token            *matchToken
 	path             []int
 	salience         int
 	maxRecency       Recency
@@ -91,8 +92,9 @@ func (a activation) clone() activation {
 	out := a
 	out.id = a.activationID()
 	out.bindings = cloneBindingTupleEntries(a.bindings)
-	out.factIDs = cloneFactIDs(a.factIDs)
-	out.factVersions = cloneFactVersions(a.factVersions)
+	out.factIDs = cloneActivationFactIDs(&a)
+	out.factVersions = cloneActivationFactVersions(&a)
+	out.token = nil
 	out.path = cloneIntPath(a.path)
 	return out
 }
@@ -126,7 +128,7 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 		RuleID:         c.activation.ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
 		ActivationID:   c.activation.activationID(),
-		FactIDs:        cloneFactIDs(c.activation.factIDs),
+		FactIDs:        cloneActivationFactIDs(&c.activation),
 	}
 }
 
@@ -136,8 +138,9 @@ func (a *agenda) publicActivation(act *activation) activation {
 	}
 	out := *act
 	out.id = act.ensureActivationID()
-	out.factIDs = cloneFactIDs(act.factIDs)
-	out.factVersions = cloneFactVersions(act.factVersions)
+	out.factIDs = cloneActivationFactIDs(act)
+	out.factVersions = cloneActivationFactVersions(act)
+	out.token = nil
 	if a == nil || a.revision == nil || len(out.factIDs) == 0 {
 		out.bindings = nil
 		out.path = nil
@@ -160,7 +163,11 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 	}
 	out := *act
 	out.bindings = nil
-	out.factIDs = cloneFactIDs(act.factIDs)
+	if act.token == nil {
+		out.factIDs = cloneFactIDs(act.factIDs)
+	} else {
+		out.factIDs = nil
+	}
 	out.factVersions = nil
 	out.path = nil
 	return out
@@ -188,6 +195,66 @@ func activationBindingTupleEntries(rule compiledRule, factIDs []FactID, factVers
 		}
 	}
 	return entries
+}
+
+func activationBindingTupleEntriesForActivation(rule compiledRule, act *activation, includePath bool) []bindingTupleEntry {
+	if act == nil || len(rule.conditions) == 0 || len(rule.conditionPlans) == 0 {
+		return nil
+	}
+	count := activationFactCount(act)
+	if count == 0 || count != activationFactVersionCount(act) {
+		return nil
+	}
+	n := min(len(rule.conditionPlans), min(len(rule.conditions), count))
+	if n != count {
+		return nil
+	}
+	entries := make([]bindingTupleEntry, n)
+	if act.token != nil {
+		fillActivationBindingTupleEntriesFromToken(entries, rule, act.token, includePath, 0)
+		return entries
+	}
+	for i := range n {
+		condition := rule.conditions[i]
+		plan := rule.conditionPlans[i]
+		entries[i] = bindingTupleEntry{
+			binding:        condition.binding,
+			bindingSlot:    i,
+			conditionOrder: condition.order,
+			conditionID:    condition.id,
+			factID:         act.factIDs[i],
+			factVersion:    act.factVersions[i],
+		}
+		if includePath {
+			entries[i].conditionPath = cloneIntPath(plan.path)
+		}
+	}
+	return entries
+}
+
+func fillActivationBindingTupleEntriesFromToken(entries []bindingTupleEntry, rule compiledRule, token *matchToken, includePath bool, index int) int {
+	if token == nil {
+		return index
+	}
+	index = fillActivationBindingTupleEntriesFromToken(entries, rule, token.parent, includePath, index)
+	if index >= len(entries) {
+		return index
+	}
+	conditionIndex := index
+	condition := rule.conditions[conditionIndex]
+	plan := rule.conditionPlans[conditionIndex]
+	entries[index] = bindingTupleEntry{
+		binding:        condition.binding,
+		bindingSlot:    conditionIndex,
+		conditionOrder: condition.order,
+		conditionID:    condition.id,
+		factID:         token.match.fact.ID(),
+		factVersion:    token.match.fact.Version(),
+	}
+	if includePath {
+		entries[index].conditionPath = cloneIntPath(plan.path)
+	}
+	return index + 1
 }
 
 func activationPathForRule(rule compiledRule) []int {
@@ -860,8 +927,15 @@ func (a *agenda) next() (activation, bool) {
 		current.status = activationStatusConsumed
 		out := *current
 		out.id = current.ensureActivationID()
-		out.factIDs = cloneFactIDs(current.factIDs)
-		out.factVersions = cloneFactVersions(current.factVersions)
+		if current.token == nil {
+			out.factIDs = cloneFactIDs(current.factIDs)
+			out.factVersions = cloneFactVersions(current.factVersions)
+		} else {
+			out.factIDs = nil
+			out.factVersions = nil
+			out.bindings = nil
+			out.path = nil
+		}
 		return out, true
 	}
 	return activation{}, false
@@ -1001,14 +1075,39 @@ func (a *agenda) indexActivation(act activation) {
 		a.byRevision = make(map[RuleRevisionID][]activationKey)
 	}
 
-	for i, factID := range act.factIDs {
-		if factIDSeenBefore(act.factIDs[:i], factID) {
-			continue
+	if act.token != nil {
+		a.indexActivationTokenFacts(act.key, act.token)
+	} else {
+		for i, factID := range act.factIDs {
+			if factIDSeenBefore(act.factIDs[:i], factID) {
+				continue
+			}
+			a.byFactID[factID] = append(a.byFactID[factID], act.key)
 		}
-		a.byFactID[factID] = append(a.byFactID[factID], act.key)
 	}
 
 	a.byRevision[act.ruleRevisionID] = append(a.byRevision[act.ruleRevisionID], act.key)
+}
+
+func (a *agenda) indexActivationTokenFacts(key activationKey, token *matchToken) {
+	if a == nil || token == nil {
+		return
+	}
+	a.indexActivationTokenFacts(key, token.parent)
+	factID := token.match.fact.ID()
+	if matchTokenContainsFactID(token.parent, factID) {
+		return
+	}
+	a.byFactID[factID] = append(a.byFactID[factID], key)
+}
+
+func matchTokenContainsFactID(token *matchToken, id FactID) bool {
+	for current := token; current != nil; current = current.parent {
+		if current.match.fact.ID() == id {
+			return true
+		}
+	}
+	return false
 }
 
 func resetActivationIndex[K comparable](index map[K][]activationKey) {
@@ -1135,6 +1234,12 @@ func activationMatchesCandidate(current *activation, candidate matchCandidate) b
 	if current.ruleID != candidate.ruleID || current.ruleRevisionID != candidate.ruleRevisionID {
 		return false
 	}
+	if current.identity.key != candidate.identity.key || current.identity.generation != candidate.identity.generation || current.identity.count != candidate.identity.count {
+		return false
+	}
+	if current.token != nil {
+		return matchTokenFactsEqualSlices(current.token, candidate.factIDs, candidate.factVersions)
+	}
 	return candidateIdentityEqual(current.identity, current.factIDs, current.factVersions, candidate.identity, candidate.factIDs, candidate.factVersions)
 }
 
@@ -1148,11 +1253,10 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
 		return false
 	}
-	if len(current.factIDs) != tokenSize(token) || len(current.factVersions) != tokenSize(token) {
-		return false
+	if current.token != nil {
+		return terminalTokenFactVersionsEqual(current.token, token)
 	}
-	index, ok := activationTokenFactsEqual(current, token, 0)
-	return ok && index == len(current.factIDs)
+	return matchTokenFactsEqualSlices(token, current.factIDs, current.factVersions)
 }
 
 func (a *agenda) storeActivation(act *activation) activationKey {
@@ -1252,6 +1356,68 @@ func cloneFactIDs(ids []FactID) []FactID {
 	return out
 }
 
+func cloneActivationFactIDs(act *activation) []FactID {
+	if act == nil {
+		return nil
+	}
+	if act.token == nil {
+		return cloneFactIDs(act.factIDs)
+	}
+	out := make([]FactID, act.token.size)
+	fillMatchTokenFactIDs(out, 0, act.token)
+	return out
+}
+
+func cloneActivationFactVersions(act *activation) []FactVersion {
+	if act == nil {
+		return nil
+	}
+	if act.token == nil {
+		return cloneFactVersions(act.factVersions)
+	}
+	out := make([]FactVersion, act.token.size)
+	fillMatchTokenFactVersions(out, 0, act.token)
+	return out
+}
+
+func activationFactCount(act *activation) int {
+	if act == nil {
+		return 0
+	}
+	if act.token != nil {
+		return tokenSize(act.token)
+	}
+	return len(act.factIDs)
+}
+
+func activationFactVersionCount(act *activation) int {
+	if act == nil {
+		return 0
+	}
+	if act.token != nil {
+		return tokenSize(act.token)
+	}
+	return len(act.factVersions)
+}
+
+func fillMatchTokenFactIDs(factIDs []FactID, index int, token *matchToken) int {
+	if token == nil {
+		return index
+	}
+	index = fillMatchTokenFactIDs(factIDs, index, token.parent)
+	factIDs[index] = token.match.fact.ID()
+	return index + 1
+}
+
+func fillMatchTokenFactVersions(factVersions []FactVersion, index int, token *matchToken) int {
+	if token == nil {
+		return index
+	}
+	index = fillMatchTokenFactVersions(factVersions, index, token.parent)
+	factVersions[index] = token.match.fact.Version()
+	return index + 1
+}
+
 func activationFromCandidate(rule compiledRule, candidate matchCandidate) activation {
 	return activation{
 		ruleID:           candidate.ruleID,
@@ -1275,16 +1441,12 @@ func activationFromTerminalToken(rule compiledRule, token *matchToken) (activati
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return activation{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
-	factIDs := make([]FactID, token.size)
-	factVersions := make([]FactVersion, token.size)
-	fillMatchTokenFacts(factIDs, factVersions, 0, token)
 	return activation{
 		ruleID:           rule.id,
 		ruleRevisionID:   rule.revisionID,
 		generation:       matchTokenGeneration(token),
 		identity:         candidateIdentityForTerminalToken(rule, token),
-		factIDs:          factIDs,
-		factVersions:     factVersions,
+		token:            token,
 		salience:         rule.salience,
 		maxRecency:       token.maxRecency,
 		aggregateRecency: token.aggregateRecency,
@@ -1326,16 +1488,6 @@ func tokenSize(token *matchToken) int {
 	return token.size
 }
 
-func fillMatchTokenFacts(factIDs []FactID, factVersions []FactVersion, index int, token *matchToken) int {
-	if token == nil {
-		return index
-	}
-	index = fillMatchTokenFacts(factIDs, factVersions, index, token.parent)
-	factIDs[index] = token.match.fact.ID()
-	factVersions[index] = token.match.fact.Version()
-	return index + 1
-}
-
 func tokenIdentityState(token *matchToken) uint64 {
 	if token == nil {
 		return candidateIdentityHashStart(0)
@@ -1343,15 +1495,23 @@ func tokenIdentityState(token *matchToken) uint64 {
 	return token.identityState
 }
 
-func activationTokenFactsEqual(current *activation, token *matchToken, index int) (int, bool) {
+func matchTokenFactsEqualSlices(token *matchToken, factIDs []FactID, factVersions []FactVersion) bool {
+	if tokenSize(token) != len(factIDs) || len(factIDs) != len(factVersions) {
+		return false
+	}
+	index, ok := matchTokenFactsEqualSlicesAt(token, factIDs, factVersions, 0)
+	return ok && index == len(factIDs)
+}
+
+func matchTokenFactsEqualSlicesAt(token *matchToken, factIDs []FactID, factVersions []FactVersion, index int) (int, bool) {
 	if token == nil {
 		return index, true
 	}
-	next, ok := activationTokenFactsEqual(current, token.parent, index)
-	if !ok || next >= len(current.factIDs) || next >= len(current.factVersions) {
+	next, ok := matchTokenFactsEqualSlicesAt(token.parent, factIDs, factVersions, index)
+	if !ok || next >= len(factIDs) || next >= len(factVersions) {
 		return next, false
 	}
-	if current.factIDs[next] != token.match.fact.ID() || current.factVersions[next] != token.match.fact.Version() {
+	if factIDs[next] != token.match.fact.ID() || factVersions[next] != token.match.fact.Version() {
 		return next, false
 	}
 	return next + 1, true

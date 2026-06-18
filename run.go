@@ -185,7 +185,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		RuleID:         activation.ruleID,
 		RuleRevisionID: activation.ruleRevisionID,
 		ActivationID:   activation.activationID(),
-		FactIDs:        cloneFactIDs(activation.factIDs),
+		FactIDs:        cloneActivationFactIDs(&activation),
 	})
 }
 
@@ -214,6 +214,6 @@ func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activa
 		ActionName:     failure.ActionName,
 		ActionIndex:    failure.ActionIndex,
 		Cause:          failure.Err,
-		FactIDs:        cloneFactIDs(activation.factIDs),
+		FactIDs:        cloneActivationFactIDs(&activation),
 	})
 }
