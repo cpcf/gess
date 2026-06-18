@@ -212,6 +212,39 @@ func (c compiledFieldConstraint) matches(fact FactSnapshot) bool {
 	return false
 }
 
+func (c compiledFieldConstraint) matchesWorking(fact *workingFact) bool {
+	value, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	switch c.operator {
+	case FieldConstraintOpExists:
+		return ok
+	case FieldConstraintOpEqual:
+		return ok && valuesComparableForEquality(value, c.value) && value.Equal(c.value)
+	case FieldConstraintOpNotEqual:
+		return ok && valuesComparableForEquality(value, c.value) && !value.Equal(c.value)
+	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
+		if !ok {
+			return false
+		}
+		comparison, comparable := compareValues(value, c.value)
+		if !comparable {
+			return false
+		}
+		switch c.operator {
+		case FieldConstraintOpLessThan:
+			return comparison < 0
+		case FieldConstraintOpLessOrEqual:
+			return comparison <= 0
+		case FieldConstraintOpGreaterThan:
+			return comparison > 0
+		case FieldConstraintOpGreaterOrEqual:
+			return comparison >= 0
+		}
+	default:
+		return false
+	}
+	return false
+}
+
 func valuesComparableForEquality(left, right Value) bool {
 	if isNumericValue(left) && isNumericValue(right) {
 		return true

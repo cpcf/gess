@@ -250,6 +250,29 @@ func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounter
 	return r.insertBetaFactWithOrigin(fact, mutationOrigin{}, span)
 }
 
+func (r *reteRuntime) insertBetaFactGenerated(fact *workingFact, snapshot FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
+	if r == nil || r.beta == nil || fact == nil {
+		return reteAgendaDelta{}
+	}
+	if r.supportsIncrementalAgenda() {
+		if routes, routed := r.plan.betaConditionRoutesForTemplateKey(fact.templateKey); routed {
+			if delta, ok := r.beta.insertFactForConditionRoutesGenerated(fact, snapshot, routes, span); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
+		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.templateKey); routed {
+			if delta, ok := r.beta.insertFactForRulesGenerated(fact, snapshot, ruleRevisionIDs, span); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
+	}
+	delta := r.beta.insertFactGenerated(fact, snapshot, span)
+	delta.supported = delta.supported && r.supportsIncrementalAgenda()
+	return delta
+}
+
 func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
@@ -396,6 +419,18 @@ func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounte
 		}
 	}
 	r.alpha.insert(r.plan, fact, span)
+}
+
+func (r *reteRuntime) insertAlphaFactGenerated(fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) {
+	if r == nil || r.alpha == nil || fact == nil {
+		return
+	}
+	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.templateKey); routed {
+		if r.alpha.insertSelectedGenerated(conditions, fact, snapshot, span) {
+			return
+		}
+	}
+	r.alpha.insertGenerated(r.plan, fact, snapshot, span)
 }
 
 func (r *reteRuntime) removeAlphaFact(fact FactSnapshot) {
@@ -741,6 +776,15 @@ func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot, span *
 	})
 }
 
+func (m *reteAlphaMemory) insertGenerated(plan reteNetworkPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) {
+	if m == nil {
+		return
+	}
+	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
+		m.insertConditionGenerated(condition, fact, snapshot, span)
+	})
+}
+
 func (m *reteAlphaMemory) insertSelected(conditions []reteConditionPlan, fact FactSnapshot, span *propagationCounterSpan) bool {
 	if m == nil {
 		return false
@@ -752,6 +796,21 @@ func (m *reteAlphaMemory) insertSelected(conditions []reteConditionPlan, fact Fa
 	}
 	for _, condition := range conditions {
 		m.insertCondition(condition, fact, span)
+	}
+	return true
+}
+
+func (m *reteAlphaMemory) insertSelectedGenerated(conditions []reteConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) bool {
+	if m == nil {
+		return false
+	}
+	for _, condition := range conditions {
+		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
+			return false
+		}
+	}
+	for _, condition := range conditions {
+		m.insertConditionGenerated(condition, fact, snapshot, span)
 	}
 	return true
 }
@@ -771,6 +830,26 @@ func (m *reteAlphaMemory) insertCondition(condition reteConditionPlan, fact Fact
 		return false
 	}
 	if conditionMemory.upsert(fact) && span != nil {
+		span.recordAlphaMatchAdded()
+	}
+	return true
+}
+
+func (m *reteAlphaMemory) insertConditionGenerated(condition reteConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) bool {
+	if m == nil {
+		return false
+	}
+	if span != nil {
+		span.recordConditionsTested()
+	}
+	if !condition.matchesAlphaWorking(fact) {
+		return true
+	}
+	conditionMemory := m.conditions[condition.conditionID]
+	if conditionMemory == nil {
+		return false
+	}
+	if conditionMemory.upsert(snapshot) && span != nil {
 		span.recordAlphaMatchAdded()
 	}
 	return true
@@ -961,6 +1040,30 @@ func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {
 	}
 	for _, constraint := range p.constraints {
 		if !constraint.matches(fact) {
+			return false
+		}
+	}
+	return true
+}
+
+func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact) bool {
+	if !p.supported || fact == nil {
+		return false
+	}
+	switch p.target.kind {
+	case conditionTargetTemplateKey:
+		if fact.templateKey != p.target.templateKey {
+			return false
+		}
+	case conditionTargetName:
+		if fact.name != p.target.name {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, constraint := range p.constraints {
+		if !constraint.matchesWorking(fact) {
 			return false
 		}
 	}

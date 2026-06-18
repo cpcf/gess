@@ -444,11 +444,11 @@ func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, 
 		defer s.endMutation()
 	}
 
-	fact, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, templateKey, values, origin)
+	_, template, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, templateKey, values, origin)
 	if err != nil {
 		return err
 	}
-	if inserted && s.revision.factMayAffectRuleMatches(fact) {
+	if inserted && s.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
 		if origin.isZero() || !s.runGuardHeld() {
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
@@ -528,13 +528,13 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	return result, agendaDelta, nil
 }
 
-func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (FactSnapshot, bool, reteAgendaDelta, error) {
+func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (*workingFact, Template, bool, reteAgendaDelta, error) {
 	if s == nil || s.closed {
-		return FactSnapshot{}, false, reteAgendaDelta{}, ErrClosedSession
+		return nil, Template{}, false, reteAgendaDelta{}, ErrClosedSession
 	}
 	template, ok := s.revision.templateByKey(templateKey)
 	if !ok {
-		return FactSnapshot{}, false, reteAgendaDelta{}, &ValidationError{
+		return nil, Template{}, false, reteAgendaDelta{}, &ValidationError{
 			TemplateName: string(templateKey),
 			Reason:       "unknown template key",
 		}
@@ -542,26 +542,25 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(s.templateValuesScratch[:0], values)
 	s.templateValuesScratch = fieldSlots[:0]
 	if err != nil {
-		return FactSnapshot{}, false, reteAgendaDelta{}, err
+		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 
 	state := s.activeFactWorkspace()
 	fact, _, inserted, err := state.insertFactSlots(s.revision, s.generation, template, fieldSlots, false)
 	if err != nil {
-		return FactSnapshot{}, false, reteAgendaDelta{}, err
+		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 	s.commitFactWorkspace(state)
 	if !inserted {
-		return fact.detachedSnapshot(), false, reteAgendaDelta{}, nil
+		return fact, template, false, reteAgendaDelta{}, nil
 	}
 
-	snapshot := fact.detachedSnapshot()
 	var span *propagationCounterSpan
 	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
+		counterSpan := s.propagationCounters.beginAssert(template.Key(), origin)
 		span = &counterSpan
 	}
-	agendaDelta := s.updateReteAlphaAfterAssert(snapshot, origin, span)
+	agendaDelta := s.updateReteAlphaAfterAssertGenerated(fact, origin, span)
 	if span != nil {
 		span.finish()
 	}
@@ -599,7 +598,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		s.nextEventSequence++
 	}
 
-	return snapshot, true, agendaDelta, nil
+	return fact, template, true, agendaDelta, nil
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
@@ -1161,6 +1160,23 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, origin mutationO
 	}
 	s.rete.insertAlphaFact(fact, span)
 	return s.rete.insertBetaFactWithOrigin(fact, origin, span)
+}
+
+func (s *Session) updateReteAlphaAfterAssertGenerated(fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
+	if s == nil || fact == nil {
+		return reteAgendaDelta{}
+	}
+	if s.rete == nil {
+		s.rebuildReteRuntime(s.revision, s.detachedFactsByInsertionOrder())
+		return reteAgendaDelta{}
+	}
+	if s.rete.alpha == nil {
+		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
+		return reteAgendaDelta{}
+	}
+	snapshot := fact.detachedSnapshot()
+	s.rete.insertAlphaFactGenerated(fact, snapshot, span)
+	return s.rete.insertBetaFactGenerated(fact, snapshot, origin, span)
 }
 
 func (s *Session) updateReteAlphaAfterRetract(fact FactSnapshot) reteAgendaDelta {
@@ -2118,10 +2134,7 @@ func (w *factWorkspace) storeGeneratedFactSlots(fieldSlots []factSlot) []factSlo
 		return nil
 	}
 	if cap(w.slotStorage)-len(w.slotStorage) < len(fieldSlots) {
-		nextCapacity := max(cap(w.slotStorage)*2, len(fieldSlots))
-		if nextCapacity < 16 {
-			nextCapacity = 16
-		}
+		nextCapacity := max(max(cap(w.slotStorage)*2, len(fieldSlots)), 16)
 		w.slotStorage = make([]factSlot, 0, nextCapacity)
 	}
 	start := len(w.slotStorage)

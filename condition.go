@@ -230,9 +230,29 @@ func (p compiledConditionPlan) matchesFact(fact FactSnapshot) bool {
 	}
 }
 
+func (p compiledConditionPlan) matchesFactWorking(fact *workingFact) bool {
+	switch p.target.kind {
+	case conditionTargetName:
+		return fact != nil && fact.name == p.target.name
+	case conditionTargetTemplateKey:
+		return fact != nil && fact.templateKey == p.target.templateKey
+	default:
+		return false
+	}
+}
+
 func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact FactSnapshot) (bool, error) {
 	for _, constraint := range p.constraints {
 		if !constraint.matches(fact) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (p compiledConditionPlan) matchesConstraintsWorking(ctx context.Context, fact *workingFact) (bool, error) {
+	for _, constraint := range p.constraints {
+		if !constraint.matchesWorking(fact) {
 			return false, nil
 		}
 	}

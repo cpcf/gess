@@ -80,6 +80,17 @@ func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
 	return f.fieldValue(field)
 }
 
+func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
+	if f == nil {
+		return Value{}, false
+	}
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	return f.fieldValue(field)
+}
+
 func (f FactSnapshot) Support() FactSupportProvenance {
 	return f.support
 }
@@ -679,7 +690,38 @@ func (f FactSnapshot) fieldValue(name string) (Value, bool) {
 	return Value{}, false
 }
 
+func (f *workingFact) fieldValue(name string) (Value, bool) {
+	if f == nil {
+		return Value{}, false
+	}
+	if f.fields != nil {
+		value, ok := f.fields[name]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		if resolved.ok {
+			return resolved.value, true
+		}
+	}
+	return Value{}, false
+}
+
 func (f FactSnapshot) fieldSlot(name string) (int, bool) {
+	for i, spec := range f.fieldSpecs {
+		if spec.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (f *workingFact) fieldSlot(name string) (int, bool) {
+	if f == nil {
+		return -1, false
+	}
 	for i, spec := range f.fieldSpecs {
 		if spec.Name == name {
 			return i, true

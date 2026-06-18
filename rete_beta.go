@@ -300,6 +300,30 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterS
 	return delta
 }
 
+func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
+	if m == nil || m.revision == nil || fact == nil {
+		return reteAgendaDelta{}
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, ruleName := range m.revision.ruleOrder {
+		if span != nil {
+			span.recordRuleMemoryVisited()
+		}
+		rule, ok := m.revision.rules[ruleName]
+		if !ok {
+			delta.supported = false
+			continue
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			delta.supported = false
+			continue
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, snapshot, span)
+	}
+	return delta
+}
+
 func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}, false
@@ -327,6 +351,37 @@ func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs [
 			return reteAgendaDelta{}, false
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact, span)
+	}
+	return delta, true
+}
+
+func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, snapshot FactSnapshot, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil || fact == nil {
+		return reteAgendaDelta{}, false
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		if span != nil {
+			span.recordRuleMemoryVisited()
+		}
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, snapshot, span)
 	}
 	return delta, true
 }
@@ -366,6 +421,45 @@ func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes 
 			visited = true
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltaForCondition(delta.added, rule.revisionID, route.conditionIndex, fact, span)
+	}
+	return delta, true
+}
+
+func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact, snapshot FactSnapshot, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil || fact == nil {
+		return reteAgendaDelta{}, false
+	}
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if route.conditionIndex < 0 || route.conditionIndex >= len(rule.conditionPlans) {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+
+	delta := reteAgendaDelta{supported: true}
+	var lastVisited RuleRevisionID
+	visited := false
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil && (!visited || lastVisited != rule.revisionID) {
+			span.recordRuleMemoryVisited()
+			lastVisited = rule.revisionID
+			visited = true
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltaForConditionGenerated(delta.added, rule.revisionID, route.conditionIndex, fact, snapshot, span)
 	}
 	return delta, true
 }
@@ -716,6 +810,16 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDel
 	return out
 }
 
+func (m *reteBetaRuleMemory) appendInsertedFactDeltasGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if m == nil {
+		return out
+	}
+	for conditionIndex, plan := range m.rule.conditionPlans {
+		out = m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, plan, fact, snapshot, span)
+	}
+	return out
+}
+
 func (m *reteBetaRuleMemory) appendInsertedFactDeltaForCondition(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.rule.conditionPlans) {
 		return out
@@ -723,11 +827,35 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltaForCondition(out []reteTermi
 	return m.appendInsertedFactDeltaForConditionPlan(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, span)
 }
 
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.rule.conditionPlans) {
+		return out
+	}
+	return m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, snapshot, span)
+}
+
 func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlan(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if span != nil {
 		span.recordConditionPlanTested()
 	}
 	match, ok, err := betaConditionMatch(plan, fact)
+	if err != nil || !ok {
+		return out
+	}
+	if !m.addConditionMatch(conditionIndex, match) {
+		return out
+	}
+	if span != nil {
+		span.recordConditionMatchAdded()
+	}
+	return m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
+}
+
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlanGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if span != nil {
+		span.recordConditionPlanTested()
+	}
+	match, ok, err := betaConditionMatchWorking(plan, fact, snapshot)
 	if err != nil || !ok {
 		return out
 	}
@@ -1305,6 +1433,21 @@ func betaConditionMatch(plan compiledConditionPlan, fact FactSnapshot) (conditio
 		conditionID: plan.id,
 		bindingSlot: plan.bindingSlot,
 		fact:        fact,
+	}, true, nil
+}
+
+func betaConditionMatchWorking(plan compiledConditionPlan, fact *workingFact, snapshot FactSnapshot) (conditionMatch, bool, error) {
+	if !plan.matchesFactWorking(fact) {
+		return conditionMatch{}, false, nil
+	}
+	ok, err := plan.matchesConstraintsWorking(nil, fact)
+	if err != nil || !ok {
+		return conditionMatch{}, false, err
+	}
+	return conditionMatch{
+		conditionID: plan.id,
+		bindingSlot: plan.bindingSlot,
+		fact:        snapshot,
 	}, true, nil
 }
 

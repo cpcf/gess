@@ -464,16 +464,20 @@ func indexRuleConditionDependencies(rule compiledRule, templateKeys map[Template
 }
 
 func (r *Ruleset) factMayAffectRuleMatches(fact FactSnapshot) bool {
+	return r.factMayAffectRuleMatchesByTarget(fact.name, fact.templateKey)
+}
+
+func (r *Ruleset) factMayAffectRuleMatchesByTarget(name string, templateKey TemplateKey) bool {
 	if r == nil {
 		return true
 	}
-	if fact.templateKey != "" {
-		if _, ok := r.conditionTemplateKeys[fact.templateKey]; ok {
+	if templateKey != "" {
+		if _, ok := r.conditionTemplateKeys[templateKey]; ok {
 			return true
 		}
 	}
-	if fact.name != "" {
-		if _, ok := r.conditionNames[fact.name]; ok {
+	if name != "" {
+		if _, ok := r.conditionNames[name]; ok {
 			return true
 		}
 	}
