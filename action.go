@@ -104,13 +104,58 @@ func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
 	if name == "" || c.bindings == nil {
 		return FactSnapshot{}, false
 	}
-	for i, binding := range c.bindings.entries {
-		if binding.binding != name {
-			continue
-		}
-		return c.materializeBinding(i)
+	if index, ok := c.bindings.bindingIndex(name); ok {
+		return c.materializeBinding(index)
 	}
 	return FactSnapshot{}, false
+}
+
+// BindingScalarValue returns one scalar field from a closed-template bound fact
+// without materializing a public FactSnapshot.
+func (c ActionContext) BindingScalarValue(name, field string) (Value, bool) {
+	return c.bindingScalarValue(name, field)
+}
+
+func (c ActionContext) bindingScalarValue(name, field string) (Value, bool) {
+	if name == "" || field == "" || c.bindings == nil {
+		return Value{}, false
+	}
+	index, ok := c.bindings.bindingIndex(name)
+	if !ok {
+		return Value{}, false
+	}
+
+	c.bindings.mu.Lock()
+	defer c.bindings.mu.Unlock()
+	return c.bindingScalarValueLocked(index, field)
+}
+
+func (c ActionContext) bindingScalarValueAt(bindingSlot int, field string) (Value, bool) {
+	if field == "" || c.bindings == nil || bindingSlot < 0 || bindingSlot >= len(c.bindings.entries) {
+		return Value{}, false
+	}
+	c.bindings.mu.Lock()
+	defer c.bindings.mu.Unlock()
+	return c.bindingScalarValueLocked(bindingSlot, field)
+}
+
+func (c ActionContext) bindingScalarValueAtSlot(bindingSlot, fieldSlot int) (Value, bool) {
+	if c.bindings == nil || bindingSlot < 0 || bindingSlot >= len(c.bindings.entries) || fieldSlot < 0 {
+		return Value{}, false
+	}
+	if len(c.bindings.snapshots) > bindingSlot {
+		if snapshot := c.bindings.snapshots[bindingSlot]; !snapshot.id.IsZero() {
+			if fieldSlot >= len(snapshot.fieldSlots) {
+				return Value{}, false
+			}
+			resolved := snapshot.fieldSlots[fieldSlot]
+			if !resolved.ok || !valueShareable(resolved.value) {
+				return Value{}, false
+			}
+			return resolved.value, true
+		}
+	}
+	return c.bindingScalarValueLiveAtSlot(bindingSlot, fieldSlot)
 }
 
 func (c ActionContext) Assert(name string, fields Fields) (AssertResult, error) {
@@ -178,6 +223,73 @@ func (c ActionContext) materializeBinding(index int) (FactSnapshot, bool) {
 	return c.materializeBindingLocked(index)
 }
 
+func (c ActionContext) bindingScalarValueLocked(index int, field string) (Value, bool) {
+	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+		return Value{}, false
+	}
+	if len(c.bindings.snapshots) > index {
+		if snapshot := c.bindings.snapshots[index]; !snapshot.id.IsZero() {
+			if value, ok := scalarFieldValue(snapshot, field); ok {
+				return value, true
+			}
+			return Value{}, false
+		}
+	}
+	return c.bindingScalarValueLive(index, field)
+}
+
+func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, bool) {
+	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+		return Value{}, false
+	}
+	if c.session == nil || c.session.revision == nil {
+		return Value{}, false
+	}
+	entry := c.bindings.entries[index]
+	fact, ok := c.session.factsByID[entry.factID]
+	if !ok || fact == nil {
+		return Value{}, false
+	}
+	if fact.generation != c.generation || fact.version != entry.factVersion {
+		return Value{}, false
+	}
+	template, ok := c.session.revision.templateByKey(fact.templateKey)
+	if !ok || !template.closed {
+		return Value{}, false
+	}
+	slot, ok := template.fieldSlot(field)
+	if !ok || slot < 0 || slot >= len(fact.fieldSlots) {
+		return Value{}, false
+	}
+	resolved := fact.fieldSlots[slot]
+	if !resolved.ok || !valueShareable(resolved.value) {
+		return Value{}, false
+	}
+	return resolved.value, true
+}
+
+func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value, bool) {
+	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) || fieldSlot < 0 {
+		return Value{}, false
+	}
+	if c.session == nil {
+		return Value{}, false
+	}
+	entry := c.bindings.entries[index]
+	fact, ok := c.session.factsByID[entry.factID]
+	if !ok || fact == nil {
+		return Value{}, false
+	}
+	if fact.generation != c.generation || fact.version != entry.factVersion || fieldSlot >= len(fact.fieldSlots) {
+		return Value{}, false
+	}
+	resolved := fact.fieldSlots[fieldSlot]
+	if !resolved.ok || !valueShareable(resolved.value) {
+		return Value{}, false
+	}
+	return resolved.value, true
+}
+
 func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) {
 	if len(c.bindings.snapshots) == 0 {
 		if len(c.bindings.entries) <= len(c.bindings.inlineSnapshots) {
@@ -205,9 +317,37 @@ func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) 
 	return snapshot, true
 }
 
+func (s *actionContextBindingState) bindingIndex(name string) (int, bool) {
+	if s == nil {
+		return 0, false
+	}
+	for i, entry := range s.entries {
+		if entry.binding == name {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+func scalarFieldValue(fact FactSnapshot, field string) (Value, bool) {
+	slot, ok := fact.fieldSlot(field)
+	if !ok || slot < 0 || slot >= len(fact.fieldSlots) {
+		return Value{}, false
+	}
+	resolved := fact.fieldSlots[slot]
+	if !resolved.ok || !valueShareable(resolved.value) {
+		return Value{}, false
+	}
+	return resolved.value, true
+}
+
 type ActionSpec struct {
 	Name string
 	Fn   ActionFunc
+	// NonEscaping allows the engine to skip freezing unread bindings after a
+	// rule fires. Set it only when Fn does not retain ActionContext or any
+	// binding-derived data that depends on post-return defensive snapshots.
+	NonEscaping bool
 }
 
 func (s ActionSpec) clone() ActionSpec {
@@ -249,9 +389,10 @@ func (a Action) clone() Action {
 }
 
 type compiledAction struct {
-	name  string
-	fn    ActionFunc
-	order int
+	name              string
+	fn                ActionFunc
+	order             int
+	skipBindingFreeze bool
 }
 
 func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
@@ -261,9 +402,10 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 	}
 
 	return compiledAction{
-		name:  normalized.Name,
-		fn:    normalized.Fn,
-		order: order,
+		name:              normalized.Name,
+		fn:                normalized.Fn,
+		order:             order,
+		skipBindingFreeze: normalized.NonEscaping,
 	}, nil
 }
 
@@ -307,7 +449,11 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 	if err != nil {
 		return err
 	}
+	skipBindingFreeze := rule.allActionsSkipBindingFreeze
 	defer func() {
+		if skipBindingFreeze {
+			return
+		}
 		if freezeErr := actionCtx.materializeAllBindings(); err == nil && freezeErr != nil {
 			err = freezeErr
 		}

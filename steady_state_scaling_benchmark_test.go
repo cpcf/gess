@@ -72,6 +72,10 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			{Name: "n", Kind: ValueInt, Required: true},
 		},
 	})
+	stepNSlot, ok := step.fieldSlot("n")
+	if !ok {
+		t.Fatal("step template missing n slot")
+	}
 	signal := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "signal",
 		Closed:            true,
@@ -129,14 +133,10 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		stream := stream
 		streamValue := steadyStateIntValue(stream)
 		advanceAction := fmt.Sprintf("advance-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: advanceAction,
 			Fn: func(ctx ActionContext) error {
-				stepFact, ok := ctx.Binding("step")
-				if !ok {
-					return fmt.Errorf("missing step binding")
-				}
-				n, err := steadyStateIntField(stepFact, "n")
+				n, err := steadyStateBindingIntAtSlot(ctx, 0, stepNSlot)
 				if err != nil {
 					return err
 				}
@@ -163,14 +163,10 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 
 		signalAction := fmt.Sprintf("signal-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: signalAction,
 			Fn: func(ctx ActionContext) error {
-				stepFact, ok := ctx.Binding("step")
-				if !ok {
-					return fmt.Errorf("missing step binding")
-				}
-				n, err := steadyStateIntField(stepFact, "n")
+				n, err := steadyStateBindingIntAtSlot(ctx, 0, stepNSlot)
 				if err != nil {
 					return err
 				}
@@ -198,14 +194,10 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 
 		routeAction := fmt.Sprintf("route-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: routeAction,
 			Fn: func(ctx ActionContext) error {
-				stepFact, ok := ctx.Binding("step")
-				if !ok {
-					return fmt.Errorf("missing step binding")
-				}
-				n, err := steadyStateIntField(stepFact, "n")
+				n, err := steadyStateBindingIntAtSlot(ctx, 0, stepNSlot)
 				if err != nil {
 					return err
 				}
@@ -244,14 +236,10 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 
 		decisionAction := fmt.Sprintf("decision-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: decisionAction,
 			Fn: func(ctx ActionContext) error {
-				stepFact, ok := ctx.Binding("step")
-				if !ok {
-					return fmt.Errorf("missing step binding")
-				}
-				n, err := steadyStateIntField(stepFact, "n")
+				n, err := steadyStateBindingIntAtSlot(ctx, 0, stepNSlot)
 				if err != nil {
 					return err
 				}
@@ -301,7 +289,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 
 		doneAction := fmt.Sprintf("finish-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: doneAction,
 			Fn: func(ctx ActionContext) error {
 				_, err := ctx.AssertTemplate(done.Key(), Fields{
@@ -326,7 +314,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 
 		completeAction := fmt.Sprintf("complete-%03d", stream)
-		mustAddAction(t, workspace, ActionSpec{
+		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: completeAction,
 			Fn: func(ctx ActionContext) error {
 				_, err := ctx.AssertTemplate(complete.Key(), Fields{
@@ -457,6 +445,30 @@ func steadyStateIntField(fact FactSnapshot, field string) (int, error) {
 	value, ok := fact.Field(field)
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q", field)
+	}
+	return int(value.data.(int64)), nil
+}
+
+func steadyStateBindingInt(ctx ActionContext, binding, field string) (int, error) {
+	value, ok := ctx.bindingScalarValue(binding, field)
+	if !ok || value.Kind() != ValueInt {
+		return 0, fmt.Errorf("missing int field %q on binding %q", field, binding)
+	}
+	return int(value.data.(int64)), nil
+}
+
+func steadyStateBindingIntAt(ctx ActionContext, bindingSlot int, field string) (int, error) {
+	value, ok := ctx.bindingScalarValueAt(bindingSlot, field)
+	if !ok || value.Kind() != ValueInt {
+		return 0, fmt.Errorf("missing int field %q on binding slot %d", field, bindingSlot)
+	}
+	return int(value.data.(int64)), nil
+}
+
+func steadyStateBindingIntAtSlot(ctx ActionContext, bindingSlot, fieldSlot int) (int, error) {
+	value, ok := ctx.bindingScalarValueAtSlot(bindingSlot, fieldSlot)
+	if !ok || value.Kind() != ValueInt {
+		return 0, fmt.Errorf("missing int field slot %d on binding slot %d", fieldSlot, bindingSlot)
 	}
 	return int(value.data.(int64)), nil
 }

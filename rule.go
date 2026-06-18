@@ -216,17 +216,18 @@ func (r Rule) clone() Rule {
 }
 
 type compiledRule struct {
-	id                RuleID
-	revisionID        RuleRevisionID
-	name              string
-	description       string
-	tags              []string
-	salience          int
-	declarationOrder  int
-	identityScopeHash uint64
-	conditions        []RuleCondition
-	conditionPlans    []compiledConditionPlan
-	actions           []RuleAction
+	id                          RuleID
+	revisionID                  RuleRevisionID
+	name                        string
+	description                 string
+	tags                        []string
+	salience                    int
+	declarationOrder            int
+	identityScopeHash           uint64
+	conditions                  []RuleCondition
+	conditionPlans              []compiledConditionPlan
+	actions                     []RuleAction
+	allActionsSkipBindingFreeze bool
 }
 
 func (r compiledRule) inspect() Rule {
@@ -399,6 +400,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	}
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
+	allActionsSkipBindingFreeze := true
 	for i, action := range normalized.Actions {
 		if action.Name == "" {
 			return compiledRule{}, &ValidationError{
@@ -408,13 +410,17 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 				Reason:         "action name is required",
 			}
 		}
-		if _, ok := actionsByName[action.Name]; !ok {
+		compiledAction, ok := actionsByName[action.Name]
+		if !ok {
 			return compiledRule{}, &ValidationError{
 				RuleName:       normalized.Name,
 				ActionIndex:    i,
 				HasActionIndex: true,
 				Reason:         "unknown action",
 			}
+		}
+		if !compiledAction.skipBindingFreeze {
+			allActionsSkipBindingFreeze = false
 		}
 		actions = append(actions, RuleAction{
 			name:  action.Name,
@@ -423,15 +429,16 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	}
 
 	compiled := compiledRule{
-		id:               ruleID,
-		name:             normalized.Name,
-		description:      normalized.Description,
-		tags:             append([]string(nil), normalized.Tags...),
-		salience:         normalized.Salience,
-		declarationOrder: declarationOrder,
-		conditions:       conditions,
-		conditionPlans:   conditionPlans,
-		actions:          actions,
+		id:                          ruleID,
+		name:                        normalized.Name,
+		description:                 normalized.Description,
+		tags:                        append([]string(nil), normalized.Tags...),
+		salience:                    normalized.Salience,
+		declarationOrder:            declarationOrder,
+		conditions:                  conditions,
+		conditionPlans:              conditionPlans,
+		actions:                     actions,
+		allActionsSkipBindingFreeze: allActionsSkipBindingFreeze,
 	}
 	compiled.revisionID = ruleRevisionIDFor(compiled)
 	compiled.identityScopeHash = candidateIdentityScopeHash(compiled.id, compiled.revisionID)
@@ -447,6 +454,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	sum.Write([]byte(rule.name))
 	sum.Write([]byte("\nsalience:"))
 	sum.Write(fmt.Appendf(nil, "%d", rule.salience))
+	sum.Write([]byte("\nall-actions-skip-binding-freeze:"))
+	sum.Write(fmt.Appendf(nil, "%t", rule.allActionsSkipBindingFreeze))
 	sum.Write([]byte("\nconditions:"))
 	for _, condition := range rule.conditions {
 		sum.Write(fmt.Appendf(nil, "%d:", condition.order))

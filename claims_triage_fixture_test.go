@@ -337,6 +337,10 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 			{Name: "injury", Kind: ValueString, Required: true},
 		},
 	})
+	claimIDSlot, ok := claim.fieldSlot("id")
+	if !ok {
+		t.Fatal("claim template missing id slot")
+	}
 	signal := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "signal",
 		Closed: true,
@@ -357,12 +361,12 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		},
 	})
 
-	addClaimsTriageAction(t, workspace, "mark-fraud-watch", triage.Key(), trace, "escalate-fraud-watch", "investigate", "fraud-watch", "siu")
-	addClaimsTriageAction(t, workspace, "mark-complex-injury", triage.Key(), trace, "route-complex-injury", "review", "injury", "senior-adjuster")
-	addClaimsTriageAction(t, workspace, "mark-repeat-claimant", triage.Key(), trace, "review-repeat-claimant", "review", "repeat-claimant", "analyst")
-	addClaimsTriageAction(t, workspace, "mark-high-exposure", triage.Key(), trace, "review-high-exposure", "review", "high-exposure", "large-loss")
-	addClaimsTriageAction(t, workspace, "mark-gold-auto", triage.Key(), trace, "approve-gold-auto", "approve", "gold-auto-low-risk", "straight-through")
-	addClaimsTriageAction(t, workspace, "mark-silver-property", triage.Key(), trace, "approve-silver-property", "approve", "silver-property-low-risk", "straight-through")
+	addClaimsTriageAction(t, workspace, "mark-fraud-watch", triage.Key(), claimIDSlot, trace, "escalate-fraud-watch", "investigate", "fraud-watch", "siu")
+	addClaimsTriageAction(t, workspace, "mark-complex-injury", triage.Key(), claimIDSlot, trace, "route-complex-injury", "review", "injury", "senior-adjuster")
+	addClaimsTriageAction(t, workspace, "mark-repeat-claimant", triage.Key(), claimIDSlot, trace, "review-repeat-claimant", "review", "repeat-claimant", "analyst")
+	addClaimsTriageAction(t, workspace, "mark-high-exposure", triage.Key(), claimIDSlot, trace, "review-high-exposure", "review", "high-exposure", "large-loss")
+	addClaimsTriageAction(t, workspace, "mark-gold-auto", triage.Key(), claimIDSlot, trace, "approve-gold-auto", "approve", "gold-auto-low-risk", "straight-through")
+	addClaimsTriageAction(t, workspace, "mark-silver-property", triage.Key(), claimIDSlot, trace, "approve-silver-property", "approve", "silver-property-low-risk", "straight-through")
 
 	mustAddRule(t, workspace, RuleSpec{
 		Name:     "escalate-fraud-watch",
@@ -531,20 +535,16 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 	return mustCompileWorkspace(t, workspace)
 }
 
-func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, triageKey TemplateKey, trace *[]string, ruleName, outcome, reason, queue string) {
+func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, triageKey TemplateKey, claimIDSlot int, trace *[]string, ruleName, outcome, reason, queue string) {
 	t.Helper()
 
 	outcomeValue := mustValue(t, outcome)
 	reasonValue := mustValue(t, reason)
 	queueValue := mustValue(t, queue)
-	mustAddAction(t, workspace, ActionSpec{
+	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: name,
 		Fn: func(ctx ActionContext) error {
-			claim, ok := ctx.Binding("claim")
-			if !ok {
-				t.Fatalf("action %s missing claim binding", name)
-			}
-			idValue, ok := claim.Field("id")
+			idValue, ok := ctx.bindingScalarValueAtSlot(0, claimIDSlot)
 			if !ok {
 				t.Fatalf("action %s missing claim id", name)
 			}

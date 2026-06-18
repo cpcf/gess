@@ -807,6 +807,46 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 	}
 }
 
+func TestRuleRevisionIDIncludesActionFreezeSemantics(t *testing.T) {
+	build := func(nonEscaping bool) *Ruleset {
+		workspace := NewWorkspace()
+		mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "person",
+			Closed: true,
+			Fields: []FieldSpec{
+				{Name: "name", Kind: ValueString, Required: true},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name:        "mark",
+			NonEscaping: nonEscaping,
+			Fn: func(ActionContext) error {
+				return nil
+			},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "person-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "person", TemplateKey: TemplateKey("person")},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+		return mustCompileWorkspace(t, workspace)
+	}
+
+	freezingRule, ok := build(false).Rule("person-rule")
+	if !ok {
+		t.Fatal("freezing ruleset missing person-rule")
+	}
+	nonEscapingRule, ok := build(true).Rule("person-rule")
+	if !ok {
+		t.Fatal("non-escaping ruleset missing person-rule")
+	}
+	if freezingRule.RevisionID() == nonEscapingRule.RevisionID() {
+		t.Fatalf("rule revision ID did not change for action freeze semantics: %q", freezingRule.RevisionID())
+	}
+}
+
 func mustAddTemplate(t testing.TB, workspace *Workspace, spec TemplateSpec) Template {
 	t.Helper()
 	if err := workspace.AddTemplate(spec); err != nil {
@@ -821,6 +861,14 @@ func mustAddTemplate(t testing.TB, workspace *Workspace, spec TemplateSpec) Temp
 
 func mustAddAction(t testing.TB, workspace *Workspace, spec ActionSpec) {
 	t.Helper()
+	if err := workspace.AddAction(spec); err != nil {
+		t.Fatalf("AddAction: %v", err)
+	}
+}
+
+func mustAddInternalAction(t testing.TB, workspace *Workspace, spec ActionSpec) {
+	t.Helper()
+	spec.NonEscaping = true
 	if err := workspace.AddAction(spec); err != nil {
 		t.Fatalf("AddAction: %v", err)
 	}

@@ -538,7 +538,7 @@ func rulesetID(templates []Template, actions []compiledAction, rules []compiledR
 
 	sum.Write([]byte("actions:\n"))
 	for _, action := range actions {
-		sum.Write(fmt.Appendf(nil, "action:%s:%d\n", action.name, action.order))
+		sum.Write(fmt.Appendf(nil, "action:%s:%d:%t\n", action.name, action.order, action.skipBindingFreeze))
 	}
 
 	sum.Write([]byte("rules:\n"))

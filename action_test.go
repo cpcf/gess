@@ -215,11 +215,428 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	}
 }
 
+func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializingSnapshots(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "nickname", Kind: ValueString},
+			{Name: "profile", Kind: ValueMap},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	personTemplate, err := compileTemplateSpec(workspace.templates[len(workspace.templates)-1])
+	if err != nil {
+		t.Fatalf("compileTemplateSpec(person): %v", err)
+	}
+	personNameSlot, ok := personTemplate.fieldSlot("name")
+	if !ok {
+		t.Fatal("person template missing name slot")
+	}
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "openPerson",
+		Closed: false,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(open-person): %v", err)
+	}
+
+	if err := workspace.AddAction(ActionSpec{
+		Name: "inspect",
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing binding state")
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("snapshots materialized before scalar read")
+			}
+
+			value, ok := ctx.bindingScalarValue("person", "name")
+			if !ok {
+				return errors.New("missing person name")
+			}
+			if value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("person name = %v, want Ada", value)
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("scalar read materialized snapshots")
+			}
+			value, ok = ctx.bindingScalarValueAtSlot(0, personNameSlot)
+			if !ok {
+				return errors.New("missing person name by field slot")
+			}
+			if value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("person name by field slot = %v, want Ada", value)
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("slot scalar read materialized snapshots")
+			}
+
+			if _, ok := ctx.bindingScalarValue("person", "nickname"); ok {
+				return errors.New("missing slot should not resolve")
+			}
+			if _, ok := ctx.bindingScalarValue("person", "profile"); ok {
+				return errors.New("non-scalar field should not resolve")
+			}
+			if _, ok := ctx.bindingScalarValue("openPerson", "name"); ok {
+				return errors.New("open template should not use scalar fast path")
+			}
+			if _, ok := ctx.Binding("openPerson"); !ok {
+				return errors.New("missing open template binding")
+			}
+			if _, ok := ctx.BindingScalarValue("openPerson", "name"); ok {
+				return errors.New("open template should not use scalar fast path after Binding materializes snapshots")
+			}
+			if _, ok := ctx.bindingScalarValue("missing", "name"); ok {
+				return errors.New("missing binding should not resolve")
+			}
+			if _, ok := ctx.bindingScalarValue("", "name"); ok {
+				return errors.New("empty binding should not resolve")
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(inspect): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "inspect-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "openPerson", TemplateKey: TemplateKey("openPerson")},
+		},
+		Actions: []RuleActionSpec{{Name: "inspect"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-scalar-fast-path-session")
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+		"name":    "Ada",
+		"profile": map[string]any{"likes": "jazz"},
+	})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("openPerson"), mustFields(t, map[string]any{
+		"name": "Grace",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(openPerson): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-fast-path"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+}
+
+func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapshots(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	auditTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "audit",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+
+	if err := workspace.AddAction(ActionSpec{
+		Name: "inspect",
+		Fn: func(ctx ActionContext) error {
+			value, ok := ctx.bindingScalarValueAt(0, "name")
+			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("initial name = %v, ok %t, want Ada", value, ok)
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("scalar read materialized snapshots")
+			}
+
+			if _, err := ctx.AssertTemplate(auditTemplate.Key(), Fields{"name": value}); err != nil {
+				return err
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("assert materialized snapshots")
+			}
+
+			value, ok = ctx.bindingScalarValueAt(0, "name")
+			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("name after assert = %v, ok %t, want Ada", value, ok)
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("second scalar read materialized snapshots")
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(inspect): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "inspect-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "inspect"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-scalar-assert-session")
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-assert"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+}
+
+func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "noop",
+		Fn: func(ActionContext) error {
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(noop): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-scalar-stale-session")
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	actionCtx, err := session.actionContextForActivation(context.Background(), selected)
+	if err != nil {
+		t.Fatalf("actionContextForActivation: %v", err)
+	}
+	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); !ok || value.data.(string) != "Ada" {
+		t.Fatalf("initial scalar value = %v, ok %t, want Ada", value, ok)
+	}
+	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Grace"}),
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); ok {
+		t.Fatalf("stale scalar value = %v, ok true; want false", value)
+	}
+}
+
+func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(ctx ActionContext, id FactID) error
+	}{
+		{
+			name: "modify",
+			mutate: func(ctx ActionContext, id FactID) error {
+				_, err := ctx.Modify(id, FactPatch{
+					Set: mustFields(t, map[string]any{"name": "Grace"}),
+				})
+				return err
+			},
+		},
+		{
+			name: "retract",
+			mutate: func(ctx ActionContext, id FactID) error {
+				_, err := ctx.Retract(id)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			var personID FactID
+			if err := workspace.AddTemplate(TemplateSpec{
+				Name:   "person",
+				Closed: true,
+				Fields: []FieldSpec{
+					{Name: "name", Kind: ValueString, Required: true},
+				},
+			}); err != nil {
+				t.Fatalf("AddTemplate(person): %v", err)
+			}
+
+			if err := workspace.AddAction(ActionSpec{
+				Name: "mutate",
+				Fn: func(ctx ActionContext) error {
+					if ctx.bindings == nil {
+						return errors.New("missing binding state")
+					}
+					if ctx.bindings.snapshots != nil {
+						return errors.New("snapshots materialized before scalar read")
+					}
+
+					value, ok := ctx.bindingScalarValue("person", "name")
+					if !ok {
+						return errors.New("missing person name")
+					}
+					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+						return fmt.Errorf("person name = %v, want Ada", value)
+					}
+					if ctx.bindings.snapshots != nil {
+						return errors.New("scalar read materialized snapshots")
+					}
+
+					if err := tc.mutate(ctx, personID); err != nil {
+						return err
+					}
+					if ctx.bindings == nil || ctx.bindings.snapshots == nil {
+						return errors.New("mutation should freeze binding snapshots")
+					}
+
+					value, ok = ctx.bindingScalarValue("person", "name")
+					if !ok {
+						return errors.New("missing frozen person name")
+					}
+					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+						return fmt.Errorf("frozen person name = %v, want Ada", value)
+					}
+					value, ok = ctx.bindingScalarValueAt(0, "name")
+					if !ok {
+						return errors.New("missing frozen person name by binding slot")
+					}
+					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+						return fmt.Errorf("frozen person name by binding slot = %v, want Ada", value)
+					}
+					return nil
+				},
+			}); err != nil {
+				t.Fatalf("AddAction(mutate): %v", err)
+			}
+			if err := workspace.AddRule(RuleSpec{
+				Name: "person-rule",
+				Conditions: []RuleConditionSpec{
+					{Binding: "person", TemplateKey: TemplateKey("person")},
+				},
+				Actions: []RuleActionSpec{{Name: "mutate"}},
+			}); err != nil {
+				t.Fatalf("AddRule: %v", err)
+			}
+
+			revision, err := workspace.Compile(context.Background())
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			session := mustSession(t, revision, SessionID("action-scalar-mutation-session-"+tc.name))
+			inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+			if err != nil {
+				t.Fatalf("AssertTemplate(person): %v", err)
+			}
+			personID = inserted.Fact.ID()
+
+			snapshot := mustSnapshot(t, context.Background(), session)
+			if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+				t.Fatalf("reconcileAgenda: %v", err)
+			}
+			selected, ok := session.agenda.next()
+			if !ok {
+				t.Fatal("agenda.next returned no activation")
+			}
+
+			if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-mutation-"+tc.name), selected); err != nil {
+				t.Fatalf("executeActivationActions: %v", err)
+			}
+
+			after := mustSnapshot(t, context.Background(), session)
+			switch tc.name {
+			case "modify":
+				fact, ok := after.Fact(personID)
+				if !ok {
+					t.Fatalf("snapshot missing person fact %q", personID)
+				}
+				if got := fact.Fields()["name"]; !got.Equal(mustValue(t, "Grace")) {
+					t.Fatalf("person name after modify = %v, want Grace", got)
+				}
+			case "retract":
+				if _, ok := after.Fact(personID); ok {
+					t.Fatalf("snapshot still contains retracted fact %q", personID)
+				}
+			}
+		})
+	}
+}
+
 func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *testing.T) {
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name: "person",
+		Name:   "person",
+		Closed: true,
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -393,6 +810,88 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 	}
 	if got := boundFacts[0].Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
 		t.Fatalf("saved bound fact after later modify = %v, want Ada", got)
+	}
+}
+
+func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *testing.T) {
+	workspace := NewWorkspace()
+
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+
+	var saved ActionContext
+	if err := workspace.AddAction(ActionSpec{
+		Name:        "save-without-read",
+		NonEscaping: true,
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing lazy binding state")
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("binding snapshots materialized before action read")
+			}
+			if value, ok := ctx.BindingScalarValue("person", "name"); !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
+			}
+			saved = ctx
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(save-without-read): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "save-without-read"}},
+	}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session := mustSession(t, revision, "action-non-escaping-context-session")
+	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		t.Fatalf("reconcileAgenda: %v", err)
+	}
+	selected, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda.next returned no activation")
+	}
+
+	if err := session.executeActivationActions(context.Background(), RunID("run:test-non-escaping-context"), selected); err != nil {
+		t.Fatalf("executeActivationActions: %v", err)
+	}
+	if saved.bindings == nil {
+		t.Fatal("saved context missing binding state")
+	}
+	if saved.bindings.snapshots != nil {
+		t.Fatalf("saved context snapshots = %#v, want nil for non-escaping action", saved.bindings.snapshots)
+	}
+
+	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Grace"}),
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if _, ok := saved.Binding("person"); ok {
+		t.Fatal("saved Binding(person) resolved after skipped freeze and later modify")
 	}
 }
 

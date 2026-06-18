@@ -263,6 +263,10 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 			{Name: "country", Kind: ValueString, Required: true},
 		},
 	})
+	applicantIDSlot, ok := applicant.fieldSlot("id")
+	if !ok {
+		t.Fatal("applicant template missing id slot")
+	}
 	financial := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "financial",
 		Closed: true,
@@ -302,11 +306,11 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		},
 	})
 
-	addDecisionAction(t, workspace, "decline-sanctions", decision.Key(), trace, "hard-stop-sanctions", "decline", "sanctions", "ineligible")
-	addDecisionAction(t, workspace, "decline-underage", decision.Key(), trace, "hard-stop-underage", "decline", "underage", "ineligible")
-	addDecisionAction(t, workspace, "review-low-credit", decision.Key(), trace, "manual-review-low-credit", "review", "low-credit", "analyst")
-	addDecisionAction(t, workspace, "review-high-debt", decision.Key(), trace, "manual-review-high-debt", "review", "high-debt", "analyst")
-	addDecisionAction(t, workspace, "approve-prime", decision.Key(), trace, "approve-prime-employed", "approve", "prime-employed", "prime")
+	addDecisionAction(t, workspace, "decline-sanctions", decision.Key(), applicantIDSlot, trace, "hard-stop-sanctions", "decline", "sanctions", "ineligible")
+	addDecisionAction(t, workspace, "decline-underage", decision.Key(), applicantIDSlot, trace, "hard-stop-underage", "decline", "underage", "ineligible")
+	addDecisionAction(t, workspace, "review-low-credit", decision.Key(), applicantIDSlot, trace, "manual-review-low-credit", "review", "low-credit", "analyst")
+	addDecisionAction(t, workspace, "review-high-debt", decision.Key(), applicantIDSlot, trace, "manual-review-high-debt", "review", "high-debt", "analyst")
+	addDecisionAction(t, workspace, "approve-prime", decision.Key(), applicantIDSlot, trace, "approve-prime-employed", "approve", "prime-employed", "prime")
 
 	mustAddRule(t, workspace, RuleSpec{
 		Name:     "hard-stop-sanctions",
@@ -409,20 +413,16 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 	return mustCompileWorkspace(t, workspace)
 }
 
-func addDecisionAction(t testing.TB, workspace *Workspace, name string, decisionKey TemplateKey, trace *[]string, ruleName, outcome, reason, tier string) {
+func addDecisionAction(t testing.TB, workspace *Workspace, name string, decisionKey TemplateKey, applicantIDSlot int, trace *[]string, ruleName, outcome, reason, tier string) {
 	t.Helper()
 
 	outcomeValue := mustValue(t, outcome)
 	reasonValue := mustValue(t, reason)
 	tierValue := mustValue(t, tier)
-	mustAddAction(t, workspace, ActionSpec{
+	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: name,
 		Fn: func(ctx ActionContext) error {
-			applicant, ok := ctx.Binding("applicant")
-			if !ok {
-				t.Fatalf("action %s missing applicant binding", name)
-			}
-			idValue, ok := applicant.Field("id")
+			idValue, ok := ctx.bindingScalarValueAtSlot(0, applicantIDSlot)
 			if !ok {
 				t.Fatalf("action %s missing applicant id", name)
 			}
