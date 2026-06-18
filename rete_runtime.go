@@ -19,6 +19,8 @@ type reteRuntime struct {
 
 type reteNetworkPlan struct {
 	rules         []reteRulePlan
+	alphaRoutes   map[TemplateKey][]reteConditionPlan
+	betaRoutes    map[TemplateKey][]RuleRevisionID
 	unsupported   []reteUnsupportedReason
 	stats         retePlanStats
 	betaSupported bool
@@ -239,8 +241,20 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 }
 
 func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
+	return r.insertBetaFactWithOrigin(fact, mutationOrigin{}, span)
+}
+
+func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
+	}
+	if !origin.isZero() && r.supportsIncrementalAgenda() {
+		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
+			if delta, ok := r.beta.insertFactForRules(fact, ruleRevisionIDs, span); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
 	}
 	delta := r.beta.insertFact(fact, span)
 	delta.supported = delta.supported && r.supportsIncrementalAgenda()
@@ -348,6 +362,11 @@ func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounte
 	if r == nil || r.alpha == nil {
 		return
 	}
+	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.TemplateKey()); routed {
+		if r.alpha.insertSelected(conditions, fact, span) {
+			return
+		}
+	}
 	r.alpha.insert(r.plan, fact, span)
 }
 
@@ -378,7 +397,9 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	}
 
 	plan := reteNetworkPlan{
-		rules: make([]reteRulePlan, 0, len(revision.ruleOrder)),
+		rules:       make([]reteRulePlan, 0, len(revision.ruleOrder)),
+		alphaRoutes: make(map[TemplateKey][]reteConditionPlan),
+		betaRoutes:  make(map[TemplateKey][]RuleRevisionID),
 	}
 	for _, ruleName := range revision.ruleOrder {
 		rule, ok := revision.rules[ruleName]
@@ -401,6 +422,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			supported:     true,
 			betaSupported: true,
 		}
+		ruleRouteKeys := make(map[TemplateKey]struct{})
 
 		for _, condition := range rule.conditionPlans {
 			conditionPlan, unsupported := planReteCondition(revision, rule, condition)
@@ -422,6 +444,14 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			if !condition.betaSupported {
 				rulePlan.betaSupported = false
 			}
+			if condition.supported && condition.target.kind == conditionTargetTemplateKey {
+				templateKey := condition.target.templateKey
+				plan.alphaRoutes[templateKey] = append(plan.alphaRoutes[templateKey], condition)
+				if _, ok := ruleRouteKeys[templateKey]; !ok {
+					plan.betaRoutes[templateKey] = append(plan.betaRoutes[templateKey], rule.revisionID)
+					ruleRouteKeys[templateKey] = struct{}{}
+				}
+			}
 		}
 		plan.stats.terminalNodes++
 		if !rulePlan.supported {
@@ -434,6 +464,20 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	}
 
 	return plan
+}
+
+func (p reteNetworkPlan) alphaRoutesForTemplateKey(templateKey TemplateKey) ([]reteConditionPlan, bool) {
+	if p.alphaRoutes == nil {
+		return nil, false
+	}
+	return p.alphaRoutes[templateKey], true
+}
+
+func (p reteNetworkPlan) betaRoutesForTemplateKey(templateKey TemplateKey) ([]RuleRevisionID, bool) {
+	if p.betaRoutes == nil {
+		return nil, false
+	}
+	return p.betaRoutes[templateKey], true
 }
 
 func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledConditionPlan) (reteConditionPlan, []reteUnsupportedReason) {
@@ -599,20 +643,43 @@ func (m *reteAlphaMemory) insert(plan reteNetworkPlan, fact FactSnapshot, span *
 		return
 	}
 	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		if span != nil {
-			span.recordConditionsTested()
-		}
-		if !condition.matchesAlpha(fact) {
-			return
-		}
-		conditionMemory := m.conditions[condition.conditionID]
-		if conditionMemory == nil {
-			return
-		}
-		if conditionMemory.upsert(fact) && span != nil {
-			span.recordAlphaMatchAdded()
-		}
+		m.insertCondition(condition, fact, span)
 	})
+}
+
+func (m *reteAlphaMemory) insertSelected(conditions []reteConditionPlan, fact FactSnapshot, span *propagationCounterSpan) bool {
+	if m == nil {
+		return false
+	}
+	for _, condition := range conditions {
+		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
+			return false
+		}
+	}
+	for _, condition := range conditions {
+		m.insertCondition(condition, fact, span)
+	}
+	return true
+}
+
+func (m *reteAlphaMemory) insertCondition(condition reteConditionPlan, fact FactSnapshot, span *propagationCounterSpan) bool {
+	if m == nil {
+		return false
+	}
+	if span != nil {
+		span.recordConditionsTested()
+	}
+	if !condition.matchesAlpha(fact) {
+		return true
+	}
+	conditionMemory := m.conditions[condition.conditionID]
+	if conditionMemory == nil {
+		return false
+	}
+	if conditionMemory.upsert(fact) && span != nil {
+		span.recordAlphaMatchAdded()
+	}
+	return true
 }
 
 func (m *reteAlphaMemory) update(plan reteNetworkPlan, before, after FactSnapshot) {

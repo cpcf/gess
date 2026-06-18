@@ -447,7 +447,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
 		span = &counterSpan
 	}
-	agendaDelta := s.updateReteAlphaAfterAssert(snapshot, span)
+	agendaDelta := s.updateReteAlphaAfterAssert(snapshot, origin, span)
 	if span != nil {
 		span.finish()
 	}
@@ -1039,7 +1039,7 @@ func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
 	s.rete = rete
 }
 
-func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
+func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
 	if s == nil {
 		return reteAgendaDelta{}
 	}
@@ -1052,7 +1052,7 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, span *propagatio
 		return reteAgendaDelta{}
 	}
 	s.rete.insertAlphaFact(fact, span)
-	return s.rete.insertBetaFact(fact, span)
+	return s.rete.insertBetaFactWithOrigin(fact, origin, span)
 }
 
 func (s *Session) updateReteAlphaAfterRetract(id FactID) reteAgendaDelta {

@@ -279,6 +279,37 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterS
 	return delta
 }
 
+func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil {
+		return reteAgendaDelta{}, false
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		if span != nil {
+			span.recordRuleMemoryVisited()
+		}
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact, span)
+	}
+	return delta, true
+}
+
 func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}

@@ -117,6 +117,142 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "left",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "right",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	extra := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "extra",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "left-a",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "left",
+				TemplateKey: left.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "left-b",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "left",
+				TemplateKey: left.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Value: 2},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "right-a",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "extra-a",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "extra",
+				TemplateKey: extra.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if got, want := len(runtime.plan.alphaRoutes[left.Key()]), 2; got != want {
+		t.Fatalf("alpha subscribers for %s = %d, want %d", left.Key(), got, want)
+	}
+	if got, want := len(runtime.plan.betaRoutes[left.Key()]), 2; got != want {
+		t.Fatalf("beta subscribers for %s = %d, want %d", left.Key(), got, want)
+	}
+	if got, want := runtime.plan.betaRoutes[left.Key()][0], revision.rules["left-a"].revisionID; got != want {
+		t.Fatalf("first beta subscriber for %s = %s, want %s", left.Key(), got, want)
+	}
+	if got, want := runtime.plan.betaRoutes[left.Key()][1], revision.rules["left-b"].revisionID; got != want {
+		t.Fatalf("second beta subscriber for %s = %s, want %s", left.Key(), got, want)
+	}
+
+	session, err := NewSession(revision, WithSessionID("route-template-key"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	origin := mutationOrigin{
+		ActivationID:   ActivationID("activation:route-template-key"),
+		RuleID:         revision.rules["left-a"].id,
+		RuleRevisionID: revision.rules["left-a"].revisionID,
+	}
+	if _, _, err := session.insertFactImmediate(ctx, "", left.Key(), mustFields(t, map[string]any{"id": 1}), origin); err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.RHSAsserts, 1; got != want {
+		t.Fatalf("rhs asserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+		t.Fatalf("rule memories visited = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
+		t.Fatalf("conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionPlansTested, 2; got != want {
+		t.Fatalf("condition plans tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
+		t.Fatalf("condition matches added = %d, want %d", got, want)
+	}
+}
+
 func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
