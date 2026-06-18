@@ -860,7 +860,7 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 		t.Fatal("missing beta rule memory")
 	}
 	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
-	beforeBucket := append([]betaConditionMatchRowID(nil), memory.conditionIndexes[1][engineeringKey]...)
+	beforeBucket := conditionIndexBucketIDs(memory.conditionIndexes[1][engineeringKey])
 	if got, want := len(beforeBucket), 2; got != want {
 		t.Fatalf("engineering bucket size before update = %d, want %d", got, want)
 	}
@@ -873,7 +873,7 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got := len(memory.conditionMatches[1]); got != 3 {
 		t.Fatalf("condition row count after duplicate add = %d, want 3", got)
 	}
-	if got := len(memory.conditionIndexes[1][engineeringKey]); got != 2 {
+	if got := memory.conditionIndexes[1][engineeringKey].len(); got != 2 {
 		t.Fatalf("engineering bucket size after duplicate add = %d, want 2", got)
 	}
 
@@ -887,7 +887,7 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.conditionMatches[1]), 2; got != want {
 		t.Fatalf("condition row count after retract = %d, want %d", got, want)
 	}
-	afterRetractBucket := memory.conditionIndexes[1][engineeringKey]
+	afterRetractBucket := conditionIndexBucketIDs(memory.conditionIndexes[1][engineeringKey])
 	if got, want := len(afterRetractBucket), 1; got != want {
 		t.Fatalf("engineering bucket size after retract = %d, want %d", got, want)
 	}
@@ -908,7 +908,7 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if memory.conditionMatches[1][2].match.fact.ID() != readded.Fact.ID() {
 		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][2].match.fact.ID(), readded.Fact.ID())
 	}
-	afterReaddBucket := memory.conditionIndexes[1][engineeringKey]
+	afterReaddBucket := conditionIndexBucketIDs(memory.conditionIndexes[1][engineeringKey])
 	if got, want := len(afterReaddBucket), 2; got != want {
 		t.Fatalf("engineering bucket size after re-add = %d, want %d", got, want)
 	}
@@ -951,7 +951,7 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	}
 
 	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
-	beforeBucket := append([]betaPrefixRowID(nil), memory.prefixIndexes[0][engineeringKey]...)
+	beforeBucket := prefixIndexBucketIDs(memory.prefixIndexes[0][engineeringKey])
 	if got, want := len(beforeBucket), 1; got != want {
 		t.Fatalf("engineering prefix bucket size before update = %d, want %d", got, want)
 	}
@@ -962,7 +962,7 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if _, err := session.Retract(ctx, retractedID); err != nil {
 		t.Fatalf("Retract(%s): %v", retractedID, err)
 	}
-	afterRetractBucket := memory.prefixIndexes[0][engineeringKey]
+	afterRetractBucket := prefixIndexBucketIDs(memory.prefixIndexes[0][engineeringKey])
 	if got, want := len(memory.prefixes[0]), 0; got != want {
 		t.Fatalf("condition 0 prefix row count after retract = %d, want %d", got, want)
 	}
@@ -983,7 +983,7 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if memory.prefixes[0][0].id != 0 {
 		t.Fatalf("re-added prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
-	afterReaddBucket := memory.prefixIndexes[0][engineeringKey]
+	afterReaddBucket := prefixIndexBucketIDs(memory.prefixIndexes[0][engineeringKey])
 	if got, want := len(afterReaddBucket), 1; got != want {
 		t.Fatalf("engineering prefix bucket size after re-add = %d, want %d", got, want)
 	}
@@ -1133,10 +1133,10 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	}
 
 	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
-	if got, want := len(memory.prefixIndexes[0][engineeringKey]), 1; got != want {
+	if got, want := memory.prefixIndexes[0][engineeringKey].len(), 1; got != want {
 		t.Fatalf("engineering prefix bucket size before readd = %d, want %d", got, want)
 	}
-	if got, want := len(memory.conditionIndexes[1][engineeringKey]), 1; got != want {
+	if got, want := memory.conditionIndexes[1][engineeringKey].len(), 1; got != want {
 		t.Fatalf("engineering condition bucket size before readd = %d, want %d", got, want)
 	}
 
@@ -1154,10 +1154,10 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if got, want := len(memory.conditionMatches[1]), 1; got != want {
 		t.Fatalf("condition row count after retracts = %d, want %d", got, want)
 	}
-	if got, want := len(memory.prefixIndexes[0][engineeringKey]), 0; got != want {
+	if got, want := memory.prefixIndexes[0][engineeringKey].len(), 0; got != want {
 		t.Fatalf("engineering prefix bucket size after retracts = %d, want %d", got, want)
 	}
-	if got, want := len(memory.conditionIndexes[1][engineeringKey]), 0; got != want {
+	if got, want := memory.conditionIndexes[1][engineeringKey].len(), 0; got != want {
 		t.Fatalf("engineering condition bucket size after retracts = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -1181,7 +1181,7 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if memory.conditionMatches[1][1].match.fact.ID() != readdedDepartment.Fact.ID() {
 		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][1].match.fact.ID(), readdedDepartment.Fact.ID())
 	}
-	afterDepartmentBucket := memory.conditionIndexes[1][engineeringKey]
+	afterDepartmentBucket := conditionIndexBucketIDs(memory.conditionIndexes[1][engineeringKey])
 	if got, want := len(afterDepartmentBucket), 1; got != want {
 		t.Fatalf("engineering condition bucket size after department re-add = %d, want %d", got, want)
 	}
@@ -1209,7 +1209,7 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if memory.prefixes[0][0].prefix.token.match.fact.ID() != readdedEmployee.Fact.ID() {
 		t.Fatalf("re-added prefix row fact ID = %s, want %s", memory.prefixes[0][0].prefix.token.match.fact.ID(), readdedEmployee.Fact.ID())
 	}
-	afterEmployeeBucket := memory.prefixIndexes[0][engineeringKey]
+	afterEmployeeBucket := prefixIndexBucketIDs(memory.prefixIndexes[0][engineeringKey])
 	if got, want := len(afterEmployeeBucket), 1; got != want {
 		t.Fatalf("engineering prefix bucket size after employee re-add = %d, want %d", got, want)
 	}
@@ -1768,7 +1768,7 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	betaRuleMemory := session.rete.beta.rules[rule.revisionID]
 	key := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
 	before := betaRuleMemory.prefixIndexes[0][key]
-	if got, want := len(before), 2; got != want {
+	if got, want := before.len(), 2; got != want {
 		t.Fatalf("prefix bucket len before reset = %d, want %d", got, want)
 	}
 	if got := len(betaRuleMemory.prefixes[1]); got == 0 {
@@ -1778,8 +1778,8 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	assertBetaTokenPointersUseBacking(t, betaRuleMemory)
 	beforeTokenChunksPtr := reflect.ValueOf(betaRuleMemory.tokenBacking[0]).Pointer()
 	beforeTokenChunksCap := cap(betaRuleMemory.tokenBacking[0])
-	beforePtr := reflect.ValueOf(before).Pointer()
-	beforeCap := cap(before)
+	beforeRestPtr := reflect.ValueOf(before.rest).Pointer()
+	beforeRestCap := cap(before.rest)
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
@@ -1788,14 +1788,14 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 		t.Fatalf("beta memory after reset = %#v, want populated memories", session.rete)
 	}
 	after := session.rete.beta.rules[rule.revisionID].prefixIndexes[0][key]
-	if got, want := len(after), 2; got != want {
+	if got, want := after.len(), 2; got != want {
 		t.Fatalf("prefix bucket len after reset = %d, want %d", got, want)
 	}
-	if got := reflect.ValueOf(after).Pointer(); got != beforePtr {
-		t.Fatalf("prefix bucket backing array changed across reset: got %#x want %#x", got, beforePtr)
+	if got := reflect.ValueOf(after.rest).Pointer(); got != beforeRestPtr {
+		t.Fatalf("prefix bucket overflow backing array changed across reset: got %#x want %#x", got, beforeRestPtr)
 	}
-	if got := cap(after); got != beforeCap {
-		t.Fatalf("prefix bucket capacity changed across reset: got %d want %d", got, beforeCap)
+	if got := cap(after.rest); got != beforeRestCap {
+		t.Fatalf("prefix bucket overflow capacity changed across reset: got %d want %d", got, beforeRestCap)
 	}
 	assertBetaPrefixesUseLinkedTokenMatches(t, session.rete.beta.rules[rule.revisionID], 1)
 	assertBetaTokenPointersUseBacking(t, session.rete.beta.rules[rule.revisionID])
@@ -2436,13 +2436,34 @@ func conditionBucketContainsFact(memory *reteBetaRuleMemory, conditionIndex int,
 	if memory == nil || conditionIndex < 0 || conditionIndex >= len(memory.conditionMatches) {
 		return false
 	}
-	for _, rowID := range memory.conditionIndexes[conditionIndex][key] {
+	found := false
+	memory.conditionIndexes[conditionIndex][key].forEach(func(rowID betaConditionMatchRowID) bool {
 		row := memory.conditionMatchRow(conditionIndex, rowID)
 		if row != nil && row.match.fact.ID() == id {
-			return true
+			found = true
+			return false
 		}
-	}
-	return false
+		return true
+	})
+	return found
+}
+
+func conditionIndexBucketIDs(bucket betaConditionMatchIndexBucket) []betaConditionMatchRowID {
+	out := make([]betaConditionMatchRowID, 0, bucket.len())
+	bucket.forEach(func(rowID betaConditionMatchRowID) bool {
+		out = append(out, rowID)
+		return true
+	})
+	return out
+}
+
+func prefixIndexBucketIDs(bucket betaPrefixIndexBucket) []betaPrefixRowID {
+	out := make([]betaPrefixRowID, 0, bucket.len())
+	bucket.forEach(func(rowID betaPrefixRowID) bool {
+		out = append(out, rowID)
+		return true
+	})
+	return out
 }
 
 func conditionMatchesContainFact(matches []conditionMatch, id FactID) bool {

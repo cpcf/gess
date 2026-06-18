@@ -27,9 +27,9 @@ type reteTerminalTokenDelta struct {
 type reteBetaRuleMemory struct {
 	rule             compiledRule
 	conditionMatches [][]betaConditionMatchRow
-	conditionIndexes []map[betaJoinKey][]betaConditionMatchRowID
+	conditionIndexes []map[betaJoinKey]betaConditionMatchIndexBucket
 	prefixes         [][]betaPrefixRow
-	prefixIndexes    []map[betaJoinKey][]betaPrefixRowID
+	prefixIndexes    []map[betaJoinKey]betaPrefixIndexBucket
 	tokenBacking     [][]matchToken
 	lookupScratch    [][]conditionMatch
 	prefixScratch    [][]conditionMatch
@@ -37,6 +37,112 @@ type reteBetaRuleMemory struct {
 }
 
 type betaConditionMatchRowID int
+
+type betaConditionMatchIndexBucket struct {
+	first betaConditionMatchRowID
+	rest  []betaConditionMatchRowID
+	count int
+}
+
+func (b betaConditionMatchIndexBucket) len() int {
+	return b.count
+}
+
+func (b betaConditionMatchIndexBucket) at(index int) (betaConditionMatchRowID, bool) {
+	if index < 0 || index >= b.count {
+		return 0, false
+	}
+	if index == 0 {
+		return b.first, true
+	}
+	index--
+	if index >= len(b.rest) {
+		return 0, false
+	}
+	return b.rest[index], true
+}
+
+func (b *betaConditionMatchIndexBucket) append(id betaConditionMatchRowID) {
+	if b.count == 0 {
+		b.first = id
+		b.count = 1
+		return
+	}
+	b.rest = append(b.rest, id)
+	b.count++
+}
+
+func (b *betaConditionMatchIndexBucket) remove(id betaConditionMatchRowID) bool {
+	if b.count == 0 {
+		return false
+	}
+	if b.first == id {
+		last := b.count - 1
+		if last == 0 {
+			b.first = 0
+			b.count = 0
+			return true
+		}
+		b.first = b.rest[last-1]
+		b.rest[last-1] = 0
+		b.rest = b.rest[:last-1]
+		b.count--
+		return true
+	}
+	for i, current := range b.rest {
+		if current != id {
+			continue
+		}
+		last := len(b.rest) - 1
+		b.rest[i] = b.rest[last]
+		b.rest[last] = 0
+		b.rest = b.rest[:last]
+		b.count--
+		return true
+	}
+	return false
+}
+
+func (b *betaConditionMatchIndexBucket) replace(oldID, newID betaConditionMatchRowID) bool {
+	if b.count == 0 {
+		return false
+	}
+	if b.first == oldID {
+		b.first = newID
+		return true
+	}
+	for i, current := range b.rest {
+		if current == oldID {
+			b.rest[i] = newID
+			return true
+		}
+	}
+	return false
+}
+
+func (b betaConditionMatchIndexBucket) forEach(fn func(betaConditionMatchRowID) bool) {
+	if b.count == 0 {
+		return
+	}
+	if !fn(b.first) {
+		return
+	}
+	for i := 0; i < b.count-1 && i < len(b.rest); i++ {
+		if !fn(b.rest[i]) {
+			return
+		}
+	}
+}
+
+func (b betaConditionMatchIndexBucket) reset() betaConditionMatchIndexBucket {
+	for i := range b.rest {
+		b.rest[i] = 0
+	}
+	b.first = 0
+	b.rest = b.rest[:0]
+	b.count = 0
+	return b
+}
 
 type betaConditionMatchRow struct {
 	id    betaConditionMatchRowID
@@ -48,6 +154,112 @@ type betaPrefix struct {
 }
 
 type betaPrefixRowID int
+
+type betaPrefixIndexBucket struct {
+	first betaPrefixRowID
+	rest  []betaPrefixRowID
+	count int
+}
+
+func (b betaPrefixIndexBucket) len() int {
+	return b.count
+}
+
+func (b betaPrefixIndexBucket) at(index int) (betaPrefixRowID, bool) {
+	if index < 0 || index >= b.count {
+		return 0, false
+	}
+	if index == 0 {
+		return b.first, true
+	}
+	index--
+	if index >= len(b.rest) {
+		return 0, false
+	}
+	return b.rest[index], true
+}
+
+func (b *betaPrefixIndexBucket) append(id betaPrefixRowID) {
+	if b.count == 0 {
+		b.first = id
+		b.count = 1
+		return
+	}
+	b.rest = append(b.rest, id)
+	b.count++
+}
+
+func (b *betaPrefixIndexBucket) remove(id betaPrefixRowID) bool {
+	if b.count == 0 {
+		return false
+	}
+	if b.first == id {
+		last := b.count - 1
+		if last == 0 {
+			b.first = 0
+			b.count = 0
+			return true
+		}
+		b.first = b.rest[last-1]
+		b.rest[last-1] = 0
+		b.rest = b.rest[:last-1]
+		b.count--
+		return true
+	}
+	for i, current := range b.rest {
+		if current != id {
+			continue
+		}
+		last := len(b.rest) - 1
+		b.rest[i] = b.rest[last]
+		b.rest[last] = 0
+		b.rest = b.rest[:last]
+		b.count--
+		return true
+	}
+	return false
+}
+
+func (b *betaPrefixIndexBucket) replace(oldID, newID betaPrefixRowID) bool {
+	if b.count == 0 {
+		return false
+	}
+	if b.first == oldID {
+		b.first = newID
+		return true
+	}
+	for i, current := range b.rest {
+		if current == oldID {
+			b.rest[i] = newID
+			return true
+		}
+	}
+	return false
+}
+
+func (b betaPrefixIndexBucket) forEach(fn func(betaPrefixRowID) bool) {
+	if b.count == 0 {
+		return
+	}
+	if !fn(b.first) {
+		return
+	}
+	for i := 0; i < b.count-1 && i < len(b.rest); i++ {
+		if !fn(b.rest[i]) {
+			return
+		}
+	}
+}
+
+func (b betaPrefixIndexBucket) reset() betaPrefixIndexBucket {
+	for i := range b.rest {
+		b.rest[i] = 0
+	}
+	b.first = 0
+	b.rest = b.rest[:0]
+	b.count = 0
+	return b
+}
 
 type betaPrefixRow struct {
 	id     betaPrefixRowID
@@ -543,9 +755,9 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 	return &reteBetaRuleMemory{
 		rule:             rule,
 		conditionMatches: make([][]betaConditionMatchRow, conditions),
-		conditionIndexes: make([]map[betaJoinKey][]betaConditionMatchRowID, conditions),
+		conditionIndexes: make([]map[betaJoinKey]betaConditionMatchIndexBucket, conditions),
 		prefixes:         make([][]betaPrefixRow, conditions),
-		prefixIndexes:    make([]map[betaJoinKey][]betaPrefixRowID, conditions),
+		prefixIndexes:    make([]map[betaJoinKey]betaPrefixIndexBucket, conditions),
 		tokenBacking:     make([][]matchToken, 0, conditions),
 		lookupScratch:    make([][]conditionMatch, conditions),
 		prefixScratch:    make([][]conditionMatch, conditions),
@@ -598,13 +810,13 @@ func (m *reteBetaRuleMemory) clear() {
 			m.conditionMatches[conditionIndex][i] = betaConditionMatchRow{}
 		}
 		m.conditionMatches[conditionIndex] = m.conditionMatches[conditionIndex][:0]
-		resetJoinIndexBuckets(m.conditionIndexes[conditionIndex])
+		resetConditionMatchIndexBuckets(m.conditionIndexes[conditionIndex])
 
 		for i := range m.prefixes[conditionIndex] {
 			m.prefixes[conditionIndex][i] = betaPrefixRow{}
 		}
 		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
-		resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
+		resetPrefixIndexBuckets(m.prefixIndexes[conditionIndex])
 		for i := range m.prefixScratch[conditionIndex] {
 			m.prefixScratch[conditionIndex][i] = conditionMatch{}
 		}
@@ -850,7 +1062,9 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) bool {
 		if !ok {
 			continue
 		}
-		for _, rowID := range m.conditionIndexes[conditionIndex][key] {
+		bucket := m.conditionIndexes[conditionIndex][key]
+		for i := 0; i < bucket.len(); i++ {
+			rowID, _ := bucket.at(i)
 			row := m.conditionMatchRow(conditionIndex, rowID)
 			if row == nil {
 				continue
@@ -910,7 +1124,9 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 	if !ok {
 		return out
 	}
-	for _, rowID := range m.prefixIndexes[conditionIndex-1][key] {
+	bucket := m.prefixIndexes[conditionIndex-1][key]
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
 		row := m.prefixRow(conditionIndex-1, rowID)
 		if row == nil {
 			continue
@@ -969,7 +1185,9 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 	if !ok {
 		return out
 	}
-	for _, rowID := range m.conditionIndexes[nextCondition][key] {
+	bucket := m.conditionIndexes[nextCondition][key]
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
 		row := m.conditionMatchRow(nextCondition, rowID)
 		if row == nil {
 			continue
@@ -1012,9 +1230,10 @@ func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix bet
 	if !ok {
 		return nil, nil
 	}
-	indexes := m.conditionIndexes[conditionIndex][key]
 	matches := m.lookupScratch[conditionIndex][:0]
-	for _, rowID := range indexes {
+	bucket := m.conditionIndexes[conditionIndex][key]
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
 		if row := m.conditionMatchRow(conditionIndex, rowID); row != nil {
 			matches = append(matches, row.match)
 		}
@@ -1236,9 +1455,11 @@ func (m *reteBetaRuleMemory) indexConditionMatchRow(conditionIndex int, rowID be
 		return
 	}
 	if m.conditionIndexes[conditionIndex] == nil {
-		m.conditionIndexes[conditionIndex] = make(map[betaJoinKey][]betaConditionMatchRowID)
+		m.conditionIndexes[conditionIndex] = make(map[betaJoinKey]betaConditionMatchIndexBucket)
 	}
-	m.conditionIndexes[conditionIndex][key] = append(m.conditionIndexes[conditionIndex][key], rowID)
+	bucket := m.conditionIndexes[conditionIndex][key]
+	bucket.append(rowID)
+	m.conditionIndexes[conditionIndex][key] = bucket
 }
 
 func (m *reteBetaRuleMemory) removeConditionMatchRow(conditionIndex int, rowID betaConditionMatchRowID) {
@@ -1293,9 +1514,11 @@ func (m *reteBetaRuleMemory) indexPrefixRow(conditionIndex int, rowID betaPrefix
 		return
 	}
 	if m.prefixIndexes[conditionIndex] == nil {
-		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey][]betaPrefixRowID)
+		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey]betaPrefixIndexBucket)
 	}
-	m.prefixIndexes[conditionIndex][key] = append(m.prefixIndexes[conditionIndex][key], rowID)
+	bucket := m.prefixIndexes[conditionIndex][key]
+	bucket.append(rowID)
+	m.prefixIndexes[conditionIndex][key] = bucket
 }
 
 func (m *reteBetaRuleMemory) removePrefixRow(conditionIndex int, rowID betaPrefixRowID) {
@@ -1332,62 +1555,40 @@ func (m *reteBetaRuleMemory) removePrefixRow(conditionIndex int, rowID betaPrefi
 func (m *reteBetaRuleMemory) removeConditionIndexRowID(conditionIndex int, key betaJoinKey, rowID betaConditionMatchRowID) {
 	index := m.conditionIndexes[conditionIndex]
 	bucket := index[key]
-	for i, current := range bucket {
-		if current != rowID {
-			continue
-		}
-		last := len(bucket) - 1
-		bucket[i] = bucket[last]
-		bucket[last] = 0
-		bucket = bucket[:last]
-		if len(bucket) == 0 {
-			delete(index, key)
-		} else {
-			index[key] = bucket
-		}
+	if !bucket.remove(rowID) {
 		return
+	}
+	if bucket.len() == 0 {
+		delete(index, key)
+	} else {
+		index[key] = bucket
 	}
 }
 
 func (m *reteBetaRuleMemory) replaceConditionIndexRowID(conditionIndex int, key betaJoinKey, oldID, newID betaConditionMatchRowID) {
 	bucket := m.conditionIndexes[conditionIndex][key]
-	for i, current := range bucket {
-		if current == oldID {
-			bucket[i] = newID
-			m.conditionIndexes[conditionIndex][key] = bucket
-			return
-		}
+	if bucket.replace(oldID, newID) {
+		m.conditionIndexes[conditionIndex][key] = bucket
 	}
 }
 
 func (m *reteBetaRuleMemory) removePrefixIndexRowID(conditionIndex int, key betaJoinKey, rowID betaPrefixRowID) {
 	index := m.prefixIndexes[conditionIndex]
 	bucket := index[key]
-	for i, current := range bucket {
-		if current != rowID {
-			continue
-		}
-		last := len(bucket) - 1
-		bucket[i] = bucket[last]
-		bucket[last] = 0
-		bucket = bucket[:last]
-		if len(bucket) == 0 {
-			delete(index, key)
-		} else {
-			index[key] = bucket
-		}
+	if !bucket.remove(rowID) {
 		return
+	}
+	if bucket.len() == 0 {
+		delete(index, key)
+	} else {
+		index[key] = bucket
 	}
 }
 
 func (m *reteBetaRuleMemory) replacePrefixIndexRowID(conditionIndex int, key betaJoinKey, oldID, newID betaPrefixRowID) {
 	bucket := m.prefixIndexes[conditionIndex][key]
-	for i, current := range bucket {
-		if current == oldID {
-			bucket[i] = newID
-			m.prefixIndexes[conditionIndex][key] = bucket
-			return
-		}
+	if bucket.replace(oldID, newID) {
+		m.prefixIndexes[conditionIndex][key] = bucket
 	}
 }
 
@@ -1527,17 +1728,15 @@ func fillConditionMatchesFromToken(out []conditionMatch, token *matchToken, limi
 	return written + 1
 }
 
-func resetJoinIndexBuckets[T any](index map[betaJoinKey][]T) {
+func resetConditionMatchIndexBuckets(index map[betaJoinKey]betaConditionMatchIndexBucket) {
 	for key, bucket := range index {
-		index[key] = bucket[:0]
+		index[key] = bucket.reset()
 	}
 }
 
-func pruneEmptyJoinIndexBuckets[T any](index map[betaJoinKey][]T) {
+func resetPrefixIndexBuckets(index map[betaJoinKey]betaPrefixIndexBucket) {
 	for key, bucket := range index {
-		if len(bucket) == 0 {
-			delete(index, key)
-		}
+		index[key] = bucket.reset()
 	}
 }
 
