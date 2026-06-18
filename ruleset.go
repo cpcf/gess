@@ -380,10 +380,7 @@ func nextGeneratedSlotCapacity(length, capacity, needed int, revision *Ruleset) 
 			minGrowth = slots
 		}
 	}
-	next := max(capacity*2, length+minGrowth)
-	if next < length+needed {
-		next = length + needed
-	}
+	next := max(max(capacity*2, length+minGrowth), length+needed)
 	return next
 }
 

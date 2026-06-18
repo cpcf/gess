@@ -741,6 +741,7 @@ type reteAlphaConditionMemory struct {
 	indexes map[FactID]int
 }
 
+const reteAlphaConditionFactReserve = 128
 const reteAlphaConditionIndexReserve = 16
 
 func newReteAlphaMemory(plan reteNetworkPlan) *reteAlphaMemory {
@@ -749,6 +750,7 @@ func newReteAlphaMemory(plan reteNetworkPlan) *reteAlphaMemory {
 	}
 	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
 		memory.conditions[condition.conditionID] = &reteAlphaConditionMemory{
+			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
 			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
 		}
 	})
