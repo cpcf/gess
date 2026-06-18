@@ -248,7 +248,7 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
 	}
-	if !origin.isZero() && r.supportsIncrementalAgenda() {
+	if r.supportsIncrementalAgenda() {
 		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
 			if delta, ok := r.beta.insertFactForRules(fact, ruleRevisionIDs, span); ok {
 				delta.supported = delta.supported && r.supportsIncrementalAgenda()
@@ -261,11 +261,19 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 	return delta
 }
 
-func (r *reteRuntime) removeBetaFact(id FactID) reteAgendaDelta {
+func (r *reteRuntime) removeBetaFact(fact FactSnapshot) reteAgendaDelta {
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
 	}
-	delta := r.beta.removeFact(id)
+	if r.supportsIncrementalAgenda() {
+		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
+			if delta, ok := r.beta.removeFactForRules(fact.ID(), ruleRevisionIDs); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
+	}
+	delta := r.beta.removeFact(fact.ID())
 	delta.supported = delta.supported && r.supportsIncrementalAgenda()
 	return delta
 }
@@ -273,6 +281,14 @@ func (r *reteRuntime) removeBetaFact(id FactID) reteAgendaDelta {
 func (r *reteRuntime) updateBetaFact(before, after FactSnapshot) reteAgendaDelta {
 	if r == nil || r.beta == nil {
 		return reteAgendaDelta{}
+	}
+	if r.supportsIncrementalAgenda() {
+		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKeys(before.TemplateKey(), after.TemplateKey()); routed {
+			if delta, ok := r.beta.updateFactForRules(before, after, ruleRevisionIDs); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
 	}
 	delta := r.beta.updateFact(before, after)
 	delta.supported = delta.supported && r.supportsIncrementalAgenda()
@@ -370,16 +386,28 @@ func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounte
 	r.alpha.insert(r.plan, fact, span)
 }
 
-func (r *reteRuntime) removeAlphaFact(id FactID) {
+func (r *reteRuntime) removeAlphaFact(fact FactSnapshot) {
 	if r == nil || r.alpha == nil {
 		return
 	}
-	r.alpha.remove(id)
+	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.TemplateKey()); routed {
+		if r.alpha.removeSelected(conditions, fact.ID()) {
+			return
+		}
+	}
+	r.alpha.remove(fact.ID())
 }
 
 func (r *reteRuntime) updateAlphaFact(before, after FactSnapshot) {
 	if r == nil || r.alpha == nil {
 		return
+	}
+	if before.TemplateKey() == after.TemplateKey() {
+		if conditions, routed := r.plan.alphaRoutesForTemplateKey(after.TemplateKey()); routed {
+			if r.alpha.updateSelected(conditions, before, after) {
+				return
+			}
+		}
 	}
 	r.alpha.update(r.plan, before, after)
 }
@@ -478,6 +506,48 @@ func (p reteNetworkPlan) betaRoutesForTemplateKey(templateKey TemplateKey) ([]Ru
 		return nil, false
 	}
 	return p.betaRoutes[templateKey], true
+}
+
+func (p reteNetworkPlan) betaRoutesForTemplateKeys(templateKeys ...TemplateKey) ([]RuleRevisionID, bool) {
+	if p.betaRoutes == nil {
+		return nil, false
+	}
+	if len(templateKeys) == 0 {
+		return nil, true
+	}
+	if len(templateKeys) == 1 || sameTemplateKeys(templateKeys) {
+		return p.betaRoutes[templateKeys[0]], true
+	}
+	selected := make(map[RuleRevisionID]struct{})
+	for _, templateKey := range templateKeys {
+		ruleRevisionIDs, routed := p.betaRoutesForTemplateKey(templateKey)
+		if !routed {
+			return nil, false
+		}
+		for _, ruleRevisionID := range ruleRevisionIDs {
+			selected[ruleRevisionID] = struct{}{}
+		}
+	}
+	if len(selected) == 0 {
+		return nil, true
+	}
+	ruleRevisionIDs := make([]RuleRevisionID, 0, len(selected))
+	for _, rule := range p.rules {
+		if _, ok := selected[rule.ruleRevisionID]; ok {
+			ruleRevisionIDs = append(ruleRevisionIDs, rule.ruleRevisionID)
+		}
+	}
+	return ruleRevisionIDs, true
+}
+
+func sameTemplateKeys(templateKeys []TemplateKey) bool {
+	first := templateKeys[0]
+	for _, templateKey := range templateKeys[1:] {
+		if templateKey != first {
+			return false
+		}
+	}
+	return true
 }
 
 func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledConditionPlan) (reteConditionPlan, []reteUnsupportedReason) {
@@ -687,21 +757,28 @@ func (m *reteAlphaMemory) update(plan reteNetworkPlan, before, after FactSnapsho
 		return
 	}
 	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		conditionMemory := m.conditions[condition.conditionID]
-		if conditionMemory == nil {
-			return
-		}
-		matchedBefore := conditionMemory.contains(before.id)
-		matchesAfter := condition.matchesAlpha(after)
-		switch {
-		case matchedBefore && matchesAfter:
-			conditionMemory.upsert(after)
-		case matchedBefore:
-			conditionMemory.remove(before.id)
-		case matchesAfter:
-			conditionMemory.upsert(after)
-		}
+		m.updateCondition(condition, before, after)
 	})
+}
+
+func (m *reteAlphaMemory) updateCondition(condition reteConditionPlan, before, after FactSnapshot) {
+	if m == nil {
+		return
+	}
+	conditionMemory := m.conditions[condition.conditionID]
+	if conditionMemory == nil {
+		return
+	}
+	matchedBefore := conditionMemory.contains(before.id)
+	matchesAfter := condition.matchesAlpha(after)
+	switch {
+	case matchedBefore && matchesAfter:
+		conditionMemory.upsert(after)
+	case matchedBefore:
+		conditionMemory.remove(before.id)
+	case matchesAfter:
+		conditionMemory.upsert(after)
+	}
 }
 
 func (m *reteAlphaMemory) remove(id FactID) {
@@ -713,6 +790,36 @@ func (m *reteAlphaMemory) remove(id FactID) {
 			conditionMemory.remove(id)
 		}
 	}
+}
+
+func (m *reteAlphaMemory) removeSelected(conditions []reteConditionPlan, id FactID) bool {
+	if m == nil {
+		return false
+	}
+	for _, condition := range conditions {
+		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
+			return false
+		}
+	}
+	for _, condition := range conditions {
+		m.conditions[condition.conditionID].remove(id)
+	}
+	return true
+}
+
+func (m *reteAlphaMemory) updateSelected(conditions []reteConditionPlan, before, after FactSnapshot) bool {
+	if m == nil {
+		return false
+	}
+	for _, condition := range conditions {
+		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
+			return false
+		}
+	}
+	for _, condition := range conditions {
+		m.updateCondition(condition, before, after)
+	}
+	return true
 }
 
 func (m *reteAlphaMemory) factsForCondition(conditionID ConditionID) ([]FactSnapshot, bool) {

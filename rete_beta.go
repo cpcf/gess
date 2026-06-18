@@ -331,6 +331,34 @@ func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 	return delta
 }
 
+func (m *reteBetaMemory) removeFactForRules(id FactID, ruleRevisionIDs []RuleRevisionID) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil {
+		return reteAgendaDelta{}, false
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, ruleRevisionID := range ruleRevisionIDs {
+		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		delta.removed = ruleMemory.appendRemovedFactDeltas(delta.removed, rule.revisionID, id)
+	}
+	return delta, true
+}
+
 func (m *reteBetaMemory) updateFact(before, after FactSnapshot) reteAgendaDelta {
 	if m == nil {
 		return reteAgendaDelta{}
@@ -342,6 +370,25 @@ func (m *reteBetaMemory) updateFact(before, after FactSnapshot) reteAgendaDelta 
 		added:     added.added,
 		removed:   removed.removed,
 	}
+}
+
+func (m *reteBetaMemory) updateFactForRules(before, after FactSnapshot, ruleRevisionIDs []RuleRevisionID) (reteAgendaDelta, bool) {
+	if m == nil {
+		return reteAgendaDelta{}, false
+	}
+	removed, ok := m.removeFactForRules(before.ID(), ruleRevisionIDs)
+	if !ok {
+		return reteAgendaDelta{}, false
+	}
+	added, ok := m.insertFactForRules(after, ruleRevisionIDs, nil)
+	if !ok {
+		return reteAgendaDelta{}, false
+	}
+	return reteAgendaDelta{
+		supported: removed.supported && added.supported,
+		added:     added.added,
+		removed:   removed.removed,
+	}, true
 }
 
 func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {

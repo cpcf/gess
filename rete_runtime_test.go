@@ -251,6 +251,31 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
 		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
+
+	publicSession, err := NewSession(revision, WithSessionID("route-public-template-key"))
+	if err != nil {
+		t.Fatalf("NewSession public: %v", err)
+	}
+	publicSession.attachPropagationCounters()
+	if _, err := publicSession.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": 2})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	snapshot = publicSession.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.Asserts, 1; got != want {
+		t.Fatalf("public asserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RHSAsserts, 0; got != want {
+		t.Fatalf("public rhs asserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+		t.Fatalf("public rule memories visited = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
+		t.Fatalf("public conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionPlansTested, 2; got != want {
+		t.Fatalf("public condition plans tested = %d, want %d", got, want)
+	}
 }
 
 func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *testing.T) {

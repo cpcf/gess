@@ -598,7 +598,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	}
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 	s.removeStoredFact(id)
-	agendaDelta := s.updateReteAlphaAfterRetract(before.ID())
+	agendaDelta := s.updateReteAlphaAfterRetract(before)
 
 	delta := MutationDelta{
 		Kind:           MutationRetract,
@@ -1055,12 +1055,12 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, origin mutationO
 	return s.rete.insertBetaFactWithOrigin(fact, origin, span)
 }
 
-func (s *Session) updateReteAlphaAfterRetract(id FactID) reteAgendaDelta {
+func (s *Session) updateReteAlphaAfterRetract(fact FactSnapshot) reteAgendaDelta {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}
 	}
-	s.rete.removeAlphaFact(id)
-	return s.rete.removeBetaFact(id)
+	s.rete.removeAlphaFact(fact)
+	return s.rete.removeBetaFact(fact)
 }
 
 func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAgendaDelta {
