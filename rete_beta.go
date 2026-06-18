@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 )
 
@@ -26,15 +25,15 @@ type reteTerminalTokenDelta struct {
 }
 
 type reteBetaRuleMemory struct {
-	rule              compiledRule
-	conditionMatches  [][]betaConditionMatchRow
-	conditionIndexes  []map[betaJoinKey][]betaConditionMatchRowID
-	prefixes          [][]betaPrefixRow
-	prefixIndexes     []map[betaJoinKey][]betaPrefixRowID
-	tokenBacking      [][]matchToken
-	lookupScratch     [][]conditionMatch
-	prefixScratch     [][]conditionMatch
-	candidateScratch  candidateScratch
+	rule             compiledRule
+	conditionMatches [][]betaConditionMatchRow
+	conditionIndexes []map[betaJoinKey][]betaConditionMatchRowID
+	prefixes         [][]betaPrefixRow
+	prefixIndexes    []map[betaJoinKey][]betaPrefixRowID
+	tokenBacking     [][]matchToken
+	lookupScratch    [][]conditionMatch
+	prefixScratch    [][]conditionMatch
+	candidateScratch candidateScratch
 }
 
 type betaConditionMatchRowID int
@@ -542,14 +541,14 @@ func (m *reteBetaMemory) updateFactForRules(before, after FactSnapshot, ruleRevi
 func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 	conditions := len(rule.conditionPlans)
 	return &reteBetaRuleMemory{
-		rule:              rule,
-		conditionMatches:  make([][]betaConditionMatchRow, conditions),
-		conditionIndexes:  make([]map[betaJoinKey][]betaConditionMatchRowID, conditions),
-		prefixes:          make([][]betaPrefixRow, conditions),
-		prefixIndexes:     make([]map[betaJoinKey][]betaPrefixRowID, conditions),
-		tokenBacking:      make([][]matchToken, 0, conditions),
-		lookupScratch:     make([][]conditionMatch, conditions),
-		prefixScratch:     make([][]conditionMatch, conditions),
+		rule:             rule,
+		conditionMatches: make([][]betaConditionMatchRow, conditions),
+		conditionIndexes: make([]map[betaJoinKey][]betaConditionMatchRowID, conditions),
+		prefixes:         make([][]betaPrefixRow, conditions),
+		prefixIndexes:    make([]map[betaJoinKey][]betaPrefixRowID, conditions),
+		tokenBacking:     make([][]matchToken, 0, conditions),
+		lookupScratch:    make([][]conditionMatch, conditions),
+		prefixScratch:    make([][]conditionMatch, conditions),
 	}
 }
 
@@ -1203,9 +1202,7 @@ func collectMatchCandidatesFromPrefixRows(ctx context.Context, rule compiledRule
 	if scratch != nil {
 		scratch.candidates = candidates
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		return agendaDeltaCandidateLess(nil, candidates[i], candidates[j])
-	})
+	sortMatchCandidates(nil, candidates)
 	return candidates, nil
 }
 

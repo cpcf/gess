@@ -2653,15 +2653,11 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(removed, func(i, j int) bool {
-		return agendaDeltaTerminalTokenLess(s.revision, removed[i], removed[j])
-	})
+	sortTerminalTokenDeltas(s.revision, removed)
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(added, func(i, j int) bool {
-		return agendaDeltaTerminalTokenLess(s.revision, added[i], added[j])
-	})
+	sortTerminalTokenDeltas(s.revision, added)
 
 	return reteAgendaDelta{
 		supported: true,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -414,11 +413,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(nextPending, func(i, j int) bool {
-		left, _ := a.activationByKeyPtr(nextPending[i])
-		right, _ := a.activationByKeyPtr(nextPending[j])
-		return activationLess(left, right)
-	})
+	a.sortActivationKeys(nextPending)
 
 	a.reconcileSeen = seen
 	a.reconcileNextPending = oldPending[:0]
@@ -483,9 +478,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(added, func(i, j int) bool {
-		return agendaDeltaCandidateLess(revision, added[i], added[j])
-	})
+	sortMatchCandidates(revision, added)
 	for _, candidate := range added {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -515,11 +508,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(a.pending, func(i, j int) bool {
-		left, _ := a.activationByKeyPtr(a.pending[i])
-		right, _ := a.activationByKeyPtr(a.pending[j])
-		return activationLess(left, right)
-	})
+	a.sortActivationKeys(a.pending)
 
 	a.deltaRemovedKeys = removedKeys
 	a.deltaChanges = changes[:0]
@@ -588,9 +577,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(added, func(i, j int) bool {
-		return agendaDeltaTerminalTokenLess(revision, added[i], added[j])
-	})
+	sortTerminalTokenDeltas(revision, added)
 
 	activated := a.deltaActivated[:0]
 	var previous reteTerminalTokenDelta
@@ -630,11 +617,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(a.pending, func(i, j int) bool {
-		left, _ := a.activationByKeyPtr(a.pending[i])
-		right, _ := a.activationByKeyPtr(a.pending[j])
-		return activationLess(left, right)
-	})
+	a.sortActivationKeys(a.pending)
 
 	a.deltaRemovedKeys = removedKeys
 	a.deltaChanges = changes[:0]
@@ -667,9 +650,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(deltas, func(i, j int) bool {
-		return agendaDeltaTerminalTokenLess(revision, deltas[i], deltas[j])
-	})
+	sortTerminalTokenDeltas(revision, deltas)
 
 	var previous reteTerminalTokenDelta
 	havePrevious := false
@@ -736,11 +717,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
 	}
-	sort.SliceStable(nextPending, func(i, j int) bool {
-		left, _ := a.activationByKeyPtr(nextPending[i])
-		right, _ := a.activationByKeyPtr(nextPending[j])
-		return activationLess(left, right)
-	})
+	a.sortActivationKeys(nextPending)
 
 	a.reconcileSeen = seen
 	a.reconcileNextPending = a.pending[:0]
@@ -775,6 +752,15 @@ func agendaDeltaCandidateLess(revision *Ruleset, left, right matchCandidate) boo
 	return left.ruleRevisionID < right.ruleRevisionID
 }
 
+func sortMatchCandidates(revision *Ruleset, candidates []matchCandidate) {
+	slices.SortStableFunc(candidates, func(left, right matchCandidate) int {
+		return compareLess(
+			agendaDeltaCandidateLess(revision, left, right),
+			agendaDeltaCandidateLess(revision, right, left),
+		)
+	})
+}
+
 func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
 	if revision != nil {
 		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]
@@ -797,6 +783,15 @@ func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTok
 	return left.ruleRevisionID < right.ruleRevisionID
 }
 
+func sortTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) {
+	slices.SortStableFunc(deltas, func(left, right reteTerminalTokenDelta) int {
+		return compareLess(
+			agendaDeltaTerminalTokenLess(revision, left, right),
+			agendaDeltaTerminalTokenLess(revision, right, left),
+		)
+	})
+}
+
 func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
 	if left.ruleRevisionID != right.ruleRevisionID {
 		return false
@@ -814,6 +809,17 @@ func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDe
 		return false
 	}
 	return terminalTokenFactVersionsEqual(left.token, right.token)
+}
+
+func compareLess(leftLess, rightLess bool) int {
+	switch {
+	case leftLess:
+		return -1
+	case rightLess:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []agendaChange {
@@ -999,9 +1005,7 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 			out = append(out, a.publicActivation(current))
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return activationLess(&out[i], &out[j])
-	})
+	sortActivations(out)
 	return out
 }
 
@@ -1019,9 +1023,7 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 			out = append(out, a.publicActivation(current))
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return activationLess(&out[i], &out[j])
-	})
+	sortActivations(out)
 	return out
 }
 
@@ -1126,6 +1128,24 @@ func pruneEmptyActivationIndex[K comparable](index map[K][]activationKey) {
 
 func factIDSeenBefore(ids []FactID, id FactID) bool {
 	return slices.Contains(ids, id)
+}
+
+func (a *agenda) sortActivationKeys(keys []activationKey) {
+	slices.SortStableFunc(keys, func(leftKey, rightKey activationKey) int {
+		left, _ := a.activationByKeyPtr(leftKey)
+		right, _ := a.activationByKeyPtr(rightKey)
+		return activationCompare(left, right)
+	})
+}
+
+func sortActivations(activations []activation) {
+	slices.SortStableFunc(activations, func(left, right activation) int {
+		return activationCompare(&left, &right)
+	})
+}
+
+func activationCompare(left, right *activation) int {
+	return compareLess(activationLess(left, right), activationLess(right, left))
 }
 
 func activationLess(left, right *activation) bool {
