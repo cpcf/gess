@@ -734,19 +734,24 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) ([]betaPre
 	plan := m.rule.conditionPlans[conditionIndex]
 	out := m.prefixViewScratch[conditionIndex][:0]
 	for _, prefix := range m.livePrefixes(conditionIndex - 1) {
-		prefixMatches := m.prefixMatches(conditionIndex, prefix)
-		matches, err := m.matchesForLeftPrefix(conditionIndex, prefix)
-		if err != nil {
-			return nil, err
-		}
-		for _, match := range matches {
-			ok, err := plan.matchesJoins(nil, match.fact, prefixMatches)
-			if err != nil {
-				return nil, err
+		if len(plan.joins) == 0 {
+			for _, match := range m.liveConditionMatches(conditionIndex) {
+				out = append(out, betaPrefix{
+					token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
+				})
 			}
-			if !ok {
+			continue
+		}
+		key, ok := betaJoinKeyForPrefixToken(plan, prefix.token)
+		if !ok {
+			continue
+		}
+		for _, rowID := range m.conditionIndexes[conditionIndex][key] {
+			row := m.conditionMatchRow(conditionIndex, rowID)
+			if row == nil || !row.live {
 				continue
 			}
+			match := row.match
 			out = append(out, betaPrefix{
 				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 			})
@@ -789,11 +794,6 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 
 	if len(plan.joins) == 0 {
 		for _, prefix := range m.livePrefixes(conditionIndex - 1) {
-			prefixMatches := m.prefixMatches(conditionIndex, prefix)
-			ok, err := plan.matchesJoins(nil, match.fact, prefixMatches)
-			if err != nil || !ok {
-				continue
-			}
 			nextPrefix := betaPrefix{
 				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
@@ -812,11 +812,6 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 			continue
 		}
 		prefix := row.prefix
-		prefixMatches := m.prefixMatches(conditionIndex, prefix)
-		ok, err := plan.matchesJoins(nil, match.fact, prefixMatches)
-		if err != nil || !ok {
-			continue
-		}
 		nextPrefix := betaPrefix{
 			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
@@ -855,17 +850,26 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 	if span != nil {
 		span.recordBetaSuccessorReached()
 	}
-	matches, err := m.matchesForLeftPrefix(nextCondition, prefix)
-	if err != nil {
+	plan := m.rule.conditionPlans[nextCondition]
+	if len(plan.joins) == 0 {
+		for _, match := range m.liveConditionMatches(nextCondition) {
+			nextPrefix := betaPrefix{
+				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+			}
+			out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, nextCondition, nextPrefix, span)
+		}
 		return out
 	}
-	prefixMatches := m.prefixMatches(nextCondition, prefix)
-	plan := m.rule.conditionPlans[nextCondition]
-	for _, match := range matches {
-		ok, err := plan.matchesJoins(nil, match.fact, prefixMatches)
-		if err != nil || !ok {
+	key, ok := betaJoinKeyForPrefixToken(plan, prefix.token)
+	if !ok {
+		return out
+	}
+	for _, rowID := range m.conditionIndexes[nextCondition][key] {
+		row := m.conditionMatchRow(nextCondition, rowID)
+		if row == nil || !row.live {
 			continue
 		}
+		match := row.match
 		nextPrefix := betaPrefix{
 			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
@@ -1285,6 +1289,31 @@ func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
 		}
 	}
 	return false
+}
+
+func betaJoinKeyForPrefixToken(plan compiledConditionPlan, token *matchToken) (betaJoinKey, bool) {
+	return betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
+		match, ok := matchTokenAtSlot(token, join.refBindingSlot)
+		if !ok {
+			return Value{}, false
+		}
+		return match.fact.compiledFieldValue(join.refField, join.refFieldSlot)
+	})
+}
+
+func matchTokenAtSlot(token *matchToken, slot int) (conditionMatch, bool) {
+	if token == nil || slot < 0 {
+		return conditionMatch{}, false
+	}
+	for current := token; current != nil; current = current.parent {
+		if current.size == slot+1 {
+			return current.match, true
+		}
+		if current.size <= slot {
+			return conditionMatch{}, false
+		}
+	}
+	return conditionMatch{}, false
 }
 
 func fillConditionMatchesFromToken(out []conditionMatch, token *matchToken, limit int) int {

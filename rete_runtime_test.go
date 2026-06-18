@@ -1010,6 +1010,185 @@ func TestReteRuntimeBetaPrefixRowsStayAppendStableAcrossRemoveAndReadd(t *testin
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
+func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("beta-indexed-join-tombstone-session"),
+		WithInitialFacts(mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	rule := revision.rules["employee-department"]
+	memory := session.rete.beta.rules[rule.revisionID]
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+
+	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
+	if got, want := len(memory.prefixIndexes[0][engineeringKey]), 1; got != want {
+		t.Fatalf("engineering prefix bucket size before readd = %d, want %d", got, want)
+	}
+	if got, want := len(memory.conditionIndexes[1][engineeringKey]), 1; got != want {
+		t.Fatalf("engineering condition bucket size before readd = %d, want %d", got, want)
+	}
+
+	employee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "Ada")
+	engineering := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	if _, err := session.Retract(ctx, employee.ID()); err != nil {
+		t.Fatalf("Retract(%s): %v", employee.ID(), err)
+	}
+	if _, err := session.Retract(ctx, engineering.ID()); err != nil {
+		t.Fatalf("Retract(%s): %v", engineering.ID(), err)
+	}
+	if memory.prefixes[0][0].live {
+		t.Fatal("retracted prefix row is still live")
+	}
+	if memory.conditionMatches[1][0].live {
+		t.Fatal("retracted condition row is still live")
+	}
+	if got, want := len(memory.prefixIndexes[0][engineeringKey]), 1; got != want {
+		t.Fatalf("engineering prefix bucket size after retracts = %d, want %d", got, want)
+	}
+	if got, want := len(memory.conditionIndexes[1][engineeringKey]), 1; got != want {
+		t.Fatalf("engineering condition bucket size after retracts = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after retracts = %d, want 0", got)
+	}
+
+	readdedDepartment, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Engineering): %v", err)
+	}
+	if readdedDepartment.Status != AssertInserted {
+		t.Fatalf("readded department status = %v, want %v", readdedDepartment.Status, AssertInserted)
+	}
+	if got, want := len(memory.conditionMatches[1]), 3; got != want {
+		t.Fatalf("condition row count after department re-add = %d, want %d", got, want)
+	}
+	if memory.conditionMatches[1][2].id != 2 || !memory.conditionMatches[1][2].live {
+		t.Fatalf("re-added condition row = %#v, want live rowID 2", memory.conditionMatches[1][2])
+	}
+	if memory.conditionMatches[1][2].match.fact.ID() != readdedDepartment.Fact.ID() {
+		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][2].match.fact.ID(), readdedDepartment.Fact.ID())
+	}
+	afterDepartmentBucket := memory.conditionIndexes[1][engineeringKey]
+	if got, want := len(afterDepartmentBucket), 2; got != want {
+		t.Fatalf("engineering condition bucket size after department re-add = %d, want %d", got, want)
+	}
+	if afterDepartmentBucket[0] != 0 || afterDepartmentBucket[1] != 2 {
+		t.Fatalf("engineering condition bucket row IDs after department re-add = %#v, want [0 2]", afterDepartmentBucket)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after department re-add = %d, want 0", got)
+	}
+
+	readdedEmployee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Ada): %v", err)
+	}
+	if readdedEmployee.Status != AssertInserted {
+		t.Fatalf("readded employee status = %v, want %v", readdedEmployee.Status, AssertInserted)
+	}
+	if got, want := len(memory.prefixes[0]), 2; got != want {
+		t.Fatalf("prefix row count after employee re-add = %d, want %d", got, want)
+	}
+	if memory.prefixes[0][1].id != 1 || !memory.prefixes[0][1].live {
+		t.Fatalf("re-added prefix row = %#v, want live rowID 1", memory.prefixes[0][1])
+	}
+	if memory.prefixes[0][1].prefix.token.match.fact.ID() != readdedEmployee.Fact.ID() {
+		t.Fatalf("re-added prefix row fact ID = %s, want %s", memory.prefixes[0][1].prefix.token.match.fact.ID(), readdedEmployee.Fact.ID())
+	}
+	afterEmployeeBucket := memory.prefixIndexes[0][engineeringKey]
+	if got, want := len(afterEmployeeBucket), 2; got != want {
+		t.Fatalf("engineering prefix bucket size after employee re-add = %d, want %d", got, want)
+	}
+	if afterEmployeeBucket[0] != 0 || afterEmployeeBucket[1] != 1 {
+		t.Fatalf("engineering prefix bucket row IDs after employee re-add = %#v, want [0 1]", afterEmployeeBucket)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after employee re-add = %d, want 1", got)
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	noise := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "left-right-no-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "right", TemplateKey: right.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+1)
+	for i := range reteAlphaMinimumFacts {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noise.Key(),
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials, SessionInitialFact{
+		TemplateKey: right.Key(),
+		Fields:      mustFields(t, map[string]any{"id": "r1"}),
+	})
+	session, err := NewSession(revision, WithSessionID("beta-no-join-successor-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations before left assert = %d, want 0", got)
+	}
+
+	inserted, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": "l1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(left): %v", err)
+	}
+	if inserted.Status != AssertInserted {
+		t.Fatalf("left assert status = %v, want %v", inserted.Status, AssertInserted)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after left assert = %d, want 1", got)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
 func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
