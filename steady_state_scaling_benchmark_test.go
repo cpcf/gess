@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -412,32 +413,46 @@ func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
 	ctx := context.Background()
 	tc := steadyStateScalingCase{streams: 2, limit: 16}
 	revision := mustCompileSteadyStateScalingRuleset(t, tc)
-	session := mustSeedSteadyStateScalingSession(t, revision, tc)
+	sessionA, resultA, traceA := runSteadyStateScalingSessionWithTrace(t, revision, tc, "a")
+	sessionB, resultB, traceB := runSteadyStateScalingSessionWithTrace(t, revision, tc, "b")
 	expectedFired := tc.streams * (4*tc.limit + 5)
 	expectedFacts := tc.streams * (4*(tc.limit+1) + 2)
 
-	result, err := session.Run(ctx)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	if resultA.Status != RunCompleted || resultA.Fired != expectedFired {
+		t.Fatalf("first run result = (%v, %d), want (%v, %d)", resultA.Status, resultA.Fired, RunCompleted, expectedFired)
 	}
-	if result.Status != RunCompleted || result.Fired != expectedFired {
-		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, expectedFired)
+	if resultB.Status != RunCompleted || resultB.Fired != expectedFired {
+		t.Fatalf("second run result = (%v, %d), want (%v, %d)", resultB.Status, resultB.Fired, RunCompleted, expectedFired)
 	}
-	if got := len(session.factsByID); got != expectedFacts {
-		t.Fatalf("final fact count = %d, want %d", got, expectedFacts)
+	if got := len(sessionA.factsByID); got != expectedFacts {
+		t.Fatalf("first run final fact count = %d, want %d", got, expectedFacts)
 	}
-	assertSteadyStateFactMix(t, session, tc)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	if got := len(sessionB.factsByID); got != expectedFacts {
+		t.Fatalf("second run final fact count = %d, want %d", got, expectedFacts)
+	}
+	if got, want := strings.Join(traceA, "|"), strings.Join(traceB, "|"); got != want {
+		t.Fatalf("fired trace mismatch:\nfirst=%s\nsecond=%s", got, want)
+	}
+	if got := len(traceA); got != expectedFired {
+		t.Fatalf("first fired trace length = %d, want %d", got, expectedFired)
+	}
+	if got := len(traceB); got != expectedFired {
+		t.Fatalf("second fired trace length = %d, want %d", got, expectedFired)
+	}
+	assertSteadyStateFactMix(t, sessionA, tc)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.rete)
+	assertSteadyStateFactMix(t, sessionB, tc)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionB), newNaiveMatcher(revision), sessionB.rete)
 
-	second, err := session.Run(ctx)
+	second, err := sessionA.Run(ctx)
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	if second.Status != RunCompleted || second.Fired != 0 {
 		t.Fatalf("second run result = (%v, %d), want (%v, 0)", second.Status, second.Fired, RunCompleted)
 	}
-	assertSteadyStateFactMix(t, session, tc)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertSteadyStateFactMix(t, sessionA, tc)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.rete)
 }
 
 func TestSteadyStateScalingPropagationCountersScale(t *testing.T) {
@@ -553,46 +568,226 @@ func collectSteadyStateScalingPropagationCounters(t testing.TB, revision *Rulese
 func assertSteadyStateFactMix(t testing.TB, session *Session, tc steadyStateScalingCase) {
 	t.Helper()
 
-	perTemplate := tc.streams * (tc.limit + 1)
-	for _, templateKey := range []TemplateKey{"step", "signal", "route", "decision"} {
-		if got := len(session.factsByTemplate[templateKey]); got != perTemplate {
-			t.Fatalf("%s fact count = %d, want %d", templateKey, got, perTemplate)
-		}
-	}
-	assertSteadyStateTerminalFacts(t, session, tc, TemplateKey("done"))
-	assertSteadyStateTerminalFacts(t, session, tc, TemplateKey("complete"))
+	assertSteadyStateFacts(t, session, TemplateKey("step"), []string{"stream", "n"}, steadyStateExpectedStepFacts(tc))
+	assertSteadyStateFacts(t, session, TemplateKey("signal"), []string{"stream", "n"}, steadyStateExpectedSignalFacts(tc))
+	assertSteadyStateFacts(t, session, TemplateKey("route"), []string{"stream", "n"}, steadyStateExpectedRouteFacts(tc))
+	assertSteadyStateFacts(t, session, TemplateKey("decision"), []string{"stream", "n"}, steadyStateExpectedDecisionFacts(tc))
+	assertSteadyStateFacts(t, session, TemplateKey("done"), []string{"stream"}, steadyStateExpectedTerminalFacts(tc))
+	assertSteadyStateFacts(t, session, TemplateKey("complete"), []string{"stream"}, steadyStateExpectedTerminalFacts(tc))
 }
 
-func assertSteadyStateTerminalFacts(t testing.TB, session *Session, tc steadyStateScalingCase, templateKey TemplateKey) {
+type steadyStateFactExpectation struct {
+	key    string
+	fields map[string]Value
+}
+
+func assertSteadyStateFacts(t testing.TB, session *Session, templateKey TemplateKey, keyFields []string, expected []steadyStateFactExpectation) {
 	t.Helper()
 
-	terminalIDs := session.factsByTemplate[templateKey]
-	if got := len(terminalIDs); got != tc.streams {
-		t.Fatalf("%s fact count = %d, want %d", templateKey, got, tc.streams)
+	actualIDs := session.factsByTemplate[templateKey]
+	if got, want := len(actualIDs), len(expected); got != want {
+		t.Fatalf("%s fact count = %d, want %d", templateKey, got, want)
 	}
-	seen := make([]bool, tc.streams)
-	for _, id := range terminalIDs {
+
+	expectedByKey := make(map[string]steadyStateFactExpectation, len(expected))
+	for _, row := range expected {
+		if _, ok := expectedByKey[row.key]; ok {
+			t.Fatalf("duplicate expected %s key %q", templateKey, row.key)
+		}
+		expectedByKey[row.key] = row
+	}
+
+	for _, id := range actualIDs {
 		fact := session.factsByID[id]
 		if fact == nil {
 			t.Fatalf("%s fact %s missing from factsByID", templateKey, id)
 		}
-		stream, err := steadyStateIntField(fact.snapshot(), "stream")
+		snapshot := fact.snapshot()
+		key, err := steadyStateFactKey(snapshot, keyFields)
 		if err != nil {
-			t.Fatalf("%s fact %s stream: %v", templateKey, id, err)
+			t.Fatalf("%s fact %s key: %v", templateKey, id, err)
 		}
-		if stream < 0 || stream >= tc.streams {
-			t.Fatalf("%s stream = %d, want range [0,%d)", templateKey, stream, tc.streams)
-		}
-		if seen[stream] {
-			t.Fatalf("duplicate %s fact for stream %d", templateKey, stream)
-		}
-		seen[stream] = true
-	}
-	for stream, ok := range seen {
+		row, ok := expectedByKey[key]
 		if !ok {
-			t.Fatalf("missing %s fact for stream %d", templateKey, stream)
+			t.Fatalf("unexpected %s fact %s: %s", templateKey, id, snapshot.String())
+		}
+		assertSteadyStateFactFields(t, templateKey, id, snapshot, row.fields)
+		delete(expectedByKey, key)
+	}
+
+	if len(expectedByKey) > 0 {
+		for key := range expectedByKey {
+			t.Fatalf("missing %s fact for key %s", templateKey, key)
 		}
 	}
+}
+
+func assertSteadyStateFactFields(t testing.TB, templateKey TemplateKey, id FactID, fact FactSnapshot, expected map[string]Value) {
+	t.Helper()
+
+	actual := fact.Fields()
+	if got, want := len(actual), len(expected); got != want {
+		t.Fatalf("%s fact %s field count = %d, want %d", templateKey, id, got, want)
+	}
+	for fieldName, want := range expected {
+		got, ok := actual[fieldName]
+		if !ok {
+			t.Fatalf("%s fact %s missing field %q: %s", templateKey, id, fieldName, fact.String())
+		}
+		if !got.Equal(want) {
+			t.Fatalf("%s fact %s field %q = %s, want %s", templateKey, id, fieldName, got.String(), want.String())
+		}
+	}
+}
+
+func steadyStateExpectedStepFacts(tc steadyStateScalingCase) []steadyStateFactExpectation {
+	rows := make([]steadyStateFactExpectation, 0, tc.streams*(tc.limit+1))
+	for stream := 0; stream < tc.streams; stream++ {
+		for n := 0; n <= tc.limit; n++ {
+			fields := map[string]Value{
+				"stream": steadyStateIntValue(stream),
+				"n":      steadyStateIntValue(n),
+			}
+			rows = append(rows, steadyStateFactExpectation{
+				key:    steadyStateFactKeyFromValues(fields, "stream", "n"),
+				fields: fields,
+			})
+		}
+	}
+	return rows
+}
+
+func steadyStateExpectedSignalFacts(tc steadyStateScalingCase) []steadyStateFactExpectation {
+	rows := make([]steadyStateFactExpectation, 0, tc.streams*(tc.limit+1))
+	for stream := 0; stream < tc.streams; stream++ {
+		for n := 0; n <= tc.limit; n++ {
+			fields := map[string]Value{
+				"stream": steadyStateIntValue(stream),
+				"n":      steadyStateIntValue(n),
+				"kind":   steadyStateStringValue(steadyStateSignalKind(n)),
+				"score":  steadyStateIntValue(50 + (n % 50)),
+			}
+			rows = append(rows, steadyStateFactExpectation{
+				key:    steadyStateFactKeyFromValues(fields, "stream", "n"),
+				fields: fields,
+			})
+		}
+	}
+	return rows
+}
+
+func steadyStateExpectedRouteFacts(tc steadyStateScalingCase) []steadyStateFactExpectation {
+	rows := make([]steadyStateFactExpectation, 0, tc.streams*(tc.limit+1))
+	for stream := 0; stream < tc.streams; stream++ {
+		for n := 0; n <= tc.limit; n++ {
+			fields := map[string]Value{
+				"stream": steadyStateIntValue(stream),
+				"n":      steadyStateIntValue(n),
+				"lane":   steadyStateStringValue(steadyStateRouteLane(n)),
+			}
+			rows = append(rows, steadyStateFactExpectation{
+				key:    steadyStateFactKeyFromValues(fields, "stream", "n"),
+				fields: fields,
+			})
+		}
+	}
+	return rows
+}
+
+func steadyStateExpectedDecisionFacts(tc steadyStateScalingCase) []steadyStateFactExpectation {
+	rows := make([]steadyStateFactExpectation, 0, tc.streams*(tc.limit+1))
+	for stream := 0; stream < tc.streams; stream++ {
+		for n := 0; n <= tc.limit; n++ {
+			fields := map[string]Value{
+				"stream":  steadyStateIntValue(stream),
+				"n":       steadyStateIntValue(n),
+				"outcome": steadyStateStringValue(steadyStateDecisionOutcome(n)),
+			}
+			rows = append(rows, steadyStateFactExpectation{
+				key:    steadyStateFactKeyFromValues(fields, "stream", "n"),
+				fields: fields,
+			})
+		}
+	}
+	return rows
+}
+
+func steadyStateExpectedTerminalFacts(tc steadyStateScalingCase) []steadyStateFactExpectation {
+	rows := make([]steadyStateFactExpectation, 0, tc.streams)
+	for stream := 0; stream < tc.streams; stream++ {
+		fields := map[string]Value{
+			"stream": steadyStateIntValue(stream),
+		}
+		rows = append(rows, steadyStateFactExpectation{
+			key:    steadyStateFactKeyFromValues(fields, "stream"),
+			fields: fields,
+		})
+	}
+	return rows
+}
+
+func steadyStateFactKeyFromValues(fields map[string]Value, keyFields ...string) string {
+	parts := make([]string, 0, len(keyFields))
+	for _, fieldName := range keyFields {
+		parts = append(parts, fieldName+"="+fields[fieldName].String())
+	}
+	return strings.Join(parts, "|")
+}
+
+func steadyStateFactKey(fact FactSnapshot, keyFields []string) (string, error) {
+	parts := make([]string, 0, len(keyFields))
+	for _, fieldName := range keyFields {
+		value, ok := fact.Field(fieldName)
+		if !ok {
+			return "", fmt.Errorf("missing field %q", fieldName)
+		}
+		parts = append(parts, fieldName+"="+value.String())
+	}
+	return strings.Join(parts, "|"), nil
+}
+
+func runSteadyStateScalingSessionWithTrace(t testing.TB, revision *Ruleset, tc steadyStateScalingCase, label string) (*Session, RunResult, []string) {
+	t.Helper()
+
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		revision,
+		WithSessionID(SessionID(fmt.Sprintf("steady-state-scaling-%d-%d-%s", tc.streams, tc.limit, label))),
+		WithEventListener(collector),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil {
+		t.Fatal("session Rete runtime is nil")
+	}
+	seedSteadyStateScalingSession(t, session, tc)
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	return session, result, steadyStateFiredRuleTrace(revision, collector.Events())
+}
+
+func steadyStateFiredRuleTrace(revision *Ruleset, events []Event) []string {
+	trace := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Type != EventRuleFired {
+			continue
+		}
+		trace = append(trace, steadyStateRuleName(revision, event.RuleRevisionID))
+	}
+	return trace
+}
+
+func steadyStateRuleName(revision *Ruleset, id RuleRevisionID) string {
+	if revision != nil {
+		if rule, ok := revision.RuleByRevisionID(id); ok {
+			return rule.Name()
+		}
+	}
+	return id.String()
 }
 
 func steadyStateIntField(fact FactSnapshot, field string) (int, error) {
