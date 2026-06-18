@@ -57,32 +57,33 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 type Session struct {
-	id                  SessionID
-	revision            *Ruleset
-	agenda              *agenda
-	propagationCounters *propagationCounterLedger
-	rete                *reteRuntime
-	generation          Generation
-	initials            []SessionInitialFact
-	initialCount        int
-	compiledInitials    []compiledSessionInitialFact
-	listeners           []EventListener
-	eventClock          func() time.Time
-	closed              bool
-	runGuard            chan struct{}
-	runState            atomic.Value
-	runAgendaDelta      reteAgendaDelta
-	runAgendaDeltas     []reteAgendaDelta
-	runAgendaStates     []runAgendaDeltaState
-	runAgendaBuckets    map[candidateIdentity]int
-	runAgendaAdded      []reteTerminalTokenDelta
-	runAgendaRemoved    []reteTerminalTokenDelta
-	runAgendaPending    bool
-	agendaReady         bool
-	agendaDirty         bool
-	mutationQueueMu     sync.Mutex
-	mutationQueue       []queuedMutation
-	mu                  struct {
+	id                    SessionID
+	revision              *Ruleset
+	agenda                *agenda
+	propagationCounters   *propagationCounterLedger
+	rete                  *reteRuntime
+	generation            Generation
+	initials              []SessionInitialFact
+	initialCount          int
+	compiledInitials      []compiledSessionInitialFact
+	listeners             []EventListener
+	eventClock            func() time.Time
+	closed                bool
+	runGuard              chan struct{}
+	runState              atomic.Value
+	runAgendaDelta        reteAgendaDelta
+	runAgendaDeltas       []reteAgendaDelta
+	runAgendaStates       []runAgendaDeltaState
+	runAgendaBuckets      map[candidateIdentity]int
+	runAgendaAdded        []reteTerminalTokenDelta
+	runAgendaRemoved      []reteTerminalTokenDelta
+	runAgendaPending      bool
+	agendaReady           bool
+	agendaDirty           bool
+	templateValuesScratch []factSlot
+	mutationQueueMu       sync.Mutex
+	mutationQueue         []queuedMutation
+	mu                    struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -96,6 +97,7 @@ type Session struct {
 	factsByTemplate   map[TemplateKey][]FactID
 	factsByName       map[string][]FactID
 	insertionOrder    []FactID
+	slotStorage       []factSlot
 	resetWorkspace    factWorkspace
 	resetFactsScratch []FactSnapshot
 	nextEventSequence uint64
@@ -176,6 +178,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		nextRunSequence:  0,
 		facts:            state.facts,
 		insertionOrder:   state.factsByInsertionOrder(),
+		slotStorage:      state.slotStorage,
 	}
 	session.runState.Store(runGuardState{})
 	session.syncPropagationCounters()
@@ -536,7 +539,8 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 			Reason:       "unknown template key",
 		}
 	}
-	fieldSlots, err := template.buildValidatedFieldSlotsFromValues(values)
+	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(s.templateValuesScratch[:0], values)
+	s.templateValuesScratch = fieldSlots[:0]
 	if err != nil {
 		return FactSnapshot{}, false, reteAgendaDelta{}, err
 	}
@@ -1719,6 +1723,7 @@ type factWorkspace struct {
 	factsByDuplicate duplicateIndexes
 	factsByTemplate  map[TemplateKey][]FactID
 	factsByName      map[string][]FactID
+	slotStorage      []factSlot
 }
 
 type duplicateSingleIntIndexKey struct {
@@ -1875,6 +1880,11 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 		w.facts = make([]workingFact, 0, initialCapacity)
 	} else {
 		w.facts = w.facts[:0]
+	}
+	if w.slotStorage == nil {
+		w.slotStorage = make([]factSlot, 0, initialCapacity)
+	} else {
+		w.slotStorage = w.slotStorage[:0]
 	}
 }
 
@@ -2073,6 +2083,10 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	if materializeDuplicateKey {
 		duplicateKey = duplicateIndex.publicKeyForTemplate(name, template)
 	}
+	storedSlots := fieldSlots
+	if !materializeDuplicateKey {
+		storedSlots = w.storeGeneratedFactSlots(fieldSlots)
+	}
 	fact := workingFact{
 		id:          id,
 		name:        name,
@@ -2080,7 +2094,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 		version:     1,
 		recency:     w.recency,
 		generation:  generation,
-		fieldSlots:  fieldSlots,
+		fieldSlots:  storedSlots,
 		fieldSpecs:  template.fields,
 		dupIndex:    duplicateIndex,
 		dupKey:      duplicateKey,
@@ -2097,6 +2111,22 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, duplicateKey, true, nil
+}
+
+func (w *factWorkspace) storeGeneratedFactSlots(fieldSlots []factSlot) []factSlot {
+	if len(fieldSlots) == 0 {
+		return nil
+	}
+	if cap(w.slotStorage)-len(w.slotStorage) < len(fieldSlots) {
+		nextCapacity := max(cap(w.slotStorage)*2, len(fieldSlots))
+		if nextCapacity < 16 {
+			nextCapacity = 16
+		}
+		w.slotStorage = make([]factSlot, 0, nextCapacity)
+	}
+	start := len(w.slotStorage)
+	w.slotStorage = append(w.slotStorage, fieldSlots...)
+	return w.slotStorage[start:len(w.slotStorage):len(w.slotStorage)]
 }
 
 func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionInitialFact) error {
@@ -2903,6 +2933,7 @@ func (s *Session) activeFactWorkspace() factWorkspace {
 		factsByDuplicate: s.factsByDuplicate,
 		factsByTemplate:  s.factsByTemplate,
 		factsByName:      s.factsByName,
+		slotStorage:      s.slotStorage,
 	}
 }
 
@@ -2918,6 +2949,7 @@ func (s *Session) commitFactWorkspace(state factWorkspace) {
 	s.factsByTemplate = state.factsByTemplate
 	s.factsByName = state.factsByName
 	s.insertionOrder = state.insertionOrder
+	s.slotStorage = state.slotStorage
 }
 
 func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
@@ -2932,6 +2964,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
 	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
 	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
+	s.slotStorage, workspace.slotStorage = workspace.slotStorage, s.slotStorage
 }
 
 func (s *Session) resetWorkingMemory() {
@@ -2945,4 +2978,5 @@ func (s *Session) resetWorkingMemory() {
 	s.factsByTemplate = make(map[TemplateKey][]FactID)
 	s.factsByName = make(map[string][]FactID)
 	s.insertionOrder = nil
+	s.slotStorage = nil
 }

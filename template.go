@@ -231,6 +231,10 @@ func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 }
 
 func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot, error) {
+	return t.buildValidatedFieldSlotsFromValuesInto(nil, values)
+}
+
+func (t Template) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values []Value) ([]factSlot, error) {
 	if !t.closed {
 		return nil, &ValidationError{
 			TemplateName: t.name,
@@ -247,9 +251,13 @@ func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot
 		return nil, nil
 	}
 
-	slots := make([]factSlot, len(t.fields))
-	for i := range t.fields {
-		slots[i].presence = fieldPresenceOmitted
+	if cap(dst) < len(t.fields) {
+		dst = make([]factSlot, len(t.fields))
+	} else {
+		dst = dst[:len(t.fields)]
+	}
+	for i := range dst {
+		dst[i] = factSlot{presence: fieldPresenceOmitted}
 	}
 
 	for i, value := range values {
@@ -264,38 +272,38 @@ func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot
 			allowed = t.fieldAllowed[field.Name]
 		}
 		if kind != ValueAny && !isValueCompatibleWithKind(kind, value) {
-			return nil, &ValidationError{
+			return dst, &ValidationError{
 				TemplateName: t.name,
 				FieldName:    field.Name,
 				Reason:       "invalid type",
 			}
 		}
 		if len(allowed) > 0 && !valueAllowed(allowed, value) {
-			return nil, &ValidationError{
+			return dst, &ValidationError{
 				TemplateName: t.name,
 				FieldName:    field.Name,
 				Reason:       "value not in allowed set",
 			}
 		}
-		slots[i].value = cloneValue(value)
-		slots[i].ok = true
-		slots[i].presence = fieldPresenceExplicit
+		dst[i].value = cloneValue(value)
+		dst[i].ok = true
+		dst[i].presence = fieldPresenceExplicit
 	}
 
 	for i, field := range t.fields {
-		if slots[i].ok {
+		if dst[i].ok {
 			continue
 		}
 		if len(t.fieldValidation) == len(t.fields) {
 			validation := t.fieldValidation[i]
 			if validation.hasDefault {
-				slots[i].value = cloneValue(validation.defaultValue)
-				slots[i].ok = true
-				slots[i].presence = fieldPresenceDefault
+				dst[i].value = cloneValue(validation.defaultValue)
+				dst[i].ok = true
+				dst[i].presence = fieldPresenceDefault
 				continue
 			}
 			if validation.required {
-				return nil, &ValidationError{
+				return dst, &ValidationError{
 					TemplateName: t.name,
 					FieldName:    field.Name,
 					Reason:       "required field is missing",
@@ -304,13 +312,13 @@ func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot
 			continue
 		}
 		if defaultValue, hasDefault := t.fieldDefaults[field.Name]; hasDefault {
-			slots[i].value = cloneValue(defaultValue)
-			slots[i].ok = true
-			slots[i].presence = fieldPresenceDefault
+			dst[i].value = cloneValue(defaultValue)
+			dst[i].ok = true
+			dst[i].presence = fieldPresenceDefault
 			continue
 		}
 		if field.Required {
-			return nil, &ValidationError{
+			return dst, &ValidationError{
 				TemplateName: t.name,
 				FieldName:    field.Name,
 				Reason:       "required field is missing",
@@ -318,7 +326,7 @@ func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot
 		}
 	}
 
-	return slots, nil
+	return dst, nil
 }
 
 func (t Template) buildValidatedFieldSlotsFromSpecs(fields Fields) ([]factSlot, error) {

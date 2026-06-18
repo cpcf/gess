@@ -1446,6 +1446,71 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	}
 }
 
+func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratchReuse(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "source",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "generated",
+		Closed:          true,
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Default: "effect", HasDefault: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		Fn: func(ctx ActionContext) error {
+			if err := ctx.AssertTemplateValues(generated.Key(), mustValue(t, 7)); err != nil {
+				return err
+			}
+			return ctx.AssertTemplateValues(generated.Key(), mustValue(t, 8))
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "effect-assert-scratch-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	first := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
+	second := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 8)
+	if got, want := first.fieldSlots[0].value, mustValue(t, 7); !got.Equal(want) {
+		t.Fatalf("first generated id = %v, want %v", got, want)
+	}
+	if got, want := second.fieldSlots[0].value, mustValue(t, 8); !got.Equal(want) {
+		t.Fatalf("second generated id = %v, want %v", got, want)
+	}
+	if got, want := first.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
+		t.Fatalf("first generated default kind = %v, want %v", got, want)
+	}
+	if got, want := second.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
+		t.Fatalf("second generated default kind = %v, want %v", got, want)
+	}
+}
+
 func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()
