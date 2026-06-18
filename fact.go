@@ -2,6 +2,7 @@ package gess
 
 import (
 	"maps"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,9 +95,239 @@ type workingFact struct {
 	fieldSlots    []factSlot
 	fieldSpecs    []FieldSpec
 	fieldPresence map[string]FieldPresence
+	dupIndex      duplicateIndexKey
 	dupKey        DuplicateKey
 	support       FactSupportProvenance
 	isTransient   bool
+}
+
+type duplicateIndexKind uint8
+
+const (
+	duplicateIndexString duplicateIndexKind = iota
+	duplicateIndexSingleInt
+	duplicateIndexDoubleInt
+	duplicateIndexSingleScalar
+	duplicateIndexDoubleScalar
+)
+
+type duplicateScalarKind uint8
+
+const (
+	duplicateScalarNull duplicateScalarKind = iota
+	duplicateScalarBool
+	duplicateScalarInt
+	duplicateScalarFloat
+	duplicateScalarString
+)
+
+type duplicateScalarKey struct {
+	kind        duplicateScalarKind
+	bits        uint64
+	stringValue string
+}
+
+func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
+	switch value.Kind() {
+	case ValueNull:
+		return duplicateScalarKey{kind: duplicateScalarNull}, true
+	case ValueBool:
+		var bits uint64
+		if value.data.(bool) {
+			bits = 1
+		}
+		return duplicateScalarKey{kind: duplicateScalarBool, bits: bits}, true
+	case ValueInt:
+		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(value.data.(int64))}, true
+	case ValueFloat:
+		floating := value.data.(float64)
+		if math.IsNaN(floating) {
+			return duplicateScalarKey{}, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(int64(floating))}, true
+		}
+		return duplicateScalarKey{kind: duplicateScalarFloat, bits: math.Float64bits(floating)}, true
+	case ValueString:
+		return duplicateScalarKey{kind: duplicateScalarString, stringValue: value.data.(string)}, true
+	default:
+		return duplicateScalarKey{}, false
+	}
+}
+
+func (k duplicateScalarKey) value() Value {
+	switch k.kind {
+	case duplicateScalarNull:
+		return NullValue()
+	case duplicateScalarBool:
+		return Value{kind: ValueBool, data: k.bits != 0}
+	case duplicateScalarInt:
+		return Value{kind: ValueInt, data: int64(k.bits)}
+	case duplicateScalarFloat:
+		return Value{kind: ValueFloat, data: math.Float64frombits(k.bits)}
+	case duplicateScalarString:
+		return Value{kind: ValueString, data: k.stringValue}
+	default:
+		return Value{}
+	}
+}
+
+type duplicateIndexKey struct {
+	kind        duplicateIndexKind
+	templateKey TemplateKey
+	firstInt    int64
+	secondInt   int64
+	first       duplicateScalarKey
+	second      duplicateScalarKey
+	stringKey   DuplicateKey
+}
+
+func (k duplicateIndexKey) isZero() bool {
+	return k.kind == duplicateIndexString && k.templateKey == "" && k.stringKey == ""
+}
+
+func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) DuplicateKey {
+	switch k.kind {
+	case duplicateIndexSingleInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		return DuplicateKey(b.String())
+	case duplicateIndexDoubleInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[1], k.secondInt)
+		return DuplicateKey(b.String())
+	case duplicateIndexSingleScalar:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[0], k.first)
+		return DuplicateKey(b.String())
+	case duplicateIndexDoubleScalar:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[0], k.first)
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[1], k.second)
+		return DuplicateKey(b.String())
+	default:
+		return k.stringKey
+	}
+}
+
+func (k duplicateIndexKey) publicKeyCapacity(name string, template Template) int {
+	size := len("name:") + len(name) + len("|template:") + len(k.templateKey) + len("|fields:")
+	switch k.kind {
+	case duplicateIndexSingleInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+	case duplicateIndexDoubleInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+		size += len(template.duplicateKeyNames[1]) + 2 + len("number:") + int64Len(k.secondInt)
+	case duplicateIndexSingleScalar:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
+	case duplicateIndexDoubleScalar:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
+		size += len(template.duplicateKeyNames[1]) + 2 + duplicateScalarKeyValueCapacity(k.second)
+	}
+	return size
+}
+
+func writeDuplicateIntKeyEntry(b *strings.Builder, fieldName string, value int64) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	b.WriteString("number:")
+	var buf [20]byte
+	b.Write(strconv.AppendInt(buf[:0], value, 10))
+	b.WriteByte(';')
+}
+
+func writeDuplicateScalarKeyEntry(b *strings.Builder, fieldName string, value duplicateScalarKey) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	encodeDuplicateScalarKey(b, value)
+	b.WriteByte(';')
+}
+
+func encodeDuplicateScalarKey(b *strings.Builder, value duplicateScalarKey) {
+	switch value.kind {
+	case duplicateScalarNull:
+		b.WriteString("null")
+	case duplicateScalarBool:
+		b.WriteString("bool:")
+		if value.bits != 0 {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case duplicateScalarInt:
+		b.WriteString("number:")
+		var buf [20]byte
+		b.Write(strconv.AppendInt(buf[:0], int64(value.bits), 10))
+	case duplicateScalarFloat:
+		b.WriteString("number:")
+		floating := math.Float64frombits(value.bits)
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			var buf [20]byte
+			b.Write(strconv.AppendInt(buf[:0], int64(floating), 10))
+			return
+		}
+		var buf [32]byte
+		b.Write(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
+	case duplicateScalarString:
+		b.WriteString("string:")
+		b.WriteString(strconv.Quote(value.stringValue))
+	}
+}
+
+func duplicateScalarKeyValueCapacity(value duplicateScalarKey) int {
+	switch value.kind {
+	case duplicateScalarNull:
+		return len("null")
+	case duplicateScalarBool:
+		if value.bits != 0 {
+			return len("bool:true")
+		}
+		return len("bool:false")
+	case duplicateScalarInt:
+		return len("number:") + int64Len(int64(value.bits))
+	case duplicateScalarFloat:
+		floating := math.Float64frombits(value.bits)
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return len("number:") + int64Len(int64(floating))
+		}
+		var buf [32]byte
+		return len("number:") + len(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
+	case duplicateScalarString:
+		return len("string:") + len(value.stringValue) + len(`""`) + len(`\u0000`)
+	default:
+		return len("any")
+	}
 }
 
 type factSlot struct {
@@ -258,13 +489,39 @@ func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) 
 }
 
 func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+	_, duplicateKey := makeDuplicateIdentityForValidatedFact(name, template, fields, slots)
+	return duplicateKey
+}
+
+func makeDuplicateIdentityForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, DuplicateKey) {
+	index := makeDuplicateIndexForValidatedFact(name, template, fields, slots)
+	return index, index.publicKeyForTemplate(name, template)
+}
+
+func makeDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) duplicateIndexKey {
 	if template.duplicatePolicy == DuplicateAllow {
-		return ""
+		return duplicateIndexKey{}
 	}
+
+	if index, ok := makeTypedDuplicateIndexForValidatedFact(name, template, fields, slots); ok {
+		return index
+	}
+
 	if len(slots) > 0 {
-		return makeDuplicateKeyForTemplateWithSlots(name, template, fields, slots)
+		duplicateKey := makeDuplicateKeyForTemplateWithSlots(name, template, fields, slots)
+		return duplicateIndexKey{
+			kind:        duplicateIndexString,
+			templateKey: template.key,
+			stringKey:   duplicateKey,
+		}
 	}
-	return makeDuplicateKeyForTemplate(name, template, fields)
+
+	duplicateKey := makeDuplicateKeyForTemplate(name, template, fields)
+	return duplicateIndexKey{
+		kind:        duplicateIndexString,
+		templateKey: template.key,
+		stringKey:   duplicateKey,
+	}
 }
 
 func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
@@ -279,6 +536,68 @@ func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields
 	b.WriteString("|fields:")
 	emitDuplicateKeyFields(&b, template, fields, slots)
 	return DuplicateKey(b.String())
+}
+
+func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, bool) {
+	switch template.duplicateIndexMode {
+	case duplicateIndexSingleScalar:
+		fieldName := template.duplicateKeyNames[0]
+		value, ok := duplicateFieldValue(fieldName, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		scalar, ok := duplicateScalarKeyFromValue(value)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if scalar.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexSingleInt,
+				templateKey: template.key,
+				firstInt:    int64(scalar.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexSingleScalar,
+			templateKey: template.key,
+			first:       scalar,
+		}, true
+	case duplicateIndexDoubleScalar:
+		firstField := template.duplicateKeyNames[0]
+		secondField := template.duplicateKeyNames[1]
+		firstValue, ok := duplicateFieldValue(firstField, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondValue, ok := duplicateFieldValue(secondField, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		firstScalar, ok := duplicateScalarKeyFromValue(firstValue)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondScalar, ok := duplicateScalarKeyFromValue(secondValue)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if firstScalar.kind == duplicateScalarInt && secondScalar.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexDoubleInt,
+				templateKey: template.key,
+				firstInt:    int64(firstScalar.bits),
+				secondInt:   int64(secondScalar.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexDoubleScalar,
+			templateKey: template.key,
+			first:       firstScalar,
+			second:      secondScalar,
+		}, true
+	default:
+		return duplicateIndexKey{}, false
+	}
 }
 
 func duplicateFields(values Fields, template Template) Fields {

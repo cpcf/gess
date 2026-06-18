@@ -480,6 +480,9 @@ func TestSessionModifySlotBackedClosedTemplateSetUnsetDefaultRequiredAndDuplicat
 	if internal := session.factsByID[first.Fact.ID()]; internal.fields != nil || len(internal.fieldSlots) == 0 {
 		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fields, len(internal.fieldSlots))
 	}
+	if internal := session.factsByID[first.Fact.ID()]; internal.dupIndex.kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
+	}
 
 	result, err := session.Modify(context.Background(), first.Fact.ID(), FactPatch{
 		Set: mustFields(t, map[string]any{"status": "paused"}),
@@ -495,6 +498,9 @@ func TestSessionModifySlotBackedClosedTemplateSetUnsetDefaultRequiredAndDuplicat
 	}
 	if internal := session.factsByID[first.Fact.ID()]; internal.fields != nil {
 		t.Fatal("slot-backed fact should remain slot-backed after modify")
+	}
+	if internal := session.factsByID[first.Fact.ID()]; internal.dupIndex.kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind after modify = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
 	}
 
 	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{

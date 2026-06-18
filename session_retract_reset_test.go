@@ -9,6 +9,7 @@ import (
 func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:            "person",
+		Closed:          true,
 		DuplicatePolicy: DuplicateUniqueKey,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
@@ -29,6 +30,9 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "person-1", "status": "active"}))
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if internal := session.factsByID[inserted.Fact.ID()]; internal.dupIndex.kind != duplicateIndexSingleScalar {
+		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
 	}
 	if got, want := len(mustSnapshot(t, context.Background(), session).Facts()), 1; got != want {
 		t.Fatalf("snapshot length = %d, want %d", got, want)
@@ -559,7 +563,7 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 	if got := len(session.factIDsByName("note")); got != 0 {
 		t.Fatalf("stale dynamic name index len after shrinking reset = %d, want 0", got)
 	}
-	if got, want := len(session.factsByDuplicate), 1; got != want {
+	if got, want := session.factsByDuplicate.len(), 1; got != want {
 		t.Fatalf("duplicate index len after shrinking reset = %d, want %d", got, want)
 	}
 	for _, fact := range firstReset.Facts() {
@@ -743,6 +747,9 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 		if compiled.fields != nil || compiled.fieldPresence != nil {
 			t.Fatalf("compiled initial %d retained map-backed storage: fields=%v presence=%v", i, compiled.fields, compiled.fieldPresence)
 		}
+		if compiled.duplicateIndex.kind != duplicateIndexSingleScalar {
+			t.Fatalf("compiled initial %d duplicate index kind = %v, want %v", i, compiled.duplicateIndex.kind, duplicateIndexSingleScalar)
+		}
 	}
 
 	if got := len(mustSnapshot(t, context.Background(), session).FactsByTemplateKey(template.Key())); got != 2 {
@@ -764,6 +771,9 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 	}
 
 	firstFact := resetFact("settings-1")
+	if firstFact.dupIndex.kind != duplicateIndexSingleScalar {
+		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.dupIndex.kind, duplicateIndexSingleScalar)
+	}
 	labelsSlot := -1
 	metaSlot := -1
 	for i, spec := range firstFact.fieldSpecs {

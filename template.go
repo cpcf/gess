@@ -43,19 +43,20 @@ type TemplateSpec struct {
 }
 
 type Template struct {
-	name              string
-	key               TemplateKey
-	compatibilityKey  TemplateKey
-	fields            []FieldSpec
-	fieldsByName      map[string]FieldSpec
-	fieldIndexes      map[string]int
-	fieldDefaults     map[string]Value
-	fieldAllowed      map[string][]Value
-	fieldValidation   []fieldValidationSpec
-	duplicatePolicy   DuplicatePolicy
-	duplicateKeyNames []string
-	duplicateKeySlots []int
-	closed            bool
+	name               string
+	key                TemplateKey
+	compatibilityKey   TemplateKey
+	fields             []FieldSpec
+	fieldsByName       map[string]FieldSpec
+	fieldIndexes       map[string]int
+	fieldDefaults      map[string]Value
+	fieldAllowed       map[string][]Value
+	fieldValidation    []fieldValidationSpec
+	duplicatePolicy    DuplicatePolicy
+	duplicateKeyNames  []string
+	duplicateKeySlots  []int
+	duplicateIndexMode duplicateIndexKind
+	closed             bool
 }
 
 type fieldValidationSpec struct {
@@ -558,22 +559,56 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			duplicateKeySlots[i] = fieldIndexes[fieldName]
 		}
 	}
+	duplicateIndexMode := duplicateIndexKeyMode(spec.Closed, spec.DuplicatePolicy, fields, duplicateKeyNames)
 
 	return Template{
-		name:              name,
-		key:               key,
-		compatibilityKey:  compatibilityKey,
-		fields:            fields,
-		fieldsByName:      fieldsByName,
-		fieldIndexes:      fieldIndexes,
-		fieldDefaults:     fieldDefaults,
-		fieldAllowed:      fieldAllowed,
-		fieldValidation:   fieldValidation,
-		duplicatePolicy:   spec.DuplicatePolicy,
-		duplicateKeyNames: duplicateKeyNames,
-		duplicateKeySlots: duplicateKeySlots,
-		closed:            spec.Closed,
+		name:               name,
+		key:                key,
+		compatibilityKey:   compatibilityKey,
+		fields:             fields,
+		fieldsByName:       fieldsByName,
+		fieldIndexes:       fieldIndexes,
+		fieldDefaults:      fieldDefaults,
+		fieldAllowed:       fieldAllowed,
+		fieldValidation:    fieldValidation,
+		duplicatePolicy:    spec.DuplicatePolicy,
+		duplicateKeyNames:  duplicateKeyNames,
+		duplicateKeySlots:  duplicateKeySlots,
+		duplicateIndexMode: duplicateIndexMode,
+		closed:             spec.Closed,
 	}, nil
+}
+
+func duplicateIndexKeyMode(closed bool, policy DuplicatePolicy, fields []FieldSpec, duplicateKeyNames []string) duplicateIndexKind {
+	if !closed || policy != DuplicateUniqueKey {
+		return duplicateIndexString
+	}
+	switch len(duplicateKeyNames) {
+	case 1:
+		if isScalarDuplicateFieldKind(fields, duplicateKeyNames[0]) {
+			return duplicateIndexSingleScalar
+		}
+	case 2:
+		if isScalarDuplicateFieldKind(fields, duplicateKeyNames[0]) && isScalarDuplicateFieldKind(fields, duplicateKeyNames[1]) {
+			return duplicateIndexDoubleScalar
+		}
+	}
+	return duplicateIndexString
+}
+
+func isScalarDuplicateFieldKind(fields []FieldSpec, name string) bool {
+	for _, field := range fields {
+		if field.Name != name {
+			continue
+		}
+		switch field.Kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func normalizeTemplateDuplicateFields(raw []string, fieldsByName map[string]FieldSpec) ([]string, error) {
