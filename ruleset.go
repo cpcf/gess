@@ -316,6 +316,77 @@ type Ruleset struct {
 	conditionNames        map[string]struct{}
 }
 
+const runFactReservePerRule = 64
+
+func (r *Ruleset) estimatedRunFactCapacity(initialFacts int) int {
+	if initialFacts < 0 {
+		initialFacts = 0
+	}
+	if r == nil || len(r.ruleOrder) == 0 {
+		return initialFacts
+	}
+	reserve := max(len(r.ruleOrder)*runFactReservePerRule, initialFacts)
+	return initialFacts + reserve
+}
+
+func (r *Ruleset) estimatedRunSlotCapacity(factCapacity int) int {
+	if r == nil || factCapacity <= 0 {
+		return 0
+	}
+	maxSlots := 0
+	for _, name := range r.templateOrder {
+		template := r.templates[name]
+		if template.closed && len(template.fields) > maxSlots {
+			maxSlots = len(template.fields)
+		}
+	}
+	if maxSlots == 0 {
+		return factCapacity
+	}
+	return factCapacity * maxSlots
+}
+
+func nextGeneratedFactCapacity(length, capacity int, revision *Ruleset) int {
+	if length < 0 {
+		length = 0
+	}
+	if capacity < length {
+		capacity = length
+	}
+	minGrowth := runFactReservePerRule
+	if revision != nil && len(revision.ruleOrder) > 0 {
+		minGrowth = max(minGrowth, len(revision.ruleOrder)*4)
+	}
+	next := max(capacity*2, length+minGrowth)
+	if next == 0 {
+		next = minGrowth
+	}
+	return next
+}
+
+func nextGeneratedSlotCapacity(length, capacity, needed int, revision *Ruleset) int {
+	if length < 0 {
+		length = 0
+	}
+	if capacity < length {
+		capacity = length
+	}
+	if needed < 1 {
+		needed = 1
+	}
+	minGrowth := needed * runFactReservePerRule
+	if revision != nil {
+		if slots := revision.estimatedRunSlotCapacity(runFactReservePerRule); slots > minGrowth {
+			minGrowth = slots
+		}
+	}
+	next := max(capacity*2, length+minGrowth)
+	if next < length+needed {
+		next = length + needed
+	}
+	return next
+}
+
 func (r *Ruleset) ID() RulesetID {
 	if r == nil {
 		return ""

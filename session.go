@@ -143,7 +143,9 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := newFactWorkspace(1, len(compiledInitials))
+	state := newFactWorkspace(1, revision.estimatedRunFactCapacity(len(compiledInitials)))
+	state.reserveTemplateIndexes(revision)
+	state.reserveSlotStorage(revision.estimatedRunSlotCapacity(cap(state.facts)))
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
@@ -836,7 +838,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 
 	before := s.detachedSnapshotLocked()
 	next := &s.resetWorkspace
-	next.reset(s.generation+1, len(compiledInitials))
+	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
+	next.reserveTemplateIndexes(s.revision)
+	next.reserveSlotStorage(s.revision.estimatedRunSlotCapacity(cap(next.facts)))
 	next.applyCompiledInitialFacts(compiledInitials)
 	facts := next.detachedFactsByInsertionOrderInto(s.resetFactsScratch[:0])
 	s.resetFactsScratch = facts
@@ -1904,6 +1908,70 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	}
 }
 
+func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
+	if w == nil || revision == nil {
+		return
+	}
+	templateCount := len(revision.templateOrder)
+	if templateCount == 0 {
+		return
+	}
+	perTemplate := max((cap(w.facts)+templateCount-1)/templateCount+runFactReservePerRule, 1)
+	for _, name := range revision.templateOrder {
+		template := revision.templates[name]
+		if template.key != "" {
+			if ids := w.factsByTemplate[template.key]; cap(ids) < perTemplate {
+				next := make([]FactID, len(ids), perTemplate)
+				copy(next, ids)
+				w.factsByTemplate[template.key] = next
+			}
+		}
+		if template.name != "" {
+			if ids := w.factsByName[template.name]; cap(ids) < perTemplate {
+				next := make([]FactID, len(ids), perTemplate)
+				copy(next, ids)
+				w.factsByName[template.name] = next
+			}
+		}
+	}
+}
+
+func (w *factWorkspace) reserveSlotStorage(capacity int) {
+	if w == nil || capacity <= cap(w.slotStorage) {
+		return
+	}
+	next := make([]factSlot, len(w.slotStorage), capacity)
+	copy(next, w.slotStorage)
+	w.slotStorage = next
+}
+
+func (w *factWorkspace) reserveGeneratedFactInsert(revision *Ruleset, slotCount int) {
+	if w == nil {
+		return
+	}
+	if len(w.facts) == cap(w.facts) {
+		nextCapacity := nextGeneratedFactCapacity(len(w.facts), cap(w.facts), revision)
+		if nextCapacity > cap(w.facts) {
+			nextFacts := make([]workingFact, len(w.facts), nextCapacity)
+			copy(nextFacts, w.facts)
+			w.facts = nextFacts
+			w.rebindFactPointers()
+		}
+	}
+	if len(w.insertionOrder) == cap(w.insertionOrder) {
+		nextCapacity := nextGeneratedFactCapacity(len(w.insertionOrder), cap(w.insertionOrder), revision)
+		if nextCapacity > cap(w.insertionOrder) {
+			nextOrder := make([]FactID, len(w.insertionOrder), nextCapacity)
+			copy(nextOrder, w.insertionOrder)
+			w.insertionOrder = nextOrder
+		}
+	}
+	if slotCount > 0 && cap(w.slotStorage)-len(w.slotStorage) < slotCount {
+		nextCapacity := nextGeneratedSlotCapacity(len(w.slotStorage), cap(w.slotStorage), slotCount, revision)
+		w.reserveSlotStorage(nextCapacity)
+	}
+}
+
 func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 	if w == nil {
 		return nil
@@ -2101,6 +2169,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	}
 	storedSlots := fieldSlots
 	if !materializeDuplicateKey {
+		w.reserveGeneratedFactInsert(revision, len(fieldSlots))
 		storedSlots = w.storeGeneratedFactSlots(fieldSlots)
 	}
 	fact := workingFact{
