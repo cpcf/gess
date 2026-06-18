@@ -47,9 +47,9 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 	unsafeFact := factSnapshotWithFields(map[string]Value{
 		"age": intValue(maxExactFloatInt + 1),
 	})
-	unsafeRight := factSnapshotWithFields(map[string]Value{
+	unsafeRight := newConditionFactRefFromSnapshot(factSnapshotWithFields(map[string]Value{
 		"age": floatValue(float64(maxExactFloatInt + 1)),
-	})
+	}))
 
 	fieldCases := []struct {
 		name       string
@@ -119,7 +119,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchmarkCompareResult = constraint.matches(snapshot)
+				benchmarkCompareResult = constraint.matches(newConditionFactRefFromSnapshot(snapshot))
 			}
 		})
 	}
@@ -139,9 +139,9 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 				refField:       "age",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: factSnapshotWithFields(map[string]Value{
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
 				"age": intValue(18),
-			})}},
+			}})}},
 		},
 		{
 			name: "SafeIntFloat",
@@ -152,9 +152,9 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 				refField:       "age",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: factSnapshotWithFields(map[string]Value{
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
 				"age": floatValue(17.5),
-			})}},
+			}})}},
 		},
 		{
 			name: "UnsafeIntFloat",
@@ -177,7 +177,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchmarkCompareResult, _ = constraint.matches(snapshot, bindings)
+				benchmarkCompareResult, _ = constraint.matches(newConditionFactRefFromSnapshot(snapshot), bindings)
 			}
 		})
 	}

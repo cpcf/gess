@@ -44,7 +44,7 @@ type compiledConditionPlan struct {
 type conditionMatch struct {
 	conditionID ConditionID
 	bindingSlot int
-	fact        FactSnapshot
+	fact        conditionFactRef
 }
 
 type bindingSet struct {
@@ -148,14 +148,15 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sou
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ok, err := p.matchesConstraints(ctx, fact)
+		ref := newConditionFactRefFromSnapshot(fact)
+		ok, err := p.matchesConstraints(ctx, ref)
 		if err != nil {
 			return err
 		}
 		if !ok {
 			continue
 		}
-		ok, err = p.matchesJoins(ctx, fact, bindings)
+		ok, err = p.matchesJoins(ctx, ref, bindings)
 		if err != nil {
 			return err
 		}
@@ -165,7 +166,7 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sou
 		if err := yield(conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
-			fact:        fact,
+			fact:        ref,
 		}); err != nil {
 			return err
 		}
@@ -188,7 +189,8 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		ok, err := p.matchesJoins(ctx, fact, bindings)
+		ref := newConditionFactRefFromSnapshot(fact)
+		ok, err := p.matchesJoins(ctx, ref, bindings)
 		if err != nil {
 			return err
 		}
@@ -198,7 +200,7 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 		if err := yield(conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
-			fact:        fact,
+			fact:        ref,
 		}); err != nil {
 			return err
 		}
@@ -206,7 +208,7 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 	return nil
 }
 
-func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact FactSnapshot, bindings []conditionMatch) (bool, error) {
+func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
 	for _, join := range p.joins {
 		ok, err := join.matches(fact, bindings)
 		if err != nil {
@@ -219,12 +221,12 @@ func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact FactSnapsh
 	return true, nil
 }
 
-func (p compiledConditionPlan) matchesFact(fact FactSnapshot) bool {
+func (p compiledConditionPlan) matchesFact(fact conditionFactRef) bool {
 	switch p.target.kind {
 	case conditionTargetName:
-		return fact.Name() == p.target.name
+		return fact.name == p.target.name
 	case conditionTargetTemplateKey:
-		return fact.TemplateKey() == p.target.templateKey
+		return fact.templateKey == p.target.templateKey
 	default:
 		return false
 	}
@@ -241,7 +243,7 @@ func (p compiledConditionPlan) matchesFactWorking(fact *workingFact) bool {
 	}
 }
 
-func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact FactSnapshot) (bool, error) {
+func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact conditionFactRef) (bool, error) {
 	for _, constraint := range p.constraints {
 		if !constraint.matches(fact) {
 			return false, nil

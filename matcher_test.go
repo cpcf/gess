@@ -255,8 +255,8 @@ func TestCollectMatchCandidatesSuppressesDuplicateBindingTuples(t *testing.T) {
 		generation: 1,
 	}
 	bindingSets := []bindingSet{
-		{matches: []conditionMatch{{bindingSlot: 0, fact: fact}}},
-		{matches: []conditionMatch{{bindingSlot: 0, fact: fact}}},
+		{matches: []conditionMatch{{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}}},
+		{matches: []conditionMatch{{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}}},
 	}
 
 	candidates, err := collectMatchCandidates(context.Background(), rule, newSnapshot("session", "ruleset", 1, nil), bindingSets)
@@ -381,7 +381,7 @@ func TestCollectMatchCandidatesObservesCancellation(t *testing.T) {
 		generation: 1,
 	}
 	bindingSets := []bindingSet{
-		{matches: []conditionMatch{{bindingSlot: 0, fact: fact}}},
+		{matches: []conditionMatch{{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}}},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

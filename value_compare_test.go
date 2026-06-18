@@ -133,7 +133,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 
 	for _, tc := range fieldTests {
 		t.Run("field/"+tc.name, func(t *testing.T) {
-			if got := tc.constraint.matches(tc.snapshot); got != tc.want {
+			if got := tc.constraint.matches(newConditionFactRefFromSnapshot(tc.snapshot)); got != tc.want {
 				t.Fatalf("match = %v, want %v", got, tc.want)
 			}
 		})
@@ -155,7 +155,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 				refField:       "age",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: other}},
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(other)}},
 			want:     true,
 		},
 		{
@@ -167,9 +167,9 @@ func TestConstraintComparisonMatches(t *testing.T) {
 				refField:       "age",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: factSnapshotWithFields(map[string]Value{
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
 				"age": floatValue(17.5),
-			})}},
+			}})}},
 			want: true,
 		},
 		{
@@ -181,7 +181,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 				refField:       "missing",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: other}},
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(other)}},
 			want:     false,
 		},
 		{
@@ -193,16 +193,16 @@ func TestConstraintComparisonMatches(t *testing.T) {
 				refField:       "age",
 			},
 			snapshot: fact,
-			bindings: []conditionMatch{{fact: factSnapshotWithFields(map[string]Value{
+			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
 				"age": stringValue("18"),
-			})}},
+			}})}},
 			want: false,
 		},
 	}
 
 	for _, tc := range joinTests {
 		t.Run("join/"+tc.name, func(t *testing.T) {
-			got, err := tc.constraint.matches(tc.snapshot, tc.bindings)
+			got, err := tc.constraint.matches(newConditionFactRefFromSnapshot(tc.snapshot), tc.bindings)
 			if err != nil {
 				t.Fatalf("matches: %v", err)
 			}

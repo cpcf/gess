@@ -179,7 +179,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 		}, nil
 }
 
-func (c compiledFieldConstraint) matches(fact FactSnapshot) bool {
+func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
 	value, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
 	switch c.operator {
 	case FieldConstraintOpExists:

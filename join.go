@@ -210,7 +210,7 @@ func compileJoinConstraintSpec(
 		}, nil
 }
 
-func (c compiledJoinConstraint) matches(fact FactSnapshot, bindings []conditionMatch) (bool, error) {
+func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []conditionMatch) (bool, error) {
 	if c.refBindingSlot < 0 {
 		return false, fmt.Errorf("%w: malformed join binding slot %d", ErrMatcher, c.refBindingSlot)
 	}

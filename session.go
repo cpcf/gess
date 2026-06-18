@@ -1176,7 +1176,7 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(fact *workingFact, origin 
 	}
 	snapshot := fact.detachedSnapshot()
 	s.rete.insertAlphaFactGenerated(fact, snapshot, span)
-	return s.rete.insertBetaFactGenerated(fact, snapshot, origin, span)
+	return s.rete.insertBetaFactGenerated(fact, origin, span)
 }
 
 func (s *Session) updateReteAlphaAfterRetract(fact FactSnapshot) reteAgendaDelta {

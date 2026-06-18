@@ -30,6 +30,18 @@ type FactSnapshot struct {
 	support       FactSupportProvenance
 }
 
+type conditionFactRef struct {
+	id          FactID
+	name        string
+	templateKey TemplateKey
+	version     FactVersion
+	recency     Recency
+	generation  Generation
+	fields      Fields
+	fieldSlots  []factSlot
+	fieldSpecs  []FieldSpec
+}
+
 func (f FactSnapshot) ID() FactID {
 	return f.id
 }
@@ -93,6 +105,127 @@ func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
 
 func (f FactSnapshot) Support() FactSupportProvenance {
 	return f.support
+}
+
+func newConditionFactRefFromSnapshot(snapshot FactSnapshot) conditionFactRef {
+	return conditionFactRef{
+		id:          snapshot.id,
+		name:        snapshot.name,
+		templateKey: snapshot.templateKey,
+		version:     snapshot.version,
+		recency:     snapshot.recency,
+		generation:  snapshot.generation,
+		fields:      snapshot.fields,
+		fieldSlots:  snapshot.fieldSlots,
+		fieldSpecs:  snapshot.fieldSpecs,
+	}
+}
+
+func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
+	if fact == nil {
+		return conditionFactRef{}
+	}
+	return conditionFactRef{
+		id:          fact.id,
+		name:        fact.name,
+		templateKey: fact.templateKey,
+		version:     fact.version,
+		recency:     fact.recency,
+		generation:  fact.generation,
+		fieldSlots:  fact.fieldSlots,
+		fieldSpecs:  fact.fieldSpecs,
+	}
+}
+
+func (f conditionFactRef) ID() FactID {
+	return f.id
+}
+
+func (f conditionFactRef) Name() string {
+	return f.name
+}
+
+func (f conditionFactRef) TemplateKey() TemplateKey {
+	return f.templateKey
+}
+
+func (f conditionFactRef) Version() FactVersion {
+	return f.version
+}
+
+func (f conditionFactRef) Recency() Recency {
+	return f.recency
+}
+
+func (f conditionFactRef) Generation() Generation {
+	return f.generation
+}
+
+func (f conditionFactRef) compiledFieldValue(field string, slot int) (Value, bool) {
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	if f.fields != nil {
+		value, ok := f.fields[field]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	return Value{}, false
+}
+
+func (f conditionFactRef) Fields() Fields {
+	if f.fields != nil {
+		return cloneFields(f.fields)
+	}
+	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+func (f conditionFactRef) Field(name string) (Value, bool) {
+	value, ok := f.compiledFieldValue(name, -1)
+	if !ok {
+		return Value{}, false
+	}
+	return cloneValue(value), true
+}
+
+func (f conditionFactRef) FieldPresence(field string) (FieldPresence, bool) {
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		return f.fieldSlots[slot].presence.fieldPresence(), true
+	}
+	return FieldPresence(""), false
+}
+
+func (f conditionFactRef) FieldPresenceMap() map[string]FieldPresence {
+	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+func (f conditionFactRef) snapshot() FactSnapshot {
+	return FactSnapshot{
+		id:          f.id,
+		name:        f.name,
+		templateKey: f.templateKey,
+		version:     f.version,
+		recency:     f.recency,
+		generation:  f.generation,
+		fields:      cloneFields(f.fields),
+		fieldSlots:  cloneFactSlots(f.fieldSlots),
+		fieldSpecs:  f.fieldSpecs,
+	}
+}
+
+func (f conditionFactRef) fieldSlot(name string) (int, bool) {
+	for i, spec := range f.fieldSpecs {
+		if spec.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
 }
 
 type workingFact struct {

@@ -250,25 +250,25 @@ func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounter
 	return r.insertBetaFactWithOrigin(fact, mutationOrigin{}, span)
 }
 
-func (r *reteRuntime) insertBetaFactGenerated(fact *workingFact, snapshot FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
+func (r *reteRuntime) insertBetaFactGenerated(fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
 	if r == nil || r.beta == nil || fact == nil {
 		return reteAgendaDelta{}
 	}
 	if r.supportsIncrementalAgenda() {
 		if routes, routed := r.plan.betaConditionRoutesForTemplateKey(fact.templateKey); routed {
-			if delta, ok := r.beta.insertFactForConditionRoutesGenerated(fact, snapshot, routes, span); ok {
+			if delta, ok := r.beta.insertFactForConditionRoutesGenerated(fact, routes, span); ok {
 				delta.supported = delta.supported && r.supportsIncrementalAgenda()
 				return delta
 			}
 		}
 		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.templateKey); routed {
-			if delta, ok := r.beta.insertFactForRulesGenerated(fact, snapshot, ruleRevisionIDs, span); ok {
+			if delta, ok := r.beta.insertFactForRulesGenerated(fact, ruleRevisionIDs, span); ok {
 				delta.supported = delta.supported && r.supportsIncrementalAgenda()
 				return delta
 			}
 		}
 	}
-	delta := r.beta.insertFactGenerated(fact, snapshot, span)
+	delta := r.beta.insertFactGenerated(fact, span)
 	delta.supported = delta.supported && r.supportsIncrementalAgenda()
 	return delta
 }
@@ -1038,8 +1038,9 @@ func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {
 	default:
 		return false
 	}
+	ref := newConditionFactRefFromSnapshot(fact)
 	for _, constraint := range p.constraints {
-		if !constraint.matches(fact) {
+		if !constraint.matches(ref) {
 			return false
 		}
 	}

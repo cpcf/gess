@@ -300,7 +300,7 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterS
 	return delta
 }
 
-func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
+func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
 	if m == nil || m.revision == nil || fact == nil {
 		return reteAgendaDelta{}
 	}
@@ -319,7 +319,7 @@ func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, snapshot FactSna
 			delta.supported = false
 			continue
 		}
-		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, snapshot, span)
+		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, span)
 	}
 	return delta
 }
@@ -355,7 +355,7 @@ func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs [
 	return delta, true
 }
 
-func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, snapshot FactSnapshot, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
 	if m == nil || m.revision == nil || fact == nil {
 		return reteAgendaDelta{}, false
 	}
@@ -381,7 +381,7 @@ func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, snapshot
 		if ruleMemory == nil {
 			return reteAgendaDelta{}, false
 		}
-		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, snapshot, span)
+		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, span)
 	}
 	return delta, true
 }
@@ -425,7 +425,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes 
 	return delta, true
 }
 
-func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact, snapshot FactSnapshot, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
 	if m == nil || m.revision == nil || fact == nil {
 		return reteAgendaDelta{}, false
 	}
@@ -459,7 +459,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact
 			lastVisited = rule.revisionID
 			visited = true
 		}
-		delta.added = ruleMemory.appendInsertedFactDeltaForConditionGenerated(delta.added, rule.revisionID, route.conditionIndex, fact, snapshot, span)
+		delta.added = ruleMemory.appendInsertedFactDeltaForConditionGenerated(delta.added, rule.revisionID, route.conditionIndex, fact, span)
 	}
 	return delta, true
 }
@@ -810,12 +810,12 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDel
 	return out
 }
 
-func (m *reteBetaRuleMemory) appendInsertedFactDeltasGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendInsertedFactDeltasGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact *workingFact, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if m == nil {
 		return out
 	}
 	for conditionIndex, plan := range m.rule.conditionPlans {
-		out = m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, plan, fact, snapshot, span)
+		out = m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, plan, fact, span)
 	}
 	return out
 }
@@ -827,11 +827,11 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltaForCondition(out []reteTermi
 	return m.appendInsertedFactDeltaForConditionPlan(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, span)
 }
 
-func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact *workingFact, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.rule.conditionPlans) {
 		return out
 	}
-	return m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, snapshot, span)
+	return m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, span)
 }
 
 func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlan(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
@@ -851,11 +851,11 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlan(out []reteT
 	return m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
 }
 
-func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlanGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlanGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact *workingFact, span *propagationCounterSpan) []reteTerminalTokenDelta {
 	if span != nil {
 		span.recordConditionPlanTested()
 	}
-	match, ok, err := betaConditionMatchWorking(plan, fact, snapshot)
+	match, ok, err := betaConditionMatchWorking(plan, fact)
 	if err != nil || !ok {
 		return out
 	}
@@ -1422,21 +1422,22 @@ func (m *reteBetaRuleMemory) rebuildPrefixIndex(conditionIndex int) {
 }
 
 func betaConditionMatch(plan compiledConditionPlan, fact FactSnapshot) (conditionMatch, bool, error) {
-	if !plan.matchesFact(fact) {
+	ref := newConditionFactRefFromSnapshot(fact)
+	if !plan.matchesFact(ref) {
 		return conditionMatch{}, false, nil
 	}
-	ok, err := plan.matchesConstraints(nil, fact)
+	ok, err := plan.matchesConstraints(nil, ref)
 	if err != nil || !ok {
 		return conditionMatch{}, false, err
 	}
 	return conditionMatch{
 		conditionID: plan.id,
 		bindingSlot: plan.bindingSlot,
-		fact:        fact,
+		fact:        ref,
 	}, true, nil
 }
 
-func betaConditionMatchWorking(plan compiledConditionPlan, fact *workingFact, snapshot FactSnapshot) (conditionMatch, bool, error) {
+func betaConditionMatchWorking(plan compiledConditionPlan, fact *workingFact) (conditionMatch, bool, error) {
 	if !plan.matchesFactWorking(fact) {
 		return conditionMatch{}, false, nil
 	}
@@ -1447,7 +1448,7 @@ func betaConditionMatchWorking(plan compiledConditionPlan, fact *workingFact, sn
 	return conditionMatch{
 		conditionID: plan.id,
 		bindingSlot: plan.bindingSlot,
-		fact:        snapshot,
+		fact:        newConditionFactRefFromWorkingFact(fact),
 	}, true, nil
 }
 
@@ -1570,7 +1571,7 @@ func pruneEmptyJoinIndexBuckets[T any](index map[betaJoinKey][]T) {
 	}
 }
 
-func betaJoinKeyForFact(plan compiledConditionPlan, fact FactSnapshot) (betaJoinKey, bool) {
+func betaJoinKeyForFact(plan compiledConditionPlan, fact conditionFactRef) (betaJoinKey, bool) {
 	return betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
 		return fact.compiledFieldValue(join.field, join.fieldSlot)
 	})
