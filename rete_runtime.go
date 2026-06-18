@@ -741,13 +741,15 @@ type reteAlphaConditionMemory struct {
 	indexes map[FactID]int
 }
 
+const reteAlphaConditionIndexReserve = 16
+
 func newReteAlphaMemory(plan reteNetworkPlan) *reteAlphaMemory {
 	memory := &reteAlphaMemory{
 		conditions: make(map[ConditionID]*reteAlphaConditionMemory, plan.stats.conditions),
 	}
 	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
 		memory.conditions[condition.conditionID] = &reteAlphaConditionMemory{
-			indexes: make(map[FactID]int),
+			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
 		}
 	})
 	return memory
@@ -960,7 +962,7 @@ func (m *reteAlphaConditionMemory) upsert(fact FactSnapshot) bool {
 		return false
 	}
 	if m.indexes == nil {
-		m.indexes = make(map[FactID]int)
+		m.indexes = make(map[FactID]int, reteAlphaConditionIndexReserve)
 	}
 	if idx, ok := m.indexes[fact.id]; ok {
 		m.facts[idx] = fact
