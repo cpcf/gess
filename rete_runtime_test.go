@@ -215,6 +215,9 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := len(runtime.plan.betaRoutes[left.Key()]), 2; got != want {
 		t.Fatalf("beta subscribers for %s = %d, want %d", left.Key(), got, want)
 	}
+	if got, want := len(runtime.plan.betaConditionRoutes[left.Key()]), 2; got != want {
+		t.Fatalf("beta condition subscribers for %s = %d, want %d", left.Key(), got, want)
+	}
 	if got, want := runtime.plan.betaRoutes[left.Key()][0], revision.rules["left-a"].revisionID; got != want {
 		t.Fatalf("first beta subscriber for %s = %s, want %s", left.Key(), got, want)
 	}
@@ -275,6 +278,81 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.ConditionPlansTested, 2; got != want {
 		t.Fatalf("public condition plans tested = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "left",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "right",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "paired",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "left",
+				TemplateKey: left.Key(),
+			},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if got, want := len(runtime.plan.betaConditionRoutes[right.Key()]), 1; got != want {
+		t.Fatalf("beta condition subscribers for %s = %d, want %d", right.Key(), got, want)
+	}
+	if got, want := runtime.plan.betaConditionRoutes[right.Key()][0].conditionIndex, 1; got != want {
+		t.Fatalf("right beta condition index = %d, want %d", got, want)
+	}
+
+	session, err := NewSession(revision, WithSessionID("route-beta-condition"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"id": 1})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
+		t.Fatalf("rule memories visited = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionsTested, 1; got != want {
+		t.Fatalf("conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionPlansTested, 1; got != want {
+		t.Fatalf("condition plans tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
+		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
 }
 
@@ -1795,8 +1873,11 @@ func assertBetaPrefixesUseLinkedTokenMatches(t testing.TB, memory *reteBetaRuleM
 			t.Fatalf("prefix %d token size = %d, want %d", i, got, want)
 		}
 		for token := prefix.token; token != nil; token = token.parent {
-			if token.match.fact.ID() != token.entry.factID || token.match.fact.Version() != token.entry.factVersion {
-				t.Fatalf("prefix %d token match = (%q, %d), want (%q, %d)", i, token.match.fact.ID(), token.match.fact.Version(), token.entry.factID, token.entry.factVersion)
+			if token.match.bindingSlot < 0 || token.match.bindingSlot >= len(memory.rule.conditionPlans) {
+				t.Fatalf("prefix %d token binding slot = %d, want valid condition slot", i, token.match.bindingSlot)
+			}
+			if token.match.conditionID != memory.rule.conditionPlans[token.match.bindingSlot].id {
+				t.Fatalf("prefix %d token condition = %q, want %q", i, token.match.conditionID, memory.rule.conditionPlans[token.match.bindingSlot].id)
 			}
 		}
 	}

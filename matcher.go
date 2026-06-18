@@ -39,7 +39,6 @@ type matchCandidate struct {
 
 type matchToken struct {
 	parent           *matchToken
-	entry            bindingTupleEntry
 	match            conditionMatch
 	size             int
 	pathLen          int
@@ -322,7 +321,9 @@ func buildMatchCandidateFromTokenGenerationWithScratch(rule compiledRule, genera
 		factVersions = make([]FactVersion, token.size)
 		path = make([]int, token.pathLen)
 	}
-	fillMatchToken(entries, factIDs, factVersions, path, 0, 0, token)
+	if _, _, err := fillMatchToken(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
+		return matchCandidate{}, err
+	}
 
 	identity := candidateIdentity{
 		generation: generation,
@@ -350,16 +351,23 @@ func buildMatchCandidateFromTokenGenerationWithScratch(rule compiledRule, genera
 	}, nil
 }
 
-func fillMatchToken(entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token *matchToken) (int, int) {
+func fillMatchToken(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token *matchToken) (int, int, error) {
 	if token == nil {
-		return entryIndex, pathIndex
+		return entryIndex, pathIndex, nil
 	}
-	entryIndex, pathIndex = fillMatchToken(entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent)
-	entries[entryIndex] = token.entry
-	factIDs[entryIndex] = token.entry.factID
-	factVersions[entryIndex] = token.entry.factVersion
-	copy(path[pathIndex:], token.entry.conditionPath)
-	return entryIndex + 1, pathIndex + len(token.entry.conditionPath)
+	entryIndex, pathIndex, err := fillMatchToken(rule, entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent)
+	if err != nil {
+		return entryIndex, pathIndex, err
+	}
+	entry, err := bindingTupleEntryForMatch(rule, token.match)
+	if err != nil {
+		return entryIndex, pathIndex, err
+	}
+	entries[entryIndex] = entry
+	factIDs[entryIndex] = entry.factID
+	factVersions[entryIndex] = entry.factVersion
+	copy(path[pathIndex:], entry.conditionPath)
+	return entryIndex + 1, pathIndex + len(entry.conditionPath), nil
 }
 
 func candidateIdentityFor(ruleID RuleID, revisionID RuleRevisionID, scopeHash uint64, generation Generation, bindings []bindingTupleEntry) candidateIdentity {
@@ -587,6 +595,23 @@ func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTu
 	}
 }
 
+func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (bindingTupleEntry, error) {
+	if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) || match.bindingSlot >= len(rule.conditionPlans) {
+		return bindingTupleEntry{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
+	}
+	condition := rule.conditions[match.bindingSlot]
+	plan := rule.conditionPlans[match.bindingSlot]
+	return bindingTupleEntry{
+		binding:        condition.binding,
+		bindingSlot:    match.bindingSlot,
+		conditionOrder: condition.order,
+		conditionID:    condition.id,
+		conditionPath:  plan.path,
+		factID:         match.fact.ID(),
+		factVersion:    match.fact.Version(),
+	}, nil
+}
+
 func newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
 	token := makeMatchToken(parent, entry, match, recency, generation)
 	return &token
@@ -595,7 +620,6 @@ func newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionM
 func makeMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) matchToken {
 	token := matchToken{
 		parent: parent,
-		entry:  entry,
 		match:  match,
 	}
 	if parent == nil {
@@ -626,7 +650,7 @@ func matchTokenEqual(left, right *matchToken) bool {
 		return false
 	}
 	for left != nil && right != nil {
-		if left.entry.factID != right.entry.factID || left.entry.factVersion != right.entry.factVersion {
+		if left.match.fact.ID() != right.match.fact.ID() || left.match.fact.Version() != right.match.fact.Version() {
 			return false
 		}
 		left = left.parent

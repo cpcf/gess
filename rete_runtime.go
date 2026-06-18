@@ -18,12 +18,13 @@ type reteRuntime struct {
 }
 
 type reteNetworkPlan struct {
-	rules         []reteRulePlan
-	alphaRoutes   map[TemplateKey][]reteConditionPlan
-	betaRoutes    map[TemplateKey][]RuleRevisionID
-	unsupported   []reteUnsupportedReason
-	stats         retePlanStats
-	betaSupported bool
+	rules               []reteRulePlan
+	alphaRoutes         map[TemplateKey][]reteConditionPlan
+	betaRoutes          map[TemplateKey][]RuleRevisionID
+	betaConditionRoutes map[TemplateKey][]reteBetaConditionRoute
+	unsupported         []reteUnsupportedReason
+	stats               retePlanStats
+	betaSupported       bool
 }
 
 type reteRulePlan struct {
@@ -67,6 +68,11 @@ type reteBetaPlan struct {
 	bindingSlot    int
 	refBindingSlot int
 	indexKind      joinIndexKind
+}
+
+type reteBetaConditionRoute struct {
+	ruleRevisionID RuleRevisionID
+	conditionIndex int
 }
 
 type reteTerminalPlan struct {
@@ -249,6 +255,12 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 		return reteAgendaDelta{}
 	}
 	if r.supportsIncrementalAgenda() {
+		if routes, routed := r.plan.betaConditionRoutesForTemplateKey(fact.TemplateKey()); routed {
+			if delta, ok := r.beta.insertFactForConditionRoutes(fact, routes, span); ok {
+				delta.supported = delta.supported && r.supportsIncrementalAgenda()
+				return delta
+			}
+		}
 		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
 			if delta, ok := r.beta.insertFactForRules(fact, ruleRevisionIDs, span); ok {
 				delta.supported = delta.supported && r.supportsIncrementalAgenda()
@@ -366,8 +378,8 @@ func countTerminalDeltaCandidateSpace(deltas []reteTerminalTokenDelta) (candidat
 
 func matchTokenGeneration(token *matchToken) Generation {
 	for token != nil {
-		if !token.entry.factID.IsZero() {
-			return token.entry.factID.Generation()
+		if id := token.match.fact.ID(); !id.IsZero() {
+			return id.Generation()
 		}
 		token = token.parent
 	}
@@ -425,9 +437,10 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	}
 
 	plan := reteNetworkPlan{
-		rules:       make([]reteRulePlan, 0, len(revision.ruleOrder)),
-		alphaRoutes: make(map[TemplateKey][]reteConditionPlan),
-		betaRoutes:  make(map[TemplateKey][]RuleRevisionID),
+		rules:               make([]reteRulePlan, 0, len(revision.ruleOrder)),
+		alphaRoutes:         make(map[TemplateKey][]reteConditionPlan),
+		betaRoutes:          make(map[TemplateKey][]RuleRevisionID),
+		betaConditionRoutes: make(map[TemplateKey][]reteBetaConditionRoute),
 	}
 	for _, ruleName := range revision.ruleOrder {
 		rule, ok := revision.rules[ruleName]
@@ -464,7 +477,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 		plan.stats.rules++
 		plan.stats.conditions += len(rulePlan.conditions)
 		plan.stats.alphaNodes += len(rulePlan.conditions)
-		for _, condition := range rulePlan.conditions {
+		for conditionIndex, condition := range rulePlan.conditions {
 			plan.stats.betaNodes += len(condition.beta)
 			if !condition.supported {
 				plan.stats.unsupportedConditions++
@@ -475,6 +488,10 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			if condition.supported && condition.target.kind == conditionTargetTemplateKey {
 				templateKey := condition.target.templateKey
 				plan.alphaRoutes[templateKey] = append(plan.alphaRoutes[templateKey], condition)
+				plan.betaConditionRoutes[templateKey] = append(plan.betaConditionRoutes[templateKey], reteBetaConditionRoute{
+					ruleRevisionID: rule.revisionID,
+					conditionIndex: conditionIndex,
+				})
 				if _, ok := ruleRouteKeys[templateKey]; !ok {
 					plan.betaRoutes[templateKey] = append(plan.betaRoutes[templateKey], rule.revisionID)
 					ruleRouteKeys[templateKey] = struct{}{}
@@ -506,6 +523,13 @@ func (p reteNetworkPlan) betaRoutesForTemplateKey(templateKey TemplateKey) ([]Ru
 		return nil, false
 	}
 	return p.betaRoutes[templateKey], true
+}
+
+func (p reteNetworkPlan) betaConditionRoutesForTemplateKey(templateKey TemplateKey) ([]reteBetaConditionRoute, bool) {
+	if p.betaConditionRoutes == nil {
+		return nil, false
+	}
+	return p.betaConditionRoutes[templateKey], true
 }
 
 func (p reteNetworkPlan) betaRoutesForTemplateKeys(templateKeys ...TemplateKey) ([]RuleRevisionID, bool) {

@@ -1331,8 +1331,8 @@ func fillMatchTokenFacts(factIDs []FactID, factVersions []FactVersion, index int
 		return index
 	}
 	index = fillMatchTokenFacts(factIDs, factVersions, index, token.parent)
-	factIDs[index] = token.entry.factID
-	factVersions[index] = token.entry.factVersion
+	factIDs[index] = token.match.fact.ID()
+	factVersions[index] = token.match.fact.Version()
 	return index + 1
 }
 
@@ -1351,7 +1351,7 @@ func activationTokenFactsEqual(current *activation, token *matchToken, index int
 	if !ok || next >= len(current.factIDs) || next >= len(current.factVersions) {
 		return next, false
 	}
-	if current.factIDs[next] != token.entry.factID || current.factVersions[next] != token.entry.factVersion {
+	if current.factIDs[next] != token.match.fact.ID() || current.factVersions[next] != token.match.fact.Version() {
 		return next, false
 	}
 	return next + 1, true
@@ -1371,7 +1371,7 @@ func terminalTokenFactVersionsEqualAt(left, right *matchToken) bool {
 	if !terminalTokenFactVersionsEqualAt(left.parent, right.parent) {
 		return false
 	}
-	return left.entry.factID == right.entry.factID && left.entry.factVersion == right.entry.factVersion
+	return left.match.fact.ID() == right.match.fact.ID() && left.match.fact.Version() == right.match.fact.Version()
 }
 
 func compareTerminalTokenFacts(left, right *matchToken) int {
@@ -1388,14 +1388,14 @@ func compareTerminalTokenFacts(left, right *matchToken) int {
 	if compare := compareTerminalTokenFacts(left.parent, right.parent); compare != 0 {
 		return compare
 	}
-	if left.entry.factID != right.entry.factID {
-		if factIDLess(left.entry.factID, right.entry.factID) {
+	if left.match.fact.ID() != right.match.fact.ID() {
+		if factIDLess(left.match.fact.ID(), right.match.fact.ID()) {
 			return -1
 		}
 		return 1
 	}
-	if left.entry.factVersion != right.entry.factVersion {
-		if left.entry.factVersion < right.entry.factVersion {
+	if left.match.fact.Version() != right.match.fact.Version() {
+		if left.match.fact.Version() < right.match.fact.Version() {
 			return -1
 		}
 		return 1

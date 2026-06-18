@@ -310,6 +310,45 @@ func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs [
 	return delta, true
 }
 
+func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil {
+		return reteAgendaDelta{}, false
+	}
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if route.conditionIndex < 0 || route.conditionIndex >= len(rule.conditionPlans) {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+
+	delta := reteAgendaDelta{supported: true}
+	var lastVisited RuleRevisionID
+	visited := false
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil && (!visited || lastVisited != rule.revisionID) {
+			span.recordRuleMemoryVisited()
+			lastVisited = rule.revisionID
+			visited = true
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltaForCondition(delta.added, rule.revisionID, route.conditionIndex, fact, span)
+	}
+	return delta, true
+}
+
 func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}
@@ -630,19 +669,30 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDel
 		return out
 	}
 	for conditionIndex, plan := range m.rule.conditionPlans {
-		if span != nil {
-			span.recordConditionPlanTested()
-		}
-		match, ok, err := betaConditionMatch(plan, fact)
-		if err != nil || !ok {
-			continue
-		}
-		if m.addConditionMatch(conditionIndex, match) && span != nil {
-			span.recordConditionMatchAdded()
-		}
-		out = m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
+		out = m.appendInsertedFactDeltaForConditionPlan(out, ruleRevisionID, conditionIndex, plan, fact, span)
 	}
 	return out
+}
+
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForCondition(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.rule.conditionPlans) {
+		return out
+	}
+	return m.appendInsertedFactDeltaForConditionPlan(out, ruleRevisionID, conditionIndex, m.rule.conditionPlans[conditionIndex], fact, span)
+}
+
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlan(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, plan compiledConditionPlan, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if span != nil {
+		span.recordConditionPlanTested()
+	}
+	match, ok, err := betaConditionMatch(plan, fact)
+	if err != nil || !ok {
+		return out
+	}
+	if m.addConditionMatch(conditionIndex, match) && span != nil {
+		span.recordConditionMatchAdded()
+	}
+	return m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
 }
 
 func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int, prefixes []betaPrefix) ([]betaPrefix, error) {
@@ -1117,14 +1167,14 @@ func compareMatchToken(left, right *matchToken) int {
 			return cmp
 		}
 	}
-	if left.entry.factID != right.entry.factID {
-		if factIDLess(left.entry.factID, right.entry.factID) {
+	if left.match.fact.ID() != right.match.fact.ID() {
+		if factIDLess(left.match.fact.ID(), right.match.fact.ID()) {
 			return -1
 		}
 		return 1
 	}
-	if left.entry.factVersion != right.entry.factVersion {
-		if left.entry.factVersion < right.entry.factVersion {
+	if left.match.fact.Version() != right.match.fact.Version() {
+		if left.match.fact.Version() < right.match.fact.Version() {
 			return -1
 		}
 		return 1
@@ -1134,7 +1184,7 @@ func compareMatchToken(left, right *matchToken) int {
 
 func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
 	for token := prefix.token; token != nil; token = token.parent {
-		if token.entry.factID == id {
+		if token.match.fact.ID() == id {
 			return true
 		}
 	}
