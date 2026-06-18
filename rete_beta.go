@@ -12,6 +12,7 @@ type reteBetaMemory struct {
 	revision            *Ruleset
 	rules               map[RuleRevisionID]*reteBetaRuleMemory
 	terminalTokenDeltas []reteTerminalTokenDelta
+	compactionNeeded    bool
 }
 
 type reteAgendaDelta struct {
@@ -35,6 +36,7 @@ type reteBetaRuleMemory struct {
 	tokenBacking      [][]matchToken
 	lookupScratch     [][]conditionMatch
 	prefixScratch     [][]conditionMatch
+	compactionNeeded  bool
 	candidateScratch  candidateScratch
 }
 
@@ -232,6 +234,7 @@ func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) 
 		return
 	}
 	m.clearTerminalTokenDeltas()
+	m.compactionNeeded = false
 	if m.rules == nil {
 		m.rules = make(map[RuleRevisionID]*reteBetaRuleMemory, len(plan.rules))
 	}
@@ -384,6 +387,9 @@ func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 			continue
 		}
 		delta.removed = ruleMemory.appendRemovedFactDeltas(delta.removed, rule.revisionID, id)
+		if ruleMemory.compactionNeeded {
+			m.compactionNeeded = true
+		}
 	}
 	return delta
 }
@@ -412,6 +418,9 @@ func (m *reteBetaMemory) removeFactForRules(id FactID, ruleRevisionIDs []RuleRev
 			return reteAgendaDelta{}, false
 		}
 		delta.removed = ruleMemory.appendRemovedFactDeltas(delta.removed, rule.revisionID, id)
+		if ruleMemory.compactionNeeded {
+			m.compactionNeeded = true
+		}
 	}
 	return delta, true
 }
@@ -514,6 +523,7 @@ func (m *reteBetaRuleMemory) clear() {
 	if m == nil {
 		return
 	}
+	m.compactionNeeded = false
 	for conditionIndex := range m.conditionMatches {
 		for i := range m.conditionMatches[conditionIndex] {
 			m.conditionMatches[conditionIndex][i] = betaConditionMatchRow{}
@@ -952,6 +962,7 @@ func (m *reteBetaRuleMemory) removeConditionMatch(conditionIndex int, id FactID)
 	}
 	row.live = false
 	row.match = conditionMatch{}
+	m.compactionNeeded = true
 }
 
 func (m *reteBetaRuleMemory) addPrefix(conditionIndex int, prefix betaPrefix) bool {
@@ -982,8 +993,82 @@ func (m *reteBetaRuleMemory) removePrefixesContainingFact(conditionIndex int, id
 		row.prefix = betaPrefix{}
 	}
 	if removed {
+		m.compactionNeeded = true
 		m.prefixes[conditionIndex] = rows
 	}
+}
+
+func (m *reteBetaRuleMemory) compactRows() bool {
+	if m == nil || !m.compactionNeeded {
+		return false
+	}
+
+	compacted := false
+	for conditionIndex, rows := range m.conditionMatches {
+		if len(rows) == 0 {
+			continue
+		}
+		liveRows := rows[:0]
+		for i := range rows {
+			row := rows[i]
+			if !row.live {
+				continue
+			}
+			row.id = betaConditionMatchRowID(len(liveRows))
+			liveRows = append(liveRows, row)
+		}
+		if len(liveRows) == len(rows) {
+			continue
+		}
+		compacted = true
+		for i := len(liveRows); i < len(rows); i++ {
+			rows[i] = betaConditionMatchRow{}
+		}
+		m.conditionMatches[conditionIndex] = liveRows
+		m.rebuildConditionIndex(conditionIndex)
+	}
+
+	for conditionIndex, rows := range m.prefixes {
+		if len(rows) == 0 {
+			continue
+		}
+		liveRows := rows[:0]
+		for i := range rows {
+			row := rows[i]
+			if !row.live {
+				continue
+			}
+			row.id = betaPrefixRowID(len(liveRows))
+			liveRows = append(liveRows, row)
+		}
+		if len(liveRows) == len(rows) {
+			continue
+		}
+		compacted = true
+		for i := len(liveRows); i < len(rows); i++ {
+			rows[i] = betaPrefixRow{}
+		}
+		m.prefixes[conditionIndex] = liveRows
+		m.rebuildPrefixIndex(conditionIndex)
+	}
+
+	if compacted {
+		for i := range m.prefixViewScratch {
+			clear(m.prefixViewScratch[i])
+			m.prefixViewScratch[i] = m.prefixViewScratch[i][:0]
+		}
+		for i := range m.lookupScratch {
+			clear(m.lookupScratch[i])
+			m.lookupScratch[i] = m.lookupScratch[i][:0]
+		}
+		for i := range m.prefixScratch {
+			clear(m.prefixScratch[i])
+			m.prefixScratch[i] = m.prefixScratch[i][:0]
+		}
+		m.candidateScratch.reset(0, 0, 0)
+	}
+	m.compactionNeeded = false
+	return compacted
 }
 
 func (m *reteBetaRuleMemory) terminalPrefixes() []betaPrefix {
