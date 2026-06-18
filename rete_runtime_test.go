@@ -775,6 +775,173 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	_ = noise2
 }
 
+func TestReteRuntimeBetaConditionRowsStayAppendStableAcrossRemoveAndReadd(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	noise := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "noise",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
+	})
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "label", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+
+	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+4)
+	for i := range reteAlphaMinimumFacts {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: noise.Key(),
+			Fields:      mustFields(t, map[string]any{"bucket": i}),
+		})
+	}
+	initials = append(initials,
+		SessionInitialFact{
+			TemplateKey: employee.Key(),
+			Fields:      mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}),
+		},
+		SessionInitialFact{
+			TemplateKey: department.Key(),
+			Fields:      mustFields(t, map[string]any{"id": "Engineering", "label": "east"}),
+		},
+		SessionInitialFact{
+			TemplateKey: department.Key(),
+			Fields:      mustFields(t, map[string]any{"id": "Engineering", "label": "west"}),
+		},
+		SessionInitialFact{
+			TemplateKey: department.Key(),
+			Fields:      mustFields(t, map[string]any{"id": "Sales", "label": "south"}),
+		},
+	)
+	session, err := NewSession(revision, WithSessionID("beta-condition-row-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	rule := revision.rules["employee-department"]
+	memory := session.rete.beta.rules[rule.revisionID]
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
+	beforeBucket := append([]betaConditionMatchRowID(nil), memory.conditionIndexes[1][engineeringKey]...)
+	if got, want := len(beforeBucket), 2; got != want {
+		t.Fatalf("engineering bucket size before update = %d, want %d", got, want)
+	}
+	if got, want := len(memory.conditionMatches[1]), 3; got != want {
+		t.Fatalf("condition row count before update = %d, want %d", got, want)
+	}
+	if !memory.conditionMatches[1][0].live || !memory.conditionMatches[1][1].live || !memory.conditionMatches[1][2].live {
+		t.Fatalf("condition row live state before update = %#v", memory.conditionMatches[1])
+	}
+	if added := memory.addConditionMatch(1, memory.conditionMatches[1][0].match); added {
+		t.Fatal("duplicate condition row was added")
+	}
+	if got := len(memory.conditionMatches[1]); got != 3 {
+		t.Fatalf("condition row count after duplicate add = %d, want 3", got)
+	}
+	if got := len(memory.conditionIndexes[1][engineeringKey]); got != 2 {
+		t.Fatalf("engineering bucket size after duplicate add = %d, want 2", got)
+	}
+
+	retractedID := memory.conditionMatches[1][0].match.fact.ID()
+	if _, err := session.Retract(ctx, retractedID); err != nil {
+		t.Fatalf("Retract(%s): %v", retractedID, err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after retract = %#v, want populated memories", session.rete)
+	}
+	if got, want := len(memory.conditionMatches[1]), 3; got != want {
+		t.Fatalf("condition row count after retract = %d, want %d", got, want)
+	}
+	if memory.conditionMatches[1][0].live {
+		t.Fatal("retracted condition row is still live")
+	}
+	if !memory.conditionMatches[1][1].live || !memory.conditionMatches[1][2].live {
+		t.Fatalf("surviving condition rows after retract are not live: %#v", memory.conditionMatches[1])
+	}
+	afterRetractBucket := memory.conditionIndexes[1][engineeringKey]
+	if got, want := len(afterRetractBucket), 2; got != want {
+		t.Fatalf("engineering bucket size after retract = %d, want %d", got, want)
+	}
+	if afterRetractBucket[0] != 0 || afterRetractBucket[1] != 1 {
+		t.Fatalf("engineering bucket row IDs after retract = %#v, want [0 1]", afterRetractBucket)
+	}
+
+	readded, err := session.AssertTemplate(ctx, department.Key(), mustFields(t, map[string]any{"id": "Engineering", "label": "north"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Engineering): %v", err)
+	}
+	if readded.Status != AssertInserted {
+		t.Fatalf("readded status = %v, want %v", readded.Status, AssertInserted)
+	}
+	if got, want := len(memory.conditionMatches[1]), 4; got != want {
+		t.Fatalf("condition row count after re-add = %d, want %d", got, want)
+	}
+	if !memory.conditionMatches[1][3].live {
+		t.Fatal("re-added condition row is not live")
+	}
+	if memory.conditionMatches[1][3].match.fact.ID() != readded.Fact.ID() {
+		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][3].match.fact.ID(), readded.Fact.ID())
+	}
+	afterReaddBucket := memory.conditionIndexes[1][engineeringKey]
+	if got, want := len(afterReaddBucket), 3; got != want {
+		t.Fatalf("engineering bucket size after re-add = %d, want %d", got, want)
+	}
+	if afterReaddBucket[0] != 0 || afterReaddBucket[1] != 1 || afterReaddBucket[2] != 3 {
+		t.Fatalf("engineering bucket row IDs after re-add = %#v, want [0 1 3]", afterReaddBucket)
+	}
+
+	matches, err := memory.matchesForLeftPrefix(1, memory.prefixes[0][0])
+	if err != nil {
+		t.Fatalf("matchesForLeftPrefix: %v", err)
+	}
+	if got, want := len(matches), 2; got != want {
+		t.Fatalf("matches for employee prefix after re-add = %d, want %d", got, want)
+	}
+	if matches[0].fact.ID() != memory.conditionMatches[1][1].match.fact.ID() {
+		t.Fatalf("first surviving match = %s, want %s", matches[0].fact.ID(), memory.conditionMatches[1][1].match.fact.ID())
+	}
+	if matches[1].fact.ID() != readded.Fact.ID() {
+		t.Fatalf("second surviving match = %s, want %s", matches[1].fact.ID(), readded.Fact.ID())
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
 func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
