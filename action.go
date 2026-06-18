@@ -172,6 +172,16 @@ func (c ActionContext) AssertTemplate(templateKey TemplateKey, fields Fields) (A
 	return c.session.insertFactWithContextAndOrigin(c.Context(), "", templateKey, fields, c.mutationOrigin())
 }
 
+// AssertTemplateValues asserts a closed-template fact using values in template
+// field order and returns only whether the effect succeeded. It is intended for
+// generated facts where callers do not need an AssertResult.
+func (c ActionContext) AssertTemplateValues(templateKey TemplateKey, values ...Value) error {
+	if c.session == nil {
+		return ErrClosedSession
+	}
+	return c.session.insertTemplateValuesWithContextAndOrigin(c.Context(), templateKey, values, c.mutationOrigin())
+}
+
 func (c ActionContext) Modify(id FactID, patch FactPatch) (ModifyResult, error) {
 	if c.session == nil {
 		return ModifyResult{Status: ModifyClosed}, ErrClosedSession

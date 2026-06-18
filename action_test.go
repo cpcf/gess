@@ -1372,6 +1372,80 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	}
 }
 
+func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "source",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "generated",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Default: "effect", HasDefault: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		Fn: func(ctx ActionContext) error {
+			return ctx.AssertTemplateValues(generated.Key(), mustValue(t, 7))
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "effect-assert-values-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	fact := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
+	if got, want := fact.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
+		t.Fatalf("generated default kind = %v, want %v", got, want)
+	}
+	internal := session.factsByID[fact.ID()]
+	if internal == nil {
+		t.Fatalf("missing internal generated fact %q", fact.ID())
+	}
+	if internal.dupKey != "" {
+		t.Fatalf("effect assert materialized duplicate key: %q", internal.dupKey)
+	}
+
+	duplicate, err := session.AssertTemplate(ctx, generated.Key(), Fields{"id": mustValue(t, 7)})
+	if err != nil {
+		t.Fatalf("AssertTemplate(generated duplicate): %v", err)
+	}
+	if duplicate.Status != AssertExisting {
+		t.Fatalf("duplicate status = %v, want %v", duplicate.Status, AssertExisting)
+	}
+	if duplicate.DuplicateKey == "" {
+		t.Fatal("duplicate key was not materialized for public duplicate result")
+	}
+	if internal.dupKey != duplicate.DuplicateKey {
+		t.Fatalf("stored duplicate key = %q, want %q", internal.dupKey, duplicate.DuplicateKey)
+	}
+}
+
 func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()

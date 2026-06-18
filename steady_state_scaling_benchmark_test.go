@@ -145,11 +145,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(step.Key(), Fields{
-					"stream": streamValue,
-					"n":      steadyStateIntValue(n + 1),
-				})
-				return err
+				return ctx.AssertTemplateValues(step.Key(), steadyStateIntValue(n+1), streamValue)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -175,13 +171,13 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(signal.Key(), Fields{
-					"stream": streamValue,
-					"n":      steadyStateIntValue(n),
-					"kind":   steadyStateStringValue(steadyStateSignalKind(n)),
-					"score":  steadyStateIntValue(50 + (n % 50)),
-				})
-				return err
+				return ctx.AssertTemplateValues(
+					signal.Key(),
+					steadyStateStringValue(steadyStateSignalKind(n)),
+					steadyStateIntValue(n),
+					steadyStateIntValue(50+(n%50)),
+					streamValue,
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -206,12 +202,12 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(route.Key(), Fields{
-					"stream": streamValue,
-					"n":      steadyStateIntValue(n),
-					"lane":   steadyStateStringValue(steadyStateRouteLane(n)),
-				})
-				return err
+				return ctx.AssertTemplateValues(
+					route.Key(),
+					steadyStateStringValue(steadyStateRouteLane(n)),
+					steadyStateIntValue(n),
+					streamValue,
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -248,12 +244,12 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(decision.Key(), Fields{
-					"stream":  streamValue,
-					"n":       steadyStateIntValue(n),
-					"outcome": steadyStateStringValue(steadyStateDecisionOutcome(n)),
-				})
-				return err
+				return ctx.AssertTemplateValues(
+					decision.Key(),
+					steadyStateIntValue(n),
+					steadyStateStringValue(steadyStateDecisionOutcome(n)),
+					streamValue,
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -297,10 +293,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: doneAction,
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.AssertTemplate(done.Key(), Fields{
-					"stream": streamValue,
-				})
-				return err
+				return ctx.AssertTemplateValues(done.Key(), streamValue)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -322,10 +315,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: completeAction,
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.AssertTemplate(complete.Key(), Fields{
-					"stream": streamValue,
-				})
-				return err
+				return ctx.AssertTemplateValues(complete.Key(), streamValue)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{

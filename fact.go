@@ -398,6 +398,23 @@ func (f *workingFact) detachedSnapshot() FactSnapshot {
 	}
 }
 
+func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
+	if f == nil || f.dupIndex.isZero() {
+		return ""
+	}
+	if f.dupKey != "" {
+		return f.dupKey
+	}
+	template := Template{key: f.templateKey}
+	if revision != nil {
+		if resolved, ok := revision.templateByKey(f.templateKey); ok {
+			template = resolved
+		}
+	}
+	f.dupKey = f.dupIndex.publicKeyForTemplate(f.name, template)
+	return f.dupKey
+}
+
 func (f FactSnapshot) clone() FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
