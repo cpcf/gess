@@ -925,7 +925,7 @@ func TestReteRuntimeBetaConditionRowsStayAppendStableAcrossRemoveAndReadd(t *tes
 		t.Fatalf("engineering bucket row IDs after re-add = %#v, want [0 1 3]", afterReaddBucket)
 	}
 
-	matches, err := memory.matchesForLeftPrefix(1, memory.prefixes[0][0])
+	matches, err := memory.matchesForLeftPrefix(1, memory.prefixes[0][0].prefix)
 	if err != nil {
 		t.Fatalf("matchesForLeftPrefix: %v", err)
 	}
@@ -937,6 +937,74 @@ func TestReteRuntimeBetaConditionRowsStayAppendStableAcrossRemoveAndReadd(t *tes
 	}
 	if matches[1].fact.ID() != readded.Fact.ID() {
 		t.Fatalf("second surviving match = %s, want %s", matches[1].fact.ID(), readded.Fact.ID())
+	}
+
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeBetaPrefixRowsStayAppendStableAcrossRemoveAndReadd(t *testing.T) {
+	ctx := context.Background()
+	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	initials := mustBetaMemoryInitialFacts(t, noiseKey, employeeKey, departmentKey)
+	session, err := NewSession(revision, WithSessionID("beta-prefix-row-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	rule := revision.rules["employee-department"]
+	memory := session.rete.beta.rules[rule.revisionID]
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+
+	engineeringKey := betaJoinKey{kind: betaJoinKeyString, stringValue: "Engineering"}
+	beforeBucket := append([]betaPrefixRowID(nil), memory.prefixIndexes[0][engineeringKey]...)
+	if got, want := len(beforeBucket), 1; got != want {
+		t.Fatalf("engineering prefix bucket size before update = %d, want %d", got, want)
+	}
+	if got, want := len(memory.prefixes[0]), 1; got != want {
+		t.Fatalf("condition 0 prefix row count before update = %d, want %d", got, want)
+	}
+	if !memory.prefixes[0][0].live {
+		t.Fatal("initial prefix row is not live")
+	}
+
+	retractedID := memory.prefixes[0][0].prefix.token.match.fact.ID()
+	if _, err := session.Retract(ctx, retractedID); err != nil {
+		t.Fatalf("Retract(%s): %v", retractedID, err)
+	}
+	if memory.prefixes[0][0].live {
+		t.Fatal("retracted prefix row is still live")
+	}
+	afterRetractBucket := memory.prefixIndexes[0][engineeringKey]
+	if got, want := len(afterRetractBucket), 1; got != want {
+		t.Fatalf("engineering prefix bucket size after retract = %d, want %d", got, want)
+	}
+	if afterRetractBucket[0] != 0 {
+		t.Fatalf("engineering prefix bucket row IDs after retract = %#v, want [0]", afterRetractBucket)
+	}
+
+	readded, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Grace", "dept": "Engineering"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(Grace): %v", err)
+	}
+	if readded.Status != AssertInserted {
+		t.Fatalf("readded status = %v, want %v", readded.Status, AssertInserted)
+	}
+	if got, want := len(memory.prefixes[0]), 2; got != want {
+		t.Fatalf("condition 0 prefix row count after re-add = %d, want %d", got, want)
+	}
+	if memory.prefixes[0][1].id != 1 || !memory.prefixes[0][1].live {
+		t.Fatalf("re-added prefix row = %#v, want live rowID 1", memory.prefixes[0][1])
+	}
+	afterReaddBucket := memory.prefixIndexes[0][engineeringKey]
+	if got, want := len(afterReaddBucket), 2; got != want {
+		t.Fatalf("engineering prefix bucket size after re-add = %d, want %d", got, want)
+	}
+	if afterReaddBucket[0] != 0 || afterReaddBucket[1] != 1 {
+		t.Fatalf("engineering prefix bucket row IDs after re-add = %#v, want [0 1]", afterReaddBucket)
 	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
@@ -1585,11 +1653,11 @@ func TestReteRuntimeBetaJoinLookupReusesScratchAcrossCalls(t *testing.T) {
 		t.Fatal("expected left-side prefixes")
 	}
 
-	matches1, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0])
+	matches1, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0].prefix)
 	if err != nil {
 		t.Fatalf("matchesForLeftPrefix first call: %v", err)
 	}
-	matches2, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0])
+	matches2, err := betaRuleMemory.matchesForLeftPrefix(1, betaRuleMemory.prefixes[0][0].prefix)
 	if err != nil {
 		t.Fatalf("matchesForLeftPrefix second call: %v", err)
 	}
@@ -2032,7 +2100,11 @@ func assertBetaPrefixesUseLinkedTokenMatches(t testing.TB, memory *reteBetaRuleM
 	if conditionIndex < 0 || conditionIndex >= len(memory.prefixes) {
 		t.Fatalf("condition index %d out of range", conditionIndex)
 	}
-	for i, prefix := range memory.prefixes[conditionIndex] {
+	for i, row := range memory.prefixes[conditionIndex] {
+		if !row.live {
+			continue
+		}
+		prefix := row.prefix
 		if prefix.token == nil {
 			t.Fatalf("prefix %d has nil token", i)
 		}
@@ -2058,8 +2130,12 @@ func assertBetaTokenPointersUseBacking(t testing.TB, memory *reteBetaRuleMemory)
 	if len(memory.tokenBacking) == 0 {
 		t.Fatal("beta token backing is empty")
 	}
-	for conditionIndex, prefixes := range memory.prefixes {
-		for i, prefix := range prefixes {
+	for conditionIndex, rows := range memory.prefixes {
+		for i, row := range rows {
+			if !row.live {
+				continue
+			}
+			prefix := row.prefix
 			if prefix.token == nil {
 				t.Fatalf("prefix %d for condition %d has nil token", i, conditionIndex)
 			}
