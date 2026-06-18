@@ -470,6 +470,24 @@ func (m *reteBetaMemory) clearTerminalTokenDeltas() {
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 }
 
+func (m *reteBetaMemory) beginTerminalTokenDelta() reteAgendaDelta {
+	if m == nil {
+		return reteAgendaDelta{}
+	}
+	return reteAgendaDelta{
+		supported: true,
+		added:     m.terminalTokenDeltas[:0],
+	}
+}
+
+func (m *reteBetaMemory) finishTerminalTokenDelta(delta reteAgendaDelta) reteAgendaDelta {
+	if m == nil {
+		return delta
+	}
+	m.terminalTokenDeltas = delta.added
+	return delta
+}
+
 func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, source factSource, rule compiledRule, alphaSource alphaFactSource) ([]matchCandidate, error) {
 	if source == nil {
 		return nil, ErrInvalidRuleset
@@ -485,7 +503,7 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterS
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}
 	}
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, ruleName := range m.revision.ruleOrder {
 		if span != nil {
 			span.recordRuleMemoryVisited()
@@ -502,14 +520,14 @@ func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterS
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact, span)
 	}
-	return delta
+	return m.finishTerminalTokenDelta(delta)
 }
 
 func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
 	if m == nil || m.revision == nil || fact == nil {
 		return reteAgendaDelta{}
 	}
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, ruleName := range m.revision.ruleOrder {
 		if span != nil {
 			span.recordRuleMemoryVisited()
@@ -526,14 +544,14 @@ func (m *reteBetaMemory) insertFactGenerated(fact *workingFact, span *propagatio
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, span)
 	}
-	return delta
+	return m.finishTerminalTokenDelta(delta)
 }
 
 func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}, false
 	}
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, ruleRevisionID := range ruleRevisionIDs {
 		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
 		if !ok {
@@ -557,14 +575,14 @@ func (m *reteBetaMemory) insertFactForRules(fact FactSnapshot, ruleRevisionIDs [
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltas(delta.added, rule.revisionID, fact, span)
 	}
-	return delta, true
+	return m.finishTerminalTokenDelta(delta), true
 }
 
 func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, ruleRevisionIDs []RuleRevisionID, span *propagationCounterSpan) (reteAgendaDelta, bool) {
 	if m == nil || m.revision == nil || fact == nil {
 		return reteAgendaDelta{}, false
 	}
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, ruleRevisionID := range ruleRevisionIDs {
 		rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
 		if !ok {
@@ -588,7 +606,7 @@ func (m *reteBetaMemory) insertFactForRulesGenerated(fact *workingFact, ruleRevi
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltasGenerated(delta.added, rule.revisionID, fact, span)
 	}
-	return delta, true
+	return m.finishTerminalTokenDelta(delta), true
 }
 
 func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
@@ -608,7 +626,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes 
 		}
 	}
 
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	var lastVisited RuleRevisionID
 	visited := false
 	for _, route := range routes {
@@ -627,7 +645,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutes(fact FactSnapshot, routes 
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltaForCondition(delta.added, rule.revisionID, route.conditionIndex, fact, span)
 	}
-	return delta, true
+	return m.finishTerminalTokenDelta(delta), true
 }
 
 func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
@@ -647,7 +665,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact
 		}
 	}
 
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	var lastVisited RuleRevisionID
 	visited := false
 	for _, route := range routes {
@@ -666,7 +684,7 @@ func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact
 		}
 		delta.added = ruleMemory.appendInsertedFactDeltaForConditionGenerated(delta.added, rule.revisionID, route.conditionIndex, fact, span)
 	}
-	return delta, true
+	return m.finishTerminalTokenDelta(delta), true
 }
 
 func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {

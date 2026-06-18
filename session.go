@@ -2452,19 +2452,39 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 		s.markAgendaDirty()
 		return
 	}
-	if s.runAgendaPending {
-		s.runAgendaDeltas = append(s.runAgendaDeltas, delta)
-		return
+	total := len(delta.added) + len(delta.removed)
+	if !s.runAgendaPending {
+		s.runAgendaDeltas = s.runAgendaDeltas[:0]
+		if s.runAgendaBuckets == nil {
+			s.runAgendaBuckets = make(map[candidateIdentity]int, total)
+		} else {
+			clear(s.runAgendaBuckets)
+		}
+		for i := range s.runAgendaStates {
+			s.runAgendaStates[i] = runAgendaDeltaState{}
+		}
+		s.runAgendaStates = slices.Grow(s.runAgendaStates[:0], total)
+		s.runAgendaPending = true
+	} else if s.runAgendaBuckets == nil {
+		s.runAgendaBuckets = make(map[candidateIdentity]int, total)
 	}
-	s.runAgendaDeltas = s.runAgendaDeltas[:0]
-	added := s.runAgendaDelta.added[:0]
-	removed := s.runAgendaDelta.removed[:0]
-	s.runAgendaDelta = reteAgendaDelta{
-		supported: true,
-		added:     append(added, delta.added...),
-		removed:   append(removed, delta.removed...),
+	if err := s.recordRunAgendaDeltaTokens(delta); err != nil {
+		s.markAgendaDirty()
 	}
-	s.runAgendaPending = true
+}
+
+func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {
+	for _, token := range delta.removed {
+		if err := s.recordCoalescedRunAgendaToken(token, false); err != nil {
+			return err
+		}
+	}
+	for _, token := range delta.added {
+		if err := s.recordCoalescedRunAgendaToken(token, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
@@ -2592,49 +2612,11 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	if s == nil || !s.runAgendaPending {
 		return reteAgendaDelta{}, nil
 	}
-	if len(s.runAgendaDeltas) == 0 {
-		return s.runAgendaDelta, nil
-	}
 	if s.revision == nil {
 		return reteAgendaDelta{}, ErrInvalidRuleset
 	}
 
-	total := len(s.runAgendaDelta.added) + len(s.runAgendaDelta.removed)
-	for _, delta := range s.runAgendaDeltas {
-		total += len(delta.added) + len(delta.removed)
-	}
-	if s.runAgendaBuckets == nil {
-		s.runAgendaBuckets = make(map[candidateIdentity]int, total)
-	} else {
-		clear(s.runAgendaBuckets)
-	}
-	for i := range s.runAgendaStates {
-		s.runAgendaStates[i] = runAgendaDeltaState{}
-	}
-	s.runAgendaStates = slices.Grow(s.runAgendaStates[:0], total)
-	processDelta := func(delta reteAgendaDelta) error {
-		for _, token := range delta.removed {
-			if err := s.recordCoalescedRunAgendaToken(token, false); err != nil {
-				return err
-			}
-		}
-		for _, token := range delta.added {
-			if err := s.recordCoalescedRunAgendaToken(token, true); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	if err := processDelta(s.runAgendaDelta); err != nil {
-		return reteAgendaDelta{}, err
-	}
-	for _, delta := range s.runAgendaDeltas {
-		if err := processDelta(delta); err != nil {
-			return reteAgendaDelta{}, err
-		}
-	}
-
+	total := len(s.runAgendaStates)
 	added := slices.Grow(s.runAgendaAdded[:0], total)
 	removed := slices.Grow(s.runAgendaRemoved[:0], total)
 	for i := range s.runAgendaStates {
@@ -2650,15 +2632,6 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	}
 	s.runAgendaAdded = added
 	s.runAgendaRemoved = removed
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordAgendaSort()
-	}
-	sortTerminalTokenDeltas(s.revision, removed)
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordAgendaSort()
-	}
-	sortTerminalTokenDeltas(s.revision, added)
-
 	return reteAgendaDelta{
 		supported: true,
 		added:     added,
