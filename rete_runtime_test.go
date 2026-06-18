@@ -651,7 +651,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	assertBetaTokenPointersUseBacking(t, betaMemory.rules[revision1.rules["employee-department"].revisionID])
 
 	betaRuleMemory := betaMemory.rules[revision1.rules["employee-department"].revisionID]
-	trackedPrefix := betaRuleMemory.terminalPrefixes()[0]
+	trackedPrefix := betaRuleMemory.terminalPrefixRows()[0].prefix
 	trackedToken := trackedPrefix.token
 	trackedTokenPtr := reflect.ValueOf(trackedPrefix.token).Pointer()
 
@@ -662,7 +662,7 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 		t.Fatal("assert rebuilt beta memory, want incremental update")
 	}
 	assertBetaTokenPointersUseBacking(t, betaRuleMemory)
-	updatedPrefix := findBetaPrefixByToken(t, betaRuleMemory.terminalPrefixes(), trackedToken)
+	updatedPrefix := findBetaPrefixRowByToken(t, betaRuleMemory.terminalPrefixRows(), trackedToken).prefix
 	if got := reflect.ValueOf(updatedPrefix.token).Pointer(); got != trackedTokenPtr {
 		t.Fatalf("terminal beta token pointer changed after append: got %#x want %#x", got, trackedTokenPtr)
 	}
@@ -867,9 +867,6 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.conditionMatches[1]), 3; got != want {
 		t.Fatalf("condition row count before update = %d, want %d", got, want)
 	}
-	if !memory.conditionMatches[1][0].live || !memory.conditionMatches[1][1].live || !memory.conditionMatches[1][2].live {
-		t.Fatalf("condition row live state before update = %#v", memory.conditionMatches[1])
-	}
 	if added := memory.addConditionMatch(1, memory.conditionMatches[1][0].match); added {
 		t.Fatal("duplicate condition row was added")
 	}
@@ -890,17 +887,12 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.conditionMatches[1]), 2; got != want {
 		t.Fatalf("condition row count after retract = %d, want %d", got, want)
 	}
-	for i, row := range memory.conditionMatches[1] {
-		if !row.live {
-			t.Fatalf("condition row %d after retract is not live: %#v", i, memory.conditionMatches[1])
-		}
-	}
 	afterRetractBucket := memory.conditionIndexes[1][engineeringKey]
 	if got, want := len(afterRetractBucket), 1; got != want {
 		t.Fatalf("engineering bucket size after retract = %d, want %d", got, want)
 	}
-	if afterRetractBucket[0] != 0 {
-		t.Fatalf("engineering bucket row IDs after retract = %#v, want [0]", afterRetractBucket)
+	if got, _ := memory.conditionMatches[1][afterRetractBucket[0]].match.fact.compiledFieldValue("id", 0); got.Kind() != ValueString || got.data.(string) != "Engineering" {
+		t.Fatalf("engineering bucket row after retract has id %s, want Engineering", got.String())
 	}
 
 	readded, err := session.AssertTemplate(ctx, department.Key(), mustFields(t, map[string]any{"id": "Engineering", "label": "north"}))
@@ -913,12 +905,6 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.conditionMatches[1]), 3; got != want {
 		t.Fatalf("condition row count after re-add = %d, want %d", got, want)
 	}
-	if got, want := memory.conditionMatches[1][2].id, betaConditionMatchRowID(2); got != want {
-		t.Fatalf("re-added condition row ID = %d, want %d", got, want)
-	}
-	if !memory.conditionMatches[1][2].live {
-		t.Fatal("re-added condition row is not live")
-	}
 	if memory.conditionMatches[1][2].match.fact.ID() != readded.Fact.ID() {
 		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][2].match.fact.ID(), readded.Fact.ID())
 	}
@@ -926,8 +912,8 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(afterReaddBucket), 2; got != want {
 		t.Fatalf("engineering bucket size after re-add = %d, want %d", got, want)
 	}
-	if afterReaddBucket[0] != 0 || afterReaddBucket[1] != 2 {
-		t.Fatalf("engineering bucket row IDs after re-add = %#v, want [0 2]", afterReaddBucket)
+	if !conditionBucketContainsFact(memory, 1, engineeringKey, readded.Fact.ID()) {
+		t.Fatalf("engineering bucket after re-add = %#v, want fact %s", afterReaddBucket, readded.Fact.ID())
 	}
 
 	matches, err := memory.matchesForLeftPrefix(1, memory.prefixes[0][0].prefix)
@@ -937,11 +923,8 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(matches), 2; got != want {
 		t.Fatalf("matches for employee prefix after re-add = %d, want %d", got, want)
 	}
-	if matches[0].fact.ID() != memory.conditionMatches[1][0].match.fact.ID() {
-		t.Fatalf("first surviving match = %s, want %s", matches[0].fact.ID(), memory.conditionMatches[1][0].match.fact.ID())
-	}
-	if matches[1].fact.ID() != readded.Fact.ID() {
-		t.Fatalf("second surviving match = %s, want %s", matches[1].fact.ID(), readded.Fact.ID())
+	if !conditionMatchesContainFact(matches, readded.Fact.ID()) {
+		t.Fatalf("matches after re-add = %#v, want fact %s", matches, readded.Fact.ID())
 	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
@@ -975,10 +958,6 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("condition 0 prefix row count before update = %d, want %d", got, want)
 	}
-	if !memory.prefixes[0][0].live {
-		t.Fatal("initial prefix row is not live")
-	}
-
 	retractedID := memory.prefixes[0][0].prefix.token.match.fact.ID()
 	if _, err := session.Retract(ctx, retractedID); err != nil {
 		t.Fatalf("Retract(%s): %v", retractedID, err)
@@ -1001,8 +980,8 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("condition 0 prefix row count after re-add = %d, want %d", got, want)
 	}
-	if memory.prefixes[0][0].id != 0 || !memory.prefixes[0][0].live {
-		t.Fatalf("re-added prefix row = %#v, want live rowID 0", memory.prefixes[0][0])
+	if memory.prefixes[0][0].id != 0 {
+		t.Fatalf("re-added prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
 	afterReaddBucket := memory.prefixIndexes[0][engineeringKey]
 	if got, want := len(afterReaddBucket), 1; got != want {
@@ -1073,11 +1052,11 @@ func TestReteRuntimeBetaRowsCompactAfterModifyWithoutTerminalRemovals(t *testing
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("condition 0 prefix row count before modify = %d, want %d", got, want)
 	}
-	if memory.conditionMatches[0][0].id != 0 || !memory.conditionMatches[0][0].live {
-		t.Fatalf("initial condition row = %#v, want live rowID 0", memory.conditionMatches[0][0])
+	if memory.conditionMatches[0][0].id != 0 {
+		t.Fatalf("initial condition row = %#v, want rowID 0", memory.conditionMatches[0][0])
 	}
-	if memory.prefixes[0][0].id != 0 || !memory.prefixes[0][0].live {
-		t.Fatalf("initial prefix row = %#v, want live rowID 0", memory.prefixes[0][0])
+	if memory.prefixes[0][0].id != 0 {
+		t.Fatalf("initial prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
 
 	_, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "inactive"})}, mutationOrigin{})
@@ -1093,10 +1072,10 @@ func TestReteRuntimeBetaRowsCompactAfterModifyWithoutTerminalRemovals(t *testing
 		t.Fatal("applyReteAgendaDelta(inactive) unexpectedly skipped")
 	}
 	if got, want := len(memory.conditionMatches[0]), 0; got != want {
-		t.Fatalf("condition 0 row count after compaction = %d, want %d", got, want)
+		t.Fatalf("condition 0 row count after removal = %d, want %d", got, want)
 	}
 	if got, want := len(memory.prefixes[0]), 0; got != want {
-		t.Fatalf("condition 0 prefix row count after compaction = %d, want %d", got, want)
+		t.Fatalf("condition 0 prefix row count after removal = %d, want %d", got, want)
 	}
 	if got, want := len(memory.conditionIndexes[0]), 0; got != want {
 		t.Fatalf("condition 0 index count after compaction = %d, want %d", got, want)
@@ -1115,14 +1094,14 @@ func TestReteRuntimeBetaRowsCompactAfterModifyWithoutTerminalRemovals(t *testing
 	if got, want := len(memory.conditionMatches[0]), 1; got != want {
 		t.Fatalf("condition 0 row count after re-add = %d, want %d", got, want)
 	}
-	if memory.conditionMatches[0][0].id != 0 || !memory.conditionMatches[0][0].live {
-		t.Fatalf("re-added condition row = %#v, want live rowID 0", memory.conditionMatches[0][0])
+	if memory.conditionMatches[0][0].id != 0 {
+		t.Fatalf("re-added condition row = %#v, want rowID 0", memory.conditionMatches[0][0])
 	}
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("condition 0 prefix row count after re-add = %d, want %d", got, want)
 	}
-	if memory.prefixes[0][0].id != 0 || !memory.prefixes[0][0].live {
-		t.Fatalf("re-added prefix row = %#v, want live rowID 0", memory.prefixes[0][0])
+	if memory.prefixes[0][0].id != 0 {
+		t.Fatalf("re-added prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
 	if got, want := len(memory.conditionIndexes[0]), 0; got != want {
 		t.Fatalf("condition 0 index count after re-add = %d, want %d", got, want)
@@ -1196,8 +1175,8 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if got, want := len(memory.conditionMatches[1]), 2; got != want {
 		t.Fatalf("condition row count after department re-add = %d, want %d", got, want)
 	}
-	if memory.conditionMatches[1][1].id != 1 || !memory.conditionMatches[1][1].live {
-		t.Fatalf("re-added condition row = %#v, want live rowID 1", memory.conditionMatches[1][1])
+	if memory.conditionMatches[1][1].id != 1 {
+		t.Fatalf("re-added condition row = %#v, want rowID 1", memory.conditionMatches[1][1])
 	}
 	if memory.conditionMatches[1][1].match.fact.ID() != readdedDepartment.Fact.ID() {
 		t.Fatalf("re-added condition row fact ID = %s, want %s", memory.conditionMatches[1][1].match.fact.ID(), readdedDepartment.Fact.ID())
@@ -1224,8 +1203,8 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("prefix row count after employee re-add = %d, want %d", got, want)
 	}
-	if memory.prefixes[0][0].id != 0 || !memory.prefixes[0][0].live {
-		t.Fatalf("re-added prefix row = %#v, want live rowID 0", memory.prefixes[0][0])
+	if memory.prefixes[0][0].id != 0 {
+		t.Fatalf("re-added prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
 	if memory.prefixes[0][0].prefix.token.match.fact.ID() != readdedEmployee.Fact.ID() {
 		t.Fatalf("re-added prefix row fact ID = %s, want %s", memory.prefixes[0][0].prefix.token.match.fact.ID(), readdedEmployee.Fact.ID())
@@ -2403,9 +2382,6 @@ func assertBetaPrefixesUseLinkedTokenMatches(t testing.TB, memory *reteBetaRuleM
 		t.Fatalf("condition index %d out of range", conditionIndex)
 	}
 	for i, row := range memory.prefixes[conditionIndex] {
-		if !row.live {
-			continue
-		}
 		prefix := row.prefix
 		if prefix.token == nil {
 			t.Fatalf("prefix %d has nil token", i)
@@ -2434,9 +2410,6 @@ func assertBetaTokenPointersUseBacking(t testing.TB, memory *reteBetaRuleMemory)
 	}
 	for conditionIndex, rows := range memory.prefixes {
 		for i, row := range rows {
-			if !row.live {
-				continue
-			}
 			prefix := row.prefix
 			if prefix.token == nil {
 				t.Fatalf("prefix %d for condition %d has nil token", i, conditionIndex)
@@ -2448,15 +2421,37 @@ func assertBetaTokenPointersUseBacking(t testing.TB, memory *reteBetaRuleMemory)
 	}
 }
 
-func findBetaPrefixByToken(t testing.TB, prefixes []betaPrefix, token *matchToken) betaPrefix {
+func findBetaPrefixRowByToken(t testing.TB, prefixes []betaPrefixRow, token *matchToken) betaPrefixRow {
 	t.Helper()
 	for _, prefix := range prefixes {
-		if matchTokenEqual(prefix.token, token) {
+		if matchTokenEqual(prefix.prefix.token, token) {
 			return prefix
 		}
 	}
 	t.Fatalf("did not find beta prefix for token %#v", token)
-	return betaPrefix{}
+	return betaPrefixRow{}
+}
+
+func conditionBucketContainsFact(memory *reteBetaRuleMemory, conditionIndex int, key betaJoinKey, id FactID) bool {
+	if memory == nil || conditionIndex < 0 || conditionIndex >= len(memory.conditionMatches) {
+		return false
+	}
+	for _, rowID := range memory.conditionIndexes[conditionIndex][key] {
+		row := memory.conditionMatchRow(conditionIndex, rowID)
+		if row != nil && row.match.fact.ID() == id {
+			return true
+		}
+	}
+	return false
+}
+
+func conditionMatchesContainFact(matches []conditionMatch, id FactID) bool {
+	for _, match := range matches {
+		if match.fact.ID() == id {
+			return true
+		}
+	}
+	return false
 }
 
 func matchTokenInAnyChunk(token *matchToken, chunks [][]matchToken) bool {

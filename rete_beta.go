@@ -12,7 +12,6 @@ type reteBetaMemory struct {
 	revision            *Ruleset
 	rules               map[RuleRevisionID]*reteBetaRuleMemory
 	terminalTokenDeltas []reteTerminalTokenDelta
-	compactionNeeded    bool
 }
 
 type reteAgendaDelta struct {
@@ -32,11 +31,9 @@ type reteBetaRuleMemory struct {
 	conditionIndexes  []map[betaJoinKey][]betaConditionMatchRowID
 	prefixes          [][]betaPrefixRow
 	prefixIndexes     []map[betaJoinKey][]betaPrefixRowID
-	prefixViewScratch [][]betaPrefix
 	tokenBacking      [][]matchToken
 	lookupScratch     [][]conditionMatch
 	prefixScratch     [][]conditionMatch
-	compactionNeeded  bool
 	candidateScratch  candidateScratch
 }
 
@@ -44,7 +41,6 @@ type betaConditionMatchRowID int
 
 type betaConditionMatchRow struct {
 	id    betaConditionMatchRowID
-	live  bool
 	match conditionMatch
 }
 
@@ -56,7 +52,6 @@ type betaPrefixRowID int
 
 type betaPrefixRow struct {
 	id     betaPrefixRowID
-	live   bool
 	prefix betaPrefix
 }
 
@@ -173,7 +168,7 @@ func (m *reteBetaMemory) matchWithoutSnapshot(ctx context.Context, generation Ge
 			return nil, false, nil
 		}
 
-		candidates, err := collectMatchCandidatesFromPrefixes(ctx, rule, generation, ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
+		candidates, err := collectMatchCandidatesFromPrefixRows(ctx, rule, generation, ruleMemory.terminalPrefixRows(), &ruleMemory.candidateScratch)
 		if err != nil {
 			return nil, false, err
 		}
@@ -214,13 +209,13 @@ func (m *reteBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]rete
 		if ruleMemory == nil {
 			return nil, false, nil
 		}
-		for _, prefix := range ruleMemory.terminalPrefixes() {
-			if prefix.token == nil {
+		for _, row := range ruleMemory.terminalPrefixRows() {
+			if row.prefix.token == nil {
 				continue
 			}
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: rule.revisionID,
-				token:          prefix.token,
+				token:          row.prefix.token,
 			})
 		}
 	}
@@ -234,7 +229,6 @@ func (m *reteBetaMemory) resetFacts(plan reteNetworkPlan, facts []FactSnapshot) 
 		return
 	}
 	m.clearTerminalTokenDeltas()
-	m.compactionNeeded = false
 	if m.rules == nil {
 		m.rules = make(map[RuleRevisionID]*reteBetaRuleMemory, len(plan.rules))
 	}
@@ -273,7 +267,7 @@ func (m *reteBetaMemory) matchRuleCandidates(ctx context.Context, source factSou
 	if ruleMemory == nil {
 		return rule.matchCandidatesWithAlpha(ctx, source, alphaSource)
 	}
-	return collectMatchCandidatesFromPrefixes(ctx, rule, source.sourceGeneration(), ruleMemory.terminalPrefixes(), &ruleMemory.candidateScratch)
+	return collectMatchCandidatesFromPrefixRows(ctx, rule, source.sourceGeneration(), ruleMemory.terminalPrefixRows(), &ruleMemory.candidateScratch)
 }
 
 func (m *reteBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
@@ -481,9 +475,6 @@ func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 			continue
 		}
 		delta.removed = ruleMemory.appendRemovedFactDeltas(delta.removed, rule.revisionID, id)
-		if ruleMemory.compactionNeeded {
-			m.compactionNeeded = true
-		}
 	}
 	return delta
 }
@@ -512,9 +503,6 @@ func (m *reteBetaMemory) removeFactForRules(id FactID, ruleRevisionIDs []RuleRev
 			return reteAgendaDelta{}, false
 		}
 		delta.removed = ruleMemory.appendRemovedFactDeltas(delta.removed, rule.revisionID, id)
-		if ruleMemory.compactionNeeded {
-			m.compactionNeeded = true
-		}
 	}
 	return delta, true
 }
@@ -559,7 +547,6 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 		conditionIndexes:  make([]map[betaJoinKey][]betaConditionMatchRowID, conditions),
 		prefixes:          make([][]betaPrefixRow, conditions),
 		prefixIndexes:     make([]map[betaJoinKey][]betaPrefixRowID, conditions),
-		prefixViewScratch: make([][]betaPrefix, conditions),
 		tokenBacking:      make([][]matchToken, 0, conditions),
 		lookupScratch:     make([][]conditionMatch, conditions),
 		prefixScratch:     make([][]conditionMatch, conditions),
@@ -590,24 +577,14 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 		if conditionIndex == 0 {
 			plan := m.rule.conditionPlans[conditionIndex]
 			for _, row := range matches {
-				if !row.live {
-					continue
-				}
 				match := row.match
 				m.addPrefix(conditionIndex, betaPrefix{
 					token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 				})
 			}
 		} else {
-			prefixes, err := m.joinExistingPrefixes(conditionIndex)
-			if err != nil {
+			if !m.joinExistingPrefixes(conditionIndex) {
 				return
-			}
-			if len(prefixes) == 0 {
-				return
-			}
-			for _, prefix := range prefixes {
-				m.addPrefix(conditionIndex, prefix)
 			}
 		}
 	}
@@ -617,7 +594,6 @@ func (m *reteBetaRuleMemory) clear() {
 	if m == nil {
 		return
 	}
-	m.compactionNeeded = false
 	for conditionIndex := range m.conditionMatches {
 		for i := range m.conditionMatches[conditionIndex] {
 			m.conditionMatches[conditionIndex][i] = betaConditionMatchRow{}
@@ -630,10 +606,6 @@ func (m *reteBetaRuleMemory) clear() {
 		}
 		m.prefixes[conditionIndex] = m.prefixes[conditionIndex][:0]
 		resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
-		for i := range m.prefixViewScratch[conditionIndex] {
-			m.prefixViewScratch[conditionIndex][i] = betaPrefix{}
-		}
-		m.prefixViewScratch[conditionIndex] = m.prefixViewScratch[conditionIndex][:0]
 		for i := range m.prefixScratch[conditionIndex] {
 			m.prefixScratch[conditionIndex][i] = conditionMatch{}
 		}
@@ -709,9 +681,6 @@ func (m *reteBetaRuleMemory) compactTokenBacking() {
 	liveCount := 0
 	for _, rows := range m.prefixes {
 		for _, row := range rows {
-			if !row.live {
-				continue
-			}
 			liveCount += countLiveTokens(row.prefix.token, seen)
 		}
 	}
@@ -780,11 +749,7 @@ func (m *reteBetaRuleMemory) liveTokenUpperBound() int {
 	}
 	count := 0
 	for _, rows := range m.prefixes {
-		for _, row := range rows {
-			if row.live {
-				count++
-			}
-		}
+		count += len(rows)
 	}
 	return count
 }
@@ -868,13 +833,15 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionPlanGenerated(ou
 	return m.appendRightMatchDeltas(out, ruleRevisionID, conditionIndex, match, span)
 }
 
-func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) ([]betaPrefix, error) {
+func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) bool {
 	plan := m.rule.conditionPlans[conditionIndex]
-	out := m.prefixViewScratch[conditionIndex][:0]
-	for _, prefix := range m.livePrefixes(conditionIndex - 1) {
+	start := len(m.prefixes[conditionIndex])
+	for _, prefixRow := range m.prefixes[conditionIndex-1] {
+		prefix := prefixRow.prefix
 		if len(plan.joins) == 0 {
-			for _, match := range m.liveConditionMatches(conditionIndex) {
-				out = append(out, betaPrefix{
+			for _, row := range m.conditionMatches[conditionIndex] {
+				match := row.match
+				m.addPrefix(conditionIndex, betaPrefix{
 					token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 				})
 			}
@@ -886,30 +853,29 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) ([]betaPre
 		}
 		for _, rowID := range m.conditionIndexes[conditionIndex][key] {
 			row := m.conditionMatchRow(conditionIndex, rowID)
-			if row == nil || !row.live {
+			if row == nil {
 				continue
 			}
 			match := row.match
-			out = append(out, betaPrefix{
+			m.addPrefix(conditionIndex, betaPrefix{
 				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 			})
 		}
 	}
-	m.prefixViewScratch[conditionIndex] = out
-	return out, nil
+	return len(m.prefixes[conditionIndex]) != start
 }
 
 func (m *reteBetaRuleMemory) appendRemovedFactDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, id FactID) []reteTerminalTokenDelta {
 	if m == nil {
 		return out
 	}
-	for _, prefix := range m.terminalPrefixes() {
-		if prefix.token == nil || !betaPrefixContainsFact(prefix, id) {
+	for _, row := range m.terminalPrefixRows() {
+		if row.prefix.token == nil || !betaPrefixContainsFact(row.prefix, id) {
 			continue
 		}
 		out = append(out, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
-			token:          prefix.token,
+			token:          row.prefix.token,
 		})
 	}
 	for conditionIndex := range m.conditionMatches {
@@ -931,7 +897,8 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 	}
 
 	if len(plan.joins) == 0 {
-		for _, prefix := range m.livePrefixes(conditionIndex - 1) {
+		for _, row := range m.prefixes[conditionIndex-1] {
+			prefix := row.prefix
 			nextPrefix := betaPrefix{
 				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
@@ -946,7 +913,7 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 	}
 	for _, rowID := range m.prefixIndexes[conditionIndex-1][key] {
 		row := m.prefixRow(conditionIndex-1, rowID)
-		if row == nil || !row.live {
+		if row == nil {
 			continue
 		}
 		prefix := row.prefix
@@ -990,7 +957,8 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 	}
 	plan := m.rule.conditionPlans[nextCondition]
 	if len(plan.joins) == 0 {
-		for _, match := range m.liveConditionMatches(nextCondition) {
+		for _, row := range m.conditionMatches[nextCondition] {
+			match := row.match
 			nextPrefix := betaPrefix{
 				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
@@ -1004,7 +972,7 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 	}
 	for _, rowID := range m.conditionIndexes[nextCondition][key] {
 		row := m.conditionMatchRow(nextCondition, rowID)
-		if row == nil || !row.live {
+		if row == nil {
 			continue
 		}
 		match := row.match
@@ -1048,7 +1016,7 @@ func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix bet
 	indexes := m.conditionIndexes[conditionIndex][key]
 	matches := m.lookupScratch[conditionIndex][:0]
 	for _, rowID := range indexes {
-		if row := m.conditionMatchRow(conditionIndex, rowID); row != nil && row.live {
+		if row := m.conditionMatchRow(conditionIndex, rowID); row != nil {
 			matches = append(matches, row.match)
 		}
 	}
@@ -1057,153 +1025,64 @@ func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix bet
 }
 
 func (m *reteBetaRuleMemory) addConditionMatch(conditionIndex int, match conditionMatch) bool {
-	if rowID, ok := m.findLiveConditionMatchRow(conditionIndex, match.fact.ID()); ok {
+	if rowID, ok := m.findConditionMatchRow(conditionIndex, match.fact.ID()); ok {
 		row := m.conditionMatchRow(conditionIndex, rowID)
 		if row != nil && conditionMatchEqual(row.match, match) {
 			return false
 		}
 		if row != nil {
-			row.live = false
-			row.match = conditionMatch{}
+			m.removeConditionMatchRow(conditionIndex, rowID)
 		}
 	}
 
 	rowID := betaConditionMatchRowID(len(m.conditionMatches[conditionIndex]))
 	rows := append(m.conditionMatches[conditionIndex], betaConditionMatchRow{
 		id:    rowID,
-		live:  true,
 		match: match,
 	})
 	m.conditionMatches[conditionIndex] = rows
-	m.indexConditionMatch(conditionIndex, rowID, match)
+	m.indexConditionMatchRow(conditionIndex, rowID)
 	return true
 }
 
 func (m *reteBetaRuleMemory) removeConditionMatch(conditionIndex int, id FactID) {
-	rowID, ok := m.findLiveConditionMatchRow(conditionIndex, id)
+	rowID, ok := m.findConditionMatchRow(conditionIndex, id)
 	if !ok {
 		return
 	}
-	row := m.conditionMatchRow(conditionIndex, rowID)
-	if row == nil || !row.live {
-		return
-	}
-	row.live = false
-	row.match = conditionMatch{}
-	m.compactionNeeded = true
+	m.removeConditionMatchRow(conditionIndex, rowID)
 }
 
 func (m *reteBetaRuleMemory) addPrefix(conditionIndex int, prefix betaPrefix) bool {
-	if _, ok := m.findLivePrefixRow(conditionIndex, prefix.token); ok {
+	if _, ok := m.findPrefixRow(conditionIndex, prefix.token); ok {
 		return false
 	}
 	rowID := betaPrefixRowID(len(m.prefixes[conditionIndex]))
 	rows := append(m.prefixes[conditionIndex], betaPrefixRow{
 		id:     rowID,
-		live:   true,
 		prefix: prefix,
 	})
 	m.prefixes[conditionIndex] = rows
-	m.indexPrefix(conditionIndex, rowID, prefix)
+	m.indexPrefixRow(conditionIndex, rowID)
 	return true
 }
 
 func (m *reteBetaRuleMemory) removePrefixesContainingFact(conditionIndex int, id FactID) {
 	rows := m.prefixes[conditionIndex]
-	removed := false
-	for i := range rows {
-		row := &rows[i]
-		if !row.live || !betaPrefixContainsFact(row.prefix, id) {
+	for i := len(rows) - 1; i >= 0; i-- {
+		row := rows[i]
+		if !betaPrefixContainsFact(row.prefix, id) {
 			continue
 		}
-		removed = true
-		row.live = false
-		row.prefix = betaPrefix{}
-	}
-	if removed {
-		m.compactionNeeded = true
-		m.prefixes[conditionIndex] = rows
+		m.removePrefixRow(conditionIndex, betaPrefixRowID(i))
 	}
 }
 
-func (m *reteBetaRuleMemory) compactRows() bool {
-	if m == nil || !m.compactionNeeded {
-		return false
-	}
-
-	compacted := false
-	for conditionIndex, rows := range m.conditionMatches {
-		if len(rows) == 0 {
-			continue
-		}
-		liveRows := rows[:0]
-		for i := range rows {
-			row := rows[i]
-			if !row.live {
-				continue
-			}
-			row.id = betaConditionMatchRowID(len(liveRows))
-			liveRows = append(liveRows, row)
-		}
-		if len(liveRows) == len(rows) {
-			continue
-		}
-		compacted = true
-		for i := len(liveRows); i < len(rows); i++ {
-			rows[i] = betaConditionMatchRow{}
-		}
-		m.conditionMatches[conditionIndex] = liveRows
-		m.rebuildConditionIndex(conditionIndex)
-	}
-
-	for conditionIndex, rows := range m.prefixes {
-		if len(rows) == 0 {
-			continue
-		}
-		liveRows := rows[:0]
-		for i := range rows {
-			row := rows[i]
-			if !row.live {
-				continue
-			}
-			row.id = betaPrefixRowID(len(liveRows))
-			liveRows = append(liveRows, row)
-		}
-		if len(liveRows) == len(rows) {
-			continue
-		}
-		compacted = true
-		for i := len(liveRows); i < len(rows); i++ {
-			rows[i] = betaPrefixRow{}
-		}
-		m.prefixes[conditionIndex] = liveRows
-		m.rebuildPrefixIndex(conditionIndex)
-	}
-
-	if compacted {
-		for i := range m.prefixViewScratch {
-			clear(m.prefixViewScratch[i])
-			m.prefixViewScratch[i] = m.prefixViewScratch[i][:0]
-		}
-		for i := range m.lookupScratch {
-			clear(m.lookupScratch[i])
-			m.lookupScratch[i] = m.lookupScratch[i][:0]
-		}
-		for i := range m.prefixScratch {
-			clear(m.prefixScratch[i])
-			m.prefixScratch[i] = m.prefixScratch[i][:0]
-		}
-		m.candidateScratch.reset(0, 0, 0)
-	}
-	m.compactionNeeded = false
-	return compacted
-}
-
-func (m *reteBetaRuleMemory) terminalPrefixes() []betaPrefix {
+func (m *reteBetaRuleMemory) terminalPrefixRows() []betaPrefixRow {
 	if m == nil || len(m.prefixes) == 0 {
 		return nil
 	}
-	return m.livePrefixes(len(m.prefixes) - 1)
+	return m.prefixes[len(m.prefixes)-1]
 }
 
 func (m *reteBetaRuleMemory) prefixRow(conditionIndex int, rowID betaPrefixRowID) *betaPrefixRow {
@@ -1217,36 +1096,18 @@ func (m *reteBetaRuleMemory) prefixRow(conditionIndex int, rowID betaPrefixRowID
 	return &rows[rowID]
 }
 
-func (m *reteBetaRuleMemory) findLivePrefixRow(conditionIndex int, token *matchToken) (betaPrefixRowID, bool) {
+func (m *reteBetaRuleMemory) findPrefixRow(conditionIndex int, token *matchToken) (betaPrefixRowID, bool) {
 	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.prefixes) {
 		return 0, false
 	}
 	rows := m.prefixes[conditionIndex]
 	for i := len(rows) - 1; i >= 0; i-- {
 		row := rows[i]
-		if row.live && matchTokenEqual(row.prefix.token, token) {
+		if matchTokenEqual(row.prefix.token, token) {
 			return betaPrefixRowID(i), true
 		}
 	}
 	return 0, false
-}
-
-func (m *reteBetaRuleMemory) livePrefixes(conditionIndex int) []betaPrefix {
-	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.prefixes) {
-		return nil
-	}
-	rows := m.prefixes[conditionIndex]
-	scratch := m.prefixViewScratch[conditionIndex][:0]
-	for _, row := range rows {
-		if row.live {
-			scratch = append(scratch, row.prefix)
-		}
-	}
-	sort.SliceStable(scratch, func(i, j int) bool {
-		return betaPrefixLess(scratch[i], scratch[j])
-	})
-	m.prefixViewScratch[conditionIndex] = scratch
-	return scratch
 }
 
 func (m *reteBetaRuleMemory) prefixMatches(conditionIndex int, prefix betaPrefix) []conditionMatch {
@@ -1276,14 +1137,14 @@ func (m *reteBetaRuleMemory) conditionMatchRow(conditionIndex int, rowID betaCon
 	return &rows[rowID]
 }
 
-func (m *reteBetaRuleMemory) findLiveConditionMatchRow(conditionIndex int, id FactID) (betaConditionMatchRowID, bool) {
+func (m *reteBetaRuleMemory) findConditionMatchRow(conditionIndex int, id FactID) (betaConditionMatchRowID, bool) {
 	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.conditionMatches) {
 		return 0, false
 	}
 	rows := m.conditionMatches[conditionIndex]
 	for i := len(rows) - 1; i >= 0; i-- {
 		row := rows[i]
-		if row.live && row.match.fact.ID() == id {
+		if row.match.fact.ID() == id {
 			return betaConditionMatchRowID(i), true
 		}
 	}
@@ -1294,15 +1155,13 @@ func (m *reteBetaRuleMemory) liveConditionMatches(conditionIndex int) []conditio
 	rows := m.conditionMatches[conditionIndex]
 	scratch := m.lookupScratch[conditionIndex][:0]
 	for _, row := range rows {
-		if row.live {
-			scratch = append(scratch, row.match)
-		}
+		scratch = append(scratch, row.match)
 	}
 	m.lookupScratch[conditionIndex] = scratch
 	return scratch
 }
 
-func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, generation Generation, prefixes []betaPrefix, scratch *candidateScratch) ([]matchCandidate, error) {
+func collectMatchCandidatesFromPrefixRows(ctx context.Context, rule compiledRule, generation Generation, prefixes []betaPrefixRow, scratch *candidateScratch) ([]matchCandidate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1329,10 +1188,10 @@ func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, 
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if prefix.token == nil {
+		if prefix.prefix.token == nil {
 			continue
 		}
-		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, prefix.token, scratch)
+		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, prefix.prefix.token, scratch)
 		if err != nil {
 			return nil, err
 		}
@@ -1344,27 +1203,38 @@ func collectMatchCandidatesFromPrefixes(ctx context.Context, rule compiledRule, 
 	if scratch != nil {
 		scratch.candidates = candidates
 	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return agendaDeltaCandidateLess(nil, candidates[i], candidates[j])
+	})
 	return candidates, nil
 }
 
-func countPrefixCandidateSpace(prefixes []betaPrefix) (candidateCount, entryCount, pathCount int) {
+func countPrefixCandidateSpace(prefixes []betaPrefixRow) (candidateCount, entryCount, pathCount int) {
 	for _, prefix := range prefixes {
-		if prefix.token == nil {
+		if prefix.prefix.token == nil {
 			continue
 		}
 		candidateCount++
-		entryCount += prefix.token.size
-		pathCount += prefix.token.pathLen
+		entryCount += prefix.prefix.token.size
+		pathCount += prefix.prefix.token.pathLen
 	}
 	return candidateCount, entryCount, pathCount
 }
 
-func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex int, rowID betaConditionMatchRowID, match conditionMatch) {
+func (m *reteBetaRuleMemory) conditionMatchJoinKey(conditionIndex int, match conditionMatch) (betaJoinKey, bool) {
 	plan := m.rule.conditionPlans[conditionIndex]
 	if len(plan.joins) == 0 {
+		return betaJoinKey{}, false
+	}
+	return betaJoinKeyForFact(plan, match.fact)
+}
+
+func (m *reteBetaRuleMemory) indexConditionMatchRow(conditionIndex int, rowID betaConditionMatchRowID) {
+	row := m.conditionMatchRow(conditionIndex, rowID)
+	if row == nil {
 		return
 	}
-	key, ok := betaJoinKeyForFact(plan, match.fact)
+	key, ok := m.conditionMatchJoinKey(conditionIndex, row.match)
 	if !ok {
 		return
 	}
@@ -1374,51 +1244,154 @@ func (m *reteBetaRuleMemory) indexConditionMatch(conditionIndex int, rowID betaC
 	m.conditionIndexes[conditionIndex][key] = append(m.conditionIndexes[conditionIndex][key], rowID)
 }
 
-func (m *reteBetaRuleMemory) rebuildConditionIndex(conditionIndex int) {
-	if m.conditionIndexes[conditionIndex] == nil {
-		m.conditionIndexes[conditionIndex] = make(map[betaJoinKey][]betaConditionMatchRowID)
+func (m *reteBetaRuleMemory) removeConditionMatchRow(conditionIndex int, rowID betaConditionMatchRowID) {
+	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.conditionMatches) || rowID < 0 {
+		return
 	}
-	resetJoinIndexBuckets(m.conditionIndexes[conditionIndex])
-	for i, row := range m.conditionMatches[conditionIndex] {
-		if !row.live {
-			continue
+	rows := m.conditionMatches[conditionIndex]
+	index := int(rowID)
+	if index >= len(rows) {
+		return
+	}
+
+	removed := rows[index]
+	if key, ok := m.conditionMatchJoinKey(conditionIndex, removed.match); ok {
+		m.removeConditionIndexRowID(conditionIndex, key, rowID)
+	}
+
+	last := len(rows) - 1
+	if index != last {
+		moved := rows[last]
+		moved.id = betaConditionMatchRowID(index)
+		rows[index] = moved
+		if key, ok := m.conditionMatchJoinKey(conditionIndex, moved.match); ok {
+			m.replaceConditionIndexRowID(conditionIndex, key, betaConditionMatchRowID(last), moved.id)
 		}
-		m.indexConditionMatch(conditionIndex, betaConditionMatchRowID(i), row.match)
 	}
-	pruneEmptyJoinIndexBuckets(m.conditionIndexes[conditionIndex])
+	rows[last] = betaConditionMatchRow{}
+	m.conditionMatches[conditionIndex] = rows[:last]
+	clear(m.lookupScratch[conditionIndex])
+	m.lookupScratch[conditionIndex] = m.lookupScratch[conditionIndex][:0]
 }
 
-func (m *reteBetaRuleMemory) indexPrefix(conditionIndex int, prefixIndex betaPrefixRowID, prefix betaPrefix) {
+func (m *reteBetaRuleMemory) prefixJoinKey(conditionIndex int, prefix betaPrefix) (betaJoinKey, bool) {
 	nextCondition := conditionIndex + 1
 	if nextCondition >= len(m.rule.conditionPlans) {
-		return
+		return betaJoinKey{}, false
 	}
 	nextPlan := m.rule.conditionPlans[nextCondition]
 	if len(nextPlan.joins) == 0 {
+		return betaJoinKey{}, false
+	}
+	return betaJoinKeyForPrefix(nextPlan, m.prefixMatches(nextCondition, prefix))
+}
+
+func (m *reteBetaRuleMemory) indexPrefixRow(conditionIndex int, rowID betaPrefixRowID) {
+	row := m.prefixRow(conditionIndex, rowID)
+	if row == nil {
 		return
 	}
-	key, ok := betaJoinKeyForPrefix(nextPlan, m.prefixMatches(nextCondition, prefix))
+	key, ok := m.prefixJoinKey(conditionIndex, row.prefix)
 	if !ok {
 		return
 	}
 	if m.prefixIndexes[conditionIndex] == nil {
 		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey][]betaPrefixRowID)
 	}
-	m.prefixIndexes[conditionIndex][key] = append(m.prefixIndexes[conditionIndex][key], prefixIndex)
+	m.prefixIndexes[conditionIndex][key] = append(m.prefixIndexes[conditionIndex][key], rowID)
 }
 
-func (m *reteBetaRuleMemory) rebuildPrefixIndex(conditionIndex int) {
-	if m.prefixIndexes[conditionIndex] == nil {
-		m.prefixIndexes[conditionIndex] = make(map[betaJoinKey][]betaPrefixRowID)
+func (m *reteBetaRuleMemory) removePrefixRow(conditionIndex int, rowID betaPrefixRowID) {
+	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.prefixes) || rowID < 0 {
+		return
 	}
-	resetJoinIndexBuckets(m.prefixIndexes[conditionIndex])
-	for i, row := range m.prefixes[conditionIndex] {
-		if !row.live {
+	rows := m.prefixes[conditionIndex]
+	index := int(rowID)
+	if index >= len(rows) {
+		return
+	}
+
+	removed := rows[index]
+	if key, ok := m.prefixJoinKey(conditionIndex, removed.prefix); ok {
+		m.removePrefixIndexRowID(conditionIndex, key, rowID)
+	}
+
+	last := len(rows) - 1
+	if index != last {
+		moved := rows[last]
+		moved.id = betaPrefixRowID(index)
+		rows[index] = moved
+		if key, ok := m.prefixJoinKey(conditionIndex, moved.prefix); ok {
+			m.replacePrefixIndexRowID(conditionIndex, key, betaPrefixRowID(last), moved.id)
+		}
+	}
+	rows[last] = betaPrefixRow{}
+	m.prefixes[conditionIndex] = rows[:last]
+	clear(m.prefixScratch[conditionIndex])
+	m.prefixScratch[conditionIndex] = m.prefixScratch[conditionIndex][:0]
+	m.candidateScratch.reset(0, 0, 0)
+}
+
+func (m *reteBetaRuleMemory) removeConditionIndexRowID(conditionIndex int, key betaJoinKey, rowID betaConditionMatchRowID) {
+	index := m.conditionIndexes[conditionIndex]
+	bucket := index[key]
+	for i, current := range bucket {
+		if current != rowID {
 			continue
 		}
-		m.indexPrefix(conditionIndex, betaPrefixRowID(i), row.prefix)
+		last := len(bucket) - 1
+		bucket[i] = bucket[last]
+		bucket[last] = 0
+		bucket = bucket[:last]
+		if len(bucket) == 0 {
+			delete(index, key)
+		} else {
+			index[key] = bucket
+		}
+		return
 	}
-	pruneEmptyJoinIndexBuckets(m.prefixIndexes[conditionIndex])
+}
+
+func (m *reteBetaRuleMemory) replaceConditionIndexRowID(conditionIndex int, key betaJoinKey, oldID, newID betaConditionMatchRowID) {
+	bucket := m.conditionIndexes[conditionIndex][key]
+	for i, current := range bucket {
+		if current == oldID {
+			bucket[i] = newID
+			m.conditionIndexes[conditionIndex][key] = bucket
+			return
+		}
+	}
+}
+
+func (m *reteBetaRuleMemory) removePrefixIndexRowID(conditionIndex int, key betaJoinKey, rowID betaPrefixRowID) {
+	index := m.prefixIndexes[conditionIndex]
+	bucket := index[key]
+	for i, current := range bucket {
+		if current != rowID {
+			continue
+		}
+		last := len(bucket) - 1
+		bucket[i] = bucket[last]
+		bucket[last] = 0
+		bucket = bucket[:last]
+		if len(bucket) == 0 {
+			delete(index, key)
+		} else {
+			index[key] = bucket
+		}
+		return
+	}
+}
+
+func (m *reteBetaRuleMemory) replacePrefixIndexRowID(conditionIndex int, key betaJoinKey, oldID, newID betaPrefixRowID) {
+	bucket := m.prefixIndexes[conditionIndex][key]
+	for i, current := range bucket {
+		if current == oldID {
+			bucket[i] = newID
+			m.prefixIndexes[conditionIndex][key] = bucket
+			return
+		}
+	}
 }
 
 func betaConditionMatch(plan compiledConditionPlan, fact FactSnapshot) (conditionMatch, bool, error) {

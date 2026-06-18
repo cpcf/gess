@@ -2532,7 +2532,7 @@ func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
 	if s == nil || s.rete == nil || s.rete.beta == nil {
 		return
 	}
-	if len(delta.removed) == 0 && !s.rete.beta.compactionNeeded {
+	if len(delta.removed) == 0 {
 		return
 	}
 
@@ -2545,25 +2545,6 @@ func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
 	}
 	for _, token := range delta.removed {
 		appendRevisionID(token.ruleRevisionID)
-	}
-
-	if s.rete.beta.compactionNeeded && s.revision != nil {
-		for _, ruleName := range s.revision.ruleOrder {
-			rule, ok := s.revision.rules[ruleName]
-			if !ok {
-				continue
-			}
-			ruleMemory := s.rete.beta.rules[rule.revisionID]
-			if ruleMemory != nil && ruleMemory.compactionNeeded {
-				appendRevisionID(rule.revisionID)
-			}
-		}
-	} else if s.rete.beta.compactionNeeded {
-		for revisionID, ruleMemory := range s.rete.beta.rules {
-			if ruleMemory != nil && ruleMemory.compactionNeeded {
-				appendRevisionID(revisionID)
-			}
-		}
 	}
 
 	if len(revisionIDs) == 0 {
@@ -2584,9 +2565,6 @@ func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
 			if ruleMemory == nil {
 				continue
 			}
-			if ruleMemory.compactionNeeded {
-				ruleMemory.compactRows()
-			}
 			ruleMemory.compactTokenBacking()
 			revisionIDs = slices.Delete(revisionIDs, revisionIndex, revisionIndex+1)
 		}
@@ -2597,13 +2575,9 @@ func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
 		if ruleMemory == nil {
 			continue
 		}
-		if ruleMemory.compactionNeeded {
-			ruleMemory.compactRows()
-		}
 		ruleMemory.compactTokenBacking()
 	}
 
-	s.rete.beta.compactionNeeded = false
 	s.rete.beta.clearTerminalTokenDeltas()
 }
 
