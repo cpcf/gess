@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -1052,6 +1053,108 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
+func TestReteRuntimeTokenBackingTrimsDeadChunksAfterReset(t *testing.T) {
+	ctx := context.Background()
+	revision, itemKey := mustTokenBackingRuleset(t)
+	initials := mustTokenBackingInitialFacts(t, itemKey, 300)
+	session, err := NewSession(
+		revision,
+		WithSessionID("token-backing-reset-session"),
+		WithInitialFacts(initials...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	rule := revision.rules["match-item"]
+	memory := session.rete.beta.rules[rule.revisionID]
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+	beforeChunks := len(memory.tokenBacking)
+	if beforeChunks < 4 {
+		t.Fatalf("token backing chunks before reset = %d, want at least 4", beforeChunks)
+	}
+
+	session.initials = session.initials[:1]
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	memory = session.rete.beta.rules[rule.revisionID]
+	afterChunks := len(memory.tokenBacking)
+	if afterChunks >= beforeChunks {
+		t.Fatalf("token backing chunks after reset = %d, want fewer than %d", afterChunks, beforeChunks)
+	}
+	if afterChunks > reteBetaMatchTokenChunkReserve+1 {
+		t.Fatalf("token backing chunks after reset = %d, want at most live chunk plus reserve %d", afterChunks, reteBetaMatchTokenChunkReserve)
+	}
+	assertBetaTokenPointersUseBacking(t, memory)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestReteRuntimeTokenBackingCompactsAfterRepeatedRetract(t *testing.T) {
+	ctx := context.Background()
+	revision, itemKey := mustTokenBackingRuleset(t)
+	initials := mustTokenBackingInitialFacts(t, itemKey, 128)
+	session, err := NewSession(
+		revision,
+		WithSessionID("token-backing-retract-session"),
+		WithInitialFacts(initials...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.beta == nil {
+		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
+	}
+	if result, err := session.Run(ctx); err != nil {
+		t.Fatalf("initial Run: %v", err)
+	} else if result.Status != RunCompleted {
+		t.Fatalf("initial run status = %v, want %v", result.Status, RunCompleted)
+	}
+
+	rule := revision.rules["match-item"]
+	memory := session.rete.beta.rules[rule.revisionID]
+	if memory == nil {
+		t.Fatal("missing beta rule memory")
+	}
+	beforeChunks := len(memory.tokenBacking)
+	if beforeChunks < 2 {
+		t.Fatalf("token backing chunks before retract = %d, want at least 2", beforeChunks)
+	}
+	if _, ok, err := session.rete.beta.currentTerminalTokenDeltas(ctx); err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	} else if !ok {
+		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable")
+	}
+	if len(session.rete.beta.terminalTokenDeltas) == 0 {
+		t.Fatal("terminal token scratch unexpectedly empty before retract")
+	}
+
+	ids := make([]FactID, 0, len(initials))
+	for _, fact := range mustSnapshot(t, ctx, session).Facts() {
+		ids = append(ids, fact.ID())
+	}
+	for i := range 120 {
+		if _, err := session.Retract(ctx, ids[i]); err != nil {
+			t.Fatalf("Retract %d: %v", i, err)
+		}
+	}
+
+	memory = session.rete.beta.rules[rule.revisionID]
+	afterChunks := len(memory.tokenBacking)
+	if afterChunks >= beforeChunks {
+		t.Fatalf("token backing chunks after retract = %d, want fewer than %d", afterChunks, beforeChunks)
+	}
+	if got := len(session.rete.beta.terminalTokenDeltas); got != 0 {
+		t.Fatalf("terminal token scratch len after compaction = %d, want 0", got)
+	}
+	assertBetaTokenPointersUseBacking(t, memory)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
 func TestReteRuntimeBetaJoinLookupReusesScratchAcrossCalls(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
@@ -1364,6 +1467,47 @@ func mustBetaMemoryInitialFacts(t testing.TB, noiseKey, employeeKey, departmentK
 			Fields:      mustFields(t, map[string]any{"id": "Sales"}),
 		},
 	)
+	return initials
+}
+
+func mustTokenBackingRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		Closed:          true,
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-item",
+		Conditions: []RuleConditionSpec{
+			{Binding: "item", TemplateKey: item.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), item.Key()
+}
+
+func mustTokenBackingInitialFacts(t testing.TB, itemKey TemplateKey, count int) []SessionInitialFact {
+	t.Helper()
+
+	initials := make([]SessionInitialFact, 0, count)
+	for i := range count {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: itemKey,
+			Fields: mustFields(t, map[string]any{
+				"id": fmt.Sprintf("item-%03d", i),
+			}),
+		})
+	}
 	return initials
 }
 

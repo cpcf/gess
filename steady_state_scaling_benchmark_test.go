@@ -396,6 +396,80 @@ func mustSeedSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc stead
 	return session
 }
 
+func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
+	ctx := context.Background()
+	tc := steadyStateScalingCase{streams: 2, limit: 16}
+	revision := mustCompileSteadyStateScalingRuleset(t, tc)
+	session := mustSeedSteadyStateScalingSession(t, revision, tc)
+	expectedFired := tc.streams * (4*tc.limit + 5)
+	expectedFacts := tc.streams * (4*(tc.limit+1) + 2)
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != expectedFired {
+		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, expectedFired)
+	}
+	if got := len(session.factsByID); got != expectedFacts {
+		t.Fatalf("final fact count = %d, want %d", got, expectedFacts)
+	}
+	assertSteadyStateFactMix(t, session, tc)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	second, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if second.Status != RunCompleted || second.Fired != 0 {
+		t.Fatalf("second run result = (%v, %d), want (%v, 0)", second.Status, second.Fired, RunCompleted)
+	}
+	assertSteadyStateFactMix(t, session, tc)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+}
+
+func TestSteadyStateScalingResetRunReusesTerminalTokenLifetimeAcrossCycles(t *testing.T) {
+	ctx := context.Background()
+	tc := steadyStateScalingCase{streams: 2, limit: 8}
+	revision := mustCompileSteadyStateScalingRuleset(t, tc)
+	initials := make([]SessionInitialFact, 0, tc.streams)
+	for stream := 0; stream < tc.streams; stream++ {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: TemplateKey("step"),
+			Fields: Fields{
+				"stream": steadyStateIntValue(stream),
+				"n":      steadyStateIntValue(0),
+			},
+		})
+	}
+	session, err := NewSession(revision, WithSessionID("steady-state-reset-cycle"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	expectedFired := tc.streams * (4*tc.limit + 5)
+	expectedFacts := tc.streams * (4*(tc.limit+1) + 2)
+
+	for cycle := range 3 {
+		if cycle > 0 {
+			if _, err := session.Reset(ctx); err != nil {
+				t.Fatalf("Reset cycle %d: %v", cycle, err)
+			}
+		}
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run cycle %d: %v", cycle, err)
+		}
+		if result.Status != RunCompleted || result.Fired != expectedFired {
+			t.Fatalf("run cycle %d result = (%v, %d), want (%v, %d)", cycle, result.Status, result.Fired, RunCompleted, expectedFired)
+		}
+		if got := len(session.factsByID); got != expectedFacts {
+			t.Fatalf("cycle %d final fact count = %d, want %d", cycle, got, expectedFacts)
+		}
+		assertSteadyStateFactMix(t, session, tc)
+		assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	}
+}
+
 func assertSteadyStateFactMix(t testing.TB, session *Session, tc steadyStateScalingCase) {
 	t.Helper()
 

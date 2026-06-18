@@ -975,6 +975,9 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if err != nil {
 		return nil, true, err
 	}
+	if !s.runAgendaPending {
+		s.compactBetaTokenBackingForDelta(delta)
+	}
 	s.agendaReady = true
 	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
@@ -2323,6 +2326,29 @@ func (s *Session) clearRunAgendaDelta() {
 	s.runAgendaAdded = s.runAgendaAdded[:0]
 	s.runAgendaRemoved = s.runAgendaRemoved[:0]
 	s.runAgendaPending = false
+}
+
+func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
+	if s == nil || s.rete == nil || s.rete.beta == nil || len(delta.removed) == 0 {
+		return
+	}
+	var revisionIDs []RuleRevisionID
+	for _, token := range delta.removed {
+		if token.ruleRevisionID == "" {
+			continue
+		}
+		seen := slices.Contains(revisionIDs, token.ruleRevisionID)
+		if !seen {
+			revisionIDs = append(revisionIDs, token.ruleRevisionID)
+		}
+	}
+	for _, revisionID := range revisionIDs {
+		ruleMemory := s.rete.beta.rules[revisionID]
+		if ruleMemory != nil {
+			ruleMemory.compactTokenBacking()
+		}
+	}
+	s.rete.beta.clearTerminalTokenDeltas()
 }
 
 type runAgendaDeltaState struct {
