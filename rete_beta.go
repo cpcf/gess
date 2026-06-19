@@ -2055,16 +2055,16 @@ func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {
 	case ValueNull:
 		return betaJoinKey{kind: betaJoinKeyNull}, true
 	case ValueBool:
-		return betaJoinKey{kind: betaJoinKeyBool, boolValue: value.data.(bool)}, true
+		return betaJoinKey{kind: betaJoinKeyBool, boolValue: value.boolValue}, true
 	case ValueInt:
-		return betaJoinKey{kind: betaJoinKeyInt, intValue: value.data.(int64)}, true
+		return betaJoinKey{kind: betaJoinKeyInt, intValue: value.intValue}, true
 	case ValueFloat:
-		if integer, ok := betaJoinIntFromFloat(value.data.(float64)); ok {
+		if integer, ok := betaJoinIntFromFloat(value.floatValue); ok {
 			return betaJoinKey{kind: betaJoinKeyInt, intValue: integer}, true
 		}
-		return betaJoinKey{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.data.(float64))}, true
+		return betaJoinKey{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.floatValue)}, true
 	case ValueString:
-		return betaJoinKey{kind: betaJoinKeyString, stringValue: value.data.(string)}, true
+		return betaJoinKey{kind: betaJoinKeyString, stringValue: value.stringValue}, true
 	default:
 		return betaJoinKey{}, false
 	}

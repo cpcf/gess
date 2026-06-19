@@ -552,7 +552,7 @@ func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, tria
 				t.Fatalf("action %s claim id kind = %s, want %s", name, idValue.Kind(), ValueString)
 			}
 
-			claimID := idValue.data.(string)
+			claimID := idValue.stringValue
 			if trace != nil {
 				*trace = append(*trace,
 					"FIRED|"+ruleName+"|"+claimID,

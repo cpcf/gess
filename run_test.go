@@ -109,7 +109,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 			if !ok || value.Kind() != ValueString {
 				return ErrInvalidRuleset
 			}
-			recorded = append(recorded, value.data.(string))
+			recorded = append(recorded, value.stringValue)
 			return nil
 		},
 	}); err != nil {

@@ -87,11 +87,11 @@ func TestValueImmutabilityAgainstCallerMapsAndPointers(t *testing.T) {
 	storedPayload := storedFields["payload"]
 	storedPayloadMap := storedPayload.data.(map[string]Value)
 
-	if got := storedPayloadMap["count"].data.(int64); got != 1 {
+	if got := storedPayloadMap["count"].intValue; got != 1 {
 		t.Fatalf("stored map count = %d, want %d", got, 1)
 	}
 	storedTags := storedPayloadMap["tags"].data.([]Value)
-	if got := storedTags[0].data.(string); got != "alpha" {
+	if got := storedTags[0].stringValue; got != "alpha" {
 		t.Fatalf("stored tags[0] = %q, want %q", got, "alpha")
 	}
 }
@@ -215,11 +215,11 @@ func TestValueAndSnapshotImmutabilityNested(t *testing.T) {
 	returned := facts[0].Fields()
 	returnedOuter := returned["outer"].data.(map[string]Value)
 	returnInner := returnedOuter["inner"].data.([]Value)
-	returnInner[0] = Value{kind: ValueString, data: "mutated"}
+	returnInner[0] = newStringValue("mutated")
 
 	facts = mustSnapshot(t, context.Background(), session).Facts()
 	actual := facts[0].Fields()["outer"].data.(map[string]Value)["inner"].data.([]Value)
-	if actual[0].data.(int64) != result.Fact.Fields()["outer"].data.(map[string]Value)["inner"].data.([]Value)[0].data.(int64) {
+	if actual[0].intValue != result.Fact.Fields()["outer"].data.(map[string]Value)["inner"].data.([]Value)[0].intValue {
 		t.Fatalf("snapshot mutation leaked into session snapshot")
 	}
 }
@@ -257,6 +257,40 @@ func TestNumericValuesAndUnsupportedTypes(t *testing.T) {
 	_, err = NewValue(struct{ Name string }{Name: "unsupported"})
 	if !errors.Is(err, ErrUnsupportedValue) {
 		t.Fatalf("NewValue struct error = %v, want ErrUnsupportedValue", err)
+	}
+}
+
+func TestScalarValuesUseTypedStorage(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  any
+	}{
+		{name: "bool", raw: true},
+		{name: "int", raw: 1},
+		{name: "float", raw: 1.5},
+		{name: "string", raw: "Ada"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := NewValue(tc.raw)
+			if err != nil {
+				t.Fatalf("NewValue: %v", err)
+			}
+			if value.data != nil {
+				t.Fatalf("scalar value data = %#v, want nil", value.data)
+			}
+		})
+	}
+
+	list, err := NewValue([]any{"Ada", 1})
+	if err != nil {
+		t.Fatalf("NewValue list: %v", err)
+	}
+	values := list.data.([]Value)
+	for i, value := range values {
+		if value.data != nil {
+			t.Fatalf("list scalar value %d data = %#v, want nil", i, value.data)
+		}
 	}
 }
 

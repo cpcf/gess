@@ -791,7 +791,7 @@ func steadyStateIntField(fact FactSnapshot, field string) (int, error) {
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q", field)
 	}
-	return int(value.data.(int64)), nil
+	return int(value.intValue), nil
 }
 
 func steadyStateBindingInt(ctx ActionContext, binding, field string) (int, error) {
@@ -799,7 +799,7 @@ func steadyStateBindingInt(ctx ActionContext, binding, field string) (int, error
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q on binding %q", field, binding)
 	}
-	return int(value.data.(int64)), nil
+	return int(value.intValue), nil
 }
 
 func steadyStateBindingIntAt(ctx ActionContext, bindingSlot int, field string) (int, error) {
@@ -807,7 +807,7 @@ func steadyStateBindingIntAt(ctx ActionContext, bindingSlot int, field string) (
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q on binding slot %d", field, bindingSlot)
 	}
-	return int(value.data.(int64)), nil
+	return int(value.intValue), nil
 }
 
 func steadyStateBindingIntAtSlot(ctx ActionContext, bindingSlot, fieldSlot int) (int, error) {
@@ -815,15 +815,15 @@ func steadyStateBindingIntAtSlot(ctx ActionContext, bindingSlot, fieldSlot int) 
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field slot %d on binding slot %d", fieldSlot, bindingSlot)
 	}
-	return int(value.data.(int64)), nil
+	return int(value.intValue), nil
 }
 
 func steadyStateIntValue(n int) Value {
-	return Value{kind: ValueInt, data: int64(n)}
+	return newIntValue(int64(n))
 }
 
 func steadyStateStringValue(s string) Value {
-	return Value{kind: ValueString, data: s}
+	return newStringValue(s)
 }
 
 func steadyStateSignalKind(n int) string {

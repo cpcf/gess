@@ -141,7 +141,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 		t.Fatal("expected reading template")
 	}
 	session := mustSession(t, revision, "nan-duplicate-session")
-	fields := Fields{"score": Value{kind: ValueFloat, data: math.NaN()}}
+	fields := Fields{"score": newFloatValue(math.NaN())}
 
 	first, err := session.AssertTemplate(context.Background(), template.Key(), fields)
 	if err != nil {

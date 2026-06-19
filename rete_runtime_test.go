@@ -1060,7 +1060,7 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(afterRetractBucket), 1; got != want {
 		t.Fatalf("engineering bucket size after retract = %d, want %d", got, want)
 	}
-	if got, _ := memory.conditionMatches[1][afterRetractBucket[0]].match.fact.compiledFieldValue("id", 0); got.Kind() != ValueString || got.data.(string) != "Engineering" {
+	if got, _ := memory.conditionMatches[1][afterRetractBucket[0]].match.fact.compiledFieldValue("id", 0); got.Kind() != ValueString || got.stringValue != "Engineering" {
 		t.Fatalf("engineering bucket row after retract has id %s, want Engineering", got.String())
 	}
 

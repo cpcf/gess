@@ -607,11 +607,11 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	}
 	nextFact := mustOnlyFact(t, session)
 	nextLabels := nextFact.fields["labels"].data.([]Value)
-	if got, want := nextLabels[0].data.(string), "stable"; got != want {
+	if got, want := nextLabels[0].stringValue, "stable"; got != want {
 		t.Fatalf("compiled list initial aliased reset fact = %q, want %q", got, want)
 	}
 	nextMeta := nextFact.fields["meta"].data.(map[string]Value)
-	if got, want := nextMeta["tier"].data.(string), "gold"; got != want {
+	if got, want := nextMeta["tier"].stringValue, "gold"; got != want {
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
 	if got := session.resetWorkspace.facts; len(got) == 0 {
@@ -622,7 +622,7 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 
 	snapshotFact := firstSnapshot.Facts()[0]
 	snapshotLabels := snapshotFact.Fields()["labels"].data.([]Value)
-	if got, want := snapshotLabels[0].data.(string), "stable"; got != want {
+	if got, want := snapshotLabels[0].stringValue, "stable"; got != want {
 		t.Fatalf("pre-reset snapshot list changed = %q, want %q", got, want)
 	}
 }
@@ -760,7 +760,7 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 		t.Helper()
 		for i := range session.facts {
 			fact := &session.facts[i]
-			if value, ok := fact.snapshotForRevision(session.revision).Field("id"); ok && value.data.(string) == id {
+			if value, ok := fact.snapshotForRevision(session.revision).Field("id"); ok && value.stringValue == id {
 				return fact
 			}
 		}
@@ -799,7 +799,7 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 		if !ok {
 			t.Fatal("reset snapshot fact missing id")
 		}
-		byID[id.data.(string)] = fact
+		byID[id.stringValue] = fact
 	}
 
 	first, ok := byID["settings-1"]

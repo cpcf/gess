@@ -431,7 +431,7 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 			}
 
 			if trace != nil {
-				id := idValue.data.(string)
+				id := idValue.stringValue
 				*trace = append(*trace,
 					"FIRED|"+ruleName+"|"+id,
 					"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,

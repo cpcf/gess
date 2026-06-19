@@ -25,8 +25,12 @@ const (
 )
 
 type Value struct {
-	kind ValueKind
-	data any
+	kind        ValueKind
+	boolValue   bool
+	intValue    int64
+	floatValue  float64
+	stringValue string
+	data        any
 }
 
 var ErrUnsupportedValue = errors.New("gess: unsupported value")
@@ -35,6 +39,22 @@ const maxExactFloatInt = int64(1 << 53)
 
 func NullValue() Value {
 	return Value{kind: ValueNull}
+}
+
+func newBoolValue(value bool) Value {
+	return Value{kind: ValueBool, boolValue: value}
+}
+
+func newIntValue(value int64) Value {
+	return Value{kind: ValueInt, intValue: value}
+}
+
+func newFloatValue(value float64) Value {
+	return Value{kind: ValueFloat, floatValue: value}
+}
+
+func newStringValue(value string) Value {
+	return Value{kind: ValueString, stringValue: value}
 }
 
 func (v Value) Kind() ValueKind {
@@ -56,7 +76,7 @@ func (v Value) Equal(other Value) bool {
 		if other.Kind() != ValueBool {
 			return false
 		}
-		return v.data.(bool) == other.data.(bool)
+		return v.boolValue == other.boolValue
 	case ValueInt:
 		return numericValuesEqual(v, other)
 	case ValueFloat:
@@ -65,7 +85,7 @@ func (v Value) Equal(other Value) bool {
 		if other.Kind() != ValueString {
 			return false
 		}
-		return v.data.(string) == other.data.(string)
+		return v.stringValue == other.stringValue
 	case ValueList:
 		if other.Kind() != ValueList {
 			return false
@@ -174,35 +194,35 @@ func canonicalValue(raw any) (Value, error) {
 	case nil:
 		return NullValue(), nil
 	case bool:
-		return Value{kind: ValueBool, data: value}, nil
+		return newBoolValue(value), nil
 	case string:
-		return Value{kind: ValueString, data: value}, nil
+		return newStringValue(value), nil
 	case int:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case int8:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case int16:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case int32:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case int64:
-		return Value{kind: ValueInt, data: value}, nil
+		return newIntValue(value), nil
 	case uint:
 		if uint64(value) > uint64(math.MaxInt64) {
 			return Value{}, fmt.Errorf("%w: unsigned integer overflow: %v", ErrUnsupportedValue, value)
 		}
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case uint8:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case uint16:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case uint32:
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case uint64:
 		if value > uint64(math.MaxInt64) {
 			return Value{}, fmt.Errorf("%w: unsigned integer overflow: %v", ErrUnsupportedValue, value)
 		}
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case float32:
 		return canonicalFloat(float64(value))
 	case float64:
@@ -234,19 +254,19 @@ func canonicalValue(raw any) (Value, error) {
 	case []bool:
 		out := make([]Value, 0, len(value))
 		for _, item := range value {
-			out = append(out, Value{kind: ValueBool, data: item})
+			out = append(out, newBoolValue(item))
 		}
 		return Value{kind: ValueList, data: out}, nil
 	case []string:
 		out := make([]Value, 0, len(value))
 		for _, item := range value {
-			out = append(out, Value{kind: ValueString, data: item})
+			out = append(out, newStringValue(item))
 		}
 		return Value{kind: ValueList, data: out}, nil
 	case []int:
 		out := make([]Value, 0, len(value))
 		for _, item := range value {
-			out = append(out, Value{kind: ValueInt, data: int64(item)})
+			out = append(out, newIntValue(int64(item)))
 		}
 		return Value{kind: ValueList, data: out}, nil
 	}
@@ -264,17 +284,17 @@ func canonicalValue(raw any) (Value, error) {
 
 	switch reflected.Kind() {
 	case reflect.Bool:
-		return Value{kind: ValueBool, data: reflected.Bool()}, nil
+		return newBoolValue(reflected.Bool()), nil
 	case reflect.String:
-		return Value{kind: ValueString, data: reflected.String()}, nil
+		return newStringValue(reflected.String()), nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return Value{kind: ValueInt, data: reflected.Int()}, nil
+		return newIntValue(reflected.Int()), nil
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		value := reflected.Uint()
 		if value > uint64(math.MaxInt64) {
 			return Value{}, fmt.Errorf("%w: unsigned integer overflow: %v", ErrUnsupportedValue, value)
 		}
-		return Value{kind: ValueInt, data: int64(value)}, nil
+		return newIntValue(int64(value)), nil
 	case reflect.Float32, reflect.Float64:
 		return canonicalFloat(reflected.Float())
 	case reflect.Map:
@@ -341,7 +361,7 @@ func canonicalFloat(value float64) (Value, error) {
 	if value == 0 {
 		value = 0
 	}
-	return Value{kind: ValueFloat, data: value}, nil
+	return newFloatValue(value), nil
 }
 
 func cloneValue(v Value) Value {
@@ -409,7 +429,7 @@ func encodeValueForDuplicateKey(b *strings.Builder, value Value) {
 		b.WriteString("null")
 	case ValueBool:
 		b.WriteString("bool:")
-		if value.data.(bool) {
+		if value.boolValue {
 			b.WriteString("true")
 		} else {
 			b.WriteString("false")
@@ -420,7 +440,7 @@ func encodeValueForDuplicateKey(b *strings.Builder, value Value) {
 		b.WriteString(numericDuplicateKey(value))
 	case ValueString:
 		b.WriteString("string:")
-		b.WriteString(strconv.Quote(value.data.(string)))
+		b.WriteString(strconv.Quote(value.stringValue))
 	case ValueList:
 		list := value.data.([]Value)
 		b.WriteString("list[")
@@ -456,13 +476,13 @@ func encodeValueForDuplicateKey(b *strings.Builder, value Value) {
 func numericValuesEqual(left, right Value) bool {
 	switch {
 	case left.Kind() == ValueInt && right.Kind() == ValueInt:
-		return left.data.(int64) == right.data.(int64)
+		return left.intValue == right.intValue
 	case left.Kind() == ValueFloat && right.Kind() == ValueFloat:
-		return left.data.(float64) == right.data.(float64)
+		return left.floatValue == right.floatValue
 	case left.Kind() == ValueInt && right.Kind() == ValueFloat:
-		return intEqualsFloat(left.data.(int64), right.data.(float64))
+		return intEqualsFloat(left.intValue, right.floatValue)
 	case left.Kind() == ValueFloat && right.Kind() == ValueInt:
-		return intEqualsFloat(right.data.(int64), left.data.(float64))
+		return intEqualsFloat(right.intValue, left.floatValue)
 	default:
 		return false
 	}
@@ -471,7 +491,7 @@ func numericValuesEqual(left, right Value) bool {
 func compareValues(left, right Value) (int, bool) {
 	switch {
 	case left.Kind() == ValueString && right.Kind() == ValueString:
-		return strings.Compare(left.data.(string), right.data.(string)), true
+		return strings.Compare(left.stringValue, right.stringValue), true
 	case isNumericValue(left) && isNumericValue(right):
 		return compareNumericValues(left, right), true
 	default:
@@ -499,10 +519,10 @@ func compareNumericValues(left, right Value) int {
 }
 
 func compareNumericValuesWithInt(left, right Value) int {
-	leftInt := left.data.(int64)
+	leftInt := left.intValue
 	switch right.Kind() {
 	case ValueInt:
-		rightInt := right.data.(int64)
+		rightInt := right.intValue
 		switch {
 		case leftInt < rightInt:
 			return -1
@@ -512,19 +532,19 @@ func compareNumericValuesWithInt(left, right Value) int {
 			return 0
 		}
 	case ValueFloat:
-		return compareIntAndFloatValues(leftInt, right.data.(float64))
+		return compareIntAndFloatValues(leftInt, right.floatValue)
 	default:
 		return 0
 	}
 }
 
 func compareNumericValuesWithFloat(left, right Value) int {
-	leftFloat := left.data.(float64)
+	leftFloat := left.floatValue
 	switch right.Kind() {
 	case ValueInt:
-		return -compareIntAndFloatValues(right.data.(int64), leftFloat)
+		return -compareIntAndFloatValues(right.intValue, leftFloat)
 	case ValueFloat:
-		rightFloat := right.data.(float64)
+		rightFloat := right.floatValue
 		switch {
 		case leftFloat < rightFloat:
 			return -1
@@ -572,9 +592,9 @@ func intEqualsFloat(integer int64, floating float64) bool {
 func numericDuplicateKey(value Value) string {
 	switch value.Kind() {
 	case ValueInt:
-		return "number:" + strconv.FormatInt(value.data.(int64), 10)
+		return "number:" + strconv.FormatInt(value.intValue, 10)
 	case ValueFloat:
-		floating := value.data.(float64)
+		floating := value.floatValue
 		if math.Trunc(floating) == floating &&
 			floating <= float64(maxExactFloatInt) &&
 			floating >= float64(-maxExactFloatInt) {
@@ -591,14 +611,14 @@ func duplicateKeyValueCapacity(value Value) int {
 	case ValueNull:
 		return len("null")
 	case ValueBool:
-		if value.data.(bool) {
+		if value.boolValue {
 			return len("bool:true")
 		}
 		return len("bool:false")
 	case ValueInt:
-		return len("number:") + int64Len(value.data.(int64))
+		return len("number:") + int64Len(value.intValue)
 	case ValueFloat:
-		floating := value.data.(float64)
+		floating := value.floatValue
 		if math.Trunc(floating) == floating &&
 			floating <= float64(maxExactFloatInt) &&
 			floating >= float64(-maxExactFloatInt) {
@@ -607,7 +627,7 @@ func duplicateKeyValueCapacity(value Value) int {
 		var buf [32]byte
 		return len("number:") + len(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
 	case ValueString:
-		return len("string:") + len(value.data.(string)) + len(`""`) + len(`\u0000`)
+		return len("string:") + len(value.stringValue) + len(`""`) + len(`\u0000`)
 	case ValueList:
 		list := value.data.([]Value)
 		size := len("list[")

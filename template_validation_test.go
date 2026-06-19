@@ -33,8 +33,8 @@ func TestTemplateDefaultsApplyBeforeValidation(t *testing.T) {
 	if status.Kind() != ValueString {
 		t.Fatalf("status kind = %q, want %q", status.Kind(), ValueString)
 	}
-	if status.data != "active" {
-		t.Fatalf("status value = %v, want active", status.data)
+	if status.stringValue != "active" {
+		t.Fatalf("status value = %v, want active", status)
 	}
 
 	presence, ok := result.Fact.FieldPresence("status")
@@ -323,7 +323,7 @@ func TestTemplateDoesNotRetainCallerOwnedDefaultOrAllowedValues(t *testing.T) {
 	}
 
 	body := result.Fact.Fields()["body"].data.(map[string]Value)
-	if got := body["count"].data.(int64); got != 1 {
+	if got := body["count"].intValue; got != 1 {
 		t.Fatalf("default count = %d, want 1", got)
 	}
 }

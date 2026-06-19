@@ -387,14 +387,14 @@ func (s reteGraphAlphaRouteSelector) key() reteGraphAlphaRouteKey {
 func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, bool) {
 	switch value.Kind() {
 	case ValueBool:
-		if value.data.(bool) {
+		if value.boolValue {
 			return reteGraphAlphaRouteValue{kind: ValueBool, bits: 1, valid: true}, true
 		}
 		return reteGraphAlphaRouteValue{kind: ValueBool, valid: true}, true
 	case ValueInt:
-		return reteGraphAlphaRouteValue{kind: ValueInt, bits: value.data.(int64), valid: true}, true
+		return reteGraphAlphaRouteValue{kind: ValueInt, bits: value.intValue, valid: true}, true
 	case ValueString:
-		return reteGraphAlphaRouteValue{kind: ValueString, text: value.data.(string), valid: true}, true
+		return reteGraphAlphaRouteValue{kind: ValueString, text: value.stringValue, valid: true}, true
 	default:
 		return reteGraphAlphaRouteValue{}, false
 	}

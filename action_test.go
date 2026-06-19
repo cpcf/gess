@@ -261,7 +261,7 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 			if !ok {
 				return errors.New("missing person name")
 			}
-			if value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("person name = %v, want Ada", value)
 			}
 			if ctx.bindings.snapshots != nil {
@@ -271,7 +271,7 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 			if !ok {
 				return errors.New("missing person name by field slot")
 			}
-			if value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("person name by field slot = %v, want Ada", value)
 			}
 			if ctx.bindings.snapshots != nil {
@@ -372,7 +372,7 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 				return errors.New("snapshots materialized before scalar read")
 			}
 			value, ok := ctx.BindingScalarValue("person", "name")
-			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
 			}
 			if ctx.bindings.snapshots != nil {
@@ -443,7 +443,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 		Name: "inspect",
 		Fn: func(ctx ActionContext) error {
 			value, ok := ctx.bindingScalarValueAt(0, "name")
-			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("initial name = %v, ok %t, want Ada", value, ok)
 			}
 			if ctx.bindings.snapshots != nil {
@@ -458,7 +458,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 			}
 
 			value, ok = ctx.bindingScalarValueAt(0, "name")
-			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("name after assert = %v, ok %t, want Ada", value, ok)
 			}
 			if ctx.bindings.snapshots != nil {
@@ -554,7 +554,7 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("actionContextForActivation: %v", err)
 	}
-	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); !ok || value.data.(string) != "Ada" {
+	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); !ok || value.stringValue != "Ada" {
 		t.Fatalf("initial scalar value = %v, ok %t, want Ada", value, ok)
 	}
 	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
@@ -618,7 +618,7 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 					if !ok {
 						return errors.New("missing person name")
 					}
-					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+					if value.Kind() != ValueString || value.stringValue != "Ada" {
 						return fmt.Errorf("person name = %v, want Ada", value)
 					}
 					if ctx.bindings.snapshots != nil {
@@ -636,14 +636,14 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 					if !ok {
 						return errors.New("missing frozen person name")
 					}
-					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+					if value.Kind() != ValueString || value.stringValue != "Ada" {
 						return fmt.Errorf("frozen person name = %v, want Ada", value)
 					}
 					value, ok = ctx.bindingScalarValueAt(0, "name")
 					if !ok {
 						return errors.New("missing frozen person name by binding slot")
 					}
-					if value.Kind() != ValueString || value.data.(string) != "Ada" {
+					if value.Kind() != ValueString || value.stringValue != "Ada" {
 						return fmt.Errorf("frozen person name by binding slot = %v, want Ada", value)
 					}
 					return nil
@@ -910,7 +910,7 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 			if ctx.bindings.snapshots != nil {
 				return errors.New("binding snapshots materialized before action read")
 			}
-			if value, ok := ctx.BindingScalarValue("person", "name"); !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+			if value, ok := ctx.BindingScalarValue("person", "name"); !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
 				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
 			}
 			saved = ctx

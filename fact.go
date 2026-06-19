@@ -271,14 +271,14 @@ func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
 		return duplicateScalarKey{kind: duplicateScalarNull}, true
 	case ValueBool:
 		var bits uint64
-		if value.data.(bool) {
+		if value.boolValue {
 			bits = 1
 		}
 		return duplicateScalarKey{kind: duplicateScalarBool, bits: bits}, true
 	case ValueInt:
-		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(value.data.(int64))}, true
+		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(value.intValue)}, true
 	case ValueFloat:
-		floating := value.data.(float64)
+		floating := value.floatValue
 		if math.IsNaN(floating) {
 			return duplicateScalarKey{}, false
 		}
@@ -289,7 +289,7 @@ func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
 		}
 		return duplicateScalarKey{kind: duplicateScalarFloat, bits: math.Float64bits(floating)}, true
 	case ValueString:
-		return duplicateScalarKey{kind: duplicateScalarString, stringValue: value.data.(string)}, true
+		return duplicateScalarKey{kind: duplicateScalarString, stringValue: value.stringValue}, true
 	default:
 		return duplicateScalarKey{}, false
 	}
@@ -300,13 +300,13 @@ func (k duplicateScalarKey) value() Value {
 	case duplicateScalarNull:
 		return NullValue()
 	case duplicateScalarBool:
-		return Value{kind: ValueBool, data: k.bits != 0}
+		return newBoolValue(k.bits != 0)
 	case duplicateScalarInt:
-		return Value{kind: ValueInt, data: int64(k.bits)}
+		return newIntValue(int64(k.bits))
 	case duplicateScalarFloat:
-		return Value{kind: ValueFloat, data: math.Float64frombits(k.bits)}
+		return newFloatValue(math.Float64frombits(k.bits))
 	case duplicateScalarString:
-		return Value{kind: ValueString, data: k.stringValue}
+		return newStringValue(k.stringValue)
 	default:
 		return Value{}
 	}

@@ -214,15 +214,15 @@ func TestConstraintComparisonMatches(t *testing.T) {
 }
 
 func intValue(n int64) Value {
-	return Value{kind: ValueInt, data: n}
+	return newIntValue(n)
 }
 
 func floatValue(n float64) Value {
-	return Value{kind: ValueFloat, data: n}
+	return newFloatValue(n)
 }
 
 func stringValue(s string) Value {
-	return Value{kind: ValueString, data: s}
+	return newStringValue(s)
 }
 
 func factSnapshotWithFields(fields map[string]Value) FactSnapshot {
