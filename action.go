@@ -27,6 +27,8 @@ type ActionContext struct {
 	sessionID      SessionID
 	rulesetID      RulesetID
 	activationID   ActivationID
+	activationKey  candidateIdentityKey
+	activationOrd  uint64
 	ruleID         RuleID
 	ruleRevisionID RuleRevisionID
 	generation     Generation
@@ -41,7 +43,9 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 	out := ActionContext{
 		ctx:            ctx,
 		session:        session,
-		activationID:   activation.activationID(),
+		activationID:   activation.id,
+		activationKey:  activation.identity.key,
+		activationOrd:  activation.publicOrdinal,
 		ruleID:         activation.ruleID,
 		ruleRevisionID: activation.ruleRevisionID,
 		generation:     activation.generation,
@@ -95,7 +99,10 @@ func (c ActionContext) RulesetID() RulesetID {
 }
 
 func (c ActionContext) ActivationID() ActivationID {
-	return c.activationID
+	if !c.activationID.IsZero() {
+		return c.activationID
+	}
+	return activationIDForIdentityKey(c.activationKey, c.activationOrd)
 }
 
 func (c ActionContext) RuleID() RuleID {
@@ -226,9 +233,11 @@ func (c ActionContext) Retract(id FactID) (RetractResult, error) {
 
 func (c ActionContext) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
-		ActivationID:   c.activationID,
-		RuleID:         c.ruleID,
-		RuleRevisionID: c.ruleRevisionID,
+		ActivationID:          c.activationID,
+		RuleID:                c.ruleID,
+		RuleRevisionID:        c.ruleRevisionID,
+		activationIdentityKey: c.activationKey,
+		activationOrdinal:     c.activationOrd,
 	}
 }
 
@@ -241,7 +250,7 @@ func (c ActionContext) materializeAllBindings() error {
 	for i := range c.bindings.len() {
 		if _, ok := c.materializeBindingLocked(i); !ok {
 			entry := c.bindings.entryAt(i)
-			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.activationID)
+			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.ActivationID())
 		}
 	}
 	return nil

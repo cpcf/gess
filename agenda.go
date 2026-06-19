@@ -65,9 +65,11 @@ type activation struct {
 
 func (a activation) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
-		ActivationID:   a.activationID(),
-		RuleID:         a.ruleID,
-		RuleRevisionID: a.ruleRevisionID,
+		ActivationID:          a.id,
+		RuleID:                a.ruleID,
+		RuleRevisionID:        a.ruleRevisionID,
+		activationIdentityKey: a.identity.key,
+		activationOrdinal:     a.publicOrdinal,
 	}
 }
 
@@ -916,6 +918,14 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 }
 
 func (a *agenda) next() (activation, bool) {
+	return a.nextActivation(true)
+}
+
+func (a *agenda) nextInternal() (activation, bool) {
+	return a.nextActivation(false)
+}
+
+func (a *agenda) nextActivation(materializeID bool) (activation, bool) {
 	if a == nil {
 		return activation{}, false
 	}
@@ -929,7 +939,9 @@ func (a *agenda) next() (activation, bool) {
 		}
 		current.status = activationStatusConsumed
 		out := *current
-		out.id = current.ensureActivationID()
+		if materializeID {
+			out.id = current.ensureActivationID()
+		}
 		if current.token.isZero() {
 			out.factIDs = cloneFactIDs(current.factIDs)
 			out.factVersions = cloneFactVersions(current.factVersions)

@@ -115,10 +115,20 @@ type mutationOrigin struct {
 	ActivationID   ActivationID
 	RuleID         RuleID
 	RuleRevisionID RuleRevisionID
+
+	activationIdentityKey candidateIdentityKey
+	activationOrdinal     uint64
 }
 
 func (o mutationOrigin) isZero() bool {
 	return o == (mutationOrigin{})
+}
+
+func (o mutationOrigin) activationID() ActivationID {
+	if !o.ActivationID.IsZero() {
+		return o.ActivationID
+	}
+	return activationIDForIdentityKey(o.activationIdentityKey, o.activationOrdinal)
 }
 
 type MutationDelta struct {

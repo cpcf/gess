@@ -89,7 +89,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			s.mutationQueueMu.Unlock()
 			continue
 		}
-		activation, ok := s.agenda.next()
+		activation, ok := s.agenda.nextInternal()
 		if !ok {
 			s.endRun()
 			s.setRunState(runGuardState{})

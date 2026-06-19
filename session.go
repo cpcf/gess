@@ -508,7 +508,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
-		ActivationID:   origin.ActivationID,
+		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
 		SupportAfter:   snapshot.Support(),
@@ -536,7 +536,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
-			ActivationID:   origin.ActivationID,
+			ActivationID:   origin.activationID(),
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
@@ -589,7 +589,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		delta := MutationDelta{
 			Kind:           MutationAssert,
 			Generation:     s.generation,
-			ActivationID:   origin.ActivationID,
+			ActivationID:   origin.activationID(),
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
 			SupportAfter:   publicSnapshot.Support(),
@@ -609,7 +609,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
-			ActivationID:   origin.ActivationID,
+			ActivationID:   origin.activationID(),
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
@@ -730,7 +730,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	delta := MutationDelta{
 		Kind:           MutationRetract,
 		Generation:     s.generation,
-		ActivationID:   origin.ActivationID,
+		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
 		Recency:        factRecency,
@@ -757,7 +757,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 			Recency:        factRecency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
-			ActivationID:   origin.ActivationID,
+			ActivationID:   origin.activationID(),
 			FactIDs:        []FactID{factID},
 			Delta:          &delta,
 		})
@@ -1537,7 +1537,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	delta := MutationDelta{
 		Kind:           MutationModify,
 		Generation:     s.generation,
-		ActivationID:   origin.ActivationID,
+		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
 		Recency:        fact.recency,
@@ -1568,7 +1568,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
-			ActivationID:   origin.ActivationID,
+			ActivationID:   origin.activationID(),
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
