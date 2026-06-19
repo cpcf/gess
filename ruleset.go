@@ -298,6 +298,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		ruleOrder:             ruleOrder,
 		conditionTemplateKeys: conditionTemplateKeys,
 		conditionNames:        conditionNames,
+		graph:                 compileReteGraph(compiledRules),
 	}, nil
 }
 
@@ -314,6 +315,7 @@ type Ruleset struct {
 	ruleOrder             []string
 	conditionTemplateKeys map[TemplateKey]struct{}
 	conditionNames        map[string]struct{}
+	graph                 *reteGraph
 }
 
 const runFactReservePerRule = 64
