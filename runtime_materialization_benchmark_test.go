@@ -36,7 +36,7 @@ var (
 	benchmarkAgendaChanges       []agendaChange
 	benchmarkTerminalTokenDeltas []reteTerminalTokenDelta
 	benchmarkAgendaByFactID      map[FactID][]activationKey
-	benchmarkAgendaByRevision    map[RuleRevisionID][]activationKey
+	benchmarkAgendaByRevision    map[RuleRevisionID]activationKeyBucket
 	benchmarkAssertResult        AssertResult
 	benchmarkModifyResult        ModifyResult
 	benchmarkRetractResult       RetractResult
@@ -454,7 +454,7 @@ func BenchmarkAgendaIndexInsertion(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		agenda := &agenda{
 			byFactID:   make(map[FactID][]activationKey, len(activations)),
-			byRevision: make(map[RuleRevisionID][]activationKey, len(activations)),
+			byRevision: make(map[RuleRevisionID]activationKeyBucket, len(activations)),
 		}
 		for _, activation := range activations {
 			agenda.indexActivation(activation)

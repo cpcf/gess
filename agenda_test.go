@@ -662,7 +662,7 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	if got, want := len(agenda.activationsByFactID(factID)), 1; got != want {
 		t.Fatalf("fact index activations = %d, want %d", got, want)
 	}
-	if got, want := len(agenda.byRevision[activation.ruleRevisionID]), 1; got != want {
+	if got, want := agenda.byRevision[activation.ruleRevisionID].len(), 1; got != want {
 		t.Fatalf("revision index keys = %d, want %d", got, want)
 	}
 	if got, want := len(agenda.activationsByRuleRevisionID(activation.ruleRevisionID)), 1; got != want {
@@ -747,7 +747,7 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	if got := len(agenda.byFactID[second.Fact.ID()]); got != 0 {
 		t.Fatalf("fact index for %q after purge = %d, want 0", second.Fact.ID(), got)
 	}
-	if got := len(agenda.byRevision[consumed.ruleRevisionID]); got != 0 {
+	if got := agenda.byRevision[consumed.ruleRevisionID].len(); got != 0 {
 		t.Fatalf("revision index after purge = %d, want 0", got)
 	}
 }
