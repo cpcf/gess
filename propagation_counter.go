@@ -34,24 +34,31 @@ func propagationOriginFromMutation(origin mutationOrigin) propagationOrigin {
 }
 
 type propagationCounterTotals struct {
-	Asserts                 int
-	RHSAsserts              int
-	RuleMemoriesVisited     int
-	ConditionsTested        int
-	AlphaMatchesAdded       int
-	ConditionPlansTested    int
-	ConditionMatchesAdded   int
-	PrefixesAdded           int
-	BetaSuccessorsReached   int
-	TokensCreated           int
-	TerminalDeltasEmitted   int
-	AgendaDeltaApplications int
-	AgendaSorts             int
-	ActivationsStored       int
-	RemovalIndexLookups     int
-	RemovalRowsTouched      int
-	RemovalRowsRemoved      int
-	TerminalDeltasRemoved   int
+	Asserts                  int
+	RHSAsserts               int
+	RuleMemoriesVisited      int
+	ConditionsTested         int
+	AlphaMatchesAdded        int
+	ConditionPlansTested     int
+	ConditionMatchesAdded    int
+	PrefixesAdded            int
+	BetaSuccessorsReached    int
+	TokensCreated            int
+	TerminalDeltasEmitted    int
+	AgendaDeltaApplications  int
+	AgendaSorts              int
+	ActivationsStored        int
+	RemovalIndexLookups      int
+	RemovalRowsTouched       int
+	RemovalRowsRemoved       int
+	TerminalDeltasRemoved    int
+	BetaLeftInputInserts     int
+	BetaRightInputInserts    int
+	BetaBucketProbes         int
+	BetaCandidateRowsScanned int
+	BetaResidualTests        int
+	BetaResidualFailures     int
+	BetaJoinedTokensProduced int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -76,6 +83,13 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.RemovalRowsTouched += other.RemovalRowsTouched
 	t.RemovalRowsRemoved += other.RemovalRowsRemoved
 	t.TerminalDeltasRemoved += other.TerminalDeltasRemoved
+	t.BetaLeftInputInserts += other.BetaLeftInputInserts
+	t.BetaRightInputInserts += other.BetaRightInputInserts
+	t.BetaBucketProbes += other.BetaBucketProbes
+	t.BetaCandidateRowsScanned += other.BetaCandidateRowsScanned
+	t.BetaResidualTests += other.BetaResidualTests
+	t.BetaResidualFailures += other.BetaResidualFailures
+	t.BetaJoinedTokensProduced += other.BetaJoinedTokensProduced
 }
 
 type propagationCounterKey struct {
@@ -233,6 +247,53 @@ func (s *propagationCounterSpan) recordTokenCreated() {
 	s.totals.TokensCreated++
 }
 
+func (s *propagationCounterSpan) recordBetaInputInsert(side reteGraphBetaInputSide) {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	switch side {
+	case reteGraphBetaInputLeft:
+		s.totals.BetaLeftInputInserts++
+	case reteGraphBetaInputRight:
+		s.totals.BetaRightInputInserts++
+	}
+}
+
+func (s *propagationCounterSpan) recordBetaBucketProbe() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaBucketProbes++
+}
+
+func (s *propagationCounterSpan) recordBetaCandidateRowScanned() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaCandidateRowsScanned++
+}
+
+func (s *propagationCounterSpan) recordBetaResidualTest() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaResidualTests++
+}
+
+func (s *propagationCounterSpan) recordBetaResidualFailure() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaResidualFailures++
+}
+
+func (s *propagationCounterSpan) recordBetaJoinedTokenProduced() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.BetaJoinedTokensProduced++
+}
+
 func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
 	if s == nil || s.ledger == nil {
 		return
@@ -388,6 +449,13 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-removal-rows-touched", float64(s.Totals.RemovalRowsTouched))
 	report("propagation-removal-rows-removed", float64(s.Totals.RemovalRowsRemoved))
 	report("propagation-terminal-deltas-removed", float64(s.Totals.TerminalDeltasRemoved))
+	report("propagation-beta-left-input-inserts", float64(s.Totals.BetaLeftInputInserts))
+	report("propagation-beta-right-input-inserts", float64(s.Totals.BetaRightInputInserts))
+	report("propagation-beta-bucket-probes", float64(s.Totals.BetaBucketProbes))
+	report("propagation-beta-candidate-rows-scanned", float64(s.Totals.BetaCandidateRowsScanned))
+	report("propagation-beta-residual-tests", float64(s.Totals.BetaResidualTests))
+	report("propagation-beta-residual-failures", float64(s.Totals.BetaResidualFailures))
+	report("propagation-beta-joined-tokens-produced", float64(s.Totals.BetaJoinedTokensProduced))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -402,6 +470,13 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-agenda-delta-applications/rhs-assert", float64(s.Totals.AgendaDeltaApplications)/rhsAsserts)
 	report("propagation-agenda-sorts/rhs-assert", float64(s.Totals.AgendaSorts)/rhsAsserts)
 	report("propagation-activations-stored/rhs-assert", float64(s.Totals.ActivationsStored)/rhsAsserts)
+	report("propagation-beta-left-input-inserts/rhs-assert", float64(s.Totals.BetaLeftInputInserts)/rhsAsserts)
+	report("propagation-beta-right-input-inserts/rhs-assert", float64(s.Totals.BetaRightInputInserts)/rhsAsserts)
+	report("propagation-beta-bucket-probes/rhs-assert", float64(s.Totals.BetaBucketProbes)/rhsAsserts)
+	report("propagation-beta-candidate-rows-scanned/rhs-assert", float64(s.Totals.BetaCandidateRowsScanned)/rhsAsserts)
+	report("propagation-beta-residual-tests/rhs-assert", float64(s.Totals.BetaResidualTests)/rhsAsserts)
+	report("propagation-beta-residual-failures/rhs-assert", float64(s.Totals.BetaResidualFailures)/rhsAsserts)
+	report("propagation-beta-joined-tokens-produced/rhs-assert", float64(s.Totals.BetaJoinedTokensProduced)/rhsAsserts)
 	report("propagation-template-count", float64(len(s.ByTemplate)))
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
@@ -437,6 +512,13 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-removal-rows-touched=" + strconv.Itoa(s.Totals.RemovalRowsTouched),
 		"propagation-removal-rows-removed=" + strconv.Itoa(s.Totals.RemovalRowsRemoved),
 		"propagation-terminal-deltas-removed=" + strconv.Itoa(s.Totals.TerminalDeltasRemoved),
+		"propagation-beta-left-input-inserts=" + strconv.Itoa(s.Totals.BetaLeftInputInserts),
+		"propagation-beta-right-input-inserts=" + strconv.Itoa(s.Totals.BetaRightInputInserts),
+		"propagation-beta-bucket-probes=" + strconv.Itoa(s.Totals.BetaBucketProbes),
+		"propagation-beta-candidate-rows-scanned=" + strconv.Itoa(s.Totals.BetaCandidateRowsScanned),
+		"propagation-beta-residual-tests=" + strconv.Itoa(s.Totals.BetaResidualTests),
+		"propagation-beta-residual-failures=" + strconv.Itoa(s.Totals.BetaResidualFailures),
+		"propagation-beta-joined-tokens-produced=" + strconv.Itoa(s.Totals.BetaJoinedTokensProduced),
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),
@@ -446,6 +528,13 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-successors-reached/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaSuccessorsReached),
 		"propagation-tokens-created/rhs-assert=" + s.perRHSAssertField(s.Totals.TokensCreated),
 		"propagation-terminal-deltas-emitted/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalDeltasEmitted),
+		"propagation-beta-left-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaLeftInputInserts),
+		"propagation-beta-right-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaRightInputInserts),
+		"propagation-beta-bucket-probes/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketProbes),
+		"propagation-beta-candidate-rows-scanned/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaCandidateRowsScanned),
+		"propagation-beta-residual-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualTests),
+		"propagation-beta-residual-failures/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualFailures),
+		"propagation-beta-joined-tokens-produced/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaJoinedTokensProduced),
 		"propagation-by-template=" + s.templateSummary(),
 		"propagation-by-origin=" + s.originSummary(),
 	}
@@ -556,7 +645,14 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"terminal-deltas-emitted=" + strconv.Itoa(totals.TerminalDeltasEmitted) + "," +
 		"agenda-delta-applications=" + strconv.Itoa(totals.AgendaDeltaApplications) + "," +
 		"agenda-sorts=" + strconv.Itoa(totals.AgendaSorts) + "," +
-		"activations-stored=" + strconv.Itoa(totals.ActivationsStored) + "}"
+		"activations-stored=" + strconv.Itoa(totals.ActivationsStored) + "," +
+		"beta-left-input-inserts=" + strconv.Itoa(totals.BetaLeftInputInserts) + "," +
+		"beta-right-input-inserts=" + strconv.Itoa(totals.BetaRightInputInserts) + "," +
+		"beta-bucket-probes=" + strconv.Itoa(totals.BetaBucketProbes) + "," +
+		"beta-candidate-rows-scanned=" + strconv.Itoa(totals.BetaCandidateRowsScanned) + "," +
+		"beta-residual-tests=" + strconv.Itoa(totals.BetaResidualTests) + "," +
+		"beta-residual-failures=" + strconv.Itoa(totals.BetaResidualFailures) + "," +
+		"beta-joined-tokens-produced=" + strconv.Itoa(totals.BetaJoinedTokensProduced) + "}"
 }
 
 func slicesSortTemplateKeys(keys []TemplateKey) {

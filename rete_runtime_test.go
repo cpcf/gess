@@ -1771,6 +1771,32 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
 
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.BetaLeftInputInserts, 1; got != want {
+		t.Fatalf("beta left input inserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaRightInputInserts, 2; got != want {
+		t.Fatalf("beta right input inserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaBucketProbes, 3; got != want {
+		t.Fatalf("beta bucket probes = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaCandidateRowsScanned, 2; got != want {
+		t.Fatalf("beta candidate rows scanned = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaResidualTests, 2; got != want {
+		t.Fatalf("beta residual tests = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaResidualFailures, 1; got != want {
+		t.Fatalf("beta residual failures = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaJoinedTokensProduced, 1; got != want {
+		t.Fatalf("beta joined tokens produced = %d, want %d", got, want)
+	}
+
 	if _, err := session.Modify(ctx, failingCandidate.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"group": "A", "score": 15})}); err != nil {
 		t.Fatalf("Modify failing candidate: %v", err)
 	}

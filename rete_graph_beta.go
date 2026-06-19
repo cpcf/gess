@@ -751,11 +751,18 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	if !inserted {
 		return true
 	}
+	if span != nil {
+		span.recordBetaInputInsert(side)
+		span.recordBetaBucketProbe()
+	}
 	switch side {
 	case reteGraphBetaInputLeft:
 		bucket := nodeMemory.right.bucketForKey(joinKey)
 		for i := 0; i < bucket.len(); i++ {
 			rowID, _ := bucket.at(i)
+			if span != nil {
+				span.recordBetaCandidateRowScanned()
+			}
 			rightRow := nodeMemory.right.row(rowID)
 			if rightRow == nil || rightRow.token.isZero() {
 				continue
@@ -764,7 +771,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if !ok {
 				continue
 			}
-			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token); err != nil {
+			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
 				return false
 			} else if !ok {
 				continue
@@ -772,6 +779,9 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			output := m.newTokenRef(token, entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation(), span)
 			if output.isZero() {
 				continue
+			}
+			if span != nil {
+				span.recordBetaJoinedTokenProduced()
 			}
 			m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, span, delta)
 		}
@@ -783,11 +793,14 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		bucket := nodeMemory.left.bucketForKey(joinKey)
 		for i := 0; i < bucket.len(); i++ {
 			rowID, _ := bucket.at(i)
+			if span != nil {
+				span.recordBetaCandidateRowScanned()
+			}
 			leftRow := nodeMemory.left.row(rowID)
 			if leftRow == nil || leftRow.token.isZero() {
 				continue
 			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token); err != nil {
+			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
 				return false
 			} else if !ok {
 				continue
@@ -795,6 +808,9 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			output := m.newTokenRef(leftRow.token, entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation(), span)
 			if output.isZero() {
 				continue
+			}
+			if span != nil {
+				span.recordBetaJoinedTokenProduced()
 			}
 			m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, span, delta)
 		}
@@ -1124,16 +1140,22 @@ func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (bet
 	})
 }
 
-func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact conditionFactRef, bindings tokenRef) (bool, error) {
+func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
 	if m == nil || node == nil || len(node.residualJoins) == 0 {
 		return true, nil
 	}
 	for _, join := range node.residualJoins {
+		if span != nil {
+			span.recordBetaResidualTest()
+		}
 		ok, err := join.matchesToken(fact, bindings)
 		if err != nil {
 			return false, err
 		}
 		if !ok {
+			if span != nil {
+				span.recordBetaResidualFailure()
+			}
 			return false, nil
 		}
 	}
