@@ -47,10 +47,9 @@ func TestStructuralDuplicateSuppressionByFields(t *testing.T) {
 		t.Fatalf("O(1) by-id lookup could not find inserted fact %q", first.Fact.ID())
 	}
 
-	if existing, ok := session.factsByID[first.Fact.ID()]; ok {
-		existing.version = 99
-		existing.recency = 101
-	}
+	existing := mustWorkingFactByID(t, session, first.Fact.ID())
+	existing.version = 99
+	existing.recency = 101
 
 	repeated, err := session.insertFact("person", "", mustFields(t, map[string]any{
 		"name":  "Ada",

@@ -256,11 +256,11 @@ func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, b
 		return Value{}, false
 	}
 	entry := c.bindings.entries[index]
-	fact, ok := c.session.factsByID[entry.factID]
+	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok || fact == nil {
 		return Value{}, false
 	}
-	if fact.generation != c.generation || fact.version != entry.factVersion {
+	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return Value{}, false
 	}
 	template, ok := c.session.revision.templateByKey(fact.templateKey)
@@ -286,11 +286,11 @@ func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value
 		return Value{}, false
 	}
 	entry := c.bindings.entries[index]
-	fact, ok := c.session.factsByID[entry.factID]
+	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok || fact == nil {
 		return Value{}, false
 	}
-	if fact.generation != c.generation || fact.version != entry.factVersion || fieldSlot >= len(fact.fieldSlots) {
+	if fact.id.Generation() != c.generation || fact.version != entry.factVersion || fieldSlot >= len(fact.fieldSlots) {
 		return Value{}, false
 	}
 	resolved := fact.fieldSlots[fieldSlot]
@@ -315,14 +315,14 @@ func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) 
 		return FactSnapshot{}, false
 	}
 	entry := c.bindings.entries[index]
-	fact, ok := c.session.factsByID[entry.factID]
+	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok {
 		return FactSnapshot{}, false
 	}
-	if fact.generation != c.generation || fact.version != entry.factVersion {
+	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return FactSnapshot{}, false
 	}
-	snapshot := fact.detachedSnapshot()
+	snapshot := fact.detachedSnapshotForRevision(c.session.revision)
 	c.bindings.snapshots[index] = snapshot
 	return snapshot, true
 }
@@ -518,11 +518,11 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 
 	entries := activationBindingTupleEntriesForActivation(rule, &activation, false)
 	for i, entry := range entries {
-		fact, ok := s.factsByID[entry.factID]
+		fact, ok := s.workingFactByID(entry.factID)
 		if !ok {
 			return ActionContext{}, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
-		if fact.generation != activation.generation || fact.version != entry.factVersion {
+		if fact.id.Generation() != activation.generation || fact.version != entry.factVersion {
 			return ActionContext{}, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
 		entries[i] = entry

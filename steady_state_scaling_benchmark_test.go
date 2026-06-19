@@ -588,11 +588,11 @@ func assertSteadyStateFacts(t testing.TB, session *Session, templateKey Template
 	}
 
 	for _, id := range actualIDs {
-		fact := session.factsByID[id]
+		fact := mustWorkingFactByID(t, session, id)
 		if fact == nil {
 			t.Fatalf("%s fact %s missing from factsByID", templateKey, id)
 		}
-		snapshot := fact.snapshot()
+		snapshot := fact.snapshotForRevision(session.revision)
 		key, err := steadyStateFactKey(snapshot, keyFields)
 		if err != nil {
 			t.Fatalf("%s fact %s key: %v", templateKey, id, err)

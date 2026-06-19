@@ -31,7 +31,7 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	if internal := session.factsByID[inserted.Fact.ID()]; internal.dupIndex.kind != duplicateIndexSingleScalar {
+	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.dupIndex.kind != duplicateIndexSingleScalar {
 		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
 	}
 	if got, want := len(mustSnapshot(t, context.Background(), session).Facts()), 1; got != want {
@@ -758,11 +758,9 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 
 	resetFact := func(id string) *workingFact {
 		t.Helper()
-		for _, fact := range session.factsByID {
-			if fact == nil {
-				continue
-			}
-			if value, ok := fact.snapshot().Field("id"); ok && value.data.(string) == id {
+		for i := range session.facts {
+			fact := &session.facts[i]
+			if value, ok := fact.snapshotForRevision(session.revision).Field("id"); ok && value.data.(string) == id {
 				return fact
 			}
 		}
@@ -776,7 +774,7 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 	}
 	labelsSlot := -1
 	metaSlot := -1
-	for i, spec := range firstFact.fieldSpecs {
+	for i, spec := range template.fields {
 		switch spec.Name {
 		case "labels":
 			labelsSlot = i
@@ -899,7 +897,7 @@ func TestSessionResetUntargetedClosedTemplateKeepsMapBackedInitial(t *testing.T)
 	if len(fact.fieldSlots) != 0 {
 		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlots)
 	}
-	if got, ok := fact.snapshot().Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+	if got, ok := fact.snapshotForRevision(session.revision).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("default status = (%v, %v), want active", got, ok)
 	}
 }
@@ -1035,8 +1033,8 @@ func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	if got, want := len(session.factsByID), 1; got != want {
 		t.Fatalf("working facts = %d, want %d", got, want)
 	}
-	for _, fact := range session.factsByID {
-		return fact
+	for i := range session.facts {
+		return &session.facts[i]
 	}
 	t.Fatal("working fact missing")
 	return nil

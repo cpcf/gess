@@ -437,7 +437,7 @@ func TestSnapshotSlotBackedAccessorsReturnDefensiveCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	internal := session.factsByID[inserted.Fact.ID()]
+	internal := mustWorkingFactByID(t, session, inserted.Fact.ID())
 	if internal.fields != nil || internal.fieldPresence != nil || len(internal.fieldSlots) == 0 {
 		t.Fatalf("slot-backed storage = fields:%v presence:%v slots:%d", internal.fields, internal.fieldPresence, len(internal.fieldSlots))
 	}

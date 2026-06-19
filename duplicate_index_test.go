@@ -98,7 +98,7 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			if first.DuplicateKey == "" {
 				t.Fatal("expected public duplicate key")
 			}
-			internal := session.factsByID[first.Fact.ID()]
+			internal := mustWorkingFactByID(t, session, first.Fact.ID())
 			if internal == nil {
 				t.Fatal("missing stored fact")
 			}
@@ -147,7 +147,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	internal := session.factsByID[first.Fact.ID()]
+	internal := mustWorkingFactByID(t, session, first.Fact.ID())
 	if internal == nil {
 		t.Fatal("missing stored fact")
 	}

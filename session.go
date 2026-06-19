@@ -92,7 +92,7 @@ type Session struct {
 	nextRecency       Recency
 	nextRunSequence   uint64
 	facts             []workingFact
-	factsByID         map[FactID]*workingFact
+	factsByID         map[FactID]int
 	factsByDuplicate  duplicateIndexes
 	factsByTemplate   map[TemplateKey][]FactID
 	factsByName       map[string][]FactID
@@ -153,7 +153,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	rete.resetAlpha(state.detachedFactsByInsertionOrder())
+	rete.resetAlpha(state.detachedFactsByInsertionOrder(revision))
 
 	session := &Session{
 		id:               cfg.id,
@@ -268,21 +268,36 @@ func (s *Session) removeStoredFact(id FactID) {
 		last := len(s.facts) - 1
 		s.facts[last] = workingFact{}
 		s.facts = s.facts[:last]
-		s.rebindStoredFactPointers()
+		s.reindexStoredFactRowsFrom(i)
 		return
 	}
 }
 
-func (s *Session) rebindStoredFactPointers() {
-	if s == nil || s.factsByID == nil {
+func (s *Session) reindexStoredFactRowsFrom(start int) {
+	if s == nil || s.factsByID == nil || start < 0 {
 		return
 	}
-	for i := range s.facts {
-		fact := &s.facts[i]
-		if _, ok := s.factsByID[fact.id]; ok {
-			s.factsByID[fact.id] = fact
+	for i := start; i < len(s.facts); i++ {
+		id := s.facts[i].id
+		if _, ok := s.factsByID[id]; ok {
+			s.factsByID[id] = i
 		}
 	}
+}
+
+func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
+	if s == nil || s.factsByID == nil {
+		return nil, false
+	}
+	index, ok := s.factsByID[id]
+	if !ok || index < 0 || index >= len(s.facts) {
+		return nil, false
+	}
+	fact := &s.facts[index]
+	if fact.id != id {
+		return nil, false
+	}
+	return fact, true
 }
 
 // factsForTarget is an internal matcher view. Callers must hold session
@@ -299,11 +314,11 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 		}
 		out := make([]FactSnapshot, 0, len(ids))
 		for _, id := range ids {
-			fact, ok := s.factsByID[id]
-			if !ok || fact == nil || fact.isTransient {
+			fact, ok := s.workingFactByID(id)
+			if !ok {
 				continue
 			}
-			out = append(out, fact.detachedSnapshot())
+			out = append(out, fact.detachedSnapshotForRevision(s.revision))
 		}
 		return out, true
 	case conditionTargetTemplateKey:
@@ -313,11 +328,11 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 		}
 		out := make([]FactSnapshot, 0, len(ids))
 		for _, id := range ids {
-			fact, ok := s.factsByID[id]
-			if !ok || fact == nil || fact.isTransient {
+			fact, ok := s.workingFactByID(id)
+			if !ok {
 				continue
 			}
-			out = append(out, fact.detachedSnapshot())
+			out = append(out, fact.detachedSnapshotForRevision(s.revision))
 		}
 		return out, true
 	default:
@@ -474,12 +489,12 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	if !inserted {
 		return AssertResult{
 			Status:       AssertExisting,
-			Fact:         fact.snapshot(),
+			Fact:         fact.snapshotForRevision(s.revision),
 			DuplicateKey: duplicateKey,
 		}, reteAgendaDelta{}, nil
 	}
 
-	snapshot := fact.snapshot()
+	snapshot := fact.snapshotForRevision(s.revision)
 	var span *propagationCounterSpan
 	if s.propagationCounters != nil {
 		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
@@ -568,7 +583,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 	}
 
 	if len(s.listeners) > 0 {
-		publicSnapshot := fact.snapshot()
+		publicSnapshot := fact.snapshotForRevision(s.revision)
 		duplicateKey := fact.publicDuplicateKey(s.revision)
 		delta := MutationDelta{
 			Kind:           MutationAssert,
@@ -680,12 +695,12 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	fact, ok := s.factsByID[id]
+	fact, ok := s.workingFactByID(id)
 	if !ok {
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	before := fact.snapshot()
+	before := fact.snapshotForRevision(s.revision)
 	oldVersion := fact.version
 	oldDuplicate := fact.publicDuplicateKey(s.revision)
 	factID := fact.id
@@ -842,7 +857,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reserveTemplateIndexes(s.revision)
 	next.reserveSlotStorage(s.revision.estimatedRunSlotCapacity(cap(next.facts)))
 	next.applyCompiledInitialFacts(compiledInitials)
-	facts := next.detachedFactsByInsertionOrderInto(s.resetFactsScratch[:0])
+	facts := next.detachedFactsByInsertionOrderInto(s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 
 	oldGeneration := s.generation
@@ -935,7 +950,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		}, err
 	}
 
-	s.rebuildFieldSlots(next)
+	s.rebuildFieldSlots(s.revision, next)
 	snapshot = s.indexedSnapshotLocked()
 	rete, err := newReteRuntime(next)
 	if err != nil {
@@ -1178,7 +1193,7 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(fact *workingFact, origin 
 		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
 	}
-	snapshot := fact.detachedSnapshot()
+	snapshot := fact.detachedSnapshotForRevision(s.revision)
 	s.rete.insertAlphaFactGenerated(fact, snapshot, span)
 	return s.rete.insertBetaFactGenerated(fact, origin, span)
 }
@@ -1199,43 +1214,38 @@ func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAge
 	return s.rete.updateBetaFact(before, after)
 }
 
-func (s *Session) rebuildFieldSlots(revision *Ruleset) {
+func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
 	if s == nil {
 		return
 	}
-	for _, fact := range s.factsByID {
-		if fact == nil {
-			continue
-		}
+	for i := range s.facts {
+		fact := &s.facts[i]
 		template, ok := revision.templateByKey(fact.templateKey)
 		if !ok {
 			if fact.fields == nil {
-				fact.fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecs)
+				fact.fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecsForRevision(previous))
 			}
 			if fact.fieldPresence == nil {
-				fact.fieldPresence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecs)
+				fact.fieldPresence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecsForRevision(previous))
 			}
 			fact.fieldSlots = nil
-			fact.fieldSpecs = nil
 			continue
 		}
 		fields := fact.fields
 		if fields == nil {
-			fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecs)
+			fields = materializeFieldsFromSlots(fact.fieldSlots, fact.fieldSpecsForRevision(previous))
 		}
 		presence := fact.fieldPresence
 		if presence == nil {
-			presence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecs)
+			presence = materializePresenceFromSlots(fact.fieldSlots, fact.fieldSpecsForRevision(previous))
 		}
 		fieldSlots := revision.buildFieldSlots(template, fields, presence)
 		if len(fieldSlots) > 0 {
 			fact.fields = nil
 			fact.fieldSlots = fieldSlots
-			fact.fieldSpecs = template.fields
 			fact.fieldPresence = nil
 		} else {
 			fact.fieldSlots = nil
-			fact.fieldSpecs = nil
 			if fields != nil {
 				fact.fields = fields
 			}
@@ -1442,12 +1452,12 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	fact, ok := s.factsByID[id]
+	fact, ok := s.workingFactByID(id)
 	if !ok {
 		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	before := fact.snapshot()
+	before := fact.snapshotForRevision(s.revision)
 	template, templateExists := s.revision.templateByKey(fact.templateKey)
 
 	beforeFields := before.Fields()
@@ -1507,18 +1517,15 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	if len(proposedFieldSlots) > 0 {
 		fact.fields = nil
 		fact.fieldSlots = cloneFactSlots(proposedFieldSlots)
-		fact.fieldSpecs = template.fields
 		fact.fieldPresence = nil
 	} else {
 		fact.fields = proposedFields
 		fact.fieldSlots = nil
-		fact.fieldSpecs = nil
 		fact.fieldPresence = proposedPresence
 	}
 	fact.dupIndex = newDupIndex
-	fact.dupKey = newDuplicate
 
-	after := fact.snapshot()
+	after := fact.snapshotForRevision(s.revision)
 	agendaDelta := s.updateReteAlphaAfterModify(before, after)
 	delta := MutationDelta{
 		Kind:           MutationModify,
@@ -1693,11 +1700,11 @@ func (s *Session) detachedFactsByInsertionOrder() []FactSnapshot {
 	}
 	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
 	for _, id := range s.insertionOrder {
-		fact, ok := s.factsByID[id]
-		if !ok || fact == nil || fact.isTransient {
+		fact, ok := s.workingFactByID(id)
+		if !ok {
 			continue
 		}
-		facts = append(facts, fact.detachedSnapshot())
+		facts = append(facts, fact.detachedSnapshotForRevision(s.revision))
 	}
 	return facts
 }
@@ -1705,17 +1712,14 @@ func (s *Session) detachedFactsByInsertionOrder() []FactSnapshot {
 func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFacts bool) Snapshot {
 	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
 	for _, id := range s.insertionOrder {
-		fact, ok := s.factsByID[id]
+		fact, ok := s.workingFactByID(id)
 		if !ok {
 			continue
 		}
-		if fact.isTransient {
-			continue
-		}
 		if cloneFacts {
-			facts = append(facts, fact.snapshot())
+			facts = append(facts, fact.snapshotForRevision(s.revision))
 		} else {
-			facts = append(facts, fact.detachedSnapshot())
+			facts = append(facts, fact.detachedSnapshotForRevision(s.revision))
 		}
 	}
 
@@ -1739,7 +1743,7 @@ type factWorkspace struct {
 	recency          Recency
 	facts            []workingFact
 	insertionOrder   []FactID
-	factsByID        map[FactID]*workingFact
+	factsByID        map[FactID]int
 	factsByDuplicate duplicateIndexes
 	factsByTemplate  map[TemplateKey][]FactID
 	factsByName      map[string][]FactID
@@ -1872,7 +1876,7 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	w.sequence = 0
 	w.recency = 0
 	if w.factsByID == nil {
-		w.factsByID = make(map[FactID]*workingFact, initialCapacity)
+		w.factsByID = make(map[FactID]int, initialCapacity)
 	} else {
 		clear(w.factsByID)
 	}
@@ -1955,7 +1959,6 @@ func (w *factWorkspace) reserveGeneratedFactInsert(revision *Ruleset, slotCount 
 			nextFacts := make([]workingFact, len(w.facts), nextCapacity)
 			copy(nextFacts, w.facts)
 			w.facts = nextFacts
-			w.rebindFactPointers()
 		}
 	}
 	if len(w.insertionOrder) == cap(w.insertionOrder) {
@@ -1977,30 +1980,37 @@ func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 		return nil
 	}
 
-	var previousBase *workingFact
-	if len(w.facts) > 0 {
-		previousBase = &w.facts[0]
-	}
-
 	w.facts = append(w.facts, fact)
 	stored := &w.facts[len(w.facts)-1]
-	if len(w.facts) > 1 && previousBase != &w.facts[0] {
-		w.rebindFactPointers()
-	}
 	if w.factsByID != nil {
-		w.factsByID[stored.id] = stored
+		w.factsByID[stored.id] = len(w.facts) - 1
 	}
 	return stored
 }
 
-func (w *factWorkspace) rebindFactPointers() {
+func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 	if w == nil || w.factsByID == nil {
+		return nil, false
+	}
+	index, ok := w.factsByID[id]
+	if !ok || index < 0 || index >= len(w.facts) {
+		return nil, false
+	}
+	fact := &w.facts[index]
+	if fact.id != id {
+		return nil, false
+	}
+	return fact, true
+}
+
+func (w *factWorkspace) reindexFactRowsFrom(start int) {
+	if w == nil || w.factsByID == nil || start < 0 {
 		return
 	}
-	for i := range w.facts {
-		fact := &w.facts[i]
-		if _, ok := w.factsByID[fact.id]; ok {
-			w.factsByID[fact.id] = fact
+	for i := start; i < len(w.facts); i++ {
+		id := w.facts[i].id
+		if _, ok := w.factsByID[id]; ok {
+			w.factsByID[id] = i
 		}
 	}
 }
@@ -2026,11 +2036,11 @@ func (w *factWorkspace) factsByInsertionOrder() []FactID {
 	return w.insertionOrder
 }
 
-func (w *factWorkspace) detachedFactsByInsertionOrder() []FactSnapshot {
-	return w.detachedFactsByInsertionOrderInto(nil)
+func (w *factWorkspace) detachedFactsByInsertionOrder(revision *Ruleset) []FactSnapshot {
+	return w.detachedFactsByInsertionOrderInto(nil, revision)
 }
 
-func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot) []FactSnapshot {
+func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot, revision *Ruleset) []FactSnapshot {
 	if w == nil || w.insertionOrder == nil || len(w.insertionOrder) == 0 {
 		return dst[:0]
 	}
@@ -2040,11 +2050,11 @@ func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot) []
 		dst = dst[:0]
 	}
 	for _, id := range w.insertionOrder {
-		fact, ok := w.factsByID[id]
-		if !ok || fact == nil || fact.isTransient {
+		fact, ok := w.workingFactByID(id)
+		if !ok {
 			continue
 		}
-		dst = append(dst, fact.detachedSnapshot())
+		dst = append(dst, fact.detachedSnapshotForRevision(revision))
 	}
 	return dst
 }
@@ -2092,7 +2102,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	if templateDuplicatePolicy != DuplicateAllow {
 		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
 		if ok {
-			existing, ok := w.factsByID[existingID]
+			existing, ok := w.workingFactByID(existingID)
 			if ok {
 				return existing, existing.publicDuplicateKey(revision), false, nil
 			}
@@ -2103,10 +2113,6 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	w.sequence++
 	w.recency++
 	id := newFactID(generation, w.sequence)
-	var fieldSpecs []FieldSpec
-	if len(fieldSlots) > 0 {
-		fieldSpecs = template.fields
-	}
 	duplicateKey := duplicateIndex.publicKeyForTemplate(name, template)
 
 	fact := workingFact{
@@ -2115,15 +2121,10 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 		templateKey:   templateKey,
 		version:       1,
 		recency:       w.recency,
-		generation:    generation,
 		fields:        canonical,
 		fieldSlots:    fieldSlots,
-		fieldSpecs:    fieldSpecs,
 		fieldPresence: presence,
 		dupIndex:      duplicateIndex,
-		dupKey:        duplicateKey,
-		support:       FactSupportProvenance{State: FactSupportStated},
-		isTransient:   false,
 	}
 
 	if len(fieldSlots) > 0 {
@@ -2149,7 +2150,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	if template.duplicatePolicy != DuplicateAllow {
 		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
 		if ok {
-			existing, ok := w.factsByID[existingID]
+			existing, ok := w.workingFactByID(existingID)
 			if ok {
 				if materializeDuplicateKey {
 					return existing, existing.publicDuplicateKey(revision), false, nil
@@ -2178,13 +2179,8 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 		templateKey: templateKey,
 		version:     1,
 		recency:     w.recency,
-		generation:  generation,
 		fieldSlots:  storedSlots,
-		fieldSpecs:  template.fields,
 		dupIndex:    duplicateIndex,
-		dupKey:      duplicateKey,
-		support:     FactSupportProvenance{State: FactSupportStated},
-		isTransient: false,
 	}
 
 	stored := w.storeFact(fact)
@@ -2376,12 +2372,7 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		templateKey: initial.templateKey,
 		version:     1,
 		recency:     w.recency,
-		generation:  w.generation,
-		fieldSpecs:  initial.fieldSpecs,
 		dupIndex:    initial.duplicateIndex,
-		dupKey:      initial.duplicateKey,
-		support:     FactSupportProvenance{State: FactSupportStated},
-		isTransient: false,
 	}
 	if initial.shareFields {
 		fact.fields = initial.fields
@@ -2911,11 +2902,11 @@ func (s *Session) factByID(id FactID) (FactSnapshot, bool) {
 	if id.Generation() != s.generation {
 		return FactSnapshot{}, false
 	}
-	fact, ok := s.factsByID[id]
+	fact, ok := s.workingFactByID(id)
 	if !ok {
 		return FactSnapshot{}, false
 	}
-	return fact.snapshot(), true
+	return fact.snapshotForRevision(s.revision), true
 }
 
 func (s *Session) factIDsByName(name string) []FactID {
@@ -2939,7 +2930,8 @@ func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
 }
 
 func (s *Session) factIDForDuplicateKey(key DuplicateKey) (FactID, bool) {
-	for _, fact := range s.factsByID {
+	for i := range s.facts {
+		fact := &s.facts[i]
 		if fact.publicDuplicateKey(s.revision) == key {
 			return fact.id, true
 		}
@@ -2997,7 +2989,7 @@ func (s *Session) resetWorkingMemory() {
 	s.nextFactSequence = 0
 	s.nextRecency = 0
 	s.facts = nil
-	s.factsByID = make(map[FactID]*workingFact)
+	s.factsByID = make(map[FactID]int)
 	s.factsByDuplicate = duplicateIndexes{}
 	s.factsByDuplicate.reset(0)
 	s.factsByTemplate = make(map[TemplateKey][]FactID)

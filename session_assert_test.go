@@ -35,10 +35,10 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	if dynamic.Delta == nil || dynamic.Delta.Kind != MutationAssert {
 		t.Fatalf("dynamic assert missing mutation delta")
 	}
-	if got := len(session.factsByID[dynamic.Fact.ID()].fieldSlots); got != 0 {
+	if got := len(mustWorkingFactByID(t, session, dynamic.Fact.ID()).fieldSlots); got != 0 {
 		t.Fatalf("dynamic field slots = %d, want zero", got)
 	}
-	if session.factsByID[dynamic.Fact.ID()].fields == nil {
+	if mustWorkingFactByID(t, session, dynamic.Fact.ID()).fields == nil {
 		t.Fatal("dynamic fact should remain map-backed")
 	}
 
@@ -83,7 +83,7 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	if got, want := len(session.facts), 1; got != want {
 		t.Fatalf("facts slice length after first assert = %d, want %d", got, want)
 	}
-	if got, want := session.factsByID[first.Fact.ID()], &session.facts[0]; got != want {
+	if got, want := mustWorkingFactByID(t, session, first.Fact.ID()), &session.facts[0]; got != want {
 		t.Fatalf("first fact pointer = %p, want %p", got, want)
 	}
 
@@ -96,11 +96,11 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	if got, want := len(session.facts), 2; got != want {
 		t.Fatalf("facts slice length after second assert = %d, want %d", got, want)
 	}
-	if got, want := session.factsByID[first.Fact.ID()], &session.facts[0]; got != want {
-		t.Fatalf("first fact pointer after growth = %p, want %p", got, want)
+	if got, want := session.factsByID[first.Fact.ID()], 0; got != want {
+		t.Fatalf("first fact row after growth = %d, want %d", got, want)
 	}
-	if got, want := session.factsByID[second.Fact.ID()], &session.facts[1]; got != want {
-		t.Fatalf("second fact pointer = %p, want %p", got, want)
+	if got, want := session.factsByID[second.Fact.ID()], 1; got != want {
+		t.Fatalf("second fact row = %d, want %d", got, want)
 	}
 
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
@@ -124,8 +124,8 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	}
 	for i := range session.facts {
 		fact := &session.facts[i]
-		if got := session.factsByID[fact.id]; got != fact {
-			t.Fatalf("fact %q pointer after growth = %p, want %p", fact.id, got, fact)
+		if got := session.factsByID[fact.id]; got != i {
+			t.Fatalf("fact %q row after growth = %d, want %d", fact.id, got, i)
 		}
 	}
 }
@@ -170,7 +170,7 @@ func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *tes
 		t.Fatalf("AssertTemplate: %v", err)
 	}
 
-	internal := session.factsByID[inserted.Fact.ID()]
+	internal := mustWorkingFactByID(t, session, inserted.Fact.ID())
 	if internal.fields != nil {
 		t.Fatal("targeted closed fact should not keep canonical fields")
 	}
@@ -456,7 +456,7 @@ func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate targeted: %v", err)
 	}
-	if got := len(session.factsByID[targetedResult.Fact.ID()].fieldSlots); got == 0 {
+	if got := len(mustWorkingFactByID(t, session, targetedResult.Fact.ID()).fieldSlots); got == 0 {
 		t.Fatalf("targeted field slots = %d, want non-zero", got)
 	}
 
@@ -464,10 +464,10 @@ func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate untargeted: %v", err)
 	}
-	if got := len(session.factsByID[untargetedResult.Fact.ID()].fieldSlots); got != 0 {
+	if got := len(mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldSlots); got != 0 {
 		t.Fatalf("untargeted field slots = %d, want zero", got)
 	}
-	if session.factsByID[untargetedResult.Fact.ID()].fieldPresence == nil {
+	if mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldPresence == nil {
 		t.Fatal("untargeted fact should remain map-backed for presence")
 	}
 }

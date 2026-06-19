@@ -131,9 +131,8 @@ func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
 		templateKey: fact.templateKey,
 		version:     fact.version,
 		recency:     fact.recency,
-		generation:  fact.generation,
+		generation:  fact.id.Generation(),
 		fieldSlots:  fact.fieldSlots,
-		fieldSpecs:  fact.fieldSpecs,
 	}
 }
 
@@ -234,15 +233,10 @@ type workingFact struct {
 	templateKey   TemplateKey
 	version       FactVersion
 	recency       Recency
-	generation    Generation
 	fields        Fields
 	fieldSlots    []factSlot
-	fieldSpecs    []FieldSpec
 	fieldPresence map[string]FieldPresence
 	dupIndex      duplicateIndexKey
-	dupKey        DuplicateKey
-	support       FactSupportProvenance
-	isTransient   bool
 }
 
 type duplicateIndexKind uint8
@@ -511,43 +505,59 @@ func (p fieldPresenceCode) fieldPresence() FieldPresence {
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
+	return f.snapshotForRevision(nil)
+}
+
+func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.name,
 		templateKey:   f.templateKey,
 		version:       f.version,
 		recency:       f.recency,
-		generation:    f.generation,
+		generation:    f.id.Generation(),
 		fields:        cloneFields(f.fields),
 		fieldSlots:    cloneFactSlots(f.fieldSlots),
-		fieldSpecs:    f.fieldSpecs,
+		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
-		support:       f.support,
+		support:       FactSupportProvenance{State: FactSupportStated},
 	}
 }
 
 func (f *workingFact) detachedSnapshot() FactSnapshot {
+	return f.detachedSnapshotForRevision(nil)
+}
+
+func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.name,
 		templateKey:   f.templateKey,
 		version:       f.version,
 		recency:       f.recency,
-		generation:    f.generation,
+		generation:    f.id.Generation(),
 		fields:        f.fields,
 		fieldSlots:    f.fieldSlots,
-		fieldSpecs:    f.fieldSpecs,
+		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: f.fieldPresence,
-		support:       f.support,
+		support:       FactSupportProvenance{State: FactSupportStated},
 	}
+}
+
+func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
+	if f == nil || len(f.fieldSlots) == 0 || revision == nil {
+		return nil
+	}
+	template, ok := revision.templateByKey(f.templateKey)
+	if !ok {
+		return nil
+	}
+	return template.fields
 }
 
 func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
 	if f == nil || f.dupIndex.isZero() {
 		return ""
-	}
-	if f.dupKey != "" {
-		return f.dupKey
 	}
 	template := Template{key: f.templateKey}
 	if revision != nil {
@@ -555,8 +565,7 @@ func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
 			template = resolved
 		}
 	}
-	f.dupKey = f.dupIndex.publicKeyForTemplate(f.name, template)
-	return f.dupKey
+	return f.dupIndex.publicKeyForTemplate(f.name, template)
 }
 
 func (f FactSnapshot) clone() FactSnapshot {
@@ -852,14 +861,6 @@ func (f FactSnapshot) fieldSlot(name string) (int, bool) {
 }
 
 func (f *workingFact) fieldSlot(name string) (int, bool) {
-	if f == nil {
-		return -1, false
-	}
-	for i, spec := range f.fieldSpecs {
-		if spec.Name == name {
-			return i, true
-		}
-	}
 	return -1, false
 }
 

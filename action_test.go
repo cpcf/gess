@@ -1351,7 +1351,7 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 		t.Fatalf("duplicate key mismatch: %q != %q", secondResult.DuplicateKey, firstResult.DuplicateKey)
 	}
 
-	internal := session.factsByID[firstResult.Fact.ID()]
+	internal := mustWorkingFactByID(t, session, firstResult.Fact.ID())
 	if internal.fields != nil {
 		t.Fatal("slot-backed action fact should not retain canonical fields")
 	}
@@ -1423,12 +1423,9 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	if got, want := fact.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
 		t.Fatalf("generated default kind = %v, want %v", got, want)
 	}
-	internal := session.factsByID[fact.ID()]
+	internal := mustWorkingFactByID(t, session, fact.ID())
 	if internal == nil {
 		t.Fatalf("missing internal generated fact %q", fact.ID())
-	}
-	if internal.dupKey != "" {
-		t.Fatalf("effect assert materialized duplicate key: %q", internal.dupKey)
 	}
 
 	duplicate, err := session.AssertTemplate(ctx, generated.Key(), Fields{"id": mustValue(t, 7)})
@@ -1441,8 +1438,8 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	if duplicate.DuplicateKey == "" {
 		t.Fatal("duplicate key was not materialized for public duplicate result")
 	}
-	if internal.dupKey != duplicate.DuplicateKey {
-		t.Fatalf("stored duplicate key = %q, want %q", internal.dupKey, duplicate.DuplicateKey)
+	if got := internal.publicDuplicateKey(session.revision); got != duplicate.DuplicateKey {
+		t.Fatalf("public duplicate key = %q, want %q", got, duplicate.DuplicateKey)
 	}
 }
 
