@@ -2671,7 +2671,7 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 	if !ok {
 		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, token.ruleRevisionID)
 	}
-	identity := candidateIdentityForTerminalToken(rule, token.token)
+	identity := candidateIdentityForTerminalTokenDelta(s.revision, token)
 	for index := s.runAgendaBuckets[identity]; index != 0; {
 		state := &s.runAgendaStates[index-1]
 		if terminalTokenDeltasEqual(s.revision, state.token, token) {
@@ -2681,7 +2681,7 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 		}
 		index = state.next
 	}
-	existing, _, ok := s.agenda.activationForTerminalToken(rule, token.token)
+	existing, _, ok := s.agenda.activationForTerminalTokenIdentity(rule, token.token, identity)
 	state := runAgendaDeltaState{
 		initial: ok && existing.status == activationStatusPending,
 		present: ok && existing.status == activationStatusPending,

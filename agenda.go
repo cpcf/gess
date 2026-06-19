@@ -547,7 +547,7 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		if !ok {
 			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 		}
-		existing, key, ok := a.activationForTerminalToken(rule, delta.token)
+		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, candidateIdentityForTerminalTokenDelta(revision, delta))
 		if !ok || existing.status != activationStatusPending {
 			continue
 		}
@@ -602,10 +602,11 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		}
 		previous = delta
 		havePrevious = true
-		if _, _, ok := a.activationForTerminalToken(rule, delta.token); ok {
+		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+		if _, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			continue
 		}
-		created, err := activationFromTerminalToken(rule, delta.token)
+		created, err := activationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
 		}
@@ -670,7 +671,8 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 		previous = delta
 		havePrevious = true
 
-		existing, key, ok := a.activationForTerminalToken(rule, delta.token)
+		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity)
 		if ok {
 			if existing.status == activationStatusPending {
 				if _, seenBefore := seen[key]; !seenBefore {
@@ -681,7 +683,7 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 			continue
 		}
 
-		created, err := activationFromTerminalToken(rule, delta.token)
+		created, err := activationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
 		}
@@ -1252,10 +1254,16 @@ func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, 
 }
 
 func (a *agenda) activationForTerminalToken(rule compiledRule, token tokenRef) (*activation, activationKey, bool) {
+	return a.activationForTerminalTokenIdentity(rule, token, candidateIdentityForTerminalToken(rule, token))
+}
+
+func (a *agenda) activationForTerminalTokenIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (*activation, activationKey, bool) {
 	if a == nil {
 		return nil, activationKey{}, false
 	}
-	identity := candidateIdentityForTerminalToken(rule, token)
+	if identity.isZero() {
+		identity = candidateIdentityForTerminalToken(rule, token)
+	}
 	fingerprint := activationFingerprintForIdentityKey(identity.key)
 	bucket := a.activations[fingerprint]
 	if current := bucket.first; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
@@ -1485,17 +1493,24 @@ func activationFromCandidate(rule compiledRule, candidate matchCandidate) activa
 }
 
 func activationFromTerminalToken(rule compiledRule, token tokenRef) (activation, error) {
+	return activationFromTerminalTokenWithIdentity(rule, token, candidateIdentityForTerminalToken(rule, token))
+}
+
+func activationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (activation, error) {
 	if token.isZero() {
 		return activation{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return activation{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
+	if identity.isZero() {
+		identity = candidateIdentityForTerminalToken(rule, token)
+	}
 	return activation{
 		ruleID:           rule.id,
 		ruleRevisionID:   rule.revisionID,
 		generation:       tokenRefGeneration(token),
-		identity:         candidateIdentityForTerminalToken(rule, token),
+		identity:         identity,
 		token:            token,
 		salience:         rule.salience,
 		maxRecency:       token.maxRecency(),
@@ -1555,6 +1570,13 @@ func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state 
 }
 
 func candidateIdentityForTerminalTokenDelta(revision *Ruleset, delta reteTerminalTokenDelta) candidateIdentity {
+	if delta.identityKey != (candidateIdentityKey{}) {
+		return candidateIdentity{
+			generation: tokenRefGeneration(delta.token),
+			count:      tokenRefSize(delta.token),
+			key:        delta.identityKey,
+		}
+	}
 	if revision == nil {
 		return candidateIdentity{}
 	}
