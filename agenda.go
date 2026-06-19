@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -501,18 +502,13 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		created := activationFromCandidate(rule, candidate)
 
 		key := a.storeActivation(&created)
-		a.pending = append(a.pending, key)
+		a.pending = a.insertActivationKeySorted(a.pending, key, &created)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
 			activation: a.compactChangeActivation(&created),
 		})
 	}
 	changes = append(changes, activated...)
-
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(a.pending)
 
 	a.deltaRemovedKeys = removedKeys
 	a.deltaChanges = changes[:0]
@@ -578,10 +574,12 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		a.pending = nextPending
 	}
 
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
+	if len(added) > 1 {
+		if a.propagationCounters != nil {
+			a.propagationCounters.recordAgendaSort()
+		}
+		sortTerminalTokenDeltas(revision, added)
 	}
-	sortTerminalTokenDeltas(revision, added)
 
 	activated := a.deltaActivated[:0]
 	var previous reteTerminalTokenDelta
@@ -610,18 +608,13 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 			return nil, err
 		}
 		key := a.storeActivation(&created)
-		a.pending = append(a.pending, key)
+		a.pending = a.insertActivationKeySorted(a.pending, key, &created)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
 			activation: a.compactChangeActivation(&created),
 		})
 	}
 	changes = append(changes, activated...)
-
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(a.pending)
 
 	a.deltaRemovedKeys = removedKeys
 	a.deltaChanges = changes[:0]
@@ -1139,6 +1132,20 @@ func (a *agenda) sortActivationKeys(keys []activationKey) {
 		right, _ := a.activationByKeyPtr(rightKey)
 		return activationCompare(left, right)
 	})
+}
+
+func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationKey, act *activation) []activationKey {
+	if a == nil || act == nil || len(keys) == 0 {
+		return append(keys, key)
+	}
+	index := sort.Search(len(keys), func(i int) bool {
+		existing, _ := a.activationByKeyPtr(keys[i])
+		return activationLess(act, existing)
+	})
+	keys = append(keys, activationKey{})
+	copy(keys[index+1:], keys[index:])
+	keys[index] = key
+	return keys
 }
 
 func sortActivations(activations []activation) {
