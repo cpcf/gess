@@ -2414,6 +2414,162 @@ func TestReteRuntimeRetractKeepsAgendaDeltaPathForSmallSupportedSession(t *testi
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
+func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalRuleset(t)
+	initials := mustGraphTopologyRemovalInitialFacts(t, employeeKey, departmentKey, regionKey, officeKey)
+	session, err := NewSession(revision, WithSessionID("graph-beta-shared-topology-retract-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	assertGraphTopologyRemovalShape(t, revision)
+	if !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before retract = %d, want %d", got, want)
+	}
+	results, err := session.rete.match(ctx, mustSnapshot(t, ctx, session))
+	if err != nil {
+		t.Fatalf("initial Rete match: %v", err)
+	}
+	candidateAgenda := newAgenda()
+	if _, err := candidateAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("candidate reconcile: %v", err)
+	}
+	directAgenda := newAgenda()
+	if _, err := directAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("direct reconcile: %v", err)
+	}
+
+	session.attachPropagationCounters()
+	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	_, delta, err := session.retractImmediate(ctx, department.ID(), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("retractImmediate(%s): %v", department.ID(), err)
+	}
+	if got, want := len(delta.removed), 2; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	directChanges := assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, delta)
+	if got, want := len(directChanges), 2; got != want {
+		t.Fatalf("direct agenda changes = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after retract = %d, want 0", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, 2; got != want {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, 6; got != want {
+		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsTouched, 5; got != want {
+		t.Fatalf("removal rows touched = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 5; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalRuleset(t)
+	initials := mustGraphTopologyRemovalInitialFacts(t, employeeKey, departmentKey, regionKey, officeKey)
+	session, err := NewSession(revision, WithSessionID("graph-beta-shared-topology-modify-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	assertGraphTopologyRemovalShape(t, revision)
+	if !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	results, err := session.rete.match(ctx, mustSnapshot(t, ctx, session))
+	if err != nil {
+		t.Fatalf("initial Rete match: %v", err)
+	}
+	candidateAgenda := newAgenda()
+	if _, err := candidateAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("candidate reconcile: %v", err)
+	}
+	directAgenda := newAgenda()
+	if _, err := directAgenda.reconcile(ctx, revision, results); err != nil {
+		t.Fatalf("direct reconcile: %v", err)
+	}
+
+	session.attachPropagationCounters()
+	region := mustSessionFactByTemplateAndField(t, session, regionKey, "id", "East")
+	result, delta, err := session.modifyImmediate(ctx, region.ID(), FactPatch{Set: mustFields(t, map[string]any{"id": "West"})}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate(%s): %v", region.ID(), err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	directChanges := assertTerminalTokenDeltaMatchesCandidateDelta(t, revision, session, candidateAgenda, directAgenda, delta)
+	if got, want := len(directChanges), 1; got != want {
+		t.Fatalf("direct agenda changes = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after modify = %d, want 1", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
+		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsTouched, 2; got != want {
+		t.Fatalf("removal rows touched = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 2; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+}
+
 func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey) {
 	t.Helper()
 
@@ -2452,6 +2608,123 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	return mustCompileWorkspace(t, workspace), noise.Key(), employee.Key(), department.Key()
+}
+
+func mustGraphTopologyRemovalRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "dept", Kind: ValueString, Required: true}},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "region", Kind: ValueString, Required: true}, {Name: "office", Kind: ValueString, Required: true}},
+	})
+	region := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "region",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	office := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "office",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	conditionsA := []RuleConditionSpec{
+		{Binding: "employee", TemplateKey: employee.Key()},
+		{
+			Binding:     "department",
+			TemplateKey: department.Key(),
+			JoinConstraints: []JoinConstraintSpec{
+				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+			},
+		},
+		{
+			Binding:     "region",
+			TemplateKey: region.Key(),
+			JoinConstraints: []JoinConstraintSpec{
+				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "region"}},
+			},
+		},
+	}
+	conditionsB := []RuleConditionSpec{
+		{Binding: "employee", TemplateKey: employee.Key()},
+		{
+			Binding:     "department",
+			TemplateKey: department.Key(),
+			JoinConstraints: []JoinConstraintSpec{
+				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+			},
+		},
+		{
+			Binding:     "office",
+			TemplateKey: office.Key(),
+			JoinConstraints: []JoinConstraintSpec{
+				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "office"}},
+			},
+		},
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "employee-department-region-a",
+		Conditions: conditionsA,
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "employee-department-office",
+		Conditions: conditionsB,
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), employee.Key(), department.Key(), region.Key(), office.Key()
+}
+
+func assertGraphTopologyRemovalShape(t *testing.T, revision *Ruleset) {
+	t.Helper()
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.TerminalNodes), 2; got != want {
+		t.Fatalf("terminal nodes = %d, want %d", got, want)
+	}
+	if got, want := len(summary.BetaNodes), 3; got != want {
+		t.Fatalf("beta nodes = %d, want shared first beta plus two branch betas (%d)", got, want)
+	}
+	shared := reteGraphStageRef{kind: reteGraphStageBeta, id: int(summary.BetaNodes[0].id)}
+	if got := summary.BetaNodes[1].left; got != shared {
+		t.Fatalf("region branch left input = %#v, want shared first beta %#v", got, shared)
+	}
+	if got := summary.BetaNodes[2].left; got != shared {
+		t.Fatalf("office branch left input = %#v, want shared first beta %#v", got, shared)
+	}
+}
+
+func mustGraphTopologyRemovalInitialFacts(t testing.TB, employeeKey, departmentKey, regionKey, officeKey TemplateKey) []SessionInitialFact {
+	t.Helper()
+
+	return []SessionInitialFact{
+		{
+			TemplateKey: employeeKey,
+			Fields:      mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}),
+		},
+		{
+			TemplateKey: departmentKey,
+			Fields:      mustFields(t, map[string]any{"id": "Engineering", "region": "East", "office": "HQ"}),
+		},
+		{
+			TemplateKey: regionKey,
+			Fields:      mustFields(t, map[string]any{"id": "East"}),
+		},
+		{
+			TemplateKey: officeKey,
+			Fields:      mustFields(t, map[string]any{"id": "HQ"}),
+		},
+	}
 }
 
 func mustBetaMemoryInitialFacts(t testing.TB, noiseKey, employeeKey, departmentKey TemplateKey) []SessionInitialFact {
