@@ -649,6 +649,31 @@ func BenchmarkReteGraphResidualJoinHighCollision(b *testing.B) {
 	}
 }
 
+func BenchmarkReteGraphResidualJoinHighCollisionReject(b *testing.B) {
+	revision, thresholdKey, candidateKey := mustGraphResidualJoinBenchmarkRuleset(b)
+	const thresholds = 256
+	candidateFields := mustFields(b, map[string]any{"group": "A", "score": -1})
+	reportGraphResidualJoinBenchmarkCounters(b, revision, thresholdKey, candidateKey, thresholds, true, candidateFields)
+
+	b.ReportAllocs()
+	b.ReportMetric(thresholds, "thresholds/op")
+	b.ReportMetric(0, "expected-joined-tokens/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustGraphResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds, true)
+		b.StartTimer()
+		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("AssertTemplate candidate: %v", err)
+		}
+		if result.Status != AssertInserted {
+			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
+		}
+		benchmarkAssertResult = result
+	}
+}
+
 func BenchmarkReteGraphResidualJoinSparseKey(b *testing.B) {
 	revision, thresholdKey, candidateKey := mustGraphResidualJoinBenchmarkRuleset(b)
 	const thresholds = 256
