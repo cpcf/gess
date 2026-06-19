@@ -2469,6 +2469,10 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	}
 
 	session.attachPropagationCounters()
+	initialSnapshot := session.propagationCounterSnapshot()
+	if got, want := initialSnapshot.TerminalRowsRetained, 2; got != want {
+		t.Fatalf("terminal rows retained after attach = %d, want %d", got, want)
+	}
 	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
 	_, delta, err := session.retractImmediate(ctx, department.ID(), mutationOrigin{})
 	if err != nil {
@@ -2497,6 +2501,12 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.TerminalDeltasRemoved, 2; got != want {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsRemoved, 2; got != want {
+		t.Fatalf("terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
+		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.RemovalIndexLookups, 6; got != want {
 		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
@@ -2636,6 +2646,160 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 	assertGraphBetaRuntimeParity(t, revision, session)
+}
+
+func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "threshold",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "candidate",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "candidate-above-threshold",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "threshold",
+				TemplateKey: threshold.Key(),
+			},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("graph-beta-terminal-memory-diagnostics"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("graph beta runtime = %#v, want graph beta support", session.rete)
+	}
+	session.attachPropagationCounters()
+
+	initialCounters := session.propagationCounterSnapshot()
+	if initialCounters.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", initialCounters.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := initialCounters.TerminalRowsRetained, 0; got != want {
+		t.Fatalf("terminal rows retained = %d, want %d", got, want)
+	}
+
+	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
+	if err != nil {
+		t.Fatalf("AssertTemplate threshold: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
+		t.Fatalf("AssertTemplate candidate: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	rule := revision.rules["candidate-above-threshold"]
+	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
+	if terminal == nil || terminal.rows.len() != 1 {
+		t.Fatalf("terminal memory = %#v, want one retained row", terminal)
+	}
+	var terminalID reteGraphTerminalNodeID
+	for _, node := range revision.graph.terminalNodes {
+		if node.ruleRevisionID == rule.revisionID {
+			terminalID = node.id
+			break
+		}
+	}
+	if terminalID == 0 {
+		t.Fatalf("terminal node for rule revision %q not found", rule.revisionID)
+	}
+	terminalToken := terminal.rows.rows[0].token
+	if terminalToken.isZero() {
+		t.Fatal("retained terminal token is zero")
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
+		t.Fatalf("terminal rows inserted = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsDeduped, 0; got != want {
+		t.Fatalf("terminal rows deduped = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsRemoved, 0; got != want {
+		t.Fatalf("terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
+		t.Fatalf("terminal rows retained = %d, want %d", got, want)
+	}
+
+	duplicateDelta := reteAgendaDelta{supported: true}
+	duplicateSpan := propagationCounterSpan{ledger: session.propagationCounters}
+	session.rete.graphBeta.insertTerminalToken(terminalID, terminalToken, &duplicateDelta, &duplicateSpan)
+	duplicateSpan.finish()
+	if len(duplicateDelta.added) != 0 {
+		t.Fatalf("duplicate terminal delta additions = %d, want 0", len(duplicateDelta.added))
+	}
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
+		t.Fatalf("terminal rows inserted after duplicate = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsDeduped, 1; got != want {
+		t.Fatalf("terminal rows deduped after duplicate = %d, want %d", got, want)
+	}
+	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
+		t.Fatalf("terminal rows retained after duplicate = %d, want %d", got, want)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Retract(ctx, thresholdFact.Fact.ID()); err != nil {
+		t.Fatalf("Retract threshold: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.TerminalRowsRemoved, 1; got != want {
+		t.Fatalf("terminal rows removed after retract = %d, want %d", got, want)
+	}
+	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
+		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
+		t.Fatalf("terminal rows retained after reset = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
+		t.Fatalf("terminal rows inserted after reset = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsDeduped, 1; got != want {
+		t.Fatalf("terminal rows deduped after reset = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsRemoved, 1; got != want {
+		t.Fatalf("terminal rows removed after reset = %d, want %d", got, want)
+	}
 }
 
 func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {

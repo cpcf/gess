@@ -52,6 +52,9 @@ type propagationCounterTotals struct {
 	RemovalRowsTouched       int
 	RemovalRowsRemoved       int
 	TerminalDeltasRemoved    int
+	TerminalRowsInserted     int
+	TerminalRowsDeduped      int
+	TerminalRowsRemoved      int
 	BetaLeftInputInserts     int
 	BetaRightInputInserts    int
 	BetaBucketProbes         int
@@ -83,6 +86,9 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.RemovalRowsTouched += other.RemovalRowsTouched
 	t.RemovalRowsRemoved += other.RemovalRowsRemoved
 	t.TerminalDeltasRemoved += other.TerminalDeltasRemoved
+	t.TerminalRowsInserted += other.TerminalRowsInserted
+	t.TerminalRowsDeduped += other.TerminalRowsDeduped
+	t.TerminalRowsRemoved += other.TerminalRowsRemoved
 	t.BetaLeftInputInserts += other.BetaLeftInputInserts
 	t.BetaRightInputInserts += other.BetaRightInputInserts
 	t.BetaBucketProbes += other.BetaBucketProbes
@@ -114,12 +120,13 @@ const (
 )
 
 type propagationCounterLedger struct {
-	totals           propagationCounterTotals
-	byTemplate       map[TemplateKey]*propagationCounterTotals
-	byOrigin         map[propagationOrigin]*propagationCounterTotals
-	byTemplateOrigin map[propagationCounterKey]*propagationCounterTotals
-	runtimePath      propagationRuntimePath
-	fallbackReasons  map[string]int
+	totals               propagationCounterTotals
+	byTemplate           map[TemplateKey]*propagationCounterTotals
+	byOrigin             map[propagationOrigin]*propagationCounterTotals
+	byTemplateOrigin     map[propagationCounterKey]*propagationCounterTotals
+	runtimePath          propagationRuntimePath
+	fallbackReasons      map[string]int
+	terminalRowsRetained int
 }
 
 type propagationCounterSpan struct {
@@ -130,12 +137,13 @@ type propagationCounterSpan struct {
 }
 
 type propagationCounterSnapshot struct {
-	Totals           propagationCounterTotals
-	ByTemplate       map[TemplateKey]propagationCounterTotals
-	ByOrigin         map[propagationOrigin]propagationCounterTotals
-	ByTemplateOrigin map[propagationCounterKey]propagationCounterTotals
-	RuntimePath      propagationRuntimePath
-	FallbackReasons  map[string]int
+	Totals               propagationCounterTotals
+	TerminalRowsRetained int
+	ByTemplate           map[TemplateKey]propagationCounterTotals
+	ByOrigin             map[propagationOrigin]propagationCounterTotals
+	ByTemplateOrigin     map[propagationCounterKey]propagationCounterTotals
+	RuntimePath          propagationRuntimePath
+	FallbackReasons      map[string]int
 }
 
 func newPropagationCounterLedger() *propagationCounterLedger {
@@ -163,11 +171,12 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		return propagationCounterSnapshot{}
 	}
 	out := propagationCounterSnapshot{
-		Totals:           l.totals,
-		ByTemplate:       make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
-		ByOrigin:         make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
-		ByTemplateOrigin: make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
-		RuntimePath:      l.runtimePath,
+		Totals:               l.totals,
+		TerminalRowsRetained: l.terminalRowsRetained,
+		ByTemplate:           make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
+		ByOrigin:             make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
+		ByTemplateOrigin:     make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
+		RuntimePath:          l.runtimePath,
 	}
 	if len(l.fallbackReasons) > 0 {
 		out.FallbackReasons = make(map[string]int, len(l.fallbackReasons))
@@ -301,6 +310,20 @@ func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
 	s.totals.TerminalDeltasEmitted++
 }
 
+func (s *propagationCounterSpan) recordTerminalRowInserted() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.TerminalRowsInserted++
+}
+
+func (s *propagationCounterSpan) recordTerminalRowDeduped() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.TerminalRowsDeduped++
+}
+
 func (s *propagationCounterSpan) finish() {
 	if s == nil || s.ledger == nil {
 		return
@@ -364,6 +387,23 @@ func (l *propagationCounterLedger) recordTerminalDeltaRemoved() {
 		return
 	}
 	l.totals.TerminalDeltasRemoved++
+}
+
+func (l *propagationCounterLedger) recordTerminalRowRemoved() {
+	if l == nil {
+		return
+	}
+	l.totals.TerminalRowsRemoved++
+}
+
+func (l *propagationCounterLedger) setTerminalRowsRetained(retained int) {
+	if l == nil {
+		return
+	}
+	if retained < 0 {
+		retained = 0
+	}
+	l.terminalRowsRetained = retained
 }
 
 func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, fallbackReasons map[string]int) {
@@ -442,6 +482,10 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-successors-reached", float64(s.Totals.BetaSuccessorsReached))
 	report("propagation-tokens-created", float64(s.Totals.TokensCreated))
 	report("propagation-terminal-deltas-emitted", float64(s.Totals.TerminalDeltasEmitted))
+	report("propagation-terminal-rows-inserted", float64(s.Totals.TerminalRowsInserted))
+	report("propagation-terminal-rows-deduped", float64(s.Totals.TerminalRowsDeduped))
+	report("propagation-terminal-rows-removed", float64(s.Totals.TerminalRowsRemoved))
+	report("propagation-terminal-rows-retained", float64(s.TerminalRowsRetained))
 	report("propagation-agenda-delta-applications", float64(s.Totals.AgendaDeltaApplications))
 	report("propagation-agenda-sorts", float64(s.Totals.AgendaSorts))
 	report("propagation-activations-stored", float64(s.Totals.ActivationsStored))
@@ -467,6 +511,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-successors-reached/rhs-assert", float64(s.Totals.BetaSuccessorsReached)/rhsAsserts)
 	report("propagation-tokens-created/rhs-assert", float64(s.Totals.TokensCreated)/rhsAsserts)
 	report("propagation-terminal-deltas-emitted/rhs-assert", float64(s.Totals.TerminalDeltasEmitted)/rhsAsserts)
+	report("propagation-terminal-rows-inserted/rhs-assert", float64(s.Totals.TerminalRowsInserted)/rhsAsserts)
+	report("propagation-terminal-rows-deduped/rhs-assert", float64(s.Totals.TerminalRowsDeduped)/rhsAsserts)
+	report("propagation-terminal-rows-removed/rhs-assert", float64(s.Totals.TerminalRowsRemoved)/rhsAsserts)
 	report("propagation-agenda-delta-applications/rhs-assert", float64(s.Totals.AgendaDeltaApplications)/rhsAsserts)
 	report("propagation-agenda-sorts/rhs-assert", float64(s.Totals.AgendaSorts)/rhsAsserts)
 	report("propagation-activations-stored/rhs-assert", float64(s.Totals.ActivationsStored)/rhsAsserts)
@@ -488,7 +535,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 }
 
 func (s propagationCounterSnapshot) runnerFields() []string {
-	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
+	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && s.TerminalRowsRetained == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
 		return nil
 	}
 	fields := []string{
@@ -505,6 +552,10 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-successors-reached=" + strconv.Itoa(s.Totals.BetaSuccessorsReached),
 		"propagation-tokens-created=" + strconv.Itoa(s.Totals.TokensCreated),
 		"propagation-terminal-deltas-emitted=" + strconv.Itoa(s.Totals.TerminalDeltasEmitted),
+		"propagation-terminal-rows-inserted=" + strconv.Itoa(s.Totals.TerminalRowsInserted),
+		"propagation-terminal-rows-deduped=" + strconv.Itoa(s.Totals.TerminalRowsDeduped),
+		"propagation-terminal-rows-removed=" + strconv.Itoa(s.Totals.TerminalRowsRemoved),
+		"propagation-terminal-rows-retained=" + strconv.Itoa(s.TerminalRowsRetained),
 		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
 		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
@@ -528,6 +579,9 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-successors-reached/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaSuccessorsReached),
 		"propagation-tokens-created/rhs-assert=" + s.perRHSAssertField(s.Totals.TokensCreated),
 		"propagation-terminal-deltas-emitted/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalDeltasEmitted),
+		"propagation-terminal-rows-inserted/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalRowsInserted),
+		"propagation-terminal-rows-deduped/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalRowsDeduped),
+		"propagation-terminal-rows-removed/rhs-assert=" + s.perRHSAssertField(s.Totals.TerminalRowsRemoved),
 		"propagation-beta-left-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaLeftInputInserts),
 		"propagation-beta-right-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaRightInputInserts),
 		"propagation-beta-bucket-probes/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketProbes),
@@ -643,9 +697,15 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"beta-successors-reached=" + strconv.Itoa(totals.BetaSuccessorsReached) + "," +
 		"tokens-created=" + strconv.Itoa(totals.TokensCreated) + "," +
 		"terminal-deltas-emitted=" + strconv.Itoa(totals.TerminalDeltasEmitted) + "," +
+		"terminal-rows-inserted=" + strconv.Itoa(totals.TerminalRowsInserted) + "," +
+		"terminal-rows-deduped=" + strconv.Itoa(totals.TerminalRowsDeduped) + "," +
+		"terminal-rows-removed=" + strconv.Itoa(totals.TerminalRowsRemoved) + "," +
 		"agenda-delta-applications=" + strconv.Itoa(totals.AgendaDeltaApplications) + "," +
 		"agenda-sorts=" + strconv.Itoa(totals.AgendaSorts) + "," +
 		"activations-stored=" + strconv.Itoa(totals.ActivationsStored) + "," +
+		"terminal-rows-inserted=" + strconv.Itoa(totals.TerminalRowsInserted) + "," +
+		"terminal-rows-deduped=" + strconv.Itoa(totals.TerminalRowsDeduped) + "," +
+		"terminal-rows-removed=" + strconv.Itoa(totals.TerminalRowsRemoved) + "," +
 		"beta-left-input-inserts=" + strconv.Itoa(totals.BetaLeftInputInserts) + "," +
 		"beta-right-input-inserts=" + strconv.Itoa(totals.BetaRightInputInserts) + "," +
 		"beta-bucket-probes=" + strconv.Itoa(totals.BetaBucketProbes) + "," +

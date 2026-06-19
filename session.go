@@ -247,6 +247,7 @@ func (s *Session) propagationCounterSnapshot() propagationCounterSnapshot {
 	if s == nil || s.propagationCounters == nil {
 		return propagationCounterSnapshot{}
 	}
+	s.syncPropagationCounters()
 	return s.propagationCounters.snapshot()
 }
 
@@ -258,7 +259,15 @@ func (s *Session) syncPropagationCounters() {
 	if s.propagationCounters == nil {
 		return
 	}
-	path, fallbackReasons := s.rete.propagationDiagnostics()
+	if s.rete != nil && s.rete.graphBeta != nil {
+		s.propagationCounters.setTerminalRowsRetained(s.rete.graphBeta.terminalRowCount())
+	} else {
+		s.propagationCounters.setTerminalRowsRetained(0)
+	}
+	path, fallbackReasons := propagationRuntimeUnknown, map[string]int(nil)
+	if s.rete != nil {
+		path, fallbackReasons = s.rete.propagationDiagnostics()
+	}
 	s.propagationCounters.setRuntimeDiagnostics(path, fallbackReasons)
 }
 
@@ -875,6 +884,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.rebuildReteRuntime(s.revision, facts)
 	} else {
 		s.rete.resetAlpha(facts)
+		s.syncPropagationCounters()
 	}
 	s.emitAgendaEvents(ctx, s.agenda.clear())
 
@@ -980,8 +990,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	s.rete = rete
 	if s.agenda == nil {
 		s.agenda = newAgenda()
-		s.syncPropagationCounters()
 	}
+	s.syncPropagationCounters()
 	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
 	if ok {
 		changes, err := s.agenda.reconcileTerminalTokens(context.Background(), next, tokens)
@@ -1169,6 +1179,7 @@ func (s *Session) rebuildReteRuntime(revision *Ruleset, facts []FactSnapshot) {
 	}
 	rete.resetAlpha(facts)
 	s.rete = rete
+	s.syncPropagationCounters()
 }
 
 func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {

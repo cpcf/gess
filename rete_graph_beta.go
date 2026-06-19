@@ -888,6 +888,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			})
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
+				counters.recordTerminalRowRemoved()
 			}
 		})
 		terminal.rows.removeContainingFact(id, counters)
@@ -962,7 +963,13 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		return
 	}
 	if !terminal.rows.insertTerminal(token) {
+		if span != nil {
+			span.recordTerminalRowDeduped()
+		}
 		return
+	}
+	if span != nil {
+		span.recordTerminalRowInserted()
 	}
 	if span != nil {
 		span.recordTerminalDeltaEmitted()
@@ -992,6 +999,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		})
 		if counters != nil {
 			counters.recordTerminalDeltaRemoved()
+			counters.recordTerminalRowRemoved()
 		}
 	})
 }
@@ -1173,6 +1181,19 @@ func (m *reteGraphBetaMemory) rowCount() int {
 			total += len(node.right.rows)
 		}
 	}
+	for _, terminal := range m.terminals {
+		if terminal != nil {
+			total += len(terminal.rows.rows)
+		}
+	}
+	return total
+}
+
+func (m *reteGraphBetaMemory) terminalRowCount() int {
+	if m == nil {
+		return 0
+	}
+	total := 0
 	for _, terminal := range m.terminals {
 		if terminal != nil {
 			total += len(terminal.rows.rows)
