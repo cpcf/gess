@@ -46,6 +46,16 @@ func newTokenArena() *tokenArena {
 	return &tokenArena{nextGeneration: 1}
 }
 
+func (a *tokenArena) reserve(rowCapacity int) {
+	if a == nil || rowCapacity <= 0 {
+		return
+	}
+	chunkCount := (rowCapacity + reteBetaMatchTokenChunkSize - 1) / reteBetaMatchTokenChunkSize
+	for len(a.chunks) < chunkCount {
+		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
+	}
+}
+
 func (a *tokenArena) reset() {
 	if a == nil {
 		return

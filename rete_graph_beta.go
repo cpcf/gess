@@ -160,6 +160,7 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 		return nil
 	}
 	rowCapacity := graphBetaTokenMemoryCapacity(revision, len(facts))
+	arenaCapacity := graphBetaTokenArenaCapacity(revision, len(facts))
 	memory := &reteGraphBetaMemory{
 		revision:            revision,
 		graph:               graph,
@@ -169,6 +170,7 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 		arena:               newTokenArena(),
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
 	}
+	memory.arena.reserve(arenaCapacity)
 	memory.reserveMemories(rowCapacity)
 	memory.resetFacts(facts)
 	return memory
@@ -180,6 +182,13 @@ func graphBetaTokenMemoryCapacity(revision *Ruleset, initialFacts int) int {
 		capacity = max(capacity, len(revision.ruleOrder)*2)
 	}
 	return capacity
+}
+
+func graphBetaTokenArenaCapacity(revision *Ruleset, initialFacts int) int {
+	if revision == nil {
+		return max(0, initialFacts)
+	}
+	return revision.estimatedRunFactCapacity(initialFacts) * 2
 }
 
 func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
