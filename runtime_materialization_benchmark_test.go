@@ -601,6 +601,29 @@ func BenchmarkReteGraphRetractHeavy(b *testing.B) {
 	}
 }
 
+func BenchmarkReteGraphRetractSparse(b *testing.B) {
+	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(b)
+	const retainedPairs = 256
+
+	b.ReportAllocs()
+	b.ReportMetric(retainedPairs, "retained-pairs/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustGraphRemovalSparseBenchmarkSession(b, revision, employeeKey, departmentKey, retainedPairs)
+		department := mustBenchmarkSessionFactByTemplateAndField(b, session, departmentKey, "id", "Engineering")
+		b.StartTimer()
+		result, err := session.Retract(context.Background(), department.ID())
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Retract: %v", err)
+		}
+		if result.Status != RetractRemoved {
+			b.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+		}
+		benchmarkRetractResult = result
+	}
+}
+
 func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(t)
 	const joinedTokens = 256
@@ -636,6 +659,71 @@ func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	if got, want := snapshot.Totals.RemovalRowsTouched, joinedTokens+1; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
+}
+
+func mustGraphRemovalSparseBenchmarkSession(tb testing.TB, revision *Ruleset, employeeKey, departmentKey TemplateKey, retainedPairs int) *Session {
+	tb.Helper()
+
+	initials := make([]SessionInitialFact, 0, retainedPairs*2+4)
+	for i := range retainedPairs {
+		deptID := fmt.Sprintf("Dept-%03d", i)
+		initials = append(initials,
+			SessionInitialFact{
+				TemplateKey: employeeKey,
+				Fields: mustFields(tb, map[string]any{
+					"name": fmt.Sprintf("employee-%03d", i),
+					"dept": deptID,
+				}),
+			},
+			SessionInitialFact{
+				TemplateKey: departmentKey,
+				Fields:      mustFields(tb, map[string]any{"id": deptID}),
+			},
+		)
+	}
+	initials = append(initials,
+		SessionInitialFact{
+			TemplateKey: employeeKey,
+			Fields: mustFields(tb, map[string]any{
+				"name": "sales-employee",
+				"dept": "Sales",
+			}),
+		},
+		SessionInitialFact{
+			TemplateKey: departmentKey,
+			Fields:      mustFields(tb, map[string]any{"id": "Sales"}),
+		},
+		SessionInitialFact{
+			TemplateKey: employeeKey,
+			Fields: mustFields(tb, map[string]any{
+				"name": "target-employee",
+				"dept": "Engineering",
+			}),
+		},
+		SessionInitialFact{
+			TemplateKey: departmentKey,
+			Fields:      mustFields(tb, map[string]any{"id": "Engineering"}),
+		},
+	)
+
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		tb.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		tb.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), retainedPairs+2; got != want {
+		tb.Fatalf("pending activations = %d, want %d", got, want)
+	}
+	return session
 }
 
 func BenchmarkAgendaTerminalTokenDeltaAssert(b *testing.B) {

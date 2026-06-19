@@ -2618,6 +2618,79 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	assertGraphBetaRuntimeParity(t, revision, session)
 }
 
+func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(t)
+	const retainedPairs = 128
+
+	session := mustGraphRemovalSparseBenchmarkSession(t, revision, employeeKey, departmentKey, retainedPairs)
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	if !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), retainedPairs+2; got != want {
+		t.Fatalf("pending activations before retract = %d, want %d", got, want)
+	}
+
+	salesEmployee := mustSessionFactByTemplateAndField(t, session, employeeKey, "name", "sales-employee")
+	salesDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Sales")
+	targetDepartment := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	keptFacts := []FactID{salesEmployee.ID(), salesDepartment.ID()}
+	var keptActivationKey activationKey
+	var keptActivationFound bool
+	for _, activation := range session.agenda.pendingActivations() {
+		if reflect.DeepEqual(activation.factIDs, keptFacts) {
+			keptActivationKey = activation.key
+			keptActivationFound = true
+			break
+		}
+	}
+	if !keptActivationFound {
+		t.Fatalf("did not find kept activation for fact IDs %#v", keptFacts)
+	}
+
+	session.attachPropagationCounters()
+	if _, err := session.Retract(ctx, targetDepartment.ID()); err != nil {
+		t.Fatalf("Retract(Engineering department): %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), retainedPairs+1; got != want {
+		t.Fatalf("pending activations after retract = %d, want %d", got, want)
+	}
+	keptActivation, ok := session.agenda.activationByKey(keptActivationKey)
+	if !ok {
+		t.Fatalf("kept activation %v disappeared after sparse retract", keptActivationKey)
+	}
+	if keptActivation.status != activationStatusPending {
+		t.Fatalf("kept activation status = %v, want pending", keptActivation.status)
+	}
+	if !reflect.DeepEqual(keptActivation.factIDs, keptFacts) {
+		t.Fatalf("kept activation fact IDs = %#v, want %#v", keptActivation.factIDs, keptFacts)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
+		t.Fatalf("removal index lookups = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsTouched, 2; got != want {
+		t.Fatalf("removal rows touched = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 2; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+}
+
 func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey) {
 	t.Helper()
 
