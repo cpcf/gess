@@ -674,6 +674,37 @@ func BenchmarkReteGraphResidualJoinSparseKey(b *testing.B) {
 	}
 }
 
+func BenchmarkReteRuntimePureResidualJoinFallbackReconcile(b *testing.B) {
+	revision, thresholdKey, candidateKey := mustPureResidualJoinBenchmarkRuleset(b)
+	const thresholds = 256
+	candidateFields := mustFields(b, map[string]any{"age": thresholds + 1})
+	reportPureResidualJoinFallbackBenchmarkCounters(b, revision, thresholdKey, candidateKey, thresholds, candidateFields)
+
+	b.ReportAllocs()
+	b.ReportMetric(thresholds, "thresholds/op")
+	b.ReportMetric(thresholds, "expected-joined-tokens/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustPureResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds)
+		b.StartTimer()
+		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		if err == nil {
+			_, err = session.reconcileAgendaInternal(context.Background())
+		}
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("assert/reconcile candidate: %v", err)
+		}
+		if result.Status != AssertInserted {
+			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
+		}
+		if got := len(session.agenda.pendingActivations()); got != thresholds {
+			b.Fatalf("pending activations = %d, want %d", got, thresholds)
+		}
+		benchmarkAssertResult = result
+	}
+}
+
 func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(t)
 	const joinedTokens = 256
@@ -1085,6 +1116,96 @@ func reportGraphResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, 
 	reporter.ReportMetric(float64(snapshot.Totals.BetaResidualFailures), "diagnostic-beta-residual-failures")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaJoinedTokensProduced), "diagnostic-beta-joined-tokens-produced")
 	reporter.ReportMetric(float64(snapshot.TerminalRowsRetained), "diagnostic-terminal-rows-retained")
+}
+
+func mustPureResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name:   "threshold",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	candidate := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name:   "candidate",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "older-than-threshold",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(tb, workspace), threshold.Key(), candidate.Key()
+}
+
+func mustPureResidualJoinBenchmarkSession(tb testing.TB, revision *Ruleset, thresholdKey TemplateKey, thresholds int) *Session {
+	tb.Helper()
+
+	initials := make([]SessionInitialFact, 0, thresholds)
+	for i := range thresholds {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: thresholdKey,
+			Fields:      mustFields(tb, map[string]any{"age": i}),
+		})
+	}
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta != nil || session.rete.plan.betaSupported {
+		tb.Fatalf("Rete runtime = %#v, want beta-unsupported fallback", session.rete)
+	}
+	return session
+}
+
+func reportPureResidualJoinFallbackBenchmarkCounters(tb testing.TB, revision *Ruleset, thresholdKey, candidateKey TemplateKey, thresholds int, candidateFields Fields) {
+	tb.Helper()
+
+	reporter, ok := tb.(interface {
+		ReportMetric(float64, string)
+	})
+	if !ok {
+		return
+	}
+	session := mustPureResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds)
+	session.attachPropagationCounters()
+	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+	if err == nil {
+		_, err = session.reconcileAgendaInternal(context.Background())
+	}
+	if err != nil {
+		tb.Fatalf("diagnostic assert/reconcile candidate: %v", err)
+	}
+	if result.Status != AssertInserted {
+		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
+	}
+	if got := len(session.agenda.pendingActivations()); got != thresholds {
+		tb.Fatalf("diagnostic pending activations = %d, want %d", got, thresholds)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphAlpha {
+		tb.Fatalf("diagnostic runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphAlpha)
+	}
+	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphAlpha), "diagnostic-runtime-graph-alpha-only")
+	reporter.ReportMetric(float64(len(snapshot.FallbackReasons)), "diagnostic-fallback-reason-count")
+	reporter.ReportMetric(float64(snapshot.FallbackReasons[propagationFallbackBetaUnsupported]), "diagnostic-fallback-beta-unsupported")
+	reporter.ReportMetric(float64(snapshot.Totals.ConditionsTested), "diagnostic-conditions-tested")
+	reporter.ReportMetric(float64(snapshot.Totals.AlphaMatchesAdded), "diagnostic-alpha-matches-added")
 }
 
 type terminalTokenDeltaBenchmarkFixture struct {
