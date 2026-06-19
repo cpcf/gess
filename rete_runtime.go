@@ -9,8 +9,10 @@ const reteAlphaMinimumFacts = 32
 
 type reteRuntime struct {
 	revision               *Ruleset
+	graph                  *reteGraph
 	plan                   reteNetworkPlan
 	oracle                 matcher
+	graphAlpha             *reteGraphAlphaMemory
 	alpha                  *reteAlphaMemory
 	beta                   *reteBetaMemory
 	terminalRemovedScratch candidateScratch
@@ -73,6 +75,8 @@ type reteBetaPlan struct {
 type reteBetaConditionRoute struct {
 	ruleRevisionID RuleRevisionID
 	conditionIndex int
+	conditionID    ConditionID
+	bindingSlot    int
 }
 
 type reteTerminalPlan struct {
@@ -141,6 +145,7 @@ func newReteRuntime(revision *Ruleset) (*reteRuntime, error) {
 	}
 	return &reteRuntime{
 		revision: revision,
+		graph:    revision.graph,
 		plan:     planReteNetwork(revision),
 		oracle:   newNaiveMatcher(revision),
 	}, nil
@@ -212,6 +217,12 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 	if r == nil {
 		return
 	}
+	if r.graph != nil {
+		if r.graphAlpha == nil {
+			r.graphAlpha = newReteGraphAlphaMemory(r.graph)
+		}
+		r.rebuildGraphAlpha(facts)
+	}
 	if r.alpha == nil {
 		r.alpha = newReteAlphaMemory(r.plan)
 	}
@@ -231,6 +242,7 @@ func (r *reteRuntime) clearMemories() {
 	if r == nil {
 		return
 	}
+	r.graphAlpha = nil
 	r.alpha = nil
 	r.beta = nil
 }
@@ -409,6 +421,214 @@ func matchTokenGeneration(token *matchToken) Generation {
 	return 0
 }
 
+func (r *reteRuntime) insertGraphAlphaFact(fact FactSnapshot, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if r == nil || r.revision == nil || r.graph == nil || r.beta == nil || !r.supportsIncrementalAgenda() {
+		return reteAgendaDelta{}, false
+	}
+	template, ok := r.revision.templateByKey(fact.TemplateKey())
+	if !ok || !template.closed {
+		return reteAgendaDelta{}, false
+	}
+	nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
+	if !routed || len(nodeIDs) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if r.graphAlpha == nil {
+		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
+	}
+	if r.alpha == nil {
+		r.alpha = newReteAlphaMemory(r.plan)
+	}
+
+	delta := reteAgendaDelta{supported: true}
+	for _, nodeID := range nodeIDs {
+		node := r.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil {
+			span.recordConditionsTested()
+		}
+		if !node.matchesSnapshot(fact) {
+			continue
+		}
+		if r.graphAlpha != nil && r.graphAlpha.upsert(nodeID, fact) && span != nil {
+			span.recordAlphaMatchAdded()
+		}
+		for _, consumer := range node.consumers {
+			r.projectGraphAlphaConsumerSnapshot(consumer, fact, span)
+		}
+		if consumerDelta, ok := r.beta.insertFactForConditionConsumers(fact, node.consumers, span); ok {
+			delta.supported = delta.supported && consumerDelta.supported
+			delta.added = append(delta.added, consumerDelta.added...)
+		} else {
+			return reteAgendaDelta{}, false
+		}
+	}
+	return delta, true
+}
+
+func (r *reteRuntime) insertGraphAlphaFactGenerated(fact *workingFact, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if r == nil || r.revision == nil || r.graph == nil || r.beta == nil || !r.supportsIncrementalAgenda() || fact == nil {
+		return reteAgendaDelta{}, false
+	}
+	template, ok := r.revision.templateByKey(fact.templateKey)
+	if !ok || !template.closed {
+		return reteAgendaDelta{}, false
+	}
+	nodeIDs, routed := r.graph.routesByTemplateKey[fact.templateKey]
+	if !routed || len(nodeIDs) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if r.graphAlpha == nil {
+		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
+	}
+	if r.alpha == nil {
+		r.alpha = newReteAlphaMemory(r.plan)
+	}
+
+	var snapshot FactSnapshot
+	haveSnapshot := false
+	delta := reteAgendaDelta{supported: true}
+	for _, nodeID := range nodeIDs {
+		node := r.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil {
+			span.recordConditionsTested()
+		}
+		if !node.matchesWorking(fact) {
+			continue
+		}
+		if !haveSnapshot {
+			snapshot = fact.detachedSnapshotForRevision(r.revision)
+			haveSnapshot = true
+		}
+		if r.graphAlpha != nil && r.graphAlpha.upsert(nodeID, snapshot) && span != nil {
+			span.recordAlphaMatchAdded()
+		}
+		for _, consumer := range node.consumers {
+			r.projectGraphAlphaConsumerSnapshot(consumer, snapshot, span)
+		}
+		if consumerDelta, ok := r.beta.insertFactForConditionConsumersGenerated(fact, node.consumers, span); ok {
+			delta.supported = delta.supported && consumerDelta.supported
+			delta.added = append(delta.added, consumerDelta.added...)
+		} else {
+			return reteAgendaDelta{}, false
+		}
+	}
+	return delta, true
+}
+
+func (r *reteRuntime) removeGraphAlphaFact(fact FactSnapshot) {
+	if r == nil || r.revision == nil || r.graph == nil || r.graphAlpha == nil {
+		return
+	}
+	template, ok := r.revision.templateByKey(fact.TemplateKey())
+	if !ok || !template.closed {
+		return
+	}
+	nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
+	if !routed {
+		return
+	}
+	for _, nodeID := range nodeIDs {
+		node := r.graph.alphaNode(nodeID)
+		if node == nil || !node.matchesSnapshot(fact) {
+			continue
+		}
+		r.graphAlpha.remove(nodeID, fact.ID())
+	}
+}
+
+func (r *reteRuntime) updateGraphAlphaFact(before, after FactSnapshot) {
+	if r == nil || r.revision == nil || r.graph == nil || r.graphAlpha == nil {
+		return
+	}
+	if before.TemplateKey() == after.TemplateKey() {
+		template, ok := r.revision.templateByKey(after.TemplateKey())
+		if !ok || !template.closed {
+			return
+		}
+		nodeIDs, routed := r.graph.routesByTemplateKey[after.TemplateKey()]
+		if !routed {
+			return
+		}
+		for _, nodeID := range nodeIDs {
+			node := r.graph.alphaNode(nodeID)
+			if node == nil {
+				continue
+			}
+			matchedBefore := node.matchesSnapshot(before)
+			matchesAfter := node.matchesSnapshot(after)
+			switch {
+			case matchedBefore && matchesAfter:
+				r.graphAlpha.upsert(nodeID, after)
+			case matchedBefore:
+				r.graphAlpha.remove(nodeID, before.ID())
+			case matchesAfter:
+				r.graphAlpha.upsert(nodeID, after)
+			}
+		}
+		return
+	}
+	r.removeGraphAlphaFact(before)
+	template, ok := r.revision.templateByKey(after.TemplateKey())
+	if !ok || !template.closed {
+		return
+	}
+	nodeIDs, routed := r.graph.routesByTemplateKey[after.TemplateKey()]
+	if !routed {
+		return
+	}
+	for _, nodeID := range nodeIDs {
+		node := r.graph.alphaNode(nodeID)
+		if node == nil || !node.matchesSnapshot(after) {
+			continue
+		}
+		r.graphAlpha.upsert(nodeID, after)
+	}
+}
+
+func (r *reteRuntime) projectGraphAlphaConsumerSnapshot(consumer reteBetaConditionRoute, fact FactSnapshot, span *propagationCounterSpan) {
+	if r == nil || r.alpha == nil {
+		return
+	}
+	conditionMemory := r.alpha.conditions[consumer.conditionID]
+	if conditionMemory == nil {
+		return
+	}
+	conditionMemory.upsert(fact)
+}
+
+func (r *reteRuntime) rebuildGraphAlpha(facts []FactSnapshot) {
+	if r == nil || r.revision == nil || r.graph == nil {
+		return
+	}
+	if r.graphAlpha == nil {
+		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
+	}
+	r.graphAlpha.reset()
+	for _, fact := range facts {
+		template, ok := r.revision.templateByKey(fact.TemplateKey())
+		if !ok || !template.closed {
+			continue
+		}
+		nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
+		if !routed {
+			continue
+		}
+		for _, nodeID := range nodeIDs {
+			node := r.graph.alphaNode(nodeID)
+			if node == nil || !node.matchesSnapshot(fact) {
+				continue
+			}
+			r.graphAlpha.upsert(nodeID, fact)
+		}
+	}
+}
+
 func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounterSpan) {
 	if r == nil || r.alpha == nil {
 		return
@@ -434,7 +654,11 @@ func (r *reteRuntime) insertAlphaFactGenerated(fact *workingFact, snapshot FactS
 }
 
 func (r *reteRuntime) removeAlphaFact(fact FactSnapshot) {
-	if r == nil || r.alpha == nil {
+	if r == nil {
+		return
+	}
+	r.removeGraphAlphaFact(fact)
+	if r.alpha == nil {
 		return
 	}
 	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.TemplateKey()); routed {
@@ -446,7 +670,11 @@ func (r *reteRuntime) removeAlphaFact(fact FactSnapshot) {
 }
 
 func (r *reteRuntime) updateAlphaFact(before, after FactSnapshot) {
-	if r == nil || r.alpha == nil {
+	if r == nil {
+		return
+	}
+	r.updateGraphAlphaFact(before, after)
+	if r.alpha == nil {
 		return
 	}
 	if before.TemplateKey() == after.TemplateKey() {
@@ -526,6 +754,8 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 				plan.betaConditionRoutes[templateKey] = append(plan.betaConditionRoutes[templateKey], reteBetaConditionRoute{
 					ruleRevisionID: rule.revisionID,
 					conditionIndex: conditionIndex,
+					conditionID:    condition.conditionID,
+					bindingSlot:    condition.bindingSlot,
 				})
 				if _, ok := ruleRouteKeys[templateKey]; !ok {
 					plan.betaRoutes[templateKey] = append(plan.betaRoutes[templateKey], rule.revisionID)
@@ -691,6 +921,77 @@ type factSource interface {
 
 type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
+}
+
+type reteGraphAlphaMemory struct {
+	nodes map[reteGraphAlphaNodeID]*reteAlphaConditionMemory
+}
+
+func newReteGraphAlphaMemory(graph *reteGraph) *reteGraphAlphaMemory {
+	if graph == nil {
+		return nil
+	}
+	memory := &reteGraphAlphaMemory{
+		nodes: make(map[reteGraphAlphaNodeID]*reteAlphaConditionMemory, len(graph.alphaNodes)),
+	}
+	for _, node := range graph.alphaNodes {
+		memory.nodes[node.id] = &reteAlphaConditionMemory{
+			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
+			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
+		}
+	}
+	return memory
+}
+
+func (m *reteGraphAlphaMemory) reset() {
+	if m == nil {
+		return
+	}
+	for _, nodeMemory := range m.nodes {
+		if nodeMemory != nil {
+			nodeMemory.clear()
+		}
+	}
+}
+
+func (m *reteGraphAlphaMemory) upsert(id reteGraphAlphaNodeID, fact FactSnapshot) bool {
+	if m == nil {
+		return false
+	}
+	nodeMemory := m.nodes[id]
+	if nodeMemory == nil {
+		nodeMemory = &reteAlphaConditionMemory{
+			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
+			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
+		}
+		if m.nodes == nil {
+			m.nodes = make(map[reteGraphAlphaNodeID]*reteAlphaConditionMemory)
+		}
+		m.nodes[id] = nodeMemory
+	}
+	return nodeMemory.upsert(fact)
+}
+
+func (m *reteGraphAlphaMemory) remove(id reteGraphAlphaNodeID, factID FactID) {
+	if m == nil {
+		return
+	}
+	nodeMemory := m.nodes[id]
+	if nodeMemory == nil {
+		return
+	}
+	nodeMemory.remove(factID)
+}
+
+func (m *reteGraphAlphaMemory) factCount(id reteGraphAlphaNodeID) int {
+	if m == nil {
+		return 0
+	}
+	nodeMemory := m.nodes[id]
+	if nodeMemory == nil {
+		return 0
+	}
+	return len(nodeMemory.facts)
 }
 
 func (m *alphaMatcher) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {

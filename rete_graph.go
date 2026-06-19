@@ -35,6 +35,7 @@ type reteGraphAlphaNode struct {
 	id          reteGraphAlphaNodeID
 	target      conditionTarget
 	constraints []compiledFieldConstraint
+	consumers   []reteBetaConditionRoute
 }
 
 type reteGraphBetaNode struct {
@@ -74,7 +75,7 @@ type reteGraphBetaKey struct {
 	joins string
 }
 
-func compileReteGraph(compiledRules []compiledRule) *reteGraph {
+func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateKey]Template) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
 	}
@@ -89,10 +90,19 @@ func compileReteGraph(compiledRules []compiledRule) *reteGraph {
 		var current reteGraphStageRef
 		haveStage := false
 
-		for _, condition := range rule.conditionPlans {
+		for conditionIndex, condition := range rule.conditionPlans {
 			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, condition.constraints)
 			alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
-			if created && condition.target.kind == conditionTargetTemplateKey {
+			supportedAlpha := reteGraphSupportsAlpha(condition.target, templatesByKey)
+			if supportedAlpha {
+				graph.appendAlphaConsumer(alphaID, reteBetaConditionRoute{
+					ruleRevisionID: rule.revisionID,
+					conditionIndex: conditionIndex,
+					conditionID:    condition.id,
+					bindingSlot:    condition.bindingSlot,
+				})
+			}
+			if created && supportedAlpha {
 				graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
 			}
 			if !haveStage {
@@ -116,6 +126,14 @@ func compileReteGraph(compiledRules []compiledRule) *reteGraph {
 	}
 
 	return graph
+}
+
+func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]Template) bool {
+	if target.kind != conditionTargetTemplateKey || target.templateKey == "" {
+		return false
+	}
+	template, ok := templatesByKey[target.templateKey]
+	return ok && template.closed
 }
 
 func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint) (reteGraphAlphaNodeID, bool) {
@@ -142,6 +160,74 @@ func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNo
 	})
 	index[key] = id
 	return id, true
+}
+
+func (g *reteGraph) appendAlphaConsumer(id reteGraphAlphaNodeID, route reteBetaConditionRoute) {
+	if g == nil || id <= 0 {
+		return
+	}
+	index := int(id) - 1
+	if index < 0 || index >= len(g.alphaNodes) {
+		return
+	}
+	g.alphaNodes[index].consumers = append(g.alphaNodes[index].consumers, route)
+}
+
+func (g *reteGraph) alphaNode(id reteGraphAlphaNodeID) *reteGraphAlphaNode {
+	if g == nil || id <= 0 {
+		return nil
+	}
+	index := int(id) - 1
+	if index < 0 || index >= len(g.alphaNodes) {
+		return nil
+	}
+	return &g.alphaNodes[index]
+}
+
+func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {
+	switch n.target.kind {
+	case conditionTargetTemplateKey:
+		if fact.TemplateKey() != n.target.templateKey {
+			return false
+		}
+	case conditionTargetName:
+		if fact.Name() != n.target.name {
+			return false
+		}
+	default:
+		return false
+	}
+	ref := newConditionFactRefFromSnapshot(fact)
+	for _, constraint := range n.constraints {
+		if !constraint.matches(ref) {
+			return false
+		}
+	}
+	return true
+}
+
+func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
+	if fact == nil {
+		return false
+	}
+	switch n.target.kind {
+	case conditionTargetTemplateKey:
+		if fact.templateKey != n.target.templateKey {
+			return false
+		}
+	case conditionTargetName:
+		if fact.name != n.target.name {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, constraint := range n.constraints {
+		if !constraint.matchesWorking(fact) {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, left, right reteGraphStageRef, joins []compiledJoinConstraint) (reteGraphBetaNodeID, bool) {
@@ -195,6 +281,7 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 	for i, node := range in {
 		out[i] = node
 		out[i].constraints = cloneCompiledFieldConstraints(node.constraints)
+		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 	}
 	return out
 }
@@ -228,6 +315,15 @@ func cloneReteGraphAlphaRoutes(in map[TemplateKey][]reteGraphAlphaNodeID) map[Te
 	for key, ids := range in {
 		out[key] = append([]reteGraphAlphaNodeID(nil), ids...)
 	}
+	return out
+}
+
+func cloneReteGraphAlphaConsumers(in []reteBetaConditionRoute) []reteBetaConditionRoute {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteBetaConditionRoute, len(in))
+	copy(out, in)
 	return out
 }
 

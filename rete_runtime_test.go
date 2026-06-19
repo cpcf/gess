@@ -65,6 +65,159 @@ func TestReteNetworkPlanDescribesClosedTemplateRules(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnce(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-a",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-b",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "p",
+			TemplateKey: person.Key(),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("shared-alpha-counter-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.RHSAsserts, 0; got != want {
+		t.Fatalf("rhs asserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionsTested, 1; got != want {
+		t.Fatalf("conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
+		t.Fatalf("condition plans tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+		t.Fatalf("rule memories visited = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 2; got != want {
+		t.Fatalf("condition matches added = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasEmitted, 2; got != want {
+		t.Fatalf("terminal deltas emitted = %d, want %d", got, want)
+	}
+
+	ruleA := revision.rules["adult-a"]
+	ruleB := revision.rules["adult-b"]
+	if got, want := session.rete.alpha.factCount(ruleA.conditionPlans[0].id), 1; got != want {
+		t.Fatalf("alpha fact count for adult-a = %d, want %d", got, want)
+	}
+	if got, want := session.rete.alpha.factCount(ruleB.conditionPlans[0].id), 1; got != want {
+		t.Fatalf("alpha fact count for adult-b = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnceForGeneratedFacts(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "noop",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-a",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-b",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "p",
+			TemplateKey: person.Key(),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("shared-alpha-generated-counter-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	originRule := revision.rules["adult-a"]
+	origin := mutationOrigin{
+		ActivationID:   ActivationID("activation:shared-alpha-generated"),
+		RuleID:         originRule.id,
+		RuleRevisionID: originRule.revisionID,
+	}
+	if _, _, _, _, err := session.insertTemplateValuesImmediate(ctx, person.Key(), []Value{mustValue(t, 20)}, origin); err != nil {
+		t.Fatalf("insertTemplateValuesImmediate: %v", err)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.RHSAsserts, 1; got != want {
+		t.Fatalf("rhs asserts = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionsTested, 1; got != want {
+		t.Fatalf("conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
+		t.Fatalf("condition plans tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+		t.Fatalf("rule memories visited = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 2; got != want {
+		t.Fatalf("condition matches added = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasEmitted, 2; got != want {
+		t.Fatalf("terminal deltas emitted = %d, want %d", got, want)
+	}
+}
+
 func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	workspace := NewWorkspace()
 	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{
@@ -242,13 +395,13 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.RHSAsserts, 1; got != want {
 		t.Fatalf("rhs asserts = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
 		t.Fatalf("rule memories visited = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
 		t.Fatalf("conditions tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionPlansTested, 2; got != want {
+	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
@@ -270,13 +423,13 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.RHSAsserts, 0; got != want {
 		t.Fatalf("public rhs asserts = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
 		t.Fatalf("public rule memories visited = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
 		t.Fatalf("public conditions tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionPlansTested, 2; got != want {
+	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("public condition plans tested = %d, want %d", got, want)
 	}
 }
@@ -348,7 +501,7 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionsTested, 1; got != want {
 		t.Fatalf("conditions tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionPlansTested, 1; got != want {
+	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {

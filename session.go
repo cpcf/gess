@@ -1177,6 +1177,9 @@ func (s *Session) updateReteAlphaAfterAssert(fact FactSnapshot, origin mutationO
 		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
 	}
+	if delta, ok := s.rete.insertGraphAlphaFact(fact, span); ok {
+		return delta
+	}
 	s.rete.insertAlphaFact(fact, span)
 	return s.rete.insertBetaFactWithOrigin(fact, origin, span)
 }
@@ -1192,6 +1195,9 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(fact *workingFact, origin 
 	if s.rete.alpha == nil {
 		s.rete.resetAlpha(s.detachedFactsByInsertionOrder())
 		return reteAgendaDelta{}
+	}
+	if delta, ok := s.rete.insertGraphAlphaFactGenerated(fact, span); ok {
+		return delta
 	}
 	snapshot := fact.detachedSnapshotForRevision(s.revision)
 	s.rete.insertAlphaFactGenerated(fact, snapshot, span)

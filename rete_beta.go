@@ -687,6 +687,84 @@ func (m *reteBetaMemory) insertFactForConditionRoutesGenerated(fact *workingFact
 	return m.finishTerminalTokenDelta(delta), true
 }
 
+func (m *reteBetaMemory) insertFactForConditionConsumers(fact FactSnapshot, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil {
+		return reteAgendaDelta{}, false
+	}
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if route.conditionIndex < 0 || route.conditionIndex >= len(rule.conditionPlans) {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+
+	delta := m.beginTerminalTokenDelta()
+	var lastVisited RuleRevisionID
+	visited := false
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil && (!visited || lastVisited != rule.revisionID) {
+			span.recordRuleMemoryVisited()
+			lastVisited = rule.revisionID
+			visited = true
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltaForConditionMatch(delta.added, rule.revisionID, route, fact, span)
+	}
+	return m.finishTerminalTokenDelta(delta), true
+}
+
+func (m *reteBetaMemory) insertFactForConditionConsumersGenerated(fact *workingFact, routes []reteBetaConditionRoute, span *propagationCounterSpan) (reteAgendaDelta, bool) {
+	if m == nil || m.revision == nil || fact == nil {
+		return reteAgendaDelta{}, false
+	}
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		if route.conditionIndex < 0 || route.conditionIndex >= len(rule.conditionPlans) {
+			return reteAgendaDelta{}, false
+		}
+		if m.rules == nil || m.rules[rule.revisionID] == nil {
+			return reteAgendaDelta{}, false
+		}
+	}
+
+	delta := m.beginTerminalTokenDelta()
+	var lastVisited RuleRevisionID
+	visited := false
+	for _, route := range routes {
+		rule, ok := m.revision.rulesByRevisionID[route.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		ruleMemory := m.rules[rule.revisionID]
+		if ruleMemory == nil {
+			return reteAgendaDelta{}, false
+		}
+		if span != nil && (!visited || lastVisited != rule.revisionID) {
+			span.recordRuleMemoryVisited()
+			lastVisited = rule.revisionID
+			visited = true
+		}
+		delta.added = ruleMemory.appendInsertedFactDeltaForConditionMatchGenerated(delta.added, rule.revisionID, route, fact, span)
+	}
+	return m.finishTerminalTokenDelta(delta), true
+}
+
 func (m *reteBetaMemory) removeFact(id FactID) reteAgendaDelta {
 	if m == nil || m.revision == nil {
 		return reteAgendaDelta{}
@@ -1012,6 +1090,42 @@ func (m *reteBetaRuleMemory) appendInsertedFactDeltasGenerated(out []reteTermina
 		out = m.appendInsertedFactDeltaForConditionPlanGenerated(out, ruleRevisionID, conditionIndex, plan, fact, span)
 	}
 	return out
+}
+
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionMatch(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, route reteBetaConditionRoute, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if m == nil || route.conditionIndex < 0 || route.conditionIndex >= len(m.rule.conditionPlans) {
+		return out
+	}
+	match := conditionMatch{
+		conditionID: route.conditionID,
+		bindingSlot: route.bindingSlot,
+		fact:        newConditionFactRefFromSnapshot(fact),
+	}
+	if !m.addConditionMatch(route.conditionIndex, match) {
+		return out
+	}
+	if span != nil {
+		span.recordConditionMatchAdded()
+	}
+	return m.appendRightMatchDeltas(out, ruleRevisionID, route.conditionIndex, match, span)
+}
+
+func (m *reteBetaRuleMemory) appendInsertedFactDeltaForConditionMatchGenerated(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, route reteBetaConditionRoute, fact *workingFact, span *propagationCounterSpan) []reteTerminalTokenDelta {
+	if m == nil || route.conditionIndex < 0 || route.conditionIndex >= len(m.rule.conditionPlans) {
+		return out
+	}
+	match := conditionMatch{
+		conditionID: route.conditionID,
+		bindingSlot: route.bindingSlot,
+		fact:        newConditionFactRefFromWorkingFact(fact),
+	}
+	if !m.addConditionMatch(route.conditionIndex, match) {
+		return out
+	}
+	if span != nil {
+		span.recordConditionMatchAdded()
+	}
+	return m.appendRightMatchDeltas(out, ruleRevisionID, route.conditionIndex, match, span)
 }
 
 func (m *reteBetaRuleMemory) appendInsertedFactDeltaForCondition(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, conditionIndex int, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {

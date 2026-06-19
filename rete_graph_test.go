@@ -118,6 +118,12 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	if got, want := len(summary.TerminalNodes), 4; got != want {
 		t.Fatalf("terminal nodes = %d, want %d", got, want)
 	}
+	if got, want := len(summary.AlphaNodes[0].consumers), 4; got != want {
+		t.Fatalf("person alpha consumers = %d, want %d", got, want)
+	}
+	if got, want := len(summary.AlphaNodes[1].consumers), 4; got != want {
+		t.Fatalf("department alpha consumers = %d, want %d", got, want)
+	}
 
 	personRoutes := summary.RoutesByTemplateKey[person.Key()]
 	if got, want := len(personRoutes), 1; got != want {
@@ -192,11 +198,16 @@ func TestReteGraphCompilesUnsupportedTargetsWithoutFailing(t *testing.T) {
 	if got, want := len(summary.TerminalNodes), 2; got != want {
 		t.Fatalf("terminal nodes = %d, want %d", got, want)
 	}
-	if got, want := len(summary.RoutesByTemplateKey[openTemplate.Key()]), 1; got != want {
+	if got, want := len(summary.RoutesByTemplateKey[openTemplate.Key()]), 0; got != want {
 		t.Fatalf("open template routes = %d, want %d", got, want)
 	}
 	if _, ok := summary.RoutesByTemplateKey[TemplateKey("matched-by-name")]; ok {
 		t.Fatalf("name-target rule should not route by template key: %#v", summary.RoutesByTemplateKey)
+	}
+	for _, node := range summary.AlphaNodes {
+		if len(node.consumers) != 0 {
+			t.Fatalf("unsupported alpha node has consumers: %#v", node)
+		}
 	}
 }
 
