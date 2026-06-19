@@ -2570,6 +2570,54 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalRuleset(t)
+	initials := mustGraphTopologyRemovalInitialFacts(t, employeeKey, departmentKey, regionKey, officeKey)
+	session, err := NewSession(revision, WithSessionID("graph-beta-shared-topology-reset-session"), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	assertGraphTopologyRemovalShape(t, revision)
+	if !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before retract = %d, want %d", got, want)
+	}
+
+	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	if _, err := session.Retract(ctx, department.ID()); err != nil {
+		t.Fatalf("Retract(Engineering department): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after retract = %d, want 0", got)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+
+	resetResult, err := session.Reset(ctx)
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if resetResult.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", resetResult.Status, ResetApplied)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime after reset = %#v, want graph beta", session.rete)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	assertGraphBetaRuntimeParity(t, revision, session)
+}
+
 func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey) {
 	t.Helper()
 
@@ -2610,7 +2658,7 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 	return mustCompileWorkspace(t, workspace), noise.Key(), employee.Key(), department.Key()
 }
 
-func mustGraphTopologyRemovalRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey, TemplateKey) {
+func mustGraphTopologyRemovalWorkspace(t testing.TB) (*Workspace, TemplateKey, TemplateKey, TemplateKey, TemplateKey) {
 	t.Helper()
 
 	workspace := NewWorkspace()
@@ -2682,7 +2730,14 @@ func mustGraphTopologyRemovalRuleset(t testing.TB) (*Ruleset, TemplateKey, Templ
 		Conditions: conditionsB,
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
-	return mustCompileWorkspace(t, workspace), employee.Key(), department.Key(), region.Key(), office.Key()
+	return workspace, employee.Key(), department.Key(), region.Key(), office.Key()
+}
+
+func mustGraphTopologyRemovalRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalWorkspace(t)
+	return mustCompileWorkspace(t, workspace), employeeKey, departmentKey, regionKey, officeKey
 }
 
 func assertGraphTopologyRemovalShape(t *testing.T, revision *Ruleset) {

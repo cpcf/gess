@@ -447,6 +447,96 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	}
 }
 
+func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testing.T) {
+	ctx := context.Background()
+	workspace, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalWorkspace(t)
+	revision1 := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(
+		revision1,
+		WithSessionID("graph-beta-shared-topology-apply-session"),
+		WithInitialFacts(mustGraphTopologyRemovalInitialFacts(t, employeeKey, departmentKey, regionKey, officeKey)...),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	assertGraphTopologyRemovalShape(t, revision1)
+	if !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before retract = %d, want %d", got, want)
+	}
+
+	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	if _, err := session.Retract(ctx, department.ID()); err != nil {
+		t.Fatalf("Retract(Engineering department): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after retract = %d, want 0", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	replacement := RuleSpec{
+		Name:     "employee-department-region-a",
+		Salience: 5,
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employeeKey},
+			{
+				Binding:     "department",
+				TemplateKey: departmentKey,
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+			{
+				Binding:     "region",
+				TemplateKey: regionKey,
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "region"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	}
+	if err := workspace.ReplaceRule(replacement); err != nil {
+		t.Fatalf("ReplaceRule(%s): %v", replacement.Name, err)
+	}
+	revision2 := mustCompileWorkspace(t, workspace)
+	result, err := session.ApplyRuleset(ctx, revision2)
+	if err != nil {
+		t.Fatalf("ApplyRuleset: %v", err)
+	}
+	if result.Status != ApplyRulesetApplied {
+		t.Fatalf("apply status = %v, want %v", result.Status, ApplyRulesetApplied)
+	}
+	if result.PreviousRulesetID != revision1.ID() {
+		t.Fatalf("previous ruleset id = %q, want %q", result.PreviousRulesetID, revision1.ID())
+	}
+	if result.CurrentRulesetID != revision2.ID() {
+		t.Fatalf("current ruleset id = %q, want %q", result.CurrentRulesetID, revision2.ID())
+	}
+	if len(result.ReplacedRuleRevisions) != 1 {
+		t.Fatalf("replaced revisions = %#v, want one", result.ReplacedRuleRevisions)
+	}
+	if session.RulesetID() != revision2.ID() {
+		t.Fatalf("session ruleset id = %q, want %q", session.RulesetID(), revision2.ID())
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime after apply = %#v, want graph beta", session.rete)
+	}
+	if got := session.agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after apply = %#v, want none", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	assertGraphBetaRuntimeParity(t, revision2, session)
+}
+
 func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSession(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
