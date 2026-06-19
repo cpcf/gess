@@ -601,6 +601,40 @@ func BenchmarkReteGraphRetractHeavy(b *testing.B) {
 	}
 }
 
+func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
+	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(t)
+	const joinedTokens = 256
+
+	session := mustGraphRemovalBenchmarkSession(t, revision, employeeKey, departmentKey, joinedTokens)
+	department := mustBenchmarkSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
+	session.attachPropagationCounters()
+
+	result, err := session.Retract(context.Background(), department.ID())
+	if err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+	if result.Status != RetractRemoved {
+		t.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got := snapshot.Totals.TerminalDeltasRemoved; got != joinedTokens {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, joinedTokens)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, joinedTokens+1; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.RemovalRowsTouched; got < snapshot.Totals.RemovalRowsRemoved {
+		t.Fatalf("removal rows touched = %d, want at least rows removed %d", got, snapshot.Totals.RemovalRowsRemoved)
+	}
+	if got := snapshot.Totals.RemovalIndexLookups; got == 0 {
+		t.Fatal("removal index lookups = 0, want indexed removal activity")
+	}
+}
+
 func BenchmarkAgendaTerminalTokenDeltaAssert(b *testing.B) {
 	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
 	agenda := newAgenda()

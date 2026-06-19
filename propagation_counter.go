@@ -48,6 +48,10 @@ type propagationCounterTotals struct {
 	AgendaDeltaApplications int
 	AgendaSorts             int
 	ActivationsStored       int
+	RemovalIndexLookups     int
+	RemovalRowsTouched      int
+	RemovalRowsRemoved      int
+	TerminalDeltasRemoved   int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -68,6 +72,10 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.AgendaDeltaApplications += other.AgendaDeltaApplications
 	t.AgendaSorts += other.AgendaSorts
 	t.ActivationsStored += other.ActivationsStored
+	t.RemovalIndexLookups += other.RemovalIndexLookups
+	t.RemovalRowsTouched += other.RemovalRowsTouched
+	t.RemovalRowsRemoved += other.RemovalRowsRemoved
+	t.TerminalDeltasRemoved += other.TerminalDeltasRemoved
 }
 
 type propagationCounterKey struct {
@@ -269,6 +277,34 @@ func (l *propagationCounterLedger) recordActivationStored() {
 	l.totals.ActivationsStored++
 }
 
+func (l *propagationCounterLedger) recordRemovalIndexLookup() {
+	if l == nil {
+		return
+	}
+	l.totals.RemovalIndexLookups++
+}
+
+func (l *propagationCounterLedger) recordRemovalRowTouched() {
+	if l == nil {
+		return
+	}
+	l.totals.RemovalRowsTouched++
+}
+
+func (l *propagationCounterLedger) recordRemovalRowRemoved() {
+	if l == nil {
+		return
+	}
+	l.totals.RemovalRowsRemoved++
+}
+
+func (l *propagationCounterLedger) recordTerminalDeltaRemoved() {
+	if l == nil {
+		return
+	}
+	l.totals.TerminalDeltasRemoved++
+}
+
 func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, fallbackReasons map[string]int) {
 	if l == nil {
 		return
@@ -348,6 +384,10 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-agenda-delta-applications", float64(s.Totals.AgendaDeltaApplications))
 	report("propagation-agenda-sorts", float64(s.Totals.AgendaSorts))
 	report("propagation-activations-stored", float64(s.Totals.ActivationsStored))
+	report("propagation-removal-index-lookups", float64(s.Totals.RemovalIndexLookups))
+	report("propagation-removal-rows-touched", float64(s.Totals.RemovalRowsTouched))
+	report("propagation-removal-rows-removed", float64(s.Totals.RemovalRowsRemoved))
+	report("propagation-terminal-deltas-removed", float64(s.Totals.TerminalDeltasRemoved))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -393,6 +433,10 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
 		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
+		"propagation-removal-index-lookups=" + strconv.Itoa(s.Totals.RemovalIndexLookups),
+		"propagation-removal-rows-touched=" + strconv.Itoa(s.Totals.RemovalRowsTouched),
+		"propagation-removal-rows-removed=" + strconv.Itoa(s.Totals.RemovalRowsRemoved),
+		"propagation-terminal-deltas-removed=" + strconv.Itoa(s.Totals.TerminalDeltasRemoved),
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),

@@ -1215,7 +1215,7 @@ func (s *Session) updateReteAlphaAfterRetract(fact FactSnapshot) reteAgendaDelta
 		return reteAgendaDelta{}
 	}
 	s.rete.removeAlphaFact(fact)
-	return s.rete.removeBetaFact(fact)
+	return s.rete.removeBetaFact(fact, s.propagationCounters)
 }
 
 func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAgendaDelta {
@@ -1223,7 +1223,7 @@ func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAge
 		return reteAgendaDelta{}
 	}
 	s.rete.updateAlphaFact(before, after)
-	return s.rete.updateBetaFact(before, after)
+	return s.rete.updateBetaFact(before, after, s.propagationCounters)
 }
 
 func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {

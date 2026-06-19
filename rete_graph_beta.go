@@ -286,9 +286,12 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef) bool {
 	return true
 }
 
-func (m *tokenHashMemory) removeContainingFact(id FactID) {
+func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) {
 	if m == nil || id.IsZero() {
 		return
+	}
+	if counters != nil {
+		counters.recordRemovalIndexLookup()
 	}
 	for {
 		bucket, ok := m.factRows[id]
@@ -299,13 +302,19 @@ func (m *tokenHashMemory) removeContainingFact(id FactID) {
 		if !ok {
 			return
 		}
-		m.removeRow(rowID)
+		if counters != nil {
+			counters.recordRemovalRowTouched()
+		}
+		m.removeRow(rowID, counters)
 	}
 }
 
-func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, fn func(tokenRef)) {
+func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(tokenRef)) {
 	if m == nil || id.IsZero() {
 		return
+	}
+	if counters != nil {
+		counters.recordRemovalIndexLookup()
 	}
 	bucket, ok := m.factRows[id]
 	if !ok || bucket.len() == 0 {
@@ -320,6 +329,9 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, fn func(tokenRef
 		}
 		havePrevious = true
 		previous = rowID
+		if counters != nil {
+			counters.recordRemovalRowTouched()
+		}
 		row := m.row(rowID)
 		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
 			continue
@@ -328,7 +340,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, fn func(tokenRef
 	}
 }
 
-func (m *tokenHashMemory) removeRow(rowID graphTokenRowID) {
+func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
 	if m == nil || rowID < 0 {
 		return
 	}
@@ -375,6 +387,9 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID) {
 	}
 	m.rows[last] = graphTokenRow{}
 	m.rows = m.rows[:last]
+	if counters != nil {
+		counters.recordRemovalRowRemoved()
+	}
 }
 
 func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
@@ -732,7 +747,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	return true
 }
 
-func (m *reteGraphBetaMemory) removeFact(id FactID) reteAgendaDelta {
+func (m *reteGraphBetaMemory) removeFact(id FactID, counters *propagationCounterLedger) reteAgendaDelta {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}
 	}
@@ -743,21 +758,24 @@ func (m *reteGraphBetaMemory) removeFact(id FactID) reteAgendaDelta {
 		if terminal == nil {
 			continue
 		}
-		terminal.rows.forEachTokenContainingFact(id, func(token tokenRef) {
+		terminal.rows.forEachTokenContainingFact(id, counters, func(token tokenRef) {
 			delta.removed = append(delta.removed, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          token,
 				identityKey:    m.terminalTokenIdentityKey(terminalNode.ruleRevisionID, token),
 			})
+			if counters != nil {
+				counters.recordTerminalDeltaRemoved()
+			}
 		})
-		terminal.rows.removeContainingFact(id)
+		terminal.rows.removeContainingFact(id, counters)
 	}
 	for _, node := range m.nodes {
 		if node == nil {
 			continue
 		}
-		node.left.removeContainingFact(id)
-		node.right.removeContainingFact(id)
+		node.left.removeContainingFact(id, counters)
+		node.right.removeContainingFact(id, counters)
 	}
 	return delta
 }
@@ -799,11 +817,11 @@ func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
 	return len(m.alphaFacts[conditionID])
 }
 
-func (m *reteGraphBetaMemory) updateFact(before, after FactSnapshot) reteAgendaDelta {
+func (m *reteGraphBetaMemory) updateFact(before, after FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
 	if m == nil {
 		return reteAgendaDelta{}
 	}
-	removed := m.removeFact(before.ID())
+	removed := m.removeFact(before.ID(), counters)
 	added := m.insertFact(after, nil)
 	return reteAgendaDelta{
 		supported: removed.supported && added.supported,

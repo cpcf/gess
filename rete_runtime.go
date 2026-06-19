@@ -360,12 +360,12 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 	return delta
 }
 
-func (r *reteRuntime) removeBetaFact(fact FactSnapshot) reteAgendaDelta {
+func (r *reteRuntime) removeBetaFact(fact FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
 	if r == nil {
 		return reteAgendaDelta{}
 	}
 	if r.graphBeta != nil {
-		delta := r.graphBeta.removeFact(fact.ID())
+		delta := r.graphBeta.removeFact(fact.ID(), counters)
 		delta.supported = delta.supported && r.supportsIncrementalAgenda()
 		return delta
 	}
@@ -385,12 +385,12 @@ func (r *reteRuntime) removeBetaFact(fact FactSnapshot) reteAgendaDelta {
 	return delta
 }
 
-func (r *reteRuntime) updateBetaFact(before, after FactSnapshot) reteAgendaDelta {
+func (r *reteRuntime) updateBetaFact(before, after FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
 	if r == nil {
 		return reteAgendaDelta{}
 	}
 	if r.graphBeta != nil {
-		delta := r.graphBeta.updateFact(before, after)
+		delta := r.graphBeta.updateFact(before, after, counters)
 		delta.supported = delta.supported && r.supportsIncrementalAgenda()
 		return delta
 	}
