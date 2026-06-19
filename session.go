@@ -81,6 +81,7 @@ type Session struct {
 	agendaReady           bool
 	agendaDirty           bool
 	templateValuesScratch []factSlot
+	actionBindingScratch  actionContextBindingState
 	mutationQueueMu       sync.Mutex
 	mutationQueue         []queuedMutation
 	mu                    struct {

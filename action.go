@@ -63,11 +63,18 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 func newTokenActionContext(ctx context.Context, session *Session, activation activation, rule compiledRule) ActionContext {
 	out := newActionContext(ctx, session, activation, nil)
 	if !activation.token.isZero() {
-		out.bindings = &actionContextBindingState{
-			conditions:     rule.conditions,
-			conditionPlans: rule.conditionPlans,
-			token:          activation.token,
-		}
+		bindings := &actionContextBindingState{}
+		bindings.resetToken(rule, activation.token)
+		out.bindings = bindings
+	}
+	return out
+}
+
+func newTokenActionContextWithBindingState(ctx context.Context, session *Session, activation activation, rule compiledRule, bindings *actionContextBindingState) ActionContext {
+	out := newActionContext(ctx, session, activation, nil)
+	if !activation.token.isZero() && bindings != nil {
+		bindings.resetToken(rule, activation.token)
+		out.bindings = bindings
 	}
 	return out
 }
@@ -363,6 +370,23 @@ func (s *actionContextBindingState) bindingIndex(name string) (int, bool) {
 	return 0, false
 }
 
+func (s *actionContextBindingState) resetToken(rule compiledRule, token tokenRef) {
+	if s == nil {
+		return
+	}
+	s.conditions = rule.conditions
+	s.conditionPlans = rule.conditionPlans
+	s.token = token
+	s.entries = nil
+	for i := range s.snapshots {
+		s.snapshots[i] = FactSnapshot{}
+	}
+	s.snapshots = nil
+	for i := range s.inlineSnapshots {
+		s.inlineSnapshots[i] = FactSnapshot{}
+	}
+}
+
 func (s *actionContextBindingState) len() int {
 	if s == nil {
 		return 0
@@ -514,11 +538,11 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 		return fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
 
-	actionCtx, err := s.actionContextForActivation(ctx, activation)
+	skipBindingFreeze := rule.allActionsSkipBindingFreeze
+	actionCtx, err := s.actionContextForActivationWithScratch(ctx, activation, skipBindingFreeze)
 	if err != nil {
 		return err
 	}
-	skipBindingFreeze := rule.allActionsSkipBindingFreeze
 	defer func() {
 		if skipBindingFreeze {
 			return
@@ -553,6 +577,10 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 }
 
 func (s *Session) actionContextForActivation(ctx context.Context, activation activation) (ActionContext, error) {
+	return s.actionContextForActivationWithScratch(ctx, activation, false)
+}
+
+func (s *Session) actionContextForActivationWithScratch(ctx context.Context, activation activation, useScratch bool) (ActionContext, error) {
 	if s == nil {
 		return ActionContext{}, ErrClosedSession
 	}
@@ -575,6 +603,9 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
+		if useScratch {
+			return newTokenActionContextWithBindingState(ctx, s, activation, rule, &s.actionBindingScratch), nil
+		}
 		return newTokenActionContext(ctx, s, activation, rule), nil
 	}
 
