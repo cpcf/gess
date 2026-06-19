@@ -2633,6 +2633,8 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-region-a", 1, 1)
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-office", 1, 1)
 
 	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
 	if _, err := session.Retract(ctx, department.ID()); err != nil {
@@ -2642,6 +2644,8 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-region-a", 1, 0)
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-office", 1, 0)
 
 	resetResult, err := session.Reset(ctx)
 	if err != nil {
@@ -2658,6 +2662,8 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 	assertGraphBetaRuntimeParity(t, revision, session)
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-region-a", 1, 1)
+	assertGraphBetaAlphaFactCount(t, session, "employee-department-office", 1, 1)
 }
 
 func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
@@ -3186,6 +3192,24 @@ func assertAlphaMemoryCount(t testing.TB, session *Session, ruleName string, wan
 	conditionID := rule.conditionPlans[0].id
 	if got := session.rete.alphaFactCount(conditionID); got != want {
 		t.Fatalf("alpha fact count for %s = %d, want %d", ruleName, got, want)
+	}
+}
+
+func assertGraphBetaAlphaFactCount(t testing.TB, session *Session, ruleName string, conditionIndex int, want int) {
+	t.Helper()
+	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatal("session has no graph beta memory")
+	}
+	rule, ok := session.revision.rules[ruleName]
+	if !ok {
+		t.Fatalf("rule %q not found", ruleName)
+	}
+	if conditionIndex < 0 || conditionIndex >= len(rule.conditionPlans) {
+		t.Fatalf("rule %q condition index %d out of range", ruleName, conditionIndex)
+	}
+	conditionID := rule.conditionPlans[conditionIndex].id
+	if got := session.rete.alphaFactCount(conditionID); got != want {
+		t.Fatalf("graph beta alpha fact count for %s condition %d = %d, want %d", ruleName, conditionIndex, got, want)
 	}
 }
 

@@ -10,7 +10,9 @@ type reteGraphBetaMemory struct {
 	graph               *reteGraph
 	nodes               map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory
 	terminals           map[reteGraphTerminalNodeID]*reteGraphTerminalMemory
-	alphaFacts          map[ConditionID]map[FactID]struct{}
+	alphaFacts          []reteGraphAlphaFactSet
+	alphaConditions     [][]ConditionID
+	alphaFactCounts     map[ConditionID]int
 	arena               *tokenArena
 	terminalTokenDeltas []reteTerminalTokenDelta
 	alphaRouteScratch   []reteGraphAlphaNodeID
@@ -25,6 +27,10 @@ type reteGraphBetaNodeMemory struct {
 
 type reteGraphTerminalMemory struct {
 	rows tokenHashMemory
+}
+
+type reteGraphAlphaFactSet struct {
+	facts map[FactID]struct{}
 }
 
 type tokenHashMemory struct {
@@ -166,12 +172,12 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 		graph:               graph,
 		nodes:               make(map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory, len(graph.betaNodes)),
 		terminals:           make(map[reteGraphTerminalNodeID]*reteGraphTerminalMemory, len(graph.terminalNodes)),
-		alphaFacts:          make(map[ConditionID]map[FactID]struct{}),
 		arena:               newTokenArena(),
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
 	}
 	memory.arena.reserve(arenaCapacity)
 	memory.reserveMemories(rowCapacity)
+	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
 	memory.resetFacts(facts)
 	return memory
 }
@@ -191,6 +197,17 @@ func graphBetaTokenArenaCapacity(revision *Ruleset, initialFacts int) int {
 	return revision.estimatedRunFactCapacity(initialFacts) * 2
 }
 
+func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFacts int) int {
+	if graph == nil || len(graph.alphaNodes) == 0 {
+		return 0
+	}
+	capacity := max(1, initialFacts)
+	if revision != nil {
+		capacity = max(capacity, revision.estimatedRunFactCapacity(initialFacts))
+	}
+	return max(1, (capacity+len(graph.alphaNodes)-1)/len(graph.alphaNodes))
+}
+
 func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 	if m == nil || m.graph == nil || rowCapacity <= 0 {
 		return
@@ -204,6 +221,55 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 		terminal := m.terminal(terminalNode.id)
 		terminal.rows.reserveTerminal(rowCapacity)
 	}
+}
+
+func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
+	if m == nil || m.graph == nil {
+		return
+	}
+	size := len(m.graph.alphaNodes) + 1
+	if cap(m.alphaFacts) < size {
+		m.alphaFacts = make([]reteGraphAlphaFactSet, size)
+	} else {
+		m.alphaFacts = m.alphaFacts[:size]
+	}
+	if factCapacity > 0 {
+		for i := 1; i < size; i++ {
+			m.alphaFacts[i].reserve(factCapacity)
+		}
+	}
+	m.alphaConditions = make([][]ConditionID, size)
+	for _, node := range m.graph.alphaNodes {
+		index := int(node.id)
+		if index <= 0 || index >= size {
+			continue
+		}
+		for _, consumer := range node.consumers {
+			m.appendAlphaCondition(index, consumer.conditionID)
+		}
+		if len(m.alphaConditions[index]) == 0 && node.entry.conditionID != "" {
+			m.appendAlphaCondition(index, node.entry.conditionID)
+		}
+	}
+	conditionCount := 0
+	for _, conditions := range m.alphaConditions {
+		conditionCount += len(conditions)
+	}
+	if m.alphaFactCounts == nil {
+		m.alphaFactCounts = make(map[ConditionID]int, conditionCount)
+	} else {
+		clear(m.alphaFactCounts)
+	}
+}
+
+func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID ConditionID) {
+	if m == nil || conditionID == "" || index <= 0 || index >= len(m.alphaConditions) {
+		return
+	}
+	if slices.Contains(m.alphaConditions[index], conditionID) {
+		return
+	}
+	m.alphaConditions[index] = append(m.alphaConditions[index], conditionID)
 }
 
 func (m *tokenHashMemory) reserveBeta(rowCapacity int) {
@@ -270,6 +336,45 @@ func (m *tokenHashMemory) len() int {
 		return 0
 	}
 	return len(m.rows)
+}
+
+func (s *reteGraphAlphaFactSet) reserve(capacity int) {
+	if s == nil || capacity <= 0 || s.facts != nil {
+		return
+	}
+	s.facts = make(map[FactID]struct{}, capacity)
+}
+
+func (s *reteGraphAlphaFactSet) insert(id FactID) bool {
+	if s == nil || id.IsZero() {
+		return false
+	}
+	if s.facts == nil {
+		s.facts = make(map[FactID]struct{}, 1)
+	}
+	if _, ok := s.facts[id]; ok {
+		return false
+	}
+	s.facts[id] = struct{}{}
+	return true
+}
+
+func (s *reteGraphAlphaFactSet) remove(id FactID) bool {
+	if s == nil || id.IsZero() || s.facts == nil {
+		return false
+	}
+	if _, ok := s.facts[id]; !ok {
+		return false
+	}
+	delete(s.facts, id)
+	return true
+}
+
+func (s *reteGraphAlphaFactSet) clear() {
+	if s == nil || s.facts == nil {
+		return
+	}
+	clear(s.facts)
 }
 
 func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
@@ -573,6 +678,9 @@ func (m *reteGraphBetaMemory) resetFacts(facts []FactSnapshot) {
 	if m == nil || m.graph == nil {
 		return
 	}
+	if len(m.alphaFacts) != len(m.graph.alphaNodes)+1 || len(m.alphaConditions) != len(m.graph.alphaNodes)+1 {
+		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, len(facts)))
+	}
 	if m.arena == nil {
 		m.arena = newTokenArena()
 	} else {
@@ -599,9 +707,11 @@ func (m *reteGraphBetaMemory) clearMemories() {
 			terminal.rows.clear()
 		}
 	}
-	for conditionID, facts := range m.alphaFacts {
-		clear(facts)
-		m.alphaFacts[conditionID] = facts
+	for i := range m.alphaFacts {
+		m.alphaFacts[i].clear()
+	}
+	if m.alphaFactCounts != nil {
+		clear(m.alphaFactCounts)
 	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
@@ -847,6 +957,10 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 	if m == nil || delta == nil {
 		return
 	}
+	alphaNodeID := reteGraphAlphaNodeID(0)
+	if source.kind == reteGraphStageAlpha {
+		alphaNodeID = reteGraphAlphaNodeID(source.id)
+	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
 		entry := terminal.entry
 		if entry.conditionID == "" {
@@ -856,7 +970,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 			continue
 		}
-		m.recordAlphaFact(entry, match.fact)
+		m.recordAlphaFact(alphaNodeID, match.fact)
 		token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), span)
 		if token.isZero() {
 			delta.supported = false
@@ -880,13 +994,13 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				delta.supported = false
 				continue
 			}
-			m.recordAlphaFact(entry, match.fact)
+			m.recordAlphaFact(alphaNodeID, match.fact)
 			token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), span)
 			if token.isZero() || !m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta) {
 				delta.supported = false
 			}
 		case reteGraphBetaInputRight:
-			m.recordAlphaFact(successor.entry, match.fact)
+			m.recordAlphaFact(alphaNodeID, match.fact)
 			edgeMatch := conditionMatch{
 				conditionID: successor.entry.conditionID,
 				bindingSlot: successor.entry.bindingSlot,
@@ -1123,32 +1237,39 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 	return delta
 }
 
-func (m *reteGraphBetaMemory) recordAlphaFact(entry bindingTupleEntry, fact conditionFactRef) {
-	if m == nil || entry.conditionID == "" || fact.ID().IsZero() {
+func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact conditionFactRef) {
+	if m == nil || nodeID <= 0 || fact.ID().IsZero() {
 		return
 	}
-	if m.alphaFacts == nil {
-		m.alphaFacts = make(map[ConditionID]map[FactID]struct{})
-	}
-	facts := m.alphaFacts[entry.conditionID]
-	if facts == nil {
-		facts = make(map[FactID]struct{})
-		m.alphaFacts[entry.conditionID] = facts
-	}
-	if _, ok := facts[fact.ID()]; ok {
+	index := int(nodeID)
+	if index <= 0 || index >= len(m.alphaFacts) {
 		return
 	}
-	facts[fact.ID()] = struct{}{}
+	if !m.alphaFacts[index].insert(fact.ID()) {
+		return
+	}
+	if m.alphaFactCounts == nil {
+		m.alphaFactCounts = make(map[ConditionID]int)
+	}
+	for _, conditionID := range m.alphaConditions[index] {
+		m.alphaFactCounts[conditionID]++
+	}
 }
 
 func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
 	}
-	for conditionID, facts := range m.alphaFacts {
-		delete(facts, id)
-		if len(facts) == 0 {
-			delete(m.alphaFacts, conditionID)
+	for index := range m.alphaFacts {
+		if !m.alphaFacts[index].remove(id) {
+			continue
+		}
+		for _, conditionID := range m.alphaConditions[index] {
+			if m.alphaFactCounts[conditionID] <= 1 {
+				delete(m.alphaFactCounts, conditionID)
+				continue
+			}
+			m.alphaFactCounts[conditionID]--
 		}
 	}
 }
@@ -1157,7 +1278,7 @@ func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
 	if m == nil || conditionID == "" {
 		return 0
 	}
-	return len(m.alphaFacts[conditionID])
+	return m.alphaFactCounts[conditionID]
 }
 
 func (m *reteGraphBetaMemory) updateFact(before, after FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
