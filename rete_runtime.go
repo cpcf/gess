@@ -365,7 +365,7 @@ func (r *reteRuntime) removeBetaFact(fact FactSnapshot, counters *propagationCou
 		return reteAgendaDelta{}
 	}
 	if r.graphBeta != nil {
-		delta := r.graphBeta.removeFact(fact.ID(), counters)
+		delta := r.graphBeta.removeFact(fact, counters)
 		delta.supported = delta.supported && r.supportsIncrementalAgenda()
 		return delta
 	}
