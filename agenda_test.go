@@ -269,6 +269,43 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
+func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-token-fact-index-session")
+
+	inserted, delta, err := session.insertFactImmediate(context.Background(), "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+
+	agenda := newAgenda()
+	if _, err := agenda.applyTerminalTokenDeltas(context.Background(), revision, nil, cloneTerminalTokenDeltas(delta.added)); err != nil {
+		t.Fatalf("applyTerminalTokenDeltas: %v", err)
+	}
+	if !agenda.tokenFactIndexDirty {
+		t.Fatal("token fact index should be dirty after storing a token-backed activation")
+	}
+	if got := agenda.byFactID[inserted.Fact.ID()].len(); got != 0 {
+		t.Fatalf("eager token fact index entries = %d, want 0", got)
+	}
+
+	activations := agenda.activationsByFactID(inserted.Fact.ID())
+	if got, want := len(activations), 1; got != want {
+		t.Fatalf("activationsByFactID = %d, want %d", got, want)
+	}
+	if activations[0].factIDs[0] != inserted.Fact.ID() {
+		t.Fatalf("activation fact ID = %q, want %q", activations[0].factIDs[0], inserted.Fact.ID())
+	}
+	if agenda.tokenFactIndexDirty {
+		t.Fatal("token fact index should be clean after fact lookup")
+	}
+	if got := agenda.byFactID[inserted.Fact.ID()].len(); got != 1 {
+		t.Fatalf("lazy token fact index entries = %d, want 1", got)
+	}
+}
+
 func TestAgendaTerminalTokenReconcileMatchesCandidateReconcile(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)

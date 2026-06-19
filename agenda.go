@@ -22,6 +22,40 @@ type activationBucket struct {
 	overflow []*activation
 }
 
+const activationRowChunkSize = 256
+
+type activationRows struct {
+	chunks [][]activation
+	count  int
+}
+
+func (r *activationRows) reset() {
+	if r == nil {
+		return
+	}
+	for chunkIndex, chunk := range r.chunks {
+		for i := range chunk {
+			chunk[i] = activation{}
+		}
+		r.chunks[chunkIndex] = chunk[:0]
+	}
+	r.count = 0
+}
+
+func (r *activationRows) add(act activation) *activation {
+	if r == nil {
+		return nil
+	}
+	chunkIndex := r.count / activationRowChunkSize
+	for len(r.chunks) <= chunkIndex {
+		r.chunks = append(r.chunks, make([]activation, 0, activationRowChunkSize))
+	}
+	r.chunks[chunkIndex] = append(r.chunks[chunkIndex], act)
+	row := &r.chunks[chunkIndex][len(r.chunks[chunkIndex])-1]
+	r.count++
+	return row
+}
+
 type activationKeyBucket struct {
 	first    activationKey
 	second   activationKey
@@ -326,9 +360,11 @@ func activationPathForRule(rule compiledRule) []int {
 
 type agenda struct {
 	activations         map[activationFingerprint]activationBucket
+	activationRows      activationRows
 	pending             []activationKey
 	byFactID            map[FactID]activationKeyBucket
 	byRevision          map[RuleRevisionID]activationKeyBucket
+	tokenFactIndexDirty bool
 	nextOrdinal         uint64
 	revision            *Ruleset
 	propagationCounters *propagationCounterLedger
@@ -366,6 +402,7 @@ func (a *agenda) reset() {
 		clear(a.activations)
 	}
 	a.pending = a.pending[:0]
+	a.activationRows.reset()
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
@@ -377,6 +414,7 @@ func (a *agenda) reset() {
 		clear(a.byRevision)
 	}
 	a.purgeActivations = nil
+	a.tokenFactIndexDirty = false
 	a.nextOrdinal = 0
 }
 
@@ -1087,6 +1125,7 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 	if a == nil {
 		return nil
 	}
+	a.ensureFactIndex()
 	bucket := a.byFactID[id]
 	if bucket.len() == 0 {
 		return nil
@@ -1137,7 +1176,31 @@ func (a *agenda) rebuildIndexes() {
 	a.pruneEmptyIndexes()
 }
 
+func (a *agenda) ensureFactIndex() {
+	if a == nil || !a.tokenFactIndexDirty {
+		return
+	}
+	if a.byFactID == nil {
+		a.byFactID = make(map[FactID]activationKeyBucket)
+	} else {
+		resetActivationIndex(a.byFactID)
+	}
+	for _, bucket := range a.activations {
+		if current := bucket.first; current != nil {
+			a.indexActivationFacts(*current, true)
+		}
+		for _, current := range bucket.overflow {
+			if current != nil {
+				a.indexActivationFacts(*current, true)
+			}
+		}
+	}
+	pruneEmptyActivationIndex(a.byFactID)
+	a.tokenFactIndexDirty = false
+}
+
 func (a *agenda) resetIndexesForRebuild() {
+	a.tokenFactIndexDirty = false
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
@@ -1169,22 +1232,36 @@ func (a *agenda) indexActivation(act activation) {
 		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
 	}
 
-	if !act.token.isZero() {
-		a.indexActivationTokenFacts(act.key, act.token)
-	} else {
-		for i, factID := range act.factIDs {
-			if factIDSeenBefore(act.factIDs[:i], factID) {
-				continue
-			}
-			factBucket := a.byFactID[factID]
-			factBucket.append(act.key)
-			a.byFactID[factID] = factBucket
-		}
-	}
+	a.indexActivationFacts(act, false)
 
 	revisionBucket := a.byRevision[act.ruleRevisionID]
 	revisionBucket.append(act.key)
 	a.byRevision[act.ruleRevisionID] = revisionBucket
+}
+
+func (a *agenda) indexActivationFacts(act activation, includeTokenFacts bool) {
+	if a == nil {
+		return
+	}
+	if a.byFactID == nil {
+		a.byFactID = make(map[FactID]activationKeyBucket)
+	}
+	if !act.token.isZero() {
+		if includeTokenFacts {
+			a.indexActivationTokenFacts(act.key, act.token)
+			return
+		}
+		a.tokenFactIndexDirty = true
+		return
+	}
+	for i, factID := range act.factIDs {
+		if factIDSeenBefore(act.factIDs[:i], factID) {
+			continue
+		}
+		factBucket := a.byFactID[factID]
+		factBucket.append(act.key)
+		a.byFactID[factID] = factBucket
+	}
 }
 
 func (a *agenda) indexActivationTokenFacts(key activationKey, token tokenRef) {
@@ -1406,14 +1483,18 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 	a.nextOrdinal++
 	publicIndex := activationIdentityIndex(bucket, act.identity.key)
 	act.publicOrdinal = publicIndex
-	if bucket.first == nil {
-		bucket.first = act
-	} else {
-		bucket.overflow = append(bucket.overflow, act)
-	}
 	act.key = key
+	stored := a.activationRows.add(*act)
+	if stored == nil {
+		stored = act
+	}
+	if bucket.first == nil {
+		bucket.first = stored
+	} else {
+		bucket.overflow = append(bucket.overflow, stored)
+	}
 	a.activations[fingerprint] = bucket
-	a.indexActivation(*act)
+	a.indexActivation(*stored)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
 	}

@@ -1251,21 +1251,32 @@ func mustTerminalTokenDeltaBenchmarkFixture(tb testing.TB) terminalTokenDeltaBen
 	if err != nil {
 		tb.Fatalf("insertFactImmediate: %v", err)
 	}
+	assertDelta = cloneReteAgendaDelta(assertDelta)
 	_, modifyDelta, err := session.modifyImmediate(context.Background(), asserted.Fact.ID(), FactPatch{
 		Set: mustFields(tb, map[string]any{"name": "Grace"}),
 	}, mutationOrigin{})
 	if err != nil {
 		tb.Fatalf("modifyImmediate: %v", err)
 	}
+	modifyDelta = cloneReteAgendaDelta(modifyDelta)
 	_, retractDelta, err := session.retractImmediate(context.Background(), asserted.Fact.ID(), mutationOrigin{})
 	if err != nil {
 		tb.Fatalf("retractImmediate: %v", err)
 	}
+	retractDelta = cloneReteAgendaDelta(retractDelta)
 	return terminalTokenDeltaBenchmarkFixture{
 		revision:     revision,
 		assertDelta:  assertDelta,
 		modifyDelta:  modifyDelta,
 		retractDelta: retractDelta,
+	}
+}
+
+func cloneReteAgendaDelta(delta reteAgendaDelta) reteAgendaDelta {
+	return reteAgendaDelta{
+		supported: delta.supported,
+		added:     cloneTerminalTokenDeltas(delta.added),
+		removed:   cloneTerminalTokenDeltas(delta.removed),
 	}
 }
 
