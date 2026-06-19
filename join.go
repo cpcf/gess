@@ -66,6 +66,52 @@ type compiledJoinConstraint struct {
 	indexKind      joinIndexKind
 }
 
+func (c compiledJoinConstraint) isHashJoin() bool {
+	return c.indexKind == joinIndexEquality
+}
+
+func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
+	if c.refBindingSlot < 0 {
+		return false, fmt.Errorf("%w: malformed join binding slot %d", ErrMatcher, c.refBindingSlot)
+	}
+	match, ok := tokenRefAtSlot(bindings, c.refBindingSlot)
+	if !ok {
+		return false, nil
+	}
+
+	left, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	if !ok {
+		return false, nil
+	}
+
+	right, ok := match.fact.compiledFieldValue(c.refField, c.refFieldSlot)
+	if !ok {
+		return false, nil
+	}
+
+	switch c.operator {
+	case FieldConstraintOpEqual:
+		return valuesComparableForEquality(left, right) && left.Equal(right), nil
+	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
+		if !isNumericValue(left) || !isNumericValue(right) {
+			return false, nil
+		}
+		comparison := compareNumericValues(left, right)
+		switch c.operator {
+		case FieldConstraintOpLessThan:
+			return comparison < 0, nil
+		case FieldConstraintOpLessOrEqual:
+			return comparison <= 0, nil
+		case FieldConstraintOpGreaterThan:
+			return comparison > 0, nil
+		case FieldConstraintOpGreaterOrEqual:
+			return comparison >= 0, nil
+		}
+	}
+
+	return false, nil
+}
+
 func validJoinOperator(operator FieldConstraintOperator) bool {
 	switch operator {
 	case FieldConstraintOpEqual, FieldConstraintOpLessThan,

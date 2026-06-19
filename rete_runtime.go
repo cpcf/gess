@@ -427,10 +427,8 @@ func (r *reteRuntime) supportsGraphBeta() bool {
 		return false
 	}
 	for _, node := range r.graph.betaNodes {
-		for _, join := range node.joins {
-			if join.operator != FieldConstraintEqual {
-				return false
-			}
+		if len(node.joins) > 0 && len(node.hashJoins) == 0 {
+			return false
 		}
 	}
 	return true
@@ -464,10 +462,8 @@ func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[stri
 	}
 	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
 		for _, node := range r.graph.betaNodes {
-			for _, join := range node.joins {
-				if join.operator != FieldConstraintEqual {
-					reasons[propagationFallbackNonEqualityJoin]++
-				}
+			if len(node.joins) > 0 && len(node.hashJoins) == 0 {
+				reasons[propagationFallbackNonEqualityJoin]++
 			}
 		}
 	}
@@ -934,10 +930,14 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 		if !rulePlan.supported {
 			plan.stats.unsupportedRules++
 		}
-		if rulePlan.betaSupported {
-			plan.betaSupported = true
-		}
 		plan.rules = append(plan.rules, rulePlan)
+	}
+	plan.betaSupported = len(plan.rules) > 0
+	for _, rulePlan := range plan.rules {
+		if !rulePlan.betaSupported {
+			plan.betaSupported = false
+			break
+		}
 	}
 
 	return plan
@@ -1024,10 +1024,11 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		},
 		beta:          make([]reteBetaPlan, 0, len(condition.joins)),
 		supported:     true,
-		betaSupported: true,
+		betaSupported: false,
 	}
 
 	var unsupported []reteUnsupportedReason
+	hashJoinCount := 0
 	addUnsupported := func(kind reteUnsupportedKind, detail string) {
 		conditionPlan.supported = false
 		conditionPlan.betaSupported = false
@@ -1065,12 +1066,15 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 			refBindingSlot: join.refBindingSlot,
 			indexKind:      join.indexKind,
 		})
-		if join.indexKind != joinIndexEquality {
-			conditionPlan.betaSupported = false
+		if join.indexKind == joinIndexEquality {
+			hashJoinCount++
 		}
 		if !join.indexable {
 			addUnsupported(reteUnsupportedUnindexedJoin, "join is not indexable by the current planner")
 		}
+	}
+	if conditionPlan.supported && (len(condition.joins) == 0 || hashJoinCount > 0) {
+		conditionPlan.betaSupported = true
 	}
 
 	return conditionPlan, unsupported

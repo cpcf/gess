@@ -42,11 +42,13 @@ type reteGraphAlphaNode struct {
 }
 
 type reteGraphBetaNode struct {
-	id    reteGraphBetaNodeID
-	left  reteGraphStageRef
-	right reteGraphStageRef
-	joins []compiledJoinConstraint
-	entry bindingTupleEntry
+	id            reteGraphBetaNodeID
+	left          reteGraphStageRef
+	right         reteGraphStageRef
+	joins         []compiledJoinConstraint
+	hashJoins     []compiledJoinConstraint
+	residualJoins []compiledJoinConstraint
+	entry         bindingTupleEntry
 }
 
 type reteGraphTerminalNode struct {
@@ -323,6 +325,7 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 	if g == nil {
 		return 0, false
 	}
+	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
 	key := reteGraphBetaKey{
 		left:  left,
 		right: right,
@@ -334,10 +337,12 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 
 	id := reteGraphBetaNodeID(len(g.betaNodes) + 1)
 	g.betaNodes = append(g.betaNodes, reteGraphBetaNode{
-		id:    id,
-		left:  left,
-		right: right,
-		joins: cloneCompiledJoinConstraints(joins),
+		id:            id,
+		left:          left,
+		right:         right,
+		joins:         cloneCompiledJoinConstraints(joins),
+		hashJoins:     cloneCompiledJoinConstraints(hashJoins),
+		residualJoins: cloneCompiledJoinConstraints(residualJoins),
 	})
 	index[key] = id
 	return id, true
@@ -394,6 +399,8 @@ func cloneReteGraphBetaNodes(in []reteGraphBetaNode) []reteGraphBetaNode {
 	for i, node := range in {
 		out[i] = node
 		out[i].joins = cloneCompiledJoinConstraints(node.joins)
+		out[i].hashJoins = cloneCompiledJoinConstraints(node.hashJoins)
+		out[i].residualJoins = cloneCompiledJoinConstraints(node.residualJoins)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
 	}
 	return out
@@ -455,6 +462,22 @@ func cloneCompiledJoinConstraints(in []compiledJoinConstraint) []compiledJoinCon
 		out[i].path = append([]int(nil), constraint.path...)
 	}
 	return out
+}
+
+func splitCompiledJoinConstraints(in []compiledJoinConstraint) ([]compiledJoinConstraint, []compiledJoinConstraint) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	hashJoins := make([]compiledJoinConstraint, 0, len(in))
+	residualJoins := make([]compiledJoinConstraint, 0, len(in))
+	for _, join := range in {
+		if join.isHashJoin() {
+			hashJoins = append(hashJoins, join)
+			continue
+		}
+		residualJoins = append(residualJoins, join)
+	}
+	return hashJoins, residualJoins
 }
 
 func serializeCompiledFieldConstraints(constraints []compiledFieldConstraint) string {

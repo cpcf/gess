@@ -167,6 +167,67 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	}
 }
 
+func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "mixed-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "left", Field: "score"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.joins), 2; got != want {
+		t.Fatalf("joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.residualJoins), 1; got != want {
+		t.Fatalf("residual joins = %d, want %d", got, want)
+	}
+	if node.hashJoins[0].operator != FieldConstraintEqual {
+		t.Fatalf("hash join operator = %v, want %v", node.hashJoins[0].operator, FieldConstraintEqual)
+	}
+	if node.residualJoins[0].operator != FieldConstraintGreaterThan {
+		t.Fatalf("residual join operator = %v, want %v", node.residualJoins[0].operator, FieldConstraintGreaterThan)
+	}
+}
+
 func TestReteGraphCompilesUnsupportedTargetsWithoutFailing(t *testing.T) {
 	workspace := NewWorkspace()
 	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{

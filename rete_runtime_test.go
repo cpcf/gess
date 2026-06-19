@@ -1693,117 +1693,111 @@ func TestReteRuntimeFallsBackForNumericJoinPlans(t *testing.T) {
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
-func TestReteRuntimeUsesBetaForSupportedRulesWithMixedFallback(t *testing.T) {
+func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
-	noise := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "noise",
-		Closed: true,
-		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
-	})
-	employee := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "employee",
-		Closed: true,
-		Fields: []FieldSpec{
-			{Name: "name", Kind: ValueString, Required: true},
-			{Name: "dept", Kind: ValueString, Required: true},
-		},
-	})
-	department := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "department",
-		Closed: true,
-		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
-	})
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "threshold",
 		Closed: true,
-		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
 	})
 	candidate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "candidate",
 		Closed: true,
-		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
 	})
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "mark",
 		Fn:   func(ActionContext) error { return nil },
 	})
 	mustAddRule(t, workspace, RuleSpec{
-		Name: "employee-department",
+		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				Binding:     "threshold",
+				TemplateKey: threshold.Key(),
 			},
-		},
-		Actions: []RuleActionSpec{{Name: "mark"}},
-	})
-	mustAddRule(t, workspace, RuleSpec{
-		Name: "older-than-threshold",
-		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
 			{
 				Binding:     "candidate",
 				TemplateKey: candidate.Key(),
 				JoinConstraints: []JoinConstraintSpec{
-					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
 				},
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
-	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+5)
-	for i := range reteAlphaMinimumFacts {
-		initials = append(initials, SessionInitialFact{
-			TemplateKey: noise.Key(),
-			Fields:      mustFields(t, map[string]any{"bucket": i}),
-		})
-	}
-	initials = append(initials,
-		SessionInitialFact{TemplateKey: employee.Key(), Fields: mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})},
-		SessionInitialFact{TemplateKey: department.Key(), Fields: mustFields(t, map[string]any{"id": "Engineering"})},
-		SessionInitialFact{TemplateKey: threshold.Key(), Fields: mustFields(t, map[string]any{"age": 20})},
-		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 10})},
-		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 30})},
-	)
-	session, err := NewSession(revision, WithSessionID("mixed-beta-fallback-session"), WithInitialFacts(initials...))
+	session, err := NewSession(revision, WithSessionID("graph-beta-mixed-residual-session"))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.beta == nil || !session.rete.plan.betaSupported {
-		t.Fatalf("beta runtime = %#v, want mixed beta support", session.rete)
+	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.plan.betaSupported {
+		t.Fatalf("graph beta runtime = %#v, want mixed graph beta support", session.rete)
 	}
-	equalityRule := revision.rules["employee-department"]
-	numericRule := revision.rules["older-than-threshold"]
-	if session.rete.beta.rules[equalityRule.revisionID] == nil {
-		t.Fatal("equality join rule did not get beta memory")
+	session.attachPropagationCounters()
+	initialCounters := session.propagationCounterSnapshot()
+	if initialCounters.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", initialCounters.RuntimePath, propagationRuntimeGraphBeta)
 	}
-	if session.rete.beta.rules[numericRule.revisionID] != nil {
-		t.Fatal("numeric join rule unexpectedly got beta memory")
+	if len(initialCounters.FallbackReasons) != 0 {
+		t.Fatalf("fallback reasons = %#v, want none for mixed hash/residual graph beta", initialCounters.FallbackReasons)
 	}
 
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
-	if results, ok, err := session.rete.matchWithoutSnapshot(ctx, session.Generation()); err != nil {
-		t.Fatalf("matchWithoutSnapshot: %v", err)
-	} else if ok {
-		t.Fatalf("matchWithoutSnapshot unexpectedly supported mixed fallback plan: %#v", results)
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
+	if err != nil {
+		t.Fatalf("AssertTemplate threshold: %v", err)
 	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	failingCandidate, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 8}))
+	if err != nil {
+		t.Fatalf("AssertTemplate failing candidate: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	_, err = session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12}))
+	if err != nil {
+		t.Fatalf("AssertTemplate passing candidate: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Modify(ctx, failingCandidate.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"group": "A", "score": 15})}); err != nil {
+		t.Fatalf("Modify failing candidate: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Retract(ctx, thresholdFact.Fact.ID()); err != nil {
+		t.Fatalf("Retract threshold: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.rete.beta.rules[equalityRule.revisionID] == nil {
-		t.Fatal("equality join rule lost beta memory after reset")
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	reverseSession, err := NewSession(revision, WithSessionID("graph-beta-mixed-residual-reverse-session"), WithInitialFacts(
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"group": "B", "score": 8})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"group": "B", "score": 14})},
+		SessionInitialFact{TemplateKey: threshold.Key(), Fields: mustFields(t, map[string]any{"group": "B", "score": 10})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession reverse: %v", err)
 	}
-	if session.rete.beta.rules[numericRule.revisionID] != nil {
-		t.Fatal("numeric join rule unexpectedly got beta memory after reset")
+	if reverseSession.rete == nil || reverseSession.rete.graphBeta == nil {
+		t.Fatalf("reverse graph beta runtime = %#v, want graph beta support", reverseSession.rete)
 	}
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertGraphBetaRuntimeParity(t, revision, reverseSession)
 }
 
 func TestReteRuntimeMatchWithoutSnapshotMatchesSnapshotForFullBetaMemory(t *testing.T) {

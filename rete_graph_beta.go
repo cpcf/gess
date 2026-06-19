@@ -764,6 +764,11 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if !ok {
 				continue
 			}
+			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token); err != nil {
+				return false
+			} else if !ok {
+				continue
+			}
 			output := m.newTokenRef(token, entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation(), span)
 			if output.isZero() {
 				continue
@@ -780,6 +785,11 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			rowID, _ := bucket.at(i)
 			leftRow := nodeMemory.left.row(rowID)
 			if leftRow == nil || leftRow.token.isZero() {
+				continue
+			}
+			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token); err != nil {
+				return false
+			} else if !ok {
 				continue
 			}
 			output := m.newTokenRef(leftRow.token, entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation(), span)
@@ -1089,7 +1099,10 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 }
 
 func graphBetaJoinKeyForLeftToken(node *reteGraphBetaNode, token tokenRef) (betaJoinKey, bool) {
-	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.joins}, func(join compiledJoinConstraint) (Value, bool) {
+	if node == nil || len(node.hashJoins) == 0 && len(node.joins) > 0 {
+		return betaJoinKey{}, false
+	}
+	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool) {
 		match, ok := tokenRefAtSlot(token, join.refBindingSlot)
 		if !ok {
 			return Value{}, false
@@ -1099,13 +1112,32 @@ func graphBetaJoinKeyForLeftToken(node *reteGraphBetaNode, token tokenRef) (beta
 }
 
 func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (betaJoinKey, bool) {
+	if node == nil || len(node.hashJoins) == 0 && len(node.joins) > 0 {
+		return betaJoinKey{}, false
+	}
 	match, ok := tokenLastMatch(token)
 	if !ok {
 		return betaJoinKey{}, false
 	}
-	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.joins}, func(join compiledJoinConstraint) (Value, bool) {
+	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool) {
 		return match.fact.compiledFieldValue(join.field, join.fieldSlot)
 	})
+}
+
+func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact conditionFactRef, bindings tokenRef) (bool, error) {
+	if m == nil || node == nil || len(node.residualJoins) == 0 {
+		return true, nil
+	}
+	for _, join := range node.residualJoins {
+		ok, err := join.matchesToken(fact, bindings)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (m *reteGraphBetaMemory) rowCount() int {
