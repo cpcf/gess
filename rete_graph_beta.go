@@ -244,6 +244,36 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	return true
 }
 
+func (m *tokenHashMemory) insertTerminal(token tokenRef) bool {
+	if m == nil || token.isZero() {
+		return false
+	}
+	if m.identityRows == nil {
+		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
+	}
+
+	identity := tokenRefKey(token)
+	bucket := m.identityRows[identity]
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
+		row := m.row(rowID)
+		if row != nil && tokenRefEqual(row.token, token) {
+			return false
+		}
+	}
+
+	rowID := graphTokenRowID(len(m.rows))
+	m.rows = append(m.rows, graphTokenRow{
+		id:       rowID,
+		token:    token,
+		identity: identity,
+	})
+	identityBucket := m.identityRows[identity]
+	identityBucket.append(rowID)
+	m.identityRows[identity] = identityBucket
+	return true
+}
+
 func (m *tokenHashMemory) removeContainingFact(id FactID) {
 	if m == nil {
 		return
@@ -683,7 +713,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		delta.supported = false
 		return
 	}
-	if !terminal.rows.insert(token, betaJoinKey{}) {
+	if !terminal.rows.insertTerminal(token) {
 		return
 	}
 	if span != nil {
