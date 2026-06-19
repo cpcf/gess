@@ -538,7 +538,7 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 		return reteAgendaDelta{}
 	}
 
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, nodeID := range nodeIDs {
 		node := m.graph.alphaNode(nodeID)
 		if node == nil {
@@ -563,7 +563,7 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 			delta.supported = false
 		}
 	}
-	return delta
+	return m.finishTerminalTokenDelta(delta)
 }
 
 func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
@@ -576,7 +576,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 		return reteAgendaDelta{}
 	}
 
-	delta := reteAgendaDelta{supported: true}
+	delta := m.beginTerminalTokenDelta()
 	for _, nodeID := range nodeIDs {
 		node := m.graph.alphaNode(nodeID)
 		if node == nil {
@@ -601,7 +601,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 			delta.supported = false
 		}
 	}
-	return delta
+	return m.finishTerminalTokenDelta(delta)
 }
 
 func (m *reteGraphBetaMemory) insertAlphaMatch(nodeID reteGraphAlphaNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) bool {
@@ -956,6 +956,24 @@ func (m *reteGraphBetaMemory) updateFact(before, after FactSnapshot, counters *p
 		added:     added.added,
 		removed:   removed.removed,
 	}
+}
+
+func (m *reteGraphBetaMemory) beginTerminalTokenDelta() reteAgendaDelta {
+	if m == nil {
+		return reteAgendaDelta{}
+	}
+	return reteAgendaDelta{
+		supported: true,
+		added:     m.terminalTokenDeltas[:0],
+	}
+}
+
+func (m *reteGraphBetaMemory) finishTerminalTokenDelta(delta reteAgendaDelta) reteAgendaDelta {
+	if m == nil {
+		return delta
+	}
+	m.terminalTokenDeltas = delta.added
+	return delta
 }
 
 func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNodeID, token tokenRef, delta *reteAgendaDelta, span *propagationCounterSpan) {
