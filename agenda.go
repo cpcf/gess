@@ -559,6 +559,15 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 }
 
 func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) ([]agendaChange, error) {
+	return a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, true)
+}
+
+func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
+	_, err := a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, false)
+	return err
+}
+
+func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {
 	if a == nil || revision == nil {
 		return nil, ErrInvalidRuleset
 	}
@@ -594,7 +603,10 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		removedKeys[key] = struct{}{}
 	}
 
-	changes := a.deltaChanges[:0]
+	var changes []agendaChange
+	if collectChanges {
+		changes = a.deltaChanges[:0]
+	}
 	if len(removedKeys) > 0 {
 		nextPending := a.deltaNextPending[:0]
 		for _, key := range a.pending {
@@ -604,10 +616,12 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 			}
 			if _, remove := removedKeys[key]; remove {
 				existing.status = activationStatusDeactivated
-				changes = append(changes, agendaChange{
-					kind:       agendaChangeDeactivated,
-					activation: a.compactChangeActivation(existing),
-				})
+				if collectChanges {
+					changes = append(changes, agendaChange{
+						kind:       agendaChangeDeactivated,
+						activation: a.compactChangeActivation(existing),
+					})
+				}
 				continue
 			}
 			nextPending = append(nextPending, key)
@@ -623,9 +637,12 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		sortTerminalTokenDeltas(revision, added)
 	}
 
-	activated := a.deltaActivated[:0]
 	var previous reteTerminalTokenDelta
 	havePrevious := false
+	var activated []agendaChange
+	if collectChanges {
+		activated = a.deltaActivated[:0]
+	}
 	for _, delta := range added {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -652,17 +669,26 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 		}
 		key := a.storeActivation(&created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, &created)
-		activated = append(activated, agendaChange{
-			kind:       agendaChangeActivated,
-			activation: a.compactChangeActivation(&created),
-		})
+		if collectChanges {
+			activated = append(activated, agendaChange{
+				kind:       agendaChangeActivated,
+				activation: a.compactChangeActivation(&created),
+			})
+		}
 	}
-	changes = append(changes, activated...)
+	if collectChanges {
+		changes = append(changes, activated...)
+	}
 
 	a.deltaRemovedKeys = removedKeys
-	a.deltaChanges = changes[:0]
-	a.deltaActivated = activated[:0]
-	return append([]agendaChange(nil), changes...), nil
+	if collectChanges {
+		a.deltaChanges = changes[:0]
+		a.deltaActivated = activated[:0]
+		return append([]agendaChange(nil), changes...), nil
+	}
+	a.deltaChanges = a.deltaChanges[:0]
+	a.deltaActivated = a.deltaActivated[:0]
+	return nil, nil
 }
 
 func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) ([]agendaChange, error) {

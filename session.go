@@ -1129,6 +1129,10 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 }
 
 func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {
+	return s.applyReteAgendaDeltaInternal(ctx, delta, true)
+}
+
+func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAgendaDelta, collectChanges bool) ([]agendaChange, bool, error) {
 	if s == nil || s.closed {
 		return nil, true, ErrClosedSession
 	}
@@ -1148,8 +1152,14 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
 		return nil, false, nil
 	}
-	changes, err := s.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
-	if err != nil {
+	var changes []agendaChange
+	if collectChanges {
+		var err error
+		changes, err = s.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
+		if err != nil {
+			return nil, true, err
+		}
+	} else if err := s.agenda.applyTerminalTokenDeltasWithoutChanges(ctx, s.revision, delta.removed, delta.added); err != nil {
 		return nil, true, err
 	}
 	if s.propagationCounters != nil {
@@ -1158,7 +1168,9 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	s.clearBetaTerminalTokenDeltasForDelta(delta)
 	s.agendaReady = true
 	s.agendaDirty = false
-	s.emitAgendaEvents(ctx, changes)
+	if collectChanges {
+		s.emitAgendaEvents(ctx, changes)
+	}
 	return changes, true, nil
 }
 
@@ -2558,7 +2570,7 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 		s.markAgendaDirty()
 		return err
 	}
-	if _, ok, err := s.applyReteAgendaDelta(ctx, delta); err != nil {
+	if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); err != nil {
 		s.clearRunAgendaDelta()
 		s.markAgendaDirty()
 		return err
