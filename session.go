@@ -255,6 +255,11 @@ func (s *Session) syncPropagationCounters() {
 		return
 	}
 	s.agenda.propagationCounters = s.propagationCounters
+	if s.propagationCounters == nil {
+		return
+	}
+	path, fallbackReasons := s.rete.propagationDiagnostics()
+	s.propagationCounters.setRuntimeDiagnostics(path, fallbackReasons)
 }
 
 func (s *Session) removeStoredFact(id FactID) {

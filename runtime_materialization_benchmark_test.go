@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -553,6 +554,53 @@ func BenchmarkReteAgendaDeltaRetract(b *testing.B) {
 	}
 }
 
+func BenchmarkReteGraphModifyHeavy(b *testing.B) {
+	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(b)
+	patch := FactPatch{Set: mustFields(b, map[string]any{"id": "Sales"})}
+	const joinedTokens = 256
+
+	b.ReportAllocs()
+	b.ReportMetric(joinedTokens, "joined-tokens/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustGraphRemovalBenchmarkSession(b, revision, employeeKey, departmentKey, joinedTokens)
+		department := mustBenchmarkSessionFactByTemplateAndField(b, session, departmentKey, "id", "Engineering")
+		b.StartTimer()
+		result, err := session.Modify(context.Background(), department.ID(), patch)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Modify: %v", err)
+		}
+		if result.Status != ModifyChanged {
+			b.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+		}
+		benchmarkModifyResult = result
+	}
+}
+
+func BenchmarkReteGraphRetractHeavy(b *testing.B) {
+	revision, employeeKey, departmentKey := mustGraphRemovalBenchmarkRuleset(b)
+	const joinedTokens = 256
+
+	b.ReportAllocs()
+	b.ReportMetric(joinedTokens, "joined-tokens/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustGraphRemovalBenchmarkSession(b, revision, employeeKey, departmentKey, joinedTokens)
+		department := mustBenchmarkSessionFactByTemplateAndField(b, session, departmentKey, "id", "Engineering")
+		b.StartTimer()
+		result, err := session.Retract(context.Background(), department.ID())
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Retract: %v", err)
+		}
+		if result.Status != RetractRemoved {
+			b.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+		}
+		benchmarkRetractResult = result
+	}
+}
+
 func BenchmarkAgendaTerminalTokenDeltaAssert(b *testing.B) {
 	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
 	agenda := newAgenda()
@@ -681,6 +729,82 @@ func mustReteAgendaDeltaBenchmarkSession(tb testing.TB, revision *Ruleset, facts
 	}
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		tb.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	return session
+}
+
+func mustGraphRemovalBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	employee := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name:   "employee",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name:   "department",
+		Closed: true,
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(tb, workspace), employee.Key(), department.Key()
+}
+
+func mustGraphRemovalBenchmarkSession(tb testing.TB, revision *Ruleset, employeeKey, departmentKey TemplateKey, employees int) *Session {
+	tb.Helper()
+
+	initials := make([]SessionInitialFact, 0, employees+1)
+	for i := range employees {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: employeeKey,
+			Fields: mustFields(tb, map[string]any{
+				"name": fmt.Sprintf("employee-%03d", i),
+				"dept": "Engineering",
+			}),
+		})
+	}
+	initials = append(initials, SessionInitialFact{
+		TemplateKey: departmentKey,
+		Fields:      mustFields(tb, map[string]any{"id": "Engineering"}),
+	})
+
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		tb.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		tb.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != employees {
+		tb.Fatalf("pending activations = %d, want %d", got, employees)
 	}
 	return session
 }

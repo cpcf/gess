@@ -467,6 +467,12 @@ func TestSteadyStateScalingPropagationCountersScale(t *testing.T) {
 	if len(largeSnapshot.ByTemplate) == 0 || len(largeSnapshot.ByOrigin) == 0 {
 		t.Fatalf("counter distributions are empty: %#v", largeSnapshot)
 	}
+	if largeSnapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", largeSnapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if len(largeSnapshot.FallbackReasons) != 0 {
+		t.Fatalf("fallback reasons = %#v, want none for supported graph-beta workload", largeSnapshot.FallbackReasons)
+	}
 	if got := largeSnapshot.ByOrigin[propagationOriginExternal].Asserts; got == 0 {
 		t.Fatalf("external origin distribution is empty: %#v", largeSnapshot.ByOrigin)
 	}

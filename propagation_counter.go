@@ -1,6 +1,7 @@
 package gess
 
 import (
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -74,11 +75,29 @@ type propagationCounterKey struct {
 	origin      propagationOrigin
 }
 
+type propagationRuntimePath string
+
+const (
+	propagationRuntimeUnknown       propagationRuntimePath = "unknown"
+	propagationRuntimeGraphBeta     propagationRuntimePath = "graph-beta"
+	propagationRuntimeLegacyBeta    propagationRuntimePath = "legacy-beta"
+	propagationRuntimeGraphAlpha    propagationRuntimePath = "graph-alpha-only"
+	propagationRuntimeSemanticMatch propagationRuntimePath = "semantic-matcher"
+)
+
+const (
+	propagationFallbackNoGraph         = "no-graph"
+	propagationFallbackBetaUnsupported = "beta-unsupported"
+	propagationFallbackNonEqualityJoin = "non-equality-join"
+)
+
 type propagationCounterLedger struct {
 	totals           propagationCounterTotals
 	byTemplate       map[TemplateKey]*propagationCounterTotals
 	byOrigin         map[propagationOrigin]*propagationCounterTotals
 	byTemplateOrigin map[propagationCounterKey]*propagationCounterTotals
+	runtimePath      propagationRuntimePath
+	fallbackReasons  map[string]int
 }
 
 type propagationCounterSpan struct {
@@ -93,6 +112,8 @@ type propagationCounterSnapshot struct {
 	ByTemplate       map[TemplateKey]propagationCounterTotals
 	ByOrigin         map[propagationOrigin]propagationCounterTotals
 	ByTemplateOrigin map[propagationCounterKey]propagationCounterTotals
+	RuntimePath      propagationRuntimePath
+	FallbackReasons  map[string]int
 }
 
 func newPropagationCounterLedger() *propagationCounterLedger {
@@ -100,6 +121,7 @@ func newPropagationCounterLedger() *propagationCounterLedger {
 		byTemplate:       make(map[TemplateKey]*propagationCounterTotals),
 		byOrigin:         make(map[propagationOrigin]*propagationCounterTotals),
 		byTemplateOrigin: make(map[propagationCounterKey]*propagationCounterTotals),
+		runtimePath:      propagationRuntimeUnknown,
 	}
 }
 
@@ -123,6 +145,11 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		ByTemplate:       make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
 		ByOrigin:         make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
 		ByTemplateOrigin: make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
+		RuntimePath:      l.runtimePath,
+	}
+	if len(l.fallbackReasons) > 0 {
+		out.FallbackReasons = make(map[string]int, len(l.fallbackReasons))
+		maps.Copy(out.FallbackReasons, l.fallbackReasons)
 	}
 	for key, totals := range l.byTemplate {
 		if totals != nil {
@@ -242,6 +269,30 @@ func (l *propagationCounterLedger) recordActivationStored() {
 	l.totals.ActivationsStored++
 }
 
+func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, fallbackReasons map[string]int) {
+	if l == nil {
+		return
+	}
+	if path == "" {
+		path = propagationRuntimeUnknown
+	}
+	l.runtimePath = path
+	if len(fallbackReasons) == 0 {
+		clear(l.fallbackReasons)
+		return
+	}
+	if l.fallbackReasons == nil {
+		l.fallbackReasons = make(map[string]int, len(fallbackReasons))
+	} else {
+		clear(l.fallbackReasons)
+	}
+	for reason, count := range fallbackReasons {
+		if count > 0 {
+			l.fallbackReasons[reason] = count
+		}
+	}
+}
+
 func (l *propagationCounterLedger) addTemplateTotals(templateKey TemplateKey, totals propagationCounterTotals) {
 	if l == nil {
 		return
@@ -314,13 +365,20 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-template-count", float64(len(s.ByTemplate)))
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
+	report("propagation-runtime-graph-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphBeta))
+	report("propagation-runtime-legacy-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeLegacyBeta))
+	report("propagation-runtime-graph-alpha-only", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphAlpha))
+	report("propagation-runtime-semantic-matcher", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeSemanticMatch))
+	report("propagation-fallback-reason-count", float64(len(s.FallbackReasons)))
 }
 
 func (s propagationCounterSnapshot) runnerFields() []string {
-	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 {
+	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
 		return nil
 	}
 	fields := []string{
+		"propagation-runtime-path=" + string(s.runtimePath()),
+		"propagation-fallback-reasons=" + s.fallbackReasonSummary(),
 		"propagation-asserts=" + strconv.Itoa(s.Totals.Asserts),
 		"propagation-rhs-asserts=" + strconv.Itoa(s.Totals.RHSAsserts),
 		"propagation-rule-memories-visited=" + strconv.Itoa(s.Totals.RuleMemoriesVisited),
@@ -351,6 +409,36 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		fields = append(fields, "propagation-by-template-origin="+summary)
 	}
 	return fields
+}
+
+func propagationRuntimePathMetric(got, want propagationRuntimePath) float64 {
+	if got == want {
+		return 1
+	}
+	return 0
+}
+
+func (s propagationCounterSnapshot) runtimePath() propagationRuntimePath {
+	if s.RuntimePath == "" {
+		return propagationRuntimeUnknown
+	}
+	return s.RuntimePath
+}
+
+func (s propagationCounterSnapshot) fallbackReasonSummary() string {
+	if len(s.FallbackReasons) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(s.FallbackReasons))
+	for key := range s.FallbackReasons {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+strconv.Itoa(s.FallbackReasons[key]))
+	}
+	return strings.Join(parts, ";")
 }
 
 func (s propagationCounterSnapshot) perRHSAssertField(value int) string {

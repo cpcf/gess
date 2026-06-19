@@ -436,6 +436,47 @@ func (r *reteRuntime) supportsGraphBeta() bool {
 	return true
 }
 
+func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[string]int) {
+	if r == nil {
+		return propagationRuntimeUnknown, nil
+	}
+	path := propagationRuntimeUnknown
+	switch {
+	case r.graphBeta != nil:
+		path = propagationRuntimeGraphBeta
+	case r.beta != nil:
+		path = propagationRuntimeLegacyBeta
+	case len(r.plan.unsupported) > 0 || r.alpha == nil:
+		path = propagationRuntimeSemanticMatch
+	case r.graphAlpha != nil || r.alpha != nil:
+		path = propagationRuntimeGraphAlpha
+	}
+
+	reasons := make(map[string]int)
+	if r.graph == nil {
+		reasons[propagationFallbackNoGraph]++
+	}
+	if !r.plan.betaSupported {
+		reasons[propagationFallbackBetaUnsupported]++
+	}
+	for _, reason := range r.plan.unsupported {
+		reasons[string(reason.kind)]++
+	}
+	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
+		for _, node := range r.graph.betaNodes {
+			for _, join := range node.joins {
+				if join.operator != FieldConstraintEqual {
+					reasons[propagationFallbackNonEqualityJoin]++
+				}
+			}
+		}
+	}
+	if path == propagationRuntimeGraphBeta && len(reasons) == 0 {
+		return path, nil
+	}
+	return path, reasons
+}
+
 func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelta, scratch *candidateScratch) ([]matchCandidate, error) {
 	if r == nil || r.revision == nil {
 		return nil, ErrInvalidRuleset

@@ -1681,6 +1681,14 @@ func TestReteRuntimeFallsBackForNumericJoinPlans(t *testing.T) {
 	if session.rete.plan.betaSupported {
 		t.Fatalf("beta plan = %#v, want unsupported for numeric joins", session.rete.plan)
 	}
+	session.attachPropagationCounters()
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphAlpha {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphAlpha)
+	}
+	if got := snapshot.FallbackReasons[propagationFallbackBetaUnsupported]; got != 1 {
+		t.Fatalf("beta unsupported fallback count = %d, want 1 in %#v", got, snapshot.FallbackReasons)
+	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
@@ -1858,6 +1866,17 @@ func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T)
 	}
 	if len(session.rete.plan.unsupported) == 0 {
 		t.Fatalf("unsupported plan reasons = %#v, want fallback reason", session.rete.plan.unsupported)
+	}
+	if session.propagationCounters != nil {
+		t.Fatalf("normal session unexpectedly has propagation counters: %#v", session.propagationCounters)
+	}
+	session.attachPropagationCounters()
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeSemanticMatch {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeSemanticMatch)
+	}
+	if got := snapshot.FallbackReasons[string(reteUnsupportedNameTarget)]; got != 1 {
+		t.Fatalf("name-target fallback count = %d, want 1 in %#v", got, snapshot.FallbackReasons)
 	}
 	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "queued"})); err != nil {
 		t.Fatalf("Assert(event): %v", err)
