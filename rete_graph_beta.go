@@ -159,16 +159,82 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 	if revision == nil || graph == nil {
 		return nil
 	}
+	rowCapacity := graphBetaTokenMemoryCapacity(revision, len(facts))
 	memory := &reteGraphBetaMemory{
-		revision:   revision,
-		graph:      graph,
-		nodes:      make(map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory, len(graph.betaNodes)),
-		terminals:  make(map[reteGraphTerminalNodeID]*reteGraphTerminalMemory, len(graph.terminalNodes)),
-		alphaFacts: make(map[ConditionID]map[FactID]struct{}),
-		arena:      newTokenArena(),
+		revision:            revision,
+		graph:               graph,
+		nodes:               make(map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory, len(graph.betaNodes)),
+		terminals:           make(map[reteGraphTerminalNodeID]*reteGraphTerminalMemory, len(graph.terminalNodes)),
+		alphaFacts:          make(map[ConditionID]map[FactID]struct{}),
+		arena:               newTokenArena(),
+		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
 	}
+	memory.reserveMemories(rowCapacity)
 	memory.resetFacts(facts)
 	return memory
+}
+
+func graphBetaTokenMemoryCapacity(revision *Ruleset, initialFacts int) int {
+	capacity := max(8, initialFacts)
+	if revision != nil {
+		capacity = max(capacity, len(revision.ruleOrder)*2)
+	}
+	return capacity
+}
+
+func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
+	if m == nil || m.graph == nil || rowCapacity <= 0 {
+		return
+	}
+	for _, graphNode := range m.graph.betaNodes {
+		node := m.nodeMemory(graphNode.id)
+		node.left.reserveBeta(rowCapacity)
+		node.right.reserveBeta(rowCapacity)
+	}
+	for _, terminalNode := range m.graph.terminalNodes {
+		terminal := m.terminal(terminalNode.id)
+		terminal.rows.reserveTerminal(rowCapacity)
+	}
+}
+
+func (m *tokenHashMemory) reserveBeta(rowCapacity int) {
+	if m == nil || rowCapacity <= 0 {
+		return
+	}
+	m.reserveRows(rowCapacity)
+	m.reserveIndexes(rowCapacity, rowCapacity, rowCapacity*2)
+}
+
+func (m *tokenHashMemory) reserveTerminal(rowCapacity int) {
+	if m == nil || rowCapacity <= 0 {
+		return
+	}
+	m.reserveRows(rowCapacity)
+	m.reserveIndexes(0, rowCapacity, rowCapacity*2)
+}
+
+func (m *tokenHashMemory) reserveRows(rowCapacity int) {
+	if m == nil || rowCapacity <= cap(m.rows) {
+		return
+	}
+	rows := make([]graphTokenRow, len(m.rows), rowCapacity)
+	copy(rows, m.rows)
+	m.rows = rows
+}
+
+func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
+	if m == nil {
+		return
+	}
+	if joinCapacity > 0 && m.indexes == nil {
+		m.indexes = make(map[betaJoinKey]graphTokenRowIDBucket, joinCapacity)
+	}
+	if identityCapacity > 0 && m.identityRows == nil {
+		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket, identityCapacity)
+	}
+	if factCapacity > 0 && m.factRows == nil {
+		m.factRows = make(map[FactID]graphTokenRowIDBucket, factCapacity)
+	}
 }
 
 func (m *tokenHashMemory) clear() {
