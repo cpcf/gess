@@ -324,3 +324,38 @@ func TestReteGraphSharesAlphaConstraintsIndependentOfDeclarationOrder(t *testing
 		t.Fatalf("person alpha routes = %d, want %d", got, want)
 	}
 }
+
+func TestReteGraphAlphaRouteSelectorRequiresTypedScalarField(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "item",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "value", Kind: ValueAny, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "numeric-any",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "item",
+			TemplateKey: item.Key(),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "value", Operator: FieldConstraintEqual, Value: 1},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.AlphaNodes), 1; got != want {
+		t.Fatalf("alpha nodes = %d, want %d", got, want)
+	}
+	if summary.AlphaNodes[0].route.enabled {
+		t.Fatalf("alpha route selector enabled for any field: %#v", summary.AlphaNodes[0].route)
+	}
+}

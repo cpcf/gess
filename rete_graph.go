@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -12,6 +13,7 @@ type reteGraph struct {
 	betaNodes           []reteGraphBetaNode
 	terminalNodes       []reteGraphTerminalNode
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
+	alphaRouteTables    map[TemplateKey]*reteGraphAlphaRouteTable
 	successorsByStage   map[reteGraphStageRef][]reteGraphStageSuccessor
 	terminalsByStage    map[reteGraphStageRef][]reteGraphTerminalRoute
 }
@@ -39,6 +41,7 @@ type reteGraphAlphaNode struct {
 	constraints []compiledFieldConstraint
 	consumers   []reteBetaConditionRoute
 	entry       bindingTupleEntry
+	route       reteGraphAlphaRouteSelector
 }
 
 type reteGraphBetaNode struct {
@@ -100,9 +103,34 @@ type reteGraphBetaKey struct {
 	joins string
 }
 
+type reteGraphAlphaRouteSelector struct {
+	fieldSlot int
+	value     reteGraphAlphaRouteValue
+	enabled   bool
+}
+
+type reteGraphAlphaRouteValue struct {
+	kind  ValueKind
+	bits  int64
+	text  string
+	valid bool
+}
+
+type reteGraphAlphaRouteKey struct {
+	fieldSlot int
+	value     reteGraphAlphaRouteValue
+}
+
+type reteGraphAlphaRouteTable struct {
+	fallback      []reteGraphAlphaNodeID
+	indexed       map[reteGraphAlphaRouteKey][]reteGraphAlphaNodeID
+	indexedFields []int
+}
+
 func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateKey]Template) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
+		alphaRouteTables:    make(map[TemplateKey]*reteGraphAlphaRouteTable),
 		successorsByStage:   make(map[reteGraphStageRef][]reteGraphStageSuccessor),
 		terminalsByStage:    make(map[reteGraphStageRef][]reteGraphTerminalRoute),
 	}
@@ -133,7 +161,14 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 				})
 			}
 			if created && supportedAlpha {
+				route := reteGraphAlphaRouteSelector{}
+				if alphaNode := graph.alphaNode(alphaID); alphaNode != nil {
+					template := templatesByKey[condition.target.templateKey]
+					route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
+					alphaNode.route = route
+				}
 				graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
+				graph.appendAlphaRoute(condition.target.templateKey, alphaID, route)
 			}
 			if !haveStage {
 				current = alphaRef
@@ -273,6 +308,96 @@ func (g *reteGraph) alphaNode(id reteGraphAlphaNodeID) *reteGraphAlphaNode {
 		return nil
 	}
 	return &g.alphaNodes[index]
+}
+
+func (g *reteGraph) appendAlphaRoute(templateKey TemplateKey, id reteGraphAlphaNodeID, route reteGraphAlphaRouteSelector) {
+	if g == nil || templateKey == "" || id <= 0 {
+		return
+	}
+	table := g.alphaRouteTables[templateKey]
+	if table == nil {
+		table = &reteGraphAlphaRouteTable{}
+		g.alphaRouteTables[templateKey] = table
+	}
+	if !route.enabled {
+		table.fallback = append(table.fallback, id)
+		return
+	}
+	key := route.key()
+	if table.indexed == nil {
+		table.indexed = make(map[reteGraphAlphaRouteKey][]reteGraphAlphaNodeID)
+	}
+	if _, ok := table.indexed[key]; !ok {
+		if !table.hasIndexedField(route.fieldSlot) {
+			table.indexedFields = append(table.indexedFields, route.fieldSlot)
+		}
+	}
+	table.indexed[key] = append(table.indexed[key], id)
+}
+
+func (t *reteGraphAlphaRouteTable) hasIndexedField(fieldSlot int) bool {
+	if t == nil {
+		return false
+	}
+	return slices.Contains(t.indexedFields, fieldSlot)
+}
+
+func (t *reteGraphAlphaRouteTable) singleIndexedField() (int, bool) {
+	if t == nil || len(t.fallback) != 0 || len(t.indexedFields) != 1 {
+		return 0, false
+	}
+	return t.indexedFields[0], true
+}
+
+func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
+	for _, constraint := range constraints {
+		if constraint.operator != FieldConstraintOpEqual || constraint.fieldSlot < 0 {
+			continue
+		}
+		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
+		if !ok {
+			continue
+		}
+		if !reteGraphAlphaRouteFieldKindMatches(template, constraint.fieldSlot, value.kind) {
+			continue
+		}
+		return reteGraphAlphaRouteSelector{
+			fieldSlot: constraint.fieldSlot,
+			value:     value,
+			enabled:   true,
+		}
+	}
+	return reteGraphAlphaRouteSelector{}
+}
+
+func reteGraphAlphaRouteFieldKindMatches(template Template, fieldSlot int, kind ValueKind) bool {
+	if fieldSlot < 0 || fieldSlot >= len(template.fields) {
+		return false
+	}
+	return template.fields[fieldSlot].Kind == kind
+}
+
+func (s reteGraphAlphaRouteSelector) key() reteGraphAlphaRouteKey {
+	return reteGraphAlphaRouteKey{
+		fieldSlot: s.fieldSlot,
+		value:     s.value,
+	}
+}
+
+func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, bool) {
+	switch value.Kind() {
+	case ValueBool:
+		if value.data.(bool) {
+			return reteGraphAlphaRouteValue{kind: ValueBool, bits: 1, valid: true}, true
+		}
+		return reteGraphAlphaRouteValue{kind: ValueBool, valid: true}, true
+	case ValueInt:
+		return reteGraphAlphaRouteValue{kind: ValueInt, bits: value.data.(int64), valid: true}, true
+	case ValueString:
+		return reteGraphAlphaRouteValue{kind: ValueString, text: value.data.(string), valid: true}, true
+	default:
+		return reteGraphAlphaRouteValue{}, false
+	}
 }
 
 func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {

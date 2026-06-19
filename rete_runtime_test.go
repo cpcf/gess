@@ -401,6 +401,9 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
 		t.Fatalf("conditions tested = %d, want %d", got, want)
 	}
+	if got, want := snapshot.Totals.AlphaMatchesAdded, 1; got != want {
+		t.Fatalf("alpha matches added = %d, want %d", got, want)
+	}
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
@@ -428,6 +431,9 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
 		t.Fatalf("public conditions tested = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.AlphaMatchesAdded, 1; got != want {
+		t.Fatalf("public alpha matches added = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("public condition plans tested = %d, want %d", got, want)
