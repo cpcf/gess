@@ -377,14 +377,14 @@ func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelt
 		seen = &localSeen
 	}
 	for _, delta := range deltas {
-		if delta.token == nil {
+		if delta.token.isZero() {
 			continue
 		}
 		rule, ok := r.revision.rulesByRevisionID[delta.ruleRevisionID]
 		if !ok {
 			return nil, ErrMatcher
 		}
-		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, matchTokenGeneration(delta.token), delta.token, scratch)
+		candidate, err := buildMatchCandidateFromTokenRefWithScratch(rule, tokenRefGeneration(delta.token), delta.token, scratch)
 		if err != nil {
 			return nil, err
 		}
@@ -401,12 +401,12 @@ func (r *reteRuntime) candidatesForTerminalDeltas(deltas []reteTerminalTokenDelt
 
 func countTerminalDeltaCandidateSpace(deltas []reteTerminalTokenDelta) (candidateCount, entryCount, pathCount int) {
 	for _, delta := range deltas {
-		if delta.token == nil {
+		if delta.token.isZero() {
 			continue
 		}
 		candidateCount++
-		entryCount += delta.token.size
-		pathCount += delta.token.pathLen
+		entryCount += delta.token.size()
+		pathCount += delta.token.pathLen()
 	}
 	return candidateCount, entryCount, pathCount
 }

@@ -1145,7 +1145,7 @@ func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelt
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordAgendaDeltaApplication()
 	}
-	s.compactBetaTokenBackingForDelta(delta)
+	s.clearBetaTerminalTokenDeltasForDelta(delta)
 	s.agendaReady = true
 	s.agendaDirty = false
 	s.emitAgendaEvents(ctx, changes)
@@ -2614,56 +2614,13 @@ func (s *Session) clearRunAgendaDelta() {
 	s.runAgendaPending = false
 }
 
-func (s *Session) compactBetaTokenBackingForDelta(delta reteAgendaDelta) {
+func (s *Session) clearBetaTerminalTokenDeltasForDelta(delta reteAgendaDelta) {
 	if s == nil || s.rete == nil || s.rete.beta == nil {
 		return
 	}
 	if len(delta.removed) == 0 {
 		return
 	}
-
-	var revisionIDs []RuleRevisionID
-	appendRevisionID := func(revisionID RuleRevisionID) {
-		if revisionID == "" || slices.Contains(revisionIDs, revisionID) {
-			return
-		}
-		revisionIDs = append(revisionIDs, revisionID)
-	}
-	for _, token := range delta.removed {
-		appendRevisionID(token.ruleRevisionID)
-	}
-
-	if len(revisionIDs) == 0 {
-		return
-	}
-
-	if s.revision != nil {
-		for _, ruleName := range s.revision.ruleOrder {
-			rule, ok := s.revision.rules[ruleName]
-			if !ok {
-				continue
-			}
-			revisionIndex := slices.Index(revisionIDs, rule.revisionID)
-			if revisionIndex < 0 {
-				continue
-			}
-			ruleMemory := s.rete.beta.rules[rule.revisionID]
-			if ruleMemory == nil {
-				continue
-			}
-			ruleMemory.compactTokenBacking()
-			revisionIDs = slices.Delete(revisionIDs, revisionIndex, revisionIndex+1)
-		}
-	}
-
-	for _, revisionID := range revisionIDs {
-		ruleMemory := s.rete.beta.rules[revisionID]
-		if ruleMemory == nil {
-			continue
-		}
-		ruleMemory.compactTokenBacking()
-	}
-
 	s.rete.beta.clearTerminalTokenDeltas()
 }
 
@@ -2706,7 +2663,7 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 }
 
 func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, present bool) error {
-	if s == nil || token.token == nil {
+	if s == nil || token.token.isZero() {
 		return nil
 	}
 	rule, ok := s.revision.rulesByRevisionID[token.ruleRevisionID]

@@ -801,12 +801,14 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
 	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
-	assertBetaTokenPointersUseBacking(t, betaMemory.rules[revision1.rules["employee-department"].revisionID])
+	assertBetaTokenRefsUseArena(t, betaMemory.rules[revision1.rules["employee-department"].revisionID])
 
 	betaRuleMemory := betaMemory.rules[revision1.rules["employee-department"].revisionID]
 	trackedPrefix := betaRuleMemory.terminalPrefixRows()[0].prefix
 	trackedToken := trackedPrefix.token
-	trackedTokenPtr := reflect.ValueOf(trackedPrefix.token).Pointer()
+	if trackedToken.isZero() {
+		t.Fatal("tracked terminal token is zero")
+	}
 
 	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
 		t.Fatalf("AssertTemplate(Ben): %v", err)
@@ -814,10 +816,10 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	if session.rete.beta != betaMemory {
 		t.Fatal("assert rebuilt beta memory, want incremental update")
 	}
-	assertBetaTokenPointersUseBacking(t, betaRuleMemory)
+	assertBetaTokenRefsUseArena(t, betaRuleMemory)
 	updatedPrefix := findBetaPrefixRowByToken(t, betaRuleMemory.terminalPrefixRows(), trackedToken).prefix
-	if got := reflect.ValueOf(updatedPrefix.token).Pointer(); got != trackedTokenPtr {
-		t.Fatalf("terminal beta token pointer changed after append: got %#x want %#x", got, trackedTokenPtr)
+	if !tokenRefEqual(updatedPrefix.token, trackedToken) {
+		t.Fatalf("terminal beta token changed after append: got %#v want %#v", updatedPrefix.token, trackedToken)
 	}
 	assertMatcherParity(t, revision1, mustSnapshot(t, ctx, session), newNaiveMatcher(revision1), session.rete)
 	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
@@ -1111,7 +1113,11 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if got, want := len(memory.prefixes[0]), 1; got != want {
 		t.Fatalf("condition 0 prefix row count before update = %d, want %d", got, want)
 	}
-	retractedID := memory.prefixes[0][0].prefix.token.match.fact.ID()
+	retractedMatch, ok := memory.prefixes[0][0].prefix.token.matchAt(0)
+	if !ok {
+		t.Fatal("condition 0 prefix token did not resolve")
+	}
+	retractedID := retractedMatch.fact.ID()
 	if _, err := session.Retract(ctx, retractedID); err != nil {
 		t.Fatalf("Retract(%s): %v", retractedID, err)
 	}
@@ -1359,8 +1365,12 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	if memory.prefixes[0][0].id != 0 {
 		t.Fatalf("re-added prefix row = %#v, want rowID 0", memory.prefixes[0][0])
 	}
-	if memory.prefixes[0][0].prefix.token.match.fact.ID() != readdedEmployee.Fact.ID() {
-		t.Fatalf("re-added prefix row fact ID = %s, want %s", memory.prefixes[0][0].prefix.token.match.fact.ID(), readdedEmployee.Fact.ID())
+	readdedMatch, ok := memory.prefixes[0][0].prefix.token.matchAt(0)
+	if !ok {
+		t.Fatal("re-added prefix token did not resolve")
+	}
+	if readdedMatch.fact.ID() != readdedEmployee.Fact.ID() {
+		t.Fatalf("re-added prefix row fact ID = %s, want %s", readdedMatch.fact.ID(), readdedEmployee.Fact.ID())
 	}
 	afterEmployeeBucket := prefixIndexBucketIDs(memory.prefixIndexes[0][engineeringKey])
 	if got, want := len(afterEmployeeBucket), 1; got != want {
@@ -1928,9 +1938,13 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 		t.Fatal("expected joined beta prefixes before reset")
 	}
 	assertBetaPrefixesUseLinkedTokenMatches(t, betaRuleMemory, 1)
-	assertBetaTokenPointersUseBacking(t, betaRuleMemory)
-	beforeTokenChunksPtr := reflect.ValueOf(betaRuleMemory.tokenBacking[0]).Pointer()
-	beforeTokenChunksCap := cap(betaRuleMemory.tokenBacking[0])
+	assertBetaTokenRefsUseArena(t, betaRuleMemory)
+	beforeArena := betaRuleMemory.tokenArena
+	beforeToken := betaRuleMemory.prefixes[1][0].prefix.token
+	beforeRows := betaRuleMemory.tokenArena.rowCount()
+	if beforeToken.isZero() {
+		t.Fatal("expected non-zero beta token before reset")
+	}
 	beforeRestPtr := reflect.ValueOf(before.rest).Pointer()
 	beforeRestCap := cap(before.rest)
 
@@ -1951,17 +1965,20 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 		t.Fatalf("prefix bucket overflow capacity changed across reset: got %d want %d", got, beforeRestCap)
 	}
 	assertBetaPrefixesUseLinkedTokenMatches(t, session.rete.beta.rules[rule.revisionID], 1)
-	assertBetaTokenPointersUseBacking(t, session.rete.beta.rules[rule.revisionID])
-	if got := reflect.ValueOf(session.rete.beta.rules[rule.revisionID].tokenBacking[0]).Pointer(); got != beforeTokenChunksPtr {
-		t.Fatalf("token chunk backing changed across reset: got %#x want %#x", got, beforeTokenChunksPtr)
+	assertBetaTokenRefsUseArena(t, session.rete.beta.rules[rule.revisionID])
+	if got := session.rete.beta.rules[rule.revisionID].tokenArena; got != beforeArena {
+		t.Fatalf("token arena changed across reset: got %p want %p", got, beforeArena)
 	}
-	if got := cap(session.rete.beta.rules[rule.revisionID].tokenBacking[0]); got != beforeTokenChunksCap {
-		t.Fatalf("token chunk capacity changed across reset: got %d want %d", got, beforeTokenChunksCap)
+	if _, ok := beforeToken.resolve(); ok {
+		t.Fatal("pre-reset token handle resolved after reset")
+	}
+	if got := session.rete.beta.rules[rule.revisionID].tokenArena.rowCount(); got != beforeRows {
+		t.Fatalf("token arena row count after reset = %d, want %d", got, beforeRows)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
-func TestReteRuntimeTokenBackingTrimsDeadChunksAfterReset(t *testing.T) {
+func TestReteRuntimeTokenArenaTrimsDeadRowsAfterReset(t *testing.T) {
 	ctx := context.Background()
 	revision, itemKey := mustTokenBackingRuleset(t)
 	initials := mustTokenBackingInitialFacts(t, itemKey, 300)
@@ -1981,28 +1998,32 @@ func TestReteRuntimeTokenBackingTrimsDeadChunksAfterReset(t *testing.T) {
 	if memory == nil {
 		t.Fatal("missing beta rule memory")
 	}
-	beforeChunks := len(memory.tokenBacking)
-	if beforeChunks < 4 {
-		t.Fatalf("token backing chunks before reset = %d, want at least 4", beforeChunks)
+	beforeRows := memory.tokenArena.rowCount()
+	if beforeRows < 256 {
+		t.Fatalf("token arena rows before reset = %d, want at least 256", beforeRows)
 	}
+	beforeToken := memory.prefixes[0][0].prefix.token
 
 	session.initials = session.initials[:1]
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
 	memory = session.rete.beta.rules[rule.revisionID]
-	afterChunks := len(memory.tokenBacking)
-	if afterChunks >= beforeChunks {
-		t.Fatalf("token backing chunks after reset = %d, want fewer than %d", afterChunks, beforeChunks)
+	afterRows := memory.tokenArena.rowCount()
+	if afterRows >= beforeRows {
+		t.Fatalf("token arena rows after reset = %d, want fewer than %d", afterRows, beforeRows)
 	}
-	if afterChunks > reteBetaMatchTokenChunkReserve+1 {
-		t.Fatalf("token backing chunks after reset = %d, want at most live chunk plus reserve %d", afterChunks, reteBetaMatchTokenChunkReserve)
+	if afterRows != 1 {
+		t.Fatalf("token arena rows after reset = %d, want 1", afterRows)
 	}
-	assertBetaTokenPointersUseBacking(t, memory)
+	if _, ok := beforeToken.resolve(); ok {
+		t.Fatal("pre-reset token handle resolved after reset")
+	}
+	assertBetaTokenRefsUseArena(t, memory)
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
-func TestReteRuntimeTokenBackingCompactsAfterRepeatedRetract(t *testing.T) {
+func TestReteRuntimeTokenArenaRefsSurviveRepeatedRetract(t *testing.T) {
 	ctx := context.Background()
 	revision, itemKey := mustTokenBackingRuleset(t)
 	initials := mustTokenBackingInitialFacts(t, itemKey, 128)
@@ -2028,9 +2049,9 @@ func TestReteRuntimeTokenBackingCompactsAfterRepeatedRetract(t *testing.T) {
 	if memory == nil {
 		t.Fatal("missing beta rule memory")
 	}
-	beforeChunks := len(memory.tokenBacking)
-	if beforeChunks < 2 {
-		t.Fatalf("token backing chunks before retract = %d, want at least 2", beforeChunks)
+	beforeRows := memory.tokenArena.rowCount()
+	if beforeRows < 128 {
+		t.Fatalf("token arena rows before retract = %d, want at least 128", beforeRows)
 	}
 	if _, ok, err := session.rete.beta.currentTerminalTokenDeltas(ctx); err != nil {
 		t.Fatalf("currentTerminalTokenDeltas: %v", err)
@@ -2052,14 +2073,14 @@ func TestReteRuntimeTokenBackingCompactsAfterRepeatedRetract(t *testing.T) {
 	}
 
 	memory = session.rete.beta.rules[rule.revisionID]
-	afterChunks := len(memory.tokenBacking)
-	if afterChunks >= beforeChunks {
-		t.Fatalf("token backing chunks after retract = %d, want fewer than %d", afterChunks, beforeChunks)
+	afterRows := memory.tokenArena.rowCount()
+	if afterRows != beforeRows {
+		t.Fatalf("token arena rows after retract = %d, want stable %d", afterRows, beforeRows)
 	}
 	if got := len(session.rete.beta.terminalTokenDeltas); got != 0 {
 		t.Fatalf("terminal token scratch len after compaction = %d, want 0", got)
 	}
-	assertBetaTokenPointersUseBacking(t, memory)
+	assertBetaTokenRefsUseArena(t, memory)
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
@@ -2536,48 +2557,60 @@ func assertBetaPrefixesUseLinkedTokenMatches(t testing.TB, memory *reteBetaRuleM
 	}
 	for i, row := range memory.prefixes[conditionIndex] {
 		prefix := row.prefix
-		if prefix.token == nil {
+		if prefix.token.isZero() {
 			t.Fatalf("prefix %d has nil token", i)
 		}
-		if got, want := prefix.token.size, conditionIndex+1; got != want {
+		if got, want := prefix.token.size(), conditionIndex+1; got != want {
 			t.Fatalf("prefix %d token size = %d, want %d", i, got, want)
 		}
-		for token := prefix.token; token != nil; token = token.parent {
-			if token.match.bindingSlot < 0 || token.match.bindingSlot >= len(memory.rule.conditionPlans) {
-				t.Fatalf("prefix %d token binding slot = %d, want valid condition slot", i, token.match.bindingSlot)
+		for token := prefix.token; !token.isZero(); token = token.parent() {
+			row, ok := token.resolve()
+			if !ok {
+				t.Fatalf("prefix %d token could not resolve", i)
 			}
-			if token.match.conditionID != memory.rule.conditionPlans[token.match.bindingSlot].id {
-				t.Fatalf("prefix %d token condition = %q, want %q", i, token.match.conditionID, memory.rule.conditionPlans[token.match.bindingSlot].id)
+			if row.match.bindingSlot < 0 || row.match.bindingSlot >= len(memory.rule.conditionPlans) {
+				t.Fatalf("prefix %d token binding slot = %d, want valid condition slot", i, row.match.bindingSlot)
+			}
+			if row.match.conditionID != memory.rule.conditionPlans[row.match.bindingSlot].id {
+				t.Fatalf("prefix %d token condition = %q, want %q", i, row.match.conditionID, memory.rule.conditionPlans[row.match.bindingSlot].id)
 			}
 		}
 	}
 }
 
-func assertBetaTokenPointersUseBacking(t testing.TB, memory *reteBetaRuleMemory) {
+func assertBetaTokenRefsUseArena(t testing.TB, memory *reteBetaRuleMemory) {
 	t.Helper()
 	if memory == nil {
 		t.Fatal("missing beta rule memory")
 	}
-	if len(memory.tokenBacking) == 0 {
-		t.Fatal("beta token backing is empty")
+	if memory.tokenArena == nil {
+		t.Fatal("beta token arena is nil")
 	}
 	for conditionIndex, rows := range memory.prefixes {
 		for i, row := range rows {
 			prefix := row.prefix
-			if prefix.token == nil {
+			if prefix.token.isZero() {
 				t.Fatalf("prefix %d for condition %d has nil token", i, conditionIndex)
 			}
-			if !matchTokenInAnyChunk(prefix.token, memory.tokenBacking) {
-				t.Fatalf("prefix %d for condition %d token is outside backing storage", i, conditionIndex)
+			resolved, ok := memory.tokenArena.resolve(prefix.token.handle)
+			if !ok {
+				t.Fatalf("prefix %d for condition %d token failed arena resolution", i, conditionIndex)
+			}
+			match, ok := prefix.token.matchAt(prefix.token.size() - 1)
+			if !ok {
+				t.Fatalf("prefix %d for condition %d token slot failed arena resolution", i, conditionIndex)
+			}
+			if resolved.match.fact.ID() != match.fact.ID() {
+				t.Fatalf("prefix %d for condition %d token row mismatch", i, conditionIndex)
 			}
 		}
 	}
 }
 
-func findBetaPrefixRowByToken(t testing.TB, prefixes []betaPrefixRow, token *matchToken) betaPrefixRow {
+func findBetaPrefixRowByToken(t testing.TB, prefixes []betaPrefixRow, token tokenRef) betaPrefixRow {
 	t.Helper()
 	for _, prefix := range prefixes {
-		if matchTokenEqual(prefix.prefix.token, token) {
+		if tokenRefEqual(prefix.prefix.token, token) {
 			return prefix
 		}
 	}
@@ -2622,25 +2655,6 @@ func prefixIndexBucketIDs(bucket betaPrefixIndexBucket) []betaPrefixRowID {
 func conditionMatchesContainFact(matches []conditionMatch, id FactID) bool {
 	for _, match := range matches {
 		if match.fact.ID() == id {
-			return true
-		}
-	}
-	return false
-}
-
-func matchTokenInAnyChunk(token *matchToken, chunks [][]matchToken) bool {
-	if token == nil {
-		return false
-	}
-	tokenStart := uintptr(unsafe.Pointer(token))
-	tokenEnd := tokenStart + unsafe.Sizeof(*token)
-	for _, chunk := range chunks {
-		if len(chunk) == 0 {
-			continue
-		}
-		chunkStart := sliceDataPtr(chunk)
-		chunkEnd := chunkStart + uintptr(len(chunk))*unsafe.Sizeof(chunk[0])
-		if tokenStart >= chunkStart && tokenEnd <= chunkEnd {
 			return true
 		}
 	}

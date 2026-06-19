@@ -351,6 +351,62 @@ func buildMatchCandidateFromTokenGenerationWithScratch(rule compiledRule, genera
 	}, nil
 }
 
+func buildMatchCandidateFromTokenRef(rule compiledRule, token tokenRef) (matchCandidate, error) {
+	return buildMatchCandidateFromTokenRefWithScratch(rule, token.generation(), token, nil)
+}
+
+func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Generation, token tokenRef, scratch *candidateScratch) (matchCandidate, error) {
+	if token.isZero() {
+		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
+	}
+	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
+		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
+	}
+
+	var entries []bindingTupleEntry
+	var factIDs []FactID
+	var factVersions []FactVersion
+	var path []int
+	size := token.size()
+	pathLen := token.pathLen()
+	if scratch != nil {
+		entries, factIDs, factVersions, path = scratch.tokenBuffers(size, pathLen)
+	} else {
+		entries = make([]bindingTupleEntry, size)
+		factIDs = make([]FactID, size)
+		factVersions = make([]FactVersion, size)
+		path = make([]int, pathLen)
+	}
+	if _, _, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
+		return matchCandidate{}, err
+	}
+
+	identity := candidateIdentity{
+		generation: generation,
+		count:      size,
+		key: candidateIdentityKey{
+			scopeHash: rule.identityScopeHash,
+			hash:      candidateIdentityHashFinish(token.identityState(), size),
+		},
+	}
+	if identity.key.scopeHash == 0 {
+		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+	}
+
+	return matchCandidate{
+		ruleID:           rule.id,
+		ruleRevisionID:   rule.revisionID,
+		identity:         identity,
+		bindingTuple:     entries,
+		factIDs:          factIDs,
+		factVersions:     factVersions,
+		generation:       generation,
+		maxRecency:       token.maxRecency(),
+		aggregateRecency: token.aggregateRecency(),
+		path:             path,
+	}, nil
+}
+
 func fillMatchToken(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token *matchToken) (int, int, error) {
 	if token == nil {
 		return entryIndex, pathIndex, nil
@@ -360,6 +416,29 @@ func fillMatchToken(rule compiledRule, entries []bindingTupleEntry, factIDs []Fa
 		return entryIndex, pathIndex, err
 	}
 	entry, err := bindingTupleEntryForMatch(rule, token.match)
+	if err != nil {
+		return entryIndex, pathIndex, err
+	}
+	entries[entryIndex] = entry
+	factIDs[entryIndex] = entry.factID
+	factVersions[entryIndex] = entry.factVersion
+	copy(path[pathIndex:], entry.conditionPath)
+	return entryIndex + 1, pathIndex + len(entry.conditionPath), nil
+}
+
+func fillTokenRef(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token tokenRef) (int, int, error) {
+	if token.isZero() {
+		return entryIndex, pathIndex, nil
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return entryIndex, pathIndex, fmt.Errorf("%w: stale token for rule %q", ErrMatcher, rule.name)
+	}
+	entryIndex, pathIndex, err := fillTokenRef(rule, entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent())
+	if err != nil {
+		return entryIndex, pathIndex, err
+	}
+	entry, err := bindingTupleEntryForMatch(rule, row.match)
 	if err != nil {
 		return entryIndex, pathIndex, err
 	}

@@ -7,6 +7,220 @@ import (
 	"strings"
 )
 
+type tokenHandle struct {
+	row        *tokenRow
+	generation uint64
+}
+
+func (h tokenHandle) isZero() bool {
+	return h.row == nil || h.generation == 0
+}
+
+type tokenRef struct {
+	handle tokenHandle
+}
+
+func (r tokenRef) isZero() bool {
+	return r.handle.isZero()
+}
+
+type tokenRow struct {
+	slotGeneration   uint64
+	parent           tokenHandle
+	match            conditionMatch
+	size             int
+	pathLen          int
+	maxRecency       Recency
+	aggregateRecency Recency
+	identityState    uint64
+	generation       Generation
+}
+
+type tokenArena struct {
+	chunks         [][]tokenRow
+	count          int
+	nextGeneration uint64
+}
+
+func newTokenArena() *tokenArena {
+	return &tokenArena{nextGeneration: 1}
+}
+
+func (a *tokenArena) reset() {
+	if a == nil {
+		return
+	}
+	for chunkIndex, chunk := range a.chunks {
+		for i := range chunk {
+			chunk[i] = tokenRow{}
+		}
+		a.chunks[chunkIndex] = chunk[:0]
+	}
+	a.count = 0
+	if a.nextGeneration == 0 {
+		a.nextGeneration = 1
+	}
+}
+
+func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
+	if a == nil {
+		return tokenRef{}
+	}
+	var parentRow *tokenRow
+	var ok bool
+	if !parent.isZero() {
+		parentRow, ok = parent.resolve()
+		if !ok {
+			return tokenRef{}
+		}
+	}
+	row := tokenRow{
+		slotGeneration: a.nextGeneration,
+		match:          match,
+		generation:     generation,
+	}
+	a.nextGeneration++
+
+	if parentRow != nil {
+		row.parent = parent.handle
+		row.size = parentRow.size + 1
+		row.pathLen = parentRow.pathLen + len(entry.conditionPath)
+		row.maxRecency = max(recency, parentRow.maxRecency)
+		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
+		row.identityState = parentRow.identityState
+		if row.generation == 0 {
+			row.generation = parentRow.generation
+		}
+	} else {
+		row.size = 1
+		row.pathLen = len(entry.conditionPath)
+		row.maxRecency = recency
+		row.aggregateRecency = recency
+		row.identityState = candidateIdentityHashStart(generation)
+		if row.generation == 0 {
+			row.generation = generation
+		}
+	}
+	row.identityState = candidateIdentityHashStep(row.identityState, entry)
+
+	chunkIndex := a.count / reteBetaMatchTokenChunkSize
+	for len(a.chunks) <= chunkIndex {
+		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
+	}
+	a.chunks[chunkIndex] = append(a.chunks[chunkIndex], row)
+	rowPtr := &a.chunks[chunkIndex][len(a.chunks[chunkIndex])-1]
+	a.count++
+	handle := tokenHandle{row: rowPtr, generation: row.slotGeneration}
+	return tokenRef{handle: handle}
+}
+
+func (a *tokenArena) resolve(handle tokenHandle) (*tokenRow, bool) {
+	if a == nil || handle.isZero() {
+		return nil, false
+	}
+	if handle.row.slotGeneration != handle.generation {
+		return nil, false
+	}
+	return handle.row, true
+}
+
+func (a *tokenArena) rowCount() int {
+	if a == nil {
+		return 0
+	}
+	return a.count
+}
+
+func (r tokenRef) resolve() (*tokenRow, bool) {
+	if r.handle.isZero() {
+		return nil, false
+	}
+	if r.handle.row.slotGeneration != r.handle.generation {
+		return nil, false
+	}
+	return r.handle.row, true
+}
+
+func (r tokenRef) parent() tokenRef {
+	row, ok := r.resolve()
+	if !ok || row.parent.isZero() {
+		return tokenRef{}
+	}
+	return tokenRef{handle: row.parent}
+}
+
+func (r tokenRef) size() int {
+	row, ok := r.resolve()
+	if !ok {
+		return 0
+	}
+	return row.size
+}
+
+func (r tokenRef) pathLen() int {
+	row, ok := r.resolve()
+	if !ok {
+		return 0
+	}
+	return row.pathLen
+}
+
+func (r tokenRef) maxRecency() Recency {
+	row, ok := r.resolve()
+	if !ok {
+		return 0
+	}
+	return row.maxRecency
+}
+
+func (r tokenRef) aggregateRecency() Recency {
+	row, ok := r.resolve()
+	if !ok {
+		return 0
+	}
+	return row.aggregateRecency
+}
+
+func (r tokenRef) generation() Generation {
+	row, ok := r.resolve()
+	if !ok {
+		return 0
+	}
+	return row.generation
+}
+
+func (r tokenRef) identityState() uint64 {
+	row, ok := r.resolve()
+	if !ok {
+		return candidateIdentityHashStart(0)
+	}
+	return row.identityState
+}
+
+func (r tokenRef) matchAt(index int) (conditionMatch, bool) {
+	row, ok := r.resolve()
+	if !ok || index < 0 || index >= row.size {
+		return conditionMatch{}, false
+	}
+	if index == row.size-1 {
+		return row.match, true
+	}
+	return r.parent().matchAt(index)
+}
+
+func (r tokenRef) containsFact(id FactID) bool {
+	for current := r; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return false
+		}
+		if row.match.fact.ID() == id {
+			return true
+		}
+	}
+	return false
+}
+
 type reteBetaMemory struct {
 	revision            *Ruleset
 	rules               map[RuleRevisionID]*reteBetaRuleMemory
@@ -21,7 +235,7 @@ type reteAgendaDelta struct {
 
 type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
-	token          *matchToken
+	token          tokenRef
 }
 
 type reteBetaRuleMemory struct {
@@ -30,7 +244,7 @@ type reteBetaRuleMemory struct {
 	conditionIndexes []map[betaJoinKey]betaConditionMatchIndexBucket
 	prefixes         [][]betaPrefixRow
 	prefixIndexes    []map[betaJoinKey]betaPrefixIndexBucket
-	tokenBacking     [][]matchToken
+	tokenArena       *tokenArena
 	lookupScratch    [][]conditionMatch
 	prefixScratch    [][]conditionMatch
 	candidateScratch candidateScratch
@@ -150,7 +364,7 @@ type betaConditionMatchRow struct {
 }
 
 type betaPrefix struct {
-	token *matchToken
+	token tokenRef
 }
 
 type betaPrefixRowID int
@@ -421,7 +635,7 @@ func (m *reteBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]rete
 			return nil, false, nil
 		}
 		for _, row := range ruleMemory.terminalPrefixRows() {
-			if row.prefix.token == nil {
+			if row.prefix.token.isZero() {
 				continue
 			}
 			deltas = append(deltas, reteTerminalTokenDelta{
@@ -854,7 +1068,7 @@ func newReteBetaRuleMemory(rule compiledRule) *reteBetaRuleMemory {
 		conditionIndexes: make([]map[betaJoinKey]betaConditionMatchIndexBucket, conditions),
 		prefixes:         make([][]betaPrefixRow, conditions),
 		prefixIndexes:    make([]map[betaJoinKey]betaPrefixIndexBucket, conditions),
-		tokenBacking:     make([][]matchToken, 0, conditions),
+		tokenArena:       newTokenArena(),
 		lookupScratch:    make([][]conditionMatch, conditions),
 		prefixScratch:    make([][]conditionMatch, conditions),
 	}
@@ -864,8 +1078,12 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 	if m == nil {
 		return
 	}
-	defer m.trimTokenBacking()
 	m.clear()
+	if m.tokenArena == nil {
+		m.tokenArena = newTokenArena()
+	} else {
+		m.tokenArena.reset()
+	}
 	for conditionIndex, plan := range m.rule.conditionPlans {
 		for _, fact := range facts {
 			match, ok, err := betaConditionMatch(plan, fact)
@@ -886,7 +1104,7 @@ func (m *reteBetaRuleMemory) resetFacts(facts []FactSnapshot) {
 			for _, row := range matches {
 				match := row.match
 				m.addPrefix(conditionIndex, betaPrefix{
-					token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
+					token: m.newTokenRef(tokenRef{}, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 				})
 			}
 		} else {
@@ -919,157 +1137,7 @@ func (m *reteBetaRuleMemory) clear() {
 		m.lookupScratch[conditionIndex] = m.lookupScratch[conditionIndex][:0]
 		m.prefixScratch[conditionIndex] = m.prefixScratch[conditionIndex][:0]
 	}
-	for chunkIndex, chunk := range m.tokenBacking {
-		for i := range chunk {
-			chunk[i] = matchToken{}
-		}
-		m.tokenBacking[chunkIndex] = chunk[:0]
-	}
 	m.candidateScratch.reset(0, 0, 0)
-}
-
-func (m *reteBetaRuleMemory) trimTokenBacking() {
-	if m == nil || len(m.tokenBacking) == 0 {
-		return
-	}
-	first := -1
-	last := -1
-	for i, chunk := range m.tokenBacking {
-		if len(chunk) == 0 {
-			continue
-		}
-		if first < 0 {
-			first = i
-		}
-		last = i
-	}
-	if first < 0 {
-		keep := min(reteBetaMatchTokenChunkReserve, len(m.tokenBacking))
-		for i := keep; i < len(m.tokenBacking); i++ {
-			m.tokenBacking[i] = nil
-		}
-		m.tokenBacking = m.tokenBacking[:keep]
-		return
-	}
-	liveLen := last - first + 1
-	reserveLen := min(reteBetaMatchTokenChunkReserve, first)
-	totalKeep := liveLen + reserveLen
-	copy(m.tokenBacking[:liveLen], m.tokenBacking[first:last+1])
-	if reserveLen > 0 {
-		copy(m.tokenBacking[liveLen:totalKeep], m.tokenBacking[first-reserveLen:first])
-	}
-	for i := totalKeep; i < len(m.tokenBacking); i++ {
-		m.tokenBacking[i] = nil
-	}
-	m.tokenBacking = m.tokenBacking[:totalKeep]
-}
-
-func (m *reteBetaRuleMemory) compactTokenBacking() {
-	if m == nil || len(m.tokenBacking) <= 1 {
-		return
-	}
-	capacity := m.tokenBackingCapacity()
-	if capacity <= reteBetaMatchTokenChunkSize {
-		return
-	}
-	liveUpperBound := m.liveTokenUpperBound()
-	if liveUpperBound == 0 {
-		for i := range m.tokenBacking {
-			m.tokenBacking[i] = nil
-		}
-		m.tokenBacking = m.tokenBacking[:0]
-		return
-	}
-	if liveUpperBound*4 >= capacity {
-		return
-	}
-
-	seen := make(map[*matchToken]struct{}, liveUpperBound)
-	liveCount := 0
-	for _, rows := range m.prefixes {
-		for _, row := range rows {
-			liveCount += countLiveTokens(row.prefix.token, seen)
-		}
-	}
-	if liveCount == 0 {
-		for i := range m.tokenBacking {
-			m.tokenBacking[i] = nil
-		}
-		m.tokenBacking = m.tokenBacking[:0]
-		return
-	}
-	if liveCount*4 >= capacity {
-		return
-	}
-
-	chunkCount := (liveCount + reteBetaMatchTokenChunkSize - 1) / reteBetaMatchTokenChunkSize
-	cloned := make(map[*matchToken]*matchToken, liveCount)
-	newBacking := make([][]matchToken, 0, chunkCount)
-	var clone func(*matchToken) *matchToken
-	clone = func(token *matchToken) *matchToken {
-		if token == nil {
-			return nil
-		}
-		if next, ok := cloned[token]; ok {
-			return next
-		}
-		parent := clone(token.parent)
-		if len(newBacking) == 0 || len(newBacking[len(newBacking)-1]) == cap(newBacking[len(newBacking)-1]) {
-			newBacking = append(newBacking, make([]matchToken, 0, reteBetaMatchTokenChunkSize))
-		}
-		copied := *token
-		copied.parent = parent
-		chunkIndex := len(newBacking) - 1
-		chunk := append(newBacking[chunkIndex], copied)
-		newBacking[chunkIndex] = chunk
-		next := &newBacking[chunkIndex][len(chunk)-1]
-		cloned[token] = next
-		return next
-	}
-
-	for conditionIndex := range m.prefixes {
-		rows := m.prefixes[conditionIndex]
-		for i := range rows {
-			rows[i].prefix.token = clone(rows[i].prefix.token)
-		}
-	}
-	for i := range m.tokenBacking {
-		m.tokenBacking[i] = nil
-	}
-	m.tokenBacking = newBacking
-}
-
-func (m *reteBetaRuleMemory) tokenBackingCapacity() int {
-	if m == nil {
-		return 0
-	}
-	capacity := 0
-	for _, chunk := range m.tokenBacking {
-		capacity += cap(chunk)
-	}
-	return capacity
-}
-
-func (m *reteBetaRuleMemory) liveTokenUpperBound() int {
-	if m == nil {
-		return 0
-	}
-	count := 0
-	for _, rows := range m.prefixes {
-		count += len(rows)
-	}
-	return count
-}
-
-func countLiveTokens(token *matchToken, seen map[*matchToken]struct{}) int {
-	if token == nil {
-		return 0
-	}
-	if _, ok := seen[token]; ok {
-		return 0
-	}
-	seen[token] = struct{}{}
-	return 1 + countLiveTokens(token.parent, seen)
 }
 
 func (m *reteBetaRuleMemory) appendInsertedFactDeltas(out []reteTerminalTokenDelta, ruleRevisionID RuleRevisionID, fact FactSnapshot, span *propagationCounterSpan) []reteTerminalTokenDelta {
@@ -1185,7 +1253,7 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) bool {
 			for _, row := range m.conditionMatches[conditionIndex] {
 				match := row.match
 				m.addPrefix(conditionIndex, betaPrefix{
-					token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
+					token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 				})
 			}
 			continue
@@ -1203,7 +1271,7 @@ func (m *reteBetaRuleMemory) joinExistingPrefixes(conditionIndex int) bool {
 			}
 			match := row.match
 			m.addPrefix(conditionIndex, betaPrefix{
-				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
+				token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), nil),
 			})
 		}
 	}
@@ -1215,7 +1283,7 @@ func (m *reteBetaRuleMemory) appendRemovedFactDeltas(out []reteTerminalTokenDelt
 		return out
 	}
 	for _, row := range m.terminalPrefixRows() {
-		if row.prefix.token == nil || !betaPrefixContainsFact(row.prefix, id) {
+		if row.prefix.token.isZero() || !betaPrefixContainsFact(row.prefix, id) {
 			continue
 		}
 		out = append(out, reteTerminalTokenDelta{
@@ -1236,7 +1304,7 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 	plan := m.rule.conditionPlans[conditionIndex]
 	if conditionIndex == 0 {
 		prefix := betaPrefix{
-			token: m.newMatchToken(nil, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+			token: m.newTokenRef(tokenRef{}, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
 		return m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, prefix, span)
 	}
@@ -1245,7 +1313,7 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 		for _, row := range m.prefixes[conditionIndex-1] {
 			prefix := row.prefix
 			nextPrefix := betaPrefix{
-				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+				token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
 			out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix, span)
 		}
@@ -1265,7 +1333,7 @@ func (m *reteBetaRuleMemory) appendRightMatchDeltas(out []reteTerminalTokenDelta
 		}
 		prefix := row.prefix
 		nextPrefix := betaPrefix{
-			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+			token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
 		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, conditionIndex, nextPrefix, span)
 	}
@@ -1280,7 +1348,7 @@ func (m *reteBetaRuleMemory) appendAndPropagatePrefixDeltas(out []reteTerminalTo
 		span.recordPrefixAdded()
 	}
 	if conditionIndex == len(m.rule.conditionPlans)-1 {
-		if prefix.token != nil {
+		if !prefix.token.isZero() {
 			if span != nil {
 				span.recordTerminalDeltaEmitted()
 			}
@@ -1307,7 +1375,7 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 		for _, row := range m.conditionMatches[nextCondition] {
 			match := row.match
 			nextPrefix := betaPrefix{
-				token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+				token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 			}
 			out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, nextCondition, nextPrefix, span)
 		}
@@ -1326,31 +1394,24 @@ func (m *reteBetaRuleMemory) appendPropagatedPrefixDeltas(out []reteTerminalToke
 		}
 		match := row.match
 		nextPrefix := betaPrefix{
-			token: m.newMatchToken(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
+			token: m.newTokenRef(prefix.token, plan.bindingTupleEntry(match), match, match.fact.Recency(), match.fact.Generation(), span),
 		}
 		out = m.appendAndPropagatePrefixDeltas(out, ruleRevisionID, nextCondition, nextPrefix, span)
 	}
 	return out
 }
 
-func (m *reteBetaRuleMemory) newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) *matchToken {
+func (m *reteBetaRuleMemory) newTokenRef(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {
 	if m == nil {
-		return nil
+		return tokenRef{}
 	}
 	if span != nil {
 		span.recordTokenCreated()
 	}
-	token := makeMatchToken(parent, entry, match, recency, generation)
-	chunks := m.tokenBacking
-	last := len(chunks) - 1
-	if last < 0 || len(chunks[last]) == cap(chunks[last]) {
-		chunks = append(chunks, make([]matchToken, 0, reteBetaMatchTokenChunkSize))
-		last = len(chunks) - 1
+	if m.tokenArena == nil {
+		m.tokenArena = newTokenArena()
 	}
-	chunk := append(chunks[last], token)
-	chunks[last] = chunk
-	m.tokenBacking = chunks
-	return &chunks[last][len(chunk)-1]
+	return m.tokenArena.add(parent, entry, match, recency, generation)
 }
 
 func (m *reteBetaRuleMemory) matchesForLeftPrefix(conditionIndex int, prefix betaPrefix) ([]conditionMatch, error) {
@@ -1446,14 +1507,14 @@ func (m *reteBetaRuleMemory) prefixRow(conditionIndex int, rowID betaPrefixRowID
 	return &rows[rowID]
 }
 
-func (m *reteBetaRuleMemory) findPrefixRow(conditionIndex int, token *matchToken) (betaPrefixRowID, bool) {
+func (m *reteBetaRuleMemory) findPrefixRow(conditionIndex int, token tokenRef) (betaPrefixRowID, bool) {
 	if m == nil || conditionIndex < 0 || conditionIndex >= len(m.prefixes) {
 		return 0, false
 	}
 	rows := m.prefixes[conditionIndex]
 	for i := len(rows) - 1; i >= 0; i-- {
 		row := rows[i]
-		if matchTokenEqual(row.prefix.token, token) {
+		if tokenRefEqual(row.prefix.token, token) {
 			return betaPrefixRowID(i), true
 		}
 	}
@@ -1461,17 +1522,17 @@ func (m *reteBetaRuleMemory) findPrefixRow(conditionIndex int, token *matchToken
 }
 
 func (m *reteBetaRuleMemory) prefixMatches(conditionIndex int, prefix betaPrefix) []conditionMatch {
-	if m == nil || prefix.token == nil || conditionIndex <= 0 {
+	if m == nil || prefix.token.isZero() || conditionIndex <= 0 {
 		return nil
 	}
-	size := min(conditionIndex, prefix.token.size)
+	size := min(conditionIndex, prefix.token.size())
 	scratch := m.prefixScratch[conditionIndex]
 	if cap(scratch) < size {
 		scratch = make([]conditionMatch, size)
 	} else {
 		scratch = scratch[:size]
 	}
-	fillConditionMatchesFromToken(scratch, prefix.token, size)
+	fillConditionMatchesFromTokenRef(scratch, prefix.token, size)
 	m.prefixScratch[conditionIndex] = scratch
 	return scratch
 }
@@ -1538,10 +1599,10 @@ func collectMatchCandidatesFromPrefixRows(ctx context.Context, rule compiledRule
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if prefix.prefix.token == nil {
+		if prefix.prefix.token.isZero() {
 			continue
 		}
-		candidate, err := buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, prefix.prefix.token, scratch)
+		candidate, err := buildMatchCandidateFromTokenRefWithScratch(rule, generation, prefix.prefix.token, scratch)
 		if err != nil {
 			return nil, err
 		}
@@ -1559,12 +1620,12 @@ func collectMatchCandidatesFromPrefixRows(ctx context.Context, rule compiledRule
 
 func countPrefixCandidateSpace(prefixes []betaPrefixRow) (candidateCount, entryCount, pathCount int) {
 	for _, prefix := range prefixes {
-		if prefix.prefix.token == nil {
+		if prefix.prefix.token.isZero() {
 			continue
 		}
 		candidateCount++
-		entryCount += prefix.prefix.token.size
-		pathCount += prefix.prefix.token.pathLen
+		entryCount += prefix.prefix.token.size()
+		pathCount += prefix.prefix.token.pathLen()
 	}
 	return candidateCount, entryCount, pathCount
 }
@@ -1770,43 +1831,87 @@ func conditionMatchEqual(left, right conditionMatch) bool {
 }
 
 func betaPrefixLess(left, right betaPrefix) bool {
-	if left.token == nil || right.token == nil {
-		return left.token == nil && right.token != nil
+	if left.token.isZero() || right.token.isZero() {
+		return left.token.isZero() && !right.token.isZero()
 	}
-	if left.token.size != right.token.size {
-		return left.token.size < right.token.size
+	if left.token.size() != right.token.size() {
+		return left.token.size() < right.token.size()
 	}
-	return compareMatchToken(left.token, right.token) < 0
+	return compareTokenRef(left.token, right.token) < 0
 }
 
 func betaPrefixEqual(left, right betaPrefix) bool {
-	return matchTokenEqual(left.token, right.token)
+	return tokenRefEqual(left.token, right.token)
 }
 
-func compareMatchToken(left, right *matchToken) int {
-	if left == nil || right == nil {
+func tokenRefEqual(left, right tokenRef) bool {
+	if left.isZero() || right.isZero() {
+		return left.isZero() && right.isZero()
+	}
+	if left.handle == right.handle {
+		return true
+	}
+	if left.size() != right.size() || left.generation() != right.generation() || left.identityState() != right.identityState() {
+		return false
+	}
+	for currentLeft, currentRight := left, right; !currentLeft.isZero() || !currentRight.isZero(); currentLeft, currentRight = currentLeft.parent(), currentRight.parent() {
+		leftRow, leftOK := currentLeft.resolve()
+		rightRow, rightOK := currentRight.resolve()
+		if !leftOK || !rightOK {
+			return false
+		}
+		if leftRow.match.fact.ID() != rightRow.match.fact.ID() || leftRow.match.fact.Version() != rightRow.match.fact.Version() {
+			return false
+		}
+		if leftRow.parent.isZero() || rightRow.parent.isZero() {
+			return leftRow.parent.isZero() && rightRow.parent.isZero()
+		}
+	}
+	return true
+}
+
+func compareTokenRef(left, right tokenRef) int {
+	if left.isZero() || right.isZero() {
 		switch {
-		case left == nil && right != nil:
+		case left.isZero() && !right.isZero():
 			return -1
-		case left != nil && right == nil:
+		case !left.isZero() && right.isZero():
 			return 1
 		default:
 			return 0
 		}
 	}
-	if left.parent != nil || right.parent != nil {
-		if cmp := compareMatchToken(left.parent, right.parent); cmp != 0 {
-			return cmp
-		}
-	}
-	if left.match.fact.ID() != right.match.fact.ID() {
-		if factIDLess(left.match.fact.ID(), right.match.fact.ID()) {
+	if left.size() != right.size() {
+		if left.size() < right.size() {
 			return -1
 		}
 		return 1
 	}
-	if left.match.fact.Version() != right.match.fact.Version() {
-		if left.match.fact.Version() < right.match.fact.Version() {
+	leftRow, leftOK := left.resolve()
+	rightRow, rightOK := right.resolve()
+	if !leftOK || !rightOK {
+		switch {
+		case !leftOK && rightOK:
+			return -1
+		case leftOK && !rightOK:
+			return 1
+		default:
+			return 0
+		}
+	}
+	if leftRow.parent.generation != 0 || rightRow.parent.generation != 0 {
+		if cmp := compareTokenRef(left.parent(), right.parent()); cmp != 0 {
+			return cmp
+		}
+	}
+	if leftRow.match.fact.ID() != rightRow.match.fact.ID() {
+		if factIDLess(leftRow.match.fact.ID(), rightRow.match.fact.ID()) {
+			return -1
+		}
+		return 1
+	}
+	if leftRow.match.fact.Version() != rightRow.match.fact.Version() {
+		if leftRow.match.fact.Version() < rightRow.match.fact.Version() {
 			return -1
 		}
 		return 1
@@ -1815,17 +1920,12 @@ func compareMatchToken(left, right *matchToken) int {
 }
 
 func betaPrefixContainsFact(prefix betaPrefix, id FactID) bool {
-	for token := prefix.token; token != nil; token = token.parent {
-		if token.match.fact.ID() == id {
-			return true
-		}
-	}
-	return false
+	return prefix.token.containsFact(id)
 }
 
-func betaJoinKeyForPrefixToken(plan compiledConditionPlan, token *matchToken) (betaJoinKey, bool) {
+func betaJoinKeyForPrefixToken(plan compiledConditionPlan, token tokenRef) (betaJoinKey, bool) {
 	return betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
-		match, ok := matchTokenAtSlot(token, join.refBindingSlot)
+		match, ok := tokenRefAtSlot(token, join.refBindingSlot)
 		if !ok {
 			return Value{}, false
 		}
@@ -1833,30 +1933,38 @@ func betaJoinKeyForPrefixToken(plan compiledConditionPlan, token *matchToken) (b
 	})
 }
 
-func matchTokenAtSlot(token *matchToken, slot int) (conditionMatch, bool) {
-	if token == nil || slot < 0 {
+func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
+	if token.isZero() || slot < 0 {
 		return conditionMatch{}, false
 	}
-	for current := token; current != nil; current = current.parent {
-		if current.size == slot+1 {
-			return current.match, true
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return conditionMatch{}, false
 		}
-		if current.size <= slot {
+		if row.size == slot+1 {
+			return row.match, true
+		}
+		if row.size <= slot {
 			return conditionMatch{}, false
 		}
 	}
 	return conditionMatch{}, false
 }
 
-func fillConditionMatchesFromToken(out []conditionMatch, token *matchToken, limit int) int {
-	if token == nil || limit <= 0 {
+func fillConditionMatchesFromTokenRef(out []conditionMatch, token tokenRef, limit int) int {
+	if token.isZero() || limit <= 0 {
 		return 0
 	}
-	written := fillConditionMatchesFromToken(out, token.parent, limit)
+	row, ok := token.resolve()
+	if !ok {
+		return 0
+	}
+	written := fillConditionMatchesFromTokenRef(out, token.parent(), limit)
 	if written >= limit {
 		return written
 	}
-	out[written] = token.match
+	out[written] = row.match
 	return written + 1
 }
 

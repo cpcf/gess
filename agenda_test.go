@@ -1437,7 +1437,7 @@ func compactAgendaChangeActivationForCompare(owner *agenda, act *activation) act
 	out.bindings = nil
 	out.factIDs = cloneActivationFactIDs(act)
 	out.factVersions = nil
-	out.token = nil
+	out.token = tokenRef{}
 	out.path = nil
 	if owner != nil {
 		out.id = owner.publicActivation(act).id

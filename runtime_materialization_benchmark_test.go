@@ -553,34 +553,6 @@ func BenchmarkReteAgendaDeltaRetract(b *testing.B) {
 	}
 }
 
-func BenchmarkReteTokenBackingDenseCompactionCheck(b *testing.B) {
-	revision, itemKey := mustTokenBackingRuleset(b)
-	session, err := NewSession(
-		revision,
-		WithSessionID("token-backing-dense-compaction-benchmark"),
-		WithInitialFacts(mustTokenBackingInitialFacts(b, itemKey, 512)...),
-	)
-	if err != nil {
-		b.Fatalf("NewSession: %v", err)
-	}
-	rule := revision.rules["match-item"]
-	memory := session.rete.beta.rules[rule.revisionID]
-	if memory == nil {
-		b.Fatal("missing beta rule memory")
-	}
-	beforeChunks := len(memory.tokenBacking)
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		memory.compactTokenBacking()
-	}
-	b.StopTimer()
-	if got := len(memory.tokenBacking); got != beforeChunks {
-		b.Fatalf("token backing chunks after dense compaction checks = %d, want %d", got, beforeChunks)
-	}
-}
-
 func BenchmarkAgendaTerminalTokenDeltaAssert(b *testing.B) {
 	fixture := mustTerminalTokenDeltaBenchmarkFixture(b)
 	agenda := newAgenda()
