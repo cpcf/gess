@@ -321,7 +321,7 @@ func activationPathForRule(rule compiledRule) []int {
 type agenda struct {
 	activations         map[activationFingerprint]activationBucket
 	pending             []activationKey
-	byFactID            map[FactID][]activationKey
+	byFactID            map[FactID]activationKeyBucket
 	byRevision          map[RuleRevisionID]activationKeyBucket
 	nextOrdinal         uint64
 	revision            *Ruleset
@@ -345,7 +345,7 @@ type agenda struct {
 func newAgenda() *agenda {
 	return &agenda{
 		activations: make(map[activationFingerprint]activationBucket),
-		byFactID:    make(map[FactID][]activationKey),
+		byFactID:    make(map[FactID]activationKeyBucket),
 		byRevision:  make(map[RuleRevisionID]activationKeyBucket),
 	}
 }
@@ -361,7 +361,7 @@ func (a *agenda) reset() {
 	}
 	a.pending = a.pending[:0]
 	if a.byFactID == nil {
-		a.byFactID = make(map[FactID][]activationKey)
+		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
 		clear(a.byFactID)
 	}
@@ -1055,16 +1055,16 @@ func (a *agenda) activationsByFactID(id FactID) []activation {
 	if a == nil {
 		return nil
 	}
-	keys := a.byFactID[id]
-	if len(keys) == 0 {
+	bucket := a.byFactID[id]
+	if bucket.len() == 0 {
 		return nil
 	}
-	out := make([]activation, 0, len(keys))
-	for _, key := range keys {
+	out := make([]activation, 0, bucket.len())
+	bucket.forEach(func(key activationKey) {
 		if current, ok := a.activationByKeyPtr(key); ok {
 			out = append(out, a.publicActivation(current))
 		}
-	}
+	})
 	sortActivations(out)
 	return out
 }
@@ -1107,9 +1107,9 @@ func (a *agenda) rebuildIndexes() {
 
 func (a *agenda) resetIndexesForRebuild() {
 	if a.byFactID == nil {
-		a.byFactID = make(map[FactID][]activationKey)
+		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
-		resetActivationSliceIndex(a.byFactID)
+		resetActivationIndex(a.byFactID)
 	}
 	if a.byRevision == nil {
 		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
@@ -1122,7 +1122,7 @@ func (a *agenda) pruneEmptyIndexes() {
 	if a == nil {
 		return
 	}
-	pruneEmptyActivationSliceIndex(a.byFactID)
+	pruneEmptyActivationIndex(a.byFactID)
 	pruneEmptyActivationIndex(a.byRevision)
 }
 
@@ -1131,7 +1131,7 @@ func (a *agenda) indexActivation(act activation) {
 		return
 	}
 	if a.byFactID == nil {
-		a.byFactID = make(map[FactID][]activationKey)
+		a.byFactID = make(map[FactID]activationKeyBucket)
 	}
 	if a.byRevision == nil {
 		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
@@ -1144,7 +1144,9 @@ func (a *agenda) indexActivation(act activation) {
 			if factIDSeenBefore(act.factIDs[:i], factID) {
 				continue
 			}
-			a.byFactID[factID] = append(a.byFactID[factID], act.key)
+			factBucket := a.byFactID[factID]
+			factBucket.append(act.key)
+			a.byFactID[factID] = factBucket
 		}
 	}
 
@@ -1166,7 +1168,9 @@ func (a *agenda) indexActivationTokenFacts(key activationKey, token tokenRef) {
 	if tokenRefContainsFactID(token.parent(), factID) {
 		return
 	}
-	a.byFactID[factID] = append(a.byFactID[factID], key)
+	factBucket := a.byFactID[factID]
+	factBucket.append(key)
+	a.byFactID[factID] = factBucket
 }
 
 func tokenRefContainsFactID(token tokenRef, id FactID) bool {
@@ -1176,20 +1180,6 @@ func tokenRefContainsFactID(token tokenRef, id FactID) bool {
 func resetActivationIndex[K comparable](index map[K]activationKeyBucket) {
 	for key, bucket := range index {
 		index[key] = bucket.reset()
-	}
-}
-
-func resetActivationSliceIndex[K comparable](index map[K][]activationKey) {
-	for key, keys := range index {
-		index[key] = keys[:0]
-	}
-}
-
-func pruneEmptyActivationSliceIndex[K comparable](index map[K][]activationKey) {
-	for key, keys := range index {
-		if len(keys) == 0 {
-			delete(index, key)
-		}
 	}
 }
 
