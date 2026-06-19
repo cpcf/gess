@@ -38,13 +38,13 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 
 	s.nextRunSequence++
 	runID := RunID("run:" + strconv.FormatUint(s.nextRunSequence, 10))
-	s.setRunState(runGuardState{
-		runID:  runID,
-		active: true,
-	})
+	s.runActive.Store(true)
 	s.endMutation()
 	defer s.endRun()
-	defer s.setRunState(runGuardState{})
+	defer func() {
+		s.runActivation.Store(nil)
+		s.runActive.Store(false)
+	}()
 	var runErr error
 	abort := func(status RunStatus, fired int, err error) (RunResult, error) {
 		runErr = err
@@ -89,10 +89,8 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			s.mutationQueueMu.Unlock()
 			continue
 		}
-		activation, ok := s.agenda.nextInternal()
+		currentActivation, activation, ok := s.agenda.nextInternalPtr()
 		if !ok {
-			s.endRun()
-			s.setRunState(runGuardState{})
 			s.mutationQueueMu.Unlock()
 			return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 		}
@@ -101,16 +99,9 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 
 		s.emitRuleFiredEvent(ctx, runID, activation)
 
-		s.setRunState(runGuardState{
-			runID:               runID,
-			active:              true,
-			allowMutationOrigin: activation.mutationOrigin(),
-		})
+		s.runActivation.Store(currentActivation)
 		err := s.executeActivationActions(ctx, runID, activation)
-		s.setRunState(runGuardState{
-			runID:  runID,
-			active: true,
-		})
+		s.runActivation.Store(nil)
 		if err != nil {
 			s.abandonRunAgendaDelta()
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

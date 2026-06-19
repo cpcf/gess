@@ -928,8 +928,17 @@ func (a *agenda) nextInternal() (activation, bool) {
 }
 
 func (a *agenda) nextActivation(materializeID bool) (activation, bool) {
+	_, out, ok := a.nextActivationPtr(materializeID)
+	return out, ok
+}
+
+func (a *agenda) nextInternalPtr() (*activation, activation, bool) {
+	return a.nextActivationPtr(false)
+}
+
+func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation, bool) {
 	if a == nil {
-		return activation{}, false
+		return nil, activation{}, false
 	}
 	for len(a.pending) > 0 {
 		key := a.pending[0]
@@ -953,9 +962,9 @@ func (a *agenda) nextActivation(materializeID bool) (activation, bool) {
 			out.bindings = nil
 			out.path = nil
 		}
-		return out, true
+		return current, out, true
 	}
-	return activation{}, false
+	return nil, activation{}, false
 }
 
 func (a *agenda) clear() []agendaChange {

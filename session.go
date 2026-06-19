@@ -70,7 +70,8 @@ type Session struct {
 	eventClock            func() time.Time
 	closed                bool
 	runGuard              chan struct{}
-	runState              atomic.Value
+	runActive             atomic.Bool
+	runActivation         atomic.Pointer[activation]
 	runAgendaDelta        reteAgendaDelta
 	runAgendaDeltas       []reteAgendaDelta
 	runAgendaStates       []runAgendaDeltaState
@@ -113,12 +114,6 @@ type queuedMutation struct {
 type queuedMutationResult struct {
 	value any
 	err   error
-}
-
-type runGuardState struct {
-	runID               RunID
-	active              bool
-	allowMutationOrigin mutationOrigin
 }
 
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
@@ -183,7 +178,6 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		insertionOrder:   state.factsByInsertionOrder(),
 		slotStorage:      state.slotStorage,
 	}
-	session.runState.Store(runGuardState{})
 	session.syncPropagationCounters()
 	return session, nil
 }
@@ -2423,25 +2417,6 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	w.insertionOrder = append(w.insertionOrder, id)
 }
 
-func (s *Session) currentRunState() runGuardState {
-	if s == nil {
-		return runGuardState{}
-	}
-	value := s.runState.Load()
-	if value == nil {
-		return runGuardState{}
-	}
-	state, _ := value.(runGuardState)
-	return state
-}
-
-func (s *Session) setRunState(state runGuardState) {
-	if s == nil {
-		return
-	}
-	s.runState.Store(state)
-}
-
 func (s *Session) runGuardHeld() bool {
 	if s == nil || s.runGuard == nil {
 		return false
@@ -2459,8 +2434,11 @@ func (s *Session) canMutateDuringRun(origin mutationOrigin) bool {
 	if s == nil || origin.isZero() {
 		return false
 	}
-	state := s.currentRunState()
-	return state.active && state.allowMutationOrigin == origin
+	if !s.runActive.Load() {
+		return false
+	}
+	activation := s.runActivation.Load()
+	return activation != nil && activation.mutationOrigin() == origin
 }
 
 func (s *Session) shouldQueueMutationDuringRun(origin mutationOrigin) bool {
