@@ -670,6 +670,91 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	}
 }
 
+func TestActivationKeyBucketSupportsInlineSecondAndReset(t *testing.T) {
+	var bucket activationKeyBucket
+	first := activationKey{fingerprint: 1, ordinal: 1}
+	second := activationKey{fingerprint: 2, ordinal: 2}
+	third := activationKey{fingerprint: 3, ordinal: 3}
+
+	if got := bucket.len(); got != 0 {
+		t.Fatalf("empty bucket len = %d, want 0", got)
+	}
+
+	bucket.append(first)
+	if got := bucket.len(); got != 1 {
+		t.Fatalf("single-item bucket len = %d, want 1", got)
+	}
+	if bucket.first != first {
+		t.Fatalf("bucket first = %#v, want %#v", bucket.first, first)
+	}
+	if bucket.second != (activationKey{}) {
+		t.Fatalf("bucket second after first append = %#v, want zero", bucket.second)
+	}
+	if bucket.overflow != nil {
+		t.Fatalf("bucket overflow after first append = %#v, want nil", bucket.overflow)
+	}
+
+	bucket.append(second)
+	if got := bucket.len(); got != 2 {
+		t.Fatalf("two-item bucket len = %d, want 2", got)
+	}
+	if bucket.first != first {
+		t.Fatalf("bucket first after second append = %#v, want %#v", bucket.first, first)
+	}
+	if bucket.second != second {
+		t.Fatalf("bucket second after second append = %#v, want %#v", bucket.second, second)
+	}
+	if bucket.overflow != nil {
+		t.Fatalf("bucket overflow after second append = %#v, want nil", bucket.overflow)
+	}
+
+	got := make([]activationKey, 0, 3)
+	bucket.forEach(func(key activationKey) {
+		got = append(got, key)
+	})
+	if !reflect.DeepEqual(got, []activationKey{first, second}) {
+		t.Fatalf("bucket iteration after two appends = %#v, want %#v", got, []activationKey{first, second})
+	}
+
+	bucket.append(third)
+	if got := bucket.len(); got != 3 {
+		t.Fatalf("overflow bucket len = %d, want 3", got)
+	}
+	if len(bucket.overflow) != 1 || bucket.overflow[0] != third {
+		t.Fatalf("bucket overflow after third append = %#v, want [%#v]", bucket.overflow, third)
+	}
+
+	got = got[:0]
+	bucket.forEach(func(key activationKey) {
+		got = append(got, key)
+	})
+	if !reflect.DeepEqual(got, []activationKey{first, second, third}) {
+		t.Fatalf("bucket iteration after overflow append = %#v, want %#v", got, []activationKey{first, second, third})
+	}
+
+	reset := bucket.reset()
+	if got := reset.len(); got != 0 {
+		t.Fatalf("reset bucket len = %d, want 0", got)
+	}
+	if reset.first != (activationKey{}) {
+		t.Fatalf("reset bucket first = %#v, want zero", reset.first)
+	}
+	if reset.second != (activationKey{}) {
+		t.Fatalf("reset bucket second = %#v, want zero", reset.second)
+	}
+	if got := len(reset.overflow); got != 0 {
+		t.Fatalf("reset bucket overflow len = %d, want 0", got)
+	}
+
+	got = got[:0]
+	reset.forEach(func(key activationKey) {
+		got = append(got, key)
+	})
+	if len(got) != 0 {
+		t.Fatalf("reset bucket iteration = %#v, want none", got)
+	}
+}
+
 func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-purge-session")

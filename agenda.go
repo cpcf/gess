@@ -23,9 +23,10 @@ type activationBucket struct {
 }
 
 type activationKeyBucket struct {
-	first activationKey
-	rest  []activationKey
-	count int
+	first    activationKey
+	second   activationKey
+	overflow []activationKey
+	count    int
 }
 
 func (b activationKeyBucket) len() int {
@@ -33,12 +34,14 @@ func (b activationKeyBucket) len() int {
 }
 
 func (b *activationKeyBucket) append(key activationKey) {
-	if b.count == 0 {
+	switch b.count {
+	case 0:
 		b.first = key
-		b.count = 1
-		return
+	case 1:
+		b.second = key
+	default:
+		b.overflow = append(b.overflow, key)
 	}
-	b.rest = append(b.rest, key)
 	b.count++
 }
 
@@ -47,17 +50,20 @@ func (b activationKeyBucket) forEach(fn func(activationKey)) {
 		return
 	}
 	fn(b.first)
-	for i := 0; i < b.count-1 && i < len(b.rest); i++ {
-		fn(b.rest[i])
+	if b.count == 1 {
+		return
+	}
+	fn(b.second)
+	for i := 0; i < b.count-2 && i < len(b.overflow); i++ {
+		fn(b.overflow[i])
 	}
 }
 
 func (b *activationKeyBucket) reset() activationKeyBucket {
-	for i := range b.rest {
-		b.rest[i] = activationKey{}
-	}
+	clear(b.overflow)
 	b.first = activationKey{}
-	b.rest = b.rest[:0]
+	b.second = activationKey{}
+	b.overflow = b.overflow[:0]
 	b.count = 0
 	return *b
 }
