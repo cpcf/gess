@@ -13,6 +13,9 @@ const inlineActionContextBindingSnapshots = 2
 
 type actionContextBindingState struct {
 	mu              sync.Mutex
+	conditions      []RuleCondition
+	conditionPlans  []compiledConditionPlan
+	token           tokenRef
 	entries         []bindingTupleEntry
 	snapshots       []FactSnapshot
 	inlineSnapshots [inlineActionContextBindingSnapshots]FactSnapshot
@@ -57,6 +60,18 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 	return out
 }
 
+func newTokenActionContext(ctx context.Context, session *Session, activation activation, rule compiledRule) ActionContext {
+	out := newActionContext(ctx, session, activation, nil)
+	if !activation.token.isZero() {
+		out.bindings = &actionContextBindingState{
+			conditions:     rule.conditions,
+			conditionPlans: rule.conditionPlans,
+			token:          activation.token,
+		}
+	}
+	return out
+}
+
 func (c ActionContext) Context() context.Context {
 	if c.ctx != nil {
 		return c.ctx
@@ -89,13 +104,13 @@ func (c ActionContext) Generation() Generation {
 }
 
 func (c ActionContext) BoundFacts() []FactSnapshot {
-	if c.bindings == nil || len(c.bindings.entries) == 0 {
+	if c.bindings == nil || c.bindings.len() == 0 {
 		return nil
 	}
 	if err := c.materializeAllBindings(); err != nil {
 		return nil
 	}
-	out := make([]FactSnapshot, len(c.bindings.entries))
+	out := make([]FactSnapshot, c.bindings.len())
 	copy(out, c.bindings.snapshots)
 	return out
 }
@@ -131,7 +146,7 @@ func (c ActionContext) bindingScalarValue(name, field string) (Value, bool) {
 }
 
 func (c ActionContext) bindingScalarValueAt(bindingSlot int, field string) (Value, bool) {
-	if field == "" || c.bindings == nil || bindingSlot < 0 || bindingSlot >= len(c.bindings.entries) {
+	if field == "" || c.bindings == nil || bindingSlot < 0 || bindingSlot >= c.bindings.len() {
 		return Value{}, false
 	}
 	c.bindings.mu.Lock()
@@ -140,7 +155,7 @@ func (c ActionContext) bindingScalarValueAt(bindingSlot int, field string) (Valu
 }
 
 func (c ActionContext) bindingScalarValueAtSlot(bindingSlot, fieldSlot int) (Value, bool) {
-	if c.bindings == nil || bindingSlot < 0 || bindingSlot >= len(c.bindings.entries) || fieldSlot < 0 {
+	if c.bindings == nil || bindingSlot < 0 || bindingSlot >= c.bindings.len() || fieldSlot < 0 {
 		return Value{}, false
 	}
 	if len(c.bindings.snapshots) > bindingSlot {
@@ -211,13 +226,14 @@ func (c ActionContext) mutationOrigin() mutationOrigin {
 }
 
 func (c ActionContext) materializeAllBindings() error {
-	if c.bindings == nil || len(c.bindings.entries) == 0 {
+	if c.bindings == nil || c.bindings.len() == 0 {
 		return nil
 	}
 	c.bindings.mu.Lock()
 	defer c.bindings.mu.Unlock()
-	for i, entry := range c.bindings.entries {
+	for i := range c.bindings.len() {
 		if _, ok := c.materializeBindingLocked(i); !ok {
+			entry := c.bindings.entryAt(i)
 			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.activationID)
 		}
 	}
@@ -225,7 +241,7 @@ func (c ActionContext) materializeAllBindings() error {
 }
 
 func (c ActionContext) materializeBinding(index int) (FactSnapshot, bool) {
-	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+	if c.bindings == nil || index < 0 || index >= c.bindings.len() {
 		return FactSnapshot{}, false
 	}
 	c.bindings.mu.Lock()
@@ -234,7 +250,7 @@ func (c ActionContext) materializeBinding(index int) (FactSnapshot, bool) {
 }
 
 func (c ActionContext) bindingScalarValueLocked(index int, field string) (Value, bool) {
-	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+	if c.bindings == nil || index < 0 || index >= c.bindings.len() {
 		return Value{}, false
 	}
 	if len(c.bindings.snapshots) > index {
@@ -249,13 +265,13 @@ func (c ActionContext) bindingScalarValueLocked(index int, field string) (Value,
 }
 
 func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, bool) {
-	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) {
+	if c.bindings == nil || index < 0 || index >= c.bindings.len() {
 		return Value{}, false
 	}
 	if c.session == nil || c.session.revision == nil {
 		return Value{}, false
 	}
-	entry := c.bindings.entries[index]
+	entry := c.bindings.entryAt(index)
 	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok || fact == nil {
 		return Value{}, false
@@ -279,13 +295,13 @@ func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, b
 }
 
 func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value, bool) {
-	if c.bindings == nil || index < 0 || index >= len(c.bindings.entries) || fieldSlot < 0 {
+	if c.bindings == nil || index < 0 || index >= c.bindings.len() || fieldSlot < 0 {
 		return Value{}, false
 	}
 	if c.session == nil {
 		return Value{}, false
 	}
-	entry := c.bindings.entries[index]
+	entry := c.bindings.entryAt(index)
 	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok || fact == nil {
 		return Value{}, false
@@ -302,10 +318,10 @@ func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value
 
 func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) {
 	if len(c.bindings.snapshots) == 0 {
-		if len(c.bindings.entries) <= len(c.bindings.inlineSnapshots) {
-			c.bindings.snapshots = c.bindings.inlineSnapshots[:len(c.bindings.entries)]
+		if c.bindings.len() <= len(c.bindings.inlineSnapshots) {
+			c.bindings.snapshots = c.bindings.inlineSnapshots[:c.bindings.len()]
 		} else {
-			c.bindings.snapshots = make([]FactSnapshot, len(c.bindings.entries))
+			c.bindings.snapshots = make([]FactSnapshot, c.bindings.len())
 		}
 	}
 	if snapshot := c.bindings.snapshots[index]; !snapshot.id.IsZero() {
@@ -314,7 +330,7 @@ func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) 
 	if c.session == nil {
 		return FactSnapshot{}, false
 	}
-	entry := c.bindings.entries[index]
+	entry := c.bindings.entryAt(index)
 	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok {
 		return FactSnapshot{}, false
@@ -331,12 +347,55 @@ func (s *actionContextBindingState) bindingIndex(name string) (int, bool) {
 	if s == nil {
 		return 0, false
 	}
+	if !s.token.isZero() {
+		for i, condition := range s.conditions {
+			if condition.binding == name {
+				return i, true
+			}
+		}
+		return 0, false
+	}
 	for i, entry := range s.entries {
 		if entry.binding == name {
 			return i, true
 		}
 	}
 	return 0, false
+}
+
+func (s *actionContextBindingState) len() int {
+	if s == nil {
+		return 0
+	}
+	if !s.token.isZero() {
+		return tokenRefSize(s.token)
+	}
+	return len(s.entries)
+}
+
+func (s *actionContextBindingState) entryAt(index int) bindingTupleEntry {
+	if s == nil || index < 0 {
+		return bindingTupleEntry{}
+	}
+	if !s.token.isZero() {
+		match, ok := s.token.matchAt(index)
+		if !ok || index >= len(s.conditions) || index >= len(s.conditionPlans) {
+			return bindingTupleEntry{}
+		}
+		condition := s.conditions[index]
+		return bindingTupleEntry{
+			binding:        condition.binding,
+			bindingSlot:    index,
+			conditionOrder: condition.order,
+			conditionID:    condition.id,
+			factID:         match.fact.ID(),
+			factVersion:    match.fact.Version(),
+		}
+	}
+	if index >= len(s.entries) {
+		return bindingTupleEntry{}
+	}
+	return s.entries[index]
 }
 
 func scalarFieldValue(fact FactSnapshot, field string) (Value, bool) {
@@ -514,6 +573,9 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 	factCount := activationFactCount(&activation)
 	if factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions) || factCount != len(rule.conditionPlans) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
+	}
+	if !activation.token.isZero() {
+		return newTokenActionContext(ctx, s, activation, rule), nil
 	}
 
 	entries := activationBindingTupleEntriesForActivation(rule, &activation, false)

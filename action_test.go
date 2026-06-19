@@ -346,6 +346,79 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 	}
 }
 
+func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
+	workspace := NewWorkspace()
+
+	mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "inspect",
+		Fn: func(ctx ActionContext) error {
+			if ctx.bindings == nil {
+				return errors.New("missing binding state")
+			}
+			if ctx.bindings.token.isZero() {
+				return errors.New("binding state is not token-backed")
+			}
+			if len(ctx.bindings.entries) != 0 {
+				return fmt.Errorf("token-backed entries = %d, want 0 before materialization", len(ctx.bindings.entries))
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("snapshots materialized before scalar read")
+			}
+			value, ok := ctx.BindingScalarValue("person", "name")
+			if !ok || value.Kind() != ValueString || value.data.(string) != "Ada" {
+				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
+			}
+			if ctx.bindings.snapshots != nil {
+				return errors.New("scalar read materialized snapshots")
+			}
+			if len(ctx.bindings.entries) != 0 {
+				return fmt.Errorf("scalar read populated entries = %d, want 0", len(ctx.bindings.entries))
+			}
+			binding, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("Binding(person) did not resolve")
+			}
+			if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
+				return fmt.Errorf("Binding(person).name = %v, want Ada", got)
+			}
+			if len(ctx.bindings.entries) != 0 {
+				return fmt.Errorf("Binding populated entries = %d, want 0", len(ctx.bindings.entries))
+			}
+			if got, want := len(ctx.bindings.snapshots), 1; got != want {
+				return fmt.Errorf("snapshots = %d, want %d", got, want)
+			}
+			return nil
+		},
+		NonEscaping: true,
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "inspect"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "action-token-backed-session")
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("session graph beta = %#v, want token-backed graph runtime", session.rete)
+	}
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
 func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapshots(t *testing.T) {
 	workspace := NewWorkspace()
 
