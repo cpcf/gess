@@ -1487,6 +1487,21 @@ func activationFromTerminalToken(rule compiledRule, token tokenRef) (activation,
 }
 
 func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candidateIdentity {
+	identityState, count, ok := terminalTokenIdentityStateForRule(rule, token, candidateIdentityHashStart(tokenRefGeneration(token)), 0)
+	if ok {
+		identity := candidateIdentity{
+			generation: tokenRefGeneration(token),
+			count:      count,
+			key: candidateIdentityKey{
+				scopeHash: rule.identityScopeHash,
+				hash:      candidateIdentityHashFinish(identityState, count),
+			},
+		}
+		if identity.key.scopeHash == 0 {
+			identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+		}
+		return identity
+	}
 	identity := candidateIdentity{
 		generation: tokenRefGeneration(token),
 		count:      tokenRefSize(token),
@@ -1499,6 +1514,25 @@ func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candid
 		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
 	}
 	return identity
+}
+
+func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state uint64, count int) (uint64, int, bool) {
+	if token.isZero() {
+		return state, count, true
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return state, count, false
+	}
+	state, count, ok = terminalTokenIdentityStateForRule(rule, token.parent(), state, count)
+	if !ok {
+		return state, count, false
+	}
+	entry, err := bindingTupleEntryForMatch(rule, row.match)
+	if err != nil {
+		return state, count, false
+	}
+	return candidateIdentityHashStep(state, entry), count + 1, true
 }
 
 func candidateIdentityForTerminalTokenDelta(revision *Ruleset, delta reteTerminalTokenDelta) candidateIdentity {

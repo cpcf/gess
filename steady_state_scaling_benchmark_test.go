@@ -458,8 +458,8 @@ func TestSteadyStateScalingPropagationCountersScale(t *testing.T) {
 	if largeSnapshot.Totals.RHSAsserts <= smallSnapshot.Totals.RHSAsserts {
 		t.Fatalf("rhs assert totals did not scale: small=%d large=%d", smallSnapshot.Totals.RHSAsserts, largeSnapshot.Totals.RHSAsserts)
 	}
-	if largeSnapshot.Totals.RuleMemoriesVisited <= smallSnapshot.Totals.RuleMemoriesVisited {
-		t.Fatalf("rule memory visits did not scale: small=%d large=%d", smallSnapshot.Totals.RuleMemoriesVisited, largeSnapshot.Totals.RuleMemoriesVisited)
+	if smallSnapshot.Totals.RuleMemoriesVisited != 0 || largeSnapshot.Totals.RuleMemoriesVisited != 0 {
+		t.Fatalf("rule memory visits = small %d large %d, want graph beta path to avoid rule-local visits", smallSnapshot.Totals.RuleMemoriesVisited, largeSnapshot.Totals.RuleMemoriesVisited)
 	}
 	if largeSnapshot.Totals.TerminalDeltasEmitted <= smallSnapshot.Totals.TerminalDeltasEmitted {
 		t.Fatalf("terminal deltas did not scale: small=%d large=%d", smallSnapshot.Totals.TerminalDeltasEmitted, largeSnapshot.Totals.TerminalDeltasEmitted)

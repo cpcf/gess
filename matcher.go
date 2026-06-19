@@ -381,17 +381,7 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		return matchCandidate{}, err
 	}
 
-	identity := candidateIdentity{
-		generation: generation,
-		count:      size,
-		key: candidateIdentityKey{
-			scopeHash: rule.identityScopeHash,
-			hash:      candidateIdentityHashFinish(token.identityState(), size),
-		},
-	}
-	if identity.key.scopeHash == 0 {
-		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
-	}
+	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
 
 	return matchCandidate{
 		ruleID:           rule.id,

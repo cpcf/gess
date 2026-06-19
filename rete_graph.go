@@ -12,6 +12,8 @@ type reteGraph struct {
 	betaNodes           []reteGraphBetaNode
 	terminalNodes       []reteGraphTerminalNode
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
+	successorsByStage   map[reteGraphStageRef][]reteGraphStageSuccessor
+	terminalsByStage    map[reteGraphStageRef][]reteGraphTerminalRoute
 }
 
 type reteGraphAlphaNodeID int
@@ -36,6 +38,7 @@ type reteGraphAlphaNode struct {
 	target      conditionTarget
 	constraints []compiledFieldConstraint
 	consumers   []reteBetaConditionRoute
+	entry       bindingTupleEntry
 }
 
 type reteGraphBetaNode struct {
@@ -43,6 +46,7 @@ type reteGraphBetaNode struct {
 	left  reteGraphStageRef
 	right reteGraphStageRef
 	joins []compiledJoinConstraint
+	entry bindingTupleEntry
 }
 
 type reteGraphTerminalNode struct {
@@ -56,6 +60,25 @@ type reteGraphDebugSummary struct {
 	BetaNodes           []reteGraphBetaNode
 	TerminalNodes       []reteGraphTerminalNode
 	RoutesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
+}
+
+type reteGraphBetaInputSide uint8
+
+const (
+	reteGraphBetaInputUnknown reteGraphBetaInputSide = iota
+	reteGraphBetaInputLeft
+	reteGraphBetaInputRight
+)
+
+type reteGraphStageSuccessor struct {
+	betaNodeID reteGraphBetaNodeID
+	side       reteGraphBetaInputSide
+	entry      bindingTupleEntry
+}
+
+type reteGraphTerminalRoute struct {
+	terminalID reteGraphTerminalNodeID
+	entry      bindingTupleEntry
 }
 
 type reteGraphAlphaKey struct {
@@ -78,6 +101,8 @@ type reteGraphBetaKey struct {
 func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateKey]Template) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
+		successorsByStage:   make(map[reteGraphStageRef][]reteGraphStageSuccessor),
+		terminalsByStage:    make(map[reteGraphStageRef][]reteGraphTerminalRoute),
 	}
 	if len(compiledRules) == 0 {
 		return graph
@@ -93,6 +118,9 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 		for conditionIndex, condition := range rule.conditionPlans {
 			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, condition.constraints)
 			alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+			if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
+				alphaNode.entry = graphTokenEntryForCondition(condition)
+			}
 			supportedAlpha := reteGraphSupportsAlpha(condition.target, templatesByKey)
 			if supportedAlpha {
 				graph.appendAlphaConsumer(alphaID, reteBetaConditionRoute{
@@ -112,6 +140,23 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 			}
 
 			betaID, _ := graph.internBetaNode(betaIndex, current, alphaRef, condition.joins)
+			if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" {
+				betaNode.entry = graphTokenEntryForCondition(condition)
+			}
+			leftEntry := bindingTupleEntry{}
+			if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+				leftEntry = graphTokenEntryForCondition(rule.conditionPlans[conditionIndex-1])
+			}
+			graph.appendStageSuccessor(current, reteGraphStageSuccessor{
+				betaNodeID: betaID,
+				side:       reteGraphBetaInputLeft,
+				entry:      leftEntry,
+			})
+			graph.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
+				betaNodeID: betaID,
+				side:       reteGraphBetaInputRight,
+				entry:      graphTokenEntryForCondition(condition),
+			})
 			current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
 		}
 
@@ -122,6 +167,14 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 			id:             reteGraphTerminalNodeID(len(graph.terminalNodes) + 1),
 			ruleRevisionID: rule.revisionID,
 			input:          current,
+		})
+		terminalEntry := bindingTupleEntry{}
+		if current.kind == reteGraphStageAlpha && len(rule.conditionPlans) > 0 {
+			terminalEntry = graphTokenEntryForCondition(rule.conditionPlans[0])
+		}
+		graph.appendTerminal(current, reteGraphTerminalRoute{
+			terminalID: reteGraphTerminalNodeID(len(graph.terminalNodes)),
+			entry:      terminalEntry,
 		})
 	}
 
@@ -171,6 +224,42 @@ func (g *reteGraph) appendAlphaConsumer(id reteGraphAlphaNodeID, route reteBetaC
 		return
 	}
 	g.alphaNodes[index].consumers = append(g.alphaNodes[index].consumers, route)
+}
+
+func (g *reteGraph) alphaNodeEntry(ref reteGraphStageRef) bindingTupleEntry {
+	if g == nil || ref.kind != reteGraphStageAlpha || ref.id <= 0 {
+		return bindingTupleEntry{}
+	}
+	node := g.alphaNode(reteGraphAlphaNodeID(ref.id))
+	if node == nil {
+		return bindingTupleEntry{}
+	}
+	return node.entry
+}
+
+func (g *reteGraph) betaNode(id reteGraphBetaNodeID) *reteGraphBetaNode {
+	if g == nil || id <= 0 {
+		return nil
+	}
+	index := int(id) - 1
+	if index < 0 || index >= len(g.betaNodes) {
+		return nil
+	}
+	return &g.betaNodes[index]
+}
+
+func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor reteGraphStageSuccessor) {
+	if g == nil || source.kind == reteGraphStageUnknown || successor.betaNodeID <= 0 {
+		return
+	}
+	g.successorsByStage[source] = append(g.successorsByStage[source], successor)
+}
+
+func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphTerminalRoute) {
+	if g == nil || source.kind == reteGraphStageUnknown || terminal.terminalID <= 0 {
+		return
+	}
+	g.terminalsByStage[source] = append(g.terminalsByStage[source], terminal)
 }
 
 func (g *reteGraph) alphaNode(id reteGraphAlphaNodeID) *reteGraphAlphaNode {
@@ -254,6 +343,16 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 	return id, true
 }
 
+func graphTokenEntryForCondition(condition compiledConditionPlan) bindingTupleEntry {
+	return bindingTupleEntry{
+		binding:        condition.binding,
+		bindingSlot:    condition.bindingSlot,
+		conditionOrder: condition.bindingSlot,
+		conditionID:    condition.id,
+		conditionPath:  cloneIntPath(condition.path),
+	}
+}
+
 func (g *reteGraph) debugSummary() reteGraphDebugSummary {
 	if g == nil {
 		return reteGraphDebugSummary{}
@@ -282,6 +381,7 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 		out[i] = node
 		out[i].constraints = cloneCompiledFieldConstraints(node.constraints)
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
+		out[i].entry = cloneBindingTupleEntry(node.entry)
 	}
 	return out
 }
@@ -294,6 +394,7 @@ func cloneReteGraphBetaNodes(in []reteGraphBetaNode) []reteGraphBetaNode {
 	for i, node := range in {
 		out[i] = node
 		out[i].joins = cloneCompiledJoinConstraints(node.joins)
+		out[i].entry = cloneBindingTupleEntry(node.entry)
 	}
 	return out
 }
@@ -325,6 +426,14 @@ func cloneReteGraphAlphaConsumers(in []reteBetaConditionRoute) []reteBetaConditi
 	out := make([]reteBetaConditionRoute, len(in))
 	copy(out, in)
 	return out
+}
+
+func cloneBindingTupleEntry(entry bindingTupleEntry) bindingTupleEntry {
+	if len(entry.conditionPath) == 0 {
+		return entry
+	}
+	entry.conditionPath = append([]int(nil), entry.conditionPath...)
+	return entry
 }
 
 func cloneCompiledFieldConstraints(in []compiledFieldConstraint) []compiledFieldConstraint {

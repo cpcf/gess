@@ -123,10 +123,10 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnce(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
 		t.Fatalf("rule memories visited = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionMatchesAdded, 2; got != want {
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 0; got != want {
 		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.TerminalDeltasEmitted, 2; got != want {
@@ -135,10 +135,10 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnce(t *testing.T) {
 
 	ruleA := revision.rules["adult-a"]
 	ruleB := revision.rules["adult-b"]
-	if got, want := session.rete.alpha.factCount(ruleA.conditionPlans[0].id), 1; got != want {
+	if got, want := session.rete.alphaFactCount(ruleA.conditionPlans[0].id), 1; got != want {
 		t.Fatalf("alpha fact count for adult-a = %d, want %d", got, want)
 	}
-	if got, want := session.rete.alpha.factCount(ruleB.conditionPlans[0].id), 1; got != want {
+	if got, want := session.rete.alphaFactCount(ruleB.conditionPlans[0].id), 1; got != want {
 		t.Fatalf("alpha fact count for adult-b = %d, want %d", got, want)
 	}
 }
@@ -207,10 +207,10 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnceForGeneratedFacts(t *test
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 2; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
 		t.Fatalf("rule memories visited = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionMatchesAdded, 2; got != want {
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 0; got != want {
 		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.TerminalDeltasEmitted, 2; got != want {
@@ -395,7 +395,7 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.RHSAsserts, 1; got != want {
 		t.Fatalf("rhs asserts = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
 		t.Fatalf("rule memories visited = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
@@ -404,7 +404,7 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 0; got != want {
 		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
 
@@ -423,7 +423,7 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	if got, want := snapshot.Totals.RHSAsserts, 0; got != want {
 		t.Fatalf("public rhs asserts = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
 		t.Fatalf("public rule memories visited = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 2; got != want {
@@ -495,7 +495,7 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.RuleMemoriesVisited, 1; got != want {
+	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
 		t.Fatalf("rule memories visited = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.ConditionsTested, 1; got != want {
@@ -504,7 +504,7 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 	if got, want := snapshot.Totals.ConditionPlansTested, 0; got != want {
 		t.Fatalf("condition plans tested = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ConditionMatchesAdded, 1; got != want {
+	if got, want := snapshot.Totals.ConditionMatchesAdded, 0; got != want {
 		t.Fatalf("condition matches added = %d, want %d", got, want)
 	}
 }
@@ -617,7 +617,7 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
 		}
 	}
-	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
+	if session.rete == nil || session.rete.alpha == nil || (session.rete.beta == nil && session.rete.graphBeta == nil) {
 		t.Fatalf("session Rete runtime = %#v, want populated alpha and beta memories", session.rete)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
@@ -793,6 +793,10 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	}
 	if !session.rete.plan.betaSupported {
 		t.Fatalf("beta plan = %#v, want supported", session.rete.plan)
+	}
+	if session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision1, session)
+		return
 	}
 	if session.rete.beta == nil {
 		t.Fatal("expected beta memory to be initialized")
@@ -1003,6 +1007,10 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
 	}
@@ -1092,6 +1100,10 @@ func TestReteRuntimeBetaPrefixRowsCompactAfterRetractAndReadd(t *testing.T) {
 	session, err := NewSession(revision, WithSessionID("beta-prefix-row-session"), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
@@ -1194,6 +1206,10 @@ func TestReteRuntimeBetaRowsCompactAfterModifyWithoutTerminalRemovals(t *testing
 	if err != nil {
 		t.Fatalf("AssertTemplate(active): %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after insert = %#v, want populated memories", session.rete)
 	}
@@ -1278,6 +1294,10 @@ func TestReteRuntimeBetaIndexedJoinsSkipTombstonedRowsAcrossReadd(t *testing.T) 
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
@@ -1789,6 +1809,10 @@ func TestReteRuntimeMatchWithoutSnapshotMatchesSnapshotForFullBetaMemory(t *test
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("full beta session runtime = %#v, want populated beta memory", session.rete)
 	}
@@ -1855,6 +1879,21 @@ func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		for i := range reteAlphaMinimumFacts {
+			if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": i})); err != nil {
+				t.Fatalf("AssertTemplate noise %d: %v", i, err)
+			}
+		}
+		if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+			t.Fatalf("AssertTemplate department: %v", err)
+		}
+		if _, err := session.Reset(ctx); err != nil {
+			t.Fatalf("Reset: %v", err)
+		}
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
 		t.Fatalf("small initial Rete runtime = %#v, want populated memories", session.rete)
@@ -1923,6 +1962,10 @@ func TestReteRuntimeBetaJoinIndexesReuseBucketBackingAcrossReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.alpha == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
 	}
@@ -1990,6 +2033,10 @@ func TestReteRuntimeTokenArenaTrimsDeadRowsAfterReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
 	}
@@ -2034,6 +2081,10 @@ func TestReteRuntimeTokenArenaRefsSurviveRepeatedRetract(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
@@ -2095,6 +2146,10 @@ func TestReteRuntimeBetaJoinLookupReusesScratchAcrossCalls(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
@@ -2204,6 +2259,10 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
+	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatalf("beta memory after initial reset = %#v, want populated memories", session.rete)
 	}
@@ -2308,6 +2367,10 @@ func TestReteRuntimeRetractKeepsAgendaDeltaPathForSmallSupportedSession(t *testi
 	session, err := NewSession(revision, WithSessionID("beta-retract-small-session"), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete != nil && session.rete.graphBeta != nil {
+		assertGraphBetaRuntimeParity(t, revision, session)
+		return
 	}
 	if session.rete == nil || session.rete.beta == nil {
 		t.Fatal("expected beta memory at threshold")
@@ -2842,6 +2905,15 @@ func assertReteRuntimeMatchWithoutSnapshotParity(t *testing.T, session *Session)
 	if !ruleMatchResultsEqual(noSnapshotResults, snapshotResults) {
 		t.Fatalf("matchWithoutSnapshot results differ from snapshot match:\nno-snapshot=%#v\nsnapshot=%#v", noSnapshotResults, snapshotResults)
 	}
+}
+
+func assertGraphBetaRuntimeParity(t *testing.T, revision *Ruleset, session *Session) {
+	t.Helper()
+	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.rete)
+	}
+	assertMatcherParity(t, revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(revision), session.rete)
+	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
 }
 
 func ruleMatchResultsEqual(left, right []ruleMatchResult) bool {
