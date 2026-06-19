@@ -1784,6 +1784,12 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	if got, want := snapshot.Totals.BetaBucketProbes, 3; got != want {
 		t.Fatalf("beta bucket probes = %d, want %d", got, want)
 	}
+	if got, want := snapshot.Totals.BetaBucketDepthTotal, 2; got != want {
+		t.Fatalf("beta bucket depth total = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaBucketDepthMax, 1; got != want {
+		t.Fatalf("beta bucket depth max = %d, want %d", got, want)
+	}
 	if got, want := snapshot.Totals.BetaCandidateRowsScanned, 2; got != want {
 		t.Fatalf("beta candidate rows scanned = %d, want %d", got, want)
 	}

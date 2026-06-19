@@ -753,11 +753,13 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	}
 	if span != nil {
 		span.recordBetaInputInsert(side)
-		span.recordBetaBucketProbe()
 	}
 	switch side {
 	case reteGraphBetaInputLeft:
 		bucket := nodeMemory.right.bucketForKey(joinKey)
+		if span != nil {
+			span.recordBetaBucketProbe(bucket.len())
+		}
 		for i := 0; i < bucket.len(); i++ {
 			rowID, _ := bucket.at(i)
 			if span != nil {
@@ -791,6 +793,9 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			return false
 		}
 		bucket := nodeMemory.left.bucketForKey(joinKey)
+		if span != nil {
+			span.recordBetaBucketProbe(bucket.len())
+		}
 		for i := 0; i < bucket.len(); i++ {
 			rowID, _ := bucket.at(i)
 			if span != nil {

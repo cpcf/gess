@@ -58,6 +58,8 @@ type propagationCounterTotals struct {
 	BetaLeftInputInserts     int
 	BetaRightInputInserts    int
 	BetaBucketProbes         int
+	BetaBucketDepthTotal     int
+	BetaBucketDepthMax       int
 	BetaCandidateRowsScanned int
 	BetaResidualTests        int
 	BetaResidualFailures     int
@@ -92,6 +94,8 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.BetaLeftInputInserts += other.BetaLeftInputInserts
 	t.BetaRightInputInserts += other.BetaRightInputInserts
 	t.BetaBucketProbes += other.BetaBucketProbes
+	t.BetaBucketDepthTotal += other.BetaBucketDepthTotal
+	t.BetaBucketDepthMax = max(t.BetaBucketDepthMax, other.BetaBucketDepthMax)
 	t.BetaCandidateRowsScanned += other.BetaCandidateRowsScanned
 	t.BetaResidualTests += other.BetaResidualTests
 	t.BetaResidualFailures += other.BetaResidualFailures
@@ -268,11 +272,16 @@ func (s *propagationCounterSpan) recordBetaInputInsert(side reteGraphBetaInputSi
 	}
 }
 
-func (s *propagationCounterSpan) recordBetaBucketProbe() {
+func (s *propagationCounterSpan) recordBetaBucketProbe(depth int) {
 	if s == nil || s.ledger == nil {
 		return
 	}
+	if depth < 0 {
+		depth = 0
+	}
 	s.totals.BetaBucketProbes++
+	s.totals.BetaBucketDepthTotal += depth
+	s.totals.BetaBucketDepthMax = max(s.totals.BetaBucketDepthMax, depth)
 }
 
 func (s *propagationCounterSpan) recordBetaCandidateRowScanned() {
@@ -496,6 +505,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-left-input-inserts", float64(s.Totals.BetaLeftInputInserts))
 	report("propagation-beta-right-input-inserts", float64(s.Totals.BetaRightInputInserts))
 	report("propagation-beta-bucket-probes", float64(s.Totals.BetaBucketProbes))
+	report("propagation-beta-bucket-depth-total", float64(s.Totals.BetaBucketDepthTotal))
+	report("propagation-beta-bucket-depth-max", float64(s.Totals.BetaBucketDepthMax))
+	report("propagation-beta-bucket-depth-mean", float64(s.Totals.BetaBucketDepthTotal)/float64(max(1, s.Totals.BetaBucketProbes)))
 	report("propagation-beta-candidate-rows-scanned", float64(s.Totals.BetaCandidateRowsScanned))
 	report("propagation-beta-residual-tests", float64(s.Totals.BetaResidualTests))
 	report("propagation-beta-residual-failures", float64(s.Totals.BetaResidualFailures))
@@ -520,6 +532,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-left-input-inserts/rhs-assert", float64(s.Totals.BetaLeftInputInserts)/rhsAsserts)
 	report("propagation-beta-right-input-inserts/rhs-assert", float64(s.Totals.BetaRightInputInserts)/rhsAsserts)
 	report("propagation-beta-bucket-probes/rhs-assert", float64(s.Totals.BetaBucketProbes)/rhsAsserts)
+	report("propagation-beta-bucket-depth-total/rhs-assert", float64(s.Totals.BetaBucketDepthTotal)/rhsAsserts)
 	report("propagation-beta-candidate-rows-scanned/rhs-assert", float64(s.Totals.BetaCandidateRowsScanned)/rhsAsserts)
 	report("propagation-beta-residual-tests/rhs-assert", float64(s.Totals.BetaResidualTests)/rhsAsserts)
 	report("propagation-beta-residual-failures/rhs-assert", float64(s.Totals.BetaResidualFailures)/rhsAsserts)
@@ -566,6 +579,9 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-left-input-inserts=" + strconv.Itoa(s.Totals.BetaLeftInputInserts),
 		"propagation-beta-right-input-inserts=" + strconv.Itoa(s.Totals.BetaRightInputInserts),
 		"propagation-beta-bucket-probes=" + strconv.Itoa(s.Totals.BetaBucketProbes),
+		"propagation-beta-bucket-depth-total=" + strconv.Itoa(s.Totals.BetaBucketDepthTotal),
+		"propagation-beta-bucket-depth-max=" + strconv.Itoa(s.Totals.BetaBucketDepthMax),
+		"propagation-beta-bucket-depth-mean=" + s.betaBucketDepthMeanField(),
 		"propagation-beta-candidate-rows-scanned=" + strconv.Itoa(s.Totals.BetaCandidateRowsScanned),
 		"propagation-beta-residual-tests=" + strconv.Itoa(s.Totals.BetaResidualTests),
 		"propagation-beta-residual-failures=" + strconv.Itoa(s.Totals.BetaResidualFailures),
@@ -585,6 +601,7 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-left-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaLeftInputInserts),
 		"propagation-beta-right-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaRightInputInserts),
 		"propagation-beta-bucket-probes/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketProbes),
+		"propagation-beta-bucket-depth-total/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketDepthTotal),
 		"propagation-beta-candidate-rows-scanned/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaCandidateRowsScanned),
 		"propagation-beta-residual-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualTests),
 		"propagation-beta-residual-failures/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualFailures),
@@ -631,6 +648,11 @@ func (s propagationCounterSnapshot) fallbackReasonSummary() string {
 func (s propagationCounterSnapshot) perRHSAssertField(value int) string {
 	rhsAsserts := max(1, s.Totals.RHSAsserts)
 	return strconv.FormatFloat(float64(value)/float64(rhsAsserts), 'f', 3, 64)
+}
+
+func (s propagationCounterSnapshot) betaBucketDepthMeanField() string {
+	probes := max(1, s.Totals.BetaBucketProbes)
+	return strconv.FormatFloat(float64(s.Totals.BetaBucketDepthTotal)/float64(probes), 'f', 3, 64)
 }
 
 func (s propagationCounterSnapshot) templateSummary() string {
@@ -709,6 +731,8 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"beta-left-input-inserts=" + strconv.Itoa(totals.BetaLeftInputInserts) + "," +
 		"beta-right-input-inserts=" + strconv.Itoa(totals.BetaRightInputInserts) + "," +
 		"beta-bucket-probes=" + strconv.Itoa(totals.BetaBucketProbes) + "," +
+		"beta-bucket-depth-total=" + strconv.Itoa(totals.BetaBucketDepthTotal) + "," +
+		"beta-bucket-depth-max=" + strconv.Itoa(totals.BetaBucketDepthMax) + "," +
 		"beta-candidate-rows-scanned=" + strconv.Itoa(totals.BetaCandidateRowsScanned) + "," +
 		"beta-residual-tests=" + strconv.Itoa(totals.BetaResidualTests) + "," +
 		"beta-residual-failures=" + strconv.Itoa(totals.BetaResidualFailures) + "," +
