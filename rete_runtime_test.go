@@ -36,6 +36,9 @@ func TestReteNetworkPlanDescribesClosedTemplateRules(t *testing.T) {
 	if runtime.plan.stats.unsupportedRules != 0 || runtime.plan.stats.unsupportedConditions != 0 {
 		t.Fatalf("unsupported stats = %#v, want no unsupported rules or conditions", runtime.plan.stats)
 	}
+	if !runtime.plan.incrementalAgendaSupported {
+		t.Fatal("incremental agenda plan flag = false, want true for supported closed-template rules")
+	}
 
 	metrics := runtime.metrics()
 	if metrics.plan != runtime.plan.stats {
@@ -254,6 +257,9 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	if got, want := runtime.plan.stats.unsupportedConditions, 2; got != want {
 		t.Fatalf("unsupported conditions = %d, want %d", got, want)
 	}
+	if runtime.plan.incrementalAgendaSupported {
+		t.Fatal("incremental agenda plan flag = true, want false for unsupported rules")
+	}
 
 	kinds := map[reteUnsupportedKind]bool{}
 	for _, reason := range runtime.plan.unsupported {
@@ -267,6 +273,22 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	}
 	if !kinds[reteUnsupportedOpenTemplate] {
 		t.Fatalf("unsupported kinds = %#v, want %q", kinds, reteUnsupportedOpenTemplate)
+	}
+}
+
+func BenchmarkReteRuntimeSupportsIncrementalAgendaPlanFlag(b *testing.B) {
+	revision := mustCompileLargeSteadyStateScalingRuleset(b, largeSteadyStateScalingCase{streams: 16, limit: 256})
+	session := mustSeedLargeSteadyStateScalingSession(b, revision, largeSteadyStateScalingCase{streams: 16, limit: 256})
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		b.Fatal("large steady-state runtime does not support incremental agenda")
+	}
+
+	b.ReportMetric(float64(len(session.rete.plan.rules)), "rules")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !session.rete.supportsIncrementalAgenda() {
+			b.Fatal("incremental agenda support changed")
+		}
 	}
 }
 
