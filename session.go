@@ -57,35 +57,34 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 type Session struct {
-	id                    SessionID
-	revision              *Ruleset
-	agenda                *agenda
-	propagationCounters   *propagationCounterLedger
-	rete                  *reteRuntime
-	generation            Generation
-	initials              []SessionInitialFact
-	initialCount          int
-	compiledInitials      []compiledSessionInitialFact
-	listeners             []EventListener
-	eventClock            func() time.Time
-	closed                bool
-	runGuard              chan struct{}
-	runActive             atomic.Bool
-	runActivation         atomic.Pointer[activation]
-	runAgendaDelta        reteAgendaDelta
-	runAgendaDeltas       []reteAgendaDelta
-	runAgendaStates       []runAgendaDeltaState
-	runAgendaBuckets      map[candidateIdentity]int
-	runAgendaAdded        []reteTerminalTokenDelta
-	runAgendaRemoved      []reteTerminalTokenDelta
-	runAgendaPending      bool
-	agendaReady           bool
-	agendaDirty           bool
-	templateValuesScratch []factSlot
-	actionBindingScratch  actionContextBindingState
-	mutationQueueMu       sync.Mutex
-	mutationQueue         []queuedMutation
-	mu                    struct {
+	id                   SessionID
+	revision             *Ruleset
+	agenda               *agenda
+	propagationCounters  *propagationCounterLedger
+	rete                 *reteRuntime
+	generation           Generation
+	initials             []SessionInitialFact
+	initialCount         int
+	compiledInitials     []compiledSessionInitialFact
+	listeners            []EventListener
+	eventClock           func() time.Time
+	closed               bool
+	runGuard             chan struct{}
+	runActive            atomic.Bool
+	runActivation        atomic.Pointer[activation]
+	runAgendaDelta       reteAgendaDelta
+	runAgendaDeltas      []reteAgendaDelta
+	runAgendaStates      []runAgendaDeltaState
+	runAgendaBuckets     map[candidateIdentity]int
+	runAgendaAdded       []reteTerminalTokenDelta
+	runAgendaRemoved     []reteTerminalTokenDelta
+	runAgendaPending     bool
+	agendaReady          bool
+	agendaDirty          bool
+	actionBindingScratch actionContextBindingState
+	mutationQueueMu      sync.Mutex
+	mutationQueue        []queuedMutation
+	mu                   struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -565,15 +564,17 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 			Reason:       "unknown template key",
 		}
 	}
-	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(s.templateValuesScratch[:0], values)
-	s.templateValuesScratch = fieldSlots[:0]
+	state := s.activeFactWorkspace()
+	fieldSlots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(template.fields))
+	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 	if err != nil {
+		state.rollbackGeneratedFactSlots(slotMark)
 		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 
-	state := s.activeFactWorkspace()
-	fact, _, inserted, err := state.insertFactSlots(s.revision, s.generation, template, fieldSlots, false)
+	fact, _, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
 	if err != nil {
+		state.rollbackGeneratedFactSlots(slotMark)
 		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 	s.commitFactWorkspace(state)
@@ -2017,6 +2018,34 @@ func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 	return stored
 }
 
+func (w *factWorkspace) reserveGeneratedFactSlots(revision *Ruleset, slotCount int) ([]factSlot, int) {
+	if w == nil {
+		return nil, 0
+	}
+	if slotCount <= 0 {
+		return nil, len(w.slotStorage)
+	}
+	mark := len(w.slotStorage)
+	w.reserveGeneratedFactInsert(revision, slotCount)
+	end := mark + slotCount
+	if cap(w.slotStorage) < end {
+		w.reserveSlotStorage(end)
+	}
+	w.slotStorage = w.slotStorage[:end]
+	slots := w.slotStorage[mark:end:end]
+	return slots, mark
+}
+
+func (w *factWorkspace) rollbackGeneratedFactSlots(mark int) {
+	if w == nil || mark < 0 || mark > len(w.slotStorage) {
+		return
+	}
+	for i := mark; i < len(w.slotStorage); i++ {
+		w.slotStorage[i] = factSlot{}
+	}
+	w.slotStorage = w.slotStorage[:mark]
+}
+
 func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 	if w == nil || w.factsByID == nil {
 		return nil, false
@@ -2221,6 +2250,46 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, duplicateKey, true, nil
+}
+
+func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+	name := template.Name()
+	templateKey := template.Key()
+	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
+	if template.duplicatePolicy != DuplicateAllow {
+		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+		if ok {
+			existing, ok := w.workingFactByID(existingID)
+			if ok {
+				w.rollbackGeneratedFactSlots(slotMark)
+				return existing, "", false, nil
+			}
+			w.factsByDuplicate.delete(duplicateIndex)
+		}
+	}
+
+	w.sequence++
+	w.recency++
+	id := newFactID(generation, w.sequence)
+	fact := workingFact{
+		id:          id,
+		name:        name,
+		templateKey: templateKey,
+		version:     1,
+		recency:     w.recency,
+		fieldSlots:  fieldSlots,
+		dupIndex:    duplicateIndex,
+	}
+
+	stored := w.storeFact(fact)
+	if template.duplicatePolicy != DuplicateAllow {
+		w.factsByDuplicate.set(duplicateIndex, id)
+	}
+	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
+	w.factsByName[name] = append(w.factsByName[name], id)
+	w.insertionOrder = append(w.insertionOrder, id)
+
+	return stored, "", true, nil
 }
 
 func (w *factWorkspace) storeGeneratedFactSlots(fieldSlots []factSlot) []factSlot {

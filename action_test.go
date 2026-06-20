@@ -1581,6 +1581,71 @@ func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratch
 	}
 }
 
+func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "source",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "generated",
+		Closed:            true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Default: "effect", HasDefault: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		Fn: func(ctx ActionContext) error {
+			return ctx.AssertTemplateValues(generated.Key(), mustValue(t, 7))
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "effect-assert-duplicate-slot-rollback-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("AssertTemplate(source 1): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
+		t.Fatalf("AssertTemplate(source 2): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+
+	generatedIDs := session.factsByTemplate[generated.Key()]
+	if got := len(generatedIDs); got != 1 {
+		t.Fatalf("generated fact count = %d, want 1", got)
+	}
+	if got, want := len(session.slotStorage), len(generated.fields); got != want {
+		t.Fatalf("generated slot storage length = %d, want %d", got, want)
+	}
+	if got, want := session.nextFactSequence, uint64(3); got != want {
+		t.Fatalf("next fact sequence = %d, want %d", got, want)
+	}
+	if got, want := session.nextRecency, Recency(3); got != want {
+		t.Fatalf("next recency = %d, want %d", got, want)
+	}
+}
+
 func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()

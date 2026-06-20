@@ -43,6 +43,14 @@ func (r *activationRows) reset() {
 }
 
 func (r *activationRows) add(act activation) *activation {
+	row := r.addEmpty()
+	if row != nil {
+		*row = act
+	}
+	return row
+}
+
+func (r *activationRows) addEmpty() *activation {
 	if r == nil {
 		return nil
 	}
@@ -50,10 +58,30 @@ func (r *activationRows) add(act activation) *activation {
 	for len(r.chunks) <= chunkIndex {
 		r.chunks = append(r.chunks, make([]activation, 0, activationRowChunkSize))
 	}
-	r.chunks[chunkIndex] = append(r.chunks[chunkIndex], act)
-	row := &r.chunks[chunkIndex][len(r.chunks[chunkIndex])-1]
+	chunk := r.chunks[chunkIndex]
+	if len(chunk) < cap(chunk) {
+		chunk = chunk[:len(chunk)+1]
+	} else {
+		chunk = append(chunk, activation{})
+	}
+	r.chunks[chunkIndex] = chunk
+	row := &r.chunks[chunkIndex][len(chunk)-1]
 	r.count++
 	return row
+}
+
+func (r *activationRows) truncate(count int) {
+	if r == nil || count < 0 || count >= r.count {
+		return
+	}
+	for r.count > count {
+		r.count--
+		chunkIndex := r.count / activationRowChunkSize
+		chunk := r.chunks[chunkIndex]
+		last := len(chunk) - 1
+		chunk[last] = activation{}
+		r.chunks[chunkIndex] = chunk[:last]
+	}
 }
 
 type activationKeyBucket struct {
@@ -469,9 +497,9 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 				continue
 			}
 
-			created := activationFromCandidate(rule, candidate)
-
-			key = a.storeActivation(&created)
+			created := a.activationRows.addEmpty()
+			fillActivationFromCandidate(created, rule, candidate)
+			key = a.storePreparedActivation(created)
 
 			if _, seenBefore := seen[key]; !seenBefore {
 				seen[key] = struct{}{}
@@ -479,7 +507,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			}
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
-				activation: a.compactChangeActivation(&created),
+				activation: a.compactChangeActivation(created),
 			})
 		}
 	}
@@ -585,13 +613,13 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 			continue
 		}
 
-		created := activationFromCandidate(rule, candidate)
-
-		key := a.storeActivation(&created)
-		a.pending = a.insertActivationKeySorted(a.pending, key, &created)
+		created := a.activationRows.addEmpty()
+		fillActivationFromCandidate(created, rule, candidate)
+		key := a.storePreparedActivation(created)
+		a.pending = a.insertActivationKeySorted(a.pending, key, created)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
-			activation: a.compactChangeActivation(&created),
+			activation: a.compactChangeActivation(created),
 		})
 	}
 	changes = append(changes, activated...)
@@ -707,16 +735,18 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if _, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			continue
 		}
-		created, err := activationFromTerminalTokenWithIdentity(rule, delta.token, identity)
-		if err != nil {
+		rowMark := a.activationRows.count
+		created := a.activationRows.addEmpty()
+		if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
+			a.activationRows.truncate(rowMark)
 			return nil, err
 		}
-		key := a.storeActivation(&created)
-		a.pending = a.insertActivationKeySorted(a.pending, key, &created)
+		key := a.storePreparedActivation(created)
+		a.pending = a.insertActivationKeySorted(a.pending, key, created)
 		if collectChanges {
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
-				activation: a.compactChangeActivation(&created),
+				activation: a.compactChangeActivation(created),
 			})
 		}
 	}
@@ -793,18 +823,20 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 			continue
 		}
 
-		created, err := activationFromTerminalTokenWithIdentity(rule, delta.token, identity)
-		if err != nil {
+		rowMark := a.activationRows.count
+		created := a.activationRows.addEmpty()
+		if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
+			a.activationRows.truncate(rowMark)
 			return nil, err
 		}
-		key = a.storeActivation(&created)
+		key = a.storePreparedActivation(created)
 		if _, seenBefore := seen[key]; !seenBefore {
 			seen[key] = struct{}{}
 			nextPending = append(nextPending, key)
 		}
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
-			activation: a.compactChangeActivation(&created),
+			activation: a.compactChangeActivation(created),
 		})
 	}
 
@@ -973,7 +1005,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 		if current := bucket.first; current != nil {
 			if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
 				nextBucket.first = current
-				a.indexActivation(*current)
+				a.indexActivation(current)
 			}
 		}
 		for _, current := range bucket.overflow {
@@ -988,7 +1020,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 			} else {
 				overflow = append(overflow, current)
 			}
-			a.indexActivation(*current)
+			a.indexActivation(current)
 		}
 		if len(bucket.overflow) > 0 {
 			clear(bucket.overflow[len(overflow):])
@@ -1165,11 +1197,11 @@ func (a *agenda) rebuildIndexes() {
 	a.resetIndexesForRebuild()
 	for _, bucket := range a.activations {
 		if current := bucket.first; current != nil {
-			a.indexActivation(*current)
+			a.indexActivation(current)
 		}
 		for _, current := range bucket.overflow {
 			if current != nil {
-				a.indexActivation(*current)
+				a.indexActivation(current)
 			}
 		}
 	}
@@ -1187,11 +1219,11 @@ func (a *agenda) ensureFactIndex() {
 	}
 	for _, bucket := range a.activations {
 		if current := bucket.first; current != nil {
-			a.indexActivationFacts(*current, true)
+			a.indexActivationFacts(current, true)
 		}
 		for _, current := range bucket.overflow {
 			if current != nil {
-				a.indexActivationFacts(*current, true)
+				a.indexActivationFacts(current, true)
 			}
 		}
 	}
@@ -1221,8 +1253,8 @@ func (a *agenda) pruneEmptyIndexes() {
 	pruneEmptyActivationIndex(a.byRevision)
 }
 
-func (a *agenda) indexActivation(act activation) {
-	if a == nil {
+func (a *agenda) indexActivation(act *activation) {
+	if a == nil || act == nil {
 		return
 	}
 	if a.byFactID == nil {
@@ -1239,8 +1271,8 @@ func (a *agenda) indexActivation(act activation) {
 	a.byRevision[act.ruleRevisionID] = revisionBucket
 }
 
-func (a *agenda) indexActivationFacts(act activation, includeTokenFacts bool) {
-	if a == nil {
+func (a *agenda) indexActivationFacts(act *activation, includeTokenFacts bool) {
+	if a == nil || act == nil {
 		return
 	}
 	if a.byFactID == nil {
@@ -1485,6 +1517,22 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 }
 
 func (a *agenda) storeActivation(act *activation) activationKey {
+	if act == nil {
+		return activationKey{}
+	}
+	stored := a.activationRows.addEmpty()
+	if stored == nil {
+		stored = act
+	} else {
+		*stored = *act
+	}
+	return a.storePreparedActivation(stored)
+}
+
+func (a *agenda) storePreparedActivation(act *activation) activationKey {
+	if act == nil {
+		return activationKey{}
+	}
 	fingerprint := activationFingerprintForIdentityKey(act.identity.key)
 	bucket := a.activations[fingerprint]
 	key := activationKey{
@@ -1495,17 +1543,13 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 	publicIndex := activationIdentityIndex(bucket, act.identity.key)
 	act.publicOrdinal = publicIndex
 	act.key = key
-	stored := a.activationRows.add(*act)
-	if stored == nil {
-		stored = act
-	}
 	if bucket.first == nil {
-		bucket.first = stored
+		bucket.first = act
 	} else {
-		bucket.overflow = append(bucket.overflow, stored)
+		bucket.overflow = append(bucket.overflow, act)
 	}
 	a.activations[fingerprint] = bucket
-	a.indexActivation(*stored)
+	a.indexActivation(act)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
 	}
@@ -1668,19 +1712,26 @@ func fillTokenRefFactVersions(factVersions []FactVersion, index int, token token
 }
 
 func activationFromCandidate(rule compiledRule, candidate matchCandidate) activation {
-	return activation{
-		ruleID:           candidate.ruleID,
-		ruleRevisionID:   candidate.ruleRevisionID,
-		generation:       candidate.generation,
-		identity:         candidate.identity,
-		factIDs:          cloneFactIDs(candidate.factIDs),
-		factVersions:     cloneFactVersions(candidate.factVersions),
-		salience:         rule.salience,
-		maxRecency:       candidate.maxRecency,
-		aggregateRecency: candidate.aggregateRecency,
-		declarationOrder: rule.declarationOrder,
-		status:           activationStatusPending,
+	var out activation
+	fillActivationFromCandidate(&out, rule, candidate)
+	return out
+}
+
+func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate matchCandidate) {
+	if dst == nil {
+		return
 	}
+	dst.ruleID = candidate.ruleID
+	dst.ruleRevisionID = candidate.ruleRevisionID
+	dst.generation = candidate.generation
+	dst.identity = candidate.identity
+	dst.factIDs = cloneFactIDs(candidate.factIDs)
+	dst.factVersions = cloneFactVersions(candidate.factVersions)
+	dst.salience = rule.salience
+	dst.maxRecency = candidate.maxRecency
+	dst.aggregateRecency = candidate.aggregateRecency
+	dst.declarationOrder = rule.declarationOrder
+	dst.status = activationStatusPending
 }
 
 func activationFromTerminalToken(rule compiledRule, token tokenRef) (activation, error) {
@@ -1688,27 +1739,37 @@ func activationFromTerminalToken(rule compiledRule, token tokenRef) (activation,
 }
 
 func activationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (activation, error) {
+	var out activation
+	if err := fillActivationFromTerminalTokenWithIdentity(&out, rule, token, identity); err != nil {
+		return activation{}, err
+	}
+	return out, nil
+}
+
+func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledRule, token tokenRef, identity candidateIdentity) error {
+	if dst == nil {
+		return fmt.Errorf("%w: empty activation storage for rule %q", ErrMatcher, rule.name)
+	}
 	if token.isZero() {
-		return activation{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
+		return fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
 	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
-		return activation{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
+		return fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
-	return activation{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		generation:       tokenRefGeneration(token),
-		identity:         identity,
-		token:            token,
-		salience:         rule.salience,
-		maxRecency:       token.maxRecency(),
-		aggregateRecency: token.aggregateRecency(),
-		declarationOrder: rule.declarationOrder,
-		status:           activationStatusPending,
-	}, nil
+	dst.ruleID = rule.id
+	dst.ruleRevisionID = rule.revisionID
+	dst.generation = tokenRefGeneration(token)
+	dst.identity = identity
+	dst.token = token
+	dst.salience = rule.salience
+	dst.maxRecency = token.maxRecency()
+	dst.aggregateRecency = token.aggregateRecency()
+	dst.declarationOrder = rule.declarationOrder
+	dst.status = activationStatusPending
+	return nil
 }
 
 func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candidateIdentity {

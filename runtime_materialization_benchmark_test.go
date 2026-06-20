@@ -457,7 +457,7 @@ func BenchmarkAgendaIndexInsertion(b *testing.B) {
 			byRevision: make(map[RuleRevisionID]activationKeyBucket, len(activations)),
 		}
 		for _, activation := range activations {
-			agenda.indexActivation(activation)
+			agenda.indexActivation(&activation)
 		}
 		benchmarkAgendaByFactID = agenda.byFactID
 		benchmarkAgendaByRevision = agenda.byRevision
@@ -473,7 +473,7 @@ func BenchmarkAgendaIndexRebuild(b *testing.B) {
 	agenda := newAgenda()
 	agenda.resetIndexesForRebuild()
 	for _, activation := range activations {
-		agenda.indexActivation(activation)
+		agenda.indexActivation(&activation)
 	}
 	agenda.pruneEmptyIndexes()
 
@@ -482,7 +482,7 @@ func BenchmarkAgendaIndexRebuild(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		agenda.resetIndexesForRebuild()
 		for _, activation := range activations {
-			agenda.indexActivation(activation)
+			agenda.indexActivation(&activation)
 		}
 		agenda.pruneEmptyIndexes()
 		benchmarkAgendaByFactID = agenda.byFactID
