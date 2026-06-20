@@ -702,7 +702,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		a.pending = nextPending
 	}
 
-	if len(added) > 1 {
+	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
 		if a.propagationCounters != nil {
 			a.propagationCounters.recordAgendaSort()
 		}
@@ -928,11 +928,21 @@ func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTok
 
 func sortTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) {
 	slices.SortStableFunc(deltas, func(left, right reteTerminalTokenDelta) int {
-		return compareLess(
-			agendaDeltaTerminalTokenLess(revision, left, right),
-			agendaDeltaTerminalTokenLess(revision, right, left),
-		)
+		return compareTerminalTokenDeltaOrder(revision, left, right)
 	})
+}
+
+func terminalTokenDeltasSorted(revision *Ruleset, deltas []reteTerminalTokenDelta) bool {
+	return slices.IsSortedFunc(deltas, func(left, right reteTerminalTokenDelta) int {
+		return compareTerminalTokenDeltaOrder(revision, left, right)
+	})
+}
+
+func compareTerminalTokenDeltaOrder(revision *Ruleset, left, right reteTerminalTokenDelta) int {
+	return compareLess(
+		agendaDeltaTerminalTokenLess(revision, left, right),
+		agendaDeltaTerminalTokenLess(revision, right, left),
+	)
 }
 
 func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
