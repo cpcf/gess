@@ -1268,6 +1268,17 @@ func (a *agenda) indexActivationTokenFacts(key activationKey, token tokenRef) {
 	if a == nil || token.isZero() {
 		return
 	}
+	if factIDs, ok := token.factIDs(); ok {
+		for i, factID := range factIDs {
+			if factIDSeenBefore(factIDs[:i], factID) {
+				continue
+			}
+			factBucket := a.byFactID[factID]
+			factBucket.append(key)
+			a.byFactID[factID] = factBucket
+		}
+		return
+	}
 	row, ok := token.resolve()
 	if !ok {
 		return
@@ -1581,8 +1592,14 @@ func cloneActivationFactIDs(act *activation) []FactID {
 	if act.token.isZero() {
 		return cloneFactIDs(act.factIDs)
 	}
-	out := make([]FactID, act.token.size())
-	fillTokenRefFactIDs(out, 0, act.token)
+	factIDs, ok := act.token.factIDs()
+	if !ok {
+		out := make([]FactID, act.token.size())
+		fillTokenRefFactIDs(out, 0, act.token)
+		return out
+	}
+	out := make([]FactID, len(factIDs))
+	copy(out, factIDs)
 	return out
 }
 
@@ -1593,8 +1610,14 @@ func cloneActivationFactVersions(act *activation) []FactVersion {
 	if act.token.isZero() {
 		return cloneFactVersions(act.factVersions)
 	}
-	out := make([]FactVersion, act.token.size())
-	fillTokenRefFactVersions(out, 0, act.token)
+	factVersions, ok := act.token.factVersions()
+	if !ok {
+		out := make([]FactVersion, act.token.size())
+		fillTokenRefFactVersions(out, 0, act.token)
+		return out
+	}
+	out := make([]FactVersion, len(factVersions))
+	copy(out, factVersions)
 	return out
 }
 
@@ -1780,6 +1803,19 @@ func matchTokenFactsEqualSlices(token tokenRef, factIDs []FactID, factVersions [
 	if tokenRefSize(token) != len(factIDs) || len(factIDs) != len(factVersions) {
 		return false
 	}
+	tokenFactIDs, idsOK := token.factIDs()
+	tokenFactVersions, versionsOK := token.factVersions()
+	if idsOK && versionsOK {
+		if len(tokenFactIDs) != len(factIDs) || len(tokenFactVersions) != len(factVersions) {
+			return false
+		}
+		for i := range tokenFactIDs {
+			if tokenFactIDs[i] != factIDs[i] || tokenFactVersions[i] != factVersions[i] {
+				return false
+			}
+		}
+		return true
+	}
 	index, ok := matchTokenFactsEqualSlicesAt(token, factIDs, factVersions, 0)
 	return ok && index == len(factIDs)
 }
@@ -1805,6 +1841,21 @@ func matchTokenFactsEqualSlicesAt(token tokenRef, factIDs []FactID, factVersions
 func terminalTokenFactVersionsEqual(left, right tokenRef) bool {
 	if tokenRefSize(left) != tokenRefSize(right) {
 		return false
+	}
+	leftFactIDs, leftIDsOK := left.factIDs()
+	rightFactIDs, rightIDsOK := right.factIDs()
+	leftFactVersions, leftVersionsOK := left.factVersions()
+	rightFactVersions, rightVersionsOK := right.factVersions()
+	if leftIDsOK && rightIDsOK && leftVersionsOK && rightVersionsOK {
+		if len(leftFactIDs) != len(rightFactIDs) || len(leftFactVersions) != len(rightFactVersions) || len(leftFactIDs) != len(leftFactVersions) {
+			return false
+		}
+		for i := range leftFactIDs {
+			if leftFactIDs[i] != rightFactIDs[i] || leftFactVersions[i] != rightFactVersions[i] {
+				return false
+			}
+		}
+		return true
 	}
 	return terminalTokenFactVersionsEqualAt(left, right)
 }

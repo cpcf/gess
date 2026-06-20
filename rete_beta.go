@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 )
 
 type tokenHandle struct {
+	arena      *tokenArena
 	row        *tokenRow
 	generation uint64
 }
@@ -29,6 +31,7 @@ type tokenRow struct {
 	parent           tokenHandle
 	match            conditionMatch
 	size             int
+	factSpanStart    int
 	pathLen          int
 	maxRecency       Recency
 	aggregateRecency Recency
@@ -38,6 +41,8 @@ type tokenRow struct {
 
 type tokenArena struct {
 	chunks         [][]tokenRow
+	factIDs        []FactID
+	factVersions   []FactVersion
 	count          int
 	nextGeneration uint64
 }
@@ -54,6 +59,17 @@ func (a *tokenArena) reserve(rowCapacity int) {
 	for len(a.chunks) < chunkCount {
 		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
 	}
+	spanCapacity := rowCapacity
+	if spanCapacity > cap(a.factIDs) {
+		factIDs := make([]FactID, len(a.factIDs), spanCapacity)
+		copy(factIDs, a.factIDs)
+		a.factIDs = factIDs
+	}
+	if spanCapacity > cap(a.factVersions) {
+		factVersions := make([]FactVersion, len(a.factVersions), spanCapacity)
+		copy(factVersions, a.factVersions)
+		a.factVersions = factVersions
+	}
 }
 
 func (a *tokenArena) reset() {
@@ -66,6 +82,14 @@ func (a *tokenArena) reset() {
 		}
 		a.chunks[chunkIndex] = chunk[:0]
 	}
+	for i := range a.factIDs {
+		a.factIDs[i] = FactID{}
+	}
+	a.factIDs = a.factIDs[:0]
+	for i := range a.factVersions {
+		a.factVersions[i] = 0
+	}
+	a.factVersions = a.factVersions[:0]
 	a.count = 0
 	if a.nextGeneration == 0 {
 		a.nextGeneration = 1
@@ -79,16 +103,30 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	var parentRow *tokenRow
 	var ok bool
 	if !parent.isZero() {
+		if parent.handle.arena != nil && parent.handle.arena != a {
+			return tokenRef{}
+		}
 		parentRow, ok = parent.resolve()
 		if !ok {
 			return tokenRef{}
 		}
 	}
-	row := tokenRow{
-		slotGeneration: a.nextGeneration,
-		match:          match,
-		generation:     generation,
+	chunkIndex := a.count / reteBetaMatchTokenChunkSize
+	for len(a.chunks) <= chunkIndex {
+		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
 	}
+	chunk := a.chunks[chunkIndex]
+	if len(chunk) < cap(chunk) {
+		chunk = chunk[:len(chunk)+1]
+	} else {
+		chunk = append(chunk, tokenRow{})
+	}
+	a.chunks[chunkIndex] = chunk
+	row := &a.chunks[chunkIndex][len(chunk)-1]
+	row.slotGeneration = a.nextGeneration
+	row.match = match
+	row.generation = generation
+	row.factSpanStart = -1
 	a.nextGeneration++
 
 	if parentRow != nil {
@@ -110,22 +148,22 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		if row.generation == 0 {
 			row.generation = generation
 		}
+		row.factSpanStart = len(a.factIDs)
+		a.factIDs = append(a.factIDs, match.fact.ID())
+		a.factVersions = append(a.factVersions, match.fact.Version())
 	}
 	row.identityState = candidateIdentityHashStep(row.identityState, entry)
 
-	chunkIndex := a.count / reteBetaMatchTokenChunkSize
-	for len(a.chunks) <= chunkIndex {
-		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
-	}
-	a.chunks[chunkIndex] = append(a.chunks[chunkIndex], row)
-	rowPtr := &a.chunks[chunkIndex][len(a.chunks[chunkIndex])-1]
 	a.count++
-	handle := tokenHandle{row: rowPtr, generation: row.slotGeneration}
+	handle := tokenHandle{arena: a, row: row, generation: row.slotGeneration}
 	return tokenRef{handle: handle}
 }
 
 func (a *tokenArena) resolve(handle tokenHandle) (*tokenRow, bool) {
 	if a == nil || handle.isZero() {
+		return nil, false
+	}
+	if handle.arena != nil && handle.arena != a {
 		return nil, false
 	}
 	if handle.row.slotGeneration != handle.generation {
@@ -139,6 +177,28 @@ func (a *tokenArena) rowCount() int {
 		return 0
 	}
 	return a.count
+}
+
+func (r *tokenRow) factIDs(arena *tokenArena) []FactID {
+	if r == nil || arena == nil || r.size <= 0 {
+		return nil
+	}
+	end := r.factSpanStart + r.size
+	if r.factSpanStart < 0 || end > len(arena.factIDs) {
+		return nil
+	}
+	return arena.factIDs[r.factSpanStart:end]
+}
+
+func (r *tokenRow) factVersions(arena *tokenArena) []FactVersion {
+	if r == nil || arena == nil || r.size <= 0 {
+		return nil
+	}
+	end := r.factSpanStart + r.size
+	if r.factSpanStart < 0 || end > len(arena.factVersions) {
+		return nil
+	}
+	return arena.factVersions[r.factSpanStart:end]
 }
 
 func (r tokenRef) resolve() (*tokenRow, bool) {
@@ -219,6 +279,10 @@ func (r tokenRef) matchAt(index int) (conditionMatch, bool) {
 }
 
 func (r tokenRef) containsFact(id FactID) bool {
+	ids, ok := r.factIDs()
+	if ok {
+		return slices.Contains(ids, id)
+	}
 	for current := r; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
@@ -229,6 +293,24 @@ func (r tokenRef) containsFact(id FactID) bool {
 		}
 	}
 	return false
+}
+
+func (r tokenRef) factIDs() ([]FactID, bool) {
+	row, ok := r.resolve()
+	if !ok {
+		return nil, false
+	}
+	factIDs := row.factIDs(r.handle.arena)
+	return factIDs, len(factIDs) == row.size
+}
+
+func (r tokenRef) factVersions() ([]FactVersion, bool) {
+	row, ok := r.resolve()
+	if !ok {
+		return nil, false
+	}
+	factVersions := row.factVersions(r.handle.arena)
+	return factVersions, len(factVersions) == row.size
 }
 
 type reteBetaMemory struct {
@@ -1868,6 +1950,21 @@ func tokenRefEqual(left, right tokenRef) bool {
 	if left.size() != right.size() || left.generation() != right.generation() || left.identityState() != right.identityState() {
 		return false
 	}
+	leftFactIDs, leftIDsOK := left.factIDs()
+	rightFactIDs, rightIDsOK := right.factIDs()
+	leftFactVersions, leftVersionsOK := left.factVersions()
+	rightFactVersions, rightVersionsOK := right.factVersions()
+	if leftIDsOK && rightIDsOK && leftVersionsOK && rightVersionsOK {
+		if len(leftFactIDs) != len(rightFactIDs) || len(leftFactVersions) != len(rightFactVersions) || len(leftFactIDs) != len(leftFactVersions) {
+			return false
+		}
+		for i := range leftFactIDs {
+			if leftFactIDs[i] != rightFactIDs[i] || leftFactVersions[i] != rightFactVersions[i] {
+				return false
+			}
+		}
+		return true
+	}
 	for currentLeft, currentRight := left, right; !currentLeft.isZero() || !currentRight.isZero(); currentLeft, currentRight = currentLeft.parent(), currentRight.parent() {
 		leftRow, leftOK := currentLeft.resolve()
 		rightRow, rightOK := currentRight.resolve()
@@ -1900,6 +1997,27 @@ func compareTokenRef(left, right tokenRef) int {
 			return -1
 		}
 		return 1
+	}
+	leftFactIDs, leftIDsOK := left.factIDs()
+	rightFactIDs, rightIDsOK := right.factIDs()
+	leftFactVersions, leftVersionsOK := left.factVersions()
+	rightFactVersions, rightVersionsOK := right.factVersions()
+	if leftIDsOK && rightIDsOK && leftVersionsOK && rightVersionsOK && len(leftFactIDs) == len(rightFactIDs) && len(leftFactVersions) == len(rightFactVersions) {
+		for i := range leftFactIDs {
+			if leftFactIDs[i] != rightFactIDs[i] {
+				if factIDLess(leftFactIDs[i], rightFactIDs[i]) {
+					return -1
+				}
+				return 1
+			}
+			if leftFactVersions[i] != rightFactVersions[i] {
+				if leftFactVersions[i] < rightFactVersions[i] {
+					return -1
+				}
+				return 1
+			}
+		}
+		return 0
 	}
 	leftRow, leftOK := left.resolve()
 	rightRow, rightOK := right.resolve()

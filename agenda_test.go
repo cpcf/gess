@@ -306,6 +306,39 @@ func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	}
 }
 
+func TestTokenArenaCachesFactSpans(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 5, recency: 11, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version(), conditionPath: []int{0}}
+	secondEntry := bindingTupleEntry{bindingSlot: 1, factID: secondFact.ID(), factVersion: secondFact.Version(), conditionPath: []int{1}}
+
+	first := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	second := arena.add(first, secondEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+	for i := range 32 {
+		fact := FactSnapshot{id: newFactID(1, uint64(i+10)), version: FactVersion(i + 1), recency: Recency(i + 20), generation: 1}
+		entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
+		arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	}
+
+	if got, want := cloneActivationFactIDs(&activation{token: second}), []FactID{firstFact.ID(), secondFact.ID()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cached token fact IDs = %#v, want %#v", got, want)
+	}
+	if got, want := cloneActivationFactVersions(&activation{token: second}), []FactVersion{firstFact.Version(), secondFact.Version()}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("cached token fact versions = %#v, want %#v", got, want)
+	}
+
+	otherArena := newTokenArena()
+	otherFirst := otherArena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	otherSecond := otherArena.add(otherFirst, secondEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+	if !tokenRefEqual(second, otherSecond) {
+		t.Fatal("equivalent token refs with cached fact spans should compare equal")
+	}
+	if !terminalTokenFactVersionsEqual(second, otherSecond) {
+		t.Fatal("equivalent terminal token fact spans should compare equal")
+	}
+}
+
 func TestAgendaTerminalTokenReconcileMatchesCandidateReconcile(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)

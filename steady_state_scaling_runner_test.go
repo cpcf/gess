@@ -88,6 +88,12 @@ func runSteadyStateHarnessCase(t *testing.T, tc steadyStateScalingCase, iteratio
 		}
 	}
 
+	memProfilePath := os.Getenv("GESS_STEADY_STATE_MEM_PROFILE")
+	memProfileRate := runtime.MemProfileRate
+	if memProfilePath != "" {
+		runtime.MemProfileRate = 1
+	}
+
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
@@ -100,8 +106,31 @@ func runSteadyStateHarnessCase(t *testing.T, tc steadyStateScalingCase, iteratio
 	}
 	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
+	if memProfilePath != "" {
+		runtime.MemProfileRate = memProfileRate
+	}
 	if profilePath != "" {
 		pprof.StopCPUProfile()
+	}
+	if memProfilePath != "" {
+		memProfileFile, err := os.Create(memProfilePath)
+		if err != nil {
+			t.Fatalf("create allocation profile: %v", err)
+		}
+		profile := pprof.Lookup("allocs")
+		if profile == nil {
+			if err := memProfileFile.Close(); err != nil {
+				t.Fatalf("close allocation profile: %v", err)
+			}
+			t.Fatal("allocation profile unavailable")
+		}
+		if err := profile.WriteTo(memProfileFile, 0); err != nil {
+			_ = memProfileFile.Close()
+			t.Fatalf("write allocation profile: %v", err)
+		}
+		if err := memProfileFile.Close(); err != nil {
+			t.Fatalf("close allocation profile: %v", err)
+		}
 	}
 
 	for i, session := range sessions {

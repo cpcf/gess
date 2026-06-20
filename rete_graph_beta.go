@@ -614,13 +614,24 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 	if m.factRows == nil {
 		m.factRows = make(map[FactID]graphTokenRowIDBucket)
 	}
+	if factIDs, ok := token.factIDs(); ok {
+		for i, id := range factIDs {
+			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
+				continue
+			}
+			bucket := m.factRows[id]
+			bucket.append(rowID)
+			m.factRows[id] = bucket
+		}
+		return
+	}
 	for current := token; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
 			return
 		}
 		id := row.match.fact.ID()
-		if id.IsZero() {
+		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
 		bucket := m.factRows[id]
@@ -633,13 +644,30 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 	if m == nil || len(m.factRows) == 0 || token.isZero() {
 		return
 	}
+	if factIDs, ok := token.factIDs(); ok {
+		for i, id := range factIDs {
+			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
+				continue
+			}
+			bucket, ok := m.factRows[id]
+			if !ok || !bucket.remove(rowID) {
+				continue
+			}
+			if bucket.len() == 0 {
+				delete(m.factRows, id)
+			} else {
+				m.factRows[id] = bucket
+			}
+		}
+		return
+	}
 	for current := token; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
 			return
 		}
 		id := row.match.fact.ID()
-		if id.IsZero() {
+		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
 		bucket, ok := m.factRows[id]
@@ -658,13 +686,25 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 	if m == nil || len(m.factRows) == 0 || token.isZero() {
 		return
 	}
+	if factIDs, ok := token.factIDs(); ok {
+		for i, id := range factIDs {
+			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
+				continue
+			}
+			bucket, ok := m.factRows[id]
+			if ok && bucket.replace(oldID, newID) {
+				m.factRows[id] = bucket
+			}
+		}
+		return
+	}
 	for current := token; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
 			return
 		}
 		id := row.match.fact.ID()
-		if id.IsZero() {
+		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
 		bucket, ok := m.factRows[id]
