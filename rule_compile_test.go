@@ -186,6 +186,124 @@ func TestRuleRevisionIdentitySurvivesUnrelatedWorkspaceEdits(t *testing.T) {
 	}
 }
 
+func TestConditionTreeNormalizesPositiveMatches(t *testing.T) {
+	flatRevision := mustCompileConditionTreeCompatibilityRevision(t, false)
+	treeRevision := mustCompileConditionTreeCompatibilityRevision(t, true)
+
+	flatRule, ok := flatRevision.Rule("condition-tree-compatible")
+	if !ok {
+		t.Fatal("flat revision missing rule")
+	}
+	treeRule, ok := treeRevision.Rule("condition-tree-compatible")
+	if !ok {
+		t.Fatal("tree revision missing rule")
+	}
+	if flatRule.RevisionID() != treeRule.RevisionID() {
+		t.Fatalf("tree revision ID = %q, want flat-compatible %q", treeRule.RevisionID(), flatRule.RevisionID())
+	}
+
+	flatConditions := flatRule.Conditions()
+	treeConditions := treeRule.Conditions()
+	if len(flatConditions) != 2 || len(treeConditions) != 2 {
+		t.Fatalf("conditions = flat %d tree %d, want 2 each", len(flatConditions), len(treeConditions))
+	}
+	for i := range flatConditions {
+		if flatConditions[i].ID() != treeConditions[i].ID() {
+			t.Fatalf("condition %d ID = %q, want %q", i, treeConditions[i].ID(), flatConditions[i].ID())
+		}
+		if treeConditions[i].DeclarationOrder() != i {
+			t.Fatalf("condition %d declaration order = %d, want %d", i, treeConditions[i].DeclarationOrder(), i)
+		}
+	}
+
+	tree := treeRule.ConditionTree()
+	if tree.Kind() != ConditionTreeKindAnd {
+		t.Fatalf("condition tree kind = %q, want %q", tree.Kind(), ConditionTreeKindAnd)
+	}
+	children := tree.Children()
+	if len(children) != 2 {
+		t.Fatalf("condition tree children = %d, want 2", len(children))
+	}
+	firstMatch, ok := children[0].Match()
+	if !ok {
+		t.Fatal("first condition tree child is not a match")
+	}
+	if firstMatch.Binding() != "person" {
+		t.Fatalf("first match binding = %q, want person", firstMatch.Binding())
+	}
+
+	children[0] = RuleConditionTree{}
+	again := treeRule.ConditionTree().Children()
+	if got := again[0].Kind(); got != ConditionTreeKindMatch {
+		t.Fatalf("condition tree children leaked mutable state: first kind = %q", got)
+	}
+}
+
+func TestConditionTreeAndFlatRulesProduceEquivalentActivations(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+
+	var fired []RuleID
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			fired = append(fired, ctx.RuleID())
+			return nil
+		},
+	})
+	conditions := conditionTreeCompatibilityConditions(person.Key(), department.Key())
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "flat-rule",
+		Conditions: conditions,
+		Actions:    []RuleActionSpec{{Name: "record"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "tree-rule",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(conditions[0]),
+			Match(conditions[1]),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("condition-tree-activation-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
+		t.Fatalf("AssertTemplate(department): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := []RuleID{"flat-rule", "tree-rule"}
+	if len(fired) != len(want) {
+		t.Fatalf("fired rules = %#v, want %#v", fired, want)
+	}
+	for i := range want {
+		if fired[i] != want[i] {
+			t.Fatalf("fired rules = %#v, want %#v", fired, want)
+		}
+	}
+}
+
 func TestReplacingRuleBySameNamePreservesIdentity(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
@@ -403,6 +521,71 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		}
 		if validation.RuleName != "broken" {
 			t.Fatalf("rule name = %q, want broken", validation.RuleName)
+		}
+	})
+
+	t.Run("flat conditions and condition tree", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddAction(ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		}); err != nil {
+			t.Fatalf("AddAction: %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name:          "broken",
+			Conditions:    []RuleConditionSpec{{Binding: "p", Name: "person"}},
+			ConditionTree: And{Conditions: []ConditionSpec{Match{Binding: "q", Name: "person"}}},
+			Actions:       []RuleActionSpec{{Name: "mark"}},
+		}); err != nil {
+			t.Fatalf("AddRule: %v", err)
+		}
+
+		_, err := workspace.Compile(context.Background())
+		if err == nil {
+			t.Fatal("Compile should reject ambiguous condition definitions")
+		}
+		var validation *ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("expected ValidationError, got %T: %v", err, err)
+		}
+		if validation.RuleName != "broken" {
+			t.Fatalf("rule name = %q, want broken", validation.RuleName)
+		}
+		if validation.Reason != "rule cannot define both flat conditions and a condition tree" {
+			t.Fatalf("reason = %q, want ambiguous condition definition", validation.Reason)
+		}
+	})
+
+	t.Run("empty and condition tree", func(t *testing.T) {
+		workspace := NewWorkspace()
+		if err := workspace.AddAction(ActionSpec{
+			Name: "mark",
+			Fn:   func(ActionContext) error { return nil },
+		}); err != nil {
+			t.Fatalf("AddAction: %v", err)
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name:          "broken",
+			ConditionTree: And{},
+			Actions:       []RuleActionSpec{{Name: "mark"}},
+		}); err != nil {
+			t.Fatalf("AddRule: %v", err)
+		}
+
+		_, err := workspace.Compile(context.Background())
+		if err == nil {
+			t.Fatal("Compile should reject empty and condition trees")
+		}
+		var validation *ValidationError
+		if !errors.As(err, &validation) {
+			t.Fatalf("expected ValidationError, got %T: %v", err, err)
+		}
+		if validation.RuleName != "broken" {
+			t.Fatalf("rule name = %q, want broken", validation.RuleName)
+		}
+		if validation.Reason != "and condition requires at least one child" {
+			t.Fatalf("reason = %q, want empty and validation failure", validation.Reason)
 		}
 	})
 
@@ -877,5 +1060,61 @@ func mustAddRule(t testing.TB, workspace *Workspace, spec RuleSpec) {
 	t.Helper()
 	if err := workspace.AddRule(spec); err != nil {
 		t.Fatalf("AddRule: %v", err)
+	}
+}
+
+func mustCompileConditionTreeCompatibilityRevision(t testing.TB, tree bool) *Ruleset {
+	t.Helper()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	conditions := conditionTreeCompatibilityConditions(person.Key(), department.Key())
+	spec := RuleSpec{
+		Name:    "condition-tree-compatible",
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	}
+	if tree {
+		spec.ConditionTree = And{Conditions: []ConditionSpec{
+			Match(conditions[0]),
+			Match(conditions[1]),
+		}}
+	} else {
+		spec.Conditions = conditions
+	}
+	mustAddRule(t, workspace, spec)
+	return mustCompileWorkspace(t, workspace)
+}
+
+func conditionTreeCompatibilityConditions(personKey, departmentKey TemplateKey) []RuleConditionSpec {
+	return []RuleConditionSpec{
+		{
+			Binding:     "person",
+			TemplateKey: personKey,
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
+			},
+		},
+		{
+			Binding:     "department",
+			TemplateKey: departmentKey,
+			JoinConstraints: []JoinConstraintSpec{
+				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
+			},
+		},
 	}
 }

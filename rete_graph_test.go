@@ -165,6 +165,56 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	}
 }
 
+func TestReteGraphTreatsFlatAndTreeConditionsEquivalently(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	conditions := conditionTreeCompatibilityConditions(person.Key(), department.Key())
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "flat",
+		Conditions: conditions,
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "tree",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(conditions[0]),
+			Match(conditions[1]),
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+
+	if got, want := len(summary.AlphaNodes), 2; got != want {
+		t.Fatalf("alpha nodes = %d, want %d", got, want)
+	}
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	if got, want := len(summary.TerminalNodes), 2; got != want {
+		t.Fatalf("terminal nodes = %d, want %d", got, want)
+	}
+	if summary.TerminalNodes[0].input != summary.TerminalNodes[1].input {
+		t.Fatalf("terminal inputs = %#v and %#v, want shared graph plan", summary.TerminalNodes[0].input, summary.TerminalNodes[1].input)
+	}
+}
+
 func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
