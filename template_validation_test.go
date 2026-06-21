@@ -99,7 +99,7 @@ func TestTemplateMissingRequiredFieldsFailValidation(t *testing.T) {
 	}
 }
 
-func TestTemplateClosedTemplateRejectsUnknownFields(t *testing.T) {
+func TestTemplateDeclaredTemplateRejectsUnknownFields(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:   "person",
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
@@ -115,7 +115,7 @@ func TestTemplateClosedTemplateRejectsUnknownFields(t *testing.T) {
 		"title": "Dr.",
 	}))
 	if err == nil {
-		t.Fatal("closed template should reject unknown field")
+		t.Fatal("declared template should reject unknown field")
 	}
 	var validation *ValidationError
 	if !errors.As(err, &validation) {

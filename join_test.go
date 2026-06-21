@@ -120,7 +120,7 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 
 		_, err := workspace.Compile(context.Background())
 		if err == nil {
-			t.Fatal("Compile should reject closed-template join fields")
+			t.Fatal("Compile should reject declared-template join fields")
 		}
 		var validation *ValidationError
 		if !errors.As(err, &validation) {
@@ -164,7 +164,7 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 
 		_, err := workspace.Compile(context.Background())
 		if err == nil {
-			t.Fatal("Compile should reject closed-template join references")
+			t.Fatal("Compile should reject declared-template join references")
 		}
 		var validation *ValidationError
 		if !errors.As(err, &validation) {
@@ -253,12 +253,12 @@ func TestBetaJoinKeyForPlanUsesTypedTwoValueKey(t *testing.T) {
 		t.Fatalf("second key = (%v, %q), want string north", key.secondKind, key.secondStringValue)
 	}
 	if key.stringValue != "" {
-		t.Fatalf("two-value key used fallback string %q", key.stringValue)
+		t.Fatalf("two-value key used canonical string %q", key.stringValue)
 	}
 }
 
-func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
-	t.Run("closed template uses slots", func(t *testing.T) {
+func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
+	t.Run("declared template uses slots", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 			Name: "person",

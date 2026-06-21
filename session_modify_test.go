@@ -298,7 +298,7 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 	}
 }
 
-func TestSessionModifyRebuildsClosedTemplateSlots(t *testing.T) {
+func TestSessionModifyRebuildsDeclaredTemplateSlots(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "person",
@@ -431,7 +431,7 @@ func TestSessionModifyTemplateUnsetDefaultAndOptionalBehavior(t *testing.T) {
 	}
 }
 
-func TestSessionModifySlotBackedClosedTemplateSetUnsetDefaultRequiredAndDuplicateCollision(t *testing.T) {
+func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplicateCollision(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "event",

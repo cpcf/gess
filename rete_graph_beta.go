@@ -940,7 +940,7 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteIDs(templateKey TemplateKey, nod
 		}]
 	}
 	m.resetAlphaRouteScratch()
-	for _, id := range table.fallback {
+	for _, id := range table.unindexed {
 		m.appendAlphaRouteCandidate(id)
 	}
 	for _, fieldSlot := range table.indexedFields {
@@ -984,7 +984,7 @@ func (m *reteGraphBetaMemory) workingAlphaRouteIDs(templateKey TemplateKey, node
 		}]
 	}
 	m.resetAlphaRouteScratch()
-	for _, id := range table.fallback {
+	for _, id := range table.unindexed {
 		m.appendAlphaRouteCandidate(id)
 	}
 	for _, fieldSlot := range table.indexedFields {

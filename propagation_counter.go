@@ -110,17 +110,16 @@ type propagationCounterKey struct {
 type propagationRuntimePath string
 
 const (
-	propagationRuntimeUnknown       propagationRuntimePath = "unknown"
-	propagationRuntimeGraphBeta     propagationRuntimePath = "graph-beta"
-	propagationRuntimeLegacyBeta    propagationRuntimePath = "legacy-beta"
-	propagationRuntimeGraphAlpha    propagationRuntimePath = "graph-alpha-only"
-	propagationRuntimeSemanticMatch propagationRuntimePath = "semantic-matcher"
+	propagationRuntimeUnknown     propagationRuntimePath = "unknown"
+	propagationRuntimeGraphBeta   propagationRuntimePath = "graph-beta"
+	propagationRuntimeGraphAlpha  propagationRuntimePath = "graph-alpha-only"
+	propagationRuntimeUnsupported propagationRuntimePath = "unsupported"
 )
 
 const (
-	propagationFallbackNoGraph         = "no-graph"
-	propagationFallbackBetaUnsupported = "beta-unsupported"
-	propagationFallbackNonEqualityJoin = "non-equality-join"
+	propagationUnsupportedNoGraph         = "no-graph"
+	propagationUnsupportedBetaUnsupported = "beta-unsupported"
+	propagationUnsupportedNonEqualityJoin = "non-equality-join"
 )
 
 type propagationCounterLedger struct {
@@ -129,7 +128,7 @@ type propagationCounterLedger struct {
 	byOrigin             map[propagationOrigin]*propagationCounterTotals
 	byTemplateOrigin     map[propagationCounterKey]*propagationCounterTotals
 	runtimePath          propagationRuntimePath
-	fallbackReasons      map[string]int
+	unsupportedReasons   map[string]int
 	terminalRowsRetained int
 	graphBetaMemory      reteGraphBetaMemoryStats
 }
@@ -149,7 +148,7 @@ type propagationCounterSnapshot struct {
 	ByOrigin             map[propagationOrigin]propagationCounterTotals
 	ByTemplateOrigin     map[propagationCounterKey]propagationCounterTotals
 	RuntimePath          propagationRuntimePath
-	FallbackReasons      map[string]int
+	UnsupportedReasons   map[string]int
 }
 
 func newPropagationCounterLedger() *propagationCounterLedger {
@@ -185,9 +184,9 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		ByTemplateOrigin:     make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
 		RuntimePath:          l.runtimePath,
 	}
-	if len(l.fallbackReasons) > 0 {
-		out.FallbackReasons = make(map[string]int, len(l.fallbackReasons))
-		maps.Copy(out.FallbackReasons, l.fallbackReasons)
+	if len(l.unsupportedReasons) > 0 {
+		out.UnsupportedReasons = make(map[string]int, len(l.unsupportedReasons))
+		maps.Copy(out.UnsupportedReasons, l.unsupportedReasons)
 	}
 	for key, totals := range l.byTemplate {
 		if totals != nil {
@@ -425,7 +424,7 @@ func (l *propagationCounterLedger) setGraphBetaMemoryStats(stats reteGraphBetaMe
 	l.graphBetaMemory = stats
 }
 
-func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, fallbackReasons map[string]int) {
+func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, unsupportedReasons map[string]int) {
 	if l == nil {
 		return
 	}
@@ -433,18 +432,18 @@ func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntime
 		path = propagationRuntimeUnknown
 	}
 	l.runtimePath = path
-	if len(fallbackReasons) == 0 {
-		clear(l.fallbackReasons)
+	if len(unsupportedReasons) == 0 {
+		clear(l.unsupportedReasons)
 		return
 	}
-	if l.fallbackReasons == nil {
-		l.fallbackReasons = make(map[string]int, len(fallbackReasons))
+	if l.unsupportedReasons == nil {
+		l.unsupportedReasons = make(map[string]int, len(unsupportedReasons))
 	} else {
-		clear(l.fallbackReasons)
+		clear(l.unsupportedReasons)
 	}
-	for reason, count := range fallbackReasons {
+	for reason, count := range unsupportedReasons {
 		if count > 0 {
-			l.fallbackReasons[reason] = count
+			l.unsupportedReasons[reason] = count
 		}
 	}
 }
@@ -571,10 +570,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
 	report("propagation-runtime-graph-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphBeta))
-	report("propagation-runtime-legacy-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeLegacyBeta))
 	report("propagation-runtime-graph-alpha-only", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphAlpha))
-	report("propagation-runtime-semantic-matcher", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeSemanticMatch))
-	report("propagation-fallback-reason-count", float64(len(s.FallbackReasons)))
+	report("propagation-runtime-unsupported", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeUnsupported))
+	report("propagation-unsupported-reason-count", float64(len(s.UnsupportedReasons)))
 }
 
 func (s propagationCounterSnapshot) runnerFields() []string {
@@ -583,7 +581,7 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 	}
 	fields := []string{
 		"propagation-runtime-path=" + string(s.runtimePath()),
-		"propagation-fallback-reasons=" + s.fallbackReasonSummary(),
+		"propagation-unsupported-reasons=" + s.unsupportedReasonSummary(),
 		"propagation-asserts=" + strconv.Itoa(s.Totals.Asserts),
 		"propagation-rhs-asserts=" + strconv.Itoa(s.Totals.RHSAsserts),
 		"propagation-rule-memories-visited=" + strconv.Itoa(s.Totals.RuleMemoriesVisited),
@@ -679,18 +677,18 @@ func (s propagationCounterSnapshot) runtimePath() propagationRuntimePath {
 	return s.RuntimePath
 }
 
-func (s propagationCounterSnapshot) fallbackReasonSummary() string {
-	if len(s.FallbackReasons) == 0 {
+func (s propagationCounterSnapshot) unsupportedReasonSummary() string {
+	if len(s.UnsupportedReasons) == 0 {
 		return "-"
 	}
-	keys := make([]string, 0, len(s.FallbackReasons))
-	for key := range s.FallbackReasons {
+	keys := make([]string, 0, len(s.UnsupportedReasons))
+	for key := range s.UnsupportedReasons {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
-		parts = append(parts, key+"="+strconv.Itoa(s.FallbackReasons[key]))
+		parts = append(parts, key+"="+strconv.Itoa(s.UnsupportedReasons[key]))
 	}
 	return strings.Join(parts, ";")
 }

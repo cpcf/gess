@@ -1210,7 +1210,7 @@ func reportPureResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, t
 		tb.Fatalf("diagnostic runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
 	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphBeta), "diagnostic-runtime-graph-beta")
-	reporter.ReportMetric(float64(len(snapshot.FallbackReasons)), "diagnostic-fallback-reason-count")
+	reporter.ReportMetric(float64(len(snapshot.UnsupportedReasons)), "diagnostic-unsupported-reason-count")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketProbes), "diagnostic-beta-bucket-probes")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaCandidateRowsScanned), "diagnostic-beta-candidate-rows-scanned")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaResidualTests), "diagnostic-beta-residual-tests")

@@ -262,11 +262,11 @@ func (s *Session) syncPropagationCounters() {
 	} else {
 		s.propagationCounters.setTerminalRowsRetained(0)
 	}
-	path, fallbackReasons := propagationRuntimeUnknown, map[string]int(nil)
+	path, unsupportedReasons := propagationRuntimeUnknown, map[string]int(nil)
 	if s.rete != nil {
-		path, fallbackReasons = s.rete.propagationDiagnostics()
+		path, unsupportedReasons = s.rete.propagationDiagnostics()
 	}
-	s.propagationCounters.setRuntimeDiagnostics(path, fallbackReasons)
+	s.propagationCounters.setRuntimeDiagnostics(path, unsupportedReasons)
 }
 
 func (s *Session) removeStoredFact(id FactID) {
@@ -1170,7 +1170,6 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordAgendaDeltaApplication()
 	}
-	s.clearBetaTerminalTokenDeltasForDelta(delta)
 	s.agendaReady = true
 	s.agendaDirty = false
 	if collectChanges {
@@ -2692,16 +2691,6 @@ func (s *Session) clearRunAgendaDelta() {
 	s.runAgendaAdded = s.runAgendaAdded[:0]
 	s.runAgendaRemoved = s.runAgendaRemoved[:0]
 	s.runAgendaPending = false
-}
-
-func (s *Session) clearBetaTerminalTokenDeltasForDelta(delta reteAgendaDelta) {
-	if s == nil || s.rete == nil || s.rete.beta == nil {
-		return
-	}
-	if len(delta.removed) == 0 {
-		return
-	}
-	s.rete.beta.clearTerminalTokenDeltas()
 }
 
 type runAgendaDeltaState struct {

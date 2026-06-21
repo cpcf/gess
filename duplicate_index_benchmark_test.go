@@ -2,7 +2,7 @@ package gess
 
 import "testing"
 
-func BenchmarkDuplicateIndexLookupInsertClosedUniqueSingleScalar(b *testing.B) {
+func BenchmarkDuplicateIndexLookupInsertDeclaredUniqueSingleScalar(b *testing.B) {
 	benchmarkDuplicateIndexLookupInsert(b, TemplateSpec{
 		Name:              "event",
 		DuplicatePolicy:   DuplicateUniqueKey,
@@ -17,7 +17,7 @@ func BenchmarkDuplicateIndexLookupInsertClosedUniqueSingleScalar(b *testing.B) {
 	}, duplicateIndexSingleScalar)
 }
 
-func BenchmarkDuplicateIndexLookupInsertClosedUniqueDoubleScalar(b *testing.B) {
+func BenchmarkDuplicateIndexLookupInsertDeclaredUniqueDoubleScalar(b *testing.B) {
 	benchmarkDuplicateIndexLookupInsert(b, TemplateSpec{
 		Name:              "route",
 		DuplicatePolicy:   DuplicateUniqueKey,
@@ -32,7 +32,7 @@ func BenchmarkDuplicateIndexLookupInsertClosedUniqueDoubleScalar(b *testing.B) {
 	}, duplicateIndexDoubleInt)
 }
 
-func BenchmarkDuplicateIndexLookupInsertOpenUniqueStringFallback(b *testing.B) {
+func BenchmarkDuplicateIndexLookupInsertDeclaredUniqueStringIndex(b *testing.B) {
 	benchmarkDuplicateIndexLookupInsert(b, TemplateSpec{
 		Name:              "event",
 		DuplicatePolicy:   DuplicateUniqueKey,
@@ -47,15 +47,15 @@ func BenchmarkDuplicateIndexLookupInsertOpenUniqueStringFallback(b *testing.B) {
 
 var benchmarkDuplicateIndex duplicateIndexKey
 
-func BenchmarkDuplicateIndexBuildClosedUniqueDoubleScalarTyped(b *testing.B) {
-	benchmarkDuplicateIndexBuildClosedUniqueDoubleScalar(b, false)
+func BenchmarkDuplicateIndexBuildDeclaredUniqueDoubleScalarTyped(b *testing.B) {
+	benchmarkDuplicateIndexBuildDeclaredUniqueDoubleScalar(b, false)
 }
 
-func BenchmarkDuplicateIndexBuildClosedUniqueDoubleScalarStringFallback(b *testing.B) {
-	benchmarkDuplicateIndexBuildClosedUniqueDoubleScalar(b, true)
+func BenchmarkDuplicateIndexBuildDeclaredUniqueDoubleScalarStringIndex(b *testing.B) {
+	benchmarkDuplicateIndexBuildDeclaredUniqueDoubleScalar(b, true)
 }
 
-func benchmarkDuplicateIndexBuildClosedUniqueDoubleScalar(b *testing.B, forceStringFallback bool) {
+func benchmarkDuplicateIndexBuildDeclaredUniqueDoubleScalar(b *testing.B, forceStringIndex bool) {
 	b.Helper()
 
 	definition := NewWorkspace()
@@ -81,7 +81,7 @@ func benchmarkDuplicateIndexBuildClosedUniqueDoubleScalar(b *testing.B, forceStr
 	if err != nil {
 		b.Fatalf("buildValidatedFieldSlots: %v", err)
 	}
-	if forceStringFallback {
+	if forceStringIndex {
 		template.duplicateIndexMode = duplicateIndexString
 	}
 

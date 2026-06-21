@@ -176,7 +176,7 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("closed template unknown field", func(t *testing.T) {
+	t.Run("declared template unknown field", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 			Name: "person",
@@ -204,7 +204,7 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 
 		_, err := workspace.Compile(context.Background())
 		if err == nil {
-			t.Fatal("Compile should reject closed-template field references")
+			t.Fatal("Compile should reject declared-template field references")
 		}
 		var validation *ValidationError
 		if !errors.As(err, &validation) {
@@ -225,8 +225,8 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 	})
 }
 
-func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
-	t.Run("closed template uses slot", func(t *testing.T) {
+func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
+	t.Run("declared template uses slot", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 			Name: "person",
@@ -317,7 +317,7 @@ func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
 			t.Fatalf("field slot = %d, want -1 for name-target conditions", planConstraint.fieldSlot)
 		}
 
-		session, err := NewSession(revision, WithSessionID("field-fallback-session"))
+		session, err := NewSession(revision, WithSessionID("field-map-lookup-session"))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
@@ -411,7 +411,7 @@ func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
 	})
 }
 
-func TestCompiledFieldValueUsesSlotBeforeMapFallback(t *testing.T) {
+func TestCompiledFieldValueUsesSlotBeforeMapLookup(t *testing.T) {
 	fact := FactSnapshot{
 		fields: Fields{
 			"tag": mustValue(t, "blue"),
@@ -427,7 +427,7 @@ func TestCompiledFieldValueUsesSlotBeforeMapFallback(t *testing.T) {
 
 	value, ok := fact.compiledFieldValue("tag", -1)
 	if !ok || !value.Equal(mustValue(t, "blue")) {
-		t.Fatalf("fallback value = (%v, %v), want blue true", value, ok)
+		t.Fatalf("map lookup value = (%v, %v), want blue true", value, ok)
 	}
 }
 

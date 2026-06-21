@@ -17,7 +17,6 @@ type reteRuntime struct {
 	graphAlpha             *reteGraphAlphaMemory
 	graphBeta              *reteGraphBetaMemory
 	alpha                  *reteAlphaMemory
-	beta                   *reteBetaMemory
 	terminalRemovedScratch candidateScratch
 	terminalAddedScratch   candidateScratch
 }
@@ -170,10 +169,10 @@ func (r *reteRuntime) unsupportedRuntimeError() error {
 	}
 	var details []string
 	if r.graph == nil {
-		details = append(details, propagationFallbackNoGraph)
+		details = append(details, propagationUnsupportedNoGraph)
 	}
 	if !r.plan.betaSupported {
-		details = append(details, propagationFallbackBetaUnsupported)
+		details = append(details, propagationUnsupportedBetaUnsupported)
 	}
 	for _, reason := range r.plan.unsupported {
 		if reason.ruleID != "" {
@@ -185,7 +184,7 @@ func (r *reteRuntime) unsupportedRuntimeError() error {
 	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
 		for _, node := range r.graph.betaNodes {
 			if len(node.joins) > 0 && len(node.hashJoins) == 0 && len(node.residualJoins) == 0 {
-				details = append(details, propagationFallbackNonEqualityJoin)
+				details = append(details, propagationUnsupportedNonEqualityJoin)
 			}
 		}
 	}
@@ -234,7 +233,7 @@ func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTer
 	if r.graphBeta != nil {
 		return r.graphBeta.currentTerminalTokenDeltas(ctx)
 	}
-	return r.beta.currentTerminalTokenDeltas(ctx)
+	return nil, false, nil
 }
 
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
@@ -288,7 +287,6 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 	r.alpha.reset(r.plan, facts)
 	if !r.plan.betaSupported {
 		r.graphBeta = nil
-		r.beta = nil
 		return
 	}
 	if r.supportsGraphBeta() {
@@ -297,10 +295,9 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 		} else {
 			r.graphBeta.resetFacts(facts)
 		}
-		r.beta = nil
 		return
 	}
-	r.beta = nil
+	r.graphBeta = nil
 }
 
 func (r *reteRuntime) clearMemories() {
@@ -310,7 +307,6 @@ func (r *reteRuntime) clearMemories() {
 	r.graphAlpha = nil
 	r.graphBeta = nil
 	r.alpha = nil
-	r.beta = nil
 }
 
 func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
@@ -319,15 +315,13 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 	}
 	if !r.plan.betaSupported {
 		r.graphBeta = nil
-		r.beta = nil
 		return
 	}
 	if r.supportsGraphBeta() {
 		r.graphBeta = newReteGraphBetaMemory(r.revision, r.graph, facts)
-		r.beta = nil
 		return
 	}
-	r.beta = nil
+	r.graphBeta = nil
 }
 
 func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
@@ -347,26 +341,7 @@ func (r *reteRuntime) insertBetaFactGenerated(fact *workingFact, origin mutation
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
-	if r.beta == nil {
-		return reteAgendaDelta{}
-	}
-	if incrementalAgendaSupported {
-		if routes, routed := r.plan.betaConditionRoutesForTemplateKey(fact.templateKey); routed {
-			if delta, ok := r.beta.insertFactForConditionRoutesGenerated(fact, routes, span); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.templateKey); routed {
-			if delta, ok := r.beta.insertFactForRulesGenerated(fact, ruleRevisionIDs, span); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-	}
-	delta := r.beta.insertFactGenerated(fact, span)
-	delta.supported = delta.supported && incrementalAgendaSupported
-	return delta
+	return reteAgendaDelta{}
 }
 
 func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteAgendaDelta {
@@ -382,26 +357,7 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
-	if r.beta == nil {
-		return reteAgendaDelta{}
-	}
-	if incrementalAgendaSupported {
-		if routes, routed := r.plan.betaConditionRoutesForTemplateKey(fact.TemplateKey()); routed {
-			if delta, ok := r.beta.insertFactForConditionRoutes(fact, routes, span); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
-			if delta, ok := r.beta.insertFactForRules(fact, ruleRevisionIDs, span); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-	}
-	delta := r.beta.insertFact(fact, span)
-	delta.supported = delta.supported && incrementalAgendaSupported
-	return delta
+	return reteAgendaDelta{}
 }
 
 func (r *reteRuntime) removeBetaFact(fact FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
@@ -414,20 +370,7 @@ func (r *reteRuntime) removeBetaFact(fact FactSnapshot, counters *propagationCou
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
-	if r.beta == nil {
-		return reteAgendaDelta{}
-	}
-	if incrementalAgendaSupported {
-		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKey(fact.TemplateKey()); routed {
-			if delta, ok := r.beta.removeFactForRules(fact.ID(), ruleRevisionIDs); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-	}
-	delta := r.beta.removeFact(fact.ID())
-	delta.supported = delta.supported && incrementalAgendaSupported
-	return delta
+	return reteAgendaDelta{}
 }
 
 func (r *reteRuntime) updateBetaFact(before, after FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
@@ -440,24 +383,11 @@ func (r *reteRuntime) updateBetaFact(before, after FactSnapshot, counters *propa
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
-	if r.beta == nil {
-		return reteAgendaDelta{}
-	}
-	if incrementalAgendaSupported {
-		if ruleRevisionIDs, routed := r.plan.betaRoutesForTemplateKeys(before.TemplateKey(), after.TemplateKey()); routed {
-			if delta, ok := r.beta.updateFactForRules(before, after, ruleRevisionIDs); ok {
-				delta.supported = delta.supported && incrementalAgendaSupported
-				return delta
-			}
-		}
-	}
-	delta := r.beta.updateFact(before, after)
-	delta.supported = delta.supported && incrementalAgendaSupported
-	return delta
+	return reteAgendaDelta{}
 }
 
 func (r *reteRuntime) supportsIncrementalAgenda() bool {
-	return r != nil && r.plan.incrementalAgendaSupported && (r.graphBeta != nil || r.beta != nil)
+	return r != nil && r.plan.incrementalAgendaSupported && r.graphBeta != nil
 }
 
 func (r *reteRuntime) supportsGraphBeta() bool {
@@ -475,20 +405,18 @@ func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[stri
 	switch {
 	case r.graphBeta != nil:
 		path = propagationRuntimeGraphBeta
-	case r.beta != nil:
-		path = propagationRuntimeLegacyBeta
 	case len(r.plan.unsupported) > 0 || r.alpha == nil:
-		path = propagationRuntimeSemanticMatch
+		path = propagationRuntimeUnsupported
 	case r.graphAlpha != nil || r.alpha != nil:
 		path = propagationRuntimeGraphAlpha
 	}
 
 	reasons := make(map[string]int)
 	if r.graph == nil {
-		reasons[propagationFallbackNoGraph]++
+		reasons[propagationUnsupportedNoGraph]++
 	}
 	if !r.plan.betaSupported {
-		reasons[propagationFallbackBetaUnsupported]++
+		reasons[propagationUnsupportedBetaUnsupported]++
 	}
 	for _, reason := range r.plan.unsupported {
 		reasons[string(reason.kind)]++
@@ -496,7 +424,7 @@ func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[stri
 	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
 		for _, node := range r.graph.betaNodes {
 			if len(node.joins) > 0 && len(node.hashJoins) == 0 && len(node.residualJoins) == 0 {
-				reasons[propagationFallbackNonEqualityJoin]++
+				reasons[propagationUnsupportedNonEqualityJoin]++
 			}
 		}
 	}
@@ -577,61 +505,8 @@ func (r *reteRuntime) insertGraphAlphaFact(fact FactSnapshot, span *propagationC
 	if r == nil || r.revision == nil || r.graph == nil || !r.supportsIncrementalAgenda() {
 		return reteAgendaDelta{}, false
 	}
-	if r.graphBeta != nil {
-		delta := r.graphBeta.insertFact(fact, span)
-		delta.supported = r.supportsIncrementalAgenda()
-		return delta, true
-	}
-	nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
-	if len(nodeIDs) == 0 {
-		return reteAgendaDelta{}, false
-	}
-	if r.graphAlpha == nil {
-		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
-	}
-	if r.alpha == nil {
-		r.alpha = newReteAlphaMemory(r.plan)
-	}
-
-	delta := reteAgendaDelta{supported: true}
-	for _, nodeID := range nodeIDs {
-		node := r.graph.alphaNode(nodeID)
-		if node == nil {
-			return reteAgendaDelta{}, false
-		}
-		if span != nil {
-			span.recordConditionsTested()
-		}
-		if !node.matchesSnapshot(fact) {
-			continue
-		}
-		if r.graphAlpha != nil && r.graphAlpha.upsert(nodeID, fact) && span != nil {
-			span.recordAlphaMatchAdded()
-		}
-		for _, consumer := range node.consumers {
-			r.projectGraphAlphaConsumerSnapshot(consumer, fact, span)
-		}
-		if r.graphBeta != nil {
-			match := conditionMatch{
-				conditionID: node.entry.conditionID,
-				bindingSlot: node.entry.bindingSlot,
-				fact:        newConditionFactRefFromSnapshot(fact),
-			}
-			if !r.graphBeta.insertAlphaMatch(nodeID, match, span, &delta) {
-				return reteAgendaDelta{}, false
-			}
-			continue
-		}
-		if r.beta == nil {
-			return reteAgendaDelta{}, false
-		}
-		if consumerDelta, ok := r.beta.insertFactForConditionConsumers(fact, node.consumers, span); ok {
-			delta.supported = delta.supported && consumerDelta.supported
-			delta.added = append(delta.added, consumerDelta.added...)
-		} else {
-			return reteAgendaDelta{}, false
-		}
-	}
+	delta := r.graphBeta.insertFact(fact, span)
+	delta.supported = r.supportsIncrementalAgenda()
 	return delta, true
 }
 
@@ -639,67 +514,8 @@ func (r *reteRuntime) insertGraphAlphaFactGenerated(fact *workingFact, span *pro
 	if r == nil || r.revision == nil || r.graph == nil || !r.supportsIncrementalAgenda() || fact == nil {
 		return reteAgendaDelta{}, false
 	}
-	if r.graphBeta != nil {
-		delta := r.graphBeta.insertFactGenerated(fact, span)
-		delta.supported = r.supportsIncrementalAgenda()
-		return delta, true
-	}
-	nodeIDs := r.graphAlphaRouteIDsForWorkingFact(fact)
-	if len(nodeIDs) == 0 {
-		return reteAgendaDelta{}, false
-	}
-	if r.graphAlpha == nil {
-		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
-	}
-	if r.alpha == nil {
-		r.alpha = newReteAlphaMemory(r.plan)
-	}
-
-	var snapshot FactSnapshot
-	haveSnapshot := false
-	delta := reteAgendaDelta{supported: true}
-	for _, nodeID := range nodeIDs {
-		node := r.graph.alphaNode(nodeID)
-		if node == nil {
-			return reteAgendaDelta{}, false
-		}
-		if span != nil {
-			span.recordConditionsTested()
-		}
-		if !node.matchesWorking(fact) {
-			continue
-		}
-		if !haveSnapshot {
-			snapshot = fact.detachedSnapshotForRevision(r.revision)
-			haveSnapshot = true
-		}
-		if r.graphAlpha != nil && r.graphAlpha.upsert(nodeID, snapshot) && span != nil {
-			span.recordAlphaMatchAdded()
-		}
-		for _, consumer := range node.consumers {
-			r.projectGraphAlphaConsumerSnapshot(consumer, snapshot, span)
-		}
-		if r.graphBeta != nil {
-			match := conditionMatch{
-				conditionID: node.entry.conditionID,
-				bindingSlot: node.entry.bindingSlot,
-				fact:        newConditionFactRefFromWorkingFact(fact),
-			}
-			if !r.graphBeta.insertAlphaMatchGenerated(nodeID, match, span, &delta) {
-				return reteAgendaDelta{}, false
-			}
-			continue
-		}
-		if r.beta == nil {
-			return reteAgendaDelta{}, false
-		}
-		if consumerDelta, ok := r.beta.insertFactForConditionConsumersGenerated(fact, node.consumers, span); ok {
-			delta.supported = delta.supported && consumerDelta.supported
-			delta.added = append(delta.added, consumerDelta.added...)
-		} else {
-			return reteAgendaDelta{}, false
-		}
-	}
+	delta := r.graphBeta.insertFactGenerated(fact, span)
+	delta.supported = r.supportsIncrementalAgenda()
 	return delta, true
 }
 

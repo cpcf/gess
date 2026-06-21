@@ -215,7 +215,7 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	}
 }
 
-func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializingSnapshots(t *testing.T) {
+func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterializingSnapshots(t *testing.T) {
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{

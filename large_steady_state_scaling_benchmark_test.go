@@ -85,8 +85,8 @@ func TestLargeSteadyStateScalingSmokeValidatesFacts(t *testing.T) {
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
 		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
-	if len(snapshot.FallbackReasons) != 0 {
-		t.Fatalf("fallback reasons = %#v, want none", snapshot.FallbackReasons)
+	if len(snapshot.UnsupportedReasons) != 0 {
+		t.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
 	}
 	if snapshot.Totals.RHSAsserts != largeSteadyStateRHSAsserts(tc) {
 		t.Fatalf("rhs asserts = %d, want %d", snapshot.Totals.RHSAsserts, largeSteadyStateRHSAsserts(tc))
@@ -874,11 +874,11 @@ func largeSteadyStateAuditCode(n int) string {
 	return fmt.Sprintf("A%d", n%10)
 }
 
-func largeSteadyStateHarnessEnvInt(t *testing.T, name string, fallback int) int {
+func largeSteadyStateHarnessEnvInt(t *testing.T, name string, defaultValue int) int {
 	t.Helper()
 	raw := os.Getenv(name)
 	if raw == "" {
-		return fallback
+		return defaultValue
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {

@@ -670,7 +670,7 @@ func TestSessionResetDoesNotReemitInitializersAsAsserts(t *testing.T) {
 	}
 }
 
-func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
+func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "settings",
@@ -842,7 +842,7 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 	}
 }
 
-func TestSessionResetUntargetedClosedTemplateKeepsMapBackedInitial(t *testing.T) {
+func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "settings",

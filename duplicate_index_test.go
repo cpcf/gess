@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
+func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 	cases := []struct {
 		name      string
 		spec      TemplateSpec
@@ -48,7 +48,7 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			wantIndex: duplicateIndexDoubleInt,
 		},
 		{
-			name: "closed-non-scalar-fallback",
+			name: "declared-non-scalar-string-index",
 			spec: TemplateSpec{
 				Name:              "payload",
 				DuplicatePolicy:   DuplicateUniqueKey,

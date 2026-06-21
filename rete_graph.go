@@ -124,7 +124,7 @@ type reteGraphAlphaRouteKey struct {
 }
 
 type reteGraphAlphaRouteTable struct {
-	fallback      []reteGraphAlphaNodeID
+	unindexed     []reteGraphAlphaNodeID
 	indexed       map[reteGraphAlphaRouteKey][]reteGraphAlphaNodeID
 	indexedFields []int
 }
@@ -357,7 +357,7 @@ func (g *reteGraph) appendAlphaRoute(templateKey TemplateKey, id reteGraphAlphaN
 		g.alphaRouteTables[templateKey] = table
 	}
 	if !route.enabled {
-		table.fallback = append(table.fallback, id)
+		table.unindexed = append(table.unindexed, id)
 		return
 	}
 	key := route.key()
@@ -380,7 +380,7 @@ func (t *reteGraphAlphaRouteTable) hasIndexedField(fieldSlot int) bool {
 }
 
 func (t *reteGraphAlphaRouteTable) singleIndexedField() (int, bool) {
-	if t == nil || len(t.fallback) != 0 || len(t.indexedFields) != 1 {
+	if t == nil || len(t.unindexed) != 0 || len(t.indexedFields) != 1 {
 		return 0, false
 	}
 	return t.indexedFields[0], true

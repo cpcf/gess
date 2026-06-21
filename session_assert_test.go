@@ -130,7 +130,7 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	}
 }
 
-func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
+func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "targeted",
@@ -412,7 +412,7 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 	}
 }
 
-func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
+func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "targeted",

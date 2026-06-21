@@ -905,11 +905,11 @@ func assertMixedCascadeSelectedFacts(t testing.TB, session *Session, tc mixedCas
 	}
 }
 
-func mixedCascadeHarnessEnvInt(t testing.TB, name string, fallback int) int {
+func mixedCascadeHarnessEnvInt(t testing.TB, name string, defaultValue int) int {
 	t.Helper()
 	raw := os.Getenv(name)
 	if raw == "" {
-		return fallback
+		return defaultValue
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
