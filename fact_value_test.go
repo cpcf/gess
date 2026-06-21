@@ -96,6 +96,53 @@ func TestValueImmutabilityAgainstCallerMapsAndPointers(t *testing.T) {
 	}
 }
 
+func TestValueScalarAccessors(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      Value
+		asBool     bool
+		wantBool   bool
+		asInt      int64
+		wantInt    bool
+		asFloat    float64
+		wantFloat  bool
+		asString   string
+		wantString bool
+	}{
+		{name: "bool", value: mustValue(t, true), asBool: true, wantBool: true},
+		{name: "int", value: mustValue(t, int64(42)), asInt: 42, wantInt: true},
+		{name: "float", value: mustValue(t, 9.8), asFloat: 9.8, wantFloat: true},
+		{name: "string", value: mustValue(t, "critical"), asString: "critical", wantString: true},
+		{name: "null", value: NullValue()},
+		{name: "list", value: mustValue(t, []string{"critical"})},
+		{name: "map", value: mustValue(t, map[string]any{"severity": "critical"})},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBool, ok := tc.value.AsBool()
+			if ok != tc.wantBool || gotBool != tc.asBool {
+				t.Fatalf("AsBool = (%v, %v), want (%v, %v)", gotBool, ok, tc.asBool, tc.wantBool)
+			}
+
+			gotInt, ok := tc.value.AsInt64()
+			if ok != tc.wantInt || gotInt != tc.asInt {
+				t.Fatalf("AsInt64 = (%v, %v), want (%v, %v)", gotInt, ok, tc.asInt, tc.wantInt)
+			}
+
+			gotFloat, ok := tc.value.AsFloat64()
+			if ok != tc.wantFloat || gotFloat != tc.asFloat {
+				t.Fatalf("AsFloat64 = (%v, %v), want (%v, %v)", gotFloat, ok, tc.asFloat, tc.wantFloat)
+			}
+
+			gotString, ok := tc.value.AsString()
+			if ok != tc.wantString || gotString != tc.asString {
+				t.Fatalf("AsString = (%q, %v), want (%q, %v)", gotString, ok, tc.asString, tc.wantString)
+			}
+		})
+	}
+}
+
 func TestMissingNullAndZeroDistinction(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "value-presence-session")
 

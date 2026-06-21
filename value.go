@@ -64,6 +64,38 @@ func (v Value) Kind() ValueKind {
 	return v.kind
 }
 
+// AsBool returns the stored bool when the value kind is ValueBool.
+func (v Value) AsBool() (bool, bool) {
+	if v.Kind() != ValueBool {
+		return false, false
+	}
+	return v.boolValue, true
+}
+
+// AsInt64 returns the stored integer when the value kind is ValueInt.
+func (v Value) AsInt64() (int64, bool) {
+	if v.Kind() != ValueInt {
+		return 0, false
+	}
+	return v.intValue, true
+}
+
+// AsFloat64 returns the stored float when the value kind is ValueFloat.
+func (v Value) AsFloat64() (float64, bool) {
+	if v.Kind() != ValueFloat {
+		return 0, false
+	}
+	return v.floatValue, true
+}
+
+// AsString returns the stored string when the value kind is ValueString.
+func (v Value) AsString() (string, bool) {
+	if v.Kind() != ValueString {
+		return "", false
+	}
+	return v.stringValue, true
+}
+
 func NewValue(raw any) (Value, error) {
 	return canonicalValue(raw)
 }
