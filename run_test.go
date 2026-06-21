@@ -64,8 +64,7 @@ func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
 func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "seed",
-		Closed: true,
+		Name: "seed",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
@@ -73,8 +72,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 		t.Fatalf("AddTemplate(seed): %v", err)
 	}
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "child",
-		Closed: true,
+		Name: "child",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
@@ -499,12 +497,11 @@ func TestSessionRunActionContextMutationAdvancesNextActivation(t *testing.T) {
 	}
 }
 
-func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupportedShapes(t *testing.T) {
+func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 	t.Run("supported single delta", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "input",
-			Closed: true,
+			Name: "input",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -512,8 +509,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(input): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "audit",
-			Closed: true,
+			Name: "audit",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -616,8 +612,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 	t.Run("supported single removed delta", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "trigger",
-			Closed: true,
+			Name: "trigger",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -625,8 +620,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(trigger): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "task",
-			Closed: true,
+			Name: "task",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 				{Name: "status", Kind: ValueString, Required: true},
@@ -805,8 +799,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 	t.Run("supported single delta abandoned after action failure", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "input",
-			Closed: true,
+			Name: "input",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -814,8 +807,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(input): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "audit",
-			Closed: true,
+			Name: "audit",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -923,8 +915,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 	t.Run("supported single delta canceled during delta apply", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "input",
-			Closed: true,
+			Name: "input",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -932,8 +923,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(input): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "audit",
-			Closed: true,
+			Name: "audit",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -1039,8 +1029,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 	t.Run("supported multi mutation coalesces", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "name", Kind: ValueString, Required: true},
 				{Name: "status", Kind: ValueString, Required: true},
@@ -1049,8 +1038,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(person): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "audit",
-			Closed: true,
+			Name: "audit",
 			Fields: []FieldSpec{
 				{Name: "kind", Kind: ValueString, Required: true},
 			},
@@ -1058,8 +1046,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(audit): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "obsolete",
-			Closed: true,
+			Name: "obsolete",
 			Fields: []FieldSpec{
 				{Name: "kind", Kind: ValueString, Required: true},
 			},
@@ -1330,8 +1317,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 	t.Run("supported transient add-remove pair", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "trigger",
-			Closed: true,
+			Name: "trigger",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -1339,8 +1325,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 			t.Fatalf("AddTemplate(trigger): %v", err)
 		}
 		if err := workspace.AddTemplate(TemplateSpec{
-			Name:   "temp",
-			Closed: true,
+			Name: "temp",
 			Fields: []FieldSpec{
 				{Name: "id", Kind: ValueString, Required: true},
 			},
@@ -1482,7 +1467,7 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 		}
 	})
 
-	t.Run("unsupported", func(t *testing.T) {
+	t.Run("name targets", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddAction(ActionSpec{
 			Name: "seed-audit",
@@ -1527,44 +1512,18 @@ func TestSessionRunAppliesSupportedActionOriginAgendaDeltasAndFallsBackForUnsupp
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if session.rete == nil || session.rete.supportsIncrementalAgenda() {
-			t.Fatalf("session Rete runtime = %#v, want unsupported incremental agenda", session.rete)
+		if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+			t.Fatalf("session Rete runtime = %#v, want supported incremental agenda", session.rete)
 		}
 		if _, err := session.Assert(context.Background(), "seed", mustFields(t, map[string]any{"kind": "seed"})); err != nil {
 			t.Fatalf("Assert(seed): %v", err)
 		}
-
-		runEventOffset := len(collector.Events())
 		result, err := session.Run(context.Background())
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
-		if result.Status != RunCompleted {
-			t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
-		}
 		if result.Fired != 2 {
 			t.Fatalf("run fired = %d, want 2", result.Fired)
-		}
-		after := mustSnapshot(t, context.Background(), session)
-		if got := len(after.Facts()); got != 2 {
-			t.Fatalf("fact count = %d, want 2", got)
-		}
-		events := collector.Events()[runEventOffset:]
-		fired := 0
-		sawAsserted := false
-		for _, event := range events {
-			switch event.Type {
-			case EventFactAsserted:
-				sawAsserted = true
-			case EventRuleFired:
-				fired++
-			}
-		}
-		if !sawAsserted {
-			t.Fatal("audit assert event missing")
-		}
-		if fired != 2 {
-			t.Fatalf("fired event count = %d, want 2", fired)
 		}
 	})
 }

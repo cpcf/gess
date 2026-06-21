@@ -69,7 +69,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	workspace := NewWorkspace()
 	step := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "step",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{
@@ -83,7 +82,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	}
 	signal := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "signal",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{
@@ -95,7 +93,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	})
 	route := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "route",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{
@@ -106,7 +103,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	})
 	decision := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "decision",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{
@@ -117,7 +113,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	})
 	done := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "done",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream"},
 		Fields: []FieldSpec{
@@ -126,7 +121,6 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 	})
 	complete := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "complete",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream"},
 		Fields: []FieldSpec{

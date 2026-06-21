@@ -175,8 +175,8 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("actionContextForActivation: %v", err)
 	}
-	if ctx.bindings == nil || len(ctx.bindings.entries) != 1 {
-		t.Fatalf("lazy binding entries = %#v, want one entry", ctx.bindings)
+	if ctx.bindings == nil || ctx.bindings.len() != 1 {
+		t.Fatalf("lazy binding count = %#v, want one entry", ctx.bindings)
 	}
 	if ctx.bindings.snapshots != nil {
 		t.Fatal("action context materialized binding snapshots before they were read")
@@ -219,8 +219,7 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 			{Name: "nickname", Kind: ValueString},
@@ -237,16 +236,6 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 	if !ok {
 		t.Fatal("person template missing name slot")
 	}
-	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "openPerson",
-		Closed: false,
-		Fields: []FieldSpec{
-			{Name: "name", Kind: ValueString, Required: true},
-		},
-	}); err != nil {
-		t.Fatalf("AddTemplate(open-person): %v", err)
-	}
-
 	if err := workspace.AddAction(ActionSpec{
 		Name: "inspect",
 		Fn: func(ctx ActionContext) error {
@@ -285,13 +274,13 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 				return errors.New("non-scalar field should not resolve")
 			}
 			if _, ok := ctx.bindingScalarValue("openPerson", "name"); ok {
-				return errors.New("open template should not use scalar fast path")
+				return errors.New("dynamic fact should not use scalar fast path")
 			}
 			if _, ok := ctx.Binding("openPerson"); !ok {
-				return errors.New("missing open template binding")
+				return errors.New("missing dynamic fact binding")
 			}
 			if _, ok := ctx.BindingScalarValue("openPerson", "name"); ok {
-				return errors.New("open template should not use scalar fast path after Binding materializes snapshots")
+				return errors.New("dynamic fact should not use scalar fast path after Binding materializes snapshots")
 			}
 			if _, ok := ctx.bindingScalarValue("missing", "name"); ok {
 				return errors.New("missing binding should not resolve")
@@ -308,7 +297,7 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 		Name: "inspect-rule",
 		Conditions: []RuleConditionSpec{
 			{Binding: "person", TemplateKey: TemplateKey("person")},
-			{Binding: "openPerson", TemplateKey: TemplateKey("openPerson")},
+			{Binding: "openPerson", Name: "openPerson"},
 		},
 		Actions: []RuleActionSpec{{Name: "inspect"}},
 	}); err != nil {
@@ -326,10 +315,10 @@ func TestActionContextBindingScalarValueUsesClosedTemplateSlotsWithoutMaterializ
 	})); err != nil {
 		t.Fatalf("AssertTemplate(person): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("openPerson"), mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), "openPerson", mustFields(t, map[string]any{
 		"name": "Grace",
 	})); err != nil {
-		t.Fatalf("AssertTemplate(openPerson): %v", err)
+		t.Fatalf("Assert(openPerson): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -350,8 +339,7 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 	workspace := NewWorkspace()
 
 	mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -423,8 +411,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -432,8 +419,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 		t.Fatalf("AddTemplate(person): %v", err)
 	}
 	auditTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "audit",
-		Closed: true,
+		Name: "audit",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -506,8 +492,7 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -595,8 +580,7 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 			workspace := NewWorkspace()
 			var personID FactID
 			if err := workspace.AddTemplate(TemplateSpec{
-				Name:   "person",
-				Closed: true,
+				Name: "person",
 				Fields: []FieldSpec{
 					{Name: "name", Kind: ValueString, Required: true},
 				},
@@ -708,8 +692,7 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -890,8 +873,7 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 	workspace := NewWorkspace()
 
 	if err := workspace.AddTemplate(TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},
@@ -1312,7 +1294,6 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	}
 	if err := workspace.AddTemplate(TemplateSpec{
 		Name:              "audit",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -1449,15 +1430,13 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "source",
-		Closed: true,
+		Name: "source",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
 		},
 	})
 	generated := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "generated",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -1520,15 +1499,13 @@ func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratch
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "source",
-		Closed: true,
+		Name: "source",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
 		},
 	})
 	generated := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:            "generated",
-		Closed:          true,
 		DuplicatePolicy: DuplicateAllow,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
@@ -1585,15 +1562,13 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "source",
-		Closed: true,
+		Name: "source",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
 		},
 	})
 	generated := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "generated",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{

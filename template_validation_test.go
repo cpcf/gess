@@ -102,7 +102,6 @@ func TestTemplateMissingRequiredFieldsFailValidation(t *testing.T) {
 func TestTemplateClosedTemplateRejectsUnknownFields(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:   "person",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	session := mustSession(t, revision, "closed-session")
@@ -223,7 +222,6 @@ func TestTemplateStableKeysAndCompatibilityMetadata(t *testing.T) {
 		CompatibilityKey: TemplateKey("person:v1"),
 		Fields:           []FieldSpec{{Name: "name", Kind: ValueString}},
 		DuplicatePolicy:  DuplicateStructural,
-		Closed:           true,
 	})
 	revisionB := mustCompile(t, TemplateSpec{
 		Name:             "person",
@@ -231,7 +229,6 @@ func TestTemplateStableKeysAndCompatibilityMetadata(t *testing.T) {
 		CompatibilityKey: TemplateKey("person:v1"),
 		Fields:           []FieldSpec{{Name: "name", Kind: ValueString}, {Name: "department", Kind: ValueString}},
 		DuplicatePolicy:  DuplicateStructural,
-		Closed:           false,
 	})
 
 	templateA, ok := revisionA.Template("person")

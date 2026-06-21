@@ -9,7 +9,6 @@ import (
 func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:            "person",
-		Closed:          true,
 		DuplicatePolicy: DuplicateUniqueKey,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
@@ -675,7 +674,6 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "settings",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -847,8 +845,7 @@ func TestSessionResetSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *test
 func TestSessionResetUntargetedClosedTemplateKeepsMapBackedInitial(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "settings",
-		Closed: true,
+		Name: "settings",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "status", Kind: ValueString, Default: "active"},
@@ -906,7 +903,6 @@ func TestSessionResetSlotBackedValidationFailureLeavesStateIntact(t *testing.T) 
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "settings",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{

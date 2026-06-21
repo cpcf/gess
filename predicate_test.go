@@ -179,8 +179,7 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 	t.Run("closed template unknown field", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueInt, Required: true},
 			},
@@ -230,8 +229,7 @@ func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
 	t.Run("closed template uses slot", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueInt, Required: true},
 				{Name: "name", Kind: ValueString, Required: true},
@@ -290,7 +288,7 @@ func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("name target falls back to fields", func(t *testing.T) {
+	t.Run("name target reads dynamic fields by name", func(t *testing.T) {
 		workspace := NewWorkspace()
 		mustAddAction(t, workspace, ActionSpec{
 			Name: "mark",
@@ -344,8 +342,7 @@ func TestFieldConstraintSlotResolutionAndFallback(t *testing.T) {
 	t.Run("missing optional field does not match", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueInt, Required: true},
 				{Name: "tag", Kind: ValueString},

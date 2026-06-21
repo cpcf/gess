@@ -16,6 +16,7 @@ var (
 	ErrStaleFactID         = errors.New("gess: stale fact id")
 	ErrDuplicateFact       = errors.New("gess: duplicate fact")
 	ErrMatcher             = errors.New("gess: matcher error")
+	ErrUnsupportedRuntime  = errors.New("gess: unsupported runtime")
 )
 
 type ValidationError struct {

@@ -159,30 +159,26 @@ func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
 
 	workspace := NewWorkspace()
 	trigger := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "trigger",
-		Closed: true,
+		Name: "trigger",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
 	})
 	person := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "status", Kind: ValueString, Required: true},
 		},
 	})
 	audit := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "audit",
-		Closed: true,
+		Name: "audit",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
 	})
 	obsolete := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "obsolete",
-		Closed: true,
+		Name: "obsolete",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
@@ -699,11 +695,11 @@ func BenchmarkReteGraphResidualJoinSparseKey(b *testing.B) {
 	}
 }
 
-func BenchmarkReteRuntimePureResidualJoinFallbackReconcile(b *testing.B) {
+func BenchmarkReteGraphPureResidualJoin(b *testing.B) {
 	revision, thresholdKey, candidateKey := mustPureResidualJoinBenchmarkRuleset(b)
 	const thresholds = 256
 	candidateFields := mustFields(b, map[string]any{"age": thresholds + 1})
-	reportPureResidualJoinFallbackBenchmarkCounters(b, revision, thresholdKey, candidateKey, thresholds, candidateFields)
+	reportPureResidualJoinBenchmarkCounters(b, revision, thresholdKey, candidateKey, thresholds, candidateFields)
 
 	b.ReportAllocs()
 	b.ReportMetric(thresholds, "thresholds/op")
@@ -713,12 +709,9 @@ func BenchmarkReteRuntimePureResidualJoinFallbackReconcile(b *testing.B) {
 		session := mustPureResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds)
 		b.StartTimer()
 		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
-		if err == nil {
-			_, err = session.reconcileAgendaInternal(context.Background())
-		}
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("assert/reconcile candidate: %v", err)
+			b.Fatalf("AssertTemplate candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -901,7 +894,6 @@ func mustBenchmarkTemplate(tb testing.TB) Template {
 	workspace := NewWorkspace()
 	return mustAddTemplate(tb, workspace, TemplateSpec{
 		Name:              "event",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -969,8 +961,7 @@ func mustGraphRemovalBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, Tem
 
 	workspace := NewWorkspace()
 	employee := mustAddTemplate(tb, workspace, TemplateSpec{
-		Name:   "employee",
-		Closed: true,
+		Name: "employee",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 			{Name: "dept", Kind: ValueString, Required: true},
@@ -978,7 +969,6 @@ func mustGraphRemovalBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, Tem
 	})
 	department := mustAddTemplate(tb, workspace, TemplateSpec{
 		Name:   "department",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(tb, workspace, ActionSpec{
@@ -1045,16 +1035,14 @@ func mustGraphResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey
 
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(tb, workspace, TemplateSpec{
-		Name:   "threshold",
-		Closed: true,
+		Name: "threshold",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
 		},
 	})
 	candidate := mustAddTemplate(tb, workspace, TemplateSpec{
-		Name:   "candidate",
-		Closed: true,
+		Name: "candidate",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
@@ -1149,12 +1137,10 @@ func mustPureResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey,
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(tb, workspace, TemplateSpec{
 		Name:   "threshold",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
 	})
 	candidate := mustAddTemplate(tb, workspace, TemplateSpec{
 		Name:   "candidate",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
 	})
 	mustAddAction(tb, workspace, ActionSpec{
@@ -1192,13 +1178,13 @@ func mustPureResidualJoinBenchmarkSession(tb testing.TB, revision *Ruleset, thre
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta != nil || session.rete.plan.betaSupported {
-		tb.Fatalf("Rete runtime = %#v, want beta-unsupported fallback", session.rete)
+	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.plan.betaSupported {
+		tb.Fatalf("Rete runtime = %#v, want graph-beta residual support", session.rete)
 	}
 	return session
 }
 
-func reportPureResidualJoinFallbackBenchmarkCounters(tb testing.TB, revision *Ruleset, thresholdKey, candidateKey TemplateKey, thresholds int, candidateFields Fields) {
+func reportPureResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, thresholdKey, candidateKey TemplateKey, thresholds int, candidateFields Fields) {
 	tb.Helper()
 
 	reporter, ok := tb.(interface {
@@ -1210,11 +1196,8 @@ func reportPureResidualJoinFallbackBenchmarkCounters(tb testing.TB, revision *Ru
 	session := mustPureResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds)
 	session.attachPropagationCounters()
 	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
-	if err == nil {
-		_, err = session.reconcileAgendaInternal(context.Background())
-	}
 	if err != nil {
-		tb.Fatalf("diagnostic assert/reconcile candidate: %v", err)
+		tb.Fatalf("diagnostic AssertTemplate candidate: %v", err)
 	}
 	if result.Status != AssertInserted {
 		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
@@ -1223,14 +1206,15 @@ func reportPureResidualJoinFallbackBenchmarkCounters(tb testing.TB, revision *Ru
 		tb.Fatalf("diagnostic pending activations = %d, want %d", got, thresholds)
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if snapshot.RuntimePath != propagationRuntimeGraphAlpha {
-		tb.Fatalf("diagnostic runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphAlpha)
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		tb.Fatalf("diagnostic runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
-	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphAlpha), "diagnostic-runtime-graph-alpha-only")
+	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphBeta), "diagnostic-runtime-graph-beta")
 	reporter.ReportMetric(float64(len(snapshot.FallbackReasons)), "diagnostic-fallback-reason-count")
-	reporter.ReportMetric(float64(snapshot.FallbackReasons[propagationFallbackBetaUnsupported]), "diagnostic-fallback-beta-unsupported")
-	reporter.ReportMetric(float64(snapshot.Totals.ConditionsTested), "diagnostic-conditions-tested")
-	reporter.ReportMetric(float64(snapshot.Totals.AlphaMatchesAdded), "diagnostic-alpha-matches-added")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketProbes), "diagnostic-beta-bucket-probes")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaCandidateRowsScanned), "diagnostic-beta-candidate-rows-scanned")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaResidualTests), "diagnostic-beta-residual-tests")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaJoinedTokensProduced), "diagnostic-beta-joined-tokens-produced")
 }
 
 type terminalTokenDeltaBenchmarkFixture struct {

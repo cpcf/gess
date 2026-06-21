@@ -725,7 +725,6 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 func mixedCascadeTemplate(name string, fields []FieldSpec, duplicateKeys []string) TemplateSpec {
 	return TemplateSpec{
 		Name:              name,
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: duplicateKeys,
 		Fields:            fields,

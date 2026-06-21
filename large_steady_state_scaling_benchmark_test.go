@@ -619,7 +619,6 @@ func mustCompileLargeSteadyStateScalingRuleset(t testing.TB, tc largeSteadyState
 func largeSteadyStateTemplate(name string, fields []FieldSpec, duplicateKeys []string) TemplateSpec {
 	return TemplateSpec{
 		Name:              name,
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: duplicateKeys,
 		Fields:            fields,

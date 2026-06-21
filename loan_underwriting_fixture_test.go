@@ -255,8 +255,7 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 
 	workspace := NewWorkspace()
 	applicant := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "applicant",
-		Closed: true,
+		Name: "applicant",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "age", Kind: ValueInt, Required: true},
@@ -268,8 +267,7 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		t.Fatal("applicant template missing id slot")
 	}
 	financial := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "financial",
-		Closed: true,
+		Name: "financial",
 		Fields: []FieldSpec{
 			{Name: "applicant-id", Kind: ValueString, Required: true},
 			{Name: "annual-income", Kind: ValueInt, Required: true},
@@ -278,8 +276,7 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		},
 	})
 	employment := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "employment",
-		Closed: true,
+		Name: "employment",
 		Fields: []FieldSpec{
 			{Name: "applicant-id", Kind: ValueString, Required: true},
 			{Name: "status", Kind: ValueString, Required: true},
@@ -287,8 +284,7 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		},
 	})
 	riskFlag := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "risk-flag",
-		Closed: true,
+		Name: "risk-flag",
 		Fields: []FieldSpec{
 			{Name: "applicant-id", Kind: ValueString, Required: true},
 			{Name: "code", Kind: ValueString, Required: true},
@@ -296,8 +292,7 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		},
 	})
 	decision := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "decision",
-		Closed: true,
+		Name: "decision",
 		Fields: []FieldSpec{
 			{Name: "applicant-id", Kind: ValueString, Required: true},
 			{Name: "outcome", Kind: ValueString, Required: true},

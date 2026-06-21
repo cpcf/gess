@@ -1052,11 +1052,10 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 		return nil, err
 	}
 
-	runtimeMatcher := matcher(newNaiveMatcher(s.revision))
-	if s.rete != nil {
-		runtimeMatcher = s.rete
+	if s.rete == nil {
+		return nil, ErrUnsupportedRuntime
 	}
-	results, err := runtimeMatcher.match(ctx, source)
+	results, err := s.rete.match(ctx, source)
 	if err != nil {
 		return nil, err
 	}

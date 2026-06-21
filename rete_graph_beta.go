@@ -802,16 +802,11 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}
 	}
-	templateKey := fact.TemplateKey()
-	nodeIDs, routed := m.graph.routesByTemplateKey[templateKey]
-	if !routed || len(nodeIDs) == 0 {
+	routeIDs := m.snapshotAlphaRouteIDsForFact(fact)
+	if len(routeIDs) == 0 {
 		return reteAgendaDelta{}
 	}
 
-	routeIDs := nodeIDs
-	if len(nodeIDs) > 3 {
-		routeIDs = m.snapshotAlphaRouteIDs(templateKey, nodeIDs, fact)
-	}
 	delta := m.beginTerminalTokenDelta()
 	for _, nodeID := range routeIDs {
 		node := m.graph.alphaNode(nodeID)
@@ -844,16 +839,11 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 	if m == nil || m.graph == nil || fact == nil {
 		return reteAgendaDelta{}
 	}
-	templateKey := fact.templateKey
-	nodeIDs, routed := m.graph.routesByTemplateKey[templateKey]
-	if !routed || len(nodeIDs) == 0 {
+	routeIDs := m.workingAlphaRouteIDsForFact(fact)
+	if len(routeIDs) == 0 {
 		return reteAgendaDelta{}
 	}
 
-	routeIDs := nodeIDs
-	if len(nodeIDs) > 3 {
-		routeIDs = m.workingAlphaRouteIDs(templateKey, nodeIDs, fact)
-	}
 	delta := m.beginTerminalTokenDelta()
 	for _, nodeID := range routeIDs {
 		node := m.graph.alphaNode(nodeID)
@@ -880,6 +870,51 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 		}
 	}
 	return m.finishTerminalTokenDelta(delta)
+}
+
+func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFact(fact FactSnapshot) []reteGraphAlphaNodeID {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	templateKey := fact.TemplateKey()
+	templateIDs := m.graph.routesByTemplateKey[templateKey]
+	if len(templateIDs) > 3 {
+		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact)
+	}
+	nameIDs := m.graph.routesByName[fact.Name()]
+	if len(templateIDs) == 0 {
+		return nameIDs
+	}
+	if len(nameIDs) == 0 {
+		return templateIDs
+	}
+	m.resetAlphaRouteScratch()
+	m.appendAlphaRouteBucket(templateIDs)
+	m.appendAlphaRouteBucket(nameIDs)
+	m.sortAlphaRouteScratch()
+	return m.alphaRouteScratch
+}
+
+func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact) []reteGraphAlphaNodeID {
+	if m == nil || m.graph == nil || fact == nil {
+		return nil
+	}
+	templateIDs := m.graph.routesByTemplateKey[fact.templateKey]
+	if len(templateIDs) > 3 {
+		templateIDs = m.workingAlphaRouteIDs(fact.templateKey, templateIDs, fact)
+	}
+	nameIDs := m.graph.routesByName[fact.name]
+	if len(templateIDs) == 0 {
+		return nameIDs
+	}
+	if len(nameIDs) == 0 {
+		return templateIDs
+	}
+	m.resetAlphaRouteScratch()
+	m.appendAlphaRouteBucket(templateIDs)
+	m.appendAlphaRouteBucket(nameIDs)
+	m.sortAlphaRouteScratch()
+	return m.alphaRouteScratch
 }
 
 func (m *reteGraphBetaMemory) snapshotAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact FactSnapshot) []reteGraphAlphaNodeID {
@@ -1263,9 +1298,8 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 	}
 	delta := reteAgendaDelta{supported: true}
 	id := fact.ID()
-	templateKey := fact.TemplateKey()
-	nodeIDs, routed := m.graph.routesByTemplateKey[templateKey]
-	if !routed || len(nodeIDs) == 0 {
+	nodeIDs := m.snapshotAlphaRouteIDsForFact(fact)
+	if len(nodeIDs) == 0 {
 		m.removeAlphaFact(id)
 		return delta
 	}
@@ -1580,8 +1614,11 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 }
 
 func graphBetaJoinKeyForLeftToken(node *reteGraphBetaNode, token tokenRef) (betaJoinKey, bool) {
-	if node == nil || len(node.hashJoins) == 0 && len(node.joins) > 0 {
+	if node == nil {
 		return betaJoinKey{}, false
+	}
+	if len(node.hashJoins) == 0 {
+		return betaJoinKey{}, true
 	}
 	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool) {
 		match, ok := tokenRefAtSlot(token, join.refBindingSlot)
@@ -1593,12 +1630,15 @@ func graphBetaJoinKeyForLeftToken(node *reteGraphBetaNode, token tokenRef) (beta
 }
 
 func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (betaJoinKey, bool) {
-	if node == nil || len(node.hashJoins) == 0 && len(node.joins) > 0 {
+	if node == nil {
 		return betaJoinKey{}, false
 	}
 	match, ok := tokenLastMatch(token)
 	if !ok {
 		return betaJoinKey{}, false
+	}
+	if len(node.hashJoins) == 0 {
+		return betaJoinKey{}, true
 	}
 	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool) {
 		return match.fact.compiledFieldValue(join.field, join.fieldSlot)

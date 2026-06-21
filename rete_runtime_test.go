@@ -72,8 +72,7 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnce(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 		},
@@ -150,8 +149,7 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnceForGeneratedFacts(t *test
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 		},
@@ -221,11 +219,10 @@ func TestReteRuntimeRoutesSharedClosedTemplateAlphaOnceForGeneratedFacts(t *test
 	}
 }
 
-func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
+func TestReteRuntimePlansNameTargetsAsGraphRoutes(t *testing.T) {
 	workspace := NewWorkspace()
-	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+	eventTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "event",
-		Closed: false,
 		Fields: []FieldSpec{{Name: "kind", Kind: ValueString}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -238,8 +235,8 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
-		Name:       "open-template",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: openTemplate.Key()}},
+		Name:       "template-target",
+		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
@@ -248,31 +245,23 @@ func TestReteRuntimeReportsFallbackBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if got, want := len(runtime.plan.unsupported), 2; got != want {
-		t.Fatalf("unsupported reasons = %d, want %d: %#v", got, want, runtime.plan.unsupported)
+	if got := len(runtime.plan.unsupported); got != 0 {
+		t.Fatalf("unsupported reasons = %#v, want none", runtime.plan.unsupported)
 	}
-	if got, want := runtime.plan.stats.unsupportedRules, 2; got != want {
-		t.Fatalf("unsupported rules = %d, want %d", got, want)
+	if got := runtime.plan.stats.unsupportedRules; got != 0 {
+		t.Fatalf("unsupported rules = %d, want 0", got)
 	}
-	if got, want := runtime.plan.stats.unsupportedConditions, 2; got != want {
-		t.Fatalf("unsupported conditions = %d, want %d", got, want)
+	if got := runtime.plan.stats.unsupportedConditions; got != 0 {
+		t.Fatalf("unsupported conditions = %d, want 0", got)
 	}
-	if runtime.plan.incrementalAgendaSupported {
-		t.Fatal("incremental agenda plan flag = true, want false for unsupported rules")
+	if !runtime.plan.incrementalAgendaSupported {
+		t.Fatal("incremental agenda plan flag = false, want true")
 	}
-
-	kinds := map[reteUnsupportedKind]bool{}
-	for _, reason := range runtime.plan.unsupported {
-		if reason.ruleID == "" || reason.ruleRevisionID == "" || reason.conditionID == "" || reason.binding == "" || reason.detail == "" {
-			t.Fatalf("unsupported reason is missing identity fields: %#v", reason)
-		}
-		kinds[reason.kind] = true
+	if len(revision.graph.routesByName["event"]) != 1 {
+		t.Fatalf("name routes = %#v, want one event route", revision.graph.routesByName)
 	}
-	if !kinds[reteUnsupportedNameTarget] {
-		t.Fatalf("unsupported kinds = %#v, want %q", kinds, reteUnsupportedNameTarget)
-	}
-	if !kinds[reteUnsupportedOpenTemplate] {
-		t.Fatalf("unsupported kinds = %#v, want %q", kinds, reteUnsupportedOpenTemplate)
+	if len(revision.graph.routesByTemplateKey[eventTemplate.Key()]) != 1 {
+		t.Fatalf("template routes = %#v, want one event route", revision.graph.routesByTemplateKey)
 	}
 }
 
@@ -297,7 +286,6 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "left",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -306,7 +294,6 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	})
 	right := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "right",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -315,7 +302,6 @@ func TestReteRuntimeRoutesClosedTemplateSubscribersByTemplateKey(t *testing.T) {
 	})
 	extra := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "extra",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -467,7 +453,6 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "left",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -476,7 +461,6 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 	})
 	right := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "right",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -537,12 +521,11 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 	}
 }
 
-func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *testing.T) {
+func TestSessionReconcileAgendaInternalSupportsNameAndTemplateTargets(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
-	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+	eventTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "event",
-		Closed: false,
 		Fields: []FieldSpec{{Name: "kind", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -556,39 +539,29 @@ func TestSessionReconcileAgendaInternalUsesSessionSourceForUnsupportedPlans(t *t
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "by-template",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: openTemplate.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
 
 	initials := []SessionInitialFact{
-		{TemplateKey: openTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "alpha"})},
-		{TemplateKey: openTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "beta"})},
+		{TemplateKey: eventTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "alpha"})},
+		{TemplateKey: eventTemplate.Key(), Fields: mustFields(t, map[string]any{"kind": "beta"})},
 	}
-	sessionInternal, err := NewSession(revision, WithSessionID("fallback-source-internal"), WithInitialFacts(initials...))
+	sessionInternal, err := NewSession(revision, WithSessionID("name-template-source-internal"), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession(internal): %v", err)
 	}
-	sessionSnapshot, err := NewSession(revision, WithSessionID("fallback-source-snapshot"), WithInitialFacts(initials...))
+	sessionSnapshot, err := NewSession(revision, WithSessionID("name-template-source-snapshot"), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession(snapshot): %v", err)
 	}
 
-	snapshot := mustSnapshot(t, ctx, sessionSnapshot)
-	snapshotChanges, err := sessionSnapshot.reconcileAgenda(ctx, snapshot)
-	if err != nil {
+	if _, err := sessionSnapshot.reconcileAgenda(ctx, mustSnapshot(t, ctx, sessionSnapshot)); err != nil {
 		t.Fatalf("snapshot reconcileAgenda: %v", err)
 	}
-	internalChanges, err := sessionInternal.reconcileAgendaInternal(ctx)
-	if err != nil {
+	if _, err := sessionInternal.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
-	}
-
-	if !reflect.DeepEqual(internalChanges, snapshotChanges) {
-		t.Fatalf("internal reconcile changes differ from snapshot reconcile:\ninternal=%#v\nsnapshot=%#v", internalChanges, snapshotChanges)
-	}
-	if !reflect.DeepEqual(sessionInternal.agenda.pendingActivations(), sessionSnapshot.agenda.pendingActivations()) {
-		t.Fatalf("internal pending activations differ from snapshot reconcile:\ninternal=%#v\nsnapshot=%#v", sessionInternal.agenda.pendingActivations(), sessionSnapshot.agenda.pendingActivations())
 	}
 }
 
@@ -649,6 +622,7 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 		t.Fatalf("session Rete runtime = %#v, want populated alpha and beta memories", session.rete)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
+	runtime.resetAlpha(snapshot.Facts())
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), session.rete)
@@ -780,7 +754,7 @@ func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) 
 	assertMatcherParity(t, revision2, mustSnapshot(t, ctx, session), newNaiveMatcher(revision2), session.rete)
 }
 
-func TestReteRuntimeUnsupportedPlanFallsBackToOracle(t *testing.T) {
+func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	mustAddAction(t, workspace, ActionSpec{
@@ -801,11 +775,17 @@ func TestReteRuntimeUnsupportedPlanFallsBackToOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if len(runtime.plan.unsupported) == 0 {
-		t.Fatalf("unsupported plan reasons = %#v, want fallback reasons", runtime.plan.unsupported)
+	runtime.resetAlpha(mustSnapshot(t, ctx, session).Facts())
+	if len(runtime.plan.unsupported) != 0 {
+		t.Fatalf("unsupported plan reasons = %#v, want none", runtime.plan.unsupported)
 	}
-
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), runtime)
+	results, err := runtime.match(ctx, mustSnapshot(t, ctx, session))
+	if err != nil {
+		t.Fatalf("runtime match: %v", err)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("match results = %d, want %d", got, want)
+	}
 }
 
 func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
@@ -889,12 +869,10 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	workspace2 := NewWorkspace()
 	noise2 := mustAddTemplate(t, workspace2, TemplateSpec{
 		Name:   "noise",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	employee2 := mustAddTemplate(t, workspace2, TemplateSpec{
-		Name:   "employee",
-		Closed: true,
+		Name: "employee",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 			{Name: "dept", Kind: ValueString, Required: true},
@@ -902,7 +880,6 @@ func TestReteRuntimeBetaMemoryMaintainsParityAcrossLifecycle(t *testing.T) {
 	})
 	department2 := mustAddTemplate(t, workspace2, TemplateSpec{
 		Name:   "department",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace2, ActionSpec{
@@ -967,20 +944,17 @@ func TestReteRuntimeBetaConditionRowsCompactAfterRetractAndReadd(t *testing.T) {
 	workspace := NewWorkspace()
 	noise := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "noise",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	employee := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "employee",
-		Closed: true,
+		Name: "employee",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 			{Name: "dept", Kind: ValueString, Required: true},
 		},
 	})
 	department := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "department",
-		Closed: true,
+		Name: "department",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "label", Kind: ValueString, Required: true},
@@ -1197,8 +1171,7 @@ func TestReteRuntimeBetaRowsCompactAfterModifyWithoutTerminalRemovals(t *testing
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	ticket := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "ticket",
-		Closed: true,
+		Name: "ticket",
 		Fields: []FieldSpec{
 			{Name: "status", Kind: ValueString, Required: true},
 		},
@@ -1440,17 +1413,14 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 	workspace := NewWorkspace()
 	noise := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "noise",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	left := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "left",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	right := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "right",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -1650,22 +1620,18 @@ func TestReteRuntimeRejectsNilRuleset(t *testing.T) {
 	}
 }
 
-func TestReteRuntimeFallsBackForNumericJoinPlans(t *testing.T) {
-	ctx := context.Background()
+func TestReteRuntimeUsesGraphBetaForResidualOnlyNumericJoinPlans(t *testing.T) {
 	workspace := NewWorkspace()
 	noise := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "noise",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "threshold",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
 	})
 	candidate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "candidate",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -1699,42 +1665,40 @@ func TestReteRuntimeFallsBackForNumericJoinPlans(t *testing.T) {
 		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 10})},
 		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"age": 30})},
 	)
-	session, err := NewSession(revision, WithSessionID("numeric-join-fallback-session"), WithInitialFacts(initials...))
+	session, err := NewSession(revision, WithSessionID("numeric-join-residual-session"), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	if session.rete == nil {
 		t.Fatal("expected Rete runtime")
 	}
-	if session.rete.plan.betaSupported {
-		t.Fatalf("beta plan = %#v, want unsupported for numeric joins", session.rete.plan)
+	if !session.rete.plan.betaSupported {
+		t.Fatalf("beta plan = %#v, want supported for residual numeric joins", session.rete.plan)
 	}
 	session.attachPropagationCounters()
 	snapshot := session.propagationCounterSnapshot()
-	if snapshot.RuntimePath != propagationRuntimeGraphAlpha {
-		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphAlpha)
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
-	if got := snapshot.FallbackReasons[propagationFallbackBetaUnsupported]; got != 1 {
-		t.Fatalf("beta unsupported fallback count = %d, want 1 in %#v", got, snapshot.FallbackReasons)
+	if len(snapshot.FallbackReasons) != 0 {
+		t.Fatalf("fallback reasons = %#v, want none", snapshot.FallbackReasons)
 	}
 
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertGraphBetaRuntimeParity(t, revision, session)
 }
 
 func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "threshold",
-		Closed: true,
+		Name: "threshold",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
 		},
 	})
 	candidate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "candidate",
-		Closed: true,
+		Name: "candidate",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
@@ -1897,7 +1861,7 @@ func TestReteRuntimeMatchWithoutSnapshotMatchesSnapshotForFullBetaMemory(t *test
 	}
 }
 
-func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T) {
+func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	if err := workspace.AddAction(ActionSpec{
@@ -1914,29 +1878,27 @@ func TestReteRuntimeDefaultSessionFallsBackForUnsupportedSmallPlan(t *testing.T)
 		t.Fatalf("AddRule(dynamic-event): %v", err)
 	}
 	revision := mustCompileWorkspace(t, workspace)
-	session := mustSession(t, revision, "small-unsupported-fallback-session")
+	session := mustSession(t, revision, "small-name-target-graph-session")
 	if session.rete == nil {
 		t.Fatal("expected default Rete runtime")
 	}
-	if len(session.rete.plan.unsupported) == 0 {
-		t.Fatalf("unsupported plan reasons = %#v, want fallback reason", session.rete.plan.unsupported)
+	if len(session.rete.plan.unsupported) != 0 {
+		t.Fatalf("unsupported plan reasons = %#v, want none", session.rete.plan.unsupported)
 	}
 	if session.propagationCounters != nil {
 		t.Fatalf("normal session unexpectedly has propagation counters: %#v", session.propagationCounters)
 	}
 	session.attachPropagationCounters()
 	snapshot := session.propagationCounterSnapshot()
-	if snapshot.RuntimePath != propagationRuntimeSemanticMatch {
-		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeSemanticMatch)
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
-	if got := snapshot.FallbackReasons[string(reteUnsupportedNameTarget)]; got != 1 {
-		t.Fatalf("name-target fallback count = %d, want 1 in %#v", got, snapshot.FallbackReasons)
+	if len(snapshot.FallbackReasons) != 0 {
+		t.Fatalf("fallback reasons = %#v, want none", snapshot.FallbackReasons)
 	}
 	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "queued"})); err != nil {
 		t.Fatalf("Assert(event): %v", err)
 	}
-
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
 func TestReteRuntimeResetKeepsSmallSupportedMemories(t *testing.T) {
@@ -2383,12 +2345,10 @@ func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "left",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	right := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "right",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueFloat, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -2692,16 +2652,14 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "threshold",
-		Closed: true,
+		Name: "threshold",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
 		},
 	})
 	candidate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "candidate",
-		Closed: true,
+		Name: "candidate",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
@@ -2885,16 +2843,14 @@ func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "threshold",
-		Closed: true,
+		Name: "threshold",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
 		},
 	})
 	candidate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "candidate",
-		Closed: true,
+		Name: "candidate",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
@@ -3037,17 +2993,14 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 	workspace := NewWorkspace()
 	noise := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "noise",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "bucket", Kind: ValueInt, Required: true}},
 	})
 	employee := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "employee",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "dept", Kind: ValueString, Required: true}},
 	})
 	department := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "department",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -3077,22 +3030,18 @@ func mustGraphTopologyRemovalWorkspace(t testing.TB) (*Workspace, TemplateKey, T
 	workspace := NewWorkspace()
 	employee := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "employee",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "dept", Kind: ValueString, Required: true}},
 	})
 	department := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "department",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "region", Kind: ValueString, Required: true}, {Name: "office", Kind: ValueString, Required: true}},
 	})
 	region := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "region",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	office := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "office",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -3228,7 +3177,6 @@ func mustTokenBackingRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:            "item",
-		Closed:          true,
 		DuplicatePolicy: DuplicateAllow,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
@@ -3290,7 +3238,6 @@ func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldCo
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:            "person",
-		Closed:          true,
 		DuplicatePolicy: DuplicateAllow,
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},

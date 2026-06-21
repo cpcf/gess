@@ -133,8 +133,7 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 func TestSessionAssertSlotBackedClosedTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "targeted",
-		Closed: true,
+		Name: "targeted",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "status", Kind: ValueString, Default: "active", AllowedValues: []any{"active", "pending"}},
@@ -301,7 +300,6 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 			}
 			if err := slotWorkspace.AddTemplate(TemplateSpec{
 				Name:              "event",
-				Closed:            true,
 				DuplicatePolicy:   tc.duplicatePolicy,
 				DuplicateKeyNames: tc.duplicateKey,
 				Fields:            baseSpec.Fields,
@@ -361,7 +359,6 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "event",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -418,15 +415,13 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 func TestSessionAssertSkipsSlotsForUntargetedClosedTemplate(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "targeted",
-		Closed: true,
+		Name: "targeted",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
 	})
 	untargeted := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "untargeted",
-		Closed: true,
+		Name: "untargeted",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
@@ -626,7 +621,6 @@ func TestSessionAssertDuplicateAllowPolicyAllowsMultiplicity(t *testing.T) {
 func TestSessionAssertValidationFailureLeavesMemoryAndEventsUnchanged(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:   "person",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	collector := &testEventCollector{}

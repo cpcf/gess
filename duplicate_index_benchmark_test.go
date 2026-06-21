@@ -5,7 +5,6 @@ import "testing"
 func BenchmarkDuplicateIndexLookupInsertClosedUniqueSingleScalar(b *testing.B) {
 	benchmarkDuplicateIndexLookupInsert(b, TemplateSpec{
 		Name:              "event",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{
@@ -21,7 +20,6 @@ func BenchmarkDuplicateIndexLookupInsertClosedUniqueSingleScalar(b *testing.B) {
 func BenchmarkDuplicateIndexLookupInsertClosedUniqueDoubleScalar(b *testing.B) {
 	benchmarkDuplicateIndexLookupInsert(b, TemplateSpec{
 		Name:              "route",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{
@@ -63,7 +61,6 @@ func benchmarkDuplicateIndexBuildClosedUniqueDoubleScalar(b *testing.B, forceStr
 	definition := NewWorkspace()
 	if err := definition.AddTemplate(TemplateSpec{
 		Name:              "route",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{

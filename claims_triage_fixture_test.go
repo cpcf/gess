@@ -74,6 +74,7 @@ func TestReteRuntimeParityHarnessMatchesClaimsTriageOracle(t *testing.T) {
 		}
 	}
 	snapshot := mustSnapshot(t, ctx, session)
+	runtime.resetAlpha(snapshot.Facts())
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
 }
@@ -305,8 +306,7 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 
 	workspace := NewWorkspace()
 	customer := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "customer",
-		Closed: true,
+		Name: "customer",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "tier", Kind: ValueString, Required: true},
@@ -315,8 +315,7 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		},
 	})
 	policy := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "policy",
-		Closed: true,
+		Name: "policy",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "customer-id", Kind: ValueString, Required: true},
@@ -326,8 +325,7 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		},
 	})
 	claim := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "claim",
-		Closed: true,
+		Name: "claim",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "customer-id", Kind: ValueString, Required: true},
@@ -342,8 +340,7 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		t.Fatal("claim template missing id slot")
 	}
 	signal := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "signal",
-		Closed: true,
+		Name: "signal",
 		Fields: []FieldSpec{
 			{Name: "claim-id", Kind: ValueString, Required: true},
 			{Name: "kind", Kind: ValueString, Required: true},
@@ -351,8 +348,7 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		},
 	})
 	triage := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "triage",
-		Closed: true,
+		Name: "triage",
 		Fields: []FieldSpec{
 			{Name: "claim-id", Kind: ValueString, Required: true},
 			{Name: "outcome", Kind: ValueString, Required: true},

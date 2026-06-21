@@ -17,7 +17,6 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			name: "single-scalar",
 			spec: TemplateSpec{
 				Name:              "event",
-				Closed:            true,
 				DuplicatePolicy:   DuplicateUniqueKey,
 				DuplicateKeyNames: []string{"id"},
 				Fields: []FieldSpec{
@@ -35,7 +34,6 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			name: "double-scalar",
 			spec: TemplateSpec{
 				Name:              "route",
-				Closed:            true,
 				DuplicatePolicy:   DuplicateUniqueKey,
 				DuplicateKeyNames: []string{"stream", "n"},
 				Fields: []FieldSpec{
@@ -53,7 +51,6 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			name: "closed-non-scalar-fallback",
 			spec: TemplateSpec{
 				Name:              "payload",
-				Closed:            true,
 				DuplicatePolicy:   DuplicateUniqueKey,
 				DuplicateKeyNames: []string{"items"},
 				Fields: []FieldSpec{
@@ -66,7 +63,7 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			wantIndex: duplicateIndexString,
 		},
 		{
-			name: "open-template-fallback",
+			name: "declared-template-defaults-to-fixed-slots",
 			spec: TemplateSpec{
 				Name:              "open-event",
 				DuplicatePolicy:   DuplicateUniqueKey,
@@ -78,7 +75,7 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 			fields: map[string]any{
 				"id": "evt-1",
 			},
-			wantIndex: duplicateIndexString,
+			wantIndex: duplicateIndexSingleScalar,
 		},
 	}
 
@@ -129,7 +126,6 @@ func TestDuplicateIndexTypedAndFallbackPaths(t *testing.T) {
 func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:              "reading",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"score"},
 		Fields: []FieldSpec{
@@ -173,7 +169,6 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:              "route",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"stream", "n"},
 		Fields: []FieldSpec{

@@ -301,8 +301,7 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 func TestSessionModifyRebuildsClosedTemplateSlots(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 			{Name: "name", Kind: ValueString, Required: true},
@@ -436,7 +435,6 @@ func TestSessionModifySlotBackedClosedTemplateSetUnsetDefaultRequiredAndDuplicat
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:              "event",
-		Closed:            true,
 		DuplicatePolicy:   DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"id"},
 		Fields: []FieldSpec{

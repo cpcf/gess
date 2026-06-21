@@ -139,7 +139,7 @@ func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
 	return FactSnapshot{}, false
 }
 
-// BindingScalarValue returns one scalar field from a closed-template bound fact
+// BindingScalarValue returns one scalar field from a fixed-template bound fact
 // without materializing a public FactSnapshot.
 func (c ActionContext) BindingScalarValue(name, field string) (Value, bool) {
 	return c.bindingScalarValue(name, field)
@@ -201,7 +201,7 @@ func (c ActionContext) AssertTemplate(templateKey TemplateKey, fields Fields) (A
 	return c.session.insertFactWithContextAndOrigin(c.Context(), "", templateKey, fields, c.mutationOrigin())
 }
 
-// AssertTemplateValues asserts a closed-template fact using values in template
+// AssertTemplateValues asserts a fixed-template fact using values in template
 // field order and returns only whether the effect succeeded. It is intended for
 // generated facts where callers do not need an AssertResult.
 func (c ActionContext) AssertTemplateValues(templateKey TemplateKey, values ...Value) error {
@@ -612,6 +612,9 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
+		if err := s.validateActivationTokenFacts(rule, activation); err != nil {
+			return ActionContext{}, err
+		}
 		if useScratch {
 			return newTokenActionContextWithBindingState(ctx, s, activation, rule, &s.actionBindingScratch), nil
 		}
@@ -631,4 +634,25 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 	}
 
 	return newActionContext(ctx, s, activation, entries), nil
+}
+
+func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation) error {
+	if tokenRefSize(activation.token) != len(rule.conditions) {
+		return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
+	}
+	for i := range rule.conditions {
+		match, ok := activation.token.matchAt(i)
+		if !ok {
+			return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
+		}
+		factID := match.fact.ID()
+		fact, ok := s.workingFactByID(factID)
+		if !ok {
+			return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+		}
+		if fact.id.Generation() != activation.generation || fact.version != match.fact.Version() {
+			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+		}
+	}
+	return nil
 }

@@ -13,6 +13,7 @@ type reteGraph struct {
 	betaNodes           []reteGraphBetaNode
 	terminalNodes       []reteGraphTerminalNode
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
+	routesByName        map[string][]reteGraphAlphaNodeID
 	alphaRouteTables    map[TemplateKey]*reteGraphAlphaRouteTable
 	successorsByStage   map[reteGraphStageRef][]reteGraphStageSuccessor
 	terminalsByStage    map[reteGraphStageRef][]reteGraphTerminalRoute
@@ -65,6 +66,7 @@ type reteGraphDebugSummary struct {
 	BetaNodes           []reteGraphBetaNode
 	TerminalNodes       []reteGraphTerminalNode
 	RoutesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
+	RoutesByName        map[string][]reteGraphAlphaNodeID
 }
 
 type reteGraphBetaInputSide uint8
@@ -130,6 +132,7 @@ type reteGraphAlphaRouteTable struct {
 func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateKey]Template) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
+		routesByName:        make(map[string][]reteGraphAlphaNodeID),
 		alphaRouteTables:    make(map[TemplateKey]*reteGraphAlphaRouteTable),
 		successorsByStage:   make(map[reteGraphStageRef][]reteGraphStageSuccessor),
 		terminalsByStage:    make(map[reteGraphStageRef][]reteGraphTerminalRoute),
@@ -167,8 +170,13 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 					route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
 					alphaNode.route = route
 				}
-				graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
-				graph.appendAlphaRoute(condition.target.templateKey, alphaID, route)
+				switch condition.target.kind {
+				case conditionTargetTemplateKey:
+					graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
+					graph.appendAlphaRoute(condition.target.templateKey, alphaID, route)
+				case conditionTargetName:
+					graph.routesByName[condition.target.name] = append(graph.routesByName[condition.target.name], alphaID)
+				}
 			}
 			if !haveStage {
 				current = alphaRef
@@ -219,11 +227,18 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 }
 
 func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]Template) bool {
-	if target.kind != conditionTargetTemplateKey || target.templateKey == "" {
+	switch target.kind {
+	case conditionTargetTemplateKey:
+		if target.templateKey == "" {
+			return false
+		}
+		template, ok := templatesByKey[target.templateKey]
+		return ok && template.closed
+	case conditionTargetName:
+		return target.name != ""
+	default:
 		return false
 	}
-	template, ok := templatesByKey[target.templateKey]
-	return ok && template.closed
 }
 
 func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint) (reteGraphAlphaNodeID, bool) {
@@ -514,6 +529,7 @@ func (g *reteGraph) debugSummary() reteGraphDebugSummary {
 		BetaNodes:           cloneReteGraphBetaNodes(g.betaNodes),
 		TerminalNodes:       cloneReteGraphTerminalNodes(g.terminalNodes),
 		RoutesByTemplateKey: cloneReteGraphAlphaRoutes(g.routesByTemplateKey),
+		RoutesByName:        cloneReteGraphNameRoutes(g.routesByName),
 	}
 }
 
@@ -567,6 +583,17 @@ func cloneReteGraphAlphaRoutes(in map[TemplateKey][]reteGraphAlphaNodeID) map[Te
 		return nil
 	}
 	out := make(map[TemplateKey][]reteGraphAlphaNodeID, len(in))
+	for key, ids := range in {
+		out[key] = append([]reteGraphAlphaNodeID(nil), ids...)
+	}
+	return out
+}
+
+func cloneReteGraphNameRoutes(in map[string][]reteGraphAlphaNodeID) map[string][]reteGraphAlphaNodeID {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string][]reteGraphAlphaNodeID, len(in))
 	for key, ids := range in {
 		out[key] = append([]reteGraphAlphaNodeID(nil), ids...)
 	}

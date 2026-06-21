@@ -10,8 +10,7 @@ import (
 func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 	workspace := NewWorkspace()
 	personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueAny, Required: true},
 			{Name: "name", Kind: ValueString, Required: true},
@@ -417,8 +416,7 @@ func mustMatcherJoinFixture(tb testing.TB) (*Ruleset, Snapshot) {
 
 	workspace := NewWorkspace()
 	personTemplate := mustAddTemplate(tb, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 			{Name: "name", Kind: ValueString, Required: true},
@@ -467,7 +465,6 @@ func TestNaiveMatcherCancellationReturnsContextError(t *testing.T) {
 	workspace := NewWorkspace()
 	personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "person",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "age", Kind: ValueAny}},
 	})
 	mustAddAction(t, workspace, ActionSpec{

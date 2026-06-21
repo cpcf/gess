@@ -404,8 +404,7 @@ func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
 func TestSnapshotSlotBackedAccessorsReturnDefensiveCopies(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 			{Name: "profile", Kind: ValueMap},

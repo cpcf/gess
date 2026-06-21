@@ -8,8 +8,7 @@ import (
 
 func TestJoinConstraintCompileValidation(t *testing.T) {
 	template := TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueAny},
 		},
@@ -262,8 +261,7 @@ func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
 	t.Run("closed template uses slots", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 				{Name: "label", Kind: ValueString},
@@ -328,11 +326,10 @@ func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("closed current falls back to dynamic ref", func(t *testing.T) {
+	t.Run("closed current joins against dynamic ref field", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 				{Name: "label", Kind: ValueString},
@@ -400,11 +397,10 @@ func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("dynamic current falls back to closed ref", func(t *testing.T) {
+	t.Run("dynamic current joins against closed ref field", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 				{Name: "label", Kind: ValueString},
@@ -478,8 +474,7 @@ func TestJoinConstraintMatching(t *testing.T) {
 	t.Run("equality order and self join", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 				{Name: "label", Kind: ValueString},
@@ -585,8 +580,7 @@ func TestJoinConstraintMatching(t *testing.T) {
 	t.Run("numeric comparison", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 			},
@@ -661,8 +655,7 @@ func TestJoinConstraintMatching(t *testing.T) {
 	t.Run("no match no error", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "age", Kind: ValueAny},
 			},
@@ -712,8 +705,7 @@ func TestJoinConstraintMatching(t *testing.T) {
 func TestJoinConstraintCancellation(t *testing.T) {
 	workspace := NewWorkspace()
 	personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueAny},
 		},

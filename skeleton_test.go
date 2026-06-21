@@ -37,8 +37,7 @@ func TestWorkspaceCompilesTemplatesIntoImmutableRevision(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	spec := TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "name", Kind: ValueString, Required: true},
 		},

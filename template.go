@@ -39,7 +39,6 @@ type TemplateSpec struct {
 	Fields            []FieldSpec
 	DuplicatePolicy   DuplicatePolicy
 	DuplicateKeyNames []string
-	Closed            bool
 }
 
 type Template struct {
@@ -116,10 +115,6 @@ func (t Template) DuplicateKeys() []string {
 	out := make([]string, len(t.duplicateKeyNames))
 	copy(out, t.duplicateKeyNames)
 	return out
-}
-
-func (t Template) Closed() bool {
-	return t.closed
 }
 
 func (t Template) Fields() []FieldSpec {
@@ -238,7 +233,7 @@ func (t Template) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values 
 	if !t.closed {
 		return nil, &ValidationError{
 			TemplateName: t.name,
-			Reason:       "template values require a closed template",
+			Reason:       "template values require a fixed template",
 		}
 	}
 	if len(values) > len(t.fields) {
@@ -424,7 +419,6 @@ func (t Template) spec() TemplateSpec {
 		Fields:            t.Fields(),
 		DuplicatePolicy:   t.duplicatePolicy,
 		DuplicateKeyNames: t.DuplicateKeys(),
-		Closed:            t.closed,
 	}
 }
 
@@ -495,7 +489,6 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	if name == "" {
 		return Template{}, &ValidationError{Reason: "template name is required"}
 	}
-
 	key := TemplateKey(strings.TrimSpace(string(spec.Key)))
 	if key == "" {
 		key = TemplateKey(name)
@@ -658,7 +651,8 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			duplicateKeySlots[i] = fieldIndexes[fieldName]
 		}
 	}
-	duplicateIndexMode := duplicateIndexKeyMode(spec.Closed, spec.DuplicatePolicy, fields, duplicateKeyNames)
+	closed := true
+	duplicateIndexMode := duplicateIndexKeyMode(closed, spec.DuplicatePolicy, fields, duplicateKeyNames)
 
 	return Template{
 		name:               name,
@@ -674,7 +668,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		duplicateKeyNames:  duplicateKeyNames,
 		duplicateKeySlots:  duplicateKeySlots,
 		duplicateIndexMode: duplicateIndexMode,
-		closed:             spec.Closed,
+		closed:             closed,
 	}, nil
 }
 

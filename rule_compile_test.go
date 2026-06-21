@@ -811,8 +811,7 @@ func TestRuleRevisionIDIncludesActionFreezeSemantics(t *testing.T) {
 	build := func(nonEscaping bool) *Ruleset {
 		workspace := NewWorkspace()
 		mustAddTemplate(t, workspace, TemplateSpec{
-			Name:   "person",
-			Closed: true,
+			Name: "person",
 			Fields: []FieldSpec{
 				{Name: "name", Kind: ValueString, Required: true},
 			},

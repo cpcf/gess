@@ -1139,7 +1139,6 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "person",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -1522,7 +1521,6 @@ func mustAgendaRevision(t testing.TB, salience int) (*Ruleset, TemplateKey) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "person",
-		Closed: true,
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	mustAddAction(t, workspace, ActionSpec{

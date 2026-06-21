@@ -2,7 +2,10 @@ package gess
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 )
 
 const reteAlphaMinimumFacts = 32
@@ -11,7 +14,6 @@ type reteRuntime struct {
 	revision               *Ruleset
 	graph                  *reteGraph
 	plan                   reteNetworkPlan
-	oracle                 matcher
 	graphAlpha             *reteGraphAlphaMemory
 	graphBeta              *reteGraphBetaMemory
 	alpha                  *reteAlphaMemory
@@ -102,7 +104,6 @@ type reteUnsupportedKind string
 const (
 	reteUnsupportedUnknownTarget reteUnsupportedKind = "unknown-target"
 	reteUnsupportedNameTarget    reteUnsupportedKind = "name-target"
-	reteUnsupportedOpenTemplate  reteUnsupportedKind = "open-template"
 	reteUnsupportedMissingTarget reteUnsupportedKind = "missing-target"
 	reteUnsupportedUnindexedJoin reteUnsupportedKind = "unindexed-join"
 )
@@ -145,41 +146,85 @@ func newReteRuntime(revision *Ruleset) (*reteRuntime, error) {
 	if revision == nil {
 		return nil, ErrInvalidRuleset
 	}
-	return &reteRuntime{
+	runtime := &reteRuntime{
 		revision: revision,
 		graph:    revision.graph,
 		plan:     planReteNetwork(revision),
-		oracle:   newNaiveMatcher(revision),
-	}, nil
+	}
+	return runtime, nil
+}
+
+func (r *reteRuntime) validateExecutableGraphBetaRuntime() error {
+	if r == nil || r.revision == nil {
+		return ErrInvalidRuleset
+	}
+	if len(r.plan.rules) == 0 || r.supportsGraphBeta() {
+		return nil
+	}
+	return r.unsupportedRuntimeError()
+}
+
+func (r *reteRuntime) unsupportedRuntimeError() error {
+	if r == nil {
+		return ErrUnsupportedRuntime
+	}
+	var details []string
+	if r.graph == nil {
+		details = append(details, propagationFallbackNoGraph)
+	}
+	if !r.plan.betaSupported {
+		details = append(details, propagationFallbackBetaUnsupported)
+	}
+	for _, reason := range r.plan.unsupported {
+		if reason.ruleID != "" {
+			details = append(details, fmt.Sprintf("%s rule=%q binding=%q detail=%q", reason.kind, reason.ruleID, reason.binding, reason.detail))
+			continue
+		}
+		details = append(details, string(reason.kind))
+	}
+	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
+		for _, node := range r.graph.betaNodes {
+			if len(node.joins) > 0 && len(node.hashJoins) == 0 && len(node.residualJoins) == 0 {
+				details = append(details, propagationFallbackNonEqualityJoin)
+			}
+		}
+	}
+	if len(details) == 0 {
+		return ErrUnsupportedRuntime
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedRuntime, strings.Join(details, "; "))
 }
 
 func (r *reteRuntime) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {
-	if r == nil || r.revision == nil || r.oracle == nil || source == nil {
+	if r == nil || r.revision == nil || source == nil {
 		return nil, ErrInvalidRuleset
+	}
+	if len(r.plan.rules) == 0 {
+		return nil, nil
+	}
+	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
+		return nil, err
 	}
 	if r.graphBeta != nil {
 		return r.graphBeta.match(ctx, source, r.alpha)
 	}
-	if r.plan.betaSupported && r.beta != nil {
-		return r.beta.match(ctx, source, r.alpha)
-	}
-	if len(r.plan.unsupported) > 0 || r.alpha == nil {
-		return r.oracle.match(ctx, source)
-	}
-	return (&alphaMatcher{revision: r.revision, source: r.alpha}).match(ctx, source)
+	return nil, r.unsupportedRuntimeError()
 }
 
 func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Generation) ([]ruleMatchResult, bool, error) {
 	if r == nil || r.revision == nil {
 		return nil, false, nil
 	}
+	if len(r.plan.rules) == 0 {
+		return nil, true, nil
+	}
+	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
+		return nil, true, err
+	}
 	if r.graphBeta != nil {
 		return r.graphBeta.matchWithoutSnapshot(ctx, generation)
 	}
-	if r.beta == nil {
-		return nil, false, nil
-	}
-	return r.beta.matchWithoutSnapshot(ctx, generation)
+	return nil, false, r.unsupportedRuntimeError()
 }
 
 func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
@@ -255,11 +300,7 @@ func (r *reteRuntime) resetAlpha(facts []FactSnapshot) {
 		r.beta = nil
 		return
 	}
-	if r.beta == nil {
-		r.beta = newReteBetaMemory(r.revision, r.plan, facts)
-		return
-	}
-	r.beta.resetFacts(r.plan, facts)
+	r.beta = nil
 }
 
 func (r *reteRuntime) clearMemories() {
@@ -286,7 +327,7 @@ func (r *reteRuntime) rebuildBeta(facts []FactSnapshot) {
 		r.beta = nil
 		return
 	}
-	r.beta = newReteBetaMemory(r.revision, r.plan, facts)
+	r.beta = nil
 }
 
 func (r *reteRuntime) insertBetaFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
@@ -423,11 +464,6 @@ func (r *reteRuntime) supportsGraphBeta() bool {
 	if r == nil || r.graph == nil || !r.plan.betaSupported || len(r.plan.unsupported) != 0 {
 		return false
 	}
-	for _, node := range r.graph.betaNodes {
-		if len(node.joins) > 0 && len(node.hashJoins) == 0 {
-			return false
-		}
-	}
 	return true
 }
 
@@ -459,7 +495,7 @@ func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[stri
 	}
 	if r.graph != nil && r.plan.betaSupported && len(r.plan.unsupported) == 0 {
 		for _, node := range r.graph.betaNodes {
-			if len(node.joins) > 0 && len(node.hashJoins) == 0 {
+			if len(node.joins) > 0 && len(node.hashJoins) == 0 && len(node.residualJoins) == 0 {
 				reasons[propagationFallbackNonEqualityJoin]++
 			}
 		}
@@ -546,12 +582,8 @@ func (r *reteRuntime) insertGraphAlphaFact(fact FactSnapshot, span *propagationC
 		delta.supported = r.supportsIncrementalAgenda()
 		return delta, true
 	}
-	template, ok := r.revision.templateByKey(fact.TemplateKey())
-	if !ok || !template.closed {
-		return reteAgendaDelta{}, false
-	}
-	nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
-	if !routed || len(nodeIDs) == 0 {
+	nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
+	if len(nodeIDs) == 0 {
 		return reteAgendaDelta{}, false
 	}
 	if r.graphAlpha == nil {
@@ -612,12 +644,8 @@ func (r *reteRuntime) insertGraphAlphaFactGenerated(fact *workingFact, span *pro
 		delta.supported = r.supportsIncrementalAgenda()
 		return delta, true
 	}
-	template, ok := r.revision.templateByKey(fact.templateKey)
-	if !ok || !template.closed {
-		return reteAgendaDelta{}, false
-	}
-	nodeIDs, routed := r.graph.routesByTemplateKey[fact.templateKey]
-	if !routed || len(nodeIDs) == 0 {
+	nodeIDs := r.graphAlphaRouteIDsForWorkingFact(fact)
+	if len(nodeIDs) == 0 {
 		return reteAgendaDelta{}, false
 	}
 	if r.graphAlpha == nil {
@@ -679,12 +707,8 @@ func (r *reteRuntime) removeGraphAlphaFact(fact FactSnapshot) {
 	if r == nil || r.revision == nil || r.graph == nil || r.graphAlpha == nil {
 		return
 	}
-	template, ok := r.revision.templateByKey(fact.TemplateKey())
-	if !ok || !template.closed {
-		return
-	}
-	nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
-	if !routed {
+	nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
+	if len(nodeIDs) == 0 {
 		return
 	}
 	for _, nodeID := range nodeIDs {
@@ -701,14 +725,7 @@ func (r *reteRuntime) updateGraphAlphaFact(before, after FactSnapshot) {
 		return
 	}
 	if before.TemplateKey() == after.TemplateKey() {
-		template, ok := r.revision.templateByKey(after.TemplateKey())
-		if !ok || !template.closed {
-			return
-		}
-		nodeIDs, routed := r.graph.routesByTemplateKey[after.TemplateKey()]
-		if !routed {
-			return
-		}
+		nodeIDs := r.graphAlphaRouteIDsForSnapshot(after)
 		for _, nodeID := range nodeIDs {
 			node := r.graph.alphaNode(nodeID)
 			if node == nil {
@@ -728,12 +745,8 @@ func (r *reteRuntime) updateGraphAlphaFact(before, after FactSnapshot) {
 		return
 	}
 	r.removeGraphAlphaFact(before)
-	template, ok := r.revision.templateByKey(after.TemplateKey())
-	if !ok || !template.closed {
-		return
-	}
-	nodeIDs, routed := r.graph.routesByTemplateKey[after.TemplateKey()]
-	if !routed {
+	nodeIDs := r.graphAlphaRouteIDsForSnapshot(after)
+	if len(nodeIDs) == 0 {
 		return
 	}
 	for _, nodeID := range nodeIDs {
@@ -765,12 +778,8 @@ func (r *reteRuntime) rebuildGraphAlpha(facts []FactSnapshot) {
 	}
 	r.graphAlpha.reset()
 	for _, fact := range facts {
-		template, ok := r.revision.templateByKey(fact.TemplateKey())
-		if !ok || !template.closed {
-			continue
-		}
-		nodeIDs, routed := r.graph.routesByTemplateKey[fact.TemplateKey()]
-		if !routed {
+		nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
+		if len(nodeIDs) == 0 {
 			continue
 		}
 		for _, nodeID := range nodeIDs {
@@ -781,6 +790,44 @@ func (r *reteRuntime) rebuildGraphAlpha(facts []FactSnapshot) {
 			r.graphAlpha.upsert(nodeID, fact)
 		}
 	}
+}
+
+func (r *reteRuntime) graphAlphaRouteIDsForSnapshot(fact FactSnapshot) []reteGraphAlphaNodeID {
+	if r == nil || r.graph == nil {
+		return nil
+	}
+	templateIDs := r.graph.routesByTemplateKey[fact.TemplateKey()]
+	nameIDs := r.graph.routesByName[fact.Name()]
+	if len(templateIDs) == 0 {
+		return nameIDs
+	}
+	if len(nameIDs) == 0 {
+		return templateIDs
+	}
+	routes := make([]reteGraphAlphaNodeID, 0, len(templateIDs)+len(nameIDs))
+	routes = append(routes, templateIDs...)
+	routes = append(routes, nameIDs...)
+	slices.Sort(routes)
+	return routes
+}
+
+func (r *reteRuntime) graphAlphaRouteIDsForWorkingFact(fact *workingFact) []reteGraphAlphaNodeID {
+	if r == nil || r.graph == nil || fact == nil {
+		return nil
+	}
+	templateIDs := r.graph.routesByTemplateKey[fact.templateKey]
+	nameIDs := r.graph.routesByName[fact.name]
+	if len(templateIDs) == 0 {
+		return nameIDs
+	}
+	if len(nameIDs) == 0 {
+		return templateIDs
+	}
+	routes := make([]reteGraphAlphaNodeID, 0, len(templateIDs)+len(nameIDs))
+	routes = append(routes, templateIDs...)
+	routes = append(routes, nameIDs...)
+	slices.Sort(routes)
+	return routes
 }
 
 func (r *reteRuntime) insertAlphaFact(fact FactSnapshot, span *propagationCounterSpan) {
@@ -1044,14 +1091,13 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 
 	switch condition.target.kind {
 	case conditionTargetTemplateKey:
-		template, ok := revision.templateByKey(condition.target.templateKey)
-		if !ok {
+		if _, ok := revision.templateByKey(condition.target.templateKey); !ok {
 			addUnsupported(reteUnsupportedMissingTarget, "template target is not present in the compiled revision")
-		} else if !template.closed {
-			addUnsupported(reteUnsupportedOpenTemplate, "open-template fields are map-shaped and not planned as fixed slots yet")
 		}
 	case conditionTargetName:
-		addUnsupported(reteUnsupportedNameTarget, "name targets may match dynamic facts, so shape is left on the semantic fallback")
+		if condition.target.name == "" {
+			addUnsupported(reteUnsupportedNameTarget, "name target is empty")
+		}
 	default:
 		addUnsupported(reteUnsupportedUnknownTarget, "condition target cannot be planned")
 	}
@@ -1073,7 +1119,7 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 			addUnsupported(reteUnsupportedUnindexedJoin, "join is not indexable by the current planner")
 		}
 	}
-	if conditionPlan.supported && (len(condition.joins) == 0 || hashJoinCount > 0) {
+	if conditionPlan.supported && (len(condition.joins) == 0 || hashJoinCount > 0 || len(condition.joins) == len(conditionPlan.beta)) {
 		conditionPlan.betaSupported = true
 	}
 

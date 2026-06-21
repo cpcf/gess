@@ -5,8 +5,7 @@ import "testing"
 func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 			{Name: "dept", Kind: ValueString, Required: true},
@@ -14,8 +13,7 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 		},
 	})
 	department := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "department",
-		Closed: true,
+		Name: "department",
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueString, Required: true},
 		},
@@ -170,16 +168,14 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "left",
-		Closed: true,
+		Name: "left",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
 		},
 	})
 	right := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "right",
-		Closed: true,
+		Name: "right",
 		Fields: []FieldSpec{
 			{Name: "group", Kind: ValueString, Required: true},
 			{Name: "score", Kind: ValueInt, Required: true},
@@ -228,11 +224,10 @@ func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	}
 }
 
-func TestReteGraphCompilesUnsupportedTargetsWithoutFailing(t *testing.T) {
+func TestReteGraphRoutesTemplateAndNameTargets(t *testing.T) {
 	workspace := NewWorkspace()
-	openTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+	eventTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:   "event",
-		Closed: false,
 		Fields: []FieldSpec{{Name: "kind", Kind: ValueString}},
 	})
 	mustAddAction(t, workspace, ActionSpec{
@@ -245,8 +240,8 @@ func TestReteGraphCompilesUnsupportedTargetsWithoutFailing(t *testing.T) {
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
-		Name:       "open-template",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: openTemplate.Key()}},
+		Name:       "template-target",
+		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 
@@ -259,24 +254,18 @@ func TestReteGraphCompilesUnsupportedTargetsWithoutFailing(t *testing.T) {
 	if got, want := len(summary.TerminalNodes), 2; got != want {
 		t.Fatalf("terminal nodes = %d, want %d", got, want)
 	}
-	if got, want := len(summary.RoutesByTemplateKey[openTemplate.Key()]), 0; got != want {
-		t.Fatalf("open template routes = %d, want %d", got, want)
+	if got, want := len(summary.RoutesByTemplateKey[eventTemplate.Key()]), 1; got != want {
+		t.Fatalf("template routes = %d, want %d", got, want)
 	}
-	if _, ok := summary.RoutesByTemplateKey[TemplateKey("matched-by-name")]; ok {
-		t.Fatalf("name-target rule should not route by template key: %#v", summary.RoutesByTemplateKey)
-	}
-	for _, node := range summary.AlphaNodes {
-		if len(node.consumers) != 0 {
-			t.Fatalf("unsupported alpha node has consumers: %#v", node)
-		}
+	if got, want := len(summary.RoutesByName["matched-by-name"]), 1; got != want {
+		t.Fatalf("name routes = %d, want %d", got, want)
 	}
 }
 
 func TestReteGraphSharesAlphaConstraintsIndependentOfDeclarationOrder(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "person",
-		Closed: true,
+		Name: "person",
 		Fields: []FieldSpec{
 			{Name: "age", Kind: ValueInt, Required: true},
 			{Name: "status", Kind: ValueString, Required: true},
@@ -328,8 +317,7 @@ func TestReteGraphSharesAlphaConstraintsIndependentOfDeclarationOrder(t *testing
 func TestReteGraphAlphaRouteSelectorRequiresTypedScalarField(t *testing.T) {
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "item",
-		Closed: true,
+		Name: "item",
 		Fields: []FieldSpec{
 			{Name: "value", Kind: ValueAny, Required: true},
 		},
