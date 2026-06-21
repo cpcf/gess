@@ -50,6 +50,7 @@ type reteConditionPlan struct {
 	path          []int
 	target        conditionTarget
 	constraints   []compiledFieldConstraint
+	predicates    []compiledExpressionPredicate
 	alpha         reteAlphaPlan
 	beta          []reteBetaPlan
 	supported     bool
@@ -105,6 +106,7 @@ const (
 	reteUnsupportedNameTarget    reteUnsupportedKind = "name-target"
 	reteUnsupportedMissingTarget reteUnsupportedKind = "missing-target"
 	reteUnsupportedUnindexedJoin reteUnsupportedKind = "unindexed-join"
+	reteUnsupportedExpression    reteUnsupportedKind = "expression-predicate"
 )
 
 type retePlanStats struct {
@@ -877,6 +879,7 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		path:        cloneIntPath(condition.path),
 		target:      condition.target,
 		constraints: condition.constraints,
+		predicates:  cloneCompiledExpressionPredicates(condition.predicates),
 		alpha: reteAlphaPlan{
 			id:             reteAlphaNodeID(rule.revisionID, condition.id),
 			ruleRevisionID: rule.revisionID,
@@ -934,6 +937,9 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		if !join.indexable {
 			addUnsupported(reteUnsupportedUnindexedJoin, "join is not indexable by the current planner")
 		}
+	}
+	for _, predicate := range condition.predicates {
+		addUnsupported(reteUnsupportedExpression, fmt.Sprintf("expression predicate %d is not executable by the current graph runtime", predicate.order))
 	}
 	if conditionPlan.supported && (len(condition.joins) == 0 || hashJoinCount > 0 || len(condition.joins) == len(conditionPlan.beta)) {
 		conditionPlan.betaSupported = true

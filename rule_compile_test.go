@@ -3,8 +3,13 @@ package gess
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
+
+type unsupportedExpressionSpec struct{}
+
+func (unsupportedExpressionSpec) expressionSpecNode() {}
 
 func TestWorkspaceCompilesRulesIntoImmutableRevision(t *testing.T) {
 	workspace := NewWorkspace()
@@ -300,6 +305,535 @@ func TestConditionTreeAndFlatRulesProduceEquivalentActivations(t *testing.T) {
 	for i := range want {
 		if fired[i] != want[i] {
 			t.Fatalf("fired rules = %#v, want %#v", fired, want)
+		}
+	}
+}
+
+func TestExpressionPredicatesCompileAndClassify(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+		},
+	})
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "threshold",
+		Fields: []FieldSpec{
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+
+	alphaPredicate := CompareExpr{
+		Operator: ExpressionCompareGreaterOrEqual,
+		Left:     CurrentFieldExpr{Field: "age"},
+		Right:    ConstExpr{Value: 18},
+	}
+	betaPredicate := CompareExpr{
+		Operator: ExpressionCompareGreaterThan,
+		Left:     CurrentFieldExpr{Field: "score"},
+		Right:    BindingFieldExpr{Binding: "threshold", Field: "score"},
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "expression-classification",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "threshold",
+				TemplateKey: threshold.Key(),
+			},
+			{
+				Binding:     "candidate",
+				TemplateKey: person.Key(),
+				Predicates: []ExpressionSpec{
+					alphaPredicate,
+					betaPredicate,
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("expression-classification")
+	if !ok {
+		t.Fatal("compiled revision missing expression-classification")
+	}
+	conditions := rule.Conditions()
+	if got, want := len(conditions), 2; got != want {
+		t.Fatalf("conditions = %d, want %d", got, want)
+	}
+	predicates := conditions[1].Predicates()
+	if got, want := len(predicates), 2; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+	if got := predicates[0].Placement(); got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("first predicate placement = %q, want alpha", got)
+	}
+	if got := predicates[1].Placement(); got != ExpressionPredicatePlacementBetaResidual {
+		t.Fatalf("second predicate placement = %q, want beta residual", got)
+	}
+	if got := predicates[1].DeclarationOrder(); got != 1 {
+		t.Fatalf("second predicate order = %d, want 1", got)
+	}
+	predicates[0] = ExpressionPredicate{}
+	if got := rule.Conditions()[1].Predicates()[0].Placement(); got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("predicate inspection leaked mutable state: placement = %q", got)
+	}
+
+	compiled := revision.rules["expression-classification"]
+	plan := compiled.conditionPlans[1]
+	if got, want := len(plan.predicates), 2; got != want {
+		t.Fatalf("compiled predicates = %d, want %d", got, want)
+	}
+	if got := plan.predicates[0].placement; got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("compiled first predicate placement = %q, want alpha", got)
+	}
+	if got := plan.predicates[1].placement; got != ExpressionPredicatePlacementBetaResidual {
+		t.Fatalf("compiled second predicate placement = %q, want beta residual", got)
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.AlphaNodes), 2; got != want {
+		t.Fatalf("alpha nodes = %d, want %d", got, want)
+	}
+	var alphaPredicates, betaPredicates int
+	for _, node := range summary.AlphaNodes {
+		alphaPredicates += len(node.predicates)
+	}
+	for _, node := range summary.BetaNodes {
+		betaPredicates += len(node.predicates)
+	}
+	if alphaPredicates != 1 {
+		t.Fatalf("alpha expression predicate count = %d, want 1", alphaPredicates)
+	}
+	if betaPredicates != 1 {
+		t.Fatalf("beta residual expression predicate count = %d, want 1", betaPredicates)
+	}
+}
+
+func TestExpressionPredicatesAffectRuleIdentity(t *testing.T) {
+	build := func(value int) *Ruleset {
+		workspace := NewWorkspace()
+		person := mustAddTemplate(t, workspace, TemplateSpec{
+			Name: "person",
+			Fields: []FieldSpec{
+				{Name: "age", Kind: ValueInt, Required: true},
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "age-rule",
+			Conditions: []RuleConditionSpec{{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				Predicates: []ExpressionSpec{CompareExpr{
+					Operator: ExpressionCompareGreaterOrEqual,
+					Left:     CurrentFieldExpr{Field: "age"},
+					Right:    ConstExpr{Value: value},
+				}},
+			}},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+		return mustCompileWorkspace(t, workspace)
+	}
+
+	rule18, ok := build(18).Rule("age-rule")
+	if !ok {
+		t.Fatal("first revision missing age-rule")
+	}
+	rule21, ok := build(21).Rule("age-rule")
+	if !ok {
+		t.Fatal("second revision missing age-rule")
+	}
+	if rule18.RevisionID() == rule21.RevisionID() {
+		t.Fatalf("rule revision ID did not change after expression edit: %q", rule18.RevisionID())
+	}
+	if rule18.Conditions()[0].ID() == rule21.Conditions()[0].ID() {
+		t.Fatalf("condition ID did not change after expression edit: %q", rule18.Conditions()[0].ID())
+	}
+}
+
+func TestConditionTreeMatchPreservesExpressionPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	condition := RuleConditionSpec{
+		Binding:     "person",
+		TemplateKey: person.Key(),
+		Predicates: []ExpressionSpec{CompareExpr{
+			Operator: ExpressionCompareGreaterOrEqual,
+			Left:     CurrentFieldExpr{Field: "age"},
+			Right:    ConstExpr{Value: 18},
+		}},
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "tree-expression",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(condition),
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("tree-expression")
+	if !ok {
+		t.Fatal("compiled revision missing tree-expression")
+	}
+	conditions := rule.Conditions()
+	if got, want := len(conditions), 1; got != want {
+		t.Fatalf("conditions = %d, want %d", got, want)
+	}
+	predicates := conditions[0].Predicates()
+	if got, want := len(predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+	if got := predicates[0].Placement(); got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("predicate placement = %q, want alpha", got)
+	}
+	tree := rule.ConditionTree()
+	treeMatch, ok := tree.Children()[0].Match()
+	if !ok {
+		t.Fatal("condition tree child is not a match")
+	}
+	if got := treeMatch.Predicates()[0].Placement(); got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("tree match predicate placement = %q, want alpha", got)
+	}
+}
+
+func TestExpressionPredicateInspectionIsImmutable(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	predicate := BooleanExpr{
+		Operator: ExpressionBoolAnd,
+		Operands: []ExpressionSpec{
+			CurrentFieldExpr{Field: "active"},
+			CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     CurrentFieldExpr{Field: "age"},
+				Right:    ConstExpr{Value: 18},
+			},
+		},
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "immutable-expression",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates:  []ExpressionSpec{predicate},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	predicate.Operands[0] = ConstExpr{Value: true}
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("immutable-expression")
+	if !ok {
+		t.Fatal("compiled revision missing immutable-expression")
+	}
+	expression, ok := rule.Conditions()[0].Predicates()[0].Expression().(BooleanExpr)
+	if !ok {
+		t.Fatalf("predicate expression type = %T, want BooleanExpr", rule.Conditions()[0].Predicates()[0].Expression())
+	}
+	if _, ok := expression.Operands[0].(CurrentFieldExpr); !ok {
+		t.Fatalf("first operand type = %T, want CurrentFieldExpr", expression.Operands[0])
+	}
+	expression.Operands[0] = ConstExpr{Value: true}
+	again := rule.Conditions()[0].Predicates()[0].Expression().(BooleanExpr)
+	if _, ok := again.Operands[0].(CurrentFieldExpr); !ok {
+		t.Fatalf("predicate expression leaked mutable operands: first operand type = %T", again.Operands[0])
+	}
+}
+
+func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		conditions      func(person Template) []RuleConditionSpec
+		wantReason      string
+		wantField       string
+		wantCondition   int
+		wantPredicate   int
+		wantErrContains string
+	}{
+		{
+			name: "future binding",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{
+					{
+						Binding:     "person",
+						TemplateKey: person.Key(),
+						Predicates: []ExpressionSpec{CompareExpr{
+							Operator: ExpressionCompareEqual,
+							Left:     CurrentFieldExpr{Field: "dept"},
+							Right:    BindingFieldExpr{Binding: "future", Field: "dept"},
+						}},
+					},
+					{Binding: "future", TemplateKey: person.Key()},
+				}
+			},
+			wantReason:    "binding field expression must refer to an earlier condition",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "unknown binding",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "dept"},
+						Right:    BindingFieldExpr{Binding: "missing", Field: "dept"},
+					}},
+				}}
+			},
+			wantReason:    "binding field expression must refer to an earlier condition",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "unknown current field",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "missing"},
+						Right:    ConstExpr{Value: "engineering"},
+					}},
+				}}
+			},
+			wantReason:    "unknown field",
+			wantField:     "missing",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "unknown binding field",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{
+					{Binding: "left", TemplateKey: person.Key()},
+					{
+						Binding:     "right",
+						TemplateKey: person.Key(),
+						Predicates: []ExpressionSpec{CompareExpr{
+							Operator: ExpressionCompareEqual,
+							Left:     CurrentFieldExpr{Field: "dept"},
+							Right:    BindingFieldExpr{Binding: "left", Field: "missing"},
+						}},
+					},
+				}
+			},
+			wantReason:    "unknown field",
+			wantField:     "missing",
+			wantCondition: 1,
+			wantPredicate: 0,
+		},
+		{
+			name: "missing operand",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "dept"},
+					}},
+				}}
+			},
+			wantReason:    "comparison expression requires left and right operands",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "invalid operator",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareUnknown,
+						Left:     CurrentFieldExpr{Field: "dept"},
+						Right:    ConstExpr{Value: "engineering"},
+					}},
+				}}
+			},
+			wantReason:    "invalid expression comparison operator",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "type mismatch",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareGreaterThan,
+						Left:     CurrentFieldExpr{Field: "dept"},
+						Right:    ConstExpr{Value: 10},
+					}},
+				}}
+			},
+			wantReason:    "expression operands have incompatible types",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "unsupported node",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates:  []ExpressionSpec{unsupportedExpressionSpec{}},
+				}}
+			},
+			wantReason:    "unsupported expression node",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "predicate not bool",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates:  []ExpressionSpec{CurrentFieldExpr{Field: "dept"}},
+				}}
+			},
+			wantReason:    "expression predicate must produce a bool",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+		{
+			name: "boolean operand not bool",
+			conditions: func(person Template) []RuleConditionSpec {
+				return []RuleConditionSpec{{
+					Binding:     "person",
+					TemplateKey: person.Key(),
+					Predicates: []ExpressionSpec{BooleanExpr{
+						Operator: ExpressionBoolAnd,
+						Operands: []ExpressionSpec{CurrentFieldExpr{Field: "dept"}},
+					}},
+				}}
+			},
+			wantReason:    "boolean expression operands must produce bool values",
+			wantCondition: 0,
+			wantPredicate: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			person := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "person",
+				Fields: []FieldSpec{
+					{Name: "dept", Kind: ValueString, Required: true},
+					{Name: "age", Kind: ValueInt, Required: true},
+					{Name: "active", Kind: ValueBool, Required: true},
+				},
+			})
+			mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, RuleSpec{
+				Name:       "broken",
+				Conditions: tc.conditions(person),
+				Actions:    []RuleActionSpec{{Name: "mark"}},
+			})
+
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile should reject invalid expression predicates")
+			}
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("expected ValidationError, got %T: %v", err, err)
+			}
+			if validation.RuleName != "broken" {
+				t.Fatalf("rule name = %q, want broken", validation.RuleName)
+			}
+			if validation.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", validation.Reason, tc.wantReason)
+			}
+			if validation.FieldName != tc.wantField {
+				t.Fatalf("field name = %q, want %q", validation.FieldName, tc.wantField)
+			}
+			if !validation.HasConditionIndex || validation.ConditionIndex != tc.wantCondition {
+				t.Fatalf("condition index = (%v, %d), want (true, %d)", validation.HasConditionIndex, validation.ConditionIndex, tc.wantCondition)
+			}
+			if !validation.HasPredicateIndex || validation.PredicateIndex != tc.wantPredicate {
+				t.Fatalf("predicate index = (%v, %d), want (true, %d)", validation.HasPredicateIndex, validation.PredicateIndex, tc.wantPredicate)
+			}
+			if tc.wantErrContains != "" && !strings.Contains(err.Error(), tc.wantErrContains) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantErrContains)
+			}
+		})
+	}
+}
+
+func TestExpressionPredicatesReturnUnsupportedRuntimeUntilExecutable(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "age-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     CurrentFieldExpr{Field: "age"},
+				Right:    ConstExpr{Value: 18},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if runtime.supportsGraphBeta() {
+		t.Fatal("runtime should not support graph beta execution for expression predicates yet")
+	}
+	if got := runtime.plan.stats.unsupportedConditions; got != 1 {
+		t.Fatalf("unsupported conditions = %d, want 1", got)
+	}
+	if err := runtime.validateExecutableGraphBetaRuntime(); !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
+	}
+
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_, err = session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20}))
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("AssertTemplate error = %v, want ErrUnsupportedRuntime", err)
+	}
+	for _, want := range []string{"expression-predicate", `rule="age-rule"`, `binding="person"`, "expression predicate 0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("AssertTemplate error %q does not contain %q", err.Error(), want)
 		}
 	}
 }

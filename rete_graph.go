@@ -40,6 +40,7 @@ type reteGraphAlphaNode struct {
 	id          reteGraphAlphaNodeID
 	target      conditionTarget
 	constraints []compiledFieldConstraint
+	predicates  []compiledExpressionPredicate
 	consumers   []reteBetaConditionRoute
 	entry       bindingTupleEntry
 	route       reteGraphAlphaRouteSelector
@@ -52,6 +53,7 @@ type reteGraphBetaNode struct {
 	joins         []compiledJoinConstraint
 	hashJoins     []compiledJoinConstraint
 	residualJoins []compiledJoinConstraint
+	predicates    []compiledExpressionPredicate
 	entry         bindingTupleEntry
 }
 
@@ -91,6 +93,7 @@ type reteGraphTerminalRoute struct {
 type reteGraphAlphaKey struct {
 	target      reteGraphTargetKey
 	constraints string
+	predicates  string
 }
 
 type reteGraphTargetKey struct {
@@ -100,9 +103,10 @@ type reteGraphTargetKey struct {
 }
 
 type reteGraphBetaKey struct {
-	left  reteGraphStageRef
-	right reteGraphStageRef
-	joins string
+	left       reteGraphStageRef
+	right      reteGraphStageRef
+	joins      string
+	predicates string
 }
 
 type reteGraphAlphaRouteSelector struct {
@@ -149,7 +153,7 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 		haveStage := false
 
 		for conditionIndex, condition := range rule.conditionPlans {
-			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, condition.constraints)
+			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, condition.constraints, alphaExpressionPredicates(condition.predicates))
 			alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
 			if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
 				alphaNode.entry = graphTokenEntryForCondition(condition)
@@ -184,7 +188,7 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 				continue
 			}
 
-			betaID, _ := graph.internBetaNode(betaIndex, current, alphaRef, condition.joins)
+			betaID, _ := graph.internBetaNode(betaIndex, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
 			if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" {
 				betaNode.entry = graphTokenEntryForCondition(condition)
 			}
@@ -241,7 +245,7 @@ func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateK
 	}
 }
 
-func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint) (reteGraphAlphaNodeID, bool) {
+func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint, predicates []compiledExpressionPredicate) (reteGraphAlphaNodeID, bool) {
 	if g == nil {
 		return 0, false
 	}
@@ -252,6 +256,7 @@ func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNo
 			templateKey: target.templateKey,
 		},
 		constraints: serializeCompiledFieldConstraints(constraints),
+		predicates:  serializeCompiledExpressionPredicates(predicates),
 	}
 	if id, ok := index[key]; ok {
 		return id, false
@@ -262,6 +267,7 @@ func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNo
 		id:          id,
 		target:      target,
 		constraints: cloneCompiledFieldConstraints(constraints),
+		predicates:  cloneCompiledExpressionPredicates(predicates),
 	})
 	index[key] = id
 	return id, true
@@ -483,15 +489,16 @@ func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
 	return true
 }
 
-func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, left, right reteGraphStageRef, joins []compiledJoinConstraint) (reteGraphBetaNodeID, bool) {
+func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, left, right reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
 	if g == nil {
 		return 0, false
 	}
 	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
 	key := reteGraphBetaKey{
-		left:  left,
-		right: right,
-		joins: serializeCompiledJoinConstraints(joins),
+		left:       left,
+		right:      right,
+		joins:      serializeCompiledJoinConstraints(joins),
+		predicates: serializeCompiledExpressionPredicates(predicates),
 	}
 	if id, ok := index[key]; ok {
 		return id, false
@@ -505,6 +512,7 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 		joins:         cloneCompiledJoinConstraints(joins),
 		hashJoins:     cloneCompiledJoinConstraints(hashJoins),
 		residualJoins: cloneCompiledJoinConstraints(residualJoins),
+		predicates:    cloneCompiledExpressionPredicates(predicates),
 	})
 	index[key] = id
 	return id, true
@@ -548,6 +556,7 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 	for i, node := range in {
 		out[i] = node
 		out[i].constraints = cloneCompiledFieldConstraints(node.constraints)
+		out[i].predicates = cloneCompiledExpressionPredicates(node.predicates)
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
 	}
@@ -564,6 +573,7 @@ func cloneReteGraphBetaNodes(in []reteGraphBetaNode) []reteGraphBetaNode {
 		out[i].joins = cloneCompiledJoinConstraints(node.joins)
 		out[i].hashJoins = cloneCompiledJoinConstraints(node.hashJoins)
 		out[i].residualJoins = cloneCompiledJoinConstraints(node.residualJoins)
+		out[i].predicates = cloneCompiledExpressionPredicates(node.predicates)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
 	}
 	return out
@@ -652,6 +662,32 @@ func splitCompiledJoinConstraints(in []compiledJoinConstraint) ([]compiledJoinCo
 		residualJoins = append(residualJoins, join)
 	}
 	return hashJoins, residualJoins
+}
+
+func alphaExpressionPredicates(predicates []compiledExpressionPredicate) []compiledExpressionPredicate {
+	if len(predicates) == 0 {
+		return nil
+	}
+	out := make([]compiledExpressionPredicate, 0, len(predicates))
+	for _, predicate := range predicates {
+		if predicate.placement == ExpressionPredicatePlacementAlpha {
+			out = append(out, predicate)
+		}
+	}
+	return out
+}
+
+func betaResidualExpressionPredicates(predicates []compiledExpressionPredicate) []compiledExpressionPredicate {
+	if len(predicates) == 0 {
+		return nil
+	}
+	out := make([]compiledExpressionPredicate, 0, len(predicates))
+	for _, predicate := range predicates {
+		if predicate.placement == ExpressionPredicatePlacementBetaResidual {
+			out = append(out, predicate)
+		}
+	}
+	return out
 }
 
 func serializeCompiledFieldConstraints(constraints []compiledFieldConstraint) string {

@@ -37,6 +37,7 @@ type compiledConditionPlan struct {
 	target      conditionTarget
 	constraints []compiledFieldConstraint
 	joins       []compiledJoinConstraint
+	predicates  []compiledExpressionPredicate
 	indexable   bool
 	indexKind   conditionIndexKind
 }
@@ -67,7 +68,7 @@ func isValidBindingName(name string) bool {
 	return true
 }
 
-func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint) ConditionID {
+func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint, predicates []compiledExpressionPredicate) ConditionID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/condition/v1\n"))
 	sum.Write([]byte("rule:"))
@@ -99,6 +100,10 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 		sum.Write([]byte("."))
 		sum.Write([]byte(join.Ref.Field))
 		sum.Write([]byte(";"))
+	}
+	if len(predicates) > 0 {
+		sum.Write([]byte("\npredicates:"))
+		sum.Write([]byte(serializeCompiledExpressionPredicates(predicates)))
 	}
 	return ConditionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
 }

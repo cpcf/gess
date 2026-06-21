@@ -13,6 +13,7 @@ type RuleConditionSpec struct {
 	TemplateKey      TemplateKey
 	FieldConstraints []FieldConstraintSpec
 	JoinConstraints  []JoinConstraintSpec
+	Predicates       []ExpressionSpec
 }
 
 func (s RuleConditionSpec) clone() RuleConditionSpec {
@@ -27,6 +28,10 @@ func (s RuleConditionSpec) clone() RuleConditionSpec {
 	out.JoinConstraints = make([]JoinConstraintSpec, len(s.JoinConstraints))
 	for i, constraint := range s.JoinConstraints {
 		out.JoinConstraints[i] = constraint.clone()
+	}
+	out.Predicates = make([]ExpressionSpec, len(s.Predicates))
+	for i, predicate := range s.Predicates {
+		out.Predicates[i] = cloneExpressionSpec(predicate)
 	}
 	return out
 }
@@ -136,6 +141,7 @@ type RuleCondition struct {
 	templateKey      TemplateKey
 	fieldConstraints []FieldConstraint
 	joinConstraints  []JoinConstraint
+	predicates       []ExpressionPredicate
 	order            int
 }
 
@@ -171,6 +177,10 @@ func (c RuleCondition) JoinConstraints() []JoinConstraint {
 	return out
 }
 
+func (c RuleCondition) Predicates() []ExpressionPredicate {
+	return cloneExpressionPredicates(c.predicates)
+}
+
 func (c RuleCondition) DeclarationOrder() int {
 	return c.order
 }
@@ -185,6 +195,7 @@ func (c RuleCondition) clone() RuleCondition {
 	for i, constraint := range c.joinConstraints {
 		out.joinConstraints[i] = constraint.clone()
 	}
+	out.predicates = cloneExpressionPredicates(c.predicates)
 	return out
 }
 
@@ -615,7 +626,18 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			compiledJoins = append(compiledJoins, planJoin)
 		}
 
-		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints)
+		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
+		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
+		for predicateIndex, predicate := range condition.Predicates {
+			compiledPredicate, planPredicate, err := compileExpressionPredicateSpec(predicate, normalized.Name, i, predicateIndex, template, conditions, bindingSlots, templatesByKey)
+			if err != nil {
+				return compiledRule{}, err
+			}
+			predicates = append(predicates, compiledPredicate)
+			compiledPredicates = append(compiledPredicates, planPredicate)
+		}
+
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates)
 		conditions = append(conditions, RuleCondition{
 			id:               conditionID,
 			binding:          condition.Binding,
@@ -623,6 +645,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			templateKey:      condition.TemplateKey,
 			fieldConstraints: fieldConstraints,
 			joinConstraints:  joinConstraints,
+			predicates:       predicates,
 			order:            i,
 		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
@@ -633,6 +656,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			target:      target,
 			constraints: compiledConstraints,
 			joins:       compiledJoins,
+			predicates:  compiledPredicates,
 			indexable:   true,
 			indexKind:   indexKind,
 		})
@@ -751,6 +775,10 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte("."))
 			sum.Write([]byte(join.Ref.Field))
 			sum.Write([]byte(","))
+		}
+		if condition.order >= 0 && condition.order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.order].predicates) > 0 {
+			sum.Write([]byte("|"))
+			sum.Write([]byte(serializeCompiledExpressionPredicates(rule.conditionPlans[condition.order].predicates)))
 		}
 		sum.Write([]byte(";"))
 	}

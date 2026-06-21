@@ -27,6 +27,8 @@ type ValidationError struct {
 	HasConditionIndex  bool
 	ConstraintIndex    int
 	HasConstraintIndex bool
+	PredicateIndex     int
+	HasPredicateIndex  bool
 	JoinIndex          int
 	HasJoinIndex       bool
 	ActionIndex        int
@@ -55,6 +57,9 @@ func (e *ValidationError) Error() string {
 	}
 	if e.HasConstraintIndex {
 		msg += fmt.Sprintf(" constraint %d", e.ConstraintIndex)
+	}
+	if e.HasPredicateIndex {
+		msg += fmt.Sprintf(" predicate %d", e.PredicateIndex)
 	}
 	if e.HasJoinIndex {
 		msg += fmt.Sprintf(" join %d", e.JoinIndex)
