@@ -1243,8 +1243,9 @@ func (s *Session) updateReteAlphaAfterModify(before, after FactSnapshot) reteAge
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}
 	}
+	delta := s.rete.updateBetaFact(before, after, s.propagationCounters)
 	s.rete.updateAlphaFact(before, after)
-	return s.rete.updateBetaFact(before, after, s.propagationCounters)
+	return delta
 }
 
 func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {

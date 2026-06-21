@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -1649,6 +1650,257 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustAlphaMemoryRuleset(t, "active-person", []FieldConstraintSpec{
+		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+	})
+	session := mustSession(t, revision, "graph-beta-modify-stops-alpha-session")
+	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "inactive"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after modify = %d, want 0", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	assertGraphBetaAlphaFactCount(t, session, "active-person", 0, 0)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativePropagationEvents, 1; got != want {
+		t.Fatalf("negative propagation events = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
+		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
+		t.Fatalf("removal index lookups = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsTouched, 1; got != want {
+		t.Fatalf("removal rows touched = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-joined-version-session")
+	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"name": "Grace"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
+	}
+	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.rete.terminalRemovedScratch)
+	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.rete.terminalAddedScratch)
+	removedIndex := candidateFactIndex(t, removed, employee.Fact.ID())
+	addedIndex := candidateFactIndex(t, added, employee.Fact.ID())
+	if removed.factVersions[removedIndex] != employee.Fact.Version() {
+		t.Fatalf("removed employee version = %d, want %d", removed.factVersions[removedIndex], employee.Fact.Version())
+	}
+	if added.factVersions[addedIndex] != result.Fact.Version() {
+		t.Fatalf("added employee version = %d, want %d", added.factVersions[addedIndex], result.Fact.Version())
+	}
+	if removed.identity == added.identity {
+		t.Fatalf("modify reused terminal identity %#v", added.identity)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-join-bucket-session")
+	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate Engineering: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate Sales: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"dept": "Sales"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
+	}
+	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.rete.terminalRemovedScratch)
+	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.rete.terminalAddedScratch)
+	if removed.factIDs[1] == added.factIDs[1] {
+		t.Fatalf("modify did not move joined department: removed %#v added %#v", removed.factIDs, added.factIDs)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
+		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeRowsRemoved, 1; got != want {
+		t.Fatalf("negative rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
+		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
+		t.Fatalf("terminal rows retained after modify = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-consumed-activation-session")
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate Ada: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate Ben: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate Engineering: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("AssertTemplate Sales: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before consume = %d, want %d", got, want)
+	}
+
+	consumed, ok := session.agenda.next()
+	if !ok {
+		t.Fatal("agenda next returned no activation")
+	}
+	storedConsumed, ok := session.agenda.activationByKey(consumed.key)
+	if !ok {
+		t.Fatalf("consumed activation %v missing after next", consumed.key)
+	}
+	consumedFactIDs := cloneFactIDs(storedConsumed.factIDs)
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after consume = %d, want %d", got, want)
+	}
+	targetEmployeeID := activationFactIDForTemplate(t, session, pending[0], employeeKey)
+
+	if _, err := session.Modify(ctx, targetEmployeeID, FactPatch{
+		Set: mustFields(t, map[string]any{"dept": "Missing"}),
+	}); err != nil {
+		t.Fatalf("Modify pending employee: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after modify = %d, want 0", got)
+	}
+	stored, ok := session.agenda.activationByKey(consumed.key)
+	if !ok {
+		t.Fatalf("consumed activation %v disappeared", consumed.key)
+	}
+	if stored.status != activationStatusConsumed {
+		t.Fatalf("consumed activation status = %v, want %v", stored.status, activationStatusConsumed)
+	}
+	if !reflect.DeepEqual(stored.factIDs, consumedFactIDs) {
+		t.Fatalf("consumed activation facts = %#v, want %#v", stored.factIDs, consumedFactIDs)
+	}
+}
+
 func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	ctx := context.Background()
 	revision, employeeKey, departmentKey, regionKey, officeKey := mustGraphTopologyRemovalRuleset(t)
@@ -2294,6 +2546,50 @@ func mustSessionFactByTemplateAndField(t *testing.T, session *Session, templateK
 	}
 	t.Fatalf("fact not found for template %q field %q = %v", templateKey, field, want)
 	return FactSnapshot{}
+}
+
+func terminalDeltaCandidateForFact(t *testing.T, session *Session, deltas []reteTerminalTokenDelta, factID FactID, scratch *candidateScratch) matchCandidate {
+	t.Helper()
+	if session == nil || session.rete == nil {
+		t.Fatal("session has no Rete runtime")
+	}
+	candidates, err := session.rete.candidatesForTerminalDeltas(deltas, scratch)
+	if err != nil {
+		t.Fatalf("terminal delta candidates: %v", err)
+	}
+	for _, candidate := range candidates {
+		if slices.Contains(candidate.factIDs, factID) {
+			return candidate
+		}
+	}
+	t.Fatalf("terminal delta candidate containing fact %q not found in %#v", factID, candidates)
+	return matchCandidate{}
+}
+
+func candidateFactIndex(t *testing.T, candidate matchCandidate, factID FactID) int {
+	t.Helper()
+	for i, id := range candidate.factIDs {
+		if id == factID {
+			return i
+		}
+	}
+	t.Fatalf("candidate fact %q not found in %#v", factID, candidate.factIDs)
+	return -1
+}
+
+func activationFactIDForTemplate(t *testing.T, session *Session, activation activation, templateKey TemplateKey) FactID {
+	t.Helper()
+	if session == nil {
+		t.Fatal("missing session")
+	}
+	for _, id := range activation.factIDs {
+		fact, ok := session.factByID(id)
+		if ok && fact.TemplateKey() == templateKey {
+			return id
+		}
+	}
+	t.Fatalf("activation %q has no fact for template %q", activation.id, templateKey)
+	return FactID{}
 }
 
 func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldConstraintSpec) (*Ruleset, TemplateKey) {

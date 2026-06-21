@@ -411,6 +411,14 @@ func (s *reteGraphAlphaFactSet) remove(id FactID) bool {
 	return true
 }
 
+func (s *reteGraphAlphaFactSet) contains(id FactID) bool {
+	if s == nil || id.IsZero() || s.facts == nil {
+		return false
+	}
+	_, ok := s.facts[id]
+	return ok
+}
+
 func (s *reteGraphAlphaFactSet) clear() {
 	if s == nil || s.facts == nil {
 		return
@@ -1076,6 +1084,19 @@ func (m *reteGraphBetaMemory) sortAlphaRouteScratch() {
 	slices.Sort(m.alphaRouteScratch)
 }
 
+func (m *reteGraphBetaMemory) matchedAlphaRouteIDsForFact(id FactID) []reteGraphAlphaNodeID {
+	if m == nil || id.IsZero() {
+		return nil
+	}
+	m.resetAlphaRouteScratch()
+	for index := 1; index < len(m.alphaFacts); index++ {
+		if m.alphaFacts[index].contains(id) {
+			m.appendAlphaRouteCandidate(reteGraphAlphaNodeID(index))
+		}
+	}
+	return m.alphaRouteScratch
+}
+
 func (m *reteGraphBetaMemory) insertAlphaMatch(nodeID reteGraphAlphaNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) bool {
 	if m == nil || delta == nil {
 		return false
@@ -1503,10 +1524,13 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 	}
 	delta := reteAgendaDelta{supported: true}
 	id := fact.ID()
-	nodeIDs := m.snapshotAlphaRouteIDsForFact(fact)
+	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
 	if len(nodeIDs) == 0 {
-		m.removeAlphaFact(id)
-		return delta
+		nodeIDs = m.snapshotAlphaRouteIDsForFact(fact)
+		if len(nodeIDs) == 0 {
+			m.removeAlphaFact(id)
+			return delta
+		}
 	}
 	for _, nodeID := range nodeIDs {
 		node := m.graph.alphaNode(nodeID)
