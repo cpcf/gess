@@ -586,11 +586,16 @@ const (
 )
 
 type betaJoinKey struct {
-	kind        betaJoinKeyKind
-	boolValue   bool
-	intValue    int64
-	floatBits   uint64
-	stringValue string
+	kind              betaJoinKeyKind
+	boolValue         bool
+	intValue          int64
+	floatBits         uint64
+	stringValue       string
+	secondKind        betaJoinKeyKind
+	secondBoolValue   bool
+	secondIntValue    int64
+	secondFloatBits   uint64
+	secondStringValue string
 }
 
 const reteBetaMatchTokenChunkSize = 64
@@ -2150,6 +2155,25 @@ func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compi
 		}, true
 	}
 
+	if len(plan.joins) == 2 {
+		firstJoin := plan.joins[0]
+		secondJoin := plan.joins[1]
+		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false
+		}
+		firstValue, ok := valueForJoin(firstJoin)
+		if !ok {
+			return betaJoinKey{}, false
+		}
+		secondValue, ok := valueForJoin(secondJoin)
+		if !ok {
+			return betaJoinKey{}, false
+		}
+		if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
+			return key, true
+		}
+	}
+
 	var b strings.Builder
 	for _, join := range plan.joins {
 		if join.indexKind != joinIndexEquality {
@@ -2166,6 +2190,23 @@ func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compi
 		kind:        betaJoinKeyFallback,
 		stringValue: b.String(),
 	}, true
+}
+
+func betaJoinKeyForTwoValues(first, second Value) (betaJoinKey, bool) {
+	firstKey, ok := betaJoinKeyForValue(first)
+	if !ok || firstKey.kind == betaJoinKeyFallback {
+		return betaJoinKey{}, false
+	}
+	secondKey, ok := betaJoinKeyForValue(second)
+	if !ok || secondKey.kind == betaJoinKeyFallback {
+		return betaJoinKey{}, false
+	}
+	firstKey.secondKind = secondKey.kind
+	firstKey.secondBoolValue = secondKey.boolValue
+	firstKey.secondIntValue = secondKey.intValue
+	firstKey.secondFloatBits = secondKey.floatBits
+	firstKey.secondStringValue = secondKey.stringValue
+	return firstKey, true
 }
 
 func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {

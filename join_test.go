@@ -227,6 +227,37 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 	})
 }
 
+func TestBetaJoinKeyForPlanUsesTypedTwoValueKey(t *testing.T) {
+	plan := compiledConditionPlan{
+		joins: []compiledJoinConstraint{
+			{indexKind: joinIndexEquality, field: "stream"},
+			{indexKind: joinIndexEquality, field: "region"},
+		},
+	}
+	key, ok := betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
+		switch join.field {
+		case "stream":
+			return mustValue(t, 42), true
+		case "region":
+			return mustValue(t, "north"), true
+		default:
+			return Value{}, false
+		}
+	})
+	if !ok {
+		t.Fatal("two-value join key was not produced")
+	}
+	if key.kind != betaJoinKeyInt || key.intValue != 42 {
+		t.Fatalf("first key = (%v, %d), want int 42", key.kind, key.intValue)
+	}
+	if key.secondKind != betaJoinKeyString || key.secondStringValue != "north" {
+		t.Fatalf("second key = (%v, %q), want string north", key.secondKind, key.secondStringValue)
+	}
+	if key.stringValue != "" {
+		t.Fatalf("two-value key used fallback string %q", key.stringValue)
+	}
+}
+
 func TestJoinConstraintSlotResolutionAndFallback(t *testing.T) {
 	t.Run("closed template uses slots", func(t *testing.T) {
 		workspace := NewWorkspace()
