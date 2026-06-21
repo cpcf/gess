@@ -8,8 +8,8 @@ import (
 type reteGraphBetaMemory struct {
 	revision            *Ruleset
 	graph               *reteGraph
-	nodes               map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory
-	terminals           map[reteGraphTerminalNodeID]*reteGraphTerminalMemory
+	nodes               []*reteGraphBetaNodeMemory
+	terminals           []*reteGraphTerminalMemory
 	alphaFacts          []reteGraphAlphaFactSet
 	alphaConditions     [][]ConditionID
 	alphaFactCounts     map[ConditionID]int
@@ -170,8 +170,8 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 	memory := &reteGraphBetaMemory{
 		revision:            revision,
 		graph:               graph,
-		nodes:               make(map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory, len(graph.betaNodes)),
-		terminals:           make(map[reteGraphTerminalNodeID]*reteGraphTerminalMemory, len(graph.terminalNodes)),
+		nodes:               make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
+		terminals:           make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
 		arena:               newTokenArena(),
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
 	}
@@ -1250,7 +1250,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 	delta := reteAgendaDelta{supported: true}
 	m.removeAlphaFact(id)
 	for _, terminalNode := range m.graph.terminalNodes {
-		terminal := m.terminals[terminalNode.id]
+		terminal := m.terminalAt(terminalNode.id)
 		if terminal == nil {
 			continue
 		}
@@ -1385,7 +1385,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 	if m == nil || delta == nil || id.IsZero() {
 		return
 	}
-	terminal := m.terminals[terminalID]
+	terminal := m.terminalAt(terminalID)
 	if terminal == nil {
 		return
 	}
@@ -1419,7 +1419,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		terminal := m.terminals[terminalNode.id]
+		terminal := m.terminalAt(terminalNode.id)
 		if terminal == nil {
 			continue
 		}
@@ -1463,35 +1463,52 @@ func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEnt
 }
 
 func (m *reteGraphBetaMemory) nodeMemory(id reteGraphBetaNodeID) *reteGraphBetaNodeMemory {
-	if m == nil {
+	if m == nil || id <= 0 {
 		return nil
 	}
-	node := m.nodes[id]
+	index := int(id)
+	if index >= len(m.nodes) {
+		next := make([]*reteGraphBetaNodeMemory, index+1)
+		copy(next, m.nodes)
+		m.nodes = next
+	}
+	node := m.nodes[index]
 	if node != nil {
 		return node
 	}
 	node = &reteGraphBetaNodeMemory{}
-	if m.nodes == nil {
-		m.nodes = make(map[reteGraphBetaNodeID]*reteGraphBetaNodeMemory)
-	}
-	m.nodes[id] = node
+	m.nodes[index] = node
 	return node
 }
 
 func (m *reteGraphBetaMemory) terminal(id reteGraphTerminalNodeID) *reteGraphTerminalMemory {
-	if m == nil {
+	if m == nil || id <= 0 {
 		return nil
 	}
-	terminal := m.terminals[id]
+	index := int(id)
+	if index >= len(m.terminals) {
+		next := make([]*reteGraphTerminalMemory, index+1)
+		copy(next, m.terminals)
+		m.terminals = next
+	}
+	terminal := m.terminals[index]
 	if terminal != nil {
 		return terminal
 	}
 	terminal = &reteGraphTerminalMemory{}
-	if m.terminals == nil {
-		m.terminals = make(map[reteGraphTerminalNodeID]*reteGraphTerminalMemory)
-	}
-	m.terminals[id] = terminal
+	m.terminals[index] = terminal
 	return terminal
+}
+
+func (m *reteGraphBetaMemory) terminalAt(id reteGraphTerminalNodeID) *reteGraphTerminalMemory {
+	if m == nil || id <= 0 {
+		return nil
+	}
+	index := int(id)
+	if index >= len(m.terminals) {
+		return nil
+	}
+	return m.terminals[index]
 }
 
 func (m *reteGraphBetaMemory) terminalRuleRevision(id reteGraphTerminalNodeID) RuleRevisionID {
@@ -1683,7 +1700,7 @@ func (m *reteGraphBetaMemory) terminalForRule(ruleRevisionID RuleRevisionID) *re
 		if terminalNode.ruleRevisionID != ruleRevisionID {
 			continue
 		}
-		return m.terminals[terminalNode.id]
+		return m.terminalAt(terminalNode.id)
 	}
 	return nil
 }
