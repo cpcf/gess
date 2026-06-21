@@ -2767,7 +2767,7 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := initialCounters.GraphBetaMemory.IdentityIndexReserve, 24; got != want {
 		t.Fatalf("graph identity index reserve = %d, want three memories reserved at %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 48; got != want {
+	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 32; got != want {
 		t.Fatalf("graph fact index reserve = %d, want three memories reserved at %d", got, want)
 	}
 
@@ -2866,6 +2866,9 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	snapshot = session.propagationCounterSnapshot()
 	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained after reset = %d, want %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.FactIndexReserve, 32; got != want {
+		t.Fatalf("graph fact index reserve after reset = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
 		t.Fatalf("terminal rows inserted after reset = %d, want %d", got, want)

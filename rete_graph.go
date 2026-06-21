@@ -285,6 +285,28 @@ func (g *reteGraph) betaNode(id reteGraphBetaNodeID) *reteGraphBetaNode {
 	return &g.betaNodes[index]
 }
 
+func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
+	if g == nil {
+		return 0
+	}
+	switch stage.kind {
+	case reteGraphStageAlpha:
+		return 1
+	case reteGraphStageBeta:
+		node := g.betaNode(reteGraphBetaNodeID(stage.id))
+		if node == nil {
+			return 0
+		}
+		leftWidth := g.stageTokenWidth(node.left)
+		if leftWidth <= 0 {
+			return 0
+		}
+		return leftWidth + 1
+	default:
+		return 0
+	}
+}
+
 func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor reteGraphStageSuccessor) {
 	if g == nil || source.kind == reteGraphStageUnknown || successor.betaNodeID <= 0 {
 		return

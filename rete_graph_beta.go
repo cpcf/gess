@@ -241,13 +241,23 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 	}
 	for _, graphNode := range m.graph.betaNodes {
 		node := m.nodeMemory(graphNode.id)
-		node.left.reserveBeta(rowCapacity)
-		node.right.reserveBeta(rowCapacity)
+		node.left.reserveBeta(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(graphNode.left)))
+		node.right.reserveBeta(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(graphNode.right)))
 	}
 	for _, terminalNode := range m.graph.terminalNodes {
 		terminal := m.terminal(terminalNode.id)
-		terminal.rows.reserveTerminal(rowCapacity)
+		terminal.rows.reserveTerminal(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(terminalNode.input)))
 	}
+}
+
+func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
+	if rowCapacity <= 0 {
+		return 0
+	}
+	if tokenWidth == 1 {
+		return rowCapacity
+	}
+	return rowCapacity * 2
 }
 
 func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
@@ -299,20 +309,20 @@ func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID Condit
 	m.alphaConditions[index] = append(m.alphaConditions[index], conditionID)
 }
 
-func (m *tokenHashMemory) reserveBeta(rowCapacity int) {
+func (m *tokenHashMemory) reserveBeta(rowCapacity, factCapacity int) {
 	if m == nil || rowCapacity <= 0 {
 		return
 	}
 	m.reserveRows(rowCapacity)
-	m.reserveIndexes(rowCapacity, rowCapacity, rowCapacity*2)
+	m.reserveIndexes(rowCapacity, rowCapacity, factCapacity)
 }
 
-func (m *tokenHashMemory) reserveTerminal(rowCapacity int) {
+func (m *tokenHashMemory) reserveTerminal(rowCapacity, factCapacity int) {
 	if m == nil || rowCapacity <= 0 {
 		return
 	}
 	m.reserveRows(rowCapacity)
-	m.reserveIndexes(0, rowCapacity, rowCapacity*2)
+	m.reserveIndexes(0, rowCapacity, factCapacity)
 }
 
 func (m *tokenHashMemory) reserveRows(rowCapacity int) {
