@@ -328,7 +328,7 @@ type reteAgendaDelta struct {
 type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
 	token          tokenRef
-	identityKey    candidateIdentityKey
+	identity       candidateIdentity
 }
 
 type reteBetaRuleMemory struct {
@@ -734,7 +734,7 @@ func (m *reteBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]rete
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: rule.revisionID,
 				token:          row.prefix.token,
-				identityKey:    candidateIdentityForTerminalToken(rule, row.prefix.token).key,
+				identity:       candidateIdentityForTerminalToken(rule, row.prefix.token),
 			})
 		}
 	}
@@ -1383,7 +1383,7 @@ func (m *reteBetaRuleMemory) appendRemovedFactDeltas(out []reteTerminalTokenDelt
 		out = append(out, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          row.prefix.token,
-			identityKey:    candidateIdentityForTerminalToken(m.rule, row.prefix.token).key,
+			identity:       candidateIdentityForTerminalToken(m.rule, row.prefix.token),
 		})
 	}
 	for conditionIndex := range m.conditionMatches {
@@ -1450,7 +1450,7 @@ func (m *reteBetaRuleMemory) appendAndPropagatePrefixDeltas(out []reteTerminalTo
 			out = append(out, reteTerminalTokenDelta{
 				ruleRevisionID: ruleRevisionID,
 				token:          prefix.token,
-				identityKey:    candidateIdentityForTerminalToken(m.rule, prefix.token).key,
+				identity:       candidateIdentityForTerminalToken(m.rule, prefix.token),
 			})
 		}
 		return out

@@ -1258,7 +1258,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			delta.removed = append(delta.removed, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          token,
-				identityKey:    m.terminalTokenIdentityKey(terminalNode.ruleRevisionID, token),
+				identity:       m.terminalTokenIdentity(terminalNode.ruleRevisionID, token),
 			})
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
@@ -1377,7 +1377,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	delta.added = append(delta.added, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
-		identityKey:    m.terminalTokenIdentityKey(ruleRevisionID, token),
+		identity:       m.terminalTokenIdentity(ruleRevisionID, token),
 	})
 }
 
@@ -1394,7 +1394,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		delta.removed = append(delta.removed, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          token,
-			identityKey:    m.terminalTokenIdentityKey(ruleRevisionID, token),
+			identity:       m.terminalTokenIdentity(ruleRevisionID, token),
 		})
 		if counters != nil {
 			counters.recordTerminalDeltaRemoved()
@@ -1430,7 +1430,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
-				identityKey:    m.terminalTokenIdentityKey(terminalNode.ruleRevisionID, row.token),
+				identity:       m.terminalTokenIdentity(terminalNode.ruleRevisionID, row.token),
 			})
 		}
 	}
@@ -1438,15 +1438,15 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 	return deltas, true, nil
 }
 
-func (m *reteGraphBetaMemory) terminalTokenIdentityKey(ruleRevisionID RuleRevisionID, token tokenRef) candidateIdentityKey {
+func (m *reteGraphBetaMemory) terminalTokenIdentity(ruleRevisionID RuleRevisionID, token tokenRef) candidateIdentity {
 	if m == nil || m.revision == nil || token.isZero() {
-		return candidateIdentityKey{}
+		return candidateIdentity{}
 	}
 	rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
 	if !ok {
-		return candidateIdentityKey{}
+		return candidateIdentity{}
 	}
-	return candidateIdentityForTerminalToken(rule, token).key
+	return candidateIdentityForTerminalToken(rule, token)
 }
 
 func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {

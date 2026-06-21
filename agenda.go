@@ -1369,6 +1369,9 @@ func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationK
 	if a == nil || act == nil || len(keys) == 0 {
 		return append(keys, key)
 	}
+	if last, ok := a.activationByKeyPtr(keys[len(keys)-1]); ok && !activationLess(act, last) {
+		return append(keys, key)
+	}
 	index := sort.Search(len(keys), func(i int) bool {
 		existing, _ := a.activationByKeyPtr(keys[i])
 		return activationLess(act, existing)
@@ -1832,12 +1835,8 @@ func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state 
 }
 
 func candidateIdentityForTerminalTokenDelta(revision *Ruleset, delta reteTerminalTokenDelta) candidateIdentity {
-	if delta.identityKey != (candidateIdentityKey{}) {
-		return candidateIdentity{
-			generation: tokenRefGeneration(delta.token),
-			count:      tokenRefSize(delta.token),
-			key:        delta.identityKey,
-		}
+	if !delta.identity.isZero() {
+		return delta.identity
 	}
 	if revision == nil {
 		return candidateIdentity{}
