@@ -1545,6 +1545,15 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if got, want := snapshot.Totals.TerminalRowsRemoved, 2; got != want {
 		t.Fatalf("terminal rows removed = %d, want %d", got, want)
 	}
+	if got, want := snapshot.Totals.NegativePropagationEvents, 4; got != want {
+		t.Fatalf("negative propagation events = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeRowsRemoved, 3; got != want {
+		t.Fatalf("negative rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 2; got != want {
+		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
+	}
 	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
 	}
@@ -2021,6 +2030,15 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativePropagationEvents, 2; got != want {
+		t.Fatalf("negative propagation events = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeRowsRemoved, 1; got != want {
+		t.Fatalf("negative rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
+		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
 		t.Fatalf("removal index lookups = %d, want %d", got, want)

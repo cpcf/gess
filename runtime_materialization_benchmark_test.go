@@ -752,11 +752,20 @@ func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	if got := snapshot.Totals.RemovalRowsTouched; got < snapshot.Totals.RemovalRowsRemoved {
 		t.Fatalf("removal rows touched = %d, want at least rows removed %d", got, snapshot.Totals.RemovalRowsRemoved)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
-		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
+	if got, want := snapshot.Totals.RemovalIndexLookups, joinedTokens+1; got != want {
+		t.Fatalf("removal index lookups = %d, want affected-token-limited %d", got, want)
 	}
 	if got, want := snapshot.Totals.RemovalRowsTouched, joinedTokens+1; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativePropagationEvents, joinedTokens+1; got != want {
+		t.Fatalf("negative propagation events = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeRowsRemoved, 1; got != want {
+		t.Fatalf("negative rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, joinedTokens; got != want {
+		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
 	}
 }
 
