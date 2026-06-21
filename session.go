@@ -241,6 +241,11 @@ func (s *Session) propagationCounterSnapshot() propagationCounterSnapshot {
 		return propagationCounterSnapshot{}
 	}
 	s.syncPropagationCounters()
+	if s.rete != nil && s.rete.graphBeta != nil {
+		s.propagationCounters.setGraphBetaMemoryStats(s.rete.graphBeta.memoryStats())
+	} else {
+		s.propagationCounters.setGraphBetaMemoryStats(reteGraphBetaMemoryStats{})
+	}
 	return s.propagationCounters.snapshot()
 }
 

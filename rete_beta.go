@@ -152,7 +152,10 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		a.factIDs = append(a.factIDs, match.fact.ID())
 		a.factVersions = append(a.factVersions, match.fact.Version())
 	}
-	row.identityState = candidateIdentityHashStep(row.identityState, entry)
+	identityEntry := entry
+	identityEntry.factID = match.fact.ID()
+	identityEntry.factVersion = match.fact.Version()
+	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
 
 	a.count++
 	handle := tokenHandle{arena: a, row: row, generation: row.slotGeneration}

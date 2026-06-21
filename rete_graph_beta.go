@@ -33,11 +33,38 @@ type reteGraphAlphaFactSet struct {
 	facts map[FactID]struct{}
 }
 
+type reteGraphBetaMemoryStats struct {
+	TokenMemories           int
+	BetaTokenMemories       int
+	TerminalTokenMemories   int
+	TokenRows               int
+	TokenRowCapacity        int
+	TokenRowReserve         int
+	TokenRowCapacityMax     int
+	TokenRowReserveMax      int
+	JoinIndexKeys           int
+	JoinIndexReserve        int
+	JoinIndexKeysMax        int
+	JoinIndexReserveMax     int
+	IdentityIndexKeys       int
+	IdentityIndexReserve    int
+	IdentityIndexKeysMax    int
+	IdentityIndexReserveMax int
+	FactIndexKeys           int
+	FactIndexReserve        int
+	FactIndexKeysMax        int
+	FactIndexReserveMax     int
+}
+
 type tokenHashMemory struct {
-	rows         []graphTokenRow
-	indexes      map[betaJoinKey]graphTokenRowIDBucket
-	identityRows map[graphTokenIdentityKey]graphTokenRowIDBucket
-	factRows     map[FactID]graphTokenRowIDBucket
+	rows                 []graphTokenRow
+	indexes              map[betaJoinKey]graphTokenRowIDBucket
+	identityRows         map[graphTokenIdentityKey]graphTokenRowIDBucket
+	factRows             map[FactID]graphTokenRowIDBucket
+	rowReserve           int
+	joinIndexReserve     int
+	identityIndexReserve int
+	factIndexReserve     int
 }
 
 type graphTokenRowID int
@@ -295,6 +322,7 @@ func (m *tokenHashMemory) reserveRows(rowCapacity int) {
 	rows := make([]graphTokenRow, len(m.rows), rowCapacity)
 	copy(rows, m.rows)
 	m.rows = rows
+	m.rowReserve = max(m.rowReserve, rowCapacity)
 }
 
 func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
@@ -303,12 +331,15 @@ func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 	}
 	if joinCapacity > 0 && m.indexes == nil {
 		m.indexes = make(map[betaJoinKey]graphTokenRowIDBucket, joinCapacity)
+		m.joinIndexReserve = max(m.joinIndexReserve, joinCapacity)
 	}
 	if identityCapacity > 0 && m.identityRows == nil {
 		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket, identityCapacity)
+		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
 	}
 	if factCapacity > 0 && m.factRows == nil {
 		m.factRows = make(map[FactID]graphTokenRowIDBucket, factCapacity)
+		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
 	}
 }
 
@@ -1616,6 +1647,62 @@ func (m *reteGraphBetaMemory) terminalRowCount() int {
 		}
 	}
 	return total
+}
+
+func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {
+	if m == nil {
+		return reteGraphBetaMemoryStats{}
+	}
+	var stats reteGraphBetaMemoryStats
+	for _, node := range m.nodes {
+		if node == nil {
+			continue
+		}
+		stats.addTokenMemory(node.left)
+		stats.BetaTokenMemories++
+		stats.addTokenMemory(node.right)
+		stats.BetaTokenMemories++
+	}
+	for _, terminal := range m.terminals {
+		if terminal == nil {
+			continue
+		}
+		stats.addTokenMemory(terminal.rows)
+		stats.TerminalTokenMemories++
+	}
+	return stats
+}
+
+func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
+	if s == nil {
+		return
+	}
+	s.TokenMemories++
+	rowCount := len(memory.rows)
+	rowCapacity := cap(memory.rows)
+	s.TokenRows += rowCount
+	s.TokenRowCapacity += rowCapacity
+	s.TokenRowReserve += memory.rowReserve
+	s.TokenRowCapacityMax = max(s.TokenRowCapacityMax, rowCapacity)
+	s.TokenRowReserveMax = max(s.TokenRowReserveMax, memory.rowReserve)
+
+	joinKeys := len(memory.indexes)
+	s.JoinIndexKeys += joinKeys
+	s.JoinIndexReserve += memory.joinIndexReserve
+	s.JoinIndexKeysMax = max(s.JoinIndexKeysMax, joinKeys)
+	s.JoinIndexReserveMax = max(s.JoinIndexReserveMax, memory.joinIndexReserve)
+
+	identityKeys := len(memory.identityRows)
+	s.IdentityIndexKeys += identityKeys
+	s.IdentityIndexReserve += memory.identityIndexReserve
+	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
+	s.IdentityIndexReserveMax = max(s.IdentityIndexReserveMax, memory.identityIndexReserve)
+
+	factKeys := len(memory.factRows)
+	s.FactIndexKeys += factKeys
+	s.FactIndexReserve += memory.factIndexReserve
+	s.FactIndexKeysMax = max(s.FactIndexKeysMax, factKeys)
+	s.FactIndexReserveMax = max(s.FactIndexReserveMax, memory.factIndexReserve)
 }
 
 func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]ruleMatchResult, error) {

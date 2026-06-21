@@ -2746,6 +2746,30 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := initialCounters.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained = %d, want %d", got, want)
 	}
+	if got, want := initialCounters.GraphBetaMemory.TokenMemories, 3; got != want {
+		t.Fatalf("graph token memories = %d, want beta left/right plus terminal %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.BetaTokenMemories, 2; got != want {
+		t.Fatalf("graph beta token memories = %d, want %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.TerminalTokenMemories, 1; got != want {
+		t.Fatalf("graph terminal token memories = %d, want %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.TokenRows, 0; got != want {
+		t.Fatalf("graph token rows = %d, want %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.TokenRowReserve, 24; got != want {
+		t.Fatalf("graph token row reserve = %d, want three memories reserved at %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.JoinIndexReserve, 16; got != want {
+		t.Fatalf("graph join index reserve = %d, want beta memories only reserved at %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.IdentityIndexReserve, 24; got != want {
+		t.Fatalf("graph identity index reserve = %d, want three memories reserved at %d", got, want)
+	}
+	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 48; got != want {
+		t.Fatalf("graph fact index reserve = %d, want three memories reserved at %d", got, want)
+	}
 
 	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
 	if err != nil {
@@ -2788,6 +2812,18 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	}
 	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
 		t.Fatalf("terminal rows retained = %d, want %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.TokenRows, 3; got != want {
+		t.Fatalf("graph token rows = %d, want beta inputs plus terminal row %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.JoinIndexKeys, 2; got != want {
+		t.Fatalf("graph join index keys = %d, want left and right beta keys %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 3; got != want {
+		t.Fatalf("graph identity index keys = %d, want each retained token identity %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 4; got != want {
+		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
 	}
 
 	duplicateDelta := reteAgendaDelta{supported: true}
@@ -2839,6 +2875,83 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.TerminalRowsRemoved, 1; got != want {
 		t.Fatalf("terminal rows removed after reset = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "threshold",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "candidate",
+		Closed: true,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "candidate-above-threshold",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "threshold",
+				TemplateKey: threshold.Key(),
+			},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("graph-beta-token-identity-indexes"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("graph beta runtime = %#v, want graph beta support", session.rete)
+	}
+	session.attachPropagationCounters()
+
+	if _, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10})); err != nil {
+		t.Fatalf("AssertTemplate threshold: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
+		t.Fatalf("AssertTemplate candidate 12: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 13})); err != nil {
+		t.Fatalf("AssertTemplate candidate 13: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.GraphBetaMemory.TokenRows, 5; got != want {
+		t.Fatalf("graph token rows = %d, want left input, two right inputs, and two terminal rows %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 5; got != want {
+		t.Fatalf("graph identity index keys = %d, want one key per retained token %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeysMax, 2; got != want {
+		t.Fatalf("graph identity index keys max = %d, want two keys in right/terminal memories %d", got, want)
+	}
+	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 6; got != want {
+		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
 	}
 }
 

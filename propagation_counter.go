@@ -131,6 +131,7 @@ type propagationCounterLedger struct {
 	runtimePath          propagationRuntimePath
 	fallbackReasons      map[string]int
 	terminalRowsRetained int
+	graphBetaMemory      reteGraphBetaMemoryStats
 }
 
 type propagationCounterSpan struct {
@@ -143,6 +144,7 @@ type propagationCounterSpan struct {
 type propagationCounterSnapshot struct {
 	Totals               propagationCounterTotals
 	TerminalRowsRetained int
+	GraphBetaMemory      reteGraphBetaMemoryStats
 	ByTemplate           map[TemplateKey]propagationCounterTotals
 	ByOrigin             map[propagationOrigin]propagationCounterTotals
 	ByTemplateOrigin     map[propagationCounterKey]propagationCounterTotals
@@ -177,6 +179,7 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 	out := propagationCounterSnapshot{
 		Totals:               l.totals,
 		TerminalRowsRetained: l.terminalRowsRetained,
+		GraphBetaMemory:      l.graphBetaMemory,
 		ByTemplate:           make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
 		ByOrigin:             make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
 		ByTemplateOrigin:     make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
@@ -415,6 +418,13 @@ func (l *propagationCounterLedger) setTerminalRowsRetained(retained int) {
 	l.terminalRowsRetained = retained
 }
 
+func (l *propagationCounterLedger) setGraphBetaMemoryStats(stats reteGraphBetaMemoryStats) {
+	if l == nil {
+		return
+	}
+	l.graphBetaMemory = stats
+}
+
 func (l *propagationCounterLedger) setRuntimeDiagnostics(path propagationRuntimePath, fallbackReasons map[string]int) {
 	if l == nil {
 		return
@@ -495,6 +505,26 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-terminal-rows-deduped", float64(s.Totals.TerminalRowsDeduped))
 	report("propagation-terminal-rows-removed", float64(s.Totals.TerminalRowsRemoved))
 	report("propagation-terminal-rows-retained", float64(s.TerminalRowsRetained))
+	report("propagation-graph-token-memories", float64(s.GraphBetaMemory.TokenMemories))
+	report("propagation-graph-beta-token-memories", float64(s.GraphBetaMemory.BetaTokenMemories))
+	report("propagation-graph-terminal-token-memories", float64(s.GraphBetaMemory.TerminalTokenMemories))
+	report("propagation-graph-token-rows", float64(s.GraphBetaMemory.TokenRows))
+	report("propagation-graph-token-row-capacity", float64(s.GraphBetaMemory.TokenRowCapacity))
+	report("propagation-graph-token-row-reserve", float64(s.GraphBetaMemory.TokenRowReserve))
+	report("propagation-graph-token-row-capacity-max", float64(s.GraphBetaMemory.TokenRowCapacityMax))
+	report("propagation-graph-token-row-reserve-max", float64(s.GraphBetaMemory.TokenRowReserveMax))
+	report("propagation-graph-join-index-keys", float64(s.GraphBetaMemory.JoinIndexKeys))
+	report("propagation-graph-join-index-reserve", float64(s.GraphBetaMemory.JoinIndexReserve))
+	report("propagation-graph-join-index-keys-max", float64(s.GraphBetaMemory.JoinIndexKeysMax))
+	report("propagation-graph-join-index-reserve-max", float64(s.GraphBetaMemory.JoinIndexReserveMax))
+	report("propagation-graph-identity-index-keys", float64(s.GraphBetaMemory.IdentityIndexKeys))
+	report("propagation-graph-identity-index-reserve", float64(s.GraphBetaMemory.IdentityIndexReserve))
+	report("propagation-graph-identity-index-keys-max", float64(s.GraphBetaMemory.IdentityIndexKeysMax))
+	report("propagation-graph-identity-index-reserve-max", float64(s.GraphBetaMemory.IdentityIndexReserveMax))
+	report("propagation-graph-fact-index-keys", float64(s.GraphBetaMemory.FactIndexKeys))
+	report("propagation-graph-fact-index-reserve", float64(s.GraphBetaMemory.FactIndexReserve))
+	report("propagation-graph-fact-index-keys-max", float64(s.GraphBetaMemory.FactIndexKeysMax))
+	report("propagation-graph-fact-index-reserve-max", float64(s.GraphBetaMemory.FactIndexReserveMax))
 	report("propagation-agenda-delta-applications", float64(s.Totals.AgendaDeltaApplications))
 	report("propagation-agenda-sorts", float64(s.Totals.AgendaSorts))
 	report("propagation-activations-stored", float64(s.Totals.ActivationsStored))
@@ -569,6 +599,26 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-terminal-rows-deduped=" + strconv.Itoa(s.Totals.TerminalRowsDeduped),
 		"propagation-terminal-rows-removed=" + strconv.Itoa(s.Totals.TerminalRowsRemoved),
 		"propagation-terminal-rows-retained=" + strconv.Itoa(s.TerminalRowsRetained),
+		"propagation-graph-token-memories=" + strconv.Itoa(s.GraphBetaMemory.TokenMemories),
+		"propagation-graph-beta-token-memories=" + strconv.Itoa(s.GraphBetaMemory.BetaTokenMemories),
+		"propagation-graph-terminal-token-memories=" + strconv.Itoa(s.GraphBetaMemory.TerminalTokenMemories),
+		"propagation-graph-token-rows=" + strconv.Itoa(s.GraphBetaMemory.TokenRows),
+		"propagation-graph-token-row-capacity=" + strconv.Itoa(s.GraphBetaMemory.TokenRowCapacity),
+		"propagation-graph-token-row-reserve=" + strconv.Itoa(s.GraphBetaMemory.TokenRowReserve),
+		"propagation-graph-token-row-capacity-max=" + strconv.Itoa(s.GraphBetaMemory.TokenRowCapacityMax),
+		"propagation-graph-token-row-reserve-max=" + strconv.Itoa(s.GraphBetaMemory.TokenRowReserveMax),
+		"propagation-graph-join-index-keys=" + strconv.Itoa(s.GraphBetaMemory.JoinIndexKeys),
+		"propagation-graph-join-index-reserve=" + strconv.Itoa(s.GraphBetaMemory.JoinIndexReserve),
+		"propagation-graph-join-index-keys-max=" + strconv.Itoa(s.GraphBetaMemory.JoinIndexKeysMax),
+		"propagation-graph-join-index-reserve-max=" + strconv.Itoa(s.GraphBetaMemory.JoinIndexReserveMax),
+		"propagation-graph-identity-index-keys=" + strconv.Itoa(s.GraphBetaMemory.IdentityIndexKeys),
+		"propagation-graph-identity-index-reserve=" + strconv.Itoa(s.GraphBetaMemory.IdentityIndexReserve),
+		"propagation-graph-identity-index-keys-max=" + strconv.Itoa(s.GraphBetaMemory.IdentityIndexKeysMax),
+		"propagation-graph-identity-index-reserve-max=" + strconv.Itoa(s.GraphBetaMemory.IdentityIndexReserveMax),
+		"propagation-graph-fact-index-keys=" + strconv.Itoa(s.GraphBetaMemory.FactIndexKeys),
+		"propagation-graph-fact-index-reserve=" + strconv.Itoa(s.GraphBetaMemory.FactIndexReserve),
+		"propagation-graph-fact-index-keys-max=" + strconv.Itoa(s.GraphBetaMemory.FactIndexKeysMax),
+		"propagation-graph-fact-index-reserve-max=" + strconv.Itoa(s.GraphBetaMemory.FactIndexReserveMax),
 		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
 		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
