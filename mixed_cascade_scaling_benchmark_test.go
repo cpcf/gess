@@ -319,13 +319,12 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(tick.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n + 1),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-				})
-				return err
+				return ctx.AssertTemplateValues(tick.Key(),
+					steadyStateIntValue(customer),
+					steadyStateIntValue(n+1),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -349,15 +348,14 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(signal.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-					"kind":     steadyStateStringValue(mixedCascadeSignalKind(n, stream)),
-					"severity": steadyStateIntValue(mixedCascadeSeverity(n, stream)),
-				})
-				return err
+				return ctx.AssertTemplateValues(signal.Key(),
+					steadyStateIntValue(customer),
+					steadyStateStringValue(mixedCascadeSignalKind(n, stream)),
+					steadyStateIntValue(n),
+					steadyStateIntValue(region),
+					steadyStateIntValue(mixedCascadeSeverity(n, stream)),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -415,15 +413,14 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(exposure.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-					"bucket":   steadyStateStringValue(mixedCascadeBucket(severity)),
-					"amount":   steadyStateIntValue(mixedCascadeAmount(severity, limitValue)),
-				})
-				return err
+				return ctx.AssertTemplateValues(exposure.Key(),
+					steadyStateIntValue(mixedCascadeAmount(severity, limitValue)),
+					steadyStateStringValue(mixedCascadeBucket(severity)),
+					steadyStateIntValue(customer),
+					steadyStateIntValue(n),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -464,14 +461,13 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(correlated.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"peer":     steadyStateIntValue(peer),
-					"region":   steadyStateIntValue(region),
-					"severity": steadyStateIntValue(severity + mixedCascadePeerSeverityBias(peer)),
-				})
-				return err
+				return ctx.AssertTemplateValues(correlated.Key(),
+					steadyStateIntValue(n),
+					steadyStateIntValue(peer),
+					steadyStateIntValue(region),
+					steadyStateIntValue(severity+mixedCascadePeerSeverityBias(peer)),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -517,14 +513,13 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(caseFact.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-					"priority": steadyStateStringValue(mixedCascadePriority(amount, correlatedSeverity)),
-				})
-				return err
+				return ctx.AssertTemplateValues(caseFact.Key(),
+					steadyStateIntValue(customer),
+					steadyStateIntValue(n),
+					steadyStateStringValue(mixedCascadePriority(amount, correlatedSeverity)),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -577,14 +572,13 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if !ok || priorityValue.Kind() != ValueString {
 					return fmt.Errorf("missing policy priority")
 				}
-				_, err = ctx.AssertTemplate(escalation.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-					"reason":   steadyStateStringValue(mixedCascadeReason(priorityValue.stringValue, n)),
-				})
-				return err
+				return ctx.AssertTemplateValues(escalation.Key(),
+					steadyStateIntValue(customer),
+					steadyStateIntValue(n),
+					steadyStateStringValue(mixedCascadeReason(priorityValue.stringValue, n)),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -632,14 +626,13 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				_, err = ctx.AssertTemplate(audit.Key(), Fields{
-					"stream":   steadyStateIntValue(stream),
-					"n":        steadyStateIntValue(n),
-					"customer": steadyStateIntValue(customer),
-					"region":   steadyStateIntValue(region),
-					"code":     steadyStateStringValue(mixedCascadeAuditCode(stream, n)),
-				})
-				return err
+				return ctx.AssertTemplateValues(audit.Key(),
+					steadyStateStringValue(mixedCascadeAuditCode(stream, n)),
+					steadyStateIntValue(customer),
+					steadyStateIntValue(n),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -681,11 +674,10 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 		mustAddInternalAction(t, workspace, ActionSpec{
 			Name: completeAction,
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.AssertTemplate(complete.Key(), Fields{
-					"stream": steadyStateIntValue(stream),
-					"region": steadyStateIntValue(region),
-				})
-				return err
+				return ctx.AssertTemplateValues(complete.Key(),
+					steadyStateIntValue(region),
+					steadyStateIntValue(stream),
+				)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
