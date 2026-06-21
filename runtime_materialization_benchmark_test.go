@@ -620,6 +620,71 @@ func BenchmarkReteGraphRetractSparse(b *testing.B) {
 	}
 }
 
+func BenchmarkReteGraphNegativePropagationRetractHeavy(b *testing.B) {
+	revision, keys := mustGraphNegativePropagationBenchmarkRuleset(b)
+	cases := graphNegativePropagationBenchmarkCases()
+
+	for _, tc := range cases {
+		name := fmt.Sprintf("beta-depth=%d/retained-groups=%d/affected-terminal=%d", tc.betaDepth, tc.retainedGroups, tc.affectedTerminalRows())
+		b.Run(name, func(b *testing.B) {
+			reportGraphNegativePropagationBenchmarkCounters(b, revision, keys, tc, graphNegativePropagationRetract)
+
+			b.ReportAllocs()
+			b.ReportMetric(float64(tc.betaDepth), "beta-depth")
+			b.ReportMetric(float64(tc.retainedGroups), "retained-groups")
+			b.ReportMetric(float64(tc.affectedTerminalRows()), "affected-terminal-rows/op")
+			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				session := mustGraphNegativePropagationBenchmarkSession(b, revision, keys, tc)
+				target := mustGraphNegativePropagationTargetFact(b, session, keys, tc)
+				b.StartTimer()
+				result, err := session.Retract(context.Background(), target.ID())
+				b.StopTimer()
+				if err != nil {
+					b.Fatalf("Retract: %v", err)
+				}
+				if result.Status != RetractRemoved {
+					b.Fatalf("retract status = %v, want %v", result.Status, RetractRemoved)
+				}
+				benchmarkRetractResult = result
+			}
+		})
+	}
+}
+
+func BenchmarkReteGraphNegativePropagationModifyHeavy(b *testing.B) {
+	revision, keys := mustGraphNegativePropagationBenchmarkRuleset(b)
+	cases := graphNegativePropagationBenchmarkCases()
+	patch := FactPatch{Set: mustFields(b, map[string]any{"group": graphNegativePropagationDestinationGroup})}
+
+	for _, tc := range cases {
+		name := fmt.Sprintf("beta-depth=%d/retained-groups=%d/affected-terminal=%d", tc.betaDepth, tc.retainedGroups, tc.affectedTerminalRows())
+		b.Run(name, func(b *testing.B) {
+			reportGraphNegativePropagationBenchmarkCounters(b, revision, keys, tc, graphNegativePropagationModify)
+
+			b.ReportAllocs()
+			b.ReportMetric(float64(tc.betaDepth), "beta-depth")
+			b.ReportMetric(float64(tc.retainedGroups), "retained-groups")
+			b.ReportMetric(float64(tc.affectedTerminalRows()), "affected-terminal-rows/op")
+			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				session := mustGraphNegativePropagationBenchmarkSession(b, revision, keys, tc)
+				target := mustGraphNegativePropagationTargetFact(b, session, keys, tc)
+				b.StartTimer()
+				result, err := session.Modify(context.Background(), target.ID(), patch)
+				b.StopTimer()
+				if err != nil {
+					b.Fatalf("Modify: %v", err)
+				}
+				if result.Status != ModifyChanged {
+					b.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+				}
+				benchmarkModifyResult = result
+			}
+		})
+	}
+}
+
 func BenchmarkReteGraphResidualJoinHighCollision(b *testing.B) {
 	revision, thresholdKey, candidateKey := mustGraphResidualJoinBenchmarkRuleset(b)
 	const thresholds = 256
@@ -766,6 +831,21 @@ func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	}
 	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, joinedTokens; got != want {
 		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
+	}
+}
+
+func TestReteGraphNegativePropagationHeavyCounters(t *testing.T) {
+	revision, keys := mustGraphNegativePropagationBenchmarkRuleset(t)
+	cases := graphNegativePropagationBenchmarkCases()
+	for _, operation := range []graphNegativePropagationOperation{graphNegativePropagationRetract, graphNegativePropagationModify} {
+		for _, tc := range cases {
+			name := fmt.Sprintf("%s/beta-depth=%d", operation, tc.betaDepth)
+			t.Run(name, func(t *testing.T) {
+				session := mustGraphNegativePropagationBenchmarkSession(t, revision, keys, tc)
+				snapshot := runGraphNegativePropagationBenchmarkMutation(t, session, keys, tc, operation)
+				assertGraphNegativePropagationCounterSnapshot(t, snapshot, tc, operation)
+			})
+		}
 	}
 }
 
@@ -1037,6 +1117,344 @@ func mustGraphRemovalBenchmarkSession(tb testing.TB, revision *Ruleset, employee
 		tb.Fatalf("pending activations = %d, want %d", got, employees)
 	}
 	return session
+}
+
+const (
+	graphNegativePropagationTargetGroup      = "target"
+	graphNegativePropagationDestinationGroup = "destination"
+)
+
+type graphNegativePropagationOperation string
+
+const (
+	graphNegativePropagationRetract graphNegativePropagationOperation = "retract"
+	graphNegativePropagationModify  graphNegativePropagationOperation = "modify"
+)
+
+type graphNegativePropagationKeys struct {
+	root   TemplateKey
+	level1 TemplateKey
+	level2 TemplateKey
+	level3 TemplateKey
+}
+
+func (k graphNegativePropagationKeys) keyAtDepth(depth int) TemplateKey {
+	switch depth {
+	case 0:
+		return k.root
+	case 1:
+		return k.level1
+	case 2:
+		return k.level2
+	case 3:
+		return k.level3
+	default:
+		return ""
+	}
+}
+
+type graphNegativePropagationBenchmarkCase struct {
+	betaDepth      int
+	level1Width    int
+	level2Width    int
+	level3Width    int
+	retainedGroups int
+}
+
+func graphNegativePropagationBenchmarkCases() []graphNegativePropagationBenchmarkCase {
+	return []graphNegativePropagationBenchmarkCase{
+		{betaDepth: 0, level1Width: 3, level2Width: 5, level3Width: 7, retainedGroups: 256},
+		{betaDepth: 1, level1Width: 3, level2Width: 5, level3Width: 7, retainedGroups: 256},
+		{betaDepth: 2, level1Width: 3, level2Width: 5, level3Width: 7, retainedGroups: 256},
+		{betaDepth: 3, level1Width: 3, level2Width: 5, level3Width: 7, retainedGroups: 256},
+	}
+}
+
+func (tc graphNegativePropagationBenchmarkCase) affectedTerminalRows() int {
+	switch tc.betaDepth {
+	case 0:
+		return tc.level1Width * tc.level2Width * tc.level3Width
+	case 1:
+		return tc.level2Width * tc.level3Width
+	case 2:
+		return tc.level1Width * tc.level3Width
+	case 3:
+		return tc.level1Width * tc.level2Width
+	default:
+		return 0
+	}
+}
+
+func (tc graphNegativePropagationBenchmarkCase) affectedBetaRows() int {
+	switch tc.betaDepth {
+	case 0:
+		return 1 + tc.level1Width + tc.level1Width*tc.level2Width
+	case 1:
+		return 2 + tc.level2Width
+	case 2:
+		return 1 + tc.level1Width
+	case 3:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (tc graphNegativePropagationBenchmarkCase) initialTerminalRows() int {
+	return 2*tc.level1Width*tc.level2Width*tc.level3Width + tc.retainedGroups
+}
+
+func mustGraphNegativePropagationBenchmarkRuleset(tb testing.TB) (*Ruleset, graphNegativePropagationKeys) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	root := mustAddGraphNegativePropagationTemplate(tb, workspace, "graph-removal-root")
+	level1 := mustAddGraphNegativePropagationTemplate(tb, workspace, "graph-removal-level1")
+	level2 := mustAddGraphNegativePropagationTemplate(tb, workspace, "graph-removal-level2")
+	level3 := mustAddGraphNegativePropagationTemplate(tb, workspace, "graph-removal-level3")
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "graph-removal-chain",
+		Conditions: []RuleConditionSpec{
+			{Binding: "root", TemplateKey: root.Key()},
+			{
+				Binding:     "level1",
+				TemplateKey: level1.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "group"}},
+				},
+			},
+			{
+				Binding:     "level2",
+				TemplateKey: level2.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "level1", Field: "group"}},
+				},
+			},
+			{
+				Binding:     "level3",
+				TemplateKey: level3.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "level2", Field: "group"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(tb, workspace), graphNegativePropagationKeys{
+		root:   root.Key(),
+		level1: level1.Key(),
+		level2: level2.Key(),
+		level3: level3.Key(),
+	}
+}
+
+func mustAddGraphNegativePropagationTemplate(tb testing.TB, workspace *Workspace, name string) Template {
+	tb.Helper()
+
+	return mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: name,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+}
+
+func mustGraphNegativePropagationBenchmarkSession(tb testing.TB, revision *Ruleset, keys graphNegativePropagationKeys, tc graphNegativePropagationBenchmarkCase) *Session {
+	tb.Helper()
+
+	initials := graphNegativePropagationInitialFacts(tb, keys, tc)
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		tb.Fatalf("Snapshot: %v", err)
+	}
+	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
+		tb.Fatalf("initial reconcileAgenda: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), tc.initialTerminalRows(); got != want {
+		tb.Fatalf("pending activations = %d, want %d", got, want)
+	}
+	return session
+}
+
+func graphNegativePropagationInitialFacts(tb testing.TB, keys graphNegativePropagationKeys, tc graphNegativePropagationBenchmarkCase) []SessionInitialFact {
+	tb.Helper()
+
+	initials := make([]SessionInitialFact, 0, 2*(2+tc.level1Width+tc.level2Width+tc.level3Width)+tc.retainedGroups*4)
+	initials = appendGraphNegativePropagationGroupFacts(tb, initials, keys, graphNegativePropagationTargetGroup, "target", tc.level1Width, tc.level2Width, tc.level3Width)
+	initials = appendGraphNegativePropagationGroupFacts(tb, initials, keys, graphNegativePropagationDestinationGroup, "destination", tc.level1Width, tc.level2Width, tc.level3Width)
+	for i := range tc.retainedGroups {
+		group := fmt.Sprintf("retained-%03d", i)
+		initials = appendGraphNegativePropagationGroupFacts(tb, initials, keys, group, group, 1, 1, 1)
+	}
+	return initials
+}
+
+func appendGraphNegativePropagationGroupFacts(tb testing.TB, initials []SessionInitialFact, keys graphNegativePropagationKeys, group, idPrefix string, level1Width, level2Width, level3Width int) []SessionInitialFact {
+	tb.Helper()
+
+	initials = append(initials, graphNegativePropagationInitialFact(tb, keys.root, idPrefix+"-root-000", group))
+	for i := range level1Width {
+		initials = append(initials, graphNegativePropagationInitialFact(tb, keys.level1, fmt.Sprintf("%s-level1-%03d", idPrefix, i), group))
+	}
+	for i := range level2Width {
+		initials = append(initials, graphNegativePropagationInitialFact(tb, keys.level2, fmt.Sprintf("%s-level2-%03d", idPrefix, i), group))
+	}
+	for i := range level3Width {
+		initials = append(initials, graphNegativePropagationInitialFact(tb, keys.level3, fmt.Sprintf("%s-level3-%03d", idPrefix, i), group))
+	}
+	return initials
+}
+
+func graphNegativePropagationInitialFact(tb testing.TB, templateKey TemplateKey, id, group string) SessionInitialFact {
+	tb.Helper()
+
+	return SessionInitialFact{
+		TemplateKey: templateKey,
+		Fields: mustFields(tb, map[string]any{
+			"id":    id,
+			"group": group,
+		}),
+	}
+}
+
+func mustGraphNegativePropagationTargetFact(tb testing.TB, session *Session, keys graphNegativePropagationKeys, tc graphNegativePropagationBenchmarkCase) FactSnapshot {
+	tb.Helper()
+
+	key := keys.keyAtDepth(tc.betaDepth)
+	if key == "" {
+		tb.Fatalf("unsupported beta depth %d", tc.betaDepth)
+	}
+	id := "target-root-000"
+	if tc.betaDepth > 0 {
+		id = fmt.Sprintf("target-level%d-000", tc.betaDepth)
+	}
+	return mustBenchmarkSessionFactByTemplateAndField(tb, session, key, "id", id)
+}
+
+func reportGraphNegativePropagationBenchmarkCounters(tb testing.TB, revision *Ruleset, keys graphNegativePropagationKeys, tc graphNegativePropagationBenchmarkCase, operation graphNegativePropagationOperation) {
+	tb.Helper()
+
+	reporter, ok := tb.(interface {
+		ReportMetric(float64, string)
+	})
+	if !ok {
+		return
+	}
+	session := mustGraphNegativePropagationBenchmarkSession(tb, revision, keys, tc)
+	snapshot := runGraphNegativePropagationBenchmarkMutation(tb, session, keys, tc, operation)
+	assertGraphNegativePropagationCounterSnapshot(tb, snapshot, tc, operation)
+	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphBeta), "diagnostic-runtime-graph-beta")
+	reporter.ReportMetric(float64(len(snapshot.UnsupportedReasons)), "diagnostic-unsupported-reason-count")
+	reporter.ReportMetric(float64(snapshot.Totals.RemovalIndexLookups), "diagnostic-removal-index-lookups")
+	reporter.ReportMetric(float64(snapshot.Totals.RemovalRowsTouched), "diagnostic-removal-rows-touched")
+	reporter.ReportMetric(float64(snapshot.Totals.RemovalRowsRemoved), "diagnostic-removal-rows-removed")
+	reporter.ReportMetric(float64(snapshot.Totals.NegativePropagationEvents), "diagnostic-negative-propagation-events")
+	reporter.ReportMetric(float64(snapshot.Totals.NegativeRowsRemoved), "diagnostic-negative-beta-rows-removed")
+	reporter.ReportMetric(float64(snapshot.Totals.NegativeTerminalRowsRemoved), "diagnostic-negative-terminal-rows-removed")
+	reporter.ReportMetric(float64(snapshot.Totals.TerminalDeltasRemoved), "diagnostic-terminal-deltas-removed")
+	reporter.ReportMetric(float64(snapshot.TerminalRowsRetained), "diagnostic-terminal-rows-retained")
+	reporter.ReportMetric(float64(snapshot.Totals.AgendaDeltaApplications), "diagnostic-agenda-delta-applications")
+}
+
+func runGraphNegativePropagationBenchmarkMutation(tb testing.TB, session *Session, keys graphNegativePropagationKeys, tc graphNegativePropagationBenchmarkCase, operation graphNegativePropagationOperation) propagationCounterSnapshot {
+	tb.Helper()
+
+	target := mustGraphNegativePropagationTargetFact(tb, session, keys, tc)
+	session.attachPropagationCounters()
+	switch operation {
+	case graphNegativePropagationRetract:
+		result, err := session.Retract(context.Background(), target.ID())
+		if err != nil {
+			tb.Fatalf("diagnostic Retract: %v", err)
+		}
+		if result.Status != RetractRemoved {
+			tb.Fatalf("diagnostic retract status = %v, want %v", result.Status, RetractRemoved)
+		}
+	case graphNegativePropagationModify:
+		result, err := session.Modify(context.Background(), target.ID(), FactPatch{
+			Set: mustFields(tb, map[string]any{"group": graphNegativePropagationDestinationGroup}),
+		})
+		if err != nil {
+			tb.Fatalf("diagnostic Modify: %v", err)
+		}
+		if result.Status != ModifyChanged {
+			tb.Fatalf("diagnostic modify status = %v, want %v", result.Status, ModifyChanged)
+		}
+	default:
+		tb.Fatalf("unsupported operation %q", operation)
+	}
+	return session.propagationCounterSnapshot()
+}
+
+func assertGraphNegativePropagationCounterSnapshot(tb testing.TB, snapshot propagationCounterSnapshot, tc graphNegativePropagationBenchmarkCase, operation graphNegativePropagationOperation) {
+	tb.Helper()
+
+	affectedTerminals := tc.affectedTerminalRows()
+	affectedBetaRows := tc.affectedBetaRows()
+	affectedRows := affectedBetaRows + affectedTerminals
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		tb.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if len(snapshot.UnsupportedReasons) != 0 {
+		tb.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
+	}
+	if got, want := snapshot.Totals.TerminalDeltasRemoved, affectedTerminals; got != want {
+		tb.Fatalf("terminal deltas removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.TerminalRowsRemoved, affectedTerminals; got != want {
+		tb.Fatalf("terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, affectedTerminals; got != want {
+		tb.Fatalf("negative terminal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativeRowsRemoved, affectedBetaRows; got != want {
+		tb.Fatalf("negative beta rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsRemoved, affectedRows; got != want {
+		tb.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsTouched, affectedRows; got != want {
+		tb.Fatalf("removal rows touched = %d, want topology-limited %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, affectedRows; got != want {
+		tb.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
+	}
+	if got, want := snapshot.Totals.NegativePropagationEvents, affectedRows; got != want {
+		tb.Fatalf("negative propagation events = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.AgendaDeltaApplications, 1; got != want {
+		tb.Fatalf("agenda delta applications = %d, want %d", got, want)
+	}
+	switch operation {
+	case graphNegativePropagationRetract:
+		if got, want := snapshot.TerminalRowsRetained, tc.initialTerminalRows()-affectedTerminals; got != want {
+			tb.Fatalf("terminal rows retained = %d, want %d", got, want)
+		}
+		if got := snapshot.Totals.TerminalRowsInserted; got != 0 {
+			tb.Fatalf("terminal rows inserted = %d, want 0", got)
+		}
+	case graphNegativePropagationModify:
+		if got, want := snapshot.TerminalRowsRetained, tc.initialTerminalRows(); got != want {
+			tb.Fatalf("terminal rows retained = %d, want %d", got, want)
+		}
+	default:
+		tb.Fatalf("unsupported operation %q", operation)
+	}
+	if snapshot.Totals.RemovalRowsTouched >= snapshot.TerminalRowsRetained {
+		tb.Fatalf("removal rows touched = %d, retained terminal rows = %d; want affected rows below retained graph size", snapshot.Totals.RemovalRowsTouched, snapshot.TerminalRowsRetained)
+	}
 }
 
 func mustGraphResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
