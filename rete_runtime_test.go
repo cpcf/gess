@@ -2,8 +2,10 @@ package gess
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +66,73 @@ func TestReteNetworkPlanDescribesDeclaredTemplateRules(t *testing.T) {
 	}
 	if counts[reteNodeTerminal] != runtime.plan.stats.terminalNodes {
 		t.Fatalf("terminal metric count = %d, want %d", counts[reteNodeTerminal], runtime.plan.stats.terminalNodes)
+	}
+}
+
+func TestReteRuntimeUnsupportedPlanFailsExplicitly(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+	})
+	session := mustSession(t, revision, "unsupported-runtime-match-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	snapshot := mustSnapshot(t, ctx, session)
+
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	runtime.resetAlpha(snapshot.Facts())
+	injectUnsupportedRuntimePlan(t, runtime, "adult-active")
+
+	_, err = runtime.match(ctx, snapshot)
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("match error = %v, want ErrUnsupportedRuntime", err)
+	}
+	for _, want := range []string{"unsupported runtime", "missing-target", `rule="adult-active"`, `binding="person"`, `detail="test unsupported graph plan"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("match error %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+func TestSessionRunFailsWhenGraphRuntimeUnsupported(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+	})
+	session := mustSession(t, revision, "unsupported-runtime-run-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+	session.agendaReady = false
+	session.agendaDirty = true
+
+	result, err := session.Run(ctx)
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("Run error = %v, want ErrUnsupportedRuntime", err)
+	}
+	if result.Status != RunFailed {
+		t.Fatalf("Run status = %s, want %s", result.Status, RunFailed)
+	}
+}
+
+func TestSessionReconcileAgendaRequiresReteRuntime(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+	})
+	session := mustSession(t, revision, "missing-runtime-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	session.rete = nil
+
+	if _, err := session.reconcileAgenda(ctx, session); !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("reconcileAgenda error = %v, want ErrUnsupportedRuntime", err)
 	}
 }
 
@@ -2237,6 +2306,30 @@ func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldCo
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
+func injectUnsupportedRuntimePlan(t testing.TB, runtime *reteRuntime, ruleName string) {
+	t.Helper()
+	if runtime == nil {
+		t.Fatal("runtime is nil")
+	}
+	rule, ok := runtime.revision.rules[ruleName]
+	if !ok {
+		t.Fatalf("rule %q not found", ruleName)
+	}
+	if len(rule.conditionPlans) == 0 {
+		t.Fatalf("rule %q has no conditions", ruleName)
+	}
+	runtime.plan.betaSupported = false
+	runtime.plan.unsupported = []reteUnsupportedReason{{
+		ruleID:         rule.id,
+		ruleRevisionID: rule.revisionID,
+		conditionID:    rule.conditionPlans[0].id,
+		binding:        rule.conditionPlans[0].binding,
+		kind:           reteUnsupportedMissingTarget,
+		detail:         "test unsupported graph plan",
+	}}
+	runtime.graphBeta = nil
 }
 
 func assertAlphaMemoryCount(t testing.TB, session *Session, ruleName string, want int) {
