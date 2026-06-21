@@ -163,6 +163,105 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	}
 }
 
+func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "seed",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(seed): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:            "child",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(child): %v", err)
+	}
+
+	var recorded []FactID
+	addChildAction := func(name string) {
+		t.Helper()
+		if err := workspace.AddAction(ActionSpec{
+			Name: name,
+			Fn: func(ctx ActionContext) error {
+				_, err := ctx.AssertTemplate(TemplateKey("child"), mustFields(t, map[string]any{"id": "same"}))
+				return err
+			},
+		}); err != nil {
+			t.Fatalf("AddAction(%s): %v", name, err)
+		}
+	}
+	addChildAction("child-first")
+	addChildAction("child-second")
+	if err := workspace.AddAction(ActionSpec{
+		Name: "record-child",
+		Fn: func(ctx ActionContext) error {
+			child, ok := ctx.Binding("child")
+			if !ok {
+				return ErrInvalidRuleset
+			}
+			recorded = append(recorded, child.ID())
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(record-child): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "seed-creates-children",
+		Conditions: []RuleConditionSpec{
+			{Binding: "seed", TemplateKey: TemplateKey("seed")},
+		},
+		Actions: []RuleActionSpec{
+			{Name: "child-first"},
+			{Name: "child-second"},
+		},
+	}); err != nil {
+		t.Fatalf("AddRule(seed-creates-children): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "record-created-child",
+		Conditions: []RuleConditionSpec{
+			{Binding: "child", TemplateKey: TemplateKey("child")},
+		},
+		Actions: []RuleActionSpec{{Name: "record-child"}},
+	}); err != nil {
+		t.Fatalf("AddRule(record-created-child): %v", err)
+	}
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("run-repeated-action-assert-facts"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("seed"), mustFields(t, map[string]any{"id": "seed"})); err != nil {
+		t.Fatalf("AssertTemplate(seed): %v", err)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 3 {
+		t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("recorded child activations = %#v, want two", recorded)
+	}
+	if recorded[0] == recorded[1] {
+		t.Fatalf("recorded duplicate child fact ID %q twice", recorded[0])
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after run = %d, want 0", got)
+	}
+}
+
 func TestSessionRunFiresActivationAndAllowsActionContextMutations(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{

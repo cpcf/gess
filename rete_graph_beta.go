@@ -70,10 +70,11 @@ type tokenHashMemory struct {
 type graphTokenRowID int
 
 type graphTokenRow struct {
-	id       graphTokenRowID
-	token    tokenRef
-	joinKey  betaJoinKey
-	identity graphTokenIdentityKey
+	id               graphTokenRowID
+	token            tokenRef
+	joinKey          betaJoinKey
+	identity         graphTokenIdentityKey
+	terminalIdentity candidateIdentity
 }
 
 type graphTokenIdentityKey struct {
@@ -485,7 +486,7 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	return true
 }
 
-func (m *tokenHashMemory) insertTerminal(token tokenRef) bool {
+func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candidateIdentity) bool {
 	if m == nil || token.isZero() {
 		return false
 	}
@@ -508,9 +509,10 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef) bool {
 
 	rowID := graphTokenRowID(len(m.rows))
 	m.rows = append(m.rows, graphTokenRow{
-		id:       rowID,
-		token:    token,
-		identity: identity,
+		id:               rowID,
+		token:            token,
+		identity:         identity,
+		terminalIdentity: terminalIdentity,
 	})
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
@@ -544,7 +546,7 @@ func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationC
 	}
 }
 
-func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(tokenRef)) int {
+func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -566,16 +568,16 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 		}
 		row := m.row(rowID)
 		if row != nil && !row.token.isZero() && row.token.containsFact(id) {
-			fn(row.token)
+			fn(*row)
 		}
 		m.removeRow(rowID, counters)
 		removed++
 	}
 }
 
-func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCounterLedger) (tokenRef, bool) {
+func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCounterLedger) (graphTokenRow, bool) {
 	if m == nil || token.isZero() {
-		return tokenRef{}, false
+		return graphTokenRow{}, false
 	}
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
@@ -583,7 +585,7 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 	identity := tokenRefKey(token)
 	bucket, ok := m.identityRows[identity]
 	if !ok || bucket.len() == 0 {
-		return tokenRef{}, false
+		return graphTokenRow{}, false
 	}
 	for i := 0; i < bucket.len(); i++ {
 		rowID, ok := bucket.at(i)
@@ -597,14 +599,14 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 		if row == nil || !tokenRefEqual(row.token, token) {
 			continue
 		}
-		removed := row.token
+		removed := *row
 		m.removeRow(rowID, counters)
 		return removed, true
 	}
-	return tokenRef{}, false
+	return graphTokenRow{}, false
 }
 
-func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(tokenRef)) {
+func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
 	if m == nil || id.IsZero() {
 		return
 	}
@@ -631,7 +633,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propag
 		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
 			continue
 		}
-		fn(row.token)
+		fn(*row)
 	}
 }
 
@@ -1414,13 +1416,15 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		if !ok {
 			return false
 		}
-		removed, ok = nodeMemory.left.removeToken(token, counters)
+		removedRow, removedOK := nodeMemory.left.removeToken(token, counters)
+		removed, ok = removedRow.token, removedOK
 	case reteGraphBetaInputRight:
 		joinKey, ok = graphBetaJoinKeyForRightToken(node, token)
 		if !ok {
 			return false
 		}
-		removed, ok = nodeMemory.right.removeToken(token, counters)
+		removedRow, removedOK := nodeMemory.right.removeToken(token, counters)
+		removed, ok = removedRow.token, removedOK
 	default:
 		return false
 	}
@@ -1563,11 +1567,11 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 		if terminal == nil {
 			continue
 		}
-		terminal.rows.forEachTokenContainingFact(id, counters, func(token tokenRef) {
+		terminal.rows.forEachTokenContainingFact(id, counters, func(row graphTokenRow) {
 			delta.removed = append(delta.removed, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
-				token:          token,
-				identity:       m.terminalTokenIdentity(terminalNode.ruleRevisionID, token),
+				token:          row.token,
+				identity:       row.terminalIdentity,
 			})
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
@@ -1670,7 +1674,9 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		delta.supported = false
 		return
 	}
-	if !terminal.rows.insertTerminal(token) {
+	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	identity := m.terminalTokenIdentity(ruleRevisionID, token)
+	if !terminal.rows.insertTerminal(token, identity) {
 		if span != nil {
 			span.recordTerminalRowDeduped()
 		}
@@ -1682,11 +1688,10 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	if span != nil {
 		span.recordTerminalDeltaEmitted()
 	}
-	ruleRevisionID := m.terminalRuleRevision(terminalID)
 	delta.added = append(delta.added, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
-		identity:       m.terminalTokenIdentity(ruleRevisionID, token),
+		identity:       identity,
 	})
 }
 
@@ -1699,11 +1704,11 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		return
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
-	terminal.rows.removeTokensContainingFact(id, counters, func(token tokenRef) {
+	terminal.rows.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
 		delta.removed = append(delta.removed, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
-			token:          token,
-			identity:       m.terminalTokenIdentity(ruleRevisionID, token),
+			token:          row.token,
+			identity:       row.terminalIdentity,
 		})
 		if counters != nil {
 			counters.recordTerminalDeltaRemoved()
@@ -1727,8 +1732,8 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
 	delta.removed = append(delta.removed, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
-		token:          removed,
-		identity:       m.terminalTokenIdentity(ruleRevisionID, removed),
+		token:          removed.token,
+		identity:       removed.terminalIdentity,
 	})
 	if counters != nil {
 		counters.recordTerminalDeltaRemoved()
@@ -1764,7 +1769,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
-				identity:       m.terminalTokenIdentity(terminalNode.ruleRevisionID, row.token),
+				identity:       row.terminalIdentity,
 			})
 		}
 	}

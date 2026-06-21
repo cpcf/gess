@@ -2146,6 +2146,131 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	session := mustSession(t, revision, "graph-beta-terminal-agenda-identity-session")
+	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+
+	rule := revision.rules["employee-department"]
+	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
+	if terminal == nil || terminal.rows.len() != 1 {
+		t.Fatalf("terminal memory = %#v, want one row", terminal)
+	}
+	row := terminal.rows.rows[0]
+	if row.terminalIdentity.isZero() {
+		t.Fatal("terminal row identity is zero")
+	}
+	if row.terminalIdentity != session.rete.graphBeta.terminalTokenIdentity(rule.revisionID, row.token) {
+		t.Fatalf("terminal row identity = %#v, want token identity", row.terminalIdentity)
+	}
+
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok || len(tokens) != 1 {
+		t.Fatalf("terminal tokens = %#v, ok=%v, want one", tokens, ok)
+	}
+	if tokens[0].identity != row.terminalIdentity {
+		t.Fatalf("terminal delta identity = %#v, want %#v", tokens[0].identity, row.terminalIdentity)
+	}
+
+	if got, want := len(session.agenda.pending), 1; got != want {
+		t.Fatalf("pending keys = %d, want %d", got, want)
+	}
+	stored, ok := session.agenda.activationByKeyPtr(session.agenda.pending[0])
+	if !ok {
+		t.Fatal("pending activation not found")
+	}
+	if stored.identity != row.terminalIdentity {
+		t.Fatalf("activation identity = %#v, want terminal row identity %#v", stored.identity, row.terminalIdentity)
+	}
+	if !stored.id.IsZero() {
+		t.Fatalf("stored activation ID = %q, want lazy zero ID", stored.id)
+	}
+
+	duplicateTokens := append(cloneTerminalTokenDeltas(tokens), tokens[0])
+	agenda := newAgenda()
+	changes, err := agenda.reconcileTerminalTokens(ctx, revision, duplicateTokens)
+	if err != nil {
+		t.Fatalf("reconcile duplicate terminal tokens: %v", err)
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("duplicate terminal token changes = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.pending), 1; got != want {
+		t.Fatalf("duplicate terminal token pending keys = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "item-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "item", TemplateKey: item.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "graph-beta-reasserted-token-identity-session")
+
+	first, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate first: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcile first: %v", err)
+	}
+	firstActivation := singlePendingActivation(t, session)
+	firstIdentity := firstActivation.identity
+	firstFactIDs := cloneFactIDs(firstActivation.factIDs)
+	if firstIdentity.isZero() {
+		t.Fatal("first identity is zero")
+	}
+
+	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
+		t.Fatalf("Retract first: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending after retract = %d, want 0", got)
+	}
+
+	second, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate second: %v", err)
+	}
+	if first.Fact.ID() == second.Fact.ID() {
+		t.Fatalf("reasserted fact reused ID %q", second.Fact.ID())
+	}
+	secondActivation := singlePendingActivation(t, session)
+	if secondActivation.identity == firstIdentity {
+		t.Fatalf("reasserted activation reused identity %#v", secondActivation.identity)
+	}
+	if reflect.DeepEqual(secondActivation.factIDs, firstFactIDs) {
+		t.Fatalf("reasserted activation facts = %#v, want new fact IDs", secondActivation.factIDs)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
 func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -2859,6 +2984,15 @@ func assertTerminalTokenDeltaMatchesCandidateDelta(t *testing.T, revision *Rules
 		t.Fatalf("direct terminal pending differs from candidate pending:\ndirect=%#v\ncandidate=%#v", got, want)
 	}
 	return directChanges
+}
+
+func singlePendingActivation(t *testing.T, session *Session) activation {
+	t.Helper()
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations = %d, want %d", got, want)
+	}
+	return pending[0]
 }
 
 func cloneTerminalTokenDeltas(deltas []reteTerminalTokenDelta) []reteTerminalTokenDelta {
