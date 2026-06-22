@@ -146,13 +146,19 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		if row.generation == 0 {
 			row.generation = generation
 		}
-		row.factSpanStart = len(a.factIDs)
-		a.factIDs = append(a.factIDs, match.fact.ID())
-		a.factVersions = append(a.factVersions, match.fact.Version())
+		if !match.hasValue {
+			row.factSpanStart = len(a.factIDs)
+			a.factIDs = append(a.factIDs, match.fact.ID())
+			a.factVersions = append(a.factVersions, match.fact.Version())
+		}
 	}
 	identityEntry := entry
-	identityEntry.factID = match.fact.ID()
-	identityEntry.factVersion = match.fact.Version()
+	identityEntry.value = cloneValue(match.value)
+	identityEntry.hasValue = match.hasValue
+	if !match.hasValue {
+		identityEntry.factID = match.fact.ID()
+		identityEntry.factVersion = match.fact.Version()
+	}
 	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
 
 	a.count++

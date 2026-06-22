@@ -2,6 +2,7 @@ package gess
 
 import (
 	"context"
+	"fmt"
 	"slices"
 )
 
@@ -9,12 +10,17 @@ type reteGraphBetaMemory struct {
 	revision            *Ruleset
 	graph               *reteGraph
 	nodes               []*reteGraphBetaNodeMemory
+	aggregates          []*reteGraphAggregateNodeMemory
 	terminals           []*reteGraphTerminalMemory
 	alphaFacts          []reteGraphAlphaFactSet
 	alphaConditions     [][]ConditionID
 	alphaFactCounts     map[ConditionID]int
 	facts               []FactSnapshot
 	factIndexes         map[FactID]int
+	factsByName         map[string][]FactSnapshot
+	factsByTemplate     map[TemplateKey][]FactSnapshot
+	factNameIndexes     map[FactID]int
+	factTemplateIndexes map[FactID]int
 	arena               *tokenArena
 	terminalTokenDeltas []reteTerminalTokenDelta
 	alphaRouteScratch   []reteGraphAlphaNodeID
@@ -25,6 +31,22 @@ type reteGraphBetaMemory struct {
 type reteGraphBetaNodeMemory struct {
 	left  tokenHashMemory
 	right tokenHashMemory
+}
+
+type reteGraphAggregateNodeMemory struct {
+	members  map[FactID]reteGraphAggregateMember
+	count    int64
+	intSum   int64
+	floatSum float64
+	floaty   bool
+	token    tokenRef
+	value    Value
+	hasValue bool
+}
+
+type reteGraphAggregateMember struct {
+	match conditionMatch
+	value Value
 }
 
 type reteGraphTerminalMemory struct {
@@ -266,6 +288,7 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 		revision:            revision,
 		graph:               graph,
 		nodes:               make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
+		aggregates:          make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
 		terminals:           make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
 		arena:               newTokenArena(),
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
@@ -894,6 +917,7 @@ func (m *reteGraphBetaMemory) resetFacts(facts []FactSnapshot) {
 	}
 	m.clearMemories()
 	m.setFacts(facts)
+	m.initializeAggregateOutputs()
 	for _, fact := range facts {
 		m.insertFact(fact, nil)
 	}
@@ -912,6 +936,36 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 	for i, fact := range m.facts {
 		m.factIndexes[fact.ID()] = i
 	}
+	m.rebuildFactTargetIndexes()
+}
+
+func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
+	if m == nil {
+		return
+	}
+	if m.factsByName == nil {
+		m.factsByName = make(map[string][]FactSnapshot)
+	} else {
+		clear(m.factsByName)
+	}
+	if m.factsByTemplate == nil {
+		m.factsByTemplate = make(map[TemplateKey][]FactSnapshot)
+	} else {
+		clear(m.factsByTemplate)
+	}
+	if m.factNameIndexes == nil {
+		m.factNameIndexes = make(map[FactID]int, len(m.facts))
+	} else {
+		clear(m.factNameIndexes)
+	}
+	if m.factTemplateIndexes == nil {
+		m.factTemplateIndexes = make(map[FactID]int, len(m.facts))
+	} else {
+		clear(m.factTemplateIndexes)
+	}
+	for _, fact := range m.facts {
+		m.addFactTargetIndexes(fact)
+	}
 }
 
 func (m *reteGraphBetaMemory) clearMemories() {
@@ -929,6 +983,11 @@ func (m *reteGraphBetaMemory) clearMemories() {
 			terminal.rows.clear()
 		}
 	}
+	for _, aggregate := range m.aggregates {
+		if aggregate != nil {
+			aggregate.clear()
+		}
+	}
 	for i := range m.alphaFacts {
 		m.alphaFacts[i].clear()
 	}
@@ -937,6 +996,32 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
+}
+
+func (m *reteGraphBetaMemory) initializeAggregateOutputs() {
+	if m == nil || m.graph == nil {
+		return
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, node := range m.graph.aggregateNodes {
+		m.refreshAggregateOutput(node.id, nil, &delta)
+	}
+}
+
+func (m *reteGraphAggregateNodeMemory) clear() {
+	if m == nil {
+		return
+	}
+	if m.members != nil {
+		clear(m.members)
+	}
+	m.count = 0
+	m.intSum = 0
+	m.floatSum = 0
+	m.floaty = false
+	m.token = tokenRef{}
+	m.value = Value{}
+	m.hasValue = false
 }
 
 func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
@@ -985,11 +1070,14 @@ func (m *reteGraphBetaMemory) upsertFactSource(fact FactSnapshot) {
 		m.factIndexes = make(map[FactID]int)
 	}
 	if index, ok := m.factIndexes[fact.ID()]; ok && index >= 0 && index < len(m.facts) {
+		m.removeFactTargetIndexes(m.facts[index])
 		m.facts[index] = fact
+		m.addFactTargetIndexes(fact)
 		return
 	}
 	m.factIndexes[fact.ID()] = len(m.facts)
 	m.facts = append(m.facts, fact)
+	m.addFactTargetIndexes(fact)
 }
 
 func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
@@ -1000,6 +1088,7 @@ func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
 	if !ok || index < 0 || index >= len(m.facts) {
 		return
 	}
+	m.removeFactTargetIndexes(m.facts[index])
 	last := len(m.facts) - 1
 	if index != last {
 		m.facts[index] = m.facts[last]
@@ -1008,6 +1097,76 @@ func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
 	m.facts[last] = FactSnapshot{}
 	m.facts = m.facts[:last]
 	delete(m.factIndexes, id)
+}
+
+func (m *reteGraphBetaMemory) addFactTargetIndexes(fact FactSnapshot) {
+	if m == nil || fact.ID().IsZero() {
+		return
+	}
+	if fact.Name() != "" {
+		if m.factsByName == nil {
+			m.factsByName = make(map[string][]FactSnapshot)
+		}
+		if m.factNameIndexes == nil {
+			m.factNameIndexes = make(map[FactID]int)
+		}
+		m.factNameIndexes[fact.ID()] = len(m.factsByName[fact.Name()])
+		m.factsByName[fact.Name()] = append(m.factsByName[fact.Name()], fact)
+	}
+	if fact.TemplateKey() != "" {
+		if m.factsByTemplate == nil {
+			m.factsByTemplate = make(map[TemplateKey][]FactSnapshot)
+		}
+		if m.factTemplateIndexes == nil {
+			m.factTemplateIndexes = make(map[FactID]int)
+		}
+		m.factTemplateIndexes[fact.ID()] = len(m.factsByTemplate[fact.TemplateKey()])
+		m.factsByTemplate[fact.TemplateKey()] = append(m.factsByTemplate[fact.TemplateKey()], fact)
+	}
+}
+
+func (m *reteGraphBetaMemory) removeFactTargetIndexes(fact FactSnapshot) {
+	if m == nil || fact.ID().IsZero() {
+		return
+	}
+	if fact.Name() != "" && m.factsByName != nil && m.factNameIndexes != nil {
+		index, ok := m.factNameIndexes[fact.ID()]
+		facts := m.factsByName[fact.Name()]
+		if ok && index >= 0 && index < len(facts) {
+			last := len(facts) - 1
+			if index != last {
+				facts[index] = facts[last]
+				m.factNameIndexes[facts[index].ID()] = index
+			}
+			facts[last] = FactSnapshot{}
+			facts = facts[:last]
+			if len(facts) == 0 {
+				delete(m.factsByName, fact.Name())
+			} else {
+				m.factsByName[fact.Name()] = facts
+			}
+		}
+		delete(m.factNameIndexes, fact.ID())
+	}
+	if fact.TemplateKey() != "" && m.factsByTemplate != nil && m.factTemplateIndexes != nil {
+		index, ok := m.factTemplateIndexes[fact.ID()]
+		facts := m.factsByTemplate[fact.TemplateKey()]
+		if ok && index >= 0 && index < len(facts) {
+			last := len(facts) - 1
+			if index != last {
+				facts[index] = facts[last]
+				m.factTemplateIndexes[facts[index].ID()] = index
+			}
+			facts[last] = FactSnapshot{}
+			facts = facts[:last]
+			if len(facts) == 0 {
+				delete(m.factsByTemplate, fact.TemplateKey())
+			} else {
+				m.factsByTemplate[fact.TemplateKey()] = facts
+			}
+		}
+		delete(m.factTemplateIndexes, fact.ID())
+	}
 }
 
 func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
@@ -1318,6 +1477,9 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 		}
 	}
+	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+		m.insertAggregateInput(aggregateID, match, span, delta)
+	}
 }
 
 func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -1376,6 +1538,227 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		default:
 			delta.supported = false
 		}
+	}
+	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+		m.removeAggregateInput(aggregateID, match, counters, delta)
+	}
+}
+
+func (m *reteGraphBetaMemory) insertAggregateInput(id reteGraphAggregateNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) {
+	if m == nil || delta == nil || match.fact.ID().IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	node := m.graph.aggregateNode(id)
+	memory := m.aggregateMemory(id)
+	if node == nil || memory == nil {
+		delta.supported = false
+		return
+	}
+	if existing, ok := memory.members[match.fact.ID()]; ok {
+		memory.removeMember(node, existing)
+	}
+	member, ok := m.aggregateMember(node, match)
+	if !ok {
+		delta.supported = false
+		return
+	}
+	if memory.members == nil {
+		memory.members = make(map[FactID]reteGraphAggregateMember)
+	}
+	memory.members[match.fact.ID()] = member
+	if err := memory.addMember(node, member); err != nil {
+		delta.supported = false
+		return
+	}
+	m.refreshAggregateOutput(id, span, delta)
+}
+
+func (m *reteGraphBetaMemory) removeAggregateInput(id reteGraphAggregateNodeID, match conditionMatch, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || delta == nil || match.fact.ID().IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	node := m.graph.aggregateNode(id)
+	memory := m.aggregateMemory(id)
+	if node == nil || memory == nil {
+		delta.supported = false
+		return
+	}
+	member, ok := memory.members[match.fact.ID()]
+	if !ok {
+		return
+	}
+	delete(memory.members, match.fact.ID())
+	memory.removeMember(node, member)
+	m.refreshAggregateOutputWithCounters(id, counters, delta)
+}
+
+func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, match conditionMatch) (reteGraphAggregateMember, bool) {
+	if node == nil {
+		return reteGraphAggregateMember{}, false
+	}
+	member := reteGraphAggregateMember{match: match}
+	if node.spec.kind == AggregateCount {
+		return member, true
+	}
+	value, ok, err := node.spec.expression.evaluate(match.fact, []conditionMatch{match})
+	if err != nil || !ok {
+		return reteGraphAggregateMember{}, false
+	}
+	member.value = value
+	return member, true
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateOutput(id reteGraphAggregateNodeID, span *propagationCounterSpan, delta *reteAgendaDelta) {
+	m.refreshAggregateOutputInternal(id, span, nil, delta)
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateOutputWithCounters(id reteGraphAggregateNodeID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	m.refreshAggregateOutputInternal(id, nil, counters, delta)
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggregateNodeID, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || delta == nil {
+		return
+	}
+	node := m.graph.aggregateNode(id)
+	memory := m.aggregateMemory(id)
+	if node == nil || memory == nil {
+		delta.supported = false
+		return
+	}
+	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
+	if !memory.token.isZero() {
+		m.propagateRemoveFromStage(stage, memory.token, counters, delta)
+		memory.token = tokenRef{}
+		memory.hasValue = false
+	}
+	value, ok := memory.result(node)
+	if !ok {
+		return
+	}
+	entry := node.entry
+	entry.value = value
+	entry.hasValue = true
+	match := conditionMatch{
+		conditionID: node.conditionID,
+		bindingSlot: node.bindingSlot,
+		value:       value,
+		hasValue:    true,
+	}
+	token := m.newTokenRef(tokenRef{}, entry, match, 0, m.aggregateGeneration(), span)
+	if token.isZero() {
+		delta.supported = false
+		return
+	}
+	memory.token = token
+	memory.value = value
+	memory.hasValue = true
+	m.propagateFromStage(stage, token, span, delta)
+}
+
+func (m *reteGraphBetaMemory) aggregateGeneration() Generation {
+	if m == nil {
+		return 1
+	}
+	for _, fact := range m.facts {
+		if !fact.ID().IsZero() {
+			return fact.Generation()
+		}
+	}
+	return 1
+}
+
+func (m *reteGraphAggregateNodeMemory) addMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) error {
+	if m == nil || node == nil {
+		return nil
+	}
+	m.count++
+	if node.spec.kind == AggregateCount {
+		return nil
+	}
+	return m.addSum(member.value)
+}
+
+func (m *reteGraphAggregateNodeMemory) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) {
+	if m == nil || node == nil {
+		return
+	}
+	if m.count > 0 {
+		m.count--
+	}
+	if node.spec.kind != AggregateSum {
+		return
+	}
+	switch member.value.Kind() {
+	case ValueInt:
+		if m.floaty {
+			m.floatSum -= float64(member.value.intValue)
+			return
+		}
+		m.intSum -= member.value.intValue
+	case ValueFloat:
+		m.recomputeSum(node)
+	}
+}
+
+func (m *reteGraphAggregateNodeMemory) addSum(value Value) error {
+	switch value.Kind() {
+	case ValueInt:
+		if m.floaty {
+			m.floatSum += float64(value.intValue)
+			return nil
+		}
+		next, overflow := safeAddInt64(m.intSum, value.intValue)
+		if overflow {
+			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
+		}
+		m.intSum = next
+	case ValueFloat:
+		if !m.floaty {
+			m.floatSum = float64(m.intSum)
+			m.intSum = 0
+			m.floaty = true
+		}
+		m.floatSum += value.floatValue
+	default:
+		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
+	}
+	return nil
+}
+
+func (m *reteGraphAggregateNodeMemory) recomputeSum(node *reteGraphAggregateNode) {
+	if m == nil || node == nil {
+		return
+	}
+	m.intSum = 0
+	m.floatSum = 0
+	m.floaty = false
+	for _, member := range m.members {
+		_ = m.addSum(member.value)
+	}
+}
+
+func (m *reteGraphAggregateNodeMemory) result(node *reteGraphAggregateNode) (Value, bool) {
+	if m == nil || node == nil {
+		return Value{}, false
+	}
+	switch node.spec.kind {
+	case AggregateCount:
+		return newIntValue(m.count), true
+	case AggregateSum:
+		if m.floaty {
+			value, err := canonicalFloat(m.floatSum)
+			return value, err == nil
+		}
+		return newIntValue(m.intSum), true
+	default:
+		return Value{}, false
 	}
 }
 
@@ -2176,6 +2559,25 @@ func (m *reteGraphBetaMemory) nodeMemory(id reteGraphBetaNodeID) *reteGraphBetaN
 	return node
 }
 
+func (m *reteGraphBetaMemory) aggregateMemory(id reteGraphAggregateNodeID) *reteGraphAggregateNodeMemory {
+	if m == nil || id <= 0 {
+		return nil
+	}
+	index := int(id)
+	if index >= len(m.aggregates) {
+		next := make([]*reteGraphAggregateNodeMemory, index+1)
+		copy(next, m.aggregates)
+		m.aggregates = next
+	}
+	aggregate := m.aggregates[index]
+	if aggregate != nil {
+		return aggregate
+	}
+	aggregate = &reteGraphAggregateNodeMemory{}
+	m.aggregates[index] = aggregate
+	return aggregate
+}
+
 func (m *reteGraphBetaMemory) terminal(id reteGraphTerminalNodeID) *reteGraphTerminalMemory {
 	if m == nil || id <= 0 {
 		return nil
@@ -2488,22 +2890,14 @@ func (m *reteGraphBetaMemory) factsForTarget(target conditionTarget) ([]FactSnap
 	if m == nil {
 		return nil, false
 	}
-	out := make([]FactSnapshot, 0, len(m.facts))
-	for _, fact := range m.facts {
-		switch target.kind {
-		case conditionTargetName:
-			if fact.Name() == target.name {
-				out = append(out, fact)
-			}
-		case conditionTargetTemplateKey:
-			if fact.TemplateKey() == target.templateKey {
-				out = append(out, fact)
-			}
-		default:
-			return nil, false
-		}
+	switch target.kind {
+	case conditionTargetName:
+		return m.factsByName[target.name], true
+	case conditionTargetTemplateKey:
+		return m.factsByTemplate[target.templateKey], true
+	default:
+		return nil, false
 	}
-	return out, true
 }
 
 func (m *reteGraphBetaMemory) collectTerminalCandidates(ctx context.Context, rule compiledRule, terminal *reteGraphTerminalMemory) ([]matchCandidate, error) {

@@ -230,13 +230,12 @@ func (p compiledAggregatePlan) evaluate(ctx context.Context, source factSource, 
 		}
 		plan := p.inputPlans[index]
 		return plan.forEachMatchWithBindings(ctx, source, selected, func(match conditionMatch) error {
-			next := make([]conditionMatch, len(selected)+1)
-			copy(next, selected)
-			next[len(selected)] = match
-			return walk(index+1, next)
+			return walk(index+1, append(selected, match))
 		})
 	}
-	if err := walk(0, append([]conditionMatch(nil), outer...)); err != nil {
+	selected := make([]conditionMatch, len(outer), len(outer)+len(p.inputPlans))
+	copy(selected, outer)
+	if err := walk(0, selected); err != nil {
 		return nil, false, err
 	}
 

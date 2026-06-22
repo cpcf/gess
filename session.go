@@ -1384,6 +1384,10 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
 		return changes, err
 	}
+	if len(s.listeners) == 0 && s.rete != nil && !s.rete.supportsIncrementalAgenda() {
+		s.markAgendaDirty()
+		return nil, nil
+	}
 	return s.reconcileAgendaInternal(ctx)
 }
 

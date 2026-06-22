@@ -745,14 +745,18 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			supported:     true,
 			betaSupported: true,
 		}
-		if rule.hasAggregateConditions() {
+		if rule.hasAggregateConditions() && !ruleAggregatesIncrementalAgendaSupported(rule) {
 			rulePlan.supported = true
 			rulePlan.betaSupported = true
 			plan.incrementalAgendaSupported = false
 		}
 		ruleRouteKeys := make(map[TemplateKey]struct{})
 
+		aggregateIncrementalSupported := ruleAggregatesIncrementalAgendaSupported(rule)
 		for _, condition := range rule.conditionPlans {
+			if condition.aggregate != nil && aggregateIncrementalSupported {
+				continue
+			}
 			conditionPlan, unsupported := planReteCondition(revision, rule, condition)
 			if len(unsupported) > 0 {
 				rulePlan.supported = false
@@ -797,7 +801,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	plan.incrementalAgendaSupported = len(plan.rules) > 0
 	for _, rulePlan := range plan.rules {
 		rule, ok := revision.rulesByRevisionID[rulePlan.ruleRevisionID]
-		if ok && rule.hasAggregateConditions() {
+		if ok && rule.hasAggregateConditions() && !ruleAggregatesIncrementalAgendaSupported(rule) {
 			plan.incrementalAgendaSupported = false
 		}
 		if !rulePlan.betaSupported {
@@ -809,6 +813,22 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	}
 
 	return plan
+}
+
+func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
+	hasAggregate := false
+	for _, branch := range rule.executionConditionBranches() {
+		for _, plan := range branch.plans {
+			if plan.aggregate == nil {
+				continue
+			}
+			hasAggregate = true
+			if len(branch.plans) != 1 || !reteGraphSupportsAggregateCondition(plan) {
+				return false
+			}
+		}
+	}
+	return hasAggregate
 }
 
 func (p reteNetworkPlan) alphaRoutesForTemplateKey(templateKey TemplateKey) ([]reteConditionPlan, bool) {
