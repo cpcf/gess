@@ -44,9 +44,21 @@ type reteGraphAggregateBucket struct {
 	intSums   []int64
 	floatSums []float64
 	floaty    []bool
+	extrema   []reteGraphAggregateExtremum
 	token     tokenRef
 	values    []Value
 	hasValue  bool
+}
+
+type reteGraphAggregateExtremum struct {
+	values  map[string]reteGraphAggregateExtremumValue
+	current Value
+	have    bool
+}
+
+type reteGraphAggregateExtremumValue struct {
+	value Value
+	count int64
 }
 
 type reteGraphAggregateMember struct {
@@ -1052,6 +1064,11 @@ func (m *reteGraphAggregateBucket) clear() {
 	m.floatSums = m.floatSums[:0]
 	clear(m.floaty)
 	m.floaty = m.floaty[:0]
+	for i := range m.extrema {
+		m.extrema[i].clear()
+	}
+	clear(m.extrema)
+	m.extrema = m.extrema[:0]
 	m.token = tokenRef{}
 	clear(m.values)
 	m.values = m.values[:0]
@@ -1939,11 +1956,23 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 	m.ensureSpecState(len(node.specs))
 	m.count++
 	for i, spec := range node.specs {
-		if spec.kind == AggregateCount {
+		switch spec.kind {
+		case AggregateCount:
 			continue
-		}
-		if err := m.addSum(i, member.values[i]); err != nil {
-			return err
+		case AggregateSum:
+			if err := m.addSum(i, member.values[i]); err != nil {
+				return err
+			}
+		case AggregateMin:
+			if err := m.addExtremum(i, member.values[i], true); err != nil {
+				return err
+			}
+		case AggregateMax:
+			if err := m.addExtremum(i, member.values[i], false); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: unsupported aggregate kind %q", ErrAggregateEvaluation, spec.kind)
 		}
 	}
 	return nil
@@ -1958,21 +1987,36 @@ func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, me
 	}
 	m.ensureSpecState(len(node.specs))
 	for i, spec := range node.specs {
-		if spec.kind != AggregateSum {
-			continue
-		}
-		value := member.values[i]
-		switch value.Kind() {
-		case ValueInt:
-			if m.floaty[i] {
-				m.floatSums[i] -= float64(value.intValue)
-				continue
+		switch spec.kind {
+		case AggregateSum:
+			value := member.values[i]
+			switch value.Kind() {
+			case ValueInt:
+				if m.floaty[i] {
+					m.floatSums[i] -= float64(value.intValue)
+					continue
+				}
+				m.intSums[i] -= value.intValue
+			case ValueFloat:
+				m.recomputeSum(node, i)
 			}
-			m.intSums[i] -= value.intValue
-		case ValueFloat:
-			m.recomputeSum(node, i)
+		case AggregateMin:
+			m.removeExtremum(i, member.values[i], true)
+		case AggregateMax:
+			m.removeExtremum(i, member.values[i], false)
 		}
 	}
+}
+
+func (m *reteGraphAggregateExtremum) clear() {
+	if m == nil {
+		return
+	}
+	if m.values != nil {
+		clear(m.values)
+	}
+	m.current = Value{}
+	m.have = false
 }
 
 func (m *reteGraphAggregateBucket) ensureSpecState(specs int) {
@@ -1987,6 +2031,9 @@ func (m *reteGraphAggregateBucket) ensureSpecState(specs int) {
 	}
 	for len(m.floaty) < specs {
 		m.floaty = append(m.floaty, false)
+	}
+	for len(m.extrema) < specs {
+		m.extrema = append(m.extrema, reteGraphAggregateExtremum{})
 	}
 }
 
@@ -2014,6 +2061,82 @@ func (m *reteGraphAggregateBucket) addSum(index int, value Value) error {
 		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
 	}
 	return nil
+}
+
+func (m *reteGraphAggregateBucket) addExtremum(index int, value Value, min bool) error {
+	m.ensureSpecState(index + 1)
+	extremum := &m.extrema[index]
+	if extremum.values == nil {
+		extremum.values = make(map[string]reteGraphAggregateExtremumValue)
+	}
+	key := value.canonicalKey()
+	entry := extremum.values[key]
+	if entry.count == 0 {
+		if extremum.have {
+			if _, ok := compareValues(value, extremum.current); !ok {
+				return fmt.Errorf("%w: min/max input is not comparable", ErrAggregateEvaluation)
+			}
+		}
+		entry.value = cloneValue(value)
+	}
+	entry.count++
+	extremum.values[key] = entry
+	if !extremum.have {
+		extremum.current = cloneValue(value)
+		extremum.have = true
+		return nil
+	}
+	comparison, ok := compareValues(value, extremum.current)
+	if !ok {
+		return fmt.Errorf("%w: min/max input is not comparable", ErrAggregateEvaluation)
+	}
+	if (min && comparison < 0) || (!min && comparison > 0) {
+		extremum.current = cloneValue(value)
+	}
+	return nil
+}
+
+func (m *reteGraphAggregateBucket) removeExtremum(index int, value Value, min bool) {
+	if m == nil || index < 0 || index >= len(m.extrema) {
+		return
+	}
+	extremum := &m.extrema[index]
+	if len(extremum.values) == 0 {
+		return
+	}
+	key := value.canonicalKey()
+	entry, ok := extremum.values[key]
+	if !ok {
+		return
+	}
+	if entry.count > 1 {
+		entry.count--
+		extremum.values[key] = entry
+		return
+	}
+	delete(extremum.values, key)
+	if !extremum.have || !extremum.current.Equal(value) {
+		return
+	}
+	extremum.current = Value{}
+	extremum.have = false
+	for _, candidate := range extremum.values {
+		if candidate.count <= 0 {
+			continue
+		}
+		if !extremum.have {
+			extremum.current = cloneValue(candidate.value)
+			extremum.have = true
+			continue
+		}
+		comparison, ok := compareValues(candidate.value, extremum.current)
+		if !ok {
+			continue
+		}
+		if (min && comparison < 0) || (!min && comparison > 0) {
+			extremum.current = cloneValue(candidate.value)
+		}
+	}
 }
 
 func (m *reteGraphAggregateBucket) recomputeSum(node *reteGraphAggregateNode, index int) {
@@ -2049,6 +2172,11 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode) ([]Valu
 				continue
 			}
 			values[i] = newIntValue(m.intSums[i])
+		case AggregateMin, AggregateMax:
+			if i >= len(m.extrema) || !m.extrema[i].have {
+				return nil, false
+			}
+			values[i] = cloneValue(m.extrema[i].current)
 		default:
 			return nil, false
 		}
