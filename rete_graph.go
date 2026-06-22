@@ -467,7 +467,7 @@ func reteGraphSupportsAggregateCondition(condition compiledConditionPlan, allowI
 	}
 	for _, spec := range condition.aggregate.specs {
 		switch spec.kind {
-		case AggregateCount, AggregateSum, AggregateMin, AggregateMax:
+		case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateCollect:
 		default:
 			return false
 		}

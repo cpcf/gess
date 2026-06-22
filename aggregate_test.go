@@ -340,6 +340,101 @@ func TestAccumulateMinAndMaxUseIncrementalAgendaDeltas(t *testing.T) {
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
+func TestAccumulateCollectUsesIncrementalAgendaDeltas(t *testing.T) {
+	var observed []Value
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			collected, ok := ctx.BindingValue("collected")
+			if !ok {
+				return errors.New("missing collected binding")
+			}
+			observed = append(observed, collected)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "collected",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Collect(BindingFieldExpr{Binding: "item", Field: "amount"}).As("collected"),
+		),
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-collect-incremental-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental collect aggregate agenda support", session.rete)
+	}
+
+	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
+	if err != nil {
+		t.Fatalf("assert first: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	if err != nil {
+		t.Fatalf("assert second: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("first Run fired = %d, want 1", result.Fired)
+	}
+	assertCollectedValue(t, observed[len(observed)-1], []Value{mustValue(t, 3), mustValue(t, 5)})
+
+	if _, err := session.Modify(context.Background(), second.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"amount": 1})}); err != nil {
+		t.Fatalf("modify second: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("second Run fired = %d, want 1", result.Fired)
+	}
+	assertCollectedValue(t, observed[len(observed)-1], []Value{mustValue(t, 3), mustValue(t, 1)})
+
+	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
+		t.Fatalf("retract first: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("third Run fired = %d, want 1", result.Fired)
+	}
+	assertCollectedValue(t, observed[len(observed)-1], []Value{mustValue(t, 1)})
+
+	if _, err := session.Retract(context.Background(), second.Fact.ID()); err != nil {
+		t.Fatalf("retract second: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("fourth Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("fourth Run fired = %d, want 1", result.Fired)
+	}
+	assertCollectedValue(t, observed[len(observed)-1], []Value{})
+}
+
 func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) {
 	var observed []bucketedAggregateRow
 	workspace := NewWorkspace()
@@ -528,6 +623,14 @@ func assertExtremaRow(t *testing.T, row Fields, min, max int64) {
 	}
 	if got := row["max"]; !got.Equal(mustValue(t, max)) {
 		t.Fatalf("max = %v, want %d", got, max)
+	}
+}
+
+func assertCollectedValue(t *testing.T, got Value, want []Value) {
+	t.Helper()
+	expected := mustValue(t, want)
+	if !got.Equal(expected) {
+		t.Fatalf("collected = %v, want %v", got, expected)
 	}
 }
 

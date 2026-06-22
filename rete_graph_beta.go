@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 )
 
 type reteGraphBetaMemory struct {
@@ -45,6 +46,7 @@ type reteGraphAggregateBucket struct {
 	floatSums []float64
 	floaty    []bool
 	extrema   []reteGraphAggregateExtremum
+	collects  [][]reteGraphAggregateCollectEntry
 	token     tokenRef
 	values    []Value
 	hasValue  bool
@@ -59,6 +61,12 @@ type reteGraphAggregateExtremum struct {
 type reteGraphAggregateExtremumValue struct {
 	value Value
 	count int64
+}
+
+type reteGraphAggregateCollectEntry struct {
+	key    graphTokenIdentityKey
+	factID FactID
+	value  Value
 }
 
 type reteGraphAggregateMember struct {
@@ -1069,6 +1077,12 @@ func (m *reteGraphAggregateBucket) clear() {
 	}
 	clear(m.extrema)
 	m.extrema = m.extrema[:0]
+	for i := range m.collects {
+		clear(m.collects[i])
+		m.collects[i] = m.collects[i][:0]
+	}
+	clear(m.collects)
+	m.collects = m.collects[:0]
 	m.token = tokenRef{}
 	clear(m.values)
 	m.values = m.values[:0]
@@ -1971,6 +1985,8 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 			if err := m.addExtremum(i, member.values[i], false); err != nil {
 				return err
 			}
+		case AggregateCollect:
+			m.addCollect(i, member)
 		default:
 			return fmt.Errorf("%w: unsupported aggregate kind %q", ErrAggregateEvaluation, spec.kind)
 		}
@@ -2004,6 +2020,8 @@ func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, me
 			m.removeExtremum(i, member.values[i], true)
 		case AggregateMax:
 			m.removeExtremum(i, member.values[i], false)
+		case AggregateCollect:
+			m.removeCollect(i, member)
 		}
 	}
 }
@@ -2034,6 +2052,9 @@ func (m *reteGraphAggregateBucket) ensureSpecState(specs int) {
 	}
 	for len(m.extrema) < specs {
 		m.extrema = append(m.extrema, reteGraphAggregateExtremum{})
+	}
+	for len(m.collects) < specs {
+		m.collects = append(m.collects, nil)
 	}
 }
 
@@ -2139,6 +2160,61 @@ func (m *reteGraphAggregateBucket) removeExtremum(index int, value Value, min bo
 	}
 }
 
+func (m *reteGraphAggregateBucket) addCollect(index int, member reteGraphAggregateMember) {
+	m.ensureSpecState(index + 1)
+	entry := reteGraphAggregateCollectEntry{
+		key:    tokenRefKey(member.token),
+		factID: member.match.fact.ID(),
+		value:  cloneValue(member.values[index]),
+	}
+	entries := m.collects[index]
+	insertAt := sort.Search(len(entries), func(i int) bool {
+		return !collectEntryLess(entries[i], entry)
+	})
+	if insertAt < len(entries) && entries[insertAt].key == entry.key {
+		entries[insertAt] = entry
+		m.collects[index] = entries
+		return
+	}
+	entries = append(entries, reteGraphAggregateCollectEntry{})
+	copy(entries[insertAt+1:], entries[insertAt:])
+	entries[insertAt] = entry
+	m.collects[index] = entries
+}
+
+func (m *reteGraphAggregateBucket) removeCollect(index int, member reteGraphAggregateMember) {
+	if m == nil || index < 0 || index >= len(m.collects) {
+		return
+	}
+	key := tokenRefKey(member.token)
+	entries := m.collects[index]
+	for i, entry := range entries {
+		if entry.key != key {
+			continue
+		}
+		copy(entries[i:], entries[i+1:])
+		entries[len(entries)-1] = reteGraphAggregateCollectEntry{}
+		m.collects[index] = entries[:len(entries)-1]
+		return
+	}
+}
+
+func collectEntryLess(left, right reteGraphAggregateCollectEntry) bool {
+	if factIDLess(left.factID, right.factID) {
+		return true
+	}
+	if factIDLess(right.factID, left.factID) {
+		return false
+	}
+	if left.key.generation != right.key.generation {
+		return left.key.generation < right.key.generation
+	}
+	if left.key.size != right.key.size {
+		return left.key.size < right.key.size
+	}
+	return left.key.identityState < right.key.identityState
+}
+
 func (m *reteGraphAggregateBucket) recomputeSum(node *reteGraphAggregateNode, index int) {
 	if m == nil || node == nil {
 		return
@@ -2177,6 +2253,16 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode) ([]Valu
 				return nil, false
 			}
 			values[i] = cloneValue(m.extrema[i].current)
+		case AggregateCollect:
+			collected := make([]Value, len(m.collects[i]))
+			for j, entry := range m.collects[i] {
+				collected[j] = cloneValue(entry.value)
+			}
+			value, err := canonicalValue(collected)
+			if err != nil {
+				return nil, false
+			}
+			values[i] = value
 		default:
 			return nil, false
 		}
