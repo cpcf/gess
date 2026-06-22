@@ -12,6 +12,7 @@ import (
 )
 
 var benchmarkAggregateScalingRunResult RunResult
+var benchmarkAggregateScalingMutationResult RunResult
 
 type aggregateScalingCase struct {
 	streams        int
@@ -46,6 +47,55 @@ func BenchmarkGessAggregateScalingSeedRun(b *testing.B) {
 				benchmarkAggregateScalingRunResult = result
 			}
 		})
+	}
+}
+
+func BenchmarkGessAggregateScalingSteadyStateMutations(b *testing.B) {
+	cases := []aggregateScalingCase{
+		{streams: 1, itemsPerStream: 128},
+		{streams: 4, itemsPerStream: 512},
+		{streams: 8, itemsPerStream: 1024},
+	}
+	mutations := []struct {
+		name string
+		run  func(testing.TB, context.Context, *Session, TemplateKey, aggregateScalingCase, FactID) RunResult
+	}{
+		{name: "assert", run: runAggregateScalingSteadyAssert},
+		{name: "modify", run: runAggregateScalingSteadyModify},
+		{name: "retract", run: runAggregateScalingSteadyRetract},
+	}
+
+	for _, tc := range cases {
+		revision, itemKey := mustCompileAggregateScalingRuleset(b, tc)
+		for _, mutation := range mutations {
+			name := fmt.Sprintf("%s/streams=%d/items=%d/rules=%d",
+				mutation.name, tc.streams, tc.itemsPerStream, tc.ruleCount())
+			b.Run(name, func(b *testing.B) {
+				ctx := context.Background()
+				b.ReportAllocs()
+				b.ReportMetric(float64(tc.streams), "streams")
+				b.ReportMetric(float64(tc.itemsPerStream), "items/stream")
+				b.ReportMetric(float64(tc.ruleCount()), "rules")
+				b.ReportMetric(1, "fired/run")
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					session := mustSession(b, revision, SessionID(fmt.Sprintf("aggregate-mutation-benchmark-%s-%d", mutation.name, i)))
+					seeded := runAggregateScalingSeedRun(b, ctx, session, itemKey, tc)
+					if seeded.Fired != tc.firedCount() {
+						b.Fatalf("seed fired = %d, want %d", seeded.Fired, tc.firedCount())
+					}
+					targetFact := FactID{}
+					if mutation.name != "assert" {
+						targetFact = mustFindAggregateScalingItem(b, session, 0, 0)
+					}
+					b.StartTimer()
+					result := mutation.run(b, ctx, session, itemKey, tc, targetFact)
+					b.StopTimer()
+					benchmarkAggregateScalingMutationResult = result
+				}
+			})
+		}
 	}
 }
 
@@ -206,6 +256,78 @@ func runAggregateScalingSeedRun(t testing.TB, ctx context.Context, session *Sess
 	}
 	validateAggregateScalingSession(t, session, result, tc, "benchmark")
 	return result
+}
+
+func runAggregateScalingSteadyAssert(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
+	t.Helper()
+
+	_, err := session.AssertTemplate(ctx, itemKey, Fields{
+		"stream": newIntValue(0),
+		"id":     newIntValue(int64(tc.itemsPerStream)),
+		"amount": newIntValue(1),
+	})
+	if err != nil {
+		t.Fatalf("steady assert: %v", err)
+	}
+	return runAggregateScalingSteadyMutation(t, ctx, session, "assert")
+}
+
+func runAggregateScalingSteadyModify(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
+	t.Helper()
+
+	_, err := session.Modify(ctx, targetFact, FactPatch{Set: Fields{"amount": newIntValue(int64(aggregateScalingAmount(0) + 1))}})
+	if err != nil {
+		t.Fatalf("steady modify: %v", err)
+	}
+	return runAggregateScalingSteadyMutation(t, ctx, session, "modify")
+}
+
+func runAggregateScalingSteadyRetract(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
+	t.Helper()
+
+	if _, err := session.Retract(ctx, targetFact); err != nil {
+		t.Fatalf("steady retract: %v", err)
+	}
+	return runAggregateScalingSteadyMutation(t, ctx, session, "retract")
+}
+
+func runAggregateScalingSteadyMutation(t testing.TB, ctx context.Context, session *Session, phase string) RunResult {
+	t.Helper()
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("%s Run: %v", phase, err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("%s run result = (%v, %d), want (%v, 1)", phase, result.Status, result.Fired, RunCompleted)
+	}
+	return result
+}
+
+func mustFindAggregateScalingItem(t testing.TB, session *Session, stream, id int) FactID {
+	t.Helper()
+
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, fact := range snapshot.FactsByTemplateKey(TemplateKey("agg-item")) {
+		streamValue, ok := fact.Field("stream")
+		if !ok {
+			continue
+		}
+		idValue, ok := fact.Field("id")
+		if !ok {
+			continue
+		}
+		streamInt, streamOK := streamValue.AsInt64()
+		idInt, idOK := idValue.AsInt64()
+		if streamOK && idOK && int(streamInt) == stream && int(idInt) == id {
+			return fact.ID()
+		}
+	}
+	t.Fatalf("missing aggregate item stream=%d id=%d", stream, id)
+	return FactID{}
 }
 
 func validateAggregateScalingSession(t testing.TB, session *Session, result RunResult, tc aggregateScalingCase, phase string) {
