@@ -2226,6 +2226,134 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
+	ctx := context.Background()
+	var fired int
+	revision, customerKey, blockKey := mustNegationRuleset(t, func(ctx ActionContext) error {
+		if _, ok := ctx.Binding("block"); ok {
+			t.Fatal("negated binding should not be visible to actions")
+		}
+		if _, ok := ctx.Binding("customer"); !ok {
+			t.Fatal("customer binding missing")
+		}
+		fired++
+		return nil
+	})
+	session := mustSession(t, revision, "graph-beta-negation-assert-retract-session")
+	if !session.rete.supportsGraphBeta() {
+		t.Fatalf("runtime does not support graph beta: %#v", session.rete.plan.unsupported)
+	}
+
+	if _, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-2", "active": true})); err != nil {
+		t.Fatalf("AssertTemplate(unrelated block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations with only right facts = %d, want 0", got)
+	}
+	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(customer): %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after customer = %d, want %d", got, want)
+	}
+	block, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after blocking fact = %d, want 0", got)
+	}
+	if _, err := session.Retract(ctx, block.Fact.ID()); err != nil {
+		t.Fatalf("Retract(block): %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after block retract = %d, want %d", got, want)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fired != 1 {
+		t.Fatalf("fired actions = %d, want 1", fired)
+	}
+	blockAgain, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "after-run"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(block after run): %v", err)
+	}
+	if _, err := session.Retract(ctx, blockAgain.Fact.ID()); err != nil {
+		t.Fatalf("Retract(block after run): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after consumed negative activation unblocked = %d, want 0", got)
+	}
+	if _, err := session.Retract(ctx, customer.Fact.ID()); err != nil {
+		t.Fatalf("Retract(customer): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after customer retract = %d, want 0", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
+	ctx := context.Background()
+	revision, customerKey, blockKey := mustNegationRuleset(t, func(ActionContext) error { return nil })
+	session := mustSession(t, revision, "graph-beta-negation-modify-session")
+	if _, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"})); err != nil {
+		t.Fatalf("AssertTemplate(customer): %v", err)
+	}
+	inactive, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": false}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(inactive block): %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations with inactive block = %d, want %d", got, want)
+	}
+	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"active": true})}); err != nil {
+		t.Fatalf("Modify block active=true: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations with active block = %d, want 0", got)
+	}
+	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"code": "still-blocking"})}); err != nil {
+		t.Fatalf("Modify active block code: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after still-blocking modify = %d, want 0", got)
+	}
+	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"active": false})}); err != nil {
+		t.Fatalf("Modify block active=false: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after inactive modify = %d, want %d", got, want)
+	}
+
+	first, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(first active block): %v", err)
+	}
+	second, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(second active block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
+	}
+	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
+		t.Fatalf("Retract(first block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations with one remaining active block = %d, want 0", got)
+	}
+	if _, err := session.Retract(ctx, second.Fact.ID()); err != nil {
+		t.Fatalf("Retract(second block): %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after last block retract = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
 func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T) {
 	ctx := context.Background()
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
@@ -2846,6 +2974,51 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	return mustCompileWorkspace(t, workspace), noise.Key(), employee.Key(), department.Key()
+}
+
+func mustNegationRuleset(t testing.TB, action func(ActionContext) error) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	block := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "block",
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+			{Name: "code", Kind: ValueString},
+		},
+	})
+	if action == nil {
+		action = func(ActionContext) error { return nil }
+	}
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   action,
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-without-active-block",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Not{Condition: Match{
+				Binding:     "block",
+				TemplateKey: block.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), customer.Key(), block.Key()
 }
 
 func mustGraphTopologyRemovalWorkspace(t testing.TB) (*Workspace, TemplateKey, TemplateKey, TemplateKey, TemplateKey) {

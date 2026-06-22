@@ -287,11 +287,14 @@ func activationBindingTupleEntries(rule compiledRule, factIDs []FactID, factVers
 	if len(factIDs) == 0 || len(factIDs) != len(factVersions) || len(rule.conditions) == 0 || len(rule.conditionPlans) == 0 {
 		return nil
 	}
-	n := min(len(rule.conditionPlans), min(len(rule.conditions), len(factIDs)))
+	n := min(len(rule.conditions), len(factIDs))
 	entries := make([]bindingTupleEntry, n)
 	for i := range n {
 		condition := rule.conditions[i]
-		plan := rule.conditionPlans[i]
+		plan, ok := rule.conditionPlanForBindingSlot(i)
+		if !ok {
+			return nil
+		}
 		entries[i] = bindingTupleEntry{
 			binding:        condition.binding,
 			bindingSlot:    i,
@@ -315,7 +318,7 @@ func activationBindingTupleEntriesForActivation(rule compiledRule, act *activati
 	if count == 0 || count != activationFactVersionCount(act) {
 		return nil
 	}
-	n := min(len(rule.conditionPlans), min(len(rule.conditions), count))
+	n := min(len(rule.conditions), count)
 	if n != count {
 		return nil
 	}
@@ -327,7 +330,10 @@ func activationBindingTupleEntriesForActivation(rule compiledRule, act *activati
 	}
 	for i := range n {
 		condition := rule.conditions[i]
-		plan := rule.conditionPlans[i]
+		plan, ok := rule.conditionPlanForBindingSlot(i)
+		if !ok {
+			return nil
+		}
 		entries[i] = bindingTupleEntry{
 			binding:        condition.binding,
 			bindingSlot:    i,
@@ -356,7 +362,10 @@ func fillActivationBindingTupleEntriesFromTokenRef(entries []bindingTupleEntry, 
 		return index
 	}
 	condition := rule.conditions[index]
-	plan := rule.conditionPlans[index]
+	plan, ok := rule.conditionPlanForBindingSlot(index)
+	if !ok {
+		return index
+	}
 	entries[index] = bindingTupleEntry{
 		binding:        condition.binding,
 		bindingSlot:    index,
@@ -372,15 +381,21 @@ func fillActivationBindingTupleEntriesFromTokenRef(entries []bindingTupleEntry, 
 }
 
 func activationPathForRule(rule compiledRule) []int {
-	if len(rule.conditionPlans) == 0 {
+	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
 		return nil
 	}
 	pathLen := 0
-	for _, plan := range rule.conditionPlans {
+	plans := make([]compiledConditionPlan, 0, len(rule.conditions))
+	for i := range rule.conditions {
+		plan, ok := rule.conditionPlanForBindingSlot(i)
+		if !ok {
+			return nil
+		}
+		plans = append(plans, plan)
 		pathLen += len(plan.path)
 	}
 	path := make([]int, 0, pathLen)
-	for _, plan := range rule.conditionPlans {
+	for _, plan := range plans {
 		path = append(path, plan.path...)
 	}
 	return path
@@ -732,7 +747,17 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		previous = delta
 		havePrevious = true
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-		if _, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+			if existing.status == activationStatusDeactivated {
+				existing.status = activationStatusPending
+				a.pending = a.insertActivationKeySorted(a.pending, key, existing)
+				if collectChanges {
+					activated = append(activated, agendaChange{
+						kind:       agendaChangeActivated,
+						activation: a.compactChangeActivation(existing),
+					})
+				}
+			}
 			continue
 		}
 		rowMark := a.activationRows.count
@@ -819,6 +844,16 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 					seen[key] = struct{}{}
 					nextPending = append(nextPending, key)
 				}
+			} else if existing.status == activationStatusDeactivated {
+				existing.status = activationStatusPending
+				if _, seenBefore := seen[key]; !seenBefore {
+					seen[key] = struct{}{}
+					nextPending = append(nextPending, key)
+				}
+				activated = append(activated, agendaChange{
+					kind:       agendaChangeActivated,
+					activation: a.compactChangeActivation(existing),
+				})
 			}
 			continue
 		}

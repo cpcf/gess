@@ -294,8 +294,8 @@ func TestReteGraphMarksNegatedBetaStages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if runtime.supportsGraphBeta() {
-		t.Fatal("runtime supports graph beta for negated graph, want unsupported until negative beta runtime exists")
+	if !runtime.supportsGraphBeta() {
+		t.Fatalf("runtime does not support graph beta for negated graph: %#v", runtime.plan.unsupported)
 	}
 }
 

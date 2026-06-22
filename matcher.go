@@ -228,11 +228,14 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 	maxRecency := Recency(0)
 	aggregateRecency := Recency(0)
 	for i, match := range matches {
-		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) || match.bindingSlot >= len(rule.conditionPlans) {
+		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
 			return matchCandidate{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
 		}
 		condition := rule.conditions[match.bindingSlot]
-		plan := rule.conditionPlans[match.bindingSlot]
+		plan, ok := rule.conditionPlanForBindingSlot(match.bindingSlot)
+		if !ok {
+			return matchCandidate{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
+		}
 		entries[i] = bindingTupleEntry{
 			binding:        condition.binding,
 			bindingSlot:    match.bindingSlot,
@@ -665,11 +668,14 @@ func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTu
 }
 
 func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (bindingTupleEntry, error) {
-	if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) || match.bindingSlot >= len(rule.conditionPlans) {
+	if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
 		return bindingTupleEntry{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
 	}
 	condition := rule.conditions[match.bindingSlot]
-	plan := rule.conditionPlans[match.bindingSlot]
+	plan, ok := rule.conditionPlanForBindingSlot(match.bindingSlot)
+	if !ok {
+		return bindingTupleEntry{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
+	}
 	return bindingTupleEntry{
 		binding:        condition.binding,
 		bindingSlot:    match.bindingSlot,

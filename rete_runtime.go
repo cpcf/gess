@@ -107,7 +107,6 @@ const (
 	reteUnsupportedMissingTarget reteUnsupportedKind = "missing-target"
 	reteUnsupportedUnindexedJoin reteUnsupportedKind = "unindexed-join"
 	reteUnsupportedExpression    reteUnsupportedKind = "expression-predicate"
-	reteUnsupportedNegation      reteUnsupportedKind = "negation"
 )
 
 type retePlanStats struct {
@@ -921,10 +920,6 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 	default:
 		addUnsupported(reteUnsupportedUnknownTarget, "condition target cannot be planned")
 	}
-	if condition.negated {
-		addUnsupported(reteUnsupportedNegation, "not condition is not executable by the current graph runtime")
-	}
-
 	for i, join := range condition.joins {
 		conditionPlan.beta = append(conditionPlan.beta, reteBetaPlan{
 			id:             reteBetaNodeID(rule.revisionID, condition.id, i),

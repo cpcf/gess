@@ -396,21 +396,14 @@ func TestConditionTreeNotCompilesAsLocalUnsupportedCondition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if runtime.supportsGraphBeta() {
-		t.Fatal("runtime supports graph beta for not condition, want unsupported until negative beta runtime exists")
+	if !runtime.supportsGraphBeta() {
+		t.Fatalf("runtime does not support graph beta for not condition: %#v", runtime.plan.unsupported)
 	}
-	if got, want := len(runtime.plan.unsupported), 1; got != want {
+	if got, want := len(runtime.plan.unsupported), 0; got != want {
 		t.Fatalf("unsupported reasons = %d, want %d: %#v", got, want, runtime.plan.unsupported)
 	}
-	if got := runtime.plan.unsupported[0].kind; got != reteUnsupportedNegation {
-		t.Fatalf("unsupported kind = %q, want %q", got, reteUnsupportedNegation)
-	}
-	err = runtime.validateExecutableGraphBetaRuntime()
-	if !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
-	}
-	if !strings.Contains(err.Error(), "negation") {
-		t.Fatalf("unsupported runtime error %q does not contain negation", err.Error())
+	if err := runtime.validateExecutableGraphBetaRuntime(); err != nil {
+		t.Fatalf("validateExecutableGraphBetaRuntime: %v", err)
 	}
 
 	session, err := NewSession(
@@ -424,9 +417,8 @@ func TestConditionTreeNotCompilesAsLocalUnsupportedCondition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	_, err = session.Run(context.Background())
-	if !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("Run error = %v, want ErrUnsupportedRuntime", err)
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
 	}
 }
 

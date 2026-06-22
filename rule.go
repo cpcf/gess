@@ -394,6 +394,18 @@ func (r compiledRule) inspect() Rule {
 	}
 }
 
+func (r compiledRule) conditionPlanForBindingSlot(bindingSlot int) (compiledConditionPlan, bool) {
+	if bindingSlot < 0 {
+		return compiledConditionPlan{}, false
+	}
+	for _, plan := range r.conditionPlans {
+		if plan.bindingSlot == bindingSlot {
+			return plan, true
+		}
+	}
+	return compiledConditionPlan{}, false
+}
+
 func cloneRuleConditions(conditions []RuleCondition) []RuleCondition {
 	out := make([]RuleCondition, len(conditions))
 	for i, condition := range conditions {

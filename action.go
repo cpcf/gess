@@ -608,7 +608,7 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
 	factCount := activationFactCount(&activation)
-	if factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions) || factCount != len(rule.conditionPlans) {
+	if factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
