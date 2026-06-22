@@ -7,6 +7,7 @@ import (
 )
 
 var benchmarkExpressionPredicateRunResult RunResult
+var benchmarkExpressionPredicateResetResult ResetResult
 
 type expressionPredicateBenchmarkCase struct {
 	systems int
@@ -25,24 +26,14 @@ func TestExpressionPredicateBenchmarkFixtureMatchesContract(t *testing.T) {
 }
 
 func BenchmarkGessExpressionPredicatesResetRun(b *testing.B) {
-	cases := []expressionPredicateBenchmarkCase{
-		{systems: 128},
-		{systems: 512},
-		{systems: 2048},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range expressionPredicateBenchmarkCases() {
 		name := fmt.Sprintf("systems=%d/initial-facts=%d/fired=%d", tc.systems, tc.initialFacts(), tc.firedCount())
 		b.Run(name, func(b *testing.B) {
 			ctx := context.Background()
 			revision := mustCompileExpressionPredicateRuleset(b)
 			session := mustExpressionPredicateSession(b, revision, tc)
 
-			b.ReportAllocs()
-			b.ReportMetric(float64(tc.systems), "systems")
-			b.ReportMetric(float64(tc.initialFacts()), "initial-facts")
-			b.ReportMetric(float64(tc.finalFacts()), "final-facts")
-			b.ReportMetric(float64(tc.firedCount()), "fired/run")
+			reportExpressionPredicateBenchmarkMetrics(b, tc)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				if _, err := session.Reset(ctx); err != nil {
@@ -55,12 +46,90 @@ func BenchmarkGessExpressionPredicatesResetRun(b *testing.B) {
 				assertExpressionPredicateBenchmarkResult(b, session, result, tc)
 				benchmarkExpressionPredicateRunResult = result
 			}
-			propagation := collectExpressionPredicatePropagationCounters(b, revision, tc)
-			propagation.reportMetrics(func(name string, value float64) {
-				b.ReportMetric(value, name)
-			})
+			reportExpressionPredicatePropagationMetrics(b, revision, tc)
 		})
 	}
+}
+
+func BenchmarkGessExpressionPredicatesResetOnly(b *testing.B) {
+	for _, tc := range expressionPredicateBenchmarkCases() {
+		name := fmt.Sprintf("systems=%d/initial-facts=%d/fired=%d", tc.systems, tc.initialFacts(), tc.firedCount())
+		b.Run(name, func(b *testing.B) {
+			ctx := context.Background()
+			revision := mustCompileExpressionPredicateRuleset(b)
+			session := mustExpressionPredicateSession(b, revision, tc)
+
+			reportExpressionPredicateBenchmarkMetrics(b, tc)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, err := session.Reset(ctx)
+				if err != nil {
+					b.Fatalf("Reset: %v", err)
+				}
+				if result.Status != ResetApplied {
+					b.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
+				}
+				if got := len(session.factsByID); got != tc.initialFacts() {
+					b.Fatalf("fact count after reset = %d, want %d", got, tc.initialFacts())
+				}
+				benchmarkExpressionPredicateResetResult = result
+			}
+		})
+	}
+}
+
+func BenchmarkGessExpressionPredicatesRunOnly(b *testing.B) {
+	for _, tc := range expressionPredicateBenchmarkCases() {
+		name := fmt.Sprintf("systems=%d/initial-facts=%d/fired=%d", tc.systems, tc.initialFacts(), tc.firedCount())
+		b.Run(name, func(b *testing.B) {
+			ctx := context.Background()
+			revision := mustCompileExpressionPredicateRuleset(b)
+			session := mustExpressionPredicateSession(b, revision, tc)
+
+			reportExpressionPredicateBenchmarkMetrics(b, tc)
+			b.ResetTimer()
+			b.StopTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := session.Reset(ctx); err != nil {
+					b.Fatalf("Reset: %v", err)
+				}
+				b.StartTimer()
+				result, err := session.Run(ctx)
+				b.StopTimer()
+				if err != nil {
+					b.Fatalf("Run: %v", err)
+				}
+				assertExpressionPredicateBenchmarkResult(b, session, result, tc)
+				benchmarkExpressionPredicateRunResult = result
+			}
+			reportExpressionPredicatePropagationMetrics(b, revision, tc)
+		})
+	}
+}
+
+func expressionPredicateBenchmarkCases() []expressionPredicateBenchmarkCase {
+	return []expressionPredicateBenchmarkCase{
+		{systems: 128},
+		{systems: 512},
+		{systems: 2048},
+	}
+}
+
+func reportExpressionPredicateBenchmarkMetrics(b *testing.B, tc expressionPredicateBenchmarkCase) {
+	b.Helper()
+	b.ReportAllocs()
+	b.ReportMetric(float64(tc.systems), "systems")
+	b.ReportMetric(float64(tc.initialFacts()), "initial-facts")
+	b.ReportMetric(float64(tc.finalFacts()), "final-facts")
+	b.ReportMetric(float64(tc.firedCount()), "fired/run")
+}
+
+func reportExpressionPredicatePropagationMetrics(b *testing.B, revision *Ruleset, tc expressionPredicateBenchmarkCase) {
+	b.Helper()
+	propagation := collectExpressionPredicatePropagationCounters(b, revision, tc)
+	propagation.reportMetrics(func(name string, value float64) {
+		b.ReportMetric(value, name)
+	})
 }
 
 func mustCompileExpressionPredicateRuleset(t testing.TB) *Ruleset {

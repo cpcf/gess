@@ -362,15 +362,9 @@ func (m *tokenHashMemory) clear() {
 		m.rows[i] = graphTokenRow{}
 	}
 	m.rows = m.rows[:0]
-	for key, bucket := range m.indexes {
-		m.indexes[key] = bucket.reset()
-	}
-	for key, bucket := range m.identityRows {
-		m.identityRows[key] = bucket.reset()
-	}
-	for key, bucket := range m.factRows {
-		m.factRows[key] = bucket.reset()
-	}
+	clear(m.indexes)
+	clear(m.identityRows)
+	clear(m.factRows)
 }
 
 func (m *tokenHashMemory) len() int {

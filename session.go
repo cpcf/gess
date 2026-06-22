@@ -871,8 +871,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.reserveTemplateIndexes(s.revision)
 	next.reserveSlotStorage(s.revision.estimatedRunSlotCapacity(cap(next.facts)))
-	next.applyCompiledInitialFacts(compiledInitials)
-	facts := next.detachedFactsByInsertionOrderInto(s.resetFactsScratch[:0], s.revision)
+	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 
 	oldGeneration := s.generation
@@ -2464,7 +2463,22 @@ func (w *factWorkspace) applyCompiledInitialFacts(initials []compiledSessionInit
 	}
 }
 
-func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitialFact) {
+func (w *factWorkspace) applyCompiledInitialFactsInto(initials []compiledSessionInitialFact, dst []FactSnapshot, revision *Ruleset) []FactSnapshot {
+	if cap(dst) < len(initials) {
+		dst = make([]FactSnapshot, 0, len(initials))
+	} else {
+		dst = dst[:0]
+	}
+	for _, initial := range initials {
+		fact := w.insertCompiledInitialFact(initial)
+		if fact != nil {
+			dst = append(dst, fact.detachedSnapshotForRevision(revision))
+		}
+	}
+	return dst
+}
+
+func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitialFact) *workingFact {
 	w.sequence++
 	w.recency++
 	id := newFactID(w.generation, w.sequence)
@@ -2493,13 +2507,14 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		fact.fieldPresence = nil
 	}
 
-	w.storeFact(fact)
+	stored := w.storeFact(fact)
 	if initial.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(initial.duplicateIndex, id)
 	}
 	w.factsByTemplate[initial.templateKey] = append(w.factsByTemplate[initial.templateKey], id)
 	w.factsByName[initial.name] = append(w.factsByName[initial.name], id)
 	w.insertionOrder = append(w.insertionOrder, id)
+	return stored
 }
 
 func (s *Session) runGuardHeld() bool {
