@@ -19,6 +19,22 @@ type aggregateScalingCase struct {
 	itemsPerStream int
 }
 
+type aggregateScalingMutationCase struct {
+	mode         string
+	needsTarget  bool
+	itemDelta    int
+	summaryDelta int64
+	run          func(testing.TB, context.Context, *Session, TemplateKey, aggregateScalingCase, FactID) RunResult
+}
+
+func aggregateScalingMutationCases() []aggregateScalingMutationCase {
+	return []aggregateScalingMutationCase{
+		{mode: "agenda-ready-assert", itemDelta: 1, summaryDelta: 1, run: runAggregateScalingSteadyAssert},
+		{mode: "modify-input", needsTarget: true, summaryDelta: 1, run: runAggregateScalingSteadyModify},
+		{mode: "retract-input", needsTarget: true, itemDelta: -1, summaryDelta: -1, run: runAggregateScalingSteadyRetract},
+	}
+}
+
 func BenchmarkGessAggregateScalingSeedRun(b *testing.B) {
 	cases := []aggregateScalingCase{
 		{streams: 1, itemsPerStream: 128},
@@ -56,20 +72,12 @@ func BenchmarkGessAggregateScalingSteadyStateMutations(b *testing.B) {
 		{streams: 4, itemsPerStream: 512},
 		{streams: 8, itemsPerStream: 1024},
 	}
-	mutations := []struct {
-		name string
-		run  func(testing.TB, context.Context, *Session, TemplateKey, aggregateScalingCase, FactID) RunResult
-	}{
-		{name: "assert", run: runAggregateScalingSteadyAssert},
-		{name: "modify", run: runAggregateScalingSteadyModify},
-		{name: "retract", run: runAggregateScalingSteadyRetract},
-	}
 
 	for _, tc := range cases {
 		revision, itemKey := mustCompileAggregateScalingRuleset(b, tc)
-		for _, mutation := range mutations {
+		for _, mutation := range aggregateScalingMutationCases() {
 			name := fmt.Sprintf("%s/streams=%d/items=%d/rules=%d",
-				mutation.name, tc.streams, tc.itemsPerStream, tc.ruleCount())
+				mutation.mode, tc.streams, tc.itemsPerStream, tc.ruleCount())
 			b.Run(name, func(b *testing.B) {
 				ctx := context.Background()
 				b.ReportAllocs()
@@ -80,13 +88,13 @@ func BenchmarkGessAggregateScalingSteadyStateMutations(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					b.StopTimer()
-					session := mustSession(b, revision, SessionID(fmt.Sprintf("aggregate-mutation-benchmark-%s-%d", mutation.name, i)))
+					session := mustSession(b, revision, SessionID(fmt.Sprintf("aggregate-mutation-benchmark-%s-%d", mutation.mode, i)))
 					seeded := runAggregateScalingSeedRun(b, ctx, session, itemKey, tc)
 					if seeded.Fired != tc.firedCount() {
 						b.Fatalf("seed fired = %d, want %d", seeded.Fired, tc.firedCount())
 					}
 					targetFact := FactID{}
-					if mutation.name != "assert" {
+					if mutation.needsTarget {
 						targetFact = mustFindAggregateScalingItem(b, session, 0, 0)
 					}
 					b.StartTimer()
@@ -112,6 +120,10 @@ func TestAggregateScalingSeedRunHarness(t *testing.T) {
 	if warmup < 0 {
 		t.Fatalf("GESS_AGGREGATE_SCALING_WARMUP must be non-negative, got %d", warmup)
 	}
+	mode := strings.TrimSpace(os.Getenv("GESS_AGGREGATE_SCALING_MODE"))
+	if mode == "" {
+		mode = "seed-run"
+	}
 
 	cases := []aggregateScalingCase{
 		{streams: 1, itemsPerStream: 128},
@@ -131,11 +143,34 @@ func TestAggregateScalingSeedRunHarness(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		runAggregateScalingHarnessCase(t, tc, iterations, warmup)
+		runAggregateScalingHarnessCase(t, tc, iterations, warmup, mode)
 	}
 }
 
-func runAggregateScalingHarnessCase(t *testing.T, tc aggregateScalingCase, iterations, warmup int) {
+func runAggregateScalingHarnessCase(t *testing.T, tc aggregateScalingCase, iterations, warmup int, mode string) {
+	t.Helper()
+
+	if mode == "all" {
+		runAggregateScalingSeedRunHarnessCase(t, tc, iterations, warmup)
+		for _, mutation := range aggregateScalingMutationCases() {
+			runAggregateScalingMutationHarnessCase(t, tc, iterations, warmup, mutation)
+		}
+		return
+	}
+	if mode == "seed-run" {
+		runAggregateScalingSeedRunHarnessCase(t, tc, iterations, warmup)
+		return
+	}
+	for _, mutation := range aggregateScalingMutationCases() {
+		if mutation.mode == mode {
+			runAggregateScalingMutationHarnessCase(t, tc, iterations, warmup, mutation)
+			return
+		}
+	}
+	t.Fatalf("unsupported GESS_AGGREGATE_SCALING_MODE %q", mode)
+}
+
+func runAggregateScalingSeedRunHarnessCase(t *testing.T, tc aggregateScalingCase, iterations, warmup int) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -174,6 +209,67 @@ func runAggregateScalingHarnessCase(t *testing.T, tc aggregateScalingCase, itera
 		float64(allocBytes)/float64(iterations),
 		float64(allocs)/float64(iterations),
 	)
+}
+
+func runAggregateScalingMutationHarnessCase(t *testing.T, tc aggregateScalingCase, iterations, warmup int, mutation aggregateScalingMutationCase) {
+	t.Helper()
+
+	ctx := context.Background()
+	revision, itemKey := mustCompileAggregateScalingRuleset(t, tc)
+	for i := range warmup {
+		session, targetFact := prepareAggregateScalingMutationSession(t, ctx, revision, itemKey, tc, mutation, SessionID(fmt.Sprintf("aggregate-scaling-%s-warmup-session-%d", mutation.mode, i)))
+		result := mutation.run(t, ctx, session, itemKey, tc, targetFact)
+		validateAggregateScalingMutationSession(t, session, result, tc, mutation, "warmup")
+	}
+
+	type preparedSession struct {
+		session    *Session
+		targetFact FactID
+		result     RunResult
+	}
+	prepared := make([]preparedSession, iterations)
+	for i := range prepared {
+		session, targetFact := prepareAggregateScalingMutationSession(t, ctx, revision, itemKey, tc, mutation, SessionID(fmt.Sprintf("aggregate-scaling-%s-benchmark-session-%d", mutation.mode, i)))
+		prepared[i] = preparedSession{session: session, targetFact: targetFact}
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	for i := range prepared {
+		prepared[i].result = mutation.run(t, ctx, prepared[i].session, itemKey, tc, prepared[i].targetFact)
+	}
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+
+	for i := range prepared {
+		validateAggregateScalingMutationSession(t, prepared[i].session, prepared[i].result, tc, mutation, "benchmark")
+	}
+
+	allocBytes := after.TotalAlloc - before.TotalAlloc
+	allocs := after.Mallocs - before.Mallocs
+	fmt.Printf(
+		"GESS_RUNNER|aggregate-scaling|%s|streams=%d|items=%d|rules=%d|seeded-facts=%d|fired=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f|alloc-bytes/op=%.0f|allocs/op=%.0f\n",
+		mutation.mode, tc.streams, tc.itemsPerStream, tc.ruleCount(), tc.finalFacts(), 1, iterations, warmup, elapsed.Nanoseconds(),
+		float64(elapsed.Nanoseconds())/float64(iterations),
+		float64(allocBytes)/float64(iterations),
+		float64(allocs)/float64(iterations),
+	)
+}
+
+func prepareAggregateScalingMutationSession(t testing.TB, ctx context.Context, revision *Ruleset, itemKey TemplateKey, tc aggregateScalingCase, mutation aggregateScalingMutationCase, sessionID SessionID) (*Session, FactID) {
+	t.Helper()
+
+	session := mustSession(t, revision, sessionID)
+	seeded := runAggregateScalingSeedRun(t, ctx, session, itemKey, tc)
+	if seeded.Fired != tc.firedCount() {
+		t.Fatalf("seed fired = %d, want %d", seeded.Fired, tc.firedCount())
+	}
+	targetFact := FactID{}
+	if mutation.needsTarget {
+		targetFact = mustFindAggregateScalingItem(t, session, 0, 0)
+	}
+	return session, targetFact
 }
 
 func mustCompileAggregateScalingRuleset(t testing.TB, tc aggregateScalingCase) (*Ruleset, TemplateKey) {
@@ -269,7 +365,7 @@ func runAggregateScalingSteadyAssert(t testing.TB, ctx context.Context, session 
 	if err != nil {
 		t.Fatalf("steady assert: %v", err)
 	}
-	return runAggregateScalingSteadyMutation(t, ctx, session, "assert")
+	return runAggregateScalingSteadyMutation(t, ctx, session, "agenda-ready-assert")
 }
 
 func runAggregateScalingSteadyModify(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
@@ -279,7 +375,7 @@ func runAggregateScalingSteadyModify(t testing.TB, ctx context.Context, session 
 	if err != nil {
 		t.Fatalf("steady modify: %v", err)
 	}
-	return runAggregateScalingSteadyMutation(t, ctx, session, "modify")
+	return runAggregateScalingSteadyMutation(t, ctx, session, "modify-input")
 }
 
 func runAggregateScalingSteadyRetract(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
@@ -288,7 +384,7 @@ func runAggregateScalingSteadyRetract(t testing.TB, ctx context.Context, session
 	if _, err := session.Retract(ctx, targetFact); err != nil {
 		t.Fatalf("steady retract: %v", err)
 	}
-	return runAggregateScalingSteadyMutation(t, ctx, session, "retract")
+	return runAggregateScalingSteadyMutation(t, ctx, session, "retract-input")
 }
 
 func runAggregateScalingSteadyMutation(t testing.TB, ctx context.Context, session *Session, phase string) RunResult {
@@ -328,6 +424,47 @@ func mustFindAggregateScalingItem(t testing.TB, session *Session, stream, id int
 	}
 	t.Fatalf("missing aggregate item stream=%d id=%d", stream, id)
 	return FactID{}
+}
+
+func validateAggregateScalingMutationSession(t testing.TB, session *Session, result RunResult, tc aggregateScalingCase, mutation aggregateScalingMutationCase, phase string) {
+	t.Helper()
+
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("%s %s run result = (%v, %d), want (%v, 1)", phase, mutation.mode, result.Status, result.Fired, RunCompleted)
+	}
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("%s %s snapshot: %v", phase, mutation.mode, err)
+	}
+
+	wantItems := tc.initialFacts() + mutation.itemDelta
+	wantSummaries := tc.streams + 1
+	itemCount := len(snapshot.FactsByTemplateKey(TemplateKey("agg-item")))
+	summaryCount := 0
+	summaryTotal := int64(0)
+	for _, fact := range snapshot.FactsByTemplateKey(TemplateKey("agg-summary")) {
+		totalValue, ok := fact.Field("total")
+		if !ok {
+			t.Fatalf("%s %s summary missing total", phase, mutation.mode)
+		}
+		total, ok := totalValue.AsInt64()
+		if !ok {
+			t.Fatalf("%s %s summary total = %v, want int", phase, mutation.mode, totalValue)
+		}
+		summaryCount++
+		summaryTotal += total
+	}
+	if itemCount != wantItems || summaryCount != wantSummaries {
+		t.Fatalf("%s %s fact mix = item:%d summary:%d, want item:%d summary:%d",
+			phase, mutation.mode, itemCount, summaryCount, wantItems, wantSummaries)
+	}
+	if got, want := snapshot.Len(), wantItems+wantSummaries; got != want {
+		t.Fatalf("%s %s final fact count = %d, want %d", phase, mutation.mode, got, want)
+	}
+	wantSummaryTotal := int64((tc.streams+1)*tc.expectedTotalPerStream()) + mutation.summaryDelta
+	if summaryTotal != wantSummaryTotal {
+		t.Fatalf("%s %s summary total = %d, want %d", phase, mutation.mode, summaryTotal, wantSummaryTotal)
+	}
 }
 
 func validateAggregateScalingSession(t testing.TB, session *Session, result RunResult, tc aggregateScalingCase, phase string) {
