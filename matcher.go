@@ -55,6 +55,8 @@ type bindingTupleEntry struct {
 	conditionPath  []int
 	factID         FactID
 	factVersion    FactVersion
+	value          Value
+	hasValue       bool
 }
 
 type candidateIdentity struct {
@@ -244,13 +246,17 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 			conditionPath:  plan.path,
 			factID:         match.fact.ID(),
 			factVersion:    match.fact.Version(),
+			value:          cloneValue(match.value),
+			hasValue:       match.hasValue,
 		}
 
-		recency := match.fact.Recency()
-		if recency > maxRecency {
-			maxRecency = recency
+		if !match.hasValue {
+			recency := match.fact.Recency()
+			if recency > maxRecency {
+				maxRecency = recency
+			}
+			aggregateRecency = addRecency(aggregateRecency, recency)
 		}
-		aggregateRecency = addRecency(aggregateRecency, recency)
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {
@@ -489,6 +495,13 @@ func candidateIdentityHashStart(generation Generation) uint64 {
 }
 
 func candidateIdentityHashStep(hash uint64, entry bindingTupleEntry) uint64 {
+	if entry.hasValue {
+		hash = fnvMixUint64(hash, 1)
+		hash = fnvMixString(hash, entry.binding)
+		hash = fnvMixString(hash, entry.value.canonicalKey())
+		return hash
+	}
+	hash = fnvMixUint64(hash, 0)
 	hash = fnvMixUint64(hash, uint64(entry.factID.generation))
 	hash = fnvMixUint64(hash, entry.factID.sequence)
 	hash = fnvMixUint64(hash, uint64(entry.factVersion))
@@ -608,7 +621,13 @@ func bindingTupleEntryLess(left, right bindingTupleEntry) bool {
 	if left.factID != right.factID {
 		return factIDLess(left.factID, right.factID)
 	}
-	return left.factVersion < right.factVersion
+	if left.factVersion != right.factVersion {
+		return left.factVersion < right.factVersion
+	}
+	if left.hasValue != right.hasValue {
+		return !left.hasValue
+	}
+	return left.value.canonicalKey() < right.value.canonicalKey()
 }
 
 func factIDLess(left, right FactID) bool {
@@ -664,6 +683,8 @@ func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTu
 		conditionPath:  p.path,
 		factID:         match.fact.ID(),
 		factVersion:    match.fact.Version(),
+		value:          cloneValue(match.value),
+		hasValue:       match.hasValue,
 	}
 }
 
@@ -684,7 +705,27 @@ func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (binding
 		conditionPath:  plan.path,
 		factID:         match.fact.ID(),
 		factVersion:    match.fact.Version(),
+		value:          cloneValue(match.value),
+		hasValue:       match.hasValue,
 	}, nil
+}
+
+func bindingTupleEntryForMatchUnchecked(rule compiledRule, plan compiledConditionPlan, match conditionMatch) bindingTupleEntry {
+	condition := RuleCondition{}
+	if match.bindingSlot >= 0 && match.bindingSlot < len(rule.conditions) {
+		condition = rule.conditions[match.bindingSlot]
+	}
+	return bindingTupleEntry{
+		binding:        condition.binding,
+		bindingSlot:    match.bindingSlot,
+		conditionOrder: condition.order,
+		conditionID:    plan.id,
+		conditionPath:  plan.path,
+		factID:         match.fact.ID(),
+		factVersion:    match.fact.Version(),
+		value:          cloneValue(match.value),
+		hasValue:       match.hasValue,
+	}
 }
 
 func newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
@@ -725,7 +766,14 @@ func matchTokenEqual(left, right *matchToken) bool {
 		return false
 	}
 	for left != nil && right != nil {
-		if left.match.fact.ID() != right.match.fact.ID() || left.match.fact.Version() != right.match.fact.Version() {
+		if left.match.hasValue != right.match.hasValue {
+			return false
+		}
+		if left.match.hasValue {
+			if !left.match.value.Equal(right.match.value) {
+				return false
+			}
+		} else if left.match.fact.ID() != right.match.fact.ID() || left.match.fact.Version() != right.match.fact.Version() {
 			return false
 		}
 		left = left.parent

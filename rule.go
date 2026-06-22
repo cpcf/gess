@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -127,6 +129,14 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case Match:
 		return condition.clone()
 	case *Match:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case AccumulateCondition:
+		return condition.clone()
+	case *AccumulateCondition:
 		if condition == nil {
 			return nil
 		}
@@ -310,11 +320,12 @@ func (c RuleConditionBranchCondition) clone() RuleConditionBranchCondition {
 type ConditionTreeKind string
 
 const (
-	ConditionTreeKindUnknown ConditionTreeKind = ""
-	ConditionTreeKindAnd     ConditionTreeKind = "and"
-	ConditionTreeKindMatch   ConditionTreeKind = "match"
-	ConditionTreeKindNot     ConditionTreeKind = "not"
-	ConditionTreeKindOr      ConditionTreeKind = "or"
+	ConditionTreeKindUnknown    ConditionTreeKind = ""
+	ConditionTreeKindAnd        ConditionTreeKind = "and"
+	ConditionTreeKindMatch      ConditionTreeKind = "match"
+	ConditionTreeKindNot        ConditionTreeKind = "not"
+	ConditionTreeKindOr         ConditionTreeKind = "or"
+	ConditionTreeKindAccumulate ConditionTreeKind = "accumulate"
 )
 
 type RuleConditionTree struct {
@@ -498,6 +509,9 @@ func (r compiledRule) conditionPlanForBindingSlot(bindingSlot int) (compiledCond
 		if plan.bindingSlot == bindingSlot {
 			return plan, true
 		}
+		if plan.aggregate != nil && bindingSlot >= plan.bindingSlot && bindingSlot < plan.bindingSlot+len(plan.aggregate.specs) {
+			return plan, true
+		}
 	}
 	return compiledConditionPlan{}, false
 }
@@ -510,6 +524,17 @@ func (r compiledRule) executionConditionBranches() []compiledConditionBranch {
 		return nil
 	}
 	return []compiledConditionBranch{{plans: r.conditionPlans}}
+}
+
+func (r compiledRule) hasAggregateConditions() bool {
+	for _, branch := range r.executionConditionBranches() {
+		for _, plan := range branch.plans {
+			if plan.aggregate != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cloneRuleConditions(conditions []RuleCondition) []RuleCondition {
@@ -552,10 +577,12 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 }
 
 type normalizedRuleCondition struct {
-	spec    RuleConditionSpec
-	path    []int
-	visible bool
-	negated bool
+	spec        RuleConditionSpec
+	aggregate   AccumulateCondition
+	isAggregate bool
+	path        []int
+	visible     bool
+	negated     bool
 }
 
 type normalizedRuleConditionBranch struct {
@@ -713,6 +740,29 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				negated: negated,
 			}},
 		}}, nil
+	case AccumulateCondition:
+		if negated {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "accumulate condition is not supported under not",
+			}
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				aggregate:   condition.clone(),
+				isAggregate: true,
+				path:        cloneIntPath(path),
+				visible:     true,
+			}},
+		}}, nil
+	case *AccumulateCondition:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, path, visible, negated)
 	default:
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -765,6 +815,13 @@ func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, path 
 	}
 	branches := make([]normalizedRuleConditionBranch, 0, len(specs))
 	for i, spec := range specs {
+		if conditionTreeContainsAggregate(spec) {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "accumulate condition is not supported inside or",
+				Err:      ErrAggregateValidation,
+			}
+		}
 		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return nil, err
@@ -882,6 +939,32 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			kind:           ConditionTreeKindMatch,
 			conditionIndex: index,
 		}, nil
+	case AccumulateCondition:
+		if negated {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "accumulate condition is not supported under not",
+			}
+		}
+		index := len(*conditions)
+		*conditions = append(*conditions, normalizedRuleCondition{
+			aggregate:   condition.clone(),
+			isAggregate: true,
+			path:        cloneIntPath(path),
+			visible:     true,
+		})
+		return compiledConditionTreeShape{
+			kind:           ConditionTreeKindAccumulate,
+			conditionIndex: index,
+		}, nil
+	case *AccumulateCondition:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenConditionTreeNode(ruleName, *condition, conditions, path, visible, negated)
 	default:
 		return compiledConditionTreeShape{}, &ValidationError{
 			RuleName: ruleName,
@@ -903,6 +986,13 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
 	for i, spec := range specs {
+		if conditionTreeContainsAggregate(spec) {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "accumulate condition is not supported inside or",
+				Err:      ErrAggregateValidation,
+			}
+		}
 		child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
@@ -910,6 +1000,36 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		shape.children = append(shape.children, child)
 	}
 	return shape, nil
+}
+
+func conditionTreeContainsAggregate(spec ConditionSpec) bool {
+	switch condition := spec.(type) {
+	case AccumulateCondition, *AccumulateCondition:
+		return true
+	case And:
+		if slices.ContainsFunc(condition.Conditions, conditionTreeContainsAggregate) {
+			return true
+		}
+	case *And:
+		if condition != nil {
+			return conditionTreeContainsAggregate(And{Conditions: condition.Conditions})
+		}
+	case Or:
+		if slices.ContainsFunc(condition.Conditions, conditionTreeContainsAggregate) {
+			return true
+		}
+	case *Or:
+		if condition != nil {
+			return conditionTreeContainsAggregate(Or{Conditions: condition.Conditions})
+		}
+	case Not:
+		return conditionTreeContainsAggregate(condition.Condition)
+	case *Not:
+		if condition != nil {
+			return conditionTreeContainsAggregate(condition.Condition)
+		}
+	}
+	return false
 }
 
 func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, path []int, visible bool, negated bool) (compiledConditionTreeShape, error) {
@@ -1087,6 +1207,88 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 	branchConditions := make([]RuleConditionBranchCondition, 0, len(normalizedConditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
 	for i, node := range normalizedConditions {
+		if node.isAggregate {
+			if node.negated {
+				return compiledRuleConditionSet{}, &ValidationError{
+					RuleName:          ruleName,
+					ConditionIndex:    i,
+					HasConditionIndex: true,
+					Reason:            "accumulate condition is not supported under not",
+				}
+			}
+			if err := validateAggregateInputShape(ruleName, i, node.aggregate.Input); err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			inputNormalized, _, err := flattenConditionTreeSpec(ruleName, node.aggregate.Input)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			inputSet, err := compileNormalizedRuleConditionBranch(ruleName, ruleID, inputNormalized, templatesByKey, true)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			for _, inputCondition := range inputSet.conditions {
+				if _, exists := bindingSlots[inputCondition.binding]; exists {
+					return compiledRuleConditionSet{}, &ValidationError{
+						RuleName:          ruleName,
+						ConditionIndex:    i,
+						HasConditionIndex: true,
+						Reason:            "aggregate input binding collides with an outer binding",
+						Err:               ErrAggregateValidation,
+					}
+				}
+			}
+			inputBindingSlots := make(map[string]int, len(bindingSlots)+len(inputSet.conditions))
+			maps.Copy(inputBindingSlots, bindingSlots)
+			inputConditions := append([]RuleCondition(nil), conditions...)
+			baseInputSlot := len(inputConditions)
+			for j, condition := range inputSet.conditions {
+				inputConditions = append(inputConditions, condition)
+				inputBindingSlots[condition.binding] = baseInputSlot + j
+			}
+			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputConditions, inputBindingSlots, templatesByKey)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			for _, result := range resultConditions {
+				if _, exists := allBindingSlots[result.binding]; exists {
+					return compiledRuleConditionSet{}, &ValidationError{
+						RuleName:          ruleName,
+						ConditionIndex:    i,
+						HasConditionIndex: true,
+						Reason:            "aggregate result binding collides with an existing binding",
+						Err:               ErrAggregateValidation,
+					}
+				}
+			}
+			aggregateID := aggregateConditionIDFor(ruleID, i, compiledSpecs, inputSet.conditionPlans)
+			firstSlot := len(conditions)
+			for j, result := range resultConditions {
+				result.id = aggregateID
+				result.order = firstSlot + j
+				conditions = append(conditions, result)
+				bindingSlots[result.binding] = firstSlot + j
+				allBindingSlots[result.binding] = firstSlot + j
+			}
+			treeCondition := RuleCondition{id: aggregateID, binding: "accumulate", order: i}
+			treeConditions = append(treeConditions, treeCondition)
+			branchConditions = append(branchConditions, RuleConditionBranchCondition{
+				condition: treeCondition,
+				path:      cloneIntPath(node.path),
+				visible:   true,
+			})
+			conditionPlans = append(conditionPlans, compiledConditionPlan{
+				id:          aggregateID,
+				binding:     "accumulate",
+				bindingSlot: firstSlot,
+				path:        []int{i},
+				aggregate: &compiledAggregatePlan{
+					inputPlans: inputSet.conditionPlans,
+					specs:      compiledSpecs,
+				},
+			})
+			continue
+		}
 		condition := node.spec
 		if condition.Binding == "" {
 			return compiledRuleConditionSet{}, &ValidationError{
@@ -1245,6 +1447,29 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 		branchConditions: branchConditions,
 		conditionPlans:   conditionPlans,
 	}, nil
+}
+
+func validateAggregateInputShape(ruleName string, conditionIndex int, spec ConditionSpec) error {
+	switch condition := spec.(type) {
+	case nil:
+		return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input is required", nil)
+	case Match, *Match:
+		return nil
+	case And:
+		for _, child := range condition.Conditions {
+			if err := validateAggregateInputShape(ruleName, conditionIndex, child); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *And:
+		if condition == nil {
+			return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input is required", nil)
+		}
+		return validateAggregateInputShape(ruleName, conditionIndex, And{Conditions: condition.Conditions})
+	default:
+		return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input supports only positive match conjunctions", nil)
+	}
 }
 
 func validateBranchBindingContract(ruleName string, expected, actual []RuleCondition) error {

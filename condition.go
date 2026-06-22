@@ -35,6 +35,7 @@ type compiledConditionPlan struct {
 	bindingSlot int
 	path        []int
 	negated     bool
+	aggregate   *compiledAggregatePlan
 	target      conditionTarget
 	constraints []compiledFieldConstraint
 	joins       []compiledJoinConstraint
@@ -47,6 +48,8 @@ type conditionMatch struct {
 	conditionID ConditionID
 	bindingSlot int
 	fact        conditionFactRef
+	value       Value
+	hasValue    bool
 }
 
 type bindingSet struct {
@@ -112,6 +115,30 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 	return ConditionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
 }
 
+func aggregateConditionIDFor(ruleID RuleID, order int, specs []compiledAggregateSpec, input []compiledConditionPlan) ConditionID {
+	sum := sha256.New()
+	sum.Write([]byte("gess/aggregate-condition/v1\n"))
+	sum.Write([]byte("rule:"))
+	sum.Write([]byte(ruleID.String()))
+	sum.Write([]byte("\norder:"))
+	sum.Write(fmt.Appendf(nil, "%d", order))
+	for _, spec := range specs {
+		sum.Write([]byte("\nspec:"))
+		sum.Write([]byte(spec.binding))
+		sum.Write([]byte(":"))
+		sum.Write([]byte(spec.kind))
+		if spec.hasExpr {
+			sum.Write([]byte(":"))
+			sum.Write([]byte(serializeCompiledExpression(spec.expression)))
+		}
+	}
+	for _, plan := range input {
+		sum.Write([]byte("\ninput:"))
+		sum.Write([]byte(plan.id.String()))
+	}
+	return ConditionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
+}
+
 func (p compiledConditionPlan) scan(ctx context.Context, source factSource) ([]conditionMatch, error) {
 	return p.scanWithBindings(ctx, source, nil)
 }
@@ -144,6 +171,9 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sou
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if p.aggregate != nil {
+		return p.forEachAggregateMatch(ctx, source, bindings, yield)
 	}
 	if p.target.kind == conditionTargetUnknown {
 		return nil
@@ -331,7 +361,33 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			return nil
 		}
 
-		matches, err := r.conditionPlans[conditionIndex].scanWithBindings(ctx, source, selected)
+		plan := r.conditionPlans[conditionIndex]
+		if plan.aggregate != nil {
+			bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+			next := make([]conditionMatch, len(selected)+len(bindings))
+			copy(next, selected)
+			nextToken := token
+			for i, binding := range bindings {
+				match := conditionMatch{
+					conditionID: plan.id,
+					bindingSlot: plan.bindingSlot + i,
+					value:       binding.value,
+					hasValue:    true,
+				}
+				next[len(selected)+i] = match
+				entry := bindingTupleEntryForMatchUnchecked(r, plan, match)
+				nextToken = newMatchToken(nextToken, entry, match, 0, source.sourceGeneration())
+			}
+			return walk(conditionIndex+1, next, nextToken)
+		}
+
+		matches, err := plan.scanWithBindings(ctx, source, selected)
 		if err != nil {
 			return err
 		}
@@ -339,7 +395,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			next := make([]conditionMatch, len(selected)+1)
 			copy(next, selected)
 			next[len(selected)] = match
-			entry := r.conditionPlans[conditionIndex].bindingTupleEntry(match)
+			entry := plan.bindingTupleEntry(match)
 			nextToken := newMatchToken(token, entry, match, match.fact.Recency(), source.sourceGeneration())
 			if err := walk(conditionIndex+1, next, nextToken); err != nil {
 				return err
@@ -372,7 +428,6 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 		return nil, nil
 	}
 
-	selected := make([]conditionMatch, len(r.conditionPlans))
 	candidates := make([]matchCandidate, 0)
 	seen := newCandidateSeenSet(0)
 
@@ -381,17 +436,13 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 		if len(plans) == 0 {
 			continue
 		}
-		if cap(selected) < len(plans) {
-			selected = make([]conditionMatch, len(plans))
-		}
-		selected = selected[:len(plans)]
-		var walk func(conditionIndex int) error
-		walk = func(conditionIndex int) error {
+		var walk func(conditionIndex int, selected []conditionMatch) error
+		walk = func(conditionIndex int, selected []conditionMatch) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			if conditionIndex == len(plans) {
-				candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected[:conditionIndex])
+				candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected)
 				if err != nil {
 					return err
 				}
@@ -403,19 +454,41 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 			}
 
 			plan := plans[conditionIndex]
+			if plan.aggregate != nil {
+				bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+				next := make([]conditionMatch, len(selected)+len(bindings))
+				copy(next, selected)
+				for i, binding := range bindings {
+					next[len(selected)+i] = conditionMatch{
+						conditionID: plan.id,
+						bindingSlot: plan.bindingSlot + i,
+						value:       binding.value,
+						hasValue:    true,
+					}
+				}
+				return walk(conditionIndex+1, next)
+			}
 			yield := func(match conditionMatch) error {
-				selected[conditionIndex] = match
-				return walk(conditionIndex + 1)
+				next := make([]conditionMatch, len(selected)+1)
+				copy(next, selected)
+				next[len(selected)] = match
+				return walk(conditionIndex+1, next)
 			}
 			if alphaSource != nil {
 				if facts, ok := alphaSource.factsForCondition(plan.id); ok {
-					return plan.forEachAlphaMatchWithBindings(ctx, facts, selected[:conditionIndex], yield)
+					return plan.forEachAlphaMatchWithBindings(ctx, facts, selected, yield)
 				}
 			}
-			return plan.forEachMatchWithBindings(ctx, source, selected[:conditionIndex], yield)
+			return plan.forEachMatchWithBindings(ctx, source, selected, yield)
 		}
 
-		if err := walk(0); err != nil {
+		if err := walk(0, nil); err != nil {
 			return nil, err
 		}
 	}

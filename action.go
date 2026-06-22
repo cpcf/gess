@@ -124,8 +124,16 @@ func (c ActionContext) BoundFacts() []FactSnapshot {
 	if err := c.materializeAllBindings(); err != nil {
 		return nil
 	}
-	out := make([]FactSnapshot, c.bindings.len())
-	copy(out, c.bindings.snapshots)
+	out := make([]FactSnapshot, 0, c.bindings.len())
+	for i := range c.bindings.len() {
+		entry := c.bindings.entryAt(i)
+		if entry.hasValue {
+			continue
+		}
+		if i < len(c.bindings.snapshots) {
+			out = append(out, c.bindings.snapshots[i])
+		}
+	}
 	return out
 }
 
@@ -137,6 +145,21 @@ func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
 		return c.materializeBinding(index)
 	}
 	return FactSnapshot{}, false
+}
+
+func (c ActionContext) BindingValue(name string) (Value, bool) {
+	if name == "" || c.bindings == nil {
+		return Value{}, false
+	}
+	index, ok := c.bindings.bindingIndex(name)
+	if !ok {
+		return Value{}, false
+	}
+	entry := c.bindings.entryAt(index)
+	if !entry.hasValue {
+		return Value{}, false
+	}
+	return cloneValue(entry.value), true
 }
 
 // BindingScalarValue returns one scalar field from a fixed-template bound fact
@@ -275,6 +298,9 @@ func (c ActionContext) materializeAllBindings() error {
 	c.bindings.mu.Lock()
 	defer c.bindings.mu.Unlock()
 	for i := range c.bindings.len() {
+		if c.bindings.entryAt(i).hasValue {
+			continue
+		}
 		if _, ok := c.materializeBindingLocked(i); !ok {
 			entry := c.bindings.entryAt(i)
 			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.ActivationID())
@@ -374,6 +400,9 @@ func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) 
 		return FactSnapshot{}, false
 	}
 	entry := c.bindings.entryAt(index)
+	if entry.hasValue {
+		return FactSnapshot{}, false
+	}
 	fact, ok := c.session.workingFactByID(entry.factID)
 	if !ok {
 		return FactSnapshot{}, false
@@ -450,6 +479,8 @@ func (s *actionContextBindingState) entryAt(index int) bindingTupleEntry {
 			conditionID:    condition.id,
 			factID:         match.fact.ID(),
 			factVersion:    match.fact.Version(),
+			value:          cloneValue(match.value),
+			hasValue:       match.hasValue,
 		}
 	}
 	if index >= len(s.entries) {
@@ -636,7 +667,7 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
 	factCount := activationFactCount(&activation)
-	if factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions) {
+	if len(activation.bindings) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
@@ -649,8 +680,14 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return newTokenActionContext(ctx, s, activation, rule), nil
 	}
 
-	entries := activationBindingTupleEntriesForActivation(rule, &activation, false)
+	entries := cloneBindingTupleEntries(activation.bindings)
+	if len(entries) == 0 {
+		entries = activationBindingTupleEntriesForActivation(rule, &activation, false)
+	}
 	for i, entry := range entries {
+		if entry.hasValue || entry.factID.IsZero() {
+			continue
+		}
 		fact, ok := s.workingFactByID(entry.factID)
 		if !ok {
 			return ActionContext{}, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
@@ -672,6 +709,9 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 		match, ok := activation.token.matchAt(i)
 		if !ok {
 			return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
+		}
+		if match.hasValue {
+			continue
 		}
 		factID := match.fact.ID()
 		fact, ok := s.workingFactByID(factID)

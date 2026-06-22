@@ -336,10 +336,7 @@ func (r *reteRuntime) insertBetaFactGenerated(fact *workingFact, origin mutation
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.graphBeta != nil {
-		delta, ok := r.insertGraphAlphaFactGenerated(fact, span)
-		if !ok {
-			return reteAgendaDelta{}
-		}
+		delta := r.graphBeta.insertFactGenerated(fact, span)
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
@@ -352,10 +349,7 @@ func (r *reteRuntime) insertBetaFactWithOrigin(fact FactSnapshot, origin mutatio
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.graphBeta != nil {
-		delta, ok := r.insertGraphAlphaFact(fact, span)
-		if !ok {
-			return reteAgendaDelta{}
-		}
+		delta := r.graphBeta.insertFact(fact, span)
 		delta.supported = delta.supported && incrementalAgendaSupported
 		return delta
 	}
@@ -751,6 +745,11 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			supported:     true,
 			betaSupported: true,
 		}
+		if rule.hasAggregateConditions() {
+			rulePlan.supported = true
+			rulePlan.betaSupported = true
+			plan.incrementalAgendaSupported = false
+		}
 		ruleRouteKeys := make(map[TemplateKey]struct{})
 
 		for _, condition := range rule.conditionPlans {
@@ -797,6 +796,10 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 	plan.betaSupported = len(plan.rules) > 0
 	plan.incrementalAgendaSupported = len(plan.rules) > 0
 	for _, rulePlan := range plan.rules {
+		rule, ok := revision.rulesByRevisionID[rulePlan.ruleRevisionID]
+		if ok && rule.hasAggregateConditions() {
+			plan.incrementalAgendaSupported = false
+		}
 		if !rulePlan.betaSupported {
 			plan.betaSupported = false
 		}
@@ -891,6 +894,11 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		beta:          make([]reteBetaPlan, 0, len(condition.joins)),
 		supported:     true,
 		betaSupported: false,
+	}
+	if condition.aggregate != nil {
+		conditionPlan.supported = true
+		conditionPlan.betaSupported = true
+		return conditionPlan, nil
 	}
 
 	var unsupported []reteUnsupportedReason

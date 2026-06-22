@@ -373,6 +373,8 @@ func fillActivationBindingTupleEntriesFromTokenRef(entries []bindingTupleEntry, 
 		conditionID:    condition.id,
 		factID:         row.match.fact.ID(),
 		factVersion:    row.match.fact.Version(),
+		value:          cloneValue(row.match.value),
+		hasValue:       row.match.hasValue,
 	}
 	if includePath {
 		entries[index].conditionPath = cloneIntPath(plan.path)
@@ -1704,6 +1706,7 @@ func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {
 	for i, entry := range entries {
 		out[i] = entry
 		out[i].conditionPath = cloneIntPath(entry.conditionPath)
+		out[i].value = cloneValue(entry.value)
 	}
 	return out
 }
@@ -1813,6 +1816,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.ruleRevisionID = candidate.ruleRevisionID
 	dst.generation = candidate.generation
 	dst.identity = candidate.identity
+	dst.bindings = cloneBindingTupleEntries(candidate.bindingTuple)
 	dst.factIDs = cloneFactIDs(candidate.factIDs)
 	dst.factVersions = cloneFactVersions(candidate.factVersions)
 	dst.salience = rule.salience

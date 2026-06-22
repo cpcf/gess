@@ -17,6 +17,8 @@ var (
 	ErrDuplicateFact             = errors.New("gess: duplicate fact")
 	ErrMatcher                   = errors.New("gess: matcher error")
 	ErrUnsupportedRuntime        = errors.New("gess: unsupported runtime")
+	ErrAggregateValidation       = errors.New("gess: aggregate validation failed")
+	ErrAggregateEvaluation       = errors.New("gess: aggregate evaluation failed")
 	ErrLogicalSupportUnavailable = errors.New("gess: logical support unavailable")
 	ErrLogicalOnlyRetract        = errors.New("gess: cannot retract logical-only fact")
 	ErrLogicalFactModify         = errors.New("gess: cannot modify fact with logical support")

@@ -65,6 +65,17 @@ func (s BindingFieldExpr) clone() BindingFieldExpr {
 	return s
 }
 
+type BindingValueExpr struct {
+	Binding string
+}
+
+func (BindingValueExpr) expressionSpecNode() {}
+
+func (s BindingValueExpr) clone() BindingValueExpr {
+	s.Binding = strings.TrimSpace(s.Binding)
+	return s
+}
+
 type CompareExpr struct {
 	Operator ExpressionComparisonOperator
 	Left     ExpressionSpec
@@ -118,6 +129,14 @@ func cloneExpressionSpec(spec ExpressionSpec) ExpressionSpec {
 	case BindingFieldExpr:
 		return expression.clone()
 	case *BindingFieldExpr:
+		if expression == nil {
+			return nil
+		}
+		cloned := expression.clone()
+		return &cloned
+	case BindingValueExpr:
+		return expression.clone()
+	case *BindingValueExpr:
 		if expression == nil {
 			return nil
 		}
@@ -182,6 +201,7 @@ const (
 	expressionNodeConst        expressionNodeKind = "const"
 	expressionNodeCurrentField expressionNodeKind = "current-field"
 	expressionNodeBindingField expressionNodeKind = "binding-field"
+	expressionNodeBindingValue expressionNodeKind = "binding-value"
 	expressionNodeCompare      expressionNodeKind = "compare"
 	expressionNodeBoolean      expressionNodeKind = "boolean"
 )
@@ -273,6 +293,13 @@ func compileExpressionSpec(
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
 		return compileBindingFieldExpression(*expression, ruleName, conditionIndex, predicateIndex, conditions, bindingSlots, templatesByKey)
+	case BindingValueExpr:
+		return compileBindingValueExpression(expression, ruleName, conditionIndex, predicateIndex, conditions, bindingSlots)
+	case *BindingValueExpr:
+		if expression == nil {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
+		}
+		return compileBindingValueExpression(*expression, ruleName, conditionIndex, predicateIndex, conditions, bindingSlots)
 	case CompareExpr:
 		return compileCompareExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey)
 	case *CompareExpr:
@@ -367,6 +394,33 @@ func compileBindingFieldExpression(
 		fieldSlot:   fieldSlot,
 		binding:     normalized.Binding,
 		bindingSlot: refSlot,
+	}, true, nil
+}
+
+func compileBindingValueExpression(
+	spec BindingValueExpr,
+	ruleName string,
+	conditionIndex, predicateIndex int,
+	conditions []RuleCondition,
+	bindingSlots map[string]int,
+) (compiledExpression, bool, error) {
+	normalized := spec.clone()
+	if normalized.Binding == "" {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding value expression requires a binding", nil)
+	}
+	refSlot, ok := bindingSlots[normalized.Binding]
+	if !ok {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding value expression must refer to an earlier condition", nil)
+	}
+	if refSlot < 0 || refSlot >= len(conditions) {
+		return compiledExpression{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, refSlot)
+	}
+	return compiledExpression{
+		kind:        expressionNodeBindingValue,
+		resultKind:  ValueAny,
+		binding:     normalized.Binding,
+		bindingSlot: refSlot,
+		fieldSlot:   -1,
 	}, true, nil
 }
 
@@ -537,6 +591,8 @@ func (e compiledExpression) graphExecutable() bool {
 		return e.field != "" && e.resultKind != ""
 	case expressionNodeBindingField:
 		return e.binding != "" && e.field != "" && e.bindingSlot >= 0 && e.resultKind != ""
+	case expressionNodeBindingValue:
+		return e.binding != "" && e.bindingSlot >= 0 && e.resultKind != ""
 	case expressionNodeCompare:
 		if !validExpressionComparisonOperator(e.compareOp) || len(e.operands) != 2 || e.resultKind != ValueBool {
 			return false
@@ -573,6 +629,8 @@ func (e compiledExpression) graphExecutable() bool {
 func (e compiledExpression) referencesBinding() bool {
 	switch e.kind {
 	case expressionNodeBindingField:
+		return true
+	case expressionNodeBindingValue:
 		return true
 	default:
 		for _, operand := range e.operands {
@@ -655,8 +713,19 @@ func (e compiledExpression) evaluate(fact conditionFactRef, bindings []condition
 		if e.bindingSlot >= len(bindings) {
 			return Value{}, false, nil
 		}
+		if bindings[e.bindingSlot].hasValue {
+			return Value{}, false, nil
+		}
 		value, ok := bindings[e.bindingSlot].fact.compiledFieldValue(e.field, e.fieldSlot)
 		return value, ok, nil
+	case expressionNodeBindingValue:
+		if e.bindingSlot < 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
+		}
+		if e.bindingSlot >= len(bindings) || !bindings[e.bindingSlot].hasValue {
+			return Value{}, false, nil
+		}
+		return bindings[e.bindingSlot].value, true, nil
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluate(fact, bindings)
@@ -685,8 +754,20 @@ func (e compiledExpression) evaluateToken(fact conditionFactRef, bindings tokenR
 		if !ok {
 			return Value{}, false, nil
 		}
+		if match.hasValue {
+			return Value{}, false, nil
+		}
 		value, ok := match.fact.compiledFieldValue(e.field, e.fieldSlot)
 		return value, ok, nil
+	case expressionNodeBindingValue:
+		if e.bindingSlot < 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
+		}
+		match, ok := tokenRefAtSlot(bindings, e.bindingSlot)
+		if !ok || !match.hasValue {
+			return Value{}, false, nil
+		}
+		return match.value, true, nil
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateToken(fact, bindings)
@@ -881,6 +962,11 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(expression.field)
 		b.WriteString(",field-slot=")
 		b.WriteString(fmt.Sprint(expression.fieldSlot))
+	case expressionNodeBindingValue:
+		b.WriteString(",binding=")
+		b.WriteString(expression.binding)
+		b.WriteString(",binding-slot=")
+		b.WriteString(fmt.Sprint(expression.bindingSlot))
 	case expressionNodeCompare:
 		b.WriteString(",op=")
 		b.WriteString(string(expression.compareOp))

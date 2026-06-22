@@ -169,6 +169,9 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 	for _, rule := range compiledRules {
 		var terminalID reteGraphTerminalNodeID
 		for _, branch := range rule.executionConditionBranches() {
+			if branchContainsAggregate(branch) {
+				continue
+			}
 			graph.ruleBranchPlans = append(graph.ruleBranchPlans, reteGraphRuleBranchPlan{
 				ruleRevisionID: rule.revisionID,
 				branchID:       branch.id,
@@ -264,6 +267,15 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 	}
 
 	return graph
+}
+
+func branchContainsAggregate(branch compiledConditionBranch) bool {
+	for _, plan := range branch.plans {
+		if plan.aggregate != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]Template) bool {

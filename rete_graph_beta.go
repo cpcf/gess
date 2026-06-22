@@ -13,6 +13,8 @@ type reteGraphBetaMemory struct {
 	alphaFacts          []reteGraphAlphaFactSet
 	alphaConditions     [][]ConditionID
 	alphaFactCounts     map[ConditionID]int
+	facts               []FactSnapshot
+	factIndexes         map[FactID]int
 	arena               *tokenArena
 	terminalTokenDeltas []reteTerminalTokenDelta
 	alphaRouteScratch   []reteGraphAlphaNodeID
@@ -891,8 +893,24 @@ func (m *reteGraphBetaMemory) resetFacts(facts []FactSnapshot) {
 		m.arena.reset()
 	}
 	m.clearMemories()
+	m.setFacts(facts)
 	for _, fact := range facts {
 		m.insertFact(fact, nil)
+	}
+}
+
+func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
+	if m == nil {
+		return
+	}
+	m.facts = append(m.facts[:0], facts...)
+	if m.factIndexes == nil {
+		m.factIndexes = make(map[FactID]int, len(facts))
+	} else {
+		clear(m.factIndexes)
+	}
+	for i, fact := range m.facts {
+		m.factIndexes[fact.ID()] = i
 	}
 }
 
@@ -925,6 +943,7 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}
 	}
+	m.upsertFactSource(fact)
 	routeIDs := m.snapshotAlphaRouteIDsForFact(fact)
 	if len(routeIDs) == 0 {
 		return reteAgendaDelta{}
@@ -956,6 +975,39 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 		}
 	}
 	return m.finishTerminalTokenDelta(delta)
+}
+
+func (m *reteGraphBetaMemory) upsertFactSource(fact FactSnapshot) {
+	if m == nil || fact.ID().IsZero() {
+		return
+	}
+	if m.factIndexes == nil {
+		m.factIndexes = make(map[FactID]int)
+	}
+	if index, ok := m.factIndexes[fact.ID()]; ok && index >= 0 && index < len(m.facts) {
+		m.facts[index] = fact
+		return
+	}
+	m.factIndexes[fact.ID()] = len(m.facts)
+	m.facts = append(m.facts, fact)
+}
+
+func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
+	if m == nil || id.IsZero() || m.factIndexes == nil {
+		return
+	}
+	index, ok := m.factIndexes[id]
+	if !ok || index < 0 || index >= len(m.facts) {
+		return
+	}
+	last := len(m.facts) - 1
+	if index != last {
+		m.facts[index] = m.facts[last]
+		m.factIndexes[m.facts[index].ID()] = index
+	}
+	m.facts[last] = FactSnapshot{}
+	m.facts = m.facts[:last]
+	delete(m.factIndexes, id)
 }
 
 func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
@@ -1805,6 +1857,7 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 	}
 	delta := reteAgendaDelta{supported: true}
 	id := fact.ID()
+	defer m.removeFactSource(id)
 	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
 	if len(nodeIDs) == 0 {
 		nodeIDs = m.snapshotAlphaRouteIDsForFact(fact)
@@ -1838,6 +1891,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 		return reteAgendaDelta{}
 	}
 	delta := reteAgendaDelta{supported: true}
+	defer m.removeFactSource(id)
 	m.removeAlphaFact(id)
 	for _, terminalNode := range m.graph.terminalNodes {
 		terminal := m.terminalAt(terminalNode.id)
@@ -2381,9 +2435,18 @@ func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource, alph
 		if !ok {
 			return nil, ErrMatcher
 		}
-		terminal := m.terminalForRule(rule.revisionID)
 		var candidates []matchCandidate
-		if terminal != nil {
+		if rule.hasAggregateConditions() {
+			matchSource := source
+			if matchSource == nil {
+				matchSource = m
+			}
+			var err error
+			candidates, err = rule.matchCandidates(ctx, matchSource)
+			if err != nil {
+				return nil, err
+			}
+		} else if terminal := m.terminalForRule(rule.revisionID); terminal != nil {
 			var err error
 			candidates, err = m.collectTerminalCandidates(ctx, rule, terminal)
 			if err != nil {
@@ -2407,6 +2470,40 @@ func (m *reteGraphBetaMemory) matchWithoutSnapshot(ctx context.Context, generati
 		return nil, false, err
 	}
 	return results, true, nil
+}
+
+func (m *reteGraphBetaMemory) sourceGeneration() Generation {
+	if m == nil {
+		return 0
+	}
+	for _, fact := range m.facts {
+		if !fact.ID().IsZero() {
+			return fact.ID().Generation()
+		}
+	}
+	return 0
+}
+
+func (m *reteGraphBetaMemory) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) {
+	if m == nil {
+		return nil, false
+	}
+	out := make([]FactSnapshot, 0, len(m.facts))
+	for _, fact := range m.facts {
+		switch target.kind {
+		case conditionTargetName:
+			if fact.Name() == target.name {
+				out = append(out, fact)
+			}
+		case conditionTargetTemplateKey:
+			if fact.TemplateKey() == target.templateKey {
+				out = append(out, fact)
+			}
+		default:
+			return nil, false
+		}
+	}
+	return out, true
 }
 
 func (m *reteGraphBetaMemory) collectTerminalCandidates(ctx context.Context, rule compiledRule, terminal *reteGraphTerminalMemory) ([]matchCandidate, error) {

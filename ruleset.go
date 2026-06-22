@@ -521,16 +521,25 @@ func (r *Ruleset) Rules() []Rule {
 func indexRuleConditionDependencies(rule compiledRule, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
 	for _, branch := range rule.executionConditionBranches() {
 		for _, plan := range branch.plans {
-			switch plan.target.kind {
-			case conditionTargetTemplateKey:
-				if plan.target.templateKey != "" {
-					templateKeys[plan.target.templateKey] = struct{}{}
-				}
-			case conditionTargetName:
-				if plan.target.name != "" {
-					names[plan.target.name] = struct{}{}
+			indexConditionTargetDependency(plan.target, templateKeys, names)
+			if plan.aggregate != nil {
+				for _, input := range plan.aggregate.inputPlans {
+					indexConditionTargetDependency(input.target, templateKeys, names)
 				}
 			}
+		}
+	}
+}
+
+func indexConditionTargetDependency(target conditionTarget, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
+	switch target.kind {
+	case conditionTargetTemplateKey:
+		if target.templateKey != "" {
+			templateKeys[target.templateKey] = struct{}{}
+		}
+	case conditionTargetName:
+		if target.name != "" {
+			names[target.name] = struct{}{}
 		}
 	}
 }
