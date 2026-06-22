@@ -76,8 +76,8 @@ type reteGraphAggregateNode struct {
 	inputEntry  bindingTupleEntry
 	conditionID ConditionID
 	bindingSlot int
-	spec        compiledAggregateSpec
-	entry       bindingTupleEntry
+	specs       []compiledAggregateSpec
+	entries     []bindingTupleEntry
 }
 
 type reteGraphTerminalNode struct {
@@ -318,7 +318,7 @@ func (g *reteGraph) compileAggregateOnlyBranch(rule compiledRule, branch compile
 		}
 	}
 
-	aggregateID := g.appendAggregate(alphaRef, graphTokenEntryForCondition(input), condition.id, condition.bindingSlot, condition.aggregate.specs[0], graphTokenEntryForAggregateBinding(rule, condition))
+	aggregateID := g.appendAggregate(alphaRef, graphTokenEntryForCondition(input), condition.id, condition.bindingSlot, condition.aggregate.specs, graphTokenEntriesForAggregateBindings(rule, condition))
 	aggregateRef := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}
 	if terminalID != nil && *terminalID == 0 {
 		g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{
@@ -338,7 +338,6 @@ func (g *reteGraph) compileAggregateOnlyBranch(rule compiledRule, branch compile
 	})
 	g.appendTerminal(aggregateRef, reteGraphTerminalRoute{
 		terminalID: *terminalID,
-		entry:      graphTokenEntryForAggregateBinding(rule, condition),
 		branchID:   branch.id,
 	})
 	return true
@@ -354,19 +353,21 @@ func branchContainsAggregate(branch compiledConditionBranch) bool {
 }
 
 func reteGraphSupportsAggregateCondition(condition compiledConditionPlan) bool {
-	if condition.aggregate == nil || len(condition.aggregate.inputPlans) != 1 || len(condition.aggregate.specs) != 1 {
+	if condition.aggregate == nil || len(condition.aggregate.inputPlans) != 1 || len(condition.aggregate.specs) == 0 {
 		return false
 	}
 	input := condition.aggregate.inputPlans[0]
 	if input.aggregate != nil || input.negated || len(input.joins) != 0 || len(betaResidualExpressionPredicates(input.predicates)) != 0 {
 		return false
 	}
-	switch condition.aggregate.specs[0].kind {
-	case AggregateCount, AggregateSum:
-		return true
-	default:
-		return false
+	for _, spec := range condition.aggregate.specs {
+		switch spec.kind {
+		case AggregateCount, AggregateSum:
+		default:
+			return false
+		}
 	}
+	return true
 }
 
 func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]Template) bool {
@@ -477,13 +478,17 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		}
 		return leftWidth + 1
 	case reteGraphStageAggregate:
-		return 1
+		node := g.aggregateNode(reteGraphAggregateNodeID(stage.id))
+		if node == nil {
+			return 0
+		}
+		return len(node.specs)
 	default:
 		return 0
 	}
 }
 
-func (g *reteGraph) appendAggregate(input reteGraphStageRef, inputEntry bindingTupleEntry, conditionID ConditionID, bindingSlot int, spec compiledAggregateSpec, entry bindingTupleEntry) reteGraphAggregateNodeID {
+func (g *reteGraph) appendAggregate(input reteGraphStageRef, inputEntry bindingTupleEntry, conditionID ConditionID, bindingSlot int, specs []compiledAggregateSpec, entries []bindingTupleEntry) reteGraphAggregateNodeID {
 	if g == nil || input.kind == reteGraphStageUnknown {
 		return 0
 	}
@@ -494,8 +499,8 @@ func (g *reteGraph) appendAggregate(input reteGraphStageRef, inputEntry bindingT
 		inputEntry:  cloneBindingTupleEntry(inputEntry),
 		conditionID: conditionID,
 		bindingSlot: bindingSlot,
-		spec:        spec,
-		entry:       cloneBindingTupleEntry(entry),
+		specs:       cloneCompiledAggregateSpecs(specs),
+		entries:     cloneBindingTupleEntries(entries),
 	})
 	g.aggregatesByStage[input] = append(g.aggregatesByStage[input], id)
 	return id
@@ -744,21 +749,38 @@ func graphTokenEntryForCondition(condition compiledConditionPlan) bindingTupleEn
 	}
 }
 
-func graphTokenEntryForAggregateBinding(rule compiledRule, condition compiledConditionPlan) bindingTupleEntry {
-	entry := bindingTupleEntry{
-		binding:        condition.binding,
-		bindingSlot:    condition.bindingSlot,
-		conditionOrder: condition.bindingSlot,
-		conditionID:    condition.id,
-		conditionPath:  cloneIntPath(condition.path),
+func graphTokenEntriesForAggregateBindings(rule compiledRule, condition compiledConditionPlan) []bindingTupleEntry {
+	if condition.aggregate == nil {
+		return nil
 	}
-	if condition.bindingSlot >= 0 && condition.bindingSlot < len(rule.conditions) {
-		public := rule.conditions[condition.bindingSlot]
-		entry.binding = public.binding
-		entry.conditionOrder = public.order
-		entry.conditionID = public.id
+	entries := make([]bindingTupleEntry, len(condition.aggregate.specs))
+	for i := range entries {
+		bindingSlot := condition.bindingSlot + i
+		entry := bindingTupleEntry{
+			binding:        condition.binding,
+			bindingSlot:    bindingSlot,
+			conditionOrder: bindingSlot,
+			conditionID:    condition.id,
+			conditionPath:  cloneIntPath(condition.path),
+		}
+		if bindingSlot >= 0 && bindingSlot < len(rule.conditions) {
+			public := rule.conditions[bindingSlot]
+			entry.binding = public.binding
+			entry.conditionOrder = public.order
+			entry.conditionID = public.id
+		}
+		entries[i] = entry
 	}
-	return entry
+	return entries
+}
+
+func cloneCompiledAggregateSpecs(in []compiledAggregateSpec) []compiledAggregateSpec {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compiledAggregateSpec, len(in))
+	copy(out, in)
+	return out
 }
 
 func (g *reteGraph) debugSummary() reteGraphDebugSummary {

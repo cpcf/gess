@@ -468,13 +468,13 @@ func (s *actionContextBindingState) entryAt(index int) bindingTupleEntry {
 	}
 	if !s.token.isZero() {
 		match, ok := s.token.matchAt(index)
-		if !ok || index >= len(s.conditions) || index >= len(s.conditionPlans) {
+		if !ok || match.bindingSlot < 0 || match.bindingSlot >= len(s.conditions) {
 			return bindingTupleEntry{}
 		}
-		condition := s.conditions[index]
+		condition := s.conditions[match.bindingSlot]
 		return bindingTupleEntry{
 			binding:        condition.binding,
-			bindingSlot:    index,
+			bindingSlot:    match.bindingSlot,
 			conditionOrder: condition.order,
 			conditionID:    condition.id,
 			factID:         match.fact.ID(),

@@ -146,8 +146,8 @@ func TestAccumulateEmptyCountSumCollectAndMinMaxNoContinuation(t *testing.T) {
 	}
 }
 
-func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
-	var observed []Value
+func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
+	var observed []Fields
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:            "item",
@@ -160,11 +160,15 @@ func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "record",
 		Fn: func(ctx ActionContext) error {
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
 			total, ok := ctx.BindingValue("total")
 			if !ok {
 				return errors.New("missing total binding")
 			}
-			observed = append(observed, total)
+			observed = append(observed, Fields{"count": count, "total": total})
 			return nil
 		},
 	})
@@ -172,6 +176,7 @@ func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
 		Name: "total",
 		ConditionTree: Accumulate(
 			Match{Binding: "item", TemplateKey: item.Key()},
+			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -196,8 +201,8 @@ func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 8)) {
-		t.Fatalf("first Run fired/value = %d/%v, want 1/8", result.Fired, observed[len(observed)-1])
+	if result.Fired != 1 || !observed[len(observed)-1]["count"].Equal(mustValue(t, 2)) || !observed[len(observed)-1]["total"].Equal(mustValue(t, 8)) {
+		t.Fatalf("first Run fired/row = %d/%v, want 1/count=2 total=8", result.Fired, observed[len(observed)-1])
 	}
 
 	if _, err := session.Modify(context.Background(), second.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"amount": 1})}); err != nil {
@@ -208,8 +213,8 @@ func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
-	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 4)) {
-		t.Fatalf("second Run fired/value = %d/%v, want 1/4", result.Fired, observed[len(observed)-1])
+	if result.Fired != 1 || !observed[len(observed)-1]["count"].Equal(mustValue(t, 2)) || !observed[len(observed)-1]["total"].Equal(mustValue(t, 4)) {
+		t.Fatalf("second Run fired/row = %d/%v, want 1/count=2 total=4", result.Fired, observed[len(observed)-1])
 	}
 
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
@@ -220,8 +225,8 @@ func TestAccumulateSumUsesIncrementalAgendaDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third Run: %v", err)
 	}
-	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 1)) {
-		t.Fatalf("third Run fired/value = %d/%v, want 1/1", result.Fired, observed[len(observed)-1])
+	if result.Fired != 1 || !observed[len(observed)-1]["count"].Equal(mustValue(t, 1)) || !observed[len(observed)-1]["total"].Equal(mustValue(t, 1)) {
+		t.Fatalf("third Run fired/row = %d/%v, want 1/count=1 total=1", result.Fired, observed[len(observed)-1])
 	}
 }
 

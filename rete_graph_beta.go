@@ -34,19 +34,19 @@ type reteGraphBetaNodeMemory struct {
 }
 
 type reteGraphAggregateNodeMemory struct {
-	members  map[FactID]reteGraphAggregateMember
-	count    int64
-	intSum   int64
-	floatSum float64
-	floaty   bool
-	token    tokenRef
-	value    Value
-	hasValue bool
+	members   map[FactID]reteGraphAggregateMember
+	count     int64
+	intSums   []int64
+	floatSums []float64
+	floaty    []bool
+	token     tokenRef
+	values    []Value
+	hasValue  bool
 }
 
 type reteGraphAggregateMember struct {
-	match conditionMatch
-	value Value
+	match  conditionMatch
+	values []Value
 }
 
 type reteGraphTerminalMemory struct {
@@ -1016,11 +1016,15 @@ func (m *reteGraphAggregateNodeMemory) clear() {
 		clear(m.members)
 	}
 	m.count = 0
-	m.intSum = 0
-	m.floatSum = 0
-	m.floaty = false
+	clear(m.intSums)
+	m.intSums = m.intSums[:0]
+	clear(m.floatSums)
+	m.floatSums = m.floatSums[:0]
+	clear(m.floaty)
+	m.floaty = m.floaty[:0]
 	m.token = tokenRef{}
-	m.value = Value{}
+	clear(m.values)
+	m.values = m.values[:0]
 	m.hasValue = false
 }
 
@@ -1603,14 +1607,19 @@ func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, matc
 		return reteGraphAggregateMember{}, false
 	}
 	member := reteGraphAggregateMember{match: match}
-	if node.spec.kind == AggregateCount {
-		return member, true
+	if len(node.specs) > 0 {
+		member.values = make([]Value, len(node.specs))
 	}
-	value, ok, err := node.spec.expression.evaluate(match.fact, []conditionMatch{match})
-	if err != nil || !ok {
-		return reteGraphAggregateMember{}, false
+	for i, spec := range node.specs {
+		if spec.kind == AggregateCount {
+			continue
+		}
+		value, ok, err := spec.expression.evaluate(match.fact, []conditionMatch{match})
+		if err != nil || !ok {
+			return reteGraphAggregateMember{}, false
+		}
+		member.values[i] = value
 	}
-	member.value = value
 	return member, true
 }
 
@@ -1638,26 +1647,30 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		memory.token = tokenRef{}
 		memory.hasValue = false
 	}
-	value, ok := memory.result(node)
-	if !ok {
+	values, ok := memory.results(node)
+	if !ok || len(values) != len(node.entries) {
 		return
 	}
-	entry := node.entry
-	entry.value = value
-	entry.hasValue = true
-	match := conditionMatch{
-		conditionID: node.conditionID,
-		bindingSlot: node.bindingSlot,
-		value:       value,
-		hasValue:    true,
-	}
-	token := m.newTokenRef(tokenRef{}, entry, match, 0, m.aggregateGeneration(), span)
-	if token.isZero() {
-		delta.supported = false
-		return
+	var token tokenRef
+	generation := m.aggregateGeneration()
+	for i, value := range values {
+		entry := node.entries[i]
+		entry.value = value
+		entry.hasValue = true
+		match := conditionMatch{
+			conditionID: node.conditionID,
+			bindingSlot: node.bindingSlot + i,
+			value:       value,
+			hasValue:    true,
+		}
+		token = m.newTokenRef(token, entry, match, 0, generation, span)
+		if token.isZero() {
+			delta.supported = false
+			return
+		}
 	}
 	memory.token = token
-	memory.value = value
+	memory.values = append(memory.values[:0], values...)
 	memory.hasValue = true
 	m.propagateFromStage(stage, token, span, delta)
 }
@@ -1678,11 +1691,17 @@ func (m *reteGraphAggregateNodeMemory) addMember(node *reteGraphAggregateNode, m
 	if m == nil || node == nil {
 		return nil
 	}
+	m.ensureSpecState(len(node.specs))
 	m.count++
-	if node.spec.kind == AggregateCount {
-		return nil
+	for i, spec := range node.specs {
+		if spec.kind == AggregateCount {
+			continue
+		}
+		if err := m.addSum(i, member.values[i]); err != nil {
+			return err
+		}
 	}
-	return m.addSum(member.value)
+	return nil
 }
 
 func (m *reteGraphAggregateNodeMemory) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) {
@@ -1692,74 +1711,104 @@ func (m *reteGraphAggregateNodeMemory) removeMember(node *reteGraphAggregateNode
 	if m.count > 0 {
 		m.count--
 	}
-	if node.spec.kind != AggregateSum {
-		return
-	}
-	switch member.value.Kind() {
-	case ValueInt:
-		if m.floaty {
-			m.floatSum -= float64(member.value.intValue)
-			return
+	m.ensureSpecState(len(node.specs))
+	for i, spec := range node.specs {
+		if spec.kind != AggregateSum {
+			continue
 		}
-		m.intSum -= member.value.intValue
-	case ValueFloat:
-		m.recomputeSum(node)
+		value := member.values[i]
+		switch value.Kind() {
+		case ValueInt:
+			if m.floaty[i] {
+				m.floatSums[i] -= float64(value.intValue)
+				continue
+			}
+			m.intSums[i] -= value.intValue
+		case ValueFloat:
+			m.recomputeSum(node, i)
+		}
 	}
 }
 
-func (m *reteGraphAggregateNodeMemory) addSum(value Value) error {
+func (m *reteGraphAggregateNodeMemory) ensureSpecState(specs int) {
+	if m == nil || specs <= 0 {
+		return
+	}
+	for len(m.intSums) < specs {
+		m.intSums = append(m.intSums, 0)
+	}
+	for len(m.floatSums) < specs {
+		m.floatSums = append(m.floatSums, 0)
+	}
+	for len(m.floaty) < specs {
+		m.floaty = append(m.floaty, false)
+	}
+}
+
+func (m *reteGraphAggregateNodeMemory) addSum(index int, value Value) error {
+	m.ensureSpecState(index + 1)
 	switch value.Kind() {
 	case ValueInt:
-		if m.floaty {
-			m.floatSum += float64(value.intValue)
+		if m.floaty[index] {
+			m.floatSums[index] += float64(value.intValue)
 			return nil
 		}
-		next, overflow := safeAddInt64(m.intSum, value.intValue)
+		next, overflow := safeAddInt64(m.intSums[index], value.intValue)
 		if overflow {
 			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
 		}
-		m.intSum = next
+		m.intSums[index] = next
 	case ValueFloat:
-		if !m.floaty {
-			m.floatSum = float64(m.intSum)
-			m.intSum = 0
-			m.floaty = true
+		if !m.floaty[index] {
+			m.floatSums[index] = float64(m.intSums[index])
+			m.intSums[index] = 0
+			m.floaty[index] = true
 		}
-		m.floatSum += value.floatValue
+		m.floatSums[index] += value.floatValue
 	default:
 		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
 	}
 	return nil
 }
 
-func (m *reteGraphAggregateNodeMemory) recomputeSum(node *reteGraphAggregateNode) {
+func (m *reteGraphAggregateNodeMemory) recomputeSum(node *reteGraphAggregateNode, index int) {
 	if m == nil || node == nil {
 		return
 	}
-	m.intSum = 0
-	m.floatSum = 0
-	m.floaty = false
+	m.ensureSpecState(index + 1)
+	m.intSums[index] = 0
+	m.floatSums[index] = 0
+	m.floaty[index] = false
 	for _, member := range m.members {
-		_ = m.addSum(member.value)
+		_ = m.addSum(index, member.values[index])
 	}
 }
 
-func (m *reteGraphAggregateNodeMemory) result(node *reteGraphAggregateNode) (Value, bool) {
+func (m *reteGraphAggregateNodeMemory) results(node *reteGraphAggregateNode) ([]Value, bool) {
 	if m == nil || node == nil {
-		return Value{}, false
+		return nil, false
 	}
-	switch node.spec.kind {
-	case AggregateCount:
-		return newIntValue(m.count), true
-	case AggregateSum:
-		if m.floaty {
-			value, err := canonicalFloat(m.floatSum)
-			return value, err == nil
+	m.ensureSpecState(len(node.specs))
+	values := make([]Value, len(node.specs))
+	for i, spec := range node.specs {
+		switch spec.kind {
+		case AggregateCount:
+			values[i] = newIntValue(m.count)
+		case AggregateSum:
+			if m.floaty[i] {
+				value, err := canonicalFloat(m.floatSums[i])
+				if err != nil {
+					return nil, false
+				}
+				values[i] = value
+				continue
+			}
+			values[i] = newIntValue(m.intSums[i])
+		default:
+			return nil, false
 		}
-		return newIntValue(m.intSum), true
-	default:
-		return Value{}, false
 	}
+	return values, true
 }
 
 func (m *reteGraphBetaMemory) propagateFromStage(source reteGraphStageRef, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
