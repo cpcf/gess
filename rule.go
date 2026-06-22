@@ -57,6 +57,22 @@ func (s And) clone() And {
 	return out
 }
 
+// Or groups condition tree branches into a disjunction.
+type Or struct {
+	Conditions []ConditionSpec
+}
+
+func (Or) conditionSpecNode() {}
+
+func (s Or) clone() Or {
+	out := s
+	out.Conditions = make([]ConditionSpec, len(s.Conditions))
+	for i, condition := range s.Conditions {
+		out.Conditions[i] = cloneConditionSpec(condition)
+	}
+	return out
+}
+
 // Not negates a condition tree node. Bindings declared inside Not are local to
 // the negated condition and are not exposed to later conditions or actions.
 type Not struct {
@@ -87,6 +103,14 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case And:
 		return condition.clone()
 	case *And:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case Or:
+		return condition.clone()
+	case *Or:
 		if condition == nil {
 			return nil
 		}
@@ -228,6 +252,7 @@ const (
 	ConditionTreeKindAnd     ConditionTreeKind = "and"
 	ConditionTreeKindMatch   ConditionTreeKind = "match"
 	ConditionTreeKindNot     ConditionTreeKind = "not"
+	ConditionTreeKindOr      ConditionTreeKind = "or"
 )
 
 type RuleConditionTree struct {
@@ -503,6 +528,16 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			}
 		}
 		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+	case Or:
+		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+	case *Or:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
 	case Not:
 		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions)
 	case *Not:
@@ -569,6 +604,36 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		shape.children = append(shape.children, child)
 	}
 	return shape, nil
+}
+
+func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
+	if len(specs) == 0 {
+		return compiledConditionTreeShape{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition requires at least one branch",
+		}
+	}
+	if negated {
+		return compiledConditionTreeShape{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition is not supported under not",
+		}
+	}
+	if len(specs) > 1 {
+		return compiledConditionTreeShape{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition branch expansion is not implemented",
+		}
+	}
+
+	child, err := flattenConditionTreeNode(ruleName, specs[0], conditions, visible, negated)
+	if err != nil {
+		return compiledConditionTreeShape{}, err
+	}
+	return compiledConditionTreeShape{
+		kind:     ConditionTreeKindOr,
+		children: []compiledConditionTreeShape{child},
+	}, nil
 }
 
 func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition) (compiledConditionTreeShape, error) {
@@ -837,6 +902,15 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 	case ConditionTreeKindNot:
 		tree := RuleConditionTree{
 			kind:     ConditionTreeKindNot,
+			children: make([]RuleConditionTree, 0, len(shape.children)),
+		}
+		for _, child := range shape.children {
+			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+		}
+		return tree
+	case ConditionTreeKindOr:
+		tree := RuleConditionTree{
+			kind:     ConditionTreeKindOr,
 			children: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {

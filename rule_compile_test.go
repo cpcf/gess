@@ -513,6 +513,158 @@ func TestConditionTreeNotBindingScopeValidation(t *testing.T) {
 	}
 }
 
+func TestConditionTreeOrSingleBranchCompilesForInspection(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error {
+		fired++
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "single-branch-or",
+		ConditionTree: Or{Conditions: []ConditionSpec{
+			And{Conditions: []ConditionSpec{
+				Match{Binding: "person", TemplateKey: person.Key()},
+				Match{
+					Binding:     "department",
+					TemplateKey: department.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
+					},
+				},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("single-branch-or")
+	if !ok {
+		t.Fatal("compiled revision missing single-branch-or")
+	}
+	tree := rule.ConditionTree()
+	if tree.Kind() != ConditionTreeKindOr {
+		t.Fatalf("condition tree kind = %q, want %q", tree.Kind(), ConditionTreeKindOr)
+	}
+	children := tree.Children()
+	if got, want := len(children), 1; got != want {
+		t.Fatalf("or children = %d, want %d", got, want)
+	}
+	if children[0].Kind() != ConditionTreeKindAnd {
+		t.Fatalf("or child kind = %q, want %q", children[0].Kind(), ConditionTreeKindAnd)
+	}
+	children[0] = RuleConditionTree{}
+	if got := rule.ConditionTree().Children()[0].Kind(); got != ConditionTreeKindAnd {
+		t.Fatalf("condition tree inspection leaked mutable state: child kind = %q", got)
+	}
+
+	session, err := NewSession(revision, WithSessionID("single-branch-or-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
+		t.Fatalf("AssertTemplate(department): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fired != 1 {
+		t.Fatalf("fired = %d, want 1", fired)
+	}
+}
+
+func TestConditionTreeOrValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		rule       func(personKey TemplateKey) RuleSpec
+		wantReason string
+	}{
+		{
+			name: "empty or",
+			rule: func(personKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name:          "broken",
+					ConditionTree: Or{},
+					Actions:       []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "or condition requires at least one branch",
+		},
+		{
+			name: "multi branch or waits for branch expansion",
+			rule: func(personKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name: "broken",
+					ConditionTree: Or{Conditions: []ConditionSpec{
+						Match{Binding: "first", TemplateKey: personKey},
+						Match{Binding: "second", TemplateKey: personKey},
+					}},
+					Actions: []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "or condition branch expansion is not implemented",
+		},
+		{
+			name: "or under not",
+			rule: func(personKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name: "broken",
+					ConditionTree: And{Conditions: []ConditionSpec{
+						Match{Binding: "person", TemplateKey: personKey},
+						Not{Condition: Or{Conditions: []ConditionSpec{
+							Match{Binding: "blocked", TemplateKey: personKey},
+						}}},
+					}},
+					Actions: []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "or condition is not supported under not",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			person := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "person",
+				Fields: []FieldSpec{
+					{Name: "name", Kind: ValueString, Required: true},
+				},
+			})
+			mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, tc.rule(person.Key()))
+
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded, want validation failure")
+			}
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("expected ValidationError, got %T: %v", err, err)
+			}
+			if validation.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", validation.Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestExpressionPredicatesCompileAndClassify(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
