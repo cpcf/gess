@@ -400,6 +400,7 @@ type compiledRule struct {
 	conditionTree               RuleConditionTree
 	conditionTreeShape          compiledConditionTreeShape
 	conditionPlans              []compiledConditionPlan
+	conditionBranches           []compiledConditionBranch
 	actions                     []RuleAction
 	allActionsSkipBindingFreeze bool
 }
@@ -431,6 +432,16 @@ func (r compiledRule) conditionPlanForBindingSlot(bindingSlot int) (compiledCond
 	return compiledConditionPlan{}, false
 }
 
+func (r compiledRule) executionConditionBranches() []compiledConditionBranch {
+	if len(r.conditionBranches) > 0 {
+		return r.conditionBranches
+	}
+	if len(r.conditionPlans) == 0 {
+		return nil
+	}
+	return []compiledConditionBranch{{plans: r.conditionPlans}}
+}
+
 func cloneRuleConditions(conditions []RuleCondition) []RuleCondition {
 	out := make([]RuleCondition, len(conditions))
 	for i, condition := range conditions {
@@ -458,6 +469,21 @@ type normalizedRuleCondition struct {
 	spec    RuleConditionSpec
 	visible bool
 	negated bool
+}
+
+type normalizedRuleConditionBranch struct {
+	conditions []normalizedRuleCondition
+}
+
+type compiledConditionBranch struct {
+	plans []compiledConditionPlan
+}
+
+func (b compiledConditionBranch) clone() compiledConditionBranch {
+	out := b
+	out.plans = make([]compiledConditionPlan, len(b.plans))
+	copy(out.plans, b.plans)
+	return out
 }
 
 func normalizeRuleSpec(spec RuleSpec) (RuleSpec, error) {
@@ -500,6 +526,180 @@ func normalizeRuleConditions(spec RuleSpec) ([]normalizedRuleCondition, compiled
 		kind:     ConditionTreeKindAnd,
 		children: children,
 	}, nil
+}
+
+func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBranch, error) {
+	if spec.ConditionTree != nil && len(spec.Conditions) > 0 {
+		return nil, &ValidationError{
+			RuleName: spec.Name,
+			Reason:   "rule cannot define both flat conditions and a condition tree",
+		}
+	}
+	if spec.ConditionTree != nil {
+		return expandConditionTreeBranches(spec.Name, spec.ConditionTree)
+	}
+	if len(spec.Conditions) == 0 {
+		return nil, nil
+	}
+	branch := normalizedRuleConditionBranch{
+		conditions: make([]normalizedRuleCondition, len(spec.Conditions)),
+	}
+	for i, condition := range spec.Conditions {
+		branch.conditions[i] = normalizedRuleCondition{
+			spec:    condition.clone(),
+			visible: true,
+		}
+	}
+	return []normalizedRuleConditionBranch{branch}, nil
+}
+
+func expandConditionTreeBranches(ruleName string, spec ConditionSpec) ([]normalizedRuleConditionBranch, error) {
+	return expandConditionTreeNodeBranches(ruleName, spec, true, false)
+}
+
+func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+	switch condition := spec.(type) {
+	case nil:
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "condition tree node is required",
+		}
+	case And:
+		return expandAndConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+	case *And:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandAndConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+	case Or:
+		return expandOrConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+	case *Or:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandOrConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+	case Not:
+		return expandNotConditionTreeBranches(ruleName, condition.Condition)
+	case *Not:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandNotConditionTreeBranches(ruleName, condition.Condition)
+	case Match:
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				spec:    RuleConditionSpec(condition).clone(),
+				visible: visible,
+				negated: negated,
+			}},
+		}}, nil
+	case *Match:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				spec:    RuleConditionSpec(*condition).clone(),
+				visible: visible,
+				negated: negated,
+			}},
+		}}, nil
+	default:
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "unsupported condition tree node",
+		}
+	}
+}
+
+func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+	if len(specs) == 0 {
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "and condition requires at least one child",
+		}
+	}
+	branches := []normalizedRuleConditionBranch{{}}
+	for _, spec := range specs {
+		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, visible, negated)
+		if err != nil {
+			return nil, err
+		}
+		next := make([]normalizedRuleConditionBranch, 0, len(branches)*len(childBranches))
+		for _, existing := range branches {
+			for _, child := range childBranches {
+				combined := normalizedRuleConditionBranch{
+					conditions: make([]normalizedRuleCondition, 0, len(existing.conditions)+len(child.conditions)),
+				}
+				combined.conditions = append(combined.conditions, existing.conditions...)
+				combined.conditions = append(combined.conditions, child.conditions...)
+				next = append(next, combined)
+			}
+		}
+		branches = next
+	}
+	return branches, nil
+}
+
+func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+	if len(specs) == 0 {
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition requires at least one branch",
+		}
+	}
+	if negated {
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition is not supported under not",
+		}
+	}
+	branches := make([]normalizedRuleConditionBranch, 0, len(specs))
+	for _, spec := range specs {
+		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, visible, negated)
+		if err != nil {
+			return nil, err
+		}
+		branches = append(branches, childBranches...)
+	}
+	return branches, nil
+}
+
+func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec) ([]normalizedRuleConditionBranch, error) {
+	switch condition := spec.(type) {
+	case Match:
+		return expandConditionTreeNodeBranches(ruleName, condition, false, true)
+	case *Match:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, false, true)
+	case Or, *Or:
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or condition is not supported under not",
+		}
+	default:
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "not condition currently supports a single match child",
+		}
+	}
 }
 
 func flattenConditionTreeSpec(ruleName string, spec ConditionSpec) ([]normalizedRuleCondition, compiledConditionTreeShape, error) {
@@ -619,21 +819,18 @@ func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditio
 			Reason:   "or condition is not supported under not",
 		}
 	}
-	if len(specs) > 1 {
-		return compiledConditionTreeShape{}, &ValidationError{
-			RuleName: ruleName,
-			Reason:   "or condition branch expansion is not implemented",
-		}
-	}
-
-	child, err := flattenConditionTreeNode(ruleName, specs[0], conditions, visible, negated)
-	if err != nil {
-		return compiledConditionTreeShape{}, err
-	}
-	return compiledConditionTreeShape{
+	shape := compiledConditionTreeShape{
 		kind:     ConditionTreeKindOr,
-		children: []compiledConditionTreeShape{child},
-	}, nil
+		children: make([]compiledConditionTreeShape, 0, len(specs)),
+	}
+	for _, spec := range specs {
+		child, err := flattenConditionTreeNode(ruleName, spec, conditions, visible, negated)
+		if err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		shape.children = append(shape.children, child)
+	}
+	return shape, nil
 }
 
 func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition) (compiledConditionTreeShape, error) {
@@ -666,8 +863,12 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	if err != nil {
 		return compiledRule{}, err
 	}
+	normalizedBranches, err := normalizeRuleConditionBranches(normalized)
+	if err != nil {
+		return compiledRule{}, err
+	}
 
-	if len(normalizedConditions) == 0 {
+	if len(normalizedBranches) == 0 {
 		return compiledRule{}, &ValidationError{
 			RuleName: normalized.Name,
 			Reason:   "rule requires at least one condition",
@@ -680,154 +881,27 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		}
 	}
 
-	bindingSlots := make(map[string]int, len(normalizedConditions))
-	allBindingSlots := make(map[string]int, len(normalizedConditions))
-	conditions := make([]RuleCondition, 0, len(normalizedConditions))
-	treeConditions := make([]RuleCondition, 0, len(normalizedConditions))
-	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
-	for i, node := range normalizedConditions {
-		condition := node.spec
-		if condition.Binding == "" {
-			return compiledRule{}, &ValidationError{
-				RuleName:          normalized.Name,
-				ConditionIndex:    i,
-				HasConditionIndex: true,
-				Reason:            "condition binding is required",
-			}
-		}
-		if !isValidBindingName(condition.Binding) {
-			return compiledRule{}, &ValidationError{
-				RuleName:          normalized.Name,
-				ConditionIndex:    i,
-				HasConditionIndex: true,
-				Reason:            "invalid binding name",
-			}
-		}
-		if _, exists := allBindingSlots[condition.Binding]; exists {
-			return compiledRule{}, &ValidationError{
-				RuleName:          normalized.Name,
-				ConditionIndex:    i,
-				HasConditionIndex: true,
-				Reason:            "duplicate binding",
-			}
-		}
-		if node.negated && len(bindingSlots) == 0 {
-			return compiledRule{}, &ValidationError{
-				RuleName:          normalized.Name,
-				ConditionIndex:    i,
-				HasConditionIndex: true,
-				Reason:            "not condition requires an earlier positive condition",
-			}
-		}
-
-		hasName := condition.Name != ""
-		hasTemplateKey := condition.TemplateKey != ""
-		if hasName == hasTemplateKey {
-			return compiledRule{}, &ValidationError{
-				RuleName:          normalized.Name,
-				ConditionIndex:    i,
-				HasConditionIndex: true,
-				Reason:            "condition target must be either a name or a template key",
-			}
-		}
-		if hasTemplateKey {
-			if _, ok := templatesByKey[condition.TemplateKey]; !ok {
-				return compiledRule{}, &ValidationError{
-					RuleName:          normalized.Name,
-					ConditionIndex:    i,
-					HasConditionIndex: true,
-					Reason:            "unknown template key",
-				}
-			}
-		}
-
-		target := conditionTarget{}
-		indexKind := conditionIndexUnknown
-		var template *Template
-		if hasName {
-			target = conditionTarget{
-				kind: conditionTargetName,
-				name: condition.Name,
-			}
-			indexKind = conditionIndexName
-		} else {
-			target = conditionTarget{
-				kind:        conditionTargetTemplateKey,
-				templateKey: condition.TemplateKey,
-			}
-			indexKind = conditionIndexTemplateKey
-			templateValue := templatesByKey[condition.TemplateKey]
-			template = &templateValue
-		}
-
-		fieldConstraints := make([]FieldConstraint, 0, len(condition.FieldConstraints))
-		compiledConstraints := make([]compiledFieldConstraint, 0, len(condition.FieldConstraints))
-		for constraintIndex, constraint := range condition.FieldConstraints {
-			compiledConstraint, planConstraint, err := compileFieldConstraintSpec(constraint, normalized.Name, i, constraintIndex, template)
-			if err != nil {
-				return compiledRule{}, err
-			}
-			fieldConstraints = append(fieldConstraints, compiledConstraint)
-			compiledConstraints = append(compiledConstraints, planConstraint)
-		}
-
-		joinConstraints := make([]JoinConstraint, 0, len(condition.JoinConstraints))
-		compiledJoins := make([]compiledJoinConstraint, 0, len(condition.JoinConstraints))
-		for joinIndex, joinConstraint := range condition.JoinConstraints {
-			compiledJoin, planJoin, err := compileJoinConstraintSpec(joinConstraint, normalized.Name, i, joinIndex, template, conditions, bindingSlots, templatesByKey)
-			if err != nil {
-				return compiledRule{}, err
-			}
-			joinConstraints = append(joinConstraints, compiledJoin)
-			compiledJoins = append(compiledJoins, planJoin)
-		}
-
-		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
-		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
-		for predicateIndex, predicate := range condition.Predicates {
-			compiledPredicate, planPredicate, err := compileExpressionPredicateSpec(predicate, normalized.Name, i, predicateIndex, template, conditions, bindingSlots, templatesByKey)
-			if err != nil {
-				return compiledRule{}, err
-			}
-			predicates = append(predicates, compiledPredicate)
-			compiledPredicates = append(compiledPredicates, planPredicate)
-		}
-
-		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates, node.negated)
-		compiledCondition := RuleCondition{
-			id:               conditionID,
-			binding:          condition.Binding,
-			name:             condition.Name,
-			templateKey:      condition.TemplateKey,
-			fieldConstraints: fieldConstraints,
-			joinConstraints:  joinConstraints,
-			predicates:       predicates,
-			order:            i,
-		}
-		publicBindingSlot := -1
-		if node.visible {
-			publicBindingSlot = len(conditions)
-			conditions = append(conditions, compiledCondition)
-		}
-		treeConditions = append(treeConditions, compiledCondition.clone())
-		conditionPlans = append(conditionPlans, compiledConditionPlan{
-			id:          conditionID,
-			binding:     condition.Binding,
-			bindingSlot: publicBindingSlot,
-			path:        []int{i},
-			negated:     node.negated,
-			target:      target,
-			constraints: compiledConstraints,
-			joins:       compiledJoins,
-			predicates:  compiledPredicates,
-			indexable:   true,
-			indexKind:   indexKind,
-		})
-		allBindingSlots[condition.Binding] = i
-		if node.visible {
-			bindingSlots[condition.Binding] = publicBindingSlot
-		}
+	inspectionSet, err := compileNormalizedRuleConditionBranch(normalized.Name, ruleID, normalizedConditions, templatesByKey, true)
+	if err != nil {
+		return compiledRule{}, err
 	}
+	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
+	var representative compiledRuleConditionSet
+	for branchIndex, branch := range normalizedBranches {
+		compiledBranch, err := compileNormalizedRuleConditionBranch(normalized.Name, ruleID, branch.conditions, templatesByKey, false)
+		if err != nil {
+			return compiledRule{}, err
+		}
+		if branchIndex == 0 {
+			representative = compiledBranch
+		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, compiledBranch.conditions); err != nil {
+			return compiledRule{}, err
+		}
+		compiledBranches = append(compiledBranches, compiledConditionBranch{plans: compiledBranch.conditionPlans})
+	}
+	conditions := representative.conditions
+	conditionPlans := representative.conditionPlans
+	treeConditions := inspectionSet.treeConditions
 	conditionTree := buildRuleConditionTree(conditionTreeShape, treeConditions)
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
@@ -871,12 +945,199 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		conditionTree:               conditionTree,
 		conditionTreeShape:          conditionTreeShape.clone(),
 		conditionPlans:              conditionPlans,
+		conditionBranches:           compiledBranches,
 		actions:                     actions,
 		allActionsSkipBindingFreeze: allActionsSkipBindingFreeze,
 	}
 	compiled.revisionID = ruleRevisionIDFor(compiled)
 	compiled.identityScopeHash = candidateIdentityScopeHash(compiled.id, compiled.revisionID)
 	return compiled, nil
+}
+
+type compiledRuleConditionSet struct {
+	conditions     []RuleCondition
+	treeConditions []RuleCondition
+	conditionPlans []compiledConditionPlan
+}
+
+func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool) (compiledRuleConditionSet, error) {
+	bindingSlots := make(map[string]int, len(normalizedConditions))
+	allBindingSlots := make(map[string]int, len(normalizedConditions))
+	conditions := make([]RuleCondition, 0, len(normalizedConditions))
+	treeConditions := make([]RuleCondition, 0, len(normalizedConditions))
+	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
+	for i, node := range normalizedConditions {
+		condition := node.spec
+		if condition.Binding == "" {
+			return compiledRuleConditionSet{}, &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "condition binding is required",
+			}
+		}
+		if !isValidBindingName(condition.Binding) {
+			return compiledRuleConditionSet{}, &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "invalid binding name",
+			}
+		}
+		if _, exists := allBindingSlots[condition.Binding]; exists && !allowDuplicateBindings {
+			return compiledRuleConditionSet{}, &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "duplicate binding",
+			}
+		}
+		if node.negated && len(bindingSlots) == 0 {
+			return compiledRuleConditionSet{}, &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "not condition requires an earlier positive condition",
+			}
+		}
+
+		hasName := condition.Name != ""
+		hasTemplateKey := condition.TemplateKey != ""
+		if hasName == hasTemplateKey {
+			return compiledRuleConditionSet{}, &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "condition target must be either a name or a template key",
+			}
+		}
+		if hasTemplateKey {
+			if _, ok := templatesByKey[condition.TemplateKey]; !ok {
+				return compiledRuleConditionSet{}, &ValidationError{
+					RuleName:          ruleName,
+					ConditionIndex:    i,
+					HasConditionIndex: true,
+					Reason:            "unknown template key",
+				}
+			}
+		}
+
+		target := conditionTarget{}
+		indexKind := conditionIndexUnknown
+		var template *Template
+		if hasName {
+			target = conditionTarget{
+				kind: conditionTargetName,
+				name: condition.Name,
+			}
+			indexKind = conditionIndexName
+		} else {
+			target = conditionTarget{
+				kind:        conditionTargetTemplateKey,
+				templateKey: condition.TemplateKey,
+			}
+			indexKind = conditionIndexTemplateKey
+			templateValue := templatesByKey[condition.TemplateKey]
+			template = &templateValue
+		}
+
+		fieldConstraints := make([]FieldConstraint, 0, len(condition.FieldConstraints))
+		compiledConstraints := make([]compiledFieldConstraint, 0, len(condition.FieldConstraints))
+		for constraintIndex, constraint := range condition.FieldConstraints {
+			compiledConstraint, planConstraint, err := compileFieldConstraintSpec(constraint, ruleName, i, constraintIndex, template)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			fieldConstraints = append(fieldConstraints, compiledConstraint)
+			compiledConstraints = append(compiledConstraints, planConstraint)
+		}
+
+		joinConstraints := make([]JoinConstraint, 0, len(condition.JoinConstraints))
+		compiledJoins := make([]compiledJoinConstraint, 0, len(condition.JoinConstraints))
+		for joinIndex, joinConstraint := range condition.JoinConstraints {
+			compiledJoin, planJoin, err := compileJoinConstraintSpec(joinConstraint, ruleName, i, joinIndex, template, conditions, bindingSlots, templatesByKey)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			joinConstraints = append(joinConstraints, compiledJoin)
+			compiledJoins = append(compiledJoins, planJoin)
+		}
+
+		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
+		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
+		for predicateIndex, predicate := range condition.Predicates {
+			compiledPredicate, planPredicate, err := compileExpressionPredicateSpec(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			predicates = append(predicates, compiledPredicate)
+			compiledPredicates = append(compiledPredicates, planPredicate)
+		}
+
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates, node.negated)
+		compiledCondition := RuleCondition{
+			id:               conditionID,
+			binding:          condition.Binding,
+			name:             condition.Name,
+			templateKey:      condition.TemplateKey,
+			fieldConstraints: fieldConstraints,
+			joinConstraints:  joinConstraints,
+			predicates:       predicates,
+			order:            i,
+		}
+		publicBindingSlot := -1
+		if node.visible {
+			if slot, ok := bindingSlots[condition.Binding]; ok && allowDuplicateBindings {
+				publicBindingSlot = slot
+			} else {
+				publicBindingSlot = len(conditions)
+				conditions = append(conditions, compiledCondition)
+			}
+		}
+		treeConditions = append(treeConditions, compiledCondition.clone())
+		conditionPlans = append(conditionPlans, compiledConditionPlan{
+			id:          conditionID,
+			binding:     condition.Binding,
+			bindingSlot: publicBindingSlot,
+			path:        []int{i},
+			negated:     node.negated,
+			target:      target,
+			constraints: compiledConstraints,
+			joins:       compiledJoins,
+			predicates:  compiledPredicates,
+			indexable:   true,
+			indexKind:   indexKind,
+		})
+		allBindingSlots[condition.Binding] = i
+		if node.visible {
+			bindingSlots[condition.Binding] = publicBindingSlot
+		}
+	}
+	return compiledRuleConditionSet{
+		conditions:     conditions,
+		treeConditions: treeConditions,
+		conditionPlans: conditionPlans,
+	}, nil
+}
+
+func validateBranchBindingContract(ruleName string, expected, actual []RuleCondition) error {
+	if len(expected) != len(actual) {
+		return &ValidationError{
+			RuleName: ruleName,
+			Reason:   "or branches must expose the same bindings",
+		}
+	}
+	for i := range expected {
+		if expected[i].binding != actual[i].binding || expected[i].name != actual[i].name || expected[i].templateKey != actual[i].templateKey {
+			return &ValidationError{
+				RuleName:          ruleName,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "or branches must expose compatible bindings",
+			}
+		}
+	}
+	return nil
 }
 
 func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleCondition) RuleConditionTree {
@@ -1011,6 +1272,29 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			}
 			sum.Write([]byte(";"))
 		}
+		if len(rule.conditionBranches) > 1 {
+			sum.Write([]byte("\ncondition-branches:"))
+			for branchIndex, branch := range rule.conditionBranches {
+				sum.Write(fmt.Appendf(nil, "%d:", branchIndex))
+				for _, plan := range branch.plans {
+					sum.Write([]byte(plan.binding))
+					sum.Write([]byte(":"))
+					if plan.negated {
+						sum.Write([]byte("not:"))
+					}
+					sum.Write([]byte(plan.target.name))
+					sum.Write([]byte(":"))
+					sum.Write([]byte(plan.target.templateKey.String()))
+					sum.Write([]byte(":"))
+					sum.Write([]byte(serializeCompiledFieldConstraints(plan.constraints)))
+					sum.Write([]byte("|"))
+					sum.Write([]byte(serializeCompiledJoinConstraints(plan.joins)))
+					sum.Write([]byte("|"))
+					sum.Write([]byte(serializeCompiledExpressionPredicates(plan.predicates)))
+					sum.Write([]byte(";"))
+				}
+			}
+		}
 	}
 	sum.Write([]byte("\nactions:"))
 	for _, action := range rule.actions {
@@ -1022,6 +1306,9 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 }
 
 func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
+	if len(rule.conditionBranches) > 1 {
+		return true
+	}
 	if len(rule.treeConditions) != len(rule.conditions) {
 		return true
 	}

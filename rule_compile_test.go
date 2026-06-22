@@ -607,7 +607,7 @@ func TestConditionTreeOrValidation(t *testing.T) {
 			wantReason: "or condition requires at least one branch",
 		},
 		{
-			name: "multi branch or waits for branch expansion",
+			name: "branch-specific binding",
 			rule: func(personKey TemplateKey) RuleSpec {
 				return RuleSpec{
 					Name: "broken",
@@ -618,7 +618,7 @@ func TestConditionTreeOrValidation(t *testing.T) {
 					Actions: []RuleActionSpec{{Name: "mark"}},
 				}
 			},
-			wantReason: "or condition branch expansion is not implemented",
+			wantReason: "or branches must expose compatible bindings",
 		},
 		{
 			name: "or under not",

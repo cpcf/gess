@@ -376,38 +376,48 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 	candidates := make([]matchCandidate, 0)
 	seen := newCandidateSeenSet(0)
 
-	var walk func(conditionIndex int) error
-	walk = func(conditionIndex int) error {
-		if err := ctx.Err(); err != nil {
-			return err
+	for _, branch := range r.executionConditionBranches() {
+		plans := branch.plans
+		if len(plans) == 0 {
+			continue
 		}
-		if conditionIndex == len(r.conditionPlans) {
-			candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected[:conditionIndex])
-			if err != nil {
+		if cap(selected) < len(plans) {
+			selected = make([]conditionMatch, len(plans))
+		}
+		selected = selected[:len(plans)]
+		var walk func(conditionIndex int) error
+		walk = func(conditionIndex int) error {
+			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if seen.seen(candidates, candidate) {
+			if conditionIndex == len(plans) {
+				candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected[:conditionIndex])
+				if err != nil {
+					return err
+				}
+				if seen.seen(candidates, candidate) {
+					return nil
+				}
+				candidates = append(candidates, candidate)
 				return nil
 			}
-			candidates = append(candidates, candidate)
-			return nil
-		}
 
-		plan := r.conditionPlans[conditionIndex]
-		yield := func(match conditionMatch) error {
-			selected[conditionIndex] = match
-			return walk(conditionIndex + 1)
-		}
-		if alphaSource != nil {
-			if facts, ok := alphaSource.factsForCondition(plan.id); ok {
-				return plan.forEachAlphaMatchWithBindings(ctx, facts, selected[:conditionIndex], yield)
+			plan := plans[conditionIndex]
+			yield := func(match conditionMatch) error {
+				selected[conditionIndex] = match
+				return walk(conditionIndex + 1)
 			}
+			if alphaSource != nil {
+				if facts, ok := alphaSource.factsForCondition(plan.id); ok {
+					return plan.forEachAlphaMatchWithBindings(ctx, facts, selected[:conditionIndex], yield)
+				}
+			}
+			return plan.forEachMatchWithBindings(ctx, source, selected[:conditionIndex], yield)
 		}
-		return plan.forEachMatchWithBindings(ctx, source, selected[:conditionIndex], yield)
-	}
 
-	if err := walk(0); err != nil {
-		return nil, err
+		if err := walk(0); err != nil {
+			return nil, err
+		}
 	}
 	return candidates, nil
 }

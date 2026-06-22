@@ -158,87 +158,94 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 	betaIndex := make(map[reteGraphBetaKey]reteGraphBetaNodeID, len(compiledRules))
 
 	for _, rule := range compiledRules {
-		var current reteGraphStageRef
-		haveStage := false
+		var terminalID reteGraphTerminalNodeID
+		for _, branch := range rule.executionConditionBranches() {
+			var current reteGraphStageRef
+			haveStage := false
+			plans := branch.plans
 
-		for conditionIndex, condition := range rule.conditionPlans {
-			alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
-			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
-			alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
-			if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
-				alphaNode.entry = graphTokenEntryForCondition(condition)
-			}
-			supportedAlpha := reteGraphSupportsAlpha(condition.target, templatesByKey)
-			if supportedAlpha {
-				graph.appendAlphaConsumer(alphaID, reteBetaConditionRoute{
-					ruleRevisionID: rule.revisionID,
-					conditionIndex: conditionIndex,
-					conditionID:    condition.id,
-					bindingSlot:    condition.bindingSlot,
+			for conditionIndex, condition := range plans {
+				alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
+				alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
+				alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+				if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
+					alphaNode.entry = graphTokenEntryForCondition(condition)
+				}
+				supportedAlpha := reteGraphSupportsAlpha(condition.target, templatesByKey)
+				if supportedAlpha {
+					graph.appendAlphaConsumer(alphaID, reteBetaConditionRoute{
+						ruleRevisionID: rule.revisionID,
+						conditionIndex: conditionIndex,
+						conditionID:    condition.id,
+						bindingSlot:    condition.bindingSlot,
+					})
+				}
+				if created && supportedAlpha {
+					route := reteGraphAlphaRouteSelector{}
+					if alphaNode := graph.alphaNode(alphaID); alphaNode != nil {
+						template := templatesByKey[condition.target.templateKey]
+						route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
+						alphaNode.route = route
+					}
+					switch condition.target.kind {
+					case conditionTargetTemplateKey:
+						graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
+						graph.appendAlphaRoute(condition.target.templateKey, alphaID, route)
+					case conditionTargetName:
+						graph.routesByName[condition.target.name] = append(graph.routesByName[condition.target.name], alphaID)
+					}
+				}
+				if !haveStage {
+					current = alphaRef
+					haveStage = true
+					continue
+				}
+
+				betaKind := reteGraphBetaNodeJoin
+				if condition.negated {
+					betaKind = reteGraphBetaNodeNot
+				}
+				betaID, _ := graph.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
+				if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" && betaKind == reteGraphBetaNodeJoin {
+					betaNode.entry = graphTokenEntryForCondition(condition)
+				}
+				leftEntry := bindingTupleEntry{}
+				if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+					leftEntry = graphTokenEntryForCondition(plans[conditionIndex-1])
+				}
+				graph.appendStageSuccessor(current, reteGraphStageSuccessor{
+					betaNodeID: betaID,
+					side:       reteGraphBetaInputLeft,
+					entry:      leftEntry,
 				})
+				graph.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
+					betaNodeID: betaID,
+					side:       reteGraphBetaInputRight,
+					entry:      graphTokenEntryForCondition(condition),
+				})
+				current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
 			}
-			if created && supportedAlpha {
-				route := reteGraphAlphaRouteSelector{}
-				if alphaNode := graph.alphaNode(alphaID); alphaNode != nil {
-					template := templatesByKey[condition.target.templateKey]
-					route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
-					alphaNode.route = route
-				}
-				switch condition.target.kind {
-				case conditionTargetTemplateKey:
-					graph.routesByTemplateKey[condition.target.templateKey] = append(graph.routesByTemplateKey[condition.target.templateKey], alphaID)
-					graph.appendAlphaRoute(condition.target.templateKey, alphaID, route)
-				case conditionTargetName:
-					graph.routesByName[condition.target.name] = append(graph.routesByName[condition.target.name], alphaID)
-				}
-			}
+
 			if !haveStage {
-				current = alphaRef
-				haveStage = true
 				continue
 			}
-
-			betaKind := reteGraphBetaNodeJoin
-			if condition.negated {
-				betaKind = reteGraphBetaNodeNot
+			if terminalID == 0 {
+				graph.terminalNodes = append(graph.terminalNodes, reteGraphTerminalNode{
+					id:             reteGraphTerminalNodeID(len(graph.terminalNodes) + 1),
+					ruleRevisionID: rule.revisionID,
+					input:          current,
+				})
+				terminalID = reteGraphTerminalNodeID(len(graph.terminalNodes))
 			}
-			betaID, _ := graph.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
-			if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" && betaKind == reteGraphBetaNodeJoin {
-				betaNode.entry = graphTokenEntryForCondition(condition)
+			terminalEntry := bindingTupleEntry{}
+			if current.kind == reteGraphStageAlpha && len(plans) > 0 {
+				terminalEntry = graphTokenEntryForCondition(plans[0])
 			}
-			leftEntry := bindingTupleEntry{}
-			if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
-				leftEntry = graphTokenEntryForCondition(rule.conditionPlans[conditionIndex-1])
-			}
-			graph.appendStageSuccessor(current, reteGraphStageSuccessor{
-				betaNodeID: betaID,
-				side:       reteGraphBetaInputLeft,
-				entry:      leftEntry,
+			graph.appendTerminal(current, reteGraphTerminalRoute{
+				terminalID: terminalID,
+				entry:      terminalEntry,
 			})
-			graph.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
-				betaNodeID: betaID,
-				side:       reteGraphBetaInputRight,
-				entry:      graphTokenEntryForCondition(condition),
-			})
-			current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
 		}
-
-		if !haveStage {
-			continue
-		}
-		graph.terminalNodes = append(graph.terminalNodes, reteGraphTerminalNode{
-			id:             reteGraphTerminalNodeID(len(graph.terminalNodes) + 1),
-			ruleRevisionID: rule.revisionID,
-			input:          current,
-		})
-		terminalEntry := bindingTupleEntry{}
-		if current.kind == reteGraphStageAlpha && len(rule.conditionPlans) > 0 {
-			terminalEntry = graphTokenEntryForCondition(rule.conditionPlans[0])
-		}
-		graph.appendTerminal(current, reteGraphTerminalRoute{
-			terminalID: reteGraphTerminalNodeID(len(graph.terminalNodes)),
-			entry:      terminalEntry,
-		})
 	}
 
 	return graph

@@ -1493,6 +1493,131 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error {
+		fired++
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "or-dedupe",
+		ConditionTree: Or{Conditions: []ConditionSpec{
+			Match{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+			},
+			Match{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
+				},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("or-dedupe-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want or branch support", session.rete)
+	}
+	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1", "active": true, "dept": "engineering"})); err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations = %d, want 1", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fired != 1 {
+		t.Fatalf("fired = %d, want 1", fired)
+	}
+}
+
+func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	block := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "block",
+		Fields: []FieldSpec{
+			{Name: "person_id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "or-support",
+		ConditionTree: Or{Conditions: []ConditionSpec{
+			Match{Binding: "person", TemplateKey: person.Key()},
+			And{Conditions: []ConditionSpec{
+				Match{Binding: "person", TemplateKey: person.Key()},
+				Not{Condition: Match{
+					Binding:     "block",
+					TemplateKey: block.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "person_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "id"}},
+					},
+				}},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	collector := &testEventCollector{}
+	session, err := NewSession(revision, WithSessionID("or-support-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1"})); err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got := len(pending); got != 1 {
+		t.Fatalf("pending activations after person = %d, want 1", got)
+	}
+	activationID := pending[0].activationID()
+	if _, err := session.AssertTemplate(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
+		t.Fatalf("AssertTemplate block: %v", err)
+	}
+	pending = session.agenda.pendingActivations()
+	if got := len(pending); got != 1 {
+		t.Fatalf("pending activations after block = %d, want 1", got)
+	}
+	if pending[0].activationID() != activationID {
+		t.Fatalf("activation changed after one branch support disappeared: got %q want %q", pending[0].activationID(), activationID)
+	}
+	for _, event := range collector.Events() {
+		if event.Type == EventRuleDeactivated {
+			t.Fatalf("unexpected deactivation event while equivalent branch remained: %#v", event)
+		}
+	}
+}
+
 func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

@@ -75,6 +75,7 @@ type graphTokenRow struct {
 	joinKey          betaJoinKey
 	identity         graphTokenIdentityKey
 	terminalIdentity candidateIdentity
+	supportCount     int
 }
 
 type graphTokenIdentityKey struct {
@@ -497,6 +498,10 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		rowID, _ := bucket.at(i)
 		row := m.row(rowID)
 		if row != nil && tokenRefEqual(row.token, token) {
+			if row.token.handle == token.handle {
+				return false
+			}
+			row.supportCount++
 			return false
 		}
 	}
@@ -507,6 +512,7 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		token:            token,
 		identity:         identity,
 		terminalIdentity: terminalIdentity,
+		supportCount:     1,
 	})
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
@@ -592,6 +598,10 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 		row := m.row(rowID)
 		if row == nil || !tokenRefEqual(row.token, token) {
 			continue
+		}
+		if row.supportCount > 1 {
+			row.supportCount--
+			return graphTokenRow{}, false
 		}
 		removed := *row
 		m.removeRow(rowID, counters)
