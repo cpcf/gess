@@ -1126,7 +1126,7 @@ func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaC
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
-	if changes, ok, err := s.applyReteAgendaDelta(ctx, delta); ok || err != nil {
+	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
 		return changes, err
 	}
 	return s.reconcileAgendaInternal(ctx)

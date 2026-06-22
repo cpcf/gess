@@ -405,6 +405,7 @@ type agenda struct {
 	activations         map[activationFingerprint]activationBucket
 	activationRows      activationRows
 	pending             []activationKey
+	lazyDeactivated     int
 	byFactID            map[FactID]activationKeyBucket
 	byRevision          map[RuleRevisionID]activationKeyBucket
 	tokenFactIndexDirty bool
@@ -445,6 +446,7 @@ func (a *agenda) reset() {
 		clear(a.activations)
 	}
 	a.pending = a.pending[:0]
+	a.lazyDeactivated = 0
 	a.activationRows.reset()
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
@@ -687,6 +689,11 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !ok || existing.status != activationStatusPending {
 			continue
 		}
+		if !collectChanges {
+			existing.status = activationStatusDeactivated
+			a.lazyDeactivated++
+			continue
+		}
 		removedKeys[key] = struct{}{}
 	}
 
@@ -750,7 +757,13 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
-				a.pending = a.insertActivationKeySorted(a.pending, key, existing)
+				pending := activationKeyPending(a.pending, key)
+				if pending && a.lazyDeactivated > 0 {
+					a.lazyDeactivated--
+				}
+				if collectChanges || !pending {
+					a.pending = a.insertActivationKeySorted(a.pending, key, existing)
+				}
 				if collectChanges {
 					activated = append(activated, agendaChange{
 						kind:       agendaChangeActivated,
@@ -1091,6 +1104,9 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	for _, key := range oldPending {
 		current, ok := a.activationByKeyPtr(key)
 		if !ok || current.status != activationStatusPending {
+			if ok && current.status == activationStatusDeactivated && a.lazyDeactivated > 0 {
+				a.lazyDeactivated--
+			}
 			continue
 		}
 		nextPending = append(nextPending, key)
@@ -1151,6 +1167,7 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 		}
 		return current, out, true
 	}
+	a.lazyDeactivated = 0
 	return nil, activation{}, false
 }
 
@@ -1189,6 +1206,7 @@ func (a *agenda) pendingActivations() []activation {
 	if a == nil || len(a.pending) == 0 {
 		return nil
 	}
+	a.compactLazyPending(false)
 	out := make([]activation, 0, len(a.pending))
 	for _, key := range a.pending {
 		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
@@ -1654,6 +1672,28 @@ func activationIDForIdentityKey(identity candidateIdentityKey, index uint64) Act
 	b.WriteByte(':')
 	writeUintToBuilder(&b, index)
 	return ActivationID(b.String())
+}
+
+func activationKeyPending(keys []activationKey, want activationKey) bool {
+	return slices.Contains(keys, want)
+}
+
+func (a *agenda) compactLazyPending(force bool) {
+	if a == nil || a.lazyDeactivated == 0 {
+		return
+	}
+	if !force && a.lazyDeactivated < 1024 && a.lazyDeactivated*2 < len(a.pending) {
+		return
+	}
+	next := a.deltaNextPending[:0]
+	for _, key := range a.pending {
+		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
+			next = append(next, key)
+		}
+	}
+	a.deltaNextPending = a.pending[:0]
+	a.pending = next
+	a.lazyDeactivated = 0
 }
 
 func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {
