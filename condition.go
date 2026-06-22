@@ -34,6 +34,7 @@ type compiledConditionPlan struct {
 	binding     string
 	bindingSlot int
 	path        []int
+	negated     bool
 	target      conditionTarget
 	constraints []compiledFieldConstraint
 	joins       []compiledJoinConstraint
@@ -68,7 +69,7 @@ func isValidBindingName(name string) bool {
 	return true
 }
 
-func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint, predicates []compiledExpressionPredicate) ConditionID {
+func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint, predicates []compiledExpressionPredicate, negated bool) ConditionID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/condition/v1\n"))
 	sum.Write([]byte("rule:"))
@@ -77,6 +78,9 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 	sum.Write(fmt.Appendf(nil, "%d", order))
 	sum.Write([]byte("\nbinding:"))
 	sum.Write([]byte(binding))
+	if negated {
+		sum.Write([]byte("\nnegated:true"))
+	}
 	sum.Write([]byte("\nname:"))
 	sum.Write([]byte(name))
 	sum.Write([]byte("\ntemplate-key:"))

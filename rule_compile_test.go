@@ -309,6 +309,218 @@ func TestConditionTreeAndFlatRulesProduceEquivalentActivations(t *testing.T) {
 	}
 }
 
+func TestConditionTreeNotCompilesAsLocalUnsupportedCondition(t *testing.T) {
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	block := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "block",
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+		},
+	})
+	note := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "note",
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-without-block",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Not{Condition: Match{
+				Binding:     "block",
+				TemplateKey: block.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			}},
+			Match{
+				Binding:     "note",
+				TemplateKey: note.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("customer-without-block")
+	if !ok {
+		t.Fatal("compiled rule missing")
+	}
+	conditions := rule.Conditions()
+	if got, want := len(conditions), 2; got != want {
+		t.Fatalf("public conditions = %d, want %d", got, want)
+	}
+	if conditions[0].Binding() != "customer" {
+		t.Fatalf("public condition binding = %q, want customer", conditions[0].Binding())
+	}
+	if conditions[1].Binding() != "note" {
+		t.Fatalf("second public condition binding = %q, want note", conditions[1].Binding())
+	}
+	tree := rule.ConditionTree()
+	children := tree.Children()
+	if tree.Kind() != ConditionTreeKindAnd || len(children) != 3 {
+		t.Fatalf("condition tree = %q with %d children, want and with 3 children", tree.Kind(), len(children))
+	}
+	notTree := children[1]
+	if notTree.Kind() != ConditionTreeKindNot {
+		t.Fatalf("second condition tree child kind = %q, want %q", notTree.Kind(), ConditionTreeKindNot)
+	}
+	notChildren := notTree.Children()
+	if len(notChildren) != 1 {
+		t.Fatalf("not children = %d, want 1", len(notChildren))
+	}
+	notMatch, ok := notChildren[0].Match()
+	if !ok {
+		t.Fatal("not child is not a match")
+	}
+	if notMatch.Binding() != "block" {
+		t.Fatalf("not match binding = %q, want block", notMatch.Binding())
+	}
+
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if runtime.supportsGraphBeta() {
+		t.Fatal("runtime supports graph beta for not condition, want unsupported until negative beta runtime exists")
+	}
+	if got, want := len(runtime.plan.unsupported), 1; got != want {
+		t.Fatalf("unsupported reasons = %d, want %d: %#v", got, want, runtime.plan.unsupported)
+	}
+	if got := runtime.plan.unsupported[0].kind; got != reteUnsupportedNegation {
+		t.Fatalf("unsupported kind = %q, want %q", got, reteUnsupportedNegation)
+	}
+	err = runtime.validateExecutableGraphBetaRuntime()
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
+	}
+	if !strings.Contains(err.Error(), "negation") {
+		t.Fatalf("unsupported runtime error %q does not contain negation", err.Error())
+	}
+
+	session, err := NewSession(
+		revision,
+		WithSessionID("not-unsupported-session"),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: customer.Key(), Fields: mustFields(t, map[string]any{"id": "c-1"})},
+			SessionInitialFact{TemplateKey: note.Key(), Fields: mustFields(t, map[string]any{"customer_id": "c-1"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	_, err = session.Run(context.Background())
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("Run error = %v, want ErrUnsupportedRuntime", err)
+	}
+}
+
+func TestConditionTreeNotBindingScopeValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		rule       func(customerKey, blockKey TemplateKey) RuleSpec
+		wantReason string
+	}{
+		{
+			name: "not first",
+			rule: func(customerKey, blockKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name: "broken",
+					ConditionTree: And{Conditions: []ConditionSpec{
+						Not{Condition: Match{Binding: "block", TemplateKey: blockKey}},
+					}},
+					Actions: []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "not condition requires an earlier positive condition",
+		},
+		{
+			name: "later condition references negated binding",
+			rule: func(customerKey, blockKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name: "broken",
+					ConditionTree: And{Conditions: []ConditionSpec{
+						Match{Binding: "customer", TemplateKey: customerKey},
+						Not{Condition: Match{Binding: "block", TemplateKey: blockKey}},
+						Match{
+							Binding:     "later",
+							TemplateKey: blockKey,
+							JoinConstraints: []JoinConstraintSpec{
+								{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "block", Field: "customer_id"}},
+							},
+						},
+					}},
+					Actions: []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "join binding reference must refer to an earlier condition",
+		},
+		{
+			name: "not child is not match",
+			rule: func(customerKey, blockKey TemplateKey) RuleSpec {
+				return RuleSpec{
+					Name: "broken",
+					ConditionTree: And{Conditions: []ConditionSpec{
+						Match{Binding: "customer", TemplateKey: customerKey},
+						Not{Condition: And{Conditions: []ConditionSpec{
+							Match{Binding: "block", TemplateKey: blockKey},
+						}}},
+					}},
+					Actions: []RuleActionSpec{{Name: "mark"}},
+				}
+			},
+			wantReason: "not condition currently supports a single match child",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			customer := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "customer",
+				Fields: []FieldSpec{
+					{Name: "id", Kind: ValueString, Required: true},
+				},
+			})
+			block := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "block",
+				Fields: []FieldSpec{
+					{Name: "customer_id", Kind: ValueString, Required: true},
+				},
+			})
+			mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, tc.rule(customer.Key(), block.Key()))
+
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded, want validation failure")
+			}
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("expected ValidationError, got %T: %v", err, err)
+			}
+			if validation.Reason != tc.wantReason {
+				t.Fatalf("reason = %q, want %q", validation.Reason, tc.wantReason)
+			}
+		})
+	}
+}
+
 func TestExpressionPredicatesCompileAndClassify(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

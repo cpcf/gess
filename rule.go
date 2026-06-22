@@ -57,6 +57,20 @@ func (s And) clone() And {
 	return out
 }
 
+// Not negates a condition tree node. Bindings declared inside Not are local to
+// the negated condition and are not exposed to later conditions or actions.
+type Not struct {
+	Condition ConditionSpec
+}
+
+func (Not) conditionSpecNode() {}
+
+func (s Not) clone() Not {
+	out := s
+	out.Condition = cloneConditionSpec(s.Condition)
+	return out
+}
+
 // Match is a positive fact match condition tree node.
 type Match RuleConditionSpec
 
@@ -73,6 +87,14 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case And:
 		return condition.clone()
 	case *And:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case Not:
+		return condition.clone()
+	case *Not:
 		if condition == nil {
 			return nil
 		}
@@ -205,6 +227,7 @@ const (
 	ConditionTreeKindUnknown ConditionTreeKind = ""
 	ConditionTreeKindAnd     ConditionTreeKind = "and"
 	ConditionTreeKindMatch   ConditionTreeKind = "match"
+	ConditionTreeKindNot     ConditionTreeKind = "not"
 )
 
 type RuleConditionTree struct {
@@ -348,6 +371,7 @@ type compiledRule struct {
 	declarationOrder            int
 	identityScopeHash           uint64
 	conditions                  []RuleCondition
+	treeConditions              []RuleCondition
 	conditionTree               RuleConditionTree
 	conditionTreeShape          compiledConditionTreeShape
 	conditionPlans              []compiledConditionPlan
@@ -393,6 +417,12 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 	return out
 }
 
+type normalizedRuleCondition struct {
+	spec    RuleConditionSpec
+	visible bool
+	negated bool
+}
+
 func normalizeRuleSpec(spec RuleSpec) (RuleSpec, error) {
 	normalized := spec.clone()
 	if normalized.Name == "" {
@@ -403,7 +433,7 @@ func normalizeRuleSpec(spec RuleSpec) (RuleSpec, error) {
 	return normalized, nil
 }
 
-func normalizeRuleConditions(spec RuleSpec) ([]RuleConditionSpec, compiledConditionTreeShape, error) {
+func normalizeRuleConditions(spec RuleSpec) ([]normalizedRuleCondition, compiledConditionTreeShape, error) {
 	if spec.ConditionTree != nil && len(spec.Conditions) > 0 {
 		return nil, compiledConditionTreeShape{}, &ValidationError{
 			RuleName: spec.Name,
@@ -417,10 +447,13 @@ func normalizeRuleConditions(spec RuleSpec) ([]RuleConditionSpec, compiledCondit
 		return nil, compiledConditionTreeShape{}, nil
 	}
 
-	conditions := make([]RuleConditionSpec, len(spec.Conditions))
+	conditions := make([]normalizedRuleCondition, len(spec.Conditions))
 	children := make([]compiledConditionTreeShape, len(spec.Conditions))
 	for i, condition := range spec.Conditions {
-		conditions[i] = condition.clone()
+		conditions[i] = normalizedRuleCondition{
+			spec:    condition.clone(),
+			visible: true,
+		}
 		children[i] = compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
 			conditionIndex: i,
@@ -432,16 +465,16 @@ func normalizeRuleConditions(spec RuleSpec) ([]RuleConditionSpec, compiledCondit
 	}, nil
 }
 
-func flattenConditionTreeSpec(ruleName string, spec ConditionSpec) ([]RuleConditionSpec, compiledConditionTreeShape, error) {
-	conditions := make([]RuleConditionSpec, 0)
-	shape, err := flattenConditionTreeNode(ruleName, spec, &conditions)
+func flattenConditionTreeSpec(ruleName string, spec ConditionSpec) ([]normalizedRuleCondition, compiledConditionTreeShape, error) {
+	conditions := make([]normalizedRuleCondition, 0)
+	shape, err := flattenConditionTreeNode(ruleName, spec, &conditions, true, false)
 	if err != nil {
 		return nil, compiledConditionTreeShape{}, err
 	}
 	return conditions, shape, nil
 }
 
-func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]RuleConditionSpec) (compiledConditionTreeShape, error) {
+func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
 	switch condition := spec.(type) {
 	case nil:
 		return compiledConditionTreeShape{}, &ValidationError{
@@ -449,7 +482,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			Reason:   "condition tree node is required",
 		}
 	case And:
-		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions)
+		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
 	case *And:
 		if condition == nil {
 			return compiledConditionTreeShape{}, &ValidationError{
@@ -457,10 +490,24 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 				Reason:   "condition tree node is required",
 			}
 		}
-		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions)
+		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+	case Not:
+		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions)
+	case *Not:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions)
 	case Match:
 		index := len(*conditions)
-		*conditions = append(*conditions, RuleConditionSpec(condition).clone())
+		*conditions = append(*conditions, normalizedRuleCondition{
+			spec:    RuleConditionSpec(condition).clone(),
+			visible: visible,
+			negated: negated,
+		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
 			conditionIndex: index,
@@ -473,7 +520,11 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			}
 		}
 		index := len(*conditions)
-		*conditions = append(*conditions, RuleConditionSpec(*condition).clone())
+		*conditions = append(*conditions, normalizedRuleCondition{
+			spec:    RuleConditionSpec(*condition).clone(),
+			visible: visible,
+			negated: negated,
+		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
 			conditionIndex: index,
@@ -486,7 +537,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 	}
 }
 
-func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]RuleConditionSpec) (compiledConditionTreeShape, error) {
+func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
 	if len(specs) == 0 {
 		return compiledConditionTreeShape{}, &ValidationError{
 			RuleName: ruleName,
@@ -499,13 +550,30 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
 	for _, spec := range specs {
-		child, err := flattenConditionTreeNode(ruleName, spec, conditions)
+		child, err := flattenConditionTreeNode(ruleName, spec, conditions, visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
 		}
 		shape.children = append(shape.children, child)
 	}
 	return shape, nil
+}
+
+func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition) (compiledConditionTreeShape, error) {
+	child, err := flattenConditionTreeNode(ruleName, spec, conditions, false, true)
+	if err != nil {
+		return compiledConditionTreeShape{}, err
+	}
+	if child.kind != ConditionTreeKindMatch {
+		return compiledConditionTreeShape{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "not condition currently supports a single match child",
+		}
+	}
+	return compiledConditionTreeShape{
+		kind:     ConditionTreeKindNot,
+		children: []compiledConditionTreeShape{child},
+	}, nil
 }
 
 func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templatesByKey map[TemplateKey]Template, actionsByName map[string]compiledAction) (compiledRule, error) {
@@ -536,9 +604,12 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	}
 
 	bindingSlots := make(map[string]int, len(normalizedConditions))
+	allBindingSlots := make(map[string]int, len(normalizedConditions))
 	conditions := make([]RuleCondition, 0, len(normalizedConditions))
+	treeConditions := make([]RuleCondition, 0, len(normalizedConditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
-	for i, condition := range normalizedConditions {
+	for i, node := range normalizedConditions {
+		condition := node.spec
 		if condition.Binding == "" {
 			return compiledRule{}, &ValidationError{
 				RuleName:          normalized.Name,
@@ -555,12 +626,20 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 				Reason:            "invalid binding name",
 			}
 		}
-		if _, exists := bindingSlots[condition.Binding]; exists {
+		if _, exists := allBindingSlots[condition.Binding]; exists {
 			return compiledRule{}, &ValidationError{
 				RuleName:          normalized.Name,
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "duplicate binding",
+			}
+		}
+		if node.negated && len(bindingSlots) == 0 {
+			return compiledRule{}, &ValidationError{
+				RuleName:          normalized.Name,
+				ConditionIndex:    i,
+				HasConditionIndex: true,
+				Reason:            "not condition requires an earlier positive condition",
 			}
 		}
 
@@ -637,8 +716,8 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			compiledPredicates = append(compiledPredicates, planPredicate)
 		}
 
-		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates)
-		conditions = append(conditions, RuleCondition{
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates, node.negated)
+		compiledCondition := RuleCondition{
 			id:               conditionID,
 			binding:          condition.Binding,
 			name:             condition.Name,
@@ -647,12 +726,19 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			joinConstraints:  joinConstraints,
 			predicates:       predicates,
 			order:            i,
-		})
+		}
+		publicBindingSlot := -1
+		if node.visible {
+			publicBindingSlot = len(conditions)
+			conditions = append(conditions, compiledCondition)
+		}
+		treeConditions = append(treeConditions, compiledCondition.clone())
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
 			id:          conditionID,
 			binding:     condition.Binding,
-			bindingSlot: i,
+			bindingSlot: publicBindingSlot,
 			path:        []int{i},
+			negated:     node.negated,
 			target:      target,
 			constraints: compiledConstraints,
 			joins:       compiledJoins,
@@ -660,9 +746,12 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			indexable:   true,
 			indexKind:   indexKind,
 		})
-		bindingSlots[condition.Binding] = i
+		allBindingSlots[condition.Binding] = i
+		if node.visible {
+			bindingSlots[condition.Binding] = publicBindingSlot
+		}
 	}
-	conditionTree := buildRuleConditionTree(conditionTreeShape, conditions)
+	conditionTree := buildRuleConditionTree(conditionTreeShape, treeConditions)
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
 	allActionsSkipBindingFreeze := true
@@ -701,6 +790,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		salience:                    normalized.Salience,
 		declarationOrder:            declarationOrder,
 		conditions:                  conditions,
+		treeConditions:              treeConditions,
 		conditionTree:               conditionTree,
 		conditionTreeShape:          conditionTreeShape.clone(),
 		conditionPlans:              conditionPlans,
@@ -732,6 +822,15 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 			match:    conditions[shape.conditionIndex].clone(),
 			hasMatch: true,
 		}
+	case ConditionTreeKindNot:
+		tree := RuleConditionTree{
+			kind:     ConditionTreeKindNot,
+			children: make([]RuleConditionTree, 0, len(shape.children)),
+		}
+		for _, child := range shape.children {
+			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+		}
+		return tree
 	default:
 		return RuleConditionTree{kind: ConditionTreeKindUnknown}
 	}
@@ -782,6 +881,51 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 		}
 		sum.Write([]byte(";"))
 	}
+	if ruleUsesConditionTreeIdentity(rule) {
+		sum.Write([]byte("\ncondition-tree:"))
+		writeCompiledConditionTreeShapeHash(sum, rule.conditionTreeShape)
+		sum.Write([]byte("\ntree-conditions:"))
+		for _, plan := range rule.conditionPlans {
+			condition, ok := ruleTreeConditionByOrder(rule.treeConditions, plan.path)
+			if !ok {
+				continue
+			}
+			sum.Write(fmt.Appendf(nil, "%d:", condition.order))
+			if plan.negated {
+				sum.Write([]byte("not:"))
+			}
+			sum.Write([]byte(condition.binding))
+			sum.Write([]byte(":"))
+			sum.Write([]byte(condition.name))
+			sum.Write([]byte(":"))
+			sum.Write([]byte(condition.templateKey.String()))
+			sum.Write([]byte(":"))
+			for _, constraint := range condition.fieldConstraints {
+				sum.Write([]byte(constraint.Field))
+				sum.Write([]byte("="))
+				sum.Write([]byte(string(constraint.Operator)))
+				sum.Write([]byte("="))
+				sum.Write([]byte(constraint.Value.String()))
+				sum.Write([]byte(","))
+			}
+			sum.Write([]byte("|"))
+			for _, join := range condition.joinConstraints {
+				sum.Write([]byte(join.Field))
+				sum.Write([]byte("="))
+				sum.Write([]byte(string(join.Operator)))
+				sum.Write([]byte("="))
+				sum.Write([]byte(join.Ref.Binding))
+				sum.Write([]byte("."))
+				sum.Write([]byte(join.Ref.Field))
+				sum.Write([]byte(","))
+			}
+			if len(plan.predicates) > 0 {
+				sum.Write([]byte("|"))
+				sum.Write([]byte(serializeCompiledExpressionPredicates(plan.predicates)))
+			}
+			sum.Write([]byte(";"))
+		}
+	}
 	sum.Write([]byte("\nactions:"))
 	for _, action := range rule.actions {
 		sum.Write(fmt.Appendf(nil, "%d:", action.order))
@@ -789,4 +933,46 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 		sum.Write([]byte(";"))
 	}
 	return RuleRevisionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
+}
+
+func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
+	if len(rule.treeConditions) != len(rule.conditions) {
+		return true
+	}
+	for _, plan := range rule.conditionPlans {
+		if plan.negated {
+			return true
+		}
+	}
+	return false
+}
+
+func writeCompiledConditionTreeShapeHash(sum hashWriter, shape compiledConditionTreeShape) {
+	sum.Write([]byte(string(shape.kind)))
+	if shape.conditionIndex >= 0 {
+		sum.Write(fmt.Appendf(nil, ":%d", shape.conditionIndex))
+	}
+	sum.Write([]byte("["))
+	for _, child := range shape.children {
+		writeCompiledConditionTreeShapeHash(sum, child)
+		sum.Write([]byte(","))
+	}
+	sum.Write([]byte("]"))
+}
+
+type hashWriter interface {
+	Write([]byte) (int, error)
+}
+
+func ruleTreeConditionByOrder(conditions []RuleCondition, path []int) (RuleCondition, bool) {
+	if len(path) == 0 {
+		return RuleCondition{}, false
+	}
+	order := path[0]
+	for _, condition := range conditions {
+		if condition.order == order {
+			return condition, true
+		}
+	}
+	return RuleCondition{}, false
 }
