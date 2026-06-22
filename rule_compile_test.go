@@ -400,15 +400,19 @@ func TestExpressionPredicatesCompileAndClassify(t *testing.T) {
 	if got, want := len(summary.AlphaNodes), 2; got != want {
 		t.Fatalf("alpha nodes = %d, want %d", got, want)
 	}
-	var alphaPredicates, betaPredicates int
+	var alphaConstraints, alphaPredicates, betaPredicates int
 	for _, node := range summary.AlphaNodes {
+		alphaConstraints += len(node.constraints)
 		alphaPredicates += len(node.predicates)
 	}
 	for _, node := range summary.BetaNodes {
 		betaPredicates += len(node.predicates)
 	}
-	if alphaPredicates != 1 {
-		t.Fatalf("alpha expression predicate count = %d, want 1", alphaPredicates)
+	if alphaConstraints != 1 {
+		t.Fatalf("alpha constraint count = %d, want 1", alphaConstraints)
+	}
+	if alphaPredicates != 0 {
+		t.Fatalf("alpha expression predicate count = %d, want 0", alphaPredicates)
 	}
 	if betaPredicates != 1 {
 		t.Fatalf("beta residual expression predicate count = %d, want 1", betaPredicates)

@@ -1482,8 +1482,8 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got < want {
 		t.Fatalf("expression predicate tests = %d, want at least %d", got, want)
 	}
-	if got, want := snapshot.Totals.ExpressionPredicateFailures, 1; got < want {
-		t.Fatalf("expression predicate failures = %d, want at least %d", got, want)
+	if got := snapshot.Totals.ExpressionPredicateFailures; got != 0 {
+		t.Fatalf("expression predicate failures = %d, want 0", got)
 	}
 	if got := snapshot.Totals.ExpressionPredicateErrors; got != 0 {
 		t.Fatalf("expression predicate errors = %d, want 0", got)

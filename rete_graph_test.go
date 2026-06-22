@@ -274,6 +274,70 @@ func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	}
 }
 
+func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "expression-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "group"},
+						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
+					},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got := len(node.joins); got != 0 {
+		t.Fatalf("declared joins = %d, want 0", got)
+	}
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+	hashJoin := node.hashJoins[0]
+	if hashJoin.field != "group" || hashJoin.refBinding != "left" || hashJoin.refField != "group" {
+		t.Fatalf("hash join = %#v, want right.group == left.group", hashJoin)
+	}
+	if hashJoin.operator != FieldConstraintEqual {
+		t.Fatalf("hash join operator = %v, want %v", hashJoin.operator, FieldConstraintEqual)
+	}
+	if node.predicates[0].placement != ExpressionPredicatePlacementBetaResidual {
+		t.Fatalf("predicate placement = %v, want beta residual", node.predicates[0].placement)
+	}
+}
+
 func TestReteGraphRoutesTemplateAndNameTargets(t *testing.T) {
 	workspace := NewWorkspace()
 	eventTemplate := mustAddTemplate(t, workspace, TemplateSpec{

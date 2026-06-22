@@ -153,7 +153,8 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 		haveStage := false
 
 		for conditionIndex, condition := range rule.conditionPlans {
-			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, condition.constraints, alphaExpressionPredicates(condition.predicates))
+			alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
+			alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
 			alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
 			if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
 				alphaNode.entry = graphTokenEntryForCondition(condition)
@@ -531,6 +532,7 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 		return 0, false
 	}
 	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
+	hashJoins = append(hashJoins, expressionPredicateHashJoins(predicates)...)
 	key := reteGraphBetaKey{
 		left:       left,
 		right:      right,
@@ -699,6 +701,152 @@ func splitCompiledJoinConstraints(in []compiledJoinConstraint) ([]compiledJoinCo
 		residualJoins = append(residualJoins, join)
 	}
 	return hashJoins, residualJoins
+}
+
+func expressionPredicateHashJoins(predicates []compiledExpressionPredicate) []compiledJoinConstraint {
+	if len(predicates) == 0 {
+		return nil
+	}
+	out := make([]compiledJoinConstraint, 0, len(predicates))
+	for _, predicate := range predicates {
+		join, ok := expressionPredicateHashJoin(predicate)
+		if ok {
+			out = append(out, join)
+		}
+	}
+	return out
+}
+
+func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compiledJoinConstraint, bool) {
+	if predicate.placement != ExpressionPredicatePlacementBetaResidual {
+		return compiledJoinConstraint{}, false
+	}
+	expression := predicate.expression
+	if expression.kind != expressionNodeCompare || expression.compareOp != ExpressionCompareEqual || len(expression.operands) != 2 {
+		return compiledJoinConstraint{}, false
+	}
+
+	current, binding, ok := expressionPredicateHashJoinOperands(expression.operands[0], expression.operands[1])
+	if !ok {
+		return compiledJoinConstraint{}, false
+	}
+	if current.field == "" || binding.field == "" || binding.binding == "" || binding.bindingSlot < 0 {
+		return compiledJoinConstraint{}, false
+	}
+	conditionIndex := -1
+	if len(predicate.path) > 0 {
+		conditionIndex = predicate.path[0]
+	}
+	return compiledJoinConstraint{
+		path:           cloneIntPath(predicate.path),
+		bindingSlot:    conditionIndex,
+		field:          current.field,
+		fieldSlot:      current.fieldSlot,
+		operator:       FieldConstraintOpEqual,
+		refBinding:     binding.binding,
+		refBindingSlot: binding.bindingSlot,
+		refField:       binding.field,
+		refFieldSlot:   binding.fieldSlot,
+		indexable:      true,
+		indexKind:      joinIndexEquality,
+	}, true
+}
+
+func expressionPredicateHashJoinOperands(left, right compiledExpression) (compiledExpression, compiledExpression, bool) {
+	if left.kind == expressionNodeCurrentField && right.kind == expressionNodeBindingField {
+		return left, right, true
+	}
+	if right.kind == expressionNodeCurrentField && left.kind == expressionNodeBindingField {
+		return right, left, true
+	}
+	return compiledExpression{}, compiledExpression{}, false
+}
+
+func graphAlphaConstraintsAndPredicates(constraints []compiledFieldConstraint, predicates []compiledExpressionPredicate) ([]compiledFieldConstraint, []compiledExpressionPredicate) {
+	alphaPredicates := alphaExpressionPredicates(predicates)
+	if len(alphaPredicates) == 0 {
+		return constraints, nil
+	}
+	outConstraints := cloneCompiledFieldConstraints(constraints)
+	outPredicates := make([]compiledExpressionPredicate, 0, len(alphaPredicates))
+	for _, predicate := range alphaPredicates {
+		constraint, ok := expressionPredicateAlphaConstraint(predicate)
+		if ok {
+			outConstraints = append(outConstraints, constraint)
+			continue
+		}
+		outPredicates = append(outPredicates, predicate)
+	}
+	return outConstraints, outPredicates
+}
+
+func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (compiledFieldConstraint, bool) {
+	if predicate.placement != ExpressionPredicatePlacementAlpha {
+		return compiledFieldConstraint{}, false
+	}
+	expression := predicate.expression
+	if expression.kind != expressionNodeCompare || len(expression.operands) != 2 {
+		return compiledFieldConstraint{}, false
+	}
+	current, constant, operator, ok := expressionPredicateAlphaConstraintOperands(expression.operands[0], expression.operands[1], expression.compareOp)
+	if !ok {
+		return compiledFieldConstraint{}, false
+	}
+	if current.field == "" {
+		return compiledFieldConstraint{}, false
+	}
+	return compiledFieldConstraint{
+		field:     current.field,
+		operator:  operator,
+		value:     cloneValue(constant.value),
+		fieldSlot: current.fieldSlot,
+	}, true
+}
+
+func expressionPredicateAlphaConstraintOperands(left, right compiledExpression, operator ExpressionComparisonOperator) (compiledExpression, compiledExpression, FieldConstraintOperator, bool) {
+	if left.kind == expressionNodeCurrentField && right.kind == expressionNodeConst {
+		fieldOperator, ok := expressionComparisonFieldConstraintOperator(operator)
+		return left, right, fieldOperator, ok
+	}
+	if left.kind == expressionNodeConst && right.kind == expressionNodeCurrentField {
+		fieldOperator, ok := expressionComparisonFieldConstraintOperator(flipExpressionComparisonOperator(operator))
+		return right, left, fieldOperator, ok
+	}
+	return compiledExpression{}, compiledExpression{}, "", false
+}
+
+func expressionComparisonFieldConstraintOperator(operator ExpressionComparisonOperator) (FieldConstraintOperator, bool) {
+	switch operator {
+	case ExpressionCompareEqual:
+		return FieldConstraintOpEqual, true
+	case ExpressionCompareNotEqual:
+		return FieldConstraintOpNotEqual, true
+	case ExpressionCompareLessThan:
+		return FieldConstraintOpLessThan, true
+	case ExpressionCompareLessOrEqual:
+		return FieldConstraintOpLessOrEqual, true
+	case ExpressionCompareGreaterThan:
+		return FieldConstraintOpGreaterThan, true
+	case ExpressionCompareGreaterOrEqual:
+		return FieldConstraintOpGreaterOrEqual, true
+	default:
+		return "", false
+	}
+}
+
+func flipExpressionComparisonOperator(operator ExpressionComparisonOperator) ExpressionComparisonOperator {
+	switch operator {
+	case ExpressionCompareLessThan:
+		return ExpressionCompareGreaterThan
+	case ExpressionCompareLessOrEqual:
+		return ExpressionCompareGreaterOrEqual
+	case ExpressionCompareGreaterThan:
+		return ExpressionCompareLessThan
+	case ExpressionCompareGreaterOrEqual:
+		return ExpressionCompareLessOrEqual
+	default:
+		return operator
+	}
 }
 
 func alphaExpressionPredicates(predicates []compiledExpressionPredicate) []compiledExpressionPredicate {
