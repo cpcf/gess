@@ -274,20 +274,21 @@ func (s *Session) syncPropagationCounters() {
 }
 
 func (s *Session) removeStoredFact(id FactID) {
-	if s == nil || len(s.facts) == 0 {
+	if s == nil || len(s.facts) == 0 || s.factsByID == nil {
 		return
 	}
-	for i := range s.facts {
-		if s.facts[i].id != id {
-			continue
-		}
-		copy(s.facts[i:], s.facts[i+1:])
-		last := len(s.facts) - 1
-		s.facts[last] = workingFact{}
-		s.facts = s.facts[:last]
-		s.reindexStoredFactRowsFrom(i)
+	index, ok := s.factsByID[id]
+	if !ok || index < 0 || index >= len(s.facts) || s.facts[index].id != id {
 		return
 	}
+	last := len(s.facts) - 1
+	if index != last {
+		moved := s.facts[last]
+		s.facts[index] = moved
+		s.factsByID[moved.id] = index
+	}
+	s.facts[last] = workingFact{}
+	s.facts = s.facts[:last]
 }
 
 func (s *Session) reindexStoredFactRowsFrom(start int) {
@@ -970,7 +971,6 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	factTemplateKey := fact.templateKey
 	factName := fact.name
 
-	delete(s.factsByID, id)
 	if !fact.dupIndex.isZero() {
 		if existingID, ok := s.factsByDuplicate.get(fact.dupIndex); ok && existingID == id {
 			s.factsByDuplicate.delete(fact.dupIndex)
@@ -986,6 +986,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	}
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 	s.removeStoredFact(id)
+	delete(s.factsByID, id)
 	agendaDelta := s.updateReteAlphaAfterRetract(before)
 	if cascade {
 		s.logicalSupportCounters.LogicalFactsRetracted++
