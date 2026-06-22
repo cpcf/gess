@@ -818,14 +818,25 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
 	hasAggregate := false
 	for _, branch := range rule.executionConditionBranches() {
-		for _, plan := range branch.plans {
+		aggregateIndex := -1
+		for i, plan := range branch.plans {
 			if plan.aggregate == nil {
 				continue
 			}
 			hasAggregate = true
-			if len(branch.plans) != 1 || !reteGraphSupportsAggregateCondition(plan) {
+			if aggregateIndex >= 0 {
 				return false
 			}
+			aggregateIndex = i
+		}
+		if aggregateIndex < 0 {
+			continue
+		}
+		if aggregateIndex != len(branch.plans)-1 {
+			return false
+		}
+		if !reteGraphSupportsAggregateCondition(branch.plans[aggregateIndex], aggregateIndex > 0) {
+			return false
 		}
 	}
 	return hasAggregate

@@ -986,13 +986,6 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
 	for i, spec := range specs {
-		if conditionTreeContainsAggregate(spec) {
-			return compiledConditionTreeShape{}, &ValidationError{
-				RuleName: ruleName,
-				Reason:   "accumulate condition is not supported inside or",
-				Err:      ErrAggregateValidation,
-			}
-		}
 		child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
@@ -1200,9 +1193,16 @@ type compiledRuleConditionSet struct {
 }
 
 func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithOuter(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil)
+}
+
+func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int) (compiledRuleConditionSet, error) {
 	bindingSlots := make(map[string]int, len(normalizedConditions))
+	maps.Copy(bindingSlots, outerBindingSlots)
 	allBindingSlots := make(map[string]int, len(normalizedConditions))
-	conditions := make([]RuleCondition, 0, len(normalizedConditions))
+	maps.Copy(allBindingSlots, outerBindingSlots)
+	conditions := make([]RuleCondition, len(outerConditions), len(outerConditions)+len(normalizedConditions))
+	copy(conditions, outerConditions)
 	treeConditions := make([]RuleCondition, 0, len(normalizedConditions))
 	branchConditions := make([]RuleConditionBranchCondition, 0, len(normalizedConditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
@@ -1223,11 +1223,26 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
-			inputSet, err := compileNormalizedRuleConditionBranch(ruleName, ruleID, inputNormalized, templatesByKey, true)
+			for _, inputNode := range inputNormalized {
+				if inputNode.spec.Binding == "" {
+					continue
+				}
+				if _, exists := bindingSlots[inputNode.spec.Binding]; exists {
+					return compiledRuleConditionSet{}, &ValidationError{
+						RuleName:          ruleName,
+						ConditionIndex:    i,
+						HasConditionIndex: true,
+						Reason:            "aggregate input binding collides with an outer binding",
+						Err:               ErrAggregateValidation,
+					}
+				}
+			}
+			inputSet, err := compileNormalizedRuleConditionBranchWithOuter(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
-			for _, inputCondition := range inputSet.conditions {
+			inputOnlyConditions := inputSet.conditions[len(conditions):]
+			for _, inputCondition := range inputOnlyConditions {
 				if _, exists := bindingSlots[inputCondition.binding]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
@@ -1238,15 +1253,11 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 					}
 				}
 			}
-			inputBindingSlots := make(map[string]int, len(bindingSlots)+len(inputSet.conditions))
-			maps.Copy(inputBindingSlots, bindingSlots)
-			inputConditions := append([]RuleCondition(nil), conditions...)
-			baseInputSlot := len(inputConditions)
+			inputBindingSlots := make(map[string]int, len(inputSet.conditions))
 			for j, condition := range inputSet.conditions {
-				inputConditions = append(inputConditions, condition)
-				inputBindingSlots[condition.binding] = baseInputSlot + j
+				inputBindingSlots[condition.binding] = j
 			}
-			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputConditions, inputBindingSlots, templatesByKey)
+			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputSet.conditions, inputBindingSlots, templatesByKey)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}

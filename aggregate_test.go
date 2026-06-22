@@ -230,6 +230,121 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	}
 }
 
+func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) {
+	var observed []bucketedAggregateRow
+	workspace := NewWorkspace()
+	group := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "group",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			groupID, ok := ctx.BindingScalarValue("group", "id")
+			if !ok {
+				return errors.New("missing group id")
+			}
+			groupName, ok := groupID.AsString()
+			if !ok {
+				return errors.New("group id is not a string")
+			}
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
+			total, ok := ctx.BindingValue("total")
+			if !ok {
+				return errors.New("missing total binding")
+			}
+			observed = append(observed, bucketedAggregateRow{group: groupName, count: count, total: total})
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "group-totals",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "group", TemplateKey: group.Key()},
+			Accumulate(
+				Match{
+					Binding:     "item",
+					TemplateKey: item.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					},
+				},
+				Count().As("count"),
+				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "bucketed-aggregate-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.rete)
+	}
+
+	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("assert group a: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("assert group b: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3}))
+	if err != nil {
+		t.Fatalf("assert item i1: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5}))
+	if err != nil {
+		t.Fatalf("assert item i2: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	start := len(observed)
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if result.Fired != 2 {
+		t.Fatalf("first Run fired = %d, want 2", result.Fired)
+	}
+	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 3}, "b": {1, 5}})
+
+	if _, err := session.Modify(context.Background(), second.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"group": "a", "amount": 2})}); err != nil {
+		t.Fatalf("modify item i2: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
+		t.Fatalf("retract item i1: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	start = len(observed)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Fired != 2 {
+		t.Fatalf("second Run fired = %d, want 2", result.Fired)
+	}
+	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 2}, "b": {0, 0}})
+}
+
 func TestAccumulateValidationRejectsUnsupportedShapesAndCollisions(t *testing.T) {
 	item := TemplateSpec{Name: "item", Fields: []FieldSpec{{Name: "amount", Kind: ValueInt}}}
 	cases := []struct {
@@ -293,5 +408,37 @@ func assertAggregateRow(t *testing.T, row Fields, count, sum, min, max int64, co
 	wantCollected := mustValue(t, collected)
 	if !gotCollected.Equal(wantCollected) {
 		t.Fatalf("collected = %v, want %v", gotCollected, wantCollected)
+	}
+}
+
+type bucketedAggregateRow struct {
+	group string
+	count Value
+	total Value
+}
+
+func assertBucketedAggregateRows(t *testing.T, rows []bucketedAggregateRow, want map[string][2]int64) {
+	t.Helper()
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v, want %d rows", rows, len(want))
+	}
+	seen := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		values, ok := want[row.group]
+		if !ok {
+			t.Fatalf("unexpected aggregate row for group %q: %v", row.group, row)
+		}
+		if seen[row.group] {
+			t.Fatalf("duplicate aggregate row for group %q", row.group)
+		}
+		seen[row.group] = true
+		if !row.count.Equal(mustValue(t, values[0])) || !row.total.Equal(mustValue(t, values[1])) {
+			t.Fatalf("group %q row = count %v total %v, want count %d total %d", row.group, row.count, row.total, values[0], values[1])
+		}
+	}
+	for group := range want {
+		if !seen[group] {
+			t.Fatalf("missing aggregate row for group %q", group)
+		}
 	}
 }
