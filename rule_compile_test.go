@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -586,6 +587,119 @@ func TestConditionTreeOrSingleBranchCompilesForInspection(t *testing.T) {
 	}
 	if fired != 1 {
 		t.Fatalf("fired = %d, want 1", fired)
+	}
+}
+
+func TestConditionTreeOrBranchInspectionExpandsSourcePaths(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	marker := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "marker",
+		Fields: []FieldSpec{
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "nested-or",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "person", TemplateKey: person.Key()},
+			Or{Conditions: []ConditionSpec{
+				Match{
+					Binding:     "marker",
+					TemplateKey: marker.Key(),
+					FieldConstraints: []FieldConstraintSpec{
+						{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+					},
+				},
+				Or{Conditions: []ConditionSpec{
+					Match{
+						Binding:     "marker",
+						TemplateKey: marker.Key(),
+						FieldConstraints: []FieldConstraintSpec{
+							{Field: "status", Operator: FieldConstraintEqual, Value: "probation"},
+						},
+					},
+					Match{
+						Binding:     "marker",
+						TemplateKey: marker.Key(),
+						FieldConstraints: []FieldConstraintSpec{
+							{Field: "status", Operator: FieldConstraintEqual, Value: "contractor"},
+						},
+					},
+				}},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("nested-or")
+	if !ok {
+		t.Fatal("compiled revision missing nested-or")
+	}
+	branches := rule.ConditionBranches()
+	if got, want := len(branches), 3; got != want {
+		t.Fatalf("branch count = %d, want %d", got, want)
+	}
+	wantPaths := [][][]int{
+		{{0}, {1, 0}},
+		{{0}, {1, 1, 0}},
+		{{0}, {1, 1, 1}},
+	}
+	for branchIndex, branch := range branches {
+		if branch.ID() != branchIndex {
+			t.Fatalf("branch %d ID = %d, want %d", branchIndex, branch.ID(), branchIndex)
+		}
+		conditions := branch.Conditions()
+		if got, want := len(conditions), 2; got != want {
+			t.Fatalf("branch %d condition count = %d, want %d", branchIndex, got, want)
+		}
+		for conditionIndex, condition := range conditions {
+			if !condition.Visible() || condition.Negated() {
+				t.Fatalf("branch %d condition %d visibility/negation = (%v, %v), want visible positive", branchIndex, conditionIndex, condition.Visible(), condition.Negated())
+			}
+			if got, want := condition.Path(), wantPaths[branchIndex][conditionIndex]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("branch %d condition %d path = %#v, want %#v", branchIndex, conditionIndex, got, want)
+			}
+		}
+	}
+
+	branches[0] = RuleConditionBranch{}
+	if got := rule.ConditionBranches()[0].ID(); got != 0 {
+		t.Fatalf("branch inspection leaked mutable branch slice: ID = %d, want 0", got)
+	}
+	firstCondition := rule.ConditionBranches()[0].Conditions()[0]
+	path := firstCondition.Path()
+	path[0] = 99
+	if got, want := rule.ConditionBranches()[0].Conditions()[0].Path(), []int{0}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("branch condition path leaked mutable state: got %#v want %#v", got, want)
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.RuleBranchPlans), 3; got != want {
+		t.Fatalf("debug branch plan count = %d, want %d", got, want)
+	}
+	for branchIndex, plan := range summary.RuleBranchPlans {
+		if plan.ruleRevisionID != rule.RevisionID() {
+			t.Fatalf("debug branch %d rule revision = %q, want %q", branchIndex, plan.ruleRevisionID, rule.RevisionID())
+		}
+		if plan.branchID != branchIndex {
+			t.Fatalf("debug branch %d ID = %d, want %d", branchIndex, plan.branchID, branchIndex)
+		}
+		if got, want := len(plan.conditions), 2; got != want {
+			t.Fatalf("debug branch %d condition count = %d, want %d", branchIndex, got, want)
+		}
+		for conditionIndex, condition := range plan.conditions {
+			if got, want := condition.Path(), wantPaths[branchIndex][conditionIndex]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("debug branch %d condition %d path = %#v, want %#v", branchIndex, conditionIndex, got, want)
+			}
+		}
 	}
 }
 

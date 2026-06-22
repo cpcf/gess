@@ -12,6 +12,7 @@ type reteGraph struct {
 	alphaNodes          []reteGraphAlphaNode
 	betaNodes           []reteGraphBetaNode
 	terminalNodes       []reteGraphTerminalNode
+	ruleBranchPlans     []reteGraphRuleBranchPlan
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
 	routesByName        map[string][]reteGraphAlphaNodeID
 	alphaRouteTables    map[TemplateKey]*reteGraphAlphaRouteTable
@@ -71,10 +72,17 @@ type reteGraphTerminalNode struct {
 	input          reteGraphStageRef
 }
 
+type reteGraphRuleBranchPlan struct {
+	ruleRevisionID RuleRevisionID
+	branchID       int
+	conditions     []RuleConditionBranchCondition
+}
+
 type reteGraphDebugSummary struct {
 	AlphaNodes          []reteGraphAlphaNode
 	BetaNodes           []reteGraphBetaNode
 	TerminalNodes       []reteGraphTerminalNode
+	RuleBranchPlans     []reteGraphRuleBranchPlan
 	RoutesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
 	RoutesByName        map[string][]reteGraphAlphaNodeID
 }
@@ -160,6 +168,11 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 	for _, rule := range compiledRules {
 		var terminalID reteGraphTerminalNodeID
 		for _, branch := range rule.executionConditionBranches() {
+			graph.ruleBranchPlans = append(graph.ruleBranchPlans, reteGraphRuleBranchPlan{
+				ruleRevisionID: rule.revisionID,
+				branchID:       branch.id,
+				conditions:     cloneRuleConditionBranchConditions(branch.conditions),
+			})
 			var current reteGraphStageRef
 			haveStage := false
 			plans := branch.plans
@@ -603,6 +616,7 @@ func (g *reteGraph) debugSummary() reteGraphDebugSummary {
 		AlphaNodes:          cloneReteGraphAlphaNodes(g.alphaNodes),
 		BetaNodes:           cloneReteGraphBetaNodes(g.betaNodes),
 		TerminalNodes:       cloneReteGraphTerminalNodes(g.terminalNodes),
+		RuleBranchPlans:     cloneReteGraphRuleBranchPlans(g.ruleBranchPlans),
 		RoutesByTemplateKey: cloneReteGraphAlphaRoutes(g.routesByTemplateKey),
 		RoutesByName:        cloneReteGraphNameRoutes(g.routesByName),
 	}
@@ -652,6 +666,18 @@ func cloneReteGraphTerminalNodes(in []reteGraphTerminalNode) []reteGraphTerminal
 	}
 	out := make([]reteGraphTerminalNode, len(in))
 	copy(out, in)
+	return out
+}
+
+func cloneReteGraphRuleBranchPlans(in []reteGraphRuleBranchPlan) []reteGraphRuleBranchPlan {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphRuleBranchPlan, len(in))
+	for i, plan := range in {
+		out[i] = plan
+		out[i].conditions = cloneRuleConditionBranchConditions(plan.conditions)
+	}
 	return out
 }
 

@@ -245,6 +245,68 @@ func (c RuleCondition) clone() RuleCondition {
 	return out
 }
 
+// RuleConditionBranch is one compiled branch in a condition tree. Flat rules
+// and tree rules without disjunction expose one branch; disjunctive trees expose
+// one branch for each expanded alternative in source order.
+type RuleConditionBranch struct {
+	id         int
+	conditions []RuleConditionBranchCondition
+}
+
+func (b RuleConditionBranch) ID() int {
+	return b.id
+}
+
+func (b RuleConditionBranch) Conditions() []RuleConditionBranchCondition {
+	out := make([]RuleConditionBranchCondition, len(b.conditions))
+	for i, condition := range b.conditions {
+		out[i] = condition.clone()
+	}
+	return out
+}
+
+func (b RuleConditionBranch) clone() RuleConditionBranch {
+	out := b
+	out.conditions = make([]RuleConditionBranchCondition, len(b.conditions))
+	for i, condition := range b.conditions {
+		out.conditions[i] = condition.clone()
+	}
+	return out
+}
+
+// RuleConditionBranchCondition describes a condition within an expanded branch.
+// Path is the authored condition-tree path, while Visible indicates whether the
+// binding is exposed to actions. Negated conditions are local and not visible.
+type RuleConditionBranchCondition struct {
+	condition RuleCondition
+	path      []int
+	visible   bool
+	negated   bool
+}
+
+func (c RuleConditionBranchCondition) Condition() RuleCondition {
+	return c.condition.clone()
+}
+
+func (c RuleConditionBranchCondition) Path() []int {
+	return cloneIntPath(c.path)
+}
+
+func (c RuleConditionBranchCondition) Visible() bool {
+	return c.visible
+}
+
+func (c RuleConditionBranchCondition) Negated() bool {
+	return c.negated
+}
+
+func (c RuleConditionBranchCondition) clone() RuleConditionBranchCondition {
+	out := c
+	out.condition = c.condition.clone()
+	out.path = cloneIntPath(c.path)
+	return out
+}
+
 type ConditionTreeKind string
 
 const (
@@ -309,16 +371,17 @@ func (a RuleAction) clone() RuleAction {
 }
 
 type Rule struct {
-	id               RuleID
-	revisionID       RuleRevisionID
-	name             string
-	description      string
-	tags             []string
-	salience         int
-	declarationOrder int
-	conditions       []RuleCondition
-	conditionTree    RuleConditionTree
-	actions          []RuleAction
+	id                RuleID
+	revisionID        RuleRevisionID
+	name              string
+	description       string
+	tags              []string
+	salience          int
+	declarationOrder  int
+	conditions        []RuleCondition
+	conditionTree     RuleConditionTree
+	conditionBranches []RuleConditionBranch
+	actions           []RuleAction
 }
 
 func (r Rule) ID() RuleID {
@@ -363,6 +426,10 @@ func (r Rule) ConditionTree() RuleConditionTree {
 	return r.conditionTree.clone()
 }
 
+func (r Rule) ConditionBranches() []RuleConditionBranch {
+	return cloneRuleConditionBranches(r.conditionBranches)
+}
+
 func (r Rule) Actions() []RuleAction {
 	out := make([]RuleAction, len(r.actions))
 	for i, action := range r.actions {
@@ -379,6 +446,7 @@ func (r Rule) clone() Rule {
 		out.conditions[i] = condition.clone()
 	}
 	out.conditionTree = r.conditionTree.clone()
+	out.conditionBranches = cloneRuleConditionBranches(r.conditionBranches)
 	out.actions = make([]RuleAction, len(r.actions))
 	for i, action := range r.actions {
 		out.actions[i] = action.clone()
@@ -401,22 +469,24 @@ type compiledRule struct {
 	conditionTreeShape          compiledConditionTreeShape
 	conditionPlans              []compiledConditionPlan
 	conditionBranches           []compiledConditionBranch
+	conditionBranchPlans        []RuleConditionBranch
 	actions                     []RuleAction
 	allActionsSkipBindingFreeze bool
 }
 
 func (r compiledRule) inspect() Rule {
 	return Rule{
-		id:               r.id,
-		revisionID:       r.revisionID,
-		name:             r.name,
-		description:      r.description,
-		tags:             append([]string(nil), r.tags...),
-		salience:         r.salience,
-		declarationOrder: r.declarationOrder,
-		conditions:       cloneRuleConditions(r.conditions),
-		conditionTree:    r.conditionTree.clone(),
-		actions:          append([]RuleAction(nil), r.actions...),
+		id:                r.id,
+		revisionID:        r.revisionID,
+		name:              r.name,
+		description:       r.description,
+		tags:              append([]string(nil), r.tags...),
+		salience:          r.salience,
+		declarationOrder:  r.declarationOrder,
+		conditions:        cloneRuleConditions(r.conditions),
+		conditionTree:     r.conditionTree.clone(),
+		conditionBranches: cloneRuleConditionBranches(r.conditionBranchPlans),
+		actions:           append([]RuleAction(nil), r.actions...),
 	}
 }
 
@@ -450,6 +520,22 @@ func cloneRuleConditions(conditions []RuleCondition) []RuleCondition {
 	return out
 }
 
+func cloneRuleConditionBranches(branches []RuleConditionBranch) []RuleConditionBranch {
+	out := make([]RuleConditionBranch, len(branches))
+	for i, branch := range branches {
+		out[i] = branch.clone()
+	}
+	return out
+}
+
+func cloneRuleConditionBranchConditions(conditions []RuleConditionBranchCondition) []RuleConditionBranchCondition {
+	out := make([]RuleConditionBranchCondition, len(conditions))
+	for i, condition := range conditions {
+		out[i] = condition.clone()
+	}
+	return out
+}
+
 type compiledConditionTreeShape struct {
 	kind           ConditionTreeKind
 	children       []compiledConditionTreeShape
@@ -467,6 +553,7 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 
 type normalizedRuleCondition struct {
 	spec    RuleConditionSpec
+	path    []int
 	visible bool
 	negated bool
 }
@@ -476,11 +563,17 @@ type normalizedRuleConditionBranch struct {
 }
 
 type compiledConditionBranch struct {
-	plans []compiledConditionPlan
+	id         int
+	conditions []RuleConditionBranchCondition
+	plans      []compiledConditionPlan
 }
 
 func (b compiledConditionBranch) clone() compiledConditionBranch {
 	out := b
+	out.conditions = make([]RuleConditionBranchCondition, len(b.conditions))
+	for i, condition := range b.conditions {
+		out.conditions[i] = condition.clone()
+	}
 	out.plans = make([]compiledConditionPlan, len(b.plans))
 	copy(out.plans, b.plans)
 	return out
@@ -515,6 +608,7 @@ func normalizeRuleConditions(spec RuleSpec) ([]normalizedRuleCondition, compiled
 	for i, condition := range spec.Conditions {
 		conditions[i] = normalizedRuleCondition{
 			spec:    condition.clone(),
+			path:    []int{i},
 			visible: true,
 		}
 		children[i] = compiledConditionTreeShape{
@@ -547,6 +641,7 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 	for i, condition := range spec.Conditions {
 		branch.conditions[i] = normalizedRuleCondition{
 			spec:    condition.clone(),
+			path:    []int{i},
 			visible: true,
 		}
 	}
@@ -554,10 +649,10 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 }
 
 func expandConditionTreeBranches(ruleName string, spec ConditionSpec) ([]normalizedRuleConditionBranch, error) {
-	return expandConditionTreeNodeBranches(ruleName, spec, true, false)
+	return expandConditionTreeNodeBranches(ruleName, spec, nil, true, false)
 }
 
-func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path []int, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
 	switch condition := spec.(type) {
 	case nil:
 		return nil, &ValidationError{
@@ -565,7 +660,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 			Reason:   "condition tree node is required",
 		}
 	case And:
-		return expandAndConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+		return expandAndConditionTreeBranches(ruleName, condition.Conditions, path, visible, negated)
 	case *And:
 		if condition == nil {
 			return nil, &ValidationError{
@@ -573,9 +668,9 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 				Reason:   "condition tree node is required",
 			}
 		}
-		return expandAndConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+		return expandAndConditionTreeBranches(ruleName, condition.Conditions, path, visible, negated)
 	case Or:
-		return expandOrConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+		return expandOrConditionTreeBranches(ruleName, condition.Conditions, path, visible, negated)
 	case *Or:
 		if condition == nil {
 			return nil, &ValidationError{
@@ -583,9 +678,9 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 				Reason:   "condition tree node is required",
 			}
 		}
-		return expandOrConditionTreeBranches(ruleName, condition.Conditions, visible, negated)
+		return expandOrConditionTreeBranches(ruleName, condition.Conditions, path, visible, negated)
 	case Not:
-		return expandNotConditionTreeBranches(ruleName, condition.Condition)
+		return expandNotConditionTreeBranches(ruleName, condition.Condition, path)
 	case *Not:
 		if condition == nil {
 			return nil, &ValidationError{
@@ -593,11 +688,12 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 				Reason:   "condition tree node is required",
 			}
 		}
-		return expandNotConditionTreeBranches(ruleName, condition.Condition)
+		return expandNotConditionTreeBranches(ruleName, condition.Condition, path)
 	case Match:
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
 				spec:    RuleConditionSpec(condition).clone(),
+				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
 			}},
@@ -612,6 +708,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
 				spec:    RuleConditionSpec(*condition).clone(),
+				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
 			}},
@@ -624,7 +721,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, visibl
 	}
 }
 
-func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, path []int, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
 	if len(specs) == 0 {
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -632,8 +729,8 @@ func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, visi
 		}
 	}
 	branches := []normalizedRuleConditionBranch{{}}
-	for _, spec := range specs {
-		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, visible, negated)
+	for i, spec := range specs {
+		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return nil, err
 		}
@@ -653,7 +750,7 @@ func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, visi
 	return branches, nil
 }
 
-func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
+func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, path []int, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
 	if len(specs) == 0 {
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -667,8 +764,8 @@ func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, visib
 		}
 	}
 	branches := make([]normalizedRuleConditionBranch, 0, len(specs))
-	for _, spec := range specs {
-		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, visible, negated)
+	for i, spec := range specs {
+		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return nil, err
 		}
@@ -677,10 +774,10 @@ func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, visib
 	return branches, nil
 }
 
-func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec) ([]normalizedRuleConditionBranch, error) {
+func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec, path []int) ([]normalizedRuleConditionBranch, error) {
 	switch condition := spec.(type) {
 	case Match:
-		return expandConditionTreeNodeBranches(ruleName, condition, false, true)
+		return expandConditionTreeNodeBranches(ruleName, condition, appendConditionTreePath(path, 0), false, true)
 	case *Match:
 		if condition == nil {
 			return nil, &ValidationError{
@@ -688,7 +785,7 @@ func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec) ([]norm
 				Reason:   "condition tree node is required",
 			}
 		}
-		return expandConditionTreeNodeBranches(ruleName, *condition, false, true)
+		return expandConditionTreeNodeBranches(ruleName, *condition, appendConditionTreePath(path, 0), false, true)
 	case Or, *Or:
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -702,16 +799,23 @@ func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec) ([]norm
 	}
 }
 
+func appendConditionTreePath(path []int, index int) []int {
+	out := make([]int, len(path), len(path)+1)
+	copy(out, path)
+	out = append(out, index)
+	return out
+}
+
 func flattenConditionTreeSpec(ruleName string, spec ConditionSpec) ([]normalizedRuleCondition, compiledConditionTreeShape, error) {
 	conditions := make([]normalizedRuleCondition, 0)
-	shape, err := flattenConditionTreeNode(ruleName, spec, &conditions, true, false)
+	shape, err := flattenConditionTreeNode(ruleName, spec, &conditions, nil, true, false)
 	if err != nil {
 		return nil, compiledConditionTreeShape{}, err
 	}
 	return conditions, shape, nil
 }
 
-func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
+func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition, path []int, visible bool, negated bool) (compiledConditionTreeShape, error) {
 	switch condition := spec.(type) {
 	case nil:
 		return compiledConditionTreeShape{}, &ValidationError{
@@ -719,7 +823,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			Reason:   "condition tree node is required",
 		}
 	case And:
-		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, path, visible, negated)
 	case *And:
 		if condition == nil {
 			return compiledConditionTreeShape{}, &ValidationError{
@@ -727,9 +831,9 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 				Reason:   "condition tree node is required",
 			}
 		}
-		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+		return flattenAndConditionTreeNode(ruleName, condition.Conditions, conditions, path, visible, negated)
 	case Or:
-		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, path, visible, negated)
 	case *Or:
 		if condition == nil {
 			return compiledConditionTreeShape{}, &ValidationError{
@@ -737,9 +841,9 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 				Reason:   "condition tree node is required",
 			}
 		}
-		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, visible, negated)
+		return flattenOrConditionTreeNode(ruleName, condition.Conditions, conditions, path, visible, negated)
 	case Not:
-		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions)
+		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions, path)
 	case *Not:
 		if condition == nil {
 			return compiledConditionTreeShape{}, &ValidationError{
@@ -747,11 +851,12 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 				Reason:   "condition tree node is required",
 			}
 		}
-		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions)
+		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions, path)
 	case Match:
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
 			spec:    RuleConditionSpec(condition).clone(),
+			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
 		})
@@ -769,6 +874,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
 			spec:    RuleConditionSpec(*condition).clone(),
+			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
 		})
@@ -784,7 +890,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 	}
 }
 
-func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
+func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, path []int, visible bool, negated bool) (compiledConditionTreeShape, error) {
 	if len(specs) == 0 {
 		return compiledConditionTreeShape{}, &ValidationError{
 			RuleName: ruleName,
@@ -796,8 +902,8 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 		kind:     ConditionTreeKindAnd,
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
-	for _, spec := range specs {
-		child, err := flattenConditionTreeNode(ruleName, spec, conditions, visible, negated)
+	for i, spec := range specs {
+		child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
 		}
@@ -806,7 +912,7 @@ func flattenAndConditionTreeNode(ruleName string, specs []ConditionSpec, conditi
 	return shape, nil
 }
 
-func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, visible bool, negated bool) (compiledConditionTreeShape, error) {
+func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, path []int, visible bool, negated bool) (compiledConditionTreeShape, error) {
 	if len(specs) == 0 {
 		return compiledConditionTreeShape{}, &ValidationError{
 			RuleName: ruleName,
@@ -823,8 +929,8 @@ func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditio
 		kind:     ConditionTreeKindOr,
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
-	for _, spec := range specs {
-		child, err := flattenConditionTreeNode(ruleName, spec, conditions, visible, negated)
+	for i, spec := range specs {
+		child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
 		}
@@ -833,8 +939,8 @@ func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditio
 	return shape, nil
 }
 
-func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition) (compiledConditionTreeShape, error) {
-	child, err := flattenConditionTreeNode(ruleName, spec, conditions, false, true)
+func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[]normalizedRuleCondition, path []int) (compiledConditionTreeShape, error) {
+	child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, 0), false, true)
 	if err != nil {
 		return compiledConditionTreeShape{}, err
 	}
@@ -897,12 +1003,23 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, compiledBranch.conditions); err != nil {
 			return compiledRule{}, err
 		}
-		compiledBranches = append(compiledBranches, compiledConditionBranch{plans: compiledBranch.conditionPlans})
+		compiledBranches = append(compiledBranches, compiledConditionBranch{
+			id:         branchIndex,
+			conditions: compiledBranch.branchConditions,
+			plans:      compiledBranch.conditionPlans,
+		})
 	}
 	conditions := representative.conditions
 	conditionPlans := representative.conditionPlans
 	treeConditions := inspectionSet.treeConditions
 	conditionTree := buildRuleConditionTree(conditionTreeShape, treeConditions)
+	conditionBranches := make([]RuleConditionBranch, len(compiledBranches))
+	for i, branch := range compiledBranches {
+		conditionBranches[i] = RuleConditionBranch{
+			id:         branch.id,
+			conditions: cloneRuleConditionBranchConditions(branch.conditions),
+		}
+	}
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
 	allActionsSkipBindingFreeze := true
@@ -946,6 +1063,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		conditionTreeShape:          conditionTreeShape.clone(),
 		conditionPlans:              conditionPlans,
 		conditionBranches:           compiledBranches,
+		conditionBranchPlans:        conditionBranches,
 		actions:                     actions,
 		allActionsSkipBindingFreeze: allActionsSkipBindingFreeze,
 	}
@@ -955,9 +1073,10 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 }
 
 type compiledRuleConditionSet struct {
-	conditions     []RuleCondition
-	treeConditions []RuleCondition
-	conditionPlans []compiledConditionPlan
+	conditions       []RuleCondition
+	treeConditions   []RuleCondition
+	branchConditions []RuleConditionBranchCondition
+	conditionPlans   []compiledConditionPlan
 }
 
 func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool) (compiledRuleConditionSet, error) {
@@ -965,6 +1084,7 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 	allBindingSlots := make(map[string]int, len(normalizedConditions))
 	conditions := make([]RuleCondition, 0, len(normalizedConditions))
 	treeConditions := make([]RuleCondition, 0, len(normalizedConditions))
+	branchConditions := make([]RuleConditionBranchCondition, 0, len(normalizedConditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
 	for i, node := range normalizedConditions {
 		condition := node.spec
@@ -1095,6 +1215,12 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 			}
 		}
 		treeConditions = append(treeConditions, compiledCondition.clone())
+		branchConditions = append(branchConditions, RuleConditionBranchCondition{
+			condition: compiledCondition.clone(),
+			path:      cloneIntPath(node.path),
+			visible:   node.visible,
+			negated:   node.negated,
+		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
 			id:          conditionID,
 			binding:     condition.Binding,
@@ -1114,9 +1240,10 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 		}
 	}
 	return compiledRuleConditionSet{
-		conditions:     conditions,
-		treeConditions: treeConditions,
-		conditionPlans: conditionPlans,
+		conditions:       conditions,
+		treeConditions:   treeConditions,
+		branchConditions: branchConditions,
+		conditionPlans:   conditionPlans,
 	}, nil
 }
 
