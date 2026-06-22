@@ -31,6 +31,13 @@ const (
 	reteGraphStageBeta
 )
 
+type reteGraphBetaNodeKind uint8
+
+const (
+	reteGraphBetaNodeJoin reteGraphBetaNodeKind = iota + 1
+	reteGraphBetaNodeNot
+)
+
 type reteGraphStageRef struct {
 	kind reteGraphStageKind
 	id   int
@@ -48,6 +55,7 @@ type reteGraphAlphaNode struct {
 
 type reteGraphBetaNode struct {
 	id            reteGraphBetaNodeID
+	kind          reteGraphBetaNodeKind
 	left          reteGraphStageRef
 	right         reteGraphStageRef
 	joins         []compiledJoinConstraint
@@ -103,6 +111,7 @@ type reteGraphTargetKey struct {
 }
 
 type reteGraphBetaKey struct {
+	kind       reteGraphBetaNodeKind
 	left       reteGraphStageRef
 	right      reteGraphStageRef
 	joins      string
@@ -189,8 +198,12 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 				continue
 			}
 
-			betaID, _ := graph.internBetaNode(betaIndex, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
-			if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" {
+			betaKind := reteGraphBetaNodeJoin
+			if condition.negated {
+				betaKind = reteGraphBetaNodeNot
+			}
+			betaID, _ := graph.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
+			if betaNode := graph.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" && betaKind == reteGraphBetaNodeJoin {
 				betaNode.entry = graphTokenEntryForCondition(condition)
 			}
 			leftEntry := bindingTupleEntry{}
@@ -322,6 +335,9 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		leftWidth := g.stageTokenWidth(node.left)
 		if leftWidth <= 0 {
 			return 0
+		}
+		if node.kind == reteGraphBetaNodeNot {
+			return leftWidth
 		}
 		return leftWidth + 1
 	default:
@@ -527,13 +543,17 @@ func (n reteGraphAlphaNode) expressionPredicatesMatch(fact conditionFactRef, spa
 	return true
 }
 
-func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, left, right reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
+func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, kind reteGraphBetaNodeKind, left, right reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
 	if g == nil {
 		return 0, false
+	}
+	if kind == 0 {
+		kind = reteGraphBetaNodeJoin
 	}
 	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
 	hashJoins = append(hashJoins, expressionPredicateHashJoins(predicates)...)
 	key := reteGraphBetaKey{
+		kind:       kind,
 		left:       left,
 		right:      right,
 		joins:      serializeCompiledJoinConstraints(joins),
@@ -546,6 +566,7 @@ func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeI
 	id := reteGraphBetaNodeID(len(g.betaNodes) + 1)
 	g.betaNodes = append(g.betaNodes, reteGraphBetaNode{
 		id:            id,
+		kind:          kind,
 		left:          left,
 		right:         right,
 		joins:         cloneCompiledJoinConstraints(joins),

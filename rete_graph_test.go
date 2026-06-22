@@ -215,6 +215,90 @@ func TestReteGraphTreatsFlatAndTreeConditionsEquivalently(t *testing.T) {
 	}
 }
 
+func TestReteGraphMarksNegatedBetaStages(t *testing.T) {
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	block := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "block",
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+		},
+	})
+	note := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "note",
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-without-block",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Not{Condition: Match{
+				Binding:     "block",
+				TemplateKey: block.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			}},
+			Match{
+				Binding:     "note",
+				TemplateKey: note.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.AlphaNodes), 3; got != want {
+		t.Fatalf("alpha nodes = %d, want %d", got, want)
+	}
+	if got, want := len(summary.BetaNodes), 2; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	notNode := summary.BetaNodes[0]
+	if notNode.kind != reteGraphBetaNodeNot {
+		t.Fatalf("first beta kind = %v, want not", notNode.kind)
+	}
+	if notNode.entry.conditionID != "" {
+		t.Fatalf("not beta output entry = %#v, want no appended right binding", notNode.entry)
+	}
+	if got, want := revision.graph.stageTokenWidth(reteGraphStageRef{kind: reteGraphStageBeta, id: int(notNode.id)}), 1; got != want {
+		t.Fatalf("not beta token width = %d, want %d", got, want)
+	}
+	joinNode := summary.BetaNodes[1]
+	if joinNode.kind != reteGraphBetaNodeJoin {
+		t.Fatalf("second beta kind = %v, want join", joinNode.kind)
+	}
+	if got, want := revision.graph.stageTokenWidth(reteGraphStageRef{kind: reteGraphStageBeta, id: int(joinNode.id)}), 2; got != want {
+		t.Fatalf("join beta token width = %d, want %d", got, want)
+	}
+	if summary.TerminalNodes[0].input != (reteGraphStageRef{kind: reteGraphStageBeta, id: int(joinNode.id)}) {
+		t.Fatalf("terminal input = %#v, want final join beta %#v", summary.TerminalNodes[0].input, joinNode.id)
+	}
+
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if runtime.supportsGraphBeta() {
+		t.Fatal("runtime supports graph beta for negated graph, want unsupported until negative beta runtime exists")
+	}
+}
+
 func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
