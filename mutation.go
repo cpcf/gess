@@ -193,6 +193,7 @@ const (
 	ModifyStale             ModifyStatus = "stale"
 	ModifyValidationFailure ModifyStatus = "validation_failure"
 	ModifyDuplicate         ModifyStatus = "duplicate"
+	ModifyLogicalSupport    ModifyStatus = "logical_support"
 	ModifyClosed            ModifyStatus = "closed"
 	ModifyConcurrencyMisuse ModifyStatus = "concurrency_misuse"
 )
@@ -210,11 +211,13 @@ func (r ModifyResult) Changed() bool {
 type RetractStatus string
 
 const (
-	RetractRemoved           RetractStatus = "removed"
-	RetractMissing           RetractStatus = "missing"
-	RetractStale             RetractStatus = "stale"
-	RetractClosed            RetractStatus = "closed"
-	RetractConcurrencyMisuse RetractStatus = "concurrency_misuse"
+	RetractRemoved              RetractStatus = "removed"
+	RetractStatedSupportRemoved RetractStatus = "stated_support_removed"
+	RetractLogicalOnly          RetractStatus = "logical_only"
+	RetractMissing              RetractStatus = "missing"
+	RetractStale                RetractStatus = "stale"
+	RetractClosed               RetractStatus = "closed"
+	RetractConcurrencyMisuse    RetractStatus = "concurrency_misuse"
 )
 
 type RetractResult struct {

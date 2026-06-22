@@ -8,14 +8,16 @@ import (
 type EventType string
 
 const (
-	EventFactAsserted    EventType = "fact_asserted"
-	EventFactModified    EventType = "fact_modified"
-	EventFactRetracted   EventType = "fact_retracted"
-	EventReset           EventType = "reset"
-	EventRuleActivated   EventType = "rule_activated"
-	EventRuleDeactivated EventType = "rule_deactivated"
-	EventRuleFired       EventType = "rule_fired"
-	EventActionFailed    EventType = "action_failed"
+	EventFactAsserted          EventType = "fact_asserted"
+	EventFactModified          EventType = "fact_modified"
+	EventFactRetracted         EventType = "fact_retracted"
+	EventReset                 EventType = "reset"
+	EventRuleActivated         EventType = "rule_activated"
+	EventRuleDeactivated       EventType = "rule_deactivated"
+	EventRuleFired             EventType = "rule_fired"
+	EventActionFailed          EventType = "action_failed"
+	EventLogicalSupportAdded   EventType = "logical_support_added"
+	EventLogicalSupportRemoved EventType = "logical_support_removed"
 )
 
 type EventSeverity string
@@ -43,6 +45,7 @@ type Event struct {
 	Cause          error
 	FactIDs        []FactID
 	Delta          *MutationDelta
+	SupportEdge    *LogicalSupportEdge
 }
 
 func cloneMutationDelta(delta *MutationDelta) *MutationDelta {
@@ -74,6 +77,10 @@ func (e Event) clone() Event {
 	out := e
 	out.FactIDs = e.RelatedFactIDs()
 	out.Delta = cloneMutationDelta(e.Delta)
+	if e.SupportEdge != nil {
+		edge := e.SupportEdge.clone()
+		out.SupportEdge = &edge
+	}
 	return out
 }
 

@@ -1,0 +1,434 @@
+package gess
+
+import (
+	"context"
+	"slices"
+	"sort"
+)
+
+type LogicalSupportEdge struct {
+	SupportID       SupportID
+	FactID          FactID
+	RuleID          RuleID
+	RuleRevisionID  RuleRevisionID
+	ActivationID    ActivationID
+	Generation      Generation
+	SupportingFacts []FactID
+}
+
+func (e LogicalSupportEdge) clone() LogicalSupportEdge {
+	out := e
+	if len(e.SupportingFacts) > 0 {
+		out.SupportingFacts = cloneFactIDs(e.SupportingFacts)
+	}
+	return out
+}
+
+type LogicalSupportCounters struct {
+	CurrentLogicalFacts          int
+	CurrentStatedAndLogicalFacts int
+	CurrentSupportEdges          int
+	LogicalFactsAsserted         int
+	LogicalFactsRetracted        int
+	SupportEdgesAdded            int
+	SupportEdgesRemoved          int
+	MetadataOnlyTransitions      int
+	CascadeRetractions           int
+	CascadeBreadthMax            int
+	CascadeDepthMax              int
+}
+
+type SupportGraph struct {
+	Generation Generation
+	Edges      []LogicalSupportEdge
+	Counters   LogicalSupportCounters
+}
+
+func (g SupportGraph) clone() SupportGraph {
+	out := g
+	if len(g.Edges) > 0 {
+		out.Edges = make([]LogicalSupportEdge, len(g.Edges))
+		for i, edge := range g.Edges {
+			out.Edges[i] = edge.clone()
+		}
+	}
+	return out
+}
+
+type logicalSupportSourceKey struct {
+	generation     Generation
+	ruleRevisionID RuleRevisionID
+	activationID   ActivationID
+}
+
+type logicalSupportEdgeRecord struct {
+	edge   LogicalSupportEdge
+	source logicalSupportSourceKey
+}
+
+func logicalSupportID(source logicalSupportSourceKey, factID FactID) SupportID {
+	if source.activationID.IsZero() || factID.IsZero() {
+		return ""
+	}
+	return SupportID("support:v1:" + source.activationID.String() + ":" + factID.String())
+}
+
+func logicalSupportSourceFromOrigin(origin mutationOrigin, generation Generation) (logicalSupportSourceKey, bool) {
+	activationID := origin.activationID()
+	if activationID.IsZero() || origin.RuleRevisionID.IsZero() {
+		return logicalSupportSourceKey{}, false
+	}
+	return logicalSupportSourceKey{
+		generation:     generation,
+		ruleRevisionID: origin.RuleRevisionID,
+		activationID:   activationID,
+	}, true
+}
+
+func logicalSupportSourceFromActivation(activation activation) logicalSupportSourceKey {
+	return logicalSupportSourceKey{
+		generation:     activation.generation,
+		ruleRevisionID: activation.ruleRevisionID,
+		activationID:   activation.activationID(),
+	}
+}
+
+func (s *Session) ensureLogicalSupportMaps() {
+	if s.logicalSupportEdges == nil {
+		s.logicalSupportEdges = make(map[SupportID]logicalSupportEdgeRecord)
+	}
+	if s.logicalSupportBySource == nil {
+		s.logicalSupportBySource = make(map[logicalSupportSourceKey]map[SupportID]struct{})
+	}
+	if s.logicalSupportByFact == nil {
+		s.logicalSupportByFact = make(map[FactID]map[SupportID]struct{})
+	}
+}
+
+func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, origin mutationOrigin, supportingFacts []FactID) (bool, error) {
+	if s == nil || fact == nil {
+		return false, ErrFactNotFound
+	}
+	source, ok := logicalSupportSourceFromOrigin(origin, s.generation)
+	if !ok {
+		return false, ErrLogicalSupportUnavailable
+	}
+	s.ensureLogicalSupportMaps()
+	supportID := logicalSupportID(source, fact.id)
+	if supportID.IsZero() {
+		return false, ErrLogicalSupportUnavailable
+	}
+	if _, exists := s.logicalSupportEdges[supportID]; exists {
+		return false, nil
+	}
+
+	edge := LogicalSupportEdge{
+		SupportID:       supportID,
+		FactID:          fact.id,
+		RuleID:          origin.RuleID,
+		RuleRevisionID:  origin.RuleRevisionID,
+		ActivationID:    source.activationID,
+		Generation:      s.generation,
+		SupportingFacts: cloneFactIDs(supportingFacts),
+	}
+	s.logicalSupportEdges[supportID] = logicalSupportEdgeRecord{edge: edge, source: source}
+	sourceEdges := s.logicalSupportBySource[source]
+	if sourceEdges == nil {
+		sourceEdges = make(map[SupportID]struct{})
+		s.logicalSupportBySource[source] = sourceEdges
+	}
+	sourceEdges[supportID] = struct{}{}
+	factEdges := s.logicalSupportByFact[fact.id]
+	if factEdges == nil {
+		factEdges = make(map[SupportID]struct{})
+		s.logicalSupportByFact[fact.id] = factEdges
+	}
+	factEdges[supportID] = struct{}{}
+	s.logicalSupportCounters.SupportEdgesAdded++
+	s.updateFactSupportState(fact)
+	s.emitLogicalSupportEvent(ctx, EventLogicalSupportAdded, edge)
+	return true, nil
+}
+
+func (s *Session) logicalSupportCount(factID FactID) int {
+	if s == nil || s.logicalSupportByFact == nil {
+		return 0
+	}
+	return len(s.logicalSupportByFact[factID])
+}
+
+func (s *Session) updateFactSupportState(fact *workingFact) {
+	if s == nil || fact == nil {
+		return
+	}
+	before := fact.resolvedSupportState()
+	logical := s.logicalSupportCount(fact.id) > 0
+	switch {
+	case before == FactSupportStated || before == FactSupportStatedAndLogical:
+		if logical {
+			fact.supportState = FactSupportStatedAndLogical
+		} else {
+			fact.supportState = FactSupportStated
+		}
+	default:
+		if logical {
+			fact.supportState = FactSupportLogical
+		} else {
+			fact.supportState = FactSupportLogical
+		}
+	}
+	if before != fact.resolvedSupportState() {
+		s.logicalSupportCounters.MetadataOnlyTransitions++
+	}
+}
+
+func (s *Session) makeFactLogicalOnly(fact *workingFact) {
+	if fact != nil {
+		fact.supportState = FactSupportLogical
+	}
+}
+
+func (s *Session) addStatedSupportToFact(fact *workingFact) bool {
+	if s == nil || fact == nil || fact.resolvedSupportState() != FactSupportLogical {
+		return false
+	}
+	fact.supportState = FactSupportStatedAndLogical
+	s.logicalSupportCounters.MetadataOnlyTransitions++
+	return true
+}
+
+func (s *Session) removeStatedSupportFromFact(fact *workingFact) bool {
+	if s == nil || fact == nil || fact.resolvedSupportState() != FactSupportStatedAndLogical {
+		return false
+	}
+	fact.supportState = FactSupportLogical
+	s.logicalSupportCounters.MetadataOnlyTransitions++
+	return true
+}
+
+func (s *Session) factHasLogicalSupport(factID FactID) bool {
+	return s.logicalSupportCount(factID) > 0
+}
+
+func (s *Session) removeLogicalSupportsForDelta(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || len(delta.removed) == 0 {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	combined := reteAgendaDelta{supported: delta.supported}
+	queue := make([]logicalSupportSourceKey, 0, len(delta.removed))
+	for _, removed := range delta.removed {
+		if removed.token.isZero() {
+			continue
+		}
+		rule, ok := s.revision.rulesByRevisionID[removed.ruleRevisionID]
+		if !ok {
+			continue
+		}
+		activation, err := activationFromTerminalTokenWithIdentity(rule, removed.token, candidateIdentityForTerminalTokenDelta(s.revision, removed))
+		if err != nil {
+			return combined, err
+		}
+		queue = append(queue, logicalSupportSourceFromActivation(activation))
+	}
+	return s.removeLogicalSupportsForSources(ctx, queue, origin)
+}
+
+func (s *Session) removeLogicalSupportsForRuleRevisions(ctx context.Context, revisions map[RuleRevisionID]struct{}, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || len(revisions) == 0 || len(s.logicalSupportBySource) == 0 {
+		return reteAgendaDelta{}, nil
+	}
+	sources := make([]logicalSupportSourceKey, 0)
+	for source := range s.logicalSupportBySource {
+		if _, ok := revisions[source.ruleRevisionID]; ok {
+			sources = append(sources, source)
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if sources[i].generation != sources[j].generation {
+			return sources[i].generation < sources[j].generation
+		}
+		if sources[i].ruleRevisionID != sources[j].ruleRevisionID {
+			return sources[i].ruleRevisionID < sources[j].ruleRevisionID
+		}
+		return sources[i].activationID < sources[j].activationID
+	})
+	return s.removeLogicalSupportsForSources(ctx, sources, origin)
+}
+
+func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources []logicalSupportSourceKey, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || len(sources) == 0 {
+		return combined, nil
+	}
+	depth := 0
+	for len(sources) > 0 {
+		depth++
+		if depth > s.logicalSupportCounters.CascadeDepthMax {
+			s.logicalSupportCounters.CascadeDepthMax = depth
+		}
+		if len(sources) > s.logicalSupportCounters.CascadeBreadthMax {
+			s.logicalSupportCounters.CascadeBreadthMax = len(sources)
+		}
+		nextSources := make([]logicalSupportSourceKey, 0)
+		unsupportedFacts := make(map[FactID]struct{})
+		for _, source := range sources {
+			removedFacts := s.removeLogicalSupportSource(ctx, source)
+			for _, factID := range removedFacts {
+				unsupportedFacts[factID] = struct{}{}
+			}
+		}
+		if len(unsupportedFacts) == 0 {
+			break
+		}
+		factIDs := make([]FactID, 0, len(unsupportedFacts))
+		for factID := range unsupportedFacts {
+			factIDs = append(factIDs, factID)
+		}
+		sort.Slice(factIDs, func(i, j int) bool {
+			if factIDs[i].Generation() != factIDs[j].Generation() {
+				return factIDs[i].Generation() < factIDs[j].Generation()
+			}
+			return factIDs[i].Sequence() < factIDs[j].Sequence()
+		})
+		for _, factID := range factIDs {
+			fact, ok := s.workingFactByID(factID)
+			if !ok {
+				continue
+			}
+			if fact.resolvedSupportState() == FactSupportLogical && !s.factHasLogicalSupport(factID) {
+				_, delta, err := s.removeFactImmediate(ctx, factID, origin, true)
+				if err != nil {
+					return combined, err
+				}
+				combined = mergeReteAgendaDelta(combined, delta)
+				for _, removed := range delta.removed {
+					if removed.token.isZero() {
+						continue
+					}
+					rule, ok := s.revision.rulesByRevisionID[removed.ruleRevisionID]
+					if !ok {
+						continue
+					}
+					activation, err := activationFromTerminalTokenWithIdentity(rule, removed.token, candidateIdentityForTerminalTokenDelta(s.revision, removed))
+					if err != nil {
+						return combined, err
+					}
+					nextSources = append(nextSources, logicalSupportSourceFromActivation(activation))
+				}
+			} else if fact.resolvedSupportState() == FactSupportStatedAndLogical && !s.factHasLogicalSupport(factID) {
+				fact.supportState = FactSupportStated
+				s.logicalSupportCounters.MetadataOnlyTransitions++
+			}
+		}
+		sources = nextSources
+	}
+	return combined, nil
+}
+
+func (s *Session) removeLogicalSupportSource(ctx context.Context, source logicalSupportSourceKey) []FactID {
+	if s == nil || len(s.logicalSupportBySource) == 0 {
+		return nil
+	}
+	ids := s.logicalSupportBySource[source]
+	if len(ids) == 0 {
+		return nil
+	}
+	supportIDs := make([]SupportID, 0, len(ids))
+	for supportID := range ids {
+		supportIDs = append(supportIDs, supportID)
+	}
+	slices.Sort(supportIDs)
+
+	affected := make([]FactID, 0, len(supportIDs))
+	for _, supportID := range supportIDs {
+		record, ok := s.logicalSupportEdges[supportID]
+		if !ok {
+			continue
+		}
+		delete(s.logicalSupportEdges, supportID)
+		if byFact := s.logicalSupportByFact[record.edge.FactID]; byFact != nil {
+			delete(byFact, supportID)
+			if len(byFact) == 0 {
+				delete(s.logicalSupportByFact, record.edge.FactID)
+			}
+		}
+		s.logicalSupportCounters.SupportEdgesRemoved++
+		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
+		affected = append(affected, record.edge.FactID)
+	}
+	delete(s.logicalSupportBySource, source)
+	return affected
+}
+
+func (s *Session) clearLogicalSupports() {
+	if s == nil {
+		return
+	}
+	clear(s.logicalSupportEdges)
+	clear(s.logicalSupportBySource)
+	clear(s.logicalSupportByFact)
+	s.logicalSupportCounters.CurrentLogicalFacts = 0
+	s.logicalSupportCounters.CurrentStatedAndLogicalFacts = 0
+	s.logicalSupportCounters.CurrentSupportEdges = 0
+}
+
+func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventType, edge LogicalSupportEdge) {
+	if s == nil || len(s.listeners) == 0 {
+		return
+	}
+	rulesetID := RulesetID("")
+	if s.revision != nil {
+		rulesetID = s.revision.ID()
+	}
+	s.nextEventSequence++
+	edgeClone := edge.clone()
+	s.emitEvent(ctx, Event{
+		SessionID:      s.id,
+		RulesetID:      rulesetID,
+		Sequence:       s.nextEventSequence,
+		Timestamp:      s.eventClock(),
+		Type:           eventType,
+		Severity:       EventSeverityInfo,
+		Generation:     edge.Generation,
+		RuleID:         edge.RuleID,
+		RuleRevisionID: edge.RuleRevisionID,
+		ActivationID:   edge.ActivationID,
+		FactIDs:        []FactID{edge.FactID},
+		SupportEdge:    &edgeClone,
+	})
+}
+
+func (s *Session) currentSupportGraph() SupportGraph {
+	if s == nil {
+		return SupportGraph{}
+	}
+	edges := make([]LogicalSupportEdge, 0, len(s.logicalSupportEdges))
+	for _, record := range s.logicalSupportEdges {
+		edges = append(edges, record.edge.clone())
+	}
+	sort.Slice(edges, func(i, j int) bool { return edges[i].SupportID < edges[j].SupportID })
+	counters := s.logicalSupportCounters
+	counters.CurrentSupportEdges = len(edges)
+	for i := range s.facts {
+		switch s.facts[i].resolvedSupportState() {
+		case FactSupportLogical:
+			counters.CurrentLogicalFacts++
+		case FactSupportStatedAndLogical:
+			counters.CurrentStatedAndLogicalFacts++
+		}
+	}
+	return SupportGraph{
+		Generation: s.generation,
+		Edges:      edges,
+		Counters:   counters,
+	}
+}
+
+func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
+	if !left.supported || !right.supported {
+		return reteAgendaDelta{}
+	}
+	left.added = append(left.added, right.added...)
+	left.removed = append(left.removed, right.removed...)
+	return left
+}

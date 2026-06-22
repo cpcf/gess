@@ -89,19 +89,23 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextFactSequence  uint64
-	nextRecency       Recency
-	nextRunSequence   uint64
-	facts             []workingFact
-	factsByID         map[FactID]int
-	factsByDuplicate  duplicateIndexes
-	factsByTemplate   map[TemplateKey][]FactID
-	factsByName       map[string][]FactID
-	insertionOrder    []FactID
-	slotStorage       []factSlot
-	resetWorkspace    factWorkspace
-	resetFactsScratch []FactSnapshot
-	nextEventSequence uint64
+	nextFactSequence       uint64
+	nextRecency            Recency
+	nextRunSequence        uint64
+	facts                  []workingFact
+	factsByID              map[FactID]int
+	factsByDuplicate       duplicateIndexes
+	factsByTemplate        map[TemplateKey][]FactID
+	factsByName            map[string][]FactID
+	insertionOrder         []FactID
+	slotStorage            []factSlot
+	resetWorkspace         factWorkspace
+	resetFactsScratch      []FactSnapshot
+	logicalSupportEdges    map[SupportID]logicalSupportEdgeRecord
+	logicalSupportBySource map[logicalSupportSourceKey]map[SupportID]struct{}
+	logicalSupportByFact   map[FactID]map[SupportID]struct{}
+	logicalSupportCounters LogicalSupportCounters
+	nextEventSequence      uint64
 }
 
 type queuedMutation struct {
@@ -455,6 +459,71 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 	return result, nil
 }
 
+func (s *Session) insertLogicalFactWithContextAndOrigin(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin, supportingFacts []FactID) (AssertResult, error) {
+	if s == nil {
+		return AssertResult{Status: AssertClosed}, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return AssertResult{Status: AssertValidationFailure}, err
+	}
+	if _, ok := logicalSupportSourceFromOrigin(origin, s.generation); !ok {
+		return AssertResult{Status: AssertValidationFailure}, ErrLogicalSupportUnavailable
+	}
+	if s.shouldQueueMutationDuringRun(origin) {
+		resultCh := make(chan queuedMutationResult, 1)
+		if s.enqueueMutationDuringRun(queuedMutation{
+			ctx: ctx,
+			apply: func(mutationCtx context.Context) (any, error) {
+				result, _, err := s.insertLogicalFactImmediate(mutationCtx, name, templateKey, fields, origin, supportingFacts)
+				return result, err
+			},
+			result: resultCh,
+		}) {
+			select {
+			case outcome := <-resultCh:
+				if outcome.err != nil {
+					if result, ok := outcome.value.(AssertResult); ok {
+						return result, outcome.err
+					}
+					return AssertResult{}, outcome.err
+				}
+				if result, ok := outcome.value.(AssertResult); ok {
+					return result, nil
+				}
+				return AssertResult{}, ErrInvalidRuleset
+			case <-ctx.Done():
+				return AssertResult{Status: AssertValidationFailure}, ctx.Err()
+			}
+		}
+	}
+
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
+		return AssertResult{Status: AssertConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+
+	result, agendaDelta, err := s.insertLogicalFactImmediate(ctx, name, templateKey, fields, origin, supportingFacts)
+	if err != nil {
+		return result, err
+	}
+	if mutationResultNeedsReconcile(result, s.revision) {
+		if origin.isZero() || !s.runGuardHeld() {
+			if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
+				return result, err
+			}
+		} else {
+			s.recordRunAgendaDelta(agendaDelta)
+		}
+	}
+	return result, nil
+}
+
 func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) error {
 	if s == nil {
 		return ErrClosedSession
@@ -488,6 +557,113 @@ func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, 
 	return nil
 }
 
+func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin, supportingFacts []FactID) (AssertResult, reteAgendaDelta, error) {
+	if s == nil || s.closed {
+		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
+	}
+
+	state := s.activeFactWorkspace()
+	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
+	if err != nil {
+		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
+	}
+	s.commitFactWorkspace(state)
+	if !inserted {
+		before := fact.snapshotForRevision(s.revision)
+		_, err := s.addLogicalSupport(ctx, fact, origin, supportingFacts)
+		if err != nil {
+			return AssertResult{Status: AssertValidationFailure, Fact: before}, reteAgendaDelta{}, err
+		}
+		if before.Support().State == FactSupportLogical {
+			s.updateFactSupportState(fact)
+		}
+		after := fact.snapshotForRevision(s.revision)
+		var delta *MutationDelta
+		if before.Support().State != after.Support().State {
+			metadataDelta := MutationDelta{
+				Kind:           MutationAssert,
+				Generation:     s.generation,
+				ActivationID:   origin.activationID(),
+				RuleID:         origin.RuleID,
+				RuleRevisionID: origin.RuleRevisionID,
+				SupportBefore:  before.Support(),
+				SupportAfter:   after.Support(),
+				Recency:        fact.recency,
+				FactID:         fact.id,
+				OldVersion:     fact.version,
+				NewVersion:     fact.version,
+				Before:         &before,
+				After:          &after,
+				OldDuplicate:   duplicateKey,
+				NewDuplicate:   duplicateKey,
+			}
+			delta = &metadataDelta
+		}
+		return AssertResult{
+			Status:       AssertExisting,
+			Fact:         after,
+			DuplicateKey: duplicateKey,
+			Delta:        delta,
+		}, reteAgendaDelta{}, nil
+	}
+
+	s.makeFactLogicalOnly(fact)
+	if _, err := s.addLogicalSupport(ctx, fact, origin, supportingFacts); err != nil {
+		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
+	}
+	s.logicalSupportCounters.LogicalFactsAsserted++
+
+	snapshot := fact.snapshotForRevision(s.revision)
+	var span *propagationCounterSpan
+	if s.propagationCounters != nil {
+		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
+		span = &counterSpan
+	}
+	agendaDelta := s.updateReteAlphaAfterAssert(snapshot, origin, span)
+	if span != nil {
+		span.finish()
+	}
+	delta := MutationDelta{
+		Kind:           MutationAssert,
+		Generation:     s.generation,
+		ActivationID:   origin.activationID(),
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		SupportAfter:   snapshot.Support(),
+		Recency:        fact.recency,
+		FactID:         fact.id,
+		NewVersion:     fact.version,
+		NewDuplicate:   duplicateKey,
+		After:          &snapshot,
+	}
+
+	result := AssertResult{
+		Status:       AssertInserted,
+		Fact:         snapshot,
+		DuplicateKey: duplicateKey,
+		Delta:        &delta,
+	}
+	if len(s.listeners) > 0 {
+		s.emitEvent(ctx, Event{
+			SessionID:      s.id,
+			RulesetID:      s.revision.ID(),
+			Sequence:       s.nextEventSequence + 1,
+			Timestamp:      s.eventClock(),
+			Type:           EventFactAsserted,
+			Generation:     s.generation,
+			Recency:        fact.recency,
+			RuleID:         origin.RuleID,
+			RuleRevisionID: origin.RuleRevisionID,
+			ActivationID:   origin.activationID(),
+			FactIDs:        []FactID{fact.id},
+			Delta:          &delta,
+		})
+		s.nextEventSequence++
+	}
+
+	return result, agendaDelta, nil
+}
+
 func (s *Session) insertFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin) (AssertResult, reteAgendaDelta, error) {
 	if s == nil || s.closed {
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
@@ -500,9 +676,36 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 	s.commitFactWorkspace(state)
 	if !inserted {
+		before := fact.snapshotForRevision(s.revision)
+		if s.addStatedSupportToFact(fact) {
+			after := fact.snapshotForRevision(s.revision)
+			delta := MutationDelta{
+				Kind:           MutationAssert,
+				Generation:     s.generation,
+				ActivationID:   origin.activationID(),
+				RuleID:         origin.RuleID,
+				RuleRevisionID: origin.RuleRevisionID,
+				SupportBefore:  before.Support(),
+				SupportAfter:   after.Support(),
+				Recency:        fact.recency,
+				FactID:         fact.id,
+				OldVersion:     fact.version,
+				NewVersion:     fact.version,
+				Before:         &before,
+				After:          &after,
+				OldDuplicate:   duplicateKey,
+				NewDuplicate:   duplicateKey,
+			}
+			return AssertResult{
+				Status:       AssertExisting,
+				Fact:         after,
+				DuplicateKey: duplicateKey,
+				Delta:        &delta,
+			}, reteAgendaDelta{}, nil
+		}
 		return AssertResult{
 			Status:       AssertExisting,
-			Fact:         fact.snapshotForRevision(s.revision),
+			Fact:         before,
 			DuplicateKey: duplicateKey,
 		}, reteAgendaDelta{}, nil
 	}
@@ -716,6 +919,50 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	}
 
 	before := fact.snapshotForRevision(s.revision)
+	switch fact.resolvedSupportState() {
+	case FactSupportLogical:
+		return RetractResult{Status: RetractLogicalOnly, Fact: before}, reteAgendaDelta{}, ErrLogicalOnlyRetract
+	case FactSupportStatedAndLogical:
+		s.removeStatedSupportFromFact(fact)
+		after := fact.snapshotForRevision(s.revision)
+		delta := MutationDelta{
+			Kind:           MutationRetract,
+			Generation:     s.generation,
+			ActivationID:   origin.activationID(),
+			RuleID:         origin.RuleID,
+			RuleRevisionID: origin.RuleRevisionID,
+			SupportBefore:  before.Support(),
+			SupportAfter:   after.Support(),
+			Recency:        fact.recency,
+			FactID:         fact.id,
+			OldVersion:     fact.version,
+			NewVersion:     fact.version,
+			Before:         &before,
+			After:          &after,
+			OldDuplicate:   fact.publicDuplicateKey(s.revision),
+			NewDuplicate:   fact.publicDuplicateKey(s.revision),
+		}
+		return RetractResult{Status: RetractStatedSupportRemoved, Fact: after, Delta: &delta}, reteAgendaDelta{}, nil
+	}
+
+	result, agendaDelta, err := s.removeFactImmediate(ctx, id, origin, false)
+	if err != nil {
+		return result, agendaDelta, err
+	}
+	cascadeDelta, err := s.removeLogicalSupportsForDelta(ctx, agendaDelta, origin)
+	if err != nil {
+		return result, agendaDelta, err
+	}
+	return result, mergeReteAgendaDelta(agendaDelta, cascadeDelta), nil
+}
+
+func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mutationOrigin, cascade bool) (RetractResult, reteAgendaDelta, error) {
+	fact, ok := s.workingFactByID(id)
+	if !ok {
+		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
+	}
+
+	before := fact.snapshotForRevision(s.revision)
 	oldVersion := fact.version
 	oldDuplicate := fact.publicDuplicateKey(s.revision)
 	factID := fact.id
@@ -740,6 +987,10 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 	s.removeStoredFact(id)
 	agendaDelta := s.updateReteAlphaAfterRetract(before)
+	if cascade {
+		s.logicalSupportCounters.LogicalFactsRetracted++
+		s.logicalSupportCounters.CascadeRetractions++
+	}
 
 	delta := MutationDelta{
 		Kind:           MutationRetract,
@@ -877,6 +1128,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	oldGeneration := s.generation
 	s.agendaReady = false
 	s.agendaDirty = false
+	s.clearLogicalSupports()
 	s.swapFactWorkspace(next)
 	s.generation = next.generation
 	if s.rete == nil {
@@ -963,6 +1215,9 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 			PreviousRulesetID: previousID,
 			CurrentRulesetID:  nextID,
 		}, err
+	}
+	if _, err := s.removeLogicalSupportsForRuleRevisions(ctx, plan.purgeRevisions, mutationOrigin{}); err != nil {
+		return ApplyRulesetResult{}, err
 	}
 
 	s.rebuildFieldSlots(s.revision, next)
@@ -1491,6 +1746,9 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	}
 
 	before := fact.snapshotForRevision(s.revision)
+	if s.factHasLogicalSupport(id) {
+		return ModifyResult{Status: ModifyLogicalSupport, Fact: before}, reteAgendaDelta{}, ErrLogicalFactModify
+	}
 	template, templateExists := s.revision.templateByKey(fact.templateKey)
 
 	beforeFields := before.Fields()
@@ -1560,6 +1818,11 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 
 	after := fact.snapshotForRevision(s.revision)
 	agendaDelta := s.updateReteAlphaAfterModify(before, after)
+	cascadeDelta, err := s.removeLogicalSupportsForDelta(ctx, agendaDelta, origin)
+	if err != nil {
+		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
+	}
+	agendaDelta = mergeReteAgendaDelta(agendaDelta, cascadeDelta)
 	delta := MutationDelta{
 		Kind:           MutationModify,
 		Generation:     s.generation,
@@ -1761,6 +2024,7 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 		rulesetID:  s.revision.ID(),
 		generation: s.generation,
 		facts:      facts,
+		support:    s.currentSupportGraph(),
 	}
 	if includeTargetIndexes {
 		snapshot.byID, snapshot.byName, snapshot.byTemplate = snapshotIndexes(facts)

@@ -233,6 +233,7 @@ type workingFact struct {
 	templateKey   TemplateKey
 	version       FactVersion
 	recency       Recency
+	supportState  FactSupportState
 	fields        Fields
 	fieldSlots    []factSlot
 	fieldPresence map[string]FieldPresence
@@ -520,7 +521,7 @@ func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 		fieldSlots:    cloneFactSlots(f.fieldSlots),
 		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
-		support:       FactSupportProvenance{State: FactSupportStated},
+		support:       FactSupportProvenance{State: f.resolvedSupportState()},
 	}
 }
 
@@ -540,8 +541,15 @@ func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapsho
 		fieldSlots:    f.fieldSlots,
 		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: f.fieldPresence,
-		support:       FactSupportProvenance{State: FactSupportStated},
+		support:       FactSupportProvenance{State: f.resolvedSupportState()},
 	}
+}
+
+func (f *workingFact) resolvedSupportState() FactSupportState {
+	if f == nil || f.supportState == "" {
+		return FactSupportStated
+	}
+	return f.supportState
 }
 
 func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {

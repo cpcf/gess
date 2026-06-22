@@ -201,6 +201,19 @@ func (c ActionContext) AssertTemplate(templateKey TemplateKey, fields Fields) (A
 	return c.session.insertFactWithContextAndOrigin(c.Context(), "", templateKey, fields, c.mutationOrigin())
 }
 
+func (c ActionContext) AssertLogical(name string, fields Fields) (AssertResult, error) {
+	if c.session == nil {
+		return AssertResult{Status: AssertClosed}, ErrClosedSession
+	}
+	if c.RuleRevisionID().IsZero() || c.ActivationID().IsZero() {
+		return AssertResult{Status: AssertValidationFailure}, ErrLogicalSupportUnavailable
+	}
+	if err := c.materializeAllBindings(); err != nil {
+		return AssertResult{Status: AssertValidationFailure}, err
+	}
+	return c.session.insertLogicalFactWithContextAndOrigin(c.Context(), name, "", fields, c.mutationOrigin(), c.supportingFactIDs())
+}
+
 // AssertTemplateValues asserts a fixed-template fact using values in template
 // field order and returns only whether the effect succeeded. It is intended for
 // generated facts where callers do not need an AssertResult.
@@ -229,6 +242,20 @@ func (c ActionContext) Retract(id FactID) (RetractResult, error) {
 		return RetractResult{Status: RetractMissing}, err
 	}
 	return c.session.retractWithContextAndOrigin(c.Context(), id, c.mutationOrigin())
+}
+
+func (c ActionContext) supportingFactIDs() []FactID {
+	if c.bindings == nil || c.bindings.len() == 0 {
+		return nil
+	}
+	out := make([]FactID, 0, c.bindings.len())
+	for i := range c.bindings.len() {
+		entry := c.bindings.entryAt(i)
+		if !entry.factID.IsZero() {
+			out = append(out, entry.factID)
+		}
+	}
+	return out
 }
 
 func (c ActionContext) mutationOrigin() mutationOrigin {
@@ -570,6 +597,7 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 			return fmt.Errorf("%w: missing action %q", ErrInvalidRuleset, actionSpec.name)
 		}
 		if err := action.fn(actionCtx); err != nil {
+			_, _ = s.removeLogicalSupportsForSources(ctx, []logicalSupportSourceKey{logicalSupportSourceFromActivation(activation)}, activation.mutationOrigin())
 			return &ActionFailureError{
 				RunID:          runID,
 				RuleID:         activation.ruleID,

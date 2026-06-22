@@ -11,6 +11,7 @@ type Snapshot struct {
 	rulesetID  RulesetID
 	generation Generation
 	facts      []FactSnapshot
+	support    SupportGraph
 	byID       map[FactID]int
 	byName     map[string][]int
 	byTemplate map[TemplateKey][]int
@@ -66,6 +67,7 @@ func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation
 		rulesetID:  rulesetID,
 		generation: generation,
 		facts:      copied,
+		support:    SupportGraph{Generation: generation},
 		byID:       byID,
 	}
 }
@@ -93,6 +95,10 @@ func (s Snapshot) Facts() []FactSnapshot {
 		out[i] = fact.clone()
 	}
 	return out
+}
+
+func (s Snapshot) SupportGraph() SupportGraph {
+	return s.support.clone()
 }
 
 func (s Snapshot) Fact(id FactID) (FactSnapshot, bool) {
