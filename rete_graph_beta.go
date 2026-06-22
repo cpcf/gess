@@ -858,7 +858,7 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		if !node.matchesSnapshot(fact) {
+		if !node.matchesSnapshotWithCounters(fact, span) {
 			continue
 		}
 		if span != nil {
@@ -895,7 +895,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		if !node.matchesWorking(fact) {
+		if !node.matchesWorkingWithCounters(fact, span) {
 			continue
 		}
 		if span != nil {
@@ -1910,7 +1910,7 @@ func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (bet
 }
 
 func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
-	if m == nil || node == nil || len(node.residualJoins) == 0 {
+	if m == nil || node == nil {
 		return true, nil
 	}
 	for _, join := range node.residualJoins {
@@ -1927,6 +1927,13 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 			}
 			return false, nil
 		}
+	}
+	ok, err := expressionPredicatesMatchToken(node.predicates, fact, bindings, span)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
 	}
 	return true, nil
 }

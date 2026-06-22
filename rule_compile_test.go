@@ -786,7 +786,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 	}
 }
 
-func TestExpressionPredicatesReturnUnsupportedRuntimeUntilExecutable(t *testing.T) {
+func TestExpressionPredicatesAreExecutableByGraphRuntime(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "person",
@@ -813,28 +813,25 @@ func TestExpressionPredicatesReturnUnsupportedRuntimeUntilExecutable(t *testing.
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if runtime.supportsGraphBeta() {
-		t.Fatal("runtime should not support graph beta execution for expression predicates yet")
+	if !runtime.supportsGraphBeta() {
+		t.Fatalf("runtime should support graph beta execution for expression predicates: %#v", runtime.plan.unsupported)
 	}
-	if got := runtime.plan.stats.unsupportedConditions; got != 1 {
-		t.Fatalf("unsupported conditions = %d, want 1", got)
+	if got := runtime.plan.stats.unsupportedConditions; got != 0 {
+		t.Fatalf("unsupported conditions = %d, want 0", got)
 	}
-	if err := runtime.validateExecutableGraphBetaRuntime(); !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
+	if err := runtime.validateExecutableGraphBetaRuntime(); err != nil {
+		t.Fatalf("validateExecutableGraphBetaRuntime: %v", err)
 	}
 
 	session, err := NewSession(revision)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	_, err = session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20}))
-	if !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("AssertTemplate error = %v, want ErrUnsupportedRuntime", err)
+	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
 	}
-	for _, want := range []string{"expression-predicate", `rule="age-rule"`, `binding="person"`, "expression predicate 0"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("AssertTemplate error %q does not contain %q", err.Error(), want)
-		}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations = %d, want 1", got)
 	}
 }
 

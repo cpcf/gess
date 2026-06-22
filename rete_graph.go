@@ -444,6 +444,10 @@ func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, b
 }
 
 func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {
+	return n.matchesSnapshotWithCounters(fact, nil)
+}
+
+func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span *propagationCounterSpan) bool {
 	switch n.target.kind {
 	case conditionTargetTemplateKey:
 		if fact.TemplateKey() != n.target.templateKey {
@@ -462,10 +466,17 @@ func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {
 			return false
 		}
 	}
+	if !n.expressionPredicatesMatch(ref, span) {
+		return false
+	}
 	return true
 }
 
 func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
+	return n.matchesWorkingWithCounters(fact, nil)
+}
+
+func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, span *propagationCounterSpan) bool {
 	if fact == nil {
 		return false
 	}
@@ -483,6 +494,32 @@ func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
 	}
 	for _, constraint := range n.constraints {
 		if !constraint.matchesWorking(fact) {
+			return false
+		}
+	}
+	ref := newConditionFactRefFromWorkingFact(fact)
+	if !n.expressionPredicatesMatch(ref, span) {
+		return false
+	}
+	return true
+}
+
+func (n reteGraphAlphaNode) expressionPredicatesMatch(fact conditionFactRef, span *propagationCounterSpan) bool {
+	for _, predicate := range n.predicates {
+		if span != nil {
+			span.recordExpressionPredicateTest()
+		}
+		ok, err := predicate.matches(fact, nil)
+		if err != nil {
+			if span != nil {
+				span.recordExpressionPredicateError()
+			}
+			return false
+		}
+		if !ok {
+			if span != nil {
+				span.recordExpressionPredicateFailure()
+			}
 			return false
 		}
 	}

@@ -939,7 +939,9 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		}
 	}
 	for _, predicate := range condition.predicates {
-		addUnsupported(reteUnsupportedExpression, fmt.Sprintf("expression predicate %d is not executable by the current graph runtime", predicate.order))
+		if !predicate.graphExecutable() {
+			addUnsupported(reteUnsupportedExpression, fmt.Sprintf("expression predicate %d is not executable by the current graph runtime", predicate.order))
+		}
 	}
 	if conditionPlan.supported && (len(condition.joins) == 0 || hashJoinCount > 0 || len(condition.joins) == len(conditionPlan.beta)) {
 		conditionPlan.betaSupported = true
@@ -1388,6 +1390,10 @@ func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {
 			return false
 		}
 	}
+	ok, err := expressionPredicatesMatch(alphaExpressionPredicates(p.predicates), ref, nil)
+	if err != nil || !ok {
+		return false
+	}
 	return true
 }
 
@@ -1411,6 +1417,11 @@ func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact) bool {
 		if !constraint.matchesWorking(fact) {
 			return false
 		}
+	}
+	ref := newConditionFactRefFromWorkingFact(fact)
+	ok, err := expressionPredicatesMatch(alphaExpressionPredicates(p.predicates), ref, nil)
+	if err != nil || !ok {
+		return false
 	}
 	return true
 }

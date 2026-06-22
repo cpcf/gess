@@ -67,6 +67,9 @@ type propagationCounterTotals struct {
 	BetaResidualTests           int
 	BetaResidualFailures        int
 	BetaJoinedTokensProduced    int
+	ExpressionPredicateTests    int
+	ExpressionPredicateFailures int
+	ExpressionPredicateErrors   int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -106,6 +109,9 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.BetaResidualTests += other.BetaResidualTests
 	t.BetaResidualFailures += other.BetaResidualFailures
 	t.BetaJoinedTokensProduced += other.BetaJoinedTokensProduced
+	t.ExpressionPredicateTests += other.ExpressionPredicateTests
+	t.ExpressionPredicateFailures += other.ExpressionPredicateFailures
+	t.ExpressionPredicateErrors += other.ExpressionPredicateErrors
 }
 
 type propagationCounterKey struct {
@@ -318,6 +324,27 @@ func (s *propagationCounterSpan) recordBetaJoinedTokenProduced() {
 		return
 	}
 	s.totals.BetaJoinedTokensProduced++
+}
+
+func (s *propagationCounterSpan) recordExpressionPredicateTest() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ExpressionPredicateTests++
+}
+
+func (s *propagationCounterSpan) recordExpressionPredicateFailure() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ExpressionPredicateFailures++
+}
+
+func (s *propagationCounterSpan) recordExpressionPredicateError() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.ExpressionPredicateErrors++
 }
 
 func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
@@ -571,6 +598,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-residual-tests", float64(s.Totals.BetaResidualTests))
 	report("propagation-beta-residual-failures", float64(s.Totals.BetaResidualFailures))
 	report("propagation-beta-joined-tokens-produced", float64(s.Totals.BetaJoinedTokensProduced))
+	report("propagation-expression-predicate-tests", float64(s.Totals.ExpressionPredicateTests))
+	report("propagation-expression-predicate-failures", float64(s.Totals.ExpressionPredicateFailures))
+	report("propagation-expression-predicate-errors", float64(s.Totals.ExpressionPredicateErrors))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -596,6 +626,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-residual-tests/rhs-assert", float64(s.Totals.BetaResidualTests)/rhsAsserts)
 	report("propagation-beta-residual-failures/rhs-assert", float64(s.Totals.BetaResidualFailures)/rhsAsserts)
 	report("propagation-beta-joined-tokens-produced/rhs-assert", float64(s.Totals.BetaJoinedTokensProduced)/rhsAsserts)
+	report("propagation-expression-predicate-tests/rhs-assert", float64(s.Totals.ExpressionPredicateTests)/rhsAsserts)
+	report("propagation-expression-predicate-failures/rhs-assert", float64(s.Totals.ExpressionPredicateFailures)/rhsAsserts)
+	report("propagation-expression-predicate-errors/rhs-assert", float64(s.Totals.ExpressionPredicateErrors)/rhsAsserts)
 	report("propagation-template-count", float64(len(s.ByTemplate)))
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
@@ -667,6 +700,9 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-residual-tests=" + strconv.Itoa(s.Totals.BetaResidualTests),
 		"propagation-beta-residual-failures=" + strconv.Itoa(s.Totals.BetaResidualFailures),
 		"propagation-beta-joined-tokens-produced=" + strconv.Itoa(s.Totals.BetaJoinedTokensProduced),
+		"propagation-expression-predicate-tests=" + strconv.Itoa(s.Totals.ExpressionPredicateTests),
+		"propagation-expression-predicate-failures=" + strconv.Itoa(s.Totals.ExpressionPredicateFailures),
+		"propagation-expression-predicate-errors=" + strconv.Itoa(s.Totals.ExpressionPredicateErrors),
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),
@@ -687,6 +723,9 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-residual-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualTests),
 		"propagation-beta-residual-failures/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualFailures),
 		"propagation-beta-joined-tokens-produced/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaJoinedTokensProduced),
+		"propagation-expression-predicate-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateTests),
+		"propagation-expression-predicate-failures/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateFailures),
+		"propagation-expression-predicate-errors/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateErrors),
 		"propagation-by-template=" + s.templateSummary(),
 		"propagation-by-origin=" + s.originSummary(),
 	}
@@ -817,7 +856,10 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"beta-candidate-rows-scanned=" + strconv.Itoa(totals.BetaCandidateRowsScanned) + "," +
 		"beta-residual-tests=" + strconv.Itoa(totals.BetaResidualTests) + "," +
 		"beta-residual-failures=" + strconv.Itoa(totals.BetaResidualFailures) + "," +
-		"beta-joined-tokens-produced=" + strconv.Itoa(totals.BetaJoinedTokensProduced) + "}"
+		"beta-joined-tokens-produced=" + strconv.Itoa(totals.BetaJoinedTokensProduced) + "," +
+		"expression-predicate-tests=" + strconv.Itoa(totals.ExpressionPredicateTests) + "," +
+		"expression-predicate-failures=" + strconv.Itoa(totals.ExpressionPredicateFailures) + "," +
+		"expression-predicate-errors=" + strconv.Itoa(totals.ExpressionPredicateErrors) + "}"
 }
 
 func slicesSortTemplateKeys(keys []TemplateKey) {

@@ -168,6 +168,13 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sou
 		if !ok {
 			continue
 		}
+		ok, err = p.matchesPredicates(ctx, ref, bindings)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
 		if err := yield(conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
@@ -202,6 +209,13 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 		if !ok {
 			continue
 		}
+		ok, err = p.matchesPredicates(ctx, ref, bindings)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
 		if err := yield(conditionMatch{
 			conditionID: p.id,
 			bindingSlot: p.bindingSlot,
@@ -216,6 +230,22 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
 	for _, join := range p.joins {
 		ok, err := join.matches(fact, bindings)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (p compiledConditionPlan) matchesPredicates(ctx context.Context, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
+	for _, predicate := range p.predicates {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		ok, err := predicate.matches(fact, bindings)
 		if err != nil {
 			return false, err
 		}

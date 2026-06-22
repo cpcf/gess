@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -1271,6 +1272,388 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 		t.Fatalf("reverse graph beta runtime = %#v, want graph beta support", reverseSession.rete)
 	}
 	assertGraphBetaRuntimeParity(t, revision, reverseSession)
+}
+
+func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-person",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{BooleanExpr{
+				Operator: ExpressionBoolAnd,
+				Operands: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareGreaterOrEqual,
+						Left:     CurrentFieldExpr{Field: "age"},
+						Right:    ConstExpr{Value: 18},
+					},
+					BooleanExpr{
+						Operator: ExpressionBoolNot,
+						Operands: []ExpressionSpec{CompareExpr{
+							Operator: ExpressionCompareGreaterOrEqual,
+							Left:     CurrentFieldExpr{Field: "age"},
+							Right:    ConstExpr{Value: 65},
+						}},
+					},
+					BooleanExpr{
+						Operator: ExpressionBoolOr,
+						Operands: []ExpressionSpec{
+							CompareExpr{
+								Operator: ExpressionCompareEqual,
+								Left:     CurrentFieldExpr{Field: "age"},
+								Right:    ConstExpr{Value: 19},
+							},
+							CompareExpr{
+								Operator: ExpressionCompareEqual,
+								Left:     CurrentFieldExpr{Field: "age"},
+								Right:    ConstExpr{Value: 20},
+							},
+						},
+					},
+				},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("alpha-expression-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.rete)
+	}
+	session.attachPropagationCounters()
+
+	young, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"age": 17}))
+	if err != nil {
+		t.Fatalf("AssertTemplate young: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after young assert = %d, want 0", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Modify(ctx, young.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 19})}); err != nil {
+		t.Fatalf("Modify young to adult: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after adult modify = %d, want 1", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Modify(ctx, young.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 16})}); err != nil {
+		t.Fatalf("Modify adult to young: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after failing modify = %d, want 0", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Retract(ctx, young.Fact.ID()); err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got < want {
+		t.Fatalf("expression predicate tests = %d, want at least %d", got, want)
+	}
+	if got, want := snapshot.Totals.ExpressionPredicateFailures, 1; got < want {
+		t.Fatalf("expression predicate failures = %d, want at least %d", got, want)
+	}
+	if got := snapshot.Totals.ExpressionPredicateErrors; got != 0 {
+		t.Fatalf("expression predicate errors = %d, want 0", got)
+	}
+}
+
+func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	system := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "system",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	finding := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "finding",
+		Fields: []FieldSpec{
+			{Name: "system-id", Kind: ValueString, Required: true},
+			{Name: "risk", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "system-finding-risk",
+		Conditions: []RuleConditionSpec{
+			{Binding: "system", TemplateKey: system.Key()},
+			{
+				Binding:     "finding",
+				TemplateKey: finding.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "system-id"},
+						Right:    BindingFieldExpr{Binding: "system", Field: "id"},
+					},
+					CompareExpr{
+						Operator: ExpressionCompareGreaterOrEqual,
+						Left:     CurrentFieldExpr{Field: "risk"},
+						Right:    ConstExpr{Value: 90},
+					},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("beta-expression-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.rete)
+	}
+	session.attachPropagationCounters()
+
+	systemFact, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "sys-1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate system: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-2", "risk": 99})); err != nil {
+		t.Fatalf("AssertTemplate wrong finding: %v", err)
+	}
+	lowRisk, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 70}))
+	if err != nil {
+		t.Fatalf("AssertTemplate low finding: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations before passing finding = %d, want 0", got)
+	}
+
+	passing, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 95}))
+	if err != nil {
+		t.Fatalf("AssertTemplate passing finding: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after passing finding = %d, want 1", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Modify(ctx, lowRisk.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"risk": 91})}); err != nil {
+		t.Fatalf("Modify low finding: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 2 {
+		t.Fatalf("pending activations after risk modify = %d, want 2", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Modify(ctx, passing.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"system-id": "sys-2"})}); err != nil {
+		t.Fatalf("Modify passing finding away: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("pending activations after system modify = %d, want 1", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	if _, err := session.Retract(ctx, systemFact.Fact.ID()); err != nil {
+		t.Fatalf("Retract system: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after system retract = %d, want 0", got)
+	}
+	assertGraphBetaRuntimeParity(t, revision, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got < want {
+		t.Fatalf("expression predicate tests = %d, want at least %d", got, want)
+	}
+	if got, want := snapshot.Totals.ExpressionPredicateFailures, 1; got < want {
+		t.Fatalf("expression predicate failures = %d, want at least %d", got, want)
+	}
+	if got := snapshot.Totals.ExpressionPredicateErrors; got != 0 {
+		t.Fatalf("expression predicate errors = %d, want 0", got)
+	}
+	if got := snapshot.Totals.BetaResidualTests; got != 0 {
+		t.Fatalf("beta residual tests = %d, want 0 for expression-only beta filters", got)
+	}
+}
+
+func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "age", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-person",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     CurrentFieldExpr{Field: "age"},
+				Right:    ConstExpr{Value: 18},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+
+	tests := []struct {
+		name   string
+		mutate func(*compiledExpressionPredicate)
+	}{
+		{
+			name: "unsupported node kind",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.expression.kind = expressionNodeKind("unsupported-test-shape")
+			},
+		},
+		{
+			name: "invalid comparison operator",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.expression.compareOp = ExpressionCompareUnknown
+			},
+		},
+		{
+			name: "invalid comparison arity",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.expression.operands = predicate.expression.operands[:1]
+			},
+		},
+		{
+			name: "incompatible comparison operand kinds",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.expression.operands[0].resultKind = ValueString
+				predicate.expression.operands[1].resultKind = ValueInt
+			},
+		},
+		{
+			name: "alpha predicate references binding",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.placement = ExpressionPredicatePlacementAlpha
+				predicate.expression.operands[1] = compiledExpression{
+					kind:        expressionNodeBindingField,
+					resultKind:  ValueInt,
+					field:       "age",
+					fieldSlot:   0,
+					binding:     "person",
+					bindingSlot: 0,
+				}
+			},
+		},
+		{
+			name: "beta predicate has no binding reference",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.placement = ExpressionPredicatePlacementBetaResidual
+			},
+		},
+		{
+			name: "boolean operand is not bool",
+			mutate: func(predicate *compiledExpressionPredicate) {
+				predicate.expression = compiledExpression{
+					kind:       expressionNodeBoolean,
+					resultKind: ValueBool,
+					boolOp:     ExpressionBoolAnd,
+					operands: []compiledExpression{{
+						kind:       expressionNodeConst,
+						resultKind: ValueInt,
+						value:      newIntValue(1),
+						fieldSlot:  -1,
+					}},
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mutated := *revision
+			mutated.rules = make(map[string]compiledRule, len(revision.rules))
+			maps.Copy(mutated.rules, revision.rules)
+			rule := mutated.rules["adult-person"]
+			rule.conditionPlans = append([]compiledConditionPlan(nil), rule.conditionPlans...)
+			rule.conditionPlans[0].predicates = cloneCompiledExpressionPredicates(rule.conditionPlans[0].predicates)
+			tc.mutate(&rule.conditionPlans[0].predicates[0])
+			mutated.rules["adult-person"] = rule
+
+			runtime, err := newReteRuntime(&mutated)
+			if err != nil {
+				t.Fatalf("newReteRuntime: %v", err)
+			}
+			if runtime.supportsGraphBeta() {
+				t.Fatal("runtime supports graph beta for malformed expression predicate, want unsupported")
+			}
+			if got := runtime.plan.stats.unsupportedConditions; got != 1 {
+				t.Fatalf("unsupported conditions = %d, want 1", got)
+			}
+			err = runtime.validateExecutableGraphBetaRuntime()
+			if !errors.Is(err, ErrUnsupportedRuntime) {
+				t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
+			}
+			for _, want := range []string{"expression-predicate", `rule="adult-person"`, `binding="person"`, "expression predicate 0"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("unsupported runtime error %q does not contain %q", err.Error(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestReteGraphAlphaExpressionPredicateErrorsAreCounted(t *testing.T) {
+	ledger := newPropagationCounterLedger()
+	span := ledger.beginAssert("", mutationOrigin{})
+	node := reteGraphAlphaNode{
+		target: conditionTarget{kind: conditionTargetName, name: "event"},
+		predicates: []compiledExpressionPredicate{{
+			placement: ExpressionPredicatePlacementAlpha,
+			expression: compiledExpression{
+				kind:       expressionNodeCompare,
+				resultKind: ValueBool,
+				compareOp:  ExpressionCompareUnknown,
+				operands: []compiledExpression{
+					{kind: expressionNodeCurrentField, resultKind: ValueInt, field: "score", fieldSlot: -1},
+					{kind: expressionNodeConst, resultKind: ValueInt, value: newIntValue(10), fieldSlot: -1},
+				},
+			},
+		}},
+	}
+	fact := FactSnapshot{
+		id:     FactID{generation: 1, sequence: 1},
+		name:   "event",
+		fields: Fields{"score": newIntValue(20)},
+	}
+	if node.matchesSnapshotWithCounters(fact, &span) {
+		t.Fatal("matchesSnapshotWithCounters = true, want false for malformed expression")
+	}
+	span.finish()
+
+	snapshot := ledger.snapshot()
+	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got != want {
+		t.Fatalf("expression predicate tests = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.ExpressionPredicateErrors, 1; got != want {
+		t.Fatalf("expression predicate errors = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ExpressionPredicateFailures; got != 0 {
+		t.Fatalf("expression predicate failures = %d, want 0", got)
+	}
 }
 
 func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) {

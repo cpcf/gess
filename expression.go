@@ -509,6 +509,291 @@ func expressionKindsNumeric(left, right ValueKind) bool {
 	return false
 }
 
+func (p compiledExpressionPredicate) graphExecutable() bool {
+	switch p.placement {
+	case ExpressionPredicatePlacementAlpha, ExpressionPredicatePlacementBetaResidual:
+	default:
+		return false
+	}
+	if !p.expression.graphExecutable() {
+		return false
+	}
+	referencesBinding := p.expression.referencesBinding()
+	switch p.placement {
+	case ExpressionPredicatePlacementAlpha:
+		return !referencesBinding
+	case ExpressionPredicatePlacementBetaResidual:
+		return referencesBinding
+	default:
+		return false
+	}
+}
+
+func (e compiledExpression) graphExecutable() bool {
+	switch e.kind {
+	case expressionNodeConst:
+		return e.resultKind != ""
+	case expressionNodeCurrentField:
+		return e.field != "" && e.resultKind != ""
+	case expressionNodeBindingField:
+		return e.binding != "" && e.field != "" && e.bindingSlot >= 0 && e.resultKind != ""
+	case expressionNodeCompare:
+		if !validExpressionComparisonOperator(e.compareOp) || len(e.operands) != 2 || e.resultKind != ValueBool {
+			return false
+		}
+		if !expressionOperandsComparable(e.compareOp, e.operands[0].resultKind, e.operands[1].resultKind) {
+			return false
+		}
+	case expressionNodeBoolean:
+		if !validExpressionBooleanOperator(e.boolOp) || e.resultKind != ValueBool {
+			return false
+		}
+		if e.boolOp == ExpressionBoolNot && len(e.operands) != 1 {
+			return false
+		}
+		if e.boolOp != ExpressionBoolNot && len(e.operands) == 0 {
+			return false
+		}
+		for _, operand := range e.operands {
+			if operand.resultKind != ValueAny && operand.resultKind != ValueBool {
+				return false
+			}
+		}
+	default:
+		return false
+	}
+	for _, operand := range e.operands {
+		if !operand.graphExecutable() {
+			return false
+		}
+	}
+	return true
+}
+
+func (e compiledExpression) referencesBinding() bool {
+	switch e.kind {
+	case expressionNodeBindingField:
+		return true
+	default:
+		for _, operand := range e.operands {
+			if operand.referencesBinding() {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func expressionPredicatesMatch(predicates []compiledExpressionPredicate, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
+	for _, predicate := range predicates {
+		ok, err := predicate.matches(fact, bindings)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func expressionPredicatesMatchToken(predicates []compiledExpressionPredicate, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+	for _, predicate := range predicates {
+		if span != nil {
+			span.recordExpressionPredicateTest()
+		}
+		ok, err := predicate.matchesToken(fact, bindings)
+		if err != nil {
+			if span != nil {
+				span.recordExpressionPredicateError()
+			}
+			return false, err
+		}
+		if !ok {
+			if span != nil {
+				span.recordExpressionPredicateFailure()
+			}
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (p compiledExpressionPredicate) matches(fact conditionFactRef, bindings []conditionMatch) (bool, error) {
+	value, ok, err := p.expression.evaluate(fact, bindings)
+	if err != nil || !ok {
+		return false, err
+	}
+	if value.Kind() != ValueBool {
+		return false, nil
+	}
+	return value.boolValue, nil
+}
+
+func (p compiledExpressionPredicate) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
+	value, ok, err := p.expression.evaluateToken(fact, bindings)
+	if err != nil || !ok {
+		return false, err
+	}
+	if value.Kind() != ValueBool {
+		return false, nil
+	}
+	return value.boolValue, nil
+}
+
+func (e compiledExpression) evaluate(fact conditionFactRef, bindings []conditionMatch) (Value, bool, error) {
+	switch e.kind {
+	case expressionNodeConst:
+		return e.value, true, nil
+	case expressionNodeCurrentField:
+		value, ok := fact.compiledFieldValue(e.field, e.fieldSlot)
+		return value, ok, nil
+	case expressionNodeBindingField:
+		if e.bindingSlot < 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
+		}
+		if e.bindingSlot >= len(bindings) {
+			return Value{}, false, nil
+		}
+		value, ok := bindings[e.bindingSlot].fact.compiledFieldValue(e.field, e.fieldSlot)
+		return value, ok, nil
+	case expressionNodeCompare:
+		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluate(fact, bindings)
+		})
+	case expressionNodeBoolean:
+		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluate(fact, bindings)
+		})
+	default:
+		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
+	}
+}
+
+func (e compiledExpression) evaluateToken(fact conditionFactRef, bindings tokenRef) (Value, bool, error) {
+	switch e.kind {
+	case expressionNodeConst:
+		return e.value, true, nil
+	case expressionNodeCurrentField:
+		value, ok := fact.compiledFieldValue(e.field, e.fieldSlot)
+		return value, ok, nil
+	case expressionNodeBindingField:
+		if e.bindingSlot < 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
+		}
+		match, ok := tokenRefAtSlot(bindings, e.bindingSlot)
+		if !ok {
+			return Value{}, false, nil
+		}
+		value, ok := match.fact.compiledFieldValue(e.field, e.fieldSlot)
+		return value, ok, nil
+	case expressionNodeCompare:
+		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluateToken(fact, bindings)
+		})
+	case expressionNodeBoolean:
+		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluateToken(fact, bindings)
+		})
+	default:
+		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
+	}
+}
+
+func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
+	if len(e.operands) != 2 {
+		return Value{}, false, fmt.Errorf("%w: malformed comparison expression operand count %d", ErrMatcher, len(e.operands))
+	}
+	left, leftOK, err := eval(e.operands[0])
+	if err != nil {
+		return Value{}, false, err
+	}
+	right, rightOK, err := eval(e.operands[1])
+	if err != nil {
+		return Value{}, false, err
+	}
+	if !leftOK || !rightOK {
+		return newBoolValue(false), true, nil
+	}
+	var matched bool
+	switch e.compareOp {
+	case ExpressionCompareEqual:
+		matched = valuesComparableForEquality(left, right) && left.Equal(right)
+	case ExpressionCompareNotEqual:
+		matched = valuesComparableForEquality(left, right) && !left.Equal(right)
+	case ExpressionCompareLessThan, ExpressionCompareLessOrEqual, ExpressionCompareGreaterThan, ExpressionCompareGreaterOrEqual:
+		comparison, comparable := compareValues(left, right)
+		if !comparable {
+			return newBoolValue(false), true, nil
+		}
+		switch e.compareOp {
+		case ExpressionCompareLessThan:
+			matched = comparison < 0
+		case ExpressionCompareLessOrEqual:
+			matched = comparison <= 0
+		case ExpressionCompareGreaterThan:
+			matched = comparison > 0
+		case ExpressionCompareGreaterOrEqual:
+			matched = comparison >= 0
+		}
+	default:
+		return Value{}, false, fmt.Errorf("%w: unsupported expression comparison operator %q", ErrMatcher, e.compareOp)
+	}
+	return newBoolValue(matched), true, nil
+}
+
+func (e compiledExpression) evaluateBoolean(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
+	boolValue := func(operand compiledExpression) (bool, error) {
+		value, ok, err := eval(operand)
+		if err != nil || !ok || value.Kind() != ValueBool {
+			return false, err
+		}
+		return value.boolValue, nil
+	}
+
+	switch e.boolOp {
+	case ExpressionBoolAnd:
+		if len(e.operands) == 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed and expression operand count 0", ErrMatcher)
+		}
+		for _, operand := range e.operands {
+			value, err := boolValue(operand)
+			if err != nil {
+				return Value{}, false, err
+			}
+			if !value {
+				return newBoolValue(false), true, nil
+			}
+		}
+		return newBoolValue(true), true, nil
+	case ExpressionBoolOr:
+		if len(e.operands) == 0 {
+			return Value{}, false, fmt.Errorf("%w: malformed or expression operand count 0", ErrMatcher)
+		}
+		for _, operand := range e.operands {
+			value, err := boolValue(operand)
+			if err != nil {
+				return Value{}, false, err
+			}
+			if value {
+				return newBoolValue(true), true, nil
+			}
+		}
+		return newBoolValue(false), true, nil
+	case ExpressionBoolNot:
+		if len(e.operands) != 1 {
+			return Value{}, false, fmt.Errorf("%w: malformed not expression operand count %d", ErrMatcher, len(e.operands))
+		}
+		value, err := boolValue(e.operands[0])
+		if err != nil {
+			return Value{}, false, err
+		}
+		return newBoolValue(!value), true, nil
+	default:
+		return Value{}, false, fmt.Errorf("%w: unsupported expression boolean operator %q", ErrMatcher, e.boolOp)
+	}
+}
+
 func expressionValidationError(ruleName string, conditionIndex, predicateIndex int, fieldName, reason string, err error) *ValidationError {
 	return &ValidationError{
 		RuleName:          ruleName,
@@ -548,8 +833,9 @@ func cloneCompiledExpressionPredicates(in []compiledExpressionPredicate) []compi
 
 func (e compiledExpression) clone() compiledExpression {
 	e.value = cloneValue(e.value)
-	e.operands = make([]compiledExpression, len(e.operands))
-	for i, operand := range e.operands {
+	operands := e.operands
+	e.operands = make([]compiledExpression, len(operands))
+	for i, operand := range operands {
 		e.operands[i] = operand.clone()
 	}
 	return e
