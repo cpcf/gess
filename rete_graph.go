@@ -104,6 +104,7 @@ type reteGraphStageSuccessor struct {
 type reteGraphTerminalRoute struct {
 	terminalID reteGraphTerminalNodeID
 	entry      bindingTupleEntry
+	branchID   int
 }
 
 type reteGraphAlphaKey struct {
@@ -257,6 +258,7 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 			graph.appendTerminal(current, reteGraphTerminalRoute{
 				terminalID: terminalID,
 				entry:      terminalEntry,
+				branchID:   branch.id,
 			})
 		}
 	}

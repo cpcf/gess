@@ -1601,6 +1601,9 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 		t.Fatalf("pending activations after person = %d, want 1", got)
 	}
 	activationID := pending[0].activationID()
+	if got, want := terminalContributorBranchIDs(t, session, "or-support"), []int{0, 1}; !slices.Equal(got, want) {
+		t.Fatalf("terminal contributor branch IDs after person = %#v, want %#v", got, want)
+	}
 	if _, err := session.AssertTemplate(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
 		t.Fatalf("AssertTemplate block: %v", err)
 	}
@@ -1611,11 +1614,33 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	if pending[0].activationID() != activationID {
 		t.Fatalf("activation changed after one branch support disappeared: got %q want %q", pending[0].activationID(), activationID)
 	}
+	if got, want := terminalContributorBranchIDs(t, session, "or-support"), []int{0}; !slices.Equal(got, want) {
+		t.Fatalf("terminal contributor branch IDs after block = %#v, want %#v", got, want)
+	}
 	for _, event := range collector.Events() {
 		if event.Type == EventRuleDeactivated {
 			t.Fatalf("unexpected deactivation event while equivalent branch remained: %#v", event)
 		}
 	}
+}
+
+func terminalContributorBranchIDs(t testing.TB, session *Session, ruleName string) []int {
+	t.Helper()
+	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatalf("session has no graph beta runtime")
+	}
+	rule, ok := session.revision.rules[ruleName]
+	if !ok {
+		t.Fatalf("rule %q not found", ruleName)
+	}
+	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
+	if terminal == nil {
+		t.Fatalf("terminal for rule %q not found", ruleName)
+	}
+	if got, want := terminal.rows.len(), 1; got != want {
+		t.Fatalf("terminal row count for rule %q = %d, want %d", ruleName, got, want)
+	}
+	return terminal.rows.rows[0].terminalBranchIDs()
 }
 
 func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
@@ -2729,7 +2754,7 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 
 	duplicateDelta := reteAgendaDelta{supported: true}
 	duplicateSpan := propagationCounterSpan{ledger: session.propagationCounters}
-	session.rete.graphBeta.insertTerminalToken(terminalID, terminalToken, &duplicateDelta, &duplicateSpan)
+	session.rete.graphBeta.insertTerminalToken(terminalID, 0, terminalToken, &duplicateDelta, &duplicateSpan)
 	duplicateSpan.finish()
 	if len(duplicateDelta.added) != 0 {
 		t.Fatalf("duplicate terminal delta additions = %d, want 0", len(duplicateDelta.added))

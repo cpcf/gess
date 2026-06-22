@@ -76,6 +76,70 @@ type graphTokenRow struct {
 	identity         graphTokenIdentityKey
 	terminalIdentity candidateIdentity
 	supportCount     int
+	branchSupports   []terminalBranchSupport
+}
+
+type terminalBranchSupport struct {
+	branchID int
+	count    int
+}
+
+func (r *graphTokenRow) addTerminalBranchSupport(branchID int) {
+	if r == nil || branchID < 0 {
+		return
+	}
+	for i := range r.branchSupports {
+		if r.branchSupports[i].branchID == branchID {
+			r.branchSupports[i].count++
+			return
+		}
+	}
+	r.branchSupports = append(r.branchSupports, terminalBranchSupport{branchID: branchID, count: 1})
+}
+
+func (r graphTokenRow) hasTerminalBranchSupport(branchID int) bool {
+	if branchID < 0 {
+		return false
+	}
+	for _, support := range r.branchSupports {
+		if support.branchID == branchID && support.count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *graphTokenRow) removeTerminalBranchSupport(branchID int) {
+	if r == nil || branchID < 0 {
+		return
+	}
+	for i := range r.branchSupports {
+		if r.branchSupports[i].branchID != branchID {
+			continue
+		}
+		r.branchSupports[i].count--
+		if r.branchSupports[i].count > 0 {
+			return
+		}
+		copy(r.branchSupports[i:], r.branchSupports[i+1:])
+		r.branchSupports[len(r.branchSupports)-1] = terminalBranchSupport{}
+		r.branchSupports = r.branchSupports[:len(r.branchSupports)-1]
+		return
+	}
+}
+
+func (r graphTokenRow) terminalBranchIDs() []int {
+	if len(r.branchSupports) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(r.branchSupports))
+	for _, support := range r.branchSupports {
+		if support.count <= 0 {
+			continue
+		}
+		out = append(out, support.branchID)
+	}
+	return out
 }
 
 type graphTokenIdentityKey struct {
@@ -481,7 +545,7 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	return true
 }
 
-func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candidateIdentity) bool {
+func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candidateIdentity, branchID int) bool {
 	if m == nil || token.isZero() {
 		return false
 	}
@@ -499,13 +563,21 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		row := m.row(rowID)
 		if row != nil && tokenRefEqual(row.token, token) {
 			if row.token.handle == token.handle {
+				if !row.hasTerminalBranchSupport(branchID) {
+					row.addTerminalBranchSupport(branchID)
+				}
 				return false
 			}
 			row.supportCount++
+			row.addTerminalBranchSupport(branchID)
 			return false
 		}
 	}
 
+	branchSupports := []terminalBranchSupport(nil)
+	if branchID >= 0 {
+		branchSupports = []terminalBranchSupport{{branchID: branchID, count: 1}}
+	}
 	rowID := graphTokenRowID(len(m.rows))
 	m.rows = append(m.rows, graphTokenRow{
 		id:               rowID,
@@ -513,6 +585,7 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		identity:         identity,
 		terminalIdentity: terminalIdentity,
 		supportCount:     1,
+		branchSupports:   branchSupports,
 	})
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
@@ -575,9 +648,13 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 	}
 }
 
-func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCounterLedger) (graphTokenRow, bool) {
+func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
 	if m == nil || token.isZero() {
 		return graphTokenRow{}, false
+	}
+	branchID := -1
+	if len(branchIDs) > 0 {
+		branchID = branchIDs[0]
 	}
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
@@ -601,6 +678,7 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 		}
 		if row.supportCount > 1 {
 			row.supportCount--
+			row.removeTerminalBranchSupport(branchID)
 			return graphTokenRow{}, false
 		}
 		removed := *row
@@ -1150,7 +1228,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 			continue
 		}
-		m.insertTerminalToken(terminal.terminalID, token, delta, span)
+		m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
 	}
 	for _, successor := range m.graph.successorsByStage[source] {
 		node := m.graph.betaNode(successor.betaNodeID)
@@ -1211,7 +1289,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		m.removeTerminalToken(terminal.terminalID, token, counters, delta)
+		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
 	}
 	for _, successor := range m.graph.successorsByStage[source] {
 		node := m.graph.betaNode(successor.betaNodeID)
@@ -1254,7 +1332,7 @@ func (m *reteGraphBetaMemory) propagateFromStage(source reteGraphStageRef, token
 		return
 	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
-		m.insertTerminalToken(terminal.terminalID, token, delta, span)
+		m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
 	}
 	for _, successor := range m.graph.successorsByStage[source] {
 		node := m.graph.betaNode(successor.betaNodeID)
@@ -1276,7 +1354,7 @@ func (m *reteGraphBetaMemory) propagateRemoveFromStage(source reteGraphStageRef,
 		counters.recordNegativePropagationEvent()
 	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
-		m.removeTerminalToken(terminal.terminalID, token, counters, delta)
+		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
 	}
 	for _, successor := range m.graph.successorsByStage[source] {
 		if !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
@@ -1889,7 +1967,7 @@ func (m *reteGraphBetaMemory) finishTerminalTokenDelta(delta reteAgendaDelta) re
 	return delta
 }
 
-func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNodeID, token tokenRef, delta *reteAgendaDelta, span *propagationCounterSpan) {
+func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNodeID, branchID int, token tokenRef, delta *reteAgendaDelta, span *propagationCounterSpan) {
 	if m == nil || delta == nil || token.isZero() {
 		return
 	}
@@ -1900,7 +1978,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
 	identity := m.terminalTokenIdentity(ruleRevisionID, token)
-	if !terminal.rows.insertTerminal(token, identity) {
+	if !terminal.rows.insertTerminal(token, identity, branchID) {
 		if span != nil {
 			span.recordTerminalRowDeduped()
 		}
@@ -1941,7 +2019,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 	})
 }
 
-func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNodeID, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNodeID, branchID int, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
 	if m == nil || delta == nil || token.isZero() {
 		return
 	}
@@ -1949,7 +2027,7 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 	if terminal == nil {
 		return
 	}
-	removed, ok := terminal.rows.removeToken(token, counters)
+	removed, ok := terminal.rows.removeToken(token, counters, branchID)
 	if !ok {
 		return
 	}
