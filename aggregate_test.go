@@ -550,6 +550,97 @@ func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) 
 	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 2}, "b": {0, 0}})
 }
 
+func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
+	var observed []int64
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	gate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "gate",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "expected", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
+			observed = append(observed, count.intValue)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "count-gate",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Accumulate(
+				Match{Binding: "item", TemplateKey: item.Key()},
+				Count().As("count"),
+			),
+			Match{
+				Binding:     "gate",
+				TemplateKey: gate.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "expected"},
+						Right:    BindingValueExpr{Binding: "count"},
+					},
+				},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-downstream-join-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want downstream aggregate incremental agenda support", session.rete)
+	}
+
+	if _, err := session.AssertTemplate(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 2})); err != nil {
+		t.Fatalf("assert gate 2: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("assert item a: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("assert item b: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if result.Fired != 1 || observed[len(observed)-1] != 2 {
+		t.Fatalf("first Run fired/observed = %d/%v, want 1/2", result.Fired, observed)
+	}
+
+	if _, err := session.AssertTemplate(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 3})); err != nil {
+		t.Fatalf("assert gate 3: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c"})); err != nil {
+		t.Fatalf("assert item c: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Fired != 1 || observed[len(observed)-1] != 3 {
+		t.Fatalf("second Run fired/observed = %d/%v, want 1/3", result.Fired, observed)
+	}
+}
+
 func TestAccumulateValidationRejectsUnsupportedShapesAndCollisions(t *testing.T) {
 	item := TemplateSpec{Name: "item", Fields: []FieldSpec{{Name: "amount", Kind: ValueInt}}}
 	cases := []struct {

@@ -832,9 +832,6 @@ func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
 		if aggregateIndex < 0 {
 			continue
 		}
-		if aggregateIndex != len(branch.plans)-1 {
-			return false
-		}
 		if !reteGraphSupportsAggregateCondition(branch.plans[aggregateIndex], aggregateIndex > 0) {
 			return false
 		}

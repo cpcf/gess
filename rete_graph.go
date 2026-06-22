@@ -304,7 +304,7 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 		}
 		aggregateIndex = i
 	}
-	if aggregateIndex < 0 || aggregateIndex != len(branch.plans)-1 {
+	if aggregateIndex < 0 {
 		return false
 	}
 	condition := branch.plans[aggregateIndex]
@@ -389,11 +389,49 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 	}
 	aggregateID := g.appendAggregate(aggregateInput, outer, graphTokenEntryForCondition(input), condition.id, condition.bindingSlot, condition.aggregate.specs, graphTokenEntriesForAggregateBindings(rule, condition))
 	aggregateRef := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}
+	current = aggregateRef
+	haveStage = true
+
+	for conditionIndex := aggregateIndex + 1; conditionIndex < len(branch.plans); conditionIndex++ {
+		later := branch.plans[conditionIndex]
+		if later.aggregate != nil {
+			return false
+		}
+		alphaID := g.compileConditionAlpha(rule, later, conditionIndex, alphaIndex, templatesByKey, true)
+		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+		if alphaID == 0 {
+			return false
+		}
+		betaKind := reteGraphBetaNodeJoin
+		if later.negated {
+			betaKind = reteGraphBetaNodeNot
+		}
+		betaID, _ := g.internBetaNode(betaIndex, betaKind, current, alphaRef, later.joins, betaResidualExpressionPredicates(later.predicates))
+		if betaNode := g.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" && betaKind == reteGraphBetaNodeJoin {
+			betaNode.entry = graphTokenEntryForCondition(later)
+		}
+		leftEntry := bindingTupleEntry{}
+		if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+			leftEntry = graphTokenEntryForCondition(branch.plans[conditionIndex-1])
+		}
+		g.appendStageSuccessor(current, reteGraphStageSuccessor{
+			betaNodeID: betaID,
+			side:       reteGraphBetaInputLeft,
+			entry:      leftEntry,
+		})
+		g.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
+			betaNodeID: betaID,
+			side:       reteGraphBetaInputRight,
+			entry:      graphTokenEntryForCondition(later),
+		})
+		current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+	}
+
 	if terminalID != nil && *terminalID == 0 {
 		g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{
 			id:             reteGraphTerminalNodeID(len(g.terminalNodes) + 1),
 			ruleRevisionID: rule.revisionID,
-			input:          aggregateRef,
+			input:          current,
 		})
 		*terminalID = reteGraphTerminalNodeID(len(g.terminalNodes))
 	}
@@ -405,7 +443,7 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 		branchID:       branch.id,
 		conditions:     cloneRuleConditionBranchConditions(branch.conditions),
 	})
-	g.appendTerminal(aggregateRef, reteGraphTerminalRoute{
+	g.appendTerminal(current, reteGraphTerminalRoute{
 		terminalID: *terminalID,
 		branchID:   branch.id,
 	})
