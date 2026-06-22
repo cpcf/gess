@@ -641,6 +641,157 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 	}
 }
 
+func TestAccumulateSharedInputRulesUseIncrementalAgendaDeltas(t *testing.T) {
+	var observed []string
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	for _, name := range []string{"record-a", "record-b"} {
+		actionName := name
+		mustAddAction(t, workspace, ActionSpec{
+			Name: actionName,
+			Fn: func(ctx ActionContext) error {
+				count, ok := ctx.BindingValue("count")
+				if !ok {
+					return errors.New("missing count binding")
+				}
+				observed = append(observed, actionName+":"+count.String())
+				return nil
+			},
+		})
+	}
+	for _, spec := range []struct {
+		rule   string
+		action string
+	}{
+		{rule: "shared-a", action: "record-a"},
+		{rule: "shared-b", action: "record-b"},
+	} {
+		mustAddRule(t, workspace, RuleSpec{
+			Name: spec.rule,
+			ConditionTree: Accumulate(
+				Match{Binding: "item", TemplateKey: item.Key()},
+				Count().As("count"),
+			),
+			Actions: []RuleActionSpec{{Name: spec.action}},
+		})
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-shared-input-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want shared aggregate incremental agenda support", session.rete)
+	}
+
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("assert item a: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("assert item b: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 2 || len(observed) != 2 {
+		t.Fatalf("Run fired/observed = %d/%v, want 2/two rows", result.Fired, observed)
+	}
+}
+
+func TestAccumulateSumHandlesDuplicateFactsAndNumericTransitionsIncrementally(t *testing.T) {
+	var observed []Value
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueAny, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			total, ok := ctx.BindingValue("total")
+			if !ok {
+				return errors.New("missing total binding")
+			}
+			observed = append(observed, total)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "sum",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+		),
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-numeric-transition-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want numeric aggregate incremental agenda support", session.rete)
+	}
+
+	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
+	if err != nil {
+		t.Fatalf("assert first: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	duplicate, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
+	if err != nil {
+		t.Fatalf("assert duplicate: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	floaty, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c", "amount": 1.5}))
+	if err != nil {
+		t.Fatalf("assert floaty: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 5.5)) {
+		t.Fatalf("first Run fired/total = %d/%v, want 1/5.5", result.Fired, observed[len(observed)-1])
+	}
+
+	if _, err := session.Modify(context.Background(), floaty.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"amount": 3})}); err != nil {
+		t.Fatalf("modify floaty: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 7)) {
+		t.Fatalf("second Run fired/total = %d/%v, want 1/7", result.Fired, observed[len(observed)-1])
+	}
+
+	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
+		t.Fatalf("retract first: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.Retract(context.Background(), duplicate.Fact.ID()); err != nil {
+		t.Fatalf("retract duplicate: %v", err)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("third Run: %v", err)
+	}
+	if result.Fired != 1 || !observed[len(observed)-1].Equal(mustValue(t, 3)) {
+		t.Fatalf("third Run fired/total = %d/%v, want 1/3", result.Fired, observed[len(observed)-1])
+	}
+}
+
 func TestAccumulateValidationRejectsUnsupportedShapesAndCollisions(t *testing.T) {
 	item := TemplateSpec{Name: "item", Fields: []FieldSpec{{Name: "amount", Kind: ValueInt}}}
 	cases := []struct {
