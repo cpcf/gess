@@ -113,6 +113,33 @@ func TestGraphRuleNetworkDiagnosticsBoundDepthGrowth(t *testing.T) {
 	}
 }
 
+func TestGraphRuleNetworkReplayBuildsFactSourceIndexesLazily(t *testing.T) {
+	tc := graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 4, items: 256}
+	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
+	facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
+	memory := newReteGraphBetaMemory(revision, revision.graph, nil)
+	if memory == nil {
+		t.Fatal("newReteGraphBetaMemory returned nil")
+	}
+	memory.resetFacts(nil)
+	for _, fact := range facts {
+		memory.insertFact(fact, nil)
+	}
+	if !memory.factTargetIndexesDirty {
+		t.Fatal("fact target indexes should stay dirty until generic fact source access")
+	}
+	eventFacts, ok := memory.factsForTarget(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templates.event})
+	if !ok {
+		t.Fatal("factsForTarget returned !ok")
+	}
+	if got, want := len(eventFacts), tc.items; got != want {
+		t.Fatalf("event facts = %d, want %d", got, want)
+	}
+	if memory.factTargetIndexesDirty {
+		t.Fatal("fact target indexes remained dirty after factsForTarget")
+	}
+}
+
 func graphRuleNetworkBenchmarkCases() []graphRuleNetworkCase {
 	orders := []graphRuleNetworkOrder{graphRuleNetworkSelective, graphRuleNetworkBroad}
 	depthItems := []struct {

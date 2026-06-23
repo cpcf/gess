@@ -8,26 +8,27 @@ import (
 )
 
 type reteGraphBetaMemory struct {
-	revision            *Ruleset
-	graph               *reteGraph
-	nodes               []*reteGraphBetaNodeMemory
-	aggregates          []*reteGraphAggregateNodeMemory
-	terminals           []*reteGraphTerminalMemory
-	alphaFacts          []reteGraphAlphaFactSet
-	alphaConditions     [][]ConditionID
-	alphaFactCounts     map[ConditionID]int
-	facts               []FactSnapshot
-	factIndexes         map[FactID]int
-	factsByName         map[string][]FactSnapshot
-	factsByTemplate     map[TemplateKey][]FactSnapshot
-	factNameIndexes     map[FactID]int
-	factTemplateIndexes map[FactID]int
-	arena               *tokenArena
-	queryArena          *tokenArena
-	terminalTokenDeltas []reteTerminalTokenDelta
-	alphaRouteScratch   []reteGraphAlphaNodeID
-	alphaRouteSeen      map[reteGraphAlphaNodeID]uint64
-	alphaRouteEpoch     uint64
+	revision               *Ruleset
+	graph                  *reteGraph
+	nodes                  []*reteGraphBetaNodeMemory
+	aggregates             []*reteGraphAggregateNodeMemory
+	terminals              []*reteGraphTerminalMemory
+	alphaFacts             []reteGraphAlphaFactSet
+	alphaConditions        [][]ConditionID
+	alphaFactCounts        map[ConditionID]int
+	facts                  []FactSnapshot
+	factIndexes            map[FactID]int
+	factsByName            map[string][]FactSnapshot
+	factsByTemplate        map[TemplateKey][]FactSnapshot
+	factNameIndexes        map[FactID]int
+	factTemplateIndexes    map[FactID]int
+	factTargetIndexesDirty bool
+	arena                  *tokenArena
+	queryArena             *tokenArena
+	terminalTokenDeltas    []reteTerminalTokenDelta
+	alphaRouteScratch      []reteGraphAlphaNodeID
+	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
+	alphaRouteEpoch        uint64
 }
 
 type reteGraphBetaNodeMemory struct {
@@ -1019,7 +1020,7 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 	for i, fact := range m.facts {
 		m.factIndexes[fact.ID()] = i
 	}
-	m.rebuildFactTargetIndexes()
+	m.markFactTargetIndexesDirty()
 }
 
 func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
@@ -1049,6 +1050,7 @@ func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
 	for _, fact := range m.facts {
 		m.addFactTargetIndexes(fact)
 	}
+	m.factTargetIndexesDirty = false
 }
 
 func (m *reteGraphBetaMemory) clearMemories() {
@@ -1192,14 +1194,13 @@ func (m *reteGraphBetaMemory) upsertFactSource(fact FactSnapshot) {
 		m.factIndexes = make(map[FactID]int)
 	}
 	if index, ok := m.factIndexes[fact.ID()]; ok && index >= 0 && index < len(m.facts) {
-		m.removeFactTargetIndexes(m.facts[index])
 		m.facts[index] = fact
-		m.addFactTargetIndexes(fact)
+		m.markFactTargetIndexesDirty()
 		return
 	}
 	m.factIndexes[fact.ID()] = len(m.facts)
 	m.facts = append(m.facts, fact)
-	m.addFactTargetIndexes(fact)
+	m.markFactTargetIndexesDirty()
 }
 
 func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
@@ -1219,6 +1220,14 @@ func (m *reteGraphBetaMemory) removeFactSource(id FactID) {
 	m.facts[last] = FactSnapshot{}
 	m.facts = m.facts[:last]
 	delete(m.factIndexes, id)
+	m.markFactTargetIndexesDirty()
+}
+
+func (m *reteGraphBetaMemory) markFactTargetIndexesDirty() {
+	if m == nil {
+		return
+	}
+	m.factTargetIndexesDirty = true
 }
 
 func (m *reteGraphBetaMemory) addFactTargetIndexes(fact FactSnapshot) {
@@ -3977,6 +3986,7 @@ func (m *reteGraphBetaMemory) factsForTarget(target conditionTarget) ([]FactSnap
 	if m == nil {
 		return nil, false
 	}
+	m.ensureFactTargetIndexes()
 	switch target.kind {
 	case conditionTargetName:
 		return m.factsByName[target.name], true
@@ -3985,6 +3995,13 @@ func (m *reteGraphBetaMemory) factsForTarget(target conditionTarget) ([]FactSnap
 	default:
 		return nil, false
 	}
+}
+
+func (m *reteGraphBetaMemory) ensureFactTargetIndexes() {
+	if m == nil || !m.factTargetIndexesDirty {
+		return
+	}
+	m.rebuildFactTargetIndexes()
 }
 
 func (m *reteGraphBetaMemory) collectTerminalCandidates(ctx context.Context, rule compiledRule, terminal *reteGraphTerminalMemory) ([]matchCandidate, error) {
