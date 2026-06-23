@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -505,17 +506,40 @@ func scalarFieldValue(fact FactSnapshot, field string) (Value, bool) {
 }
 
 type ActionSpec struct {
-	Name string
-	Fn   ActionFunc
+	Name                 string
+	Fn                   ActionFunc
+	AssertTemplateValues *AssertTemplateValuesActionSpec
 	// NonEscaping allows the engine to skip freezing unread bindings after a
 	// rule fires. Set it only when Fn does not retain ActionContext or any
 	// binding-derived data that depends on post-return defensive snapshots.
 	NonEscaping bool
 }
 
+type AssertTemplateValuesActionSpec struct {
+	TemplateKey TemplateKey
+	Values      []ExpressionSpec
+}
+
 func (s ActionSpec) clone() ActionSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
+	if s.AssertTemplateValues != nil {
+		out.AssertTemplateValues = s.AssertTemplateValues.clone()
+	}
+	return out
+}
+
+func (s *AssertTemplateValuesActionSpec) clone() *AssertTemplateValuesActionSpec {
+	if s == nil {
+		return nil
+	}
+	out := &AssertTemplateValuesActionSpec{
+		TemplateKey: s.TemplateKey,
+		Values:      make([]ExpressionSpec, len(s.Values)),
+	}
+	for i, value := range s.Values {
+		out.Values[i] = cloneExpressionSpec(value)
+	}
 	return out
 }
 
@@ -526,9 +550,35 @@ func normalizeActionSpec(spec ActionSpec) (ActionSpec, error) {
 			Reason: "action name is required",
 		}
 	}
-	if normalized.Fn == nil {
+	actionKinds := 0
+	if normalized.Fn != nil {
+		actionKinds++
+	}
+	if normalized.AssertTemplateValues != nil {
+		actionKinds++
+		if normalized.AssertTemplateValues.TemplateKey == "" {
+			return ActionSpec{}, &ValidationError{
+				Reason: "assert template values action requires a template key",
+			}
+		}
+		for i, value := range normalized.AssertTemplateValues.Values {
+			if value == nil {
+				return ActionSpec{}, &ValidationError{
+					Reason:         "assert template values action requires a value expression",
+					ActionIndex:    i,
+					HasActionIndex: true,
+				}
+			}
+		}
+	}
+	if actionKinds == 0 {
 		return ActionSpec{}, &ValidationError{
-			Reason: "action function is required",
+			Reason: "action function or native action is required",
+		}
+	}
+	if actionKinds > 1 {
+		return ActionSpec{}, &ValidationError{
+			Reason: "action must declare exactly one action implementation",
 		}
 	}
 	return normalized, nil
@@ -552,10 +602,32 @@ func (a Action) clone() Action {
 }
 
 type compiledAction struct {
-	name              string
-	fn                ActionFunc
-	order             int
-	skipBindingFreeze bool
+	name                 string
+	fn                   ActionFunc
+	assertTemplateValues *AssertTemplateValuesActionSpec
+	order                int
+	skipBindingFreeze    bool
+}
+
+type compiledRuleActionKind uint8
+
+const (
+	compiledRuleActionFunction compiledRuleActionKind = iota
+	compiledRuleActionAssertTemplateValues
+)
+
+type compiledRuleAction struct {
+	kind                 compiledRuleActionKind
+	name                 string
+	order                int
+	fn                   ActionFunc
+	assertTemplateValues compiledAssertTemplateValuesAction
+	skipBindingFreeze    bool
+}
+
+type compiledAssertTemplateValuesAction struct {
+	template Template
+	values   []compiledExpression
 }
 
 func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
@@ -565,10 +637,11 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 	}
 
 	return compiledAction{
-		name:              normalized.Name,
-		fn:                normalized.Fn,
-		order:             order,
-		skipBindingFreeze: normalized.NonEscaping,
+		name:                 normalized.Name,
+		fn:                   normalized.Fn,
+		assertTemplateValues: normalized.AssertTemplateValues,
+		order:                order,
+		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil,
 	}, nil
 }
 
@@ -581,6 +654,263 @@ func (a compiledAction) inspect() Action {
 
 func (a compiledAction) clone() compiledAction {
 	return a
+}
+
+func compileRuleActionExecution(ruleName string, actionIndex int, action compiledAction, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) (compiledRuleAction, error) {
+	out := compiledRuleAction{
+		name:              action.name,
+		order:             actionIndex,
+		fn:                action.fn,
+		skipBindingFreeze: action.skipBindingFreeze,
+	}
+	if action.fn != nil {
+		out.kind = compiledRuleActionFunction
+		return out, nil
+	}
+	if action.assertTemplateValues == nil {
+		return compiledRuleAction{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			Reason:         "action implementation is missing",
+		}
+	}
+	spec := action.assertTemplateValues
+	template, ok := templatesByKey[spec.TemplateKey]
+	if !ok {
+		return compiledRuleAction{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			TemplateName:   string(spec.TemplateKey),
+			Reason:         "unknown template key",
+		}
+	}
+	if !template.closed {
+		return compiledRuleAction{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			TemplateName:   template.Name(),
+			Reason:         "template values require a fixed template",
+		}
+	}
+	if len(spec.Values) > len(template.fields) {
+		return compiledRuleAction{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			TemplateName:   template.Name(),
+			Reason:         "too many field values",
+		}
+	}
+
+	values := make([]compiledExpression, len(spec.Values))
+	for i, valueSpec := range spec.Values {
+		if nativeActionExpressionUsesCurrent(valueSpec) {
+			return compiledRuleAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				TemplateName:   template.Name(),
+				FieldName:      template.fields[i].Name,
+				Reason:         "native assert value cannot reference a current fact",
+			}
+		}
+		value, _, err := compileExpressionSpecWithParams(valueSpec, ruleName, -1, i, nil, conditions, bindingSlots, templatesByKey, nil, functions)
+		if err != nil {
+			return compiledRuleAction{}, err
+		}
+		field := template.fields[i]
+		if field.Kind != ValueAny && value.resultKind != ValueAny && value.resultKind != field.Kind {
+			return compiledRuleAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				TemplateName:   template.Name(),
+				FieldName:      field.Name,
+				Reason:         "native assert value type does not match template field",
+			}
+		}
+		values[i] = value
+	}
+
+	out.kind = compiledRuleActionAssertTemplateValues
+	out.assertTemplateValues = compiledAssertTemplateValuesAction{
+		template: template,
+		values:   values,
+	}
+	return out, nil
+}
+
+func nativeActionExpressionUsesCurrent(spec ExpressionSpec) bool {
+	switch expression := spec.(type) {
+	case nil:
+		return false
+	case CurrentFieldExpr, *CurrentFieldExpr, HasPathExpr, *HasPathExpr, ParamExpr, *ParamExpr:
+		return true
+	case CallExpr:
+		if slices.ContainsFunc(expression.Args, nativeActionExpressionUsesCurrent) {
+			return true
+		}
+	case *CallExpr:
+		if expression == nil {
+			return false
+		}
+		if slices.ContainsFunc(expression.Args, nativeActionExpressionUsesCurrent) {
+			return true
+		}
+	case CompareExpr:
+		return nativeActionExpressionUsesCurrent(expression.Left) || nativeActionExpressionUsesCurrent(expression.Right)
+	case *CompareExpr:
+		return expression != nil && (nativeActionExpressionUsesCurrent(expression.Left) || nativeActionExpressionUsesCurrent(expression.Right))
+	case BooleanExpr:
+		if slices.ContainsFunc(expression.Operands, nativeActionExpressionUsesCurrent) {
+			return true
+		}
+	case *BooleanExpr:
+		if expression == nil {
+			return false
+		}
+		if slices.ContainsFunc(expression.Operands, nativeActionExpressionUsesCurrent) {
+			return true
+		}
+	}
+	return false
+}
+
+func serializeCompiledRuleAction(action compiledRuleAction) string {
+	var b strings.Builder
+	b.WriteString(action.name)
+	b.WriteByte(':')
+	b.WriteString(fmt.Sprint(action.order))
+	b.WriteByte(':')
+	switch action.kind {
+	case compiledRuleActionFunction:
+		b.WriteString("function")
+	case compiledRuleActionAssertTemplateValues:
+		b.WriteString("assert-template-values:")
+		b.WriteString(action.assertTemplateValues.template.Key().String())
+		for _, value := range action.assertTemplateValues.values {
+			b.WriteByte(':')
+			b.WriteString(serializeCompiledExpression(value))
+		}
+	default:
+		b.WriteString("unknown")
+	}
+	return b.String()
+}
+
+func serializeCompiledActionDeclaration(action compiledAction) string {
+	var b strings.Builder
+	b.WriteString(action.name)
+	b.WriteByte(':')
+	b.WriteString(fmt.Sprint(action.order))
+	b.WriteByte(':')
+	b.WriteString(fmt.Sprint(action.skipBindingFreeze))
+	if action.assertTemplateValues == nil {
+		b.WriteString(":function")
+		return b.String()
+	}
+	b.WriteString(":assert-template-values:")
+	b.WriteString(action.assertTemplateValues.TemplateKey.String())
+	for _, value := range action.assertTemplateValues.Values {
+		b.WriteByte(':')
+		b.WriteString(serializeExpressionSpec(value))
+	}
+	return b.String()
+}
+
+func serializeExpressionSpec(spec ExpressionSpec) string {
+	switch expression := spec.(type) {
+	case nil:
+		return "<nil>"
+	case ConstExpr:
+		value, err := canonicalValue(expression.Value)
+		if err != nil {
+			return "const:error"
+		}
+		return "const:" + value.canonicalKey()
+	case *ConstExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case CurrentFieldExpr:
+		return "current:" + pathOrField(expression.Path, expression.Field).String()
+	case *CurrentFieldExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case BindingFieldExpr:
+		return "binding-field:" + expression.Binding + ":" + pathOrField(expression.Path, expression.Field).String()
+	case *BindingFieldExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case BindingValueExpr:
+		return "binding-value:" + expression.Binding
+	case *BindingValueExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case HasPathExpr:
+		return "has-path:" + expression.Path.String()
+	case *HasPathExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case ParamExpr:
+		return "param:" + expression.Name
+	case *ParamExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case CallExpr:
+		var b strings.Builder
+		b.WriteString("call:")
+		b.WriteString(expression.Name)
+		for _, arg := range expression.Args {
+			b.WriteByte('(')
+			b.WriteString(serializeExpressionSpec(arg))
+			b.WriteByte(')')
+		}
+		return b.String()
+	case *CallExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case CompareExpr:
+		return "compare:" + string(expression.Operator) + "(" + serializeExpressionSpec(expression.Left) + ")(" + serializeExpressionSpec(expression.Right) + ")"
+	case *CompareExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	case BooleanExpr:
+		var b strings.Builder
+		b.WriteString("bool:")
+		b.WriteString(string(expression.Operator))
+		for _, operand := range expression.Operands {
+			b.WriteByte('(')
+			b.WriteString(serializeExpressionSpec(operand))
+			b.WriteByte(')')
+		}
+		return b.String()
+	case *BooleanExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
+	default:
+		return fmt.Sprintf("unsupported:%T", spec)
+	}
 }
 
 func (s *Session) executeActivationActions(ctx context.Context, runID RunID, activation activation) (err error) {
@@ -609,28 +939,49 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 	}
 
 	skipBindingFreeze := rule.allActionsSkipBindingFreeze
-	actionCtx, err := s.actionContextForActivationWithScratch(ctx, activation, skipBindingFreeze)
-	if err != nil {
-		return err
-	}
+	var actionCtx ActionContext
+	actionCtxReady := false
+	activationValidated := false
 	defer func() {
-		if skipBindingFreeze {
+		if !actionCtxReady || skipBindingFreeze {
 			return
 		}
 		if freezeErr := actionCtx.materializeAllBindings(); err == nil && freezeErr != nil {
 			err = freezeErr
 		}
 	}()
-
-	for _, actionSpec := range rule.actions {
+	for _, actionSpec := range rule.actionExecutions {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		action, ok := s.revision.actions[actionSpec.name]
-		if !ok {
-			return fmt.Errorf("%w: missing action %q", ErrInvalidRuleset, actionSpec.name)
+		var actionErr error
+		switch actionSpec.kind {
+		case compiledRuleActionFunction:
+			if !actionCtxReady {
+				actionCtx, err = s.actionContextForActivationWithScratch(ctx, activation, skipBindingFreeze)
+				if err != nil {
+					return err
+				}
+				actionCtxReady = true
+				activationValidated = true
+			}
+			if actionSpec.fn == nil {
+				actionErr = fmt.Errorf("%w: missing action %q", ErrInvalidRuleset, actionSpec.name)
+			} else {
+				actionErr = actionSpec.fn(actionCtx)
+			}
+		case compiledRuleActionAssertTemplateValues:
+			if !activationValidated {
+				if err := s.validateActivationTokenFacts(rule, activation); err != nil {
+					return err
+				}
+				activationValidated = true
+			}
+			actionErr = s.executeAssertTemplateValuesAction(ctx, activation, rule, actionSpec.assertTemplateValues)
+		default:
+			actionErr = fmt.Errorf("%w: unsupported action %q", ErrInvalidRuleset, actionSpec.name)
 		}
-		if err := action.fn(actionCtx); err != nil {
+		if actionErr != nil {
 			_, _ = s.removeLogicalSupportsForSources(ctx, []logicalSupportSourceKey{logicalSupportSourceFromActivation(activation)}, activation.mutationOrigin())
 			return &ActionFailureError{
 				RunID:          runID,
@@ -639,12 +990,133 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 				ActivationID:   activation.activationID(),
 				ActionName:     actionSpec.name,
 				ActionIndex:    actionSpec.order,
-				Err:            err,
+				Err:            actionErr,
 			}
 		}
 	}
 
 	return nil
+}
+
+func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
+	values, err := s.evaluateAssertTemplateValuesAction(ctx, activation, rule, action)
+	if err != nil {
+		return err
+	}
+	origin := activation.mutationOrigin()
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
+		return ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+
+	_, template, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, action.template.Key(), values, origin)
+	if err != nil {
+		return err
+	}
+	if inserted && s.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
+		if origin.isZero() || !s.runGuardHeld() {
+			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
+			return err
+		}
+		s.recordRunAgendaDelta(agendaDelta)
+	}
+	return nil
+}
+
+func (s *Session) evaluateAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) ([]Value, error) {
+	if len(action.values) == 0 {
+		return s.actionValueScratch[:0], nil
+	}
+	values := s.actionValueScratch
+	if cap(values) < len(action.values) {
+		values = make([]Value, len(action.values))
+	} else {
+		values = values[:len(action.values)]
+	}
+	var err error
+	if !activation.token.isZero() {
+		for i, expression := range action.values {
+			values[i], err = evaluateNativeActionExpressionWithToken(ctx, expression, activation.token)
+			if err != nil {
+				s.actionValueScratch = values
+				return nil, err
+			}
+		}
+		s.actionValueScratch = values
+		return values, nil
+	}
+
+	matches, err := s.actionMatchesForActivation(activation, rule)
+	if err != nil {
+		s.actionValueScratch = values
+		return nil, err
+	}
+	for i, expression := range action.values {
+		value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+		if evalErr != nil {
+			s.actionValueScratch = values
+			return nil, evalErr
+		}
+		if !ok {
+			s.actionValueScratch = values
+			return nil, fmt.Errorf("%w: native assert value %d is unavailable", ErrMatcher, i)
+		}
+		values[i] = value
+	}
+	s.actionValueScratch = values
+	return values, nil
+}
+
+func evaluateNativeActionExpressionWithToken(ctx context.Context, expression compiledExpression, token tokenRef) (Value, error) {
+	value, ok, err := expression.evaluateTokenWithContextParamsOffset(ctx, conditionFactRef{}, token, nil, 0)
+	if err != nil {
+		return Value{}, err
+	}
+	if !ok {
+		return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
+	}
+	return value, nil
+}
+
+func (s *Session) actionMatchesForActivation(activation activation, rule compiledRule) ([]conditionMatch, error) {
+	matches := s.actionMatchScratch
+	if cap(matches) < len(rule.conditions) {
+		matches = make([]conditionMatch, len(rule.conditions))
+	} else {
+		for i := range matches {
+			matches[i] = conditionMatch{}
+		}
+		matches = matches[:len(rule.conditions)]
+	}
+	for i, condition := range rule.conditions {
+		if i >= len(activation.factIDs) || i >= len(activation.factVersions) {
+			s.actionMatchScratch = matches
+			return nil, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
+		}
+		factID := activation.factIDs[i]
+		if factID.IsZero() {
+			continue
+		}
+		fact, ok := s.workingFactByID(factID)
+		if !ok {
+			s.actionMatchScratch = matches
+			return nil, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+		}
+		if fact.id.Generation() != activation.generation || fact.version != activation.factVersions[i] {
+			s.actionMatchScratch = matches
+			return nil, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+		}
+		matches[i] = conditionMatch{
+			conditionID: condition.id,
+			bindingSlot: i,
+			fact:        newConditionFactRefFromWorkingFact(fact),
+		}
+	}
+	s.actionMatchScratch = matches
+	return matches, nil
 }
 
 func (s *Session) actionContextForActivation(ctx context.Context, activation activation) (ActionContext, error) {

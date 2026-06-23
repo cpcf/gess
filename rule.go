@@ -531,6 +531,7 @@ type compiledRule struct {
 	conditionBranches           []compiledConditionBranch
 	conditionBranchPlans        []RuleConditionBranch
 	actions                     []RuleAction
+	actionExecutions            []compiledRuleAction
 	allActionsSkipBindingFreeze bool
 }
 
@@ -1525,6 +1526,8 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	}
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
+	actionExecutions := make([]compiledRuleAction, 0, len(normalized.Actions))
+	actionBindingSlots := bindingSlotsForRuleConditions(conditions)
 	allActionsSkipBindingFreeze := true
 	for i, action := range normalized.Actions {
 		if action.Name == "" {
@@ -1547,10 +1550,15 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		if !compiledAction.skipBindingFreeze {
 			allActionsSkipBindingFreeze = false
 		}
+		actionExecution, err := compileRuleActionExecution(normalized.Name, i, compiledAction, conditions, actionBindingSlots, templatesByKey, functions)
+		if err != nil {
+			return compiledRule{}, err
+		}
 		actions = append(actions, RuleAction{
 			name:  action.Name,
 			order: i,
 		})
+		actionExecutions = append(actionExecutions, actionExecution)
 	}
 
 	compiled := compiledRule{
@@ -1568,11 +1576,25 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		conditionBranches:           compiledBranches,
 		conditionBranchPlans:        conditionBranches,
 		actions:                     actions,
+		actionExecutions:            actionExecutions,
 		allActionsSkipBindingFreeze: allActionsSkipBindingFreeze,
 	}
 	compiled.revisionID = ruleRevisionIDFor(compiled)
 	compiled.identityScopeHash = candidateIdentityScopeHash(compiled.id, compiled.revisionID)
 	return compiled, nil
+}
+
+func bindingSlotsForRuleConditions(conditions []RuleCondition) map[string]int {
+	out := make(map[string]int, len(conditions))
+	for i, condition := range conditions {
+		if condition.binding == "" {
+			continue
+		}
+		if _, exists := out[condition.binding]; !exists {
+			out[condition.binding] = i
+		}
+	}
+	return out
 }
 
 type compiledRuleConditionSet struct {
@@ -2174,6 +2196,11 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	for _, action := range rule.actions {
 		sum.Write(fmt.Appendf(nil, "%d:", action.order))
 		sum.Write([]byte(action.name))
+		sum.Write([]byte(";"))
+	}
+	sum.Write([]byte("\naction-executions:"))
+	for _, action := range rule.actionExecutions {
+		sum.Write([]byte(serializeCompiledRuleAction(action)))
 		sum.Write([]byte(";"))
 	}
 	return RuleRevisionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))

@@ -875,7 +875,9 @@ func rulesetID(templates []Template, actions []compiledAction, functions []compi
 
 	sum.Write([]byte("actions:\n"))
 	for _, action := range actions {
-		sum.Write(fmt.Appendf(nil, "action:%s:%d:%t\n", action.name, action.order, action.skipBindingFreeze))
+		sum.Write([]byte("action:"))
+		sum.Write([]byte(serializeCompiledActionDeclaration(action)))
+		sum.Write([]byte("\n"))
 	}
 
 	sum.Write([]byte("functions:\n"))
@@ -907,6 +909,11 @@ func rulesetID(templates []Template, actions []compiledAction, functions []compi
 		sum.Write(fmt.Appendf(nil, "action-count:%d\n", len(rule.actions)))
 		for _, action := range rule.actions {
 			sum.Write(fmt.Appendf(nil, "action:%d:%s\n", action.order, action.name))
+		}
+		for _, action := range rule.actionExecutions {
+			sum.Write([]byte("action-exec:"))
+			sum.Write([]byte(serializeCompiledRuleAction(action)))
+			sum.Write([]byte("\n"))
 		}
 	}
 

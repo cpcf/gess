@@ -83,6 +83,8 @@ type Session struct {
 	agendaReady          bool
 	agendaDirty          bool
 	actionBindingScratch actionContextBindingState
+	actionValueScratch   []Value
+	actionMatchScratch   []conditionMatch
 	mutationQueueMu      sync.Mutex
 	mutationQueue        []queuedMutation
 	mu                   struct {

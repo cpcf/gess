@@ -314,12 +314,12 @@ func addPredicateNormalizationAlertAction(t testing.TB, workspace *Workspace, al
 	t.Helper()
 	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: actionName,
-		Fn: func(ctx ActionContext) error {
-			findingID, ok := ctx.BindingScalarValue("finding", "id")
-			if !ok {
-				return fmt.Errorf("finding id binding is unavailable")
-			}
-			return ctx.AssertTemplateValues(alertTemplateKey, newStringValue(ruleName), findingID)
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: alertTemplateKey,
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "finding", Field: "id"},
+				ConstExpr{Value: ruleName},
+			},
 		},
 	})
 }

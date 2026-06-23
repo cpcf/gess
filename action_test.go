@@ -1495,6 +1495,66 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	}
 }
 
+func TestNativeAssertTemplateValuesAction(t *testing.T) {
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "generated",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"kind", "id"},
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "source", Field: "id"},
+				ConstExpr{Value: "native"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate-native",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "source",
+			TemplateKey: source.Key(),
+		}},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-action-session")
+	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	generatedFacts := snapshot.FactsByTemplateKey(generated.Key())
+	if len(generatedFacts) != 1 {
+		t.Fatalf("generated facts = %d, want 1", len(generatedFacts))
+	}
+	if got, ok := generatedFacts[0].Field("kind"); !ok || !got.Equal(mustValue(t, "native")) {
+		t.Fatalf("generated kind = (%v, %t), want native", got, ok)
+	}
+	if got, ok := generatedFacts[0].Field("id"); !ok || !got.Equal(mustValue(t, "s-1")) {
+		t.Fatalf("generated id = (%v, %t), want s-1", got, ok)
+	}
+}
+
 func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratchReuse(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
