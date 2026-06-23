@@ -10,9 +10,22 @@ import (
 	"time"
 )
 
+const (
+	graphRuleNetworkHarnessModeReplay  = "graph-replay"
+	graphRuleNetworkHarnessModeSeedRun = "seed-run"
+)
+
 func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
 	if os.Getenv("GESS_GRAPH_RULE_NETWORK_RUNNER") == "" {
 		t.Skip("set GESS_GRAPH_RULE_NETWORK_RUNNER=1 to run the comparable graph-rule harness")
+	}
+
+	mode := os.Getenv("GESS_GRAPH_RULE_NETWORK_MODE")
+	if mode == "" {
+		mode = graphRuleNetworkHarnessModeReplay
+	}
+	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun {
+		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, mode)
 	}
 
 	iterations := graphRuleNetworkHarnessEnvInt(t, "GESS_GRAPH_RULE_NETWORK_ITERATIONS", 3)
@@ -44,11 +57,24 @@ func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		runGraphRuleNetworkHarnessCase(t, tc, iterations, warmup)
+		runGraphRuleNetworkHarnessCase(t, tc, iterations, warmup, mode)
 	}
 }
 
-func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int) {
+func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int, mode string) {
+	t.Helper()
+
+	switch mode {
+	case graphRuleNetworkHarnessModeReplay:
+		runGraphRuleNetworkReplayHarnessCase(t, tc, iterations, warmup)
+	case graphRuleNetworkHarnessModeSeedRun:
+		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup)
+	default:
+		t.Fatalf("unsupported graph-rule-network harness mode %q", mode)
+	}
+}
+
+func runGraphRuleNetworkReplayHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -93,6 +119,68 @@ func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, itera
 	)
 }
 
+func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int) {
+	t.Helper()
+
+	ctx := context.Background()
+	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
+	expected := graphRuleNetworkExpectedMatches(tc.depth, tc.items)
+	initialFacts := authoredOrderInitialFacts(tc.items)
+
+	for i := range warmup {
+		session := mustSession(t, revision, SessionID(fmt.Sprintf("graph-rule-network-seed-warmup-%s-%d-%d-%d", tc.order, tc.depth, tc.items, i)))
+		session.attachPropagationCounters()
+		seedAuthoredOrderFacts(t, ctx, session, templates, tc.items)
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("warmup Run: %v", err)
+		}
+		validateGraphRuleNetworkSeedRunHarnessSession(t, session, result, expected, initialFacts, "warmup")
+	}
+
+	sessions := make([]*Session, iterations)
+	for i := range sessions {
+		sessions[i] = mustSession(t, revision, SessionID(fmt.Sprintf("graph-rule-network-seed-benchmark-%s-%d-%d-%d", tc.order, tc.depth, tc.items, i)))
+		sessions[i].attachPropagationCounters()
+	}
+
+	results := make([]RunResult, iterations)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	for i, session := range sessions {
+		seedAuthoredOrderFacts(t, ctx, session, templates, tc.items)
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("benchmark Run: %v", err)
+		}
+		results[i] = result
+	}
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+
+	for i, session := range sessions {
+		validateGraphRuleNetworkSeedRunHarnessSession(t, session, results[i], expected, initialFacts, "benchmark")
+	}
+
+	snapshot := sessions[len(sessions)-1].propagationCounterSnapshot()
+	allocBytes := after.TotalAlloc - before.TotalAlloc
+	allocs := after.Mallocs - before.Mallocs
+	fmt.Printf(
+		"GESS_RUNNER|graph-rule-network|seed-run|order=%s|depth=%d|items=%d|rules=1|initial-facts=%d|fired=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f|alloc-bytes/op=%.0f|allocs/op=%.0f|graph-token-rows-retained=%d|terminal-rows-retained=%d|beta-bucket-probes=%d|beta-candidate-rows-scanned=%d|beta-joined-tokens=%d|tokens-created=%d\n",
+		tc.order, tc.depth, tc.items, initialFacts, expected, iterations, warmup, elapsed.Nanoseconds(),
+		float64(elapsed.Nanoseconds())/float64(iterations),
+		float64(allocBytes)/float64(iterations),
+		float64(allocs)/float64(iterations),
+		snapshot.GraphBetaMemory.TokenRows,
+		snapshot.TerminalRowsRetained,
+		snapshot.Totals.BetaBucketProbes,
+		snapshot.Totals.BetaCandidateRowsScanned,
+		snapshot.Totals.BetaJoinedTokensProduced,
+		snapshot.Totals.TokensCreated,
+	)
+}
+
 func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraphBetaMemory, facts []FactSnapshot, expected int, phase string) {
 	t.Helper()
 	memory.resetFacts(nil)
@@ -110,6 +198,16 @@ func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraph
 		t.Fatalf("%s terminal deltas = %d, want %d", phase, len(deltas), expected)
 	}
 	benchmarkGraphRuleTerminalDeltas = deltas
+}
+
+func validateGraphRuleNetworkSeedRunHarnessSession(t testing.TB, session *Session, result RunResult, expected, initialFacts int, phase string) {
+	t.Helper()
+	if result.Status != RunCompleted || result.Fired != expected {
+		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, expected)
+	}
+	if got := len(session.factsByID); got != initialFacts {
+		t.Fatalf("%s facts retained = %d, want %d", phase, got, initialFacts)
+	}
 }
 
 func graphRuleNetworkHarnessEnvInt(t *testing.T, name string, defaultValue int) int {
