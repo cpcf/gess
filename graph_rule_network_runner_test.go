@@ -303,6 +303,7 @@ func seedAuthoredOrderFactsWithPreparedTemplateValues(t testing.TB, ctx context.
 	block := mustPrepareTemplateValueInserter(t, session, templates.block)
 
 	err := session.insertPreparedTemplateValuesBatchWithContext(ctx, func(batch *preparedTemplateValueBatch) error {
+		batch.reserve(authoredOrderInitialFacts(items), authoredOrderPreparedSeedSlotCount(items))
 		seedAuthoredOrderFactsIntoPreparedTemplateValueBatch(t, batch, root, event, detail, tag, block, items)
 		return nil
 	})
@@ -364,6 +365,16 @@ func seedAuthoredOrderFactsIntoPreparedTemplateValueBatch(t testing.TB, batch *p
 			}
 		}
 	}
+}
+
+func authoredOrderPreparedSeedSlotCount(items int) int {
+	blocked := 0
+	for id := range items {
+		if authoredOrderBlocked(id) {
+			blocked++
+		}
+	}
+	return authoredOrderRootCount*3 + items*7 + blocked*2
 }
 
 func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraphBetaMemory, facts []FactSnapshot, expected int, phase string) {

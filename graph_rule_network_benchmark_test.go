@@ -179,6 +179,15 @@ func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
 	if got, want := len(session.factsByID), authoredOrderInitialFacts(tc.items); got != want {
 		t.Fatalf("facts retained = %d, want %d", got, want)
 	}
+	if !session.factTargetIndexesDirty {
+		t.Fatal("fact target indexes should stay dirty after prepared seed")
+	}
+	if got, want := len(session.factIDsByTemplate(templates.event)), tc.items; got != want {
+		t.Fatalf("event fact ids = %d, want %d", got, want)
+	}
+	if session.factTargetIndexesDirty {
+		t.Fatal("fact target indexes remained dirty after fact id lookup")
+	}
 	if session.agendaDirty || !session.agendaReady {
 		t.Fatalf("agenda state after prepared seed = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
 	}

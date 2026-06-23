@@ -97,6 +97,7 @@ type Session struct {
 	factsByDuplicate       duplicateIndexes
 	factsByTemplate        map[TemplateKey][]FactID
 	factsByName            map[string][]FactID
+	factTargetIndexesDirty bool
 	insertionOrder         []FactID
 	slotStorage            []factSlot
 	resetWorkspace         factWorkspace
@@ -170,16 +171,17 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		factsByID:        state.factsByID,
-		factsByDuplicate: state.factsByDuplicate,
-		factsByTemplate:  state.factsByTemplate,
-		factsByName:      state.factsByName,
-		nextFactSequence: state.nextFactSequence(),
-		nextRecency:      state.nextRecency(),
-		nextRunSequence:  0,
-		facts:            state.facts,
-		insertionOrder:   state.factsByInsertionOrder(),
-		slotStorage:      state.slotStorage,
+		factsByID:              state.factsByID,
+		factsByDuplicate:       state.factsByDuplicate,
+		factsByTemplate:        state.factsByTemplate,
+		factsByName:            state.factsByName,
+		factTargetIndexesDirty: state.factTargetIndexesDirty,
+		nextFactSequence:       state.nextFactSequence(),
+		nextRecency:            state.nextRecency(),
+		nextRunSequence:        0,
+		facts:                  state.facts,
+		insertionOrder:         state.factsByInsertionOrder(),
+		slotStorage:            state.slotStorage,
 	}
 	session.syncPropagationCounters()
 	return session, nil
@@ -326,6 +328,7 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 	if s == nil {
 		return nil, false
 	}
+	s.ensureFactTargetIndexes()
 	switch target.kind {
 	case conditionTargetName:
 		ids := s.factsByName[target.name]
@@ -357,6 +360,52 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 		return out, true
 	default:
 		return nil, false
+	}
+}
+
+func (s *Session) ensureFactTargetIndexes() {
+	if s == nil || !s.factTargetIndexesDirty {
+		return
+	}
+	s.rebuildFactTargetIndexes()
+}
+
+func (s *Session) rebuildFactTargetIndexes() {
+	if s == nil {
+		return
+	}
+	if s.factsByTemplate == nil {
+		s.factsByTemplate = make(map[TemplateKey][]FactID)
+	} else {
+		clear(s.factsByTemplate)
+	}
+	if s.factsByName == nil {
+		s.factsByName = make(map[string][]FactID)
+	} else {
+		clear(s.factsByName)
+	}
+	for i := range s.facts {
+		fact := &s.facts[i]
+		if fact.id.IsZero() {
+			continue
+		}
+		s.factsByTemplate[fact.templateKey] = append(s.factsByTemplate[fact.templateKey], fact.id)
+		s.factsByName[fact.name] = append(s.factsByName[fact.name], fact.id)
+	}
+	s.factTargetIndexesDirty = false
+}
+
+func (s *Session) removeFactTargetIndexes(templateKey TemplateKey, name string, id FactID) {
+	if s == nil || id.IsZero() || s.factTargetIndexesDirty {
+		return
+	}
+	s.factsByTemplate[templateKey] = removeFactIDFromSlice(s.factsByTemplate[templateKey], id)
+	if len(s.factsByTemplate[templateKey]) == 0 {
+		delete(s.factsByTemplate, templateKey)
+	}
+	s.factsByName[name] = removeFactIDFromSlice(s.factsByName[name], id)
+	if len(s.factsByName[name]) == 0 {
+		delete(s.factsByName, name)
 	}
 }
 
@@ -680,6 +729,7 @@ func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Conte
 		session: s,
 		state:   s.activeFactWorkspace(),
 	}
+	batch.state.skipFactTargetIndexes = true
 	if fn != nil {
 		if err := fn(batch); err != nil {
 			s.commitFactWorkspace(batch.state)
@@ -695,6 +745,13 @@ func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Conte
 		return err
 	}
 	return nil
+}
+
+func (b *preparedTemplateValueBatch) reserve(facts, slots int) {
+	if b == nil {
+		return
+	}
+	b.state.reserveGeneratedFactCapacity(b.session.revision, facts, slots)
 }
 
 func (p preparedTemplateValueInserter) insert2(b *preparedTemplateValueBatch, v0, v1 Value) error {
@@ -1228,18 +1285,9 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	factName := fact.name
 
 	if !fact.dupIndex.isZero() {
-		if existingID, ok := s.factsByDuplicate.get(fact.dupIndex); ok && existingID == id {
-			s.factsByDuplicate.delete(fact.dupIndex)
-		}
+		s.factsByDuplicate.deleteFact(fact.dupIndex, id)
 	}
-	s.factsByTemplate[factTemplateKey] = removeFactIDFromSlice(s.factsByTemplate[factTemplateKey], id)
-	if len(s.factsByTemplate[factTemplateKey]) == 0 {
-		delete(s.factsByTemplate, factTemplateKey)
-	}
-	s.factsByName[factName] = removeFactIDFromSlice(s.factsByName[factName], id)
-	if len(s.factsByName[factName]) == 0 {
-		delete(s.factsByName, factName)
-	}
+	s.removeFactTargetIndexes(factTemplateKey, factName, id)
 	s.insertionOrder = removeFactIDFromSlice(s.insertionOrder, id)
 	s.removeStoredFact(id)
 	delete(s.factsByID, id)
@@ -2042,7 +2090,23 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	oldDuplicate := fact.publicDuplicateKey(s.revision)
 
 	if duplicatePolicy != DuplicateAllow {
-		if existingID, ok := s.factsByDuplicate.get(newDupIndex); ok && existingID != fact.id {
+		if newDupIndex.kind == duplicateIndexStructural {
+			duplicate := false
+			s.factsByDuplicate.forEachStructuralFactID(newDupIndex, func(existingID FactID) bool {
+				if existingID == fact.id {
+					return true
+				}
+				existing, ok := s.workingFactByID(existingID)
+				if ok && structuralDuplicateSlotsEqual(template, proposedFieldSlots, existing.fieldSlots) {
+					duplicate = true
+					return false
+				}
+				return true
+			})
+			if duplicate {
+				return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
+			}
+		} else if existingID, ok := s.factsByDuplicate.get(newDupIndex); ok && existingID != fact.id {
 			return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 		}
 	}
@@ -2055,7 +2119,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 
 	if duplicatePolicy != DuplicateAllow && fact.dupIndex != newDupIndex {
 		if !fact.dupIndex.isZero() {
-			s.factsByDuplicate.delete(fact.dupIndex)
+			s.factsByDuplicate.deleteFact(fact.dupIndex, fact.id)
 		}
 		if !newDupIndex.isZero() {
 			s.factsByDuplicate.set(newDupIndex, fact.id)
@@ -2064,6 +2128,9 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 
 	oldVersion := fact.version
 	newDuplicate := newDupIndex.publicKeyForTemplate(fact.name, template)
+	if newDupIndex.kind == duplicateIndexStructural {
+		newDuplicate = makeDuplicateKeyForTemplateWithSlots(fact.name, template, proposedFields, proposedFieldSlots)
+	}
 	fact.version++
 	fact.recency = s.nextRecency
 	if len(proposedFieldSlots) > 0 {
@@ -2297,16 +2364,18 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 }
 
 type factWorkspace struct {
-	generation       Generation
-	sequence         uint64
-	recency          Recency
-	facts            []workingFact
-	insertionOrder   []FactID
-	factsByID        map[FactID]int
-	factsByDuplicate duplicateIndexes
-	factsByTemplate  map[TemplateKey][]FactID
-	factsByName      map[string][]FactID
-	slotStorage      []factSlot
+	generation             Generation
+	sequence               uint64
+	recency                Recency
+	facts                  []workingFact
+	insertionOrder         []FactID
+	factsByID              map[FactID]int
+	factsByDuplicate       duplicateIndexes
+	factsByTemplate        map[TemplateKey][]FactID
+	factsByName            map[string][]FactID
+	slotStorage            []factSlot
+	skipFactTargetIndexes  bool
+	factTargetIndexesDirty bool
 }
 
 type duplicateSingleIntIndexKey struct {
@@ -2320,11 +2389,18 @@ type duplicateDoubleIntIndexKey struct {
 	second      int64
 }
 
+type duplicateStructuralIndexKey struct {
+	templateKey TemplateKey
+	hash        uint64
+}
+
 type duplicateIndexes struct {
-	strings   map[DuplicateKey]FactID
-	singleInt map[duplicateSingleIntIndexKey]FactID
-	doubleInt map[duplicateDoubleIntIndexKey]FactID
-	scalars   map[duplicateIndexKey]FactID
+	strings        map[DuplicateKey]FactID
+	singleInt      map[duplicateSingleIntIndexKey]FactID
+	doubleInt      map[duplicateDoubleIntIndexKey]FactID
+	scalars        map[duplicateIndexKey]FactID
+	structural     map[duplicateStructuralIndexKey]FactID
+	structuralRest map[duplicateStructuralIndexKey][]FactID
 }
 
 func (i *duplicateIndexes) reset(initialCapacity int) {
@@ -2351,6 +2427,14 @@ func (i *duplicateIndexes) reset(initialCapacity int) {
 	} else {
 		clear(i.scalars)
 	}
+	if i.structural == nil {
+		i.structural = make(map[duplicateStructuralIndexKey]FactID, initialCapacity)
+	} else {
+		clear(i.structural)
+	}
+	if i.structuralRest != nil {
+		clear(i.structuralRest)
+	}
 }
 
 func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
@@ -2364,6 +2448,12 @@ func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
 	case duplicateIndexDoubleInt:
 		factID, ok := i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}]
 		return factID, ok
+	case duplicateIndexStructural:
+		factID, ok := i.structural[duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}]
+		if !ok || factID.IsZero() {
+			return FactID{}, false
+		}
+		return factID, true
 	default:
 		factID, ok := i.scalars[key]
 		return factID, ok
@@ -2390,6 +2480,19 @@ func (i *duplicateIndexes) set(key duplicateIndexKey, factID FactID) {
 			i.doubleInt = make(map[duplicateDoubleIntIndexKey]FactID)
 		}
 		i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}] = factID
+	case duplicateIndexStructural:
+		if i.structural == nil {
+			i.structural = make(map[duplicateStructuralIndexKey]FactID)
+		}
+		structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
+		if existingID, ok := i.structural[structuralKey]; !ok || existingID.IsZero() {
+			i.structural[structuralKey] = factID
+			return
+		}
+		if i.structuralRest == nil {
+			i.structuralRest = make(map[duplicateStructuralIndexKey][]FactID)
+		}
+		i.structuralRest[structuralKey] = append(i.structuralRest[structuralKey], factID)
 	default:
 		if i.scalars == nil {
 			i.scalars = make(map[duplicateIndexKey]FactID)
@@ -2409,13 +2512,80 @@ func (i *duplicateIndexes) delete(key duplicateIndexKey) {
 		delete(i.singleInt, duplicateSingleIntIndexKey{templateKey: key.templateKey, value: key.firstInt})
 	case duplicateIndexDoubleInt:
 		delete(i.doubleInt, duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt})
+	case duplicateIndexStructural:
+		delete(i.structural, duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
+		delete(i.structuralRest, duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
 		delete(i.scalars, key)
 	}
 }
 
+func (i *duplicateIndexes) deleteFact(key duplicateIndexKey, factID FactID) {
+	if key.isZero() {
+		return
+	}
+	if key.kind != duplicateIndexStructural {
+		if existingID, ok := i.get(key); ok && existingID == factID {
+			i.delete(key)
+		}
+		return
+	}
+	structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
+	if existingID, ok := i.structural[structuralKey]; ok && existingID == factID {
+		rest := i.structuralRest[structuralKey]
+		if len(rest) == 0 {
+			delete(i.structural, structuralKey)
+			delete(i.structuralRest, structuralKey)
+		} else {
+			last := len(rest) - 1
+			i.structural[structuralKey] = rest[last]
+			rest[last] = FactID{}
+			rest = rest[:last]
+			if len(rest) == 0 {
+				delete(i.structuralRest, structuralKey)
+			} else {
+				i.structuralRest[structuralKey] = rest
+			}
+		}
+		return
+	}
+	rest := i.structuralRest[structuralKey]
+	for index, id := range rest {
+		if id != factID {
+			continue
+		}
+		last := len(rest) - 1
+		rest[index] = rest[last]
+		rest[last] = FactID{}
+		rest = rest[:last]
+		if len(rest) == 0 {
+			delete(i.structuralRest, structuralKey)
+		} else {
+			i.structuralRest[structuralKey] = rest
+		}
+		return
+	}
+}
+
+func (i duplicateIndexes) forEachStructuralFactID(key duplicateIndexKey, fn func(FactID) bool) {
+	if key.kind != duplicateIndexStructural || fn == nil {
+		return
+	}
+	structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
+	if id := i.structural[structuralKey]; !id.IsZero() {
+		if !fn(id) {
+			return
+		}
+	}
+	for _, id := range i.structuralRest[structuralKey] {
+		if id.IsZero() || !fn(id) {
+			return
+		}
+	}
+}
+
 func (i duplicateIndexes) len() int {
-	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.scalars)
+	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.scalars) + len(i.structural)
 }
 
 func newFactWorkspace(generation Generation, initialCapacity int) *factWorkspace {
@@ -2434,6 +2604,8 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	w.generation = generation
 	w.sequence = 0
 	w.recency = 0
+	w.skipFactTargetIndexes = false
+	w.factTargetIndexesDirty = false
 	if w.factsByID == nil {
 		w.factsByID = make(map[FactID]int, initialCapacity)
 	} else {
@@ -2472,7 +2644,7 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 }
 
 func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
-	if w == nil || revision == nil {
+	if w == nil || revision == nil || w.skipFactTargetIndexes {
 		return
 	}
 	templateCount := len(revision.templateOrder)
@@ -2499,6 +2671,18 @@ func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
 	}
 }
 
+func (w *factWorkspace) addFactTargetIndexes(templateKey TemplateKey, name string, id FactID) {
+	if w == nil || id.IsZero() {
+		return
+	}
+	if w.skipFactTargetIndexes || w.factTargetIndexesDirty {
+		w.factTargetIndexesDirty = true
+		return
+	}
+	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
+	w.factsByName[name] = append(w.factsByName[name], id)
+}
+
 func (w *factWorkspace) reserveSlotStorage(capacity int) {
 	if w == nil || capacity <= cap(w.slotStorage) {
 		return
@@ -2506,6 +2690,30 @@ func (w *factWorkspace) reserveSlotStorage(capacity int) {
 	next := make([]factSlot, len(w.slotStorage), capacity)
 	copy(next, w.slotStorage)
 	w.slotStorage = next
+}
+
+func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, factCount, slotCount int) {
+	if w == nil {
+		return
+	}
+	if factCount > 0 {
+		factCapacity := len(w.facts) + factCount
+		if cap(w.facts) < factCapacity {
+			nextFacts := make([]workingFact, len(w.facts), factCapacity)
+			copy(nextFacts, w.facts)
+			w.facts = nextFacts
+		}
+		orderCapacity := len(w.insertionOrder) + factCount
+		if cap(w.insertionOrder) < orderCapacity {
+			nextOrder := make([]FactID, len(w.insertionOrder), orderCapacity)
+			copy(nextOrder, w.insertionOrder)
+			w.insertionOrder = nextOrder
+		}
+	}
+	if slotCount > 0 {
+		w.reserveSlotStorage(len(w.slotStorage) + slotCount)
+	}
+	w.reserveTemplateIndexes(revision)
 }
 
 func (w *factWorkspace) reserveGeneratedFactInsert(revision *Ruleset, slotCount int) {
@@ -2588,6 +2796,28 @@ func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	return fact, true
+}
+
+func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
+	if w == nil || key.kind != duplicateIndexStructural {
+		return nil, false
+	}
+	var found *workingFact
+	w.factsByDuplicate.forEachStructuralFactID(key, func(id FactID) bool {
+		existing, ok := w.workingFactByID(id)
+		if !ok {
+			return true
+		}
+		if structuralDuplicateSlotsEqual(template, slots, existing.fieldSlots) {
+			found = existing
+			return false
+		}
+		return true
+	})
+	if found != nil {
+		return found, true
+	}
+	return nil, false
 }
 
 func (w *factWorkspace) reindexFactRowsFrom(start int) {
@@ -2687,13 +2917,19 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, canonical, fieldSlots)
 
 	if templateDuplicatePolicy != DuplicateAllow {
-		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
-		if ok {
-			existing, ok := w.workingFactByID(existingID)
-			if ok {
+		if duplicateIndex.kind == duplicateIndexStructural {
+			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
 				return existing, existing.publicDuplicateKey(revision), false, nil
 			}
-			w.factsByDuplicate.delete(duplicateIndex)
+		} else {
+			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			if ok {
+				existing, ok := w.workingFactByID(existingID)
+				if ok {
+					return existing, existing.publicDuplicateKey(revision), false, nil
+				}
+				w.factsByDuplicate.delete(duplicateIndex)
+			}
 		}
 	}
 
@@ -2701,6 +2937,9 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	w.recency++
 	id := newFactID(generation, w.sequence)
 	duplicateKey := duplicateIndex.publicKeyForTemplate(name, template)
+	if duplicateIndex.kind == duplicateIndexStructural {
+		duplicateKey = makeDuplicateKeyForTemplateWithSlots(name, template, canonical, fieldSlots)
+	}
 
 	fact := workingFact{
 		id:            id,
@@ -2723,8 +2962,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	if templateDuplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
-	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
-	w.factsByName[name] = append(w.factsByName[name], id)
+	w.addFactTargetIndexes(templateKey, name, id)
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, duplicateKey, true, nil
@@ -2735,16 +2973,25 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	templateKey := template.Key()
 	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
 	if template.duplicatePolicy != DuplicateAllow {
-		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
-		if ok {
-			existing, ok := w.workingFactByID(existingID)
-			if ok {
+		if duplicateIndex.kind == duplicateIndexStructural {
+			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
 				if materializeDuplicateKey {
 					return existing, existing.publicDuplicateKey(revision), false, nil
 				}
 				return existing, "", false, nil
 			}
-			w.factsByDuplicate.delete(duplicateIndex)
+		} else {
+			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			if ok {
+				existing, ok := w.workingFactByID(existingID)
+				if ok {
+					if materializeDuplicateKey {
+						return existing, existing.publicDuplicateKey(revision), false, nil
+					}
+					return existing, "", false, nil
+				}
+				w.factsByDuplicate.delete(duplicateIndex)
+			}
 		}
 	}
 
@@ -2754,6 +3001,9 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	var duplicateKey DuplicateKey
 	if materializeDuplicateKey {
 		duplicateKey = duplicateIndex.publicKeyForTemplate(name, template)
+		if duplicateIndex.kind == duplicateIndexStructural {
+			duplicateKey = makeDuplicateKeyForTemplateWithSlots(name, template, nil, fieldSlots)
+		}
 	}
 	storedSlots := fieldSlots
 	if !materializeDuplicateKey {
@@ -2774,8 +3024,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	if template.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
-	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
-	w.factsByName[name] = append(w.factsByName[name], id)
+	w.addFactTargetIndexes(templateKey, name, id)
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, duplicateKey, true, nil
@@ -2786,14 +3035,21 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 	templateKey := template.Key()
 	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
 	if template.duplicatePolicy != DuplicateAllow {
-		existingID, ok := w.factsByDuplicate.get(duplicateIndex)
-		if ok {
-			existing, ok := w.workingFactByID(existingID)
-			if ok {
+		if duplicateIndex.kind == duplicateIndexStructural {
+			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
 				w.rollbackGeneratedFactSlots(slotMark)
 				return existing, "", false, nil
 			}
-			w.factsByDuplicate.delete(duplicateIndex)
+		} else {
+			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			if ok {
+				existing, ok := w.workingFactByID(existingID)
+				if ok {
+					w.rollbackGeneratedFactSlots(slotMark)
+					return existing, "", false, nil
+				}
+				w.factsByDuplicate.delete(duplicateIndex)
+			}
 		}
 	}
 
@@ -2814,8 +3070,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 	if template.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
-	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
-	w.factsByName[name] = append(w.factsByName[name], id)
+	w.addFactTargetIndexes(templateKey, name, id)
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, "", true, nil
@@ -2931,6 +3186,10 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		}
 
 		duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
+		duplicateKey := duplicateIndex.publicKeyForTemplate(name, template)
+		if duplicateIndex.kind == duplicateIndexStructural {
+			duplicateKey = makeDuplicateKeyForTemplateWithSlots(name, template, nil, fieldSlots)
+		}
 		return compiledSessionInitialFact{
 			name:            name,
 			templateKey:     templateKey,
@@ -2938,7 +3197,7 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 			fieldSpecs:      template.fields,
 			duplicatePolicy: template.duplicatePolicy,
 			duplicateIndex:  duplicateIndex,
-			duplicateKey:    duplicateIndex.publicKeyForTemplate(name, template),
+			duplicateKey:    duplicateKey,
 			shareSlots:      factSlotsShareable(fieldSlots),
 		}, nil
 	}
@@ -2961,6 +3220,10 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 	duplicatePolicy := template.duplicatePolicy
 	fieldSlots := revision.buildFieldSlots(template, fields, presence)
 	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, fields, fieldSlots)
+	duplicateKey := duplicateIndex.publicKeyForTemplate(name, template)
+	if duplicateIndex.kind == duplicateIndexStructural {
+		duplicateKey = makeDuplicateKeyForTemplateWithSlots(name, template, fields, fieldSlots)
+	}
 	var fieldSpecs []FieldSpec
 	if len(fieldSlots) > 0 {
 		fields = nil
@@ -2977,7 +3240,7 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		fieldPresence:   presence,
 		duplicatePolicy: duplicatePolicy,
 		duplicateIndex:  duplicateIndex,
-		duplicateKey:    duplicateIndex.publicKeyForTemplate(name, template),
+		duplicateKey:    duplicateKey,
 		shareFields:     fieldsShareable(fields),
 		shareSlots:      factSlotsShareable(fieldSlots),
 	}, nil
@@ -3037,8 +3300,7 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	if initial.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(initial.duplicateIndex, id)
 	}
-	w.factsByTemplate[initial.templateKey] = append(w.factsByTemplate[initial.templateKey], id)
-	w.factsByName[initial.name] = append(w.factsByName[initial.name], id)
+	w.addFactTargetIndexes(initial.templateKey, initial.name, id)
 	w.insertionOrder = append(w.insertionOrder, id)
 	return stored
 }
@@ -3484,6 +3746,7 @@ func (s *Session) factByID(id FactID) (FactSnapshot, bool) {
 }
 
 func (s *Session) factIDsByName(name string) []FactID {
+	s.ensureFactTargetIndexes()
 	ids := s.factsByName[name]
 	if len(ids) == 0 {
 		return nil
@@ -3494,6 +3757,7 @@ func (s *Session) factIDsByName(name string) []FactID {
 }
 
 func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
+	s.ensureFactTargetIndexes()
 	ids := s.factsByTemplate[templateKey]
 	if len(ids) == 0 {
 		return nil
@@ -3515,16 +3779,17 @@ func (s *Session) factIDForDuplicateKey(key DuplicateKey) (FactID, bool) {
 
 func (s *Session) activeFactWorkspace() factWorkspace {
 	return factWorkspace{
-		generation:       s.generation,
-		sequence:         s.nextFactSequence,
-		recency:          s.nextRecency,
-		facts:            s.facts,
-		insertionOrder:   s.insertionOrder,
-		factsByID:        s.factsByID,
-		factsByDuplicate: s.factsByDuplicate,
-		factsByTemplate:  s.factsByTemplate,
-		factsByName:      s.factsByName,
-		slotStorage:      s.slotStorage,
+		generation:             s.generation,
+		sequence:               s.nextFactSequence,
+		recency:                s.nextRecency,
+		facts:                  s.facts,
+		insertionOrder:         s.insertionOrder,
+		factsByID:              s.factsByID,
+		factsByDuplicate:       s.factsByDuplicate,
+		factsByTemplate:        s.factsByTemplate,
+		factsByName:            s.factsByName,
+		factTargetIndexesDirty: s.factTargetIndexesDirty,
+		slotStorage:            s.slotStorage,
 	}
 }
 
@@ -3539,6 +3804,7 @@ func (s *Session) commitFactWorkspace(state factWorkspace) {
 	s.factsByDuplicate = state.factsByDuplicate
 	s.factsByTemplate = state.factsByTemplate
 	s.factsByName = state.factsByName
+	s.factTargetIndexesDirty = state.factTargetIndexesDirty
 	s.insertionOrder = state.insertionOrder
 	s.slotStorage = state.slotStorage
 }
@@ -3554,6 +3820,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.factsByDuplicate, workspace.factsByDuplicate = workspace.factsByDuplicate, s.factsByDuplicate
 	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
 	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
+	s.factTargetIndexesDirty, workspace.factTargetIndexesDirty = workspace.factTargetIndexesDirty, s.factTargetIndexesDirty
 	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
 	s.slotStorage, workspace.slotStorage = workspace.slotStorage, s.slotStorage
 }
@@ -3568,6 +3835,7 @@ func (s *Session) resetWorkingMemory() {
 	s.factsByDuplicate.reset(0)
 	s.factsByTemplate = make(map[TemplateKey][]FactID)
 	s.factsByName = make(map[string][]FactID)
+	s.factTargetIndexesDirty = false
 	s.insertionOrder = nil
 	s.slotStorage = nil
 }

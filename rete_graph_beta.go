@@ -173,6 +173,7 @@ type tokenHashMemory struct {
 	joinIndexReserve     int
 	identityIndexReserve int
 	factIndexReserve     int
+	factRowsDirty        bool
 }
 
 type graphTokenRowID int
@@ -510,6 +511,20 @@ func (m *tokenHashMemory) reserveRows(rowCapacity int) {
 	m.rowReserve = max(m.rowReserve, rowCapacity)
 }
 
+func (m *tokenHashMemory) ensureRowCapacity(rowCapacity int) {
+	if m == nil || rowCapacity <= cap(m.rows) {
+		return
+	}
+	nextCapacity := max(8, cap(m.rows)*2)
+	for nextCapacity < rowCapacity {
+		nextCapacity *= 2
+	}
+	rows := make([]graphTokenRow, len(m.rows), nextCapacity)
+	copy(rows, m.rows)
+	m.rows = rows
+	m.rowReserve = max(m.rowReserve, nextCapacity)
+}
+
 func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
 	if m == nil {
 		return
@@ -522,8 +537,7 @@ func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket, identityCapacity)
 		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
 	}
-	if factCapacity > 0 && m.factRows == nil {
-		m.factRows = make(map[FactID]graphTokenRowIDBucket, factCapacity)
+	if factCapacity > 0 {
 		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
 	}
 }
@@ -539,6 +553,7 @@ func (m *tokenHashMemory) clear() {
 	clear(m.indexes)
 	clear(m.identityRows)
 	clear(m.factRows)
+	m.factRowsDirty = false
 }
 
 func (m *tokenHashMemory) len() int {
@@ -623,10 +638,6 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	if m.indexes == nil {
 		m.indexes = make(map[betaJoinKey]graphTokenRowIDBucket)
 	}
-	if m.factRows == nil {
-		m.factRows = make(map[FactID]graphTokenRowIDBucket)
-	}
-
 	identity := tokenRefKey(token)
 	bucket := m.identityRows[identity]
 	for i := 0; i < bucket.len(); i++ {
@@ -638,19 +649,21 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	}
 
 	rowID := graphTokenRowID(len(m.rows))
-	m.rows = append(m.rows, graphTokenRow{
+	m.ensureRowCapacity(int(rowID) + 1)
+	m.rows = m.rows[:int(rowID)+1]
+	m.rows[rowID] = graphTokenRow{
 		id:       rowID,
 		token:    token,
 		joinKey:  joinKey,
 		identity: identity,
-	})
+	}
 	joinBucket := m.indexes[joinKey]
 	joinBucket.append(rowID)
 	m.indexes[joinKey] = joinBucket
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
 	m.identityRows[identity] = identityBucket
-	m.indexTokenFacts(token, rowID)
+	m.markFactRowsDirty()
 	return true
 }
 
@@ -661,10 +674,6 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 	if m.identityRows == nil {
 		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
 	}
-	if m.factRows == nil {
-		m.factRows = make(map[FactID]graphTokenRowIDBucket)
-	}
-
 	identity := tokenRefKey(token)
 	bucket := m.identityRows[identity]
 	for i := 0; i < bucket.len(); i++ {
@@ -688,18 +697,20 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		branchSupports = []terminalBranchSupport{{branchID: branchID, count: 1}}
 	}
 	rowID := graphTokenRowID(len(m.rows))
-	m.rows = append(m.rows, graphTokenRow{
+	m.ensureRowCapacity(int(rowID) + 1)
+	m.rows = m.rows[:int(rowID)+1]
+	m.rows[rowID] = graphTokenRow{
 		id:               rowID,
 		token:            token,
 		identity:         identity,
 		terminalIdentity: terminalIdentity,
 		supportCount:     1,
 		branchSupports:   branchSupports,
-	})
+	}
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
 	m.identityRows[identity] = identityBucket
-	m.indexTokenFacts(token, rowID)
+	m.markFactRowsDirty()
 	return true
 }
 
@@ -707,6 +718,7 @@ func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationC
 	if m == nil || id.IsZero() {
 		return 0
 	}
+	m.ensureFactRows()
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
@@ -732,6 +744,7 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 	if m == nil || id.IsZero() {
 		return 0
 	}
+	m.ensureFactRows()
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
@@ -801,6 +814,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propag
 	if m == nil || id.IsZero() {
 		return
 	}
+	m.ensureFactRows()
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
@@ -855,7 +869,9 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 			}
 		}
 	}
-	m.removeTokenFacts(removed.token, rowID)
+	if !m.factRowsDirty {
+		m.removeTokenFacts(removed.token, rowID)
+	}
 	last := len(m.rows) - 1
 	if index != last {
 		moved := m.rows[last]
@@ -871,13 +887,47 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 				m.identityRows[moved.identity] = bucket
 			}
 		}
-		m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
+		if !m.factRowsDirty {
+			m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
+		}
 	}
 	m.rows[last] = graphTokenRow{}
 	m.rows = m.rows[:last]
 	if counters != nil {
 		counters.recordRemovalRowRemoved()
 	}
+}
+
+func (m *tokenHashMemory) markFactRowsDirty() {
+	if m == nil {
+		return
+	}
+	m.factRowsDirty = true
+}
+
+func (m *tokenHashMemory) ensureFactRows() {
+	if m == nil || !m.factRowsDirty {
+		return
+	}
+	m.rebuildFactRows()
+}
+
+func (m *tokenHashMemory) rebuildFactRows() {
+	if m == nil {
+		return
+	}
+	if m.factRows == nil {
+		m.factRows = make(map[FactID]graphTokenRowIDBucket, max(m.factIndexReserve, len(m.rows)))
+	} else {
+		clear(m.factRows)
+	}
+	for index, row := range m.rows {
+		if row.token.isZero() {
+			continue
+		}
+		m.indexTokenFacts(row.token, graphTokenRowID(index))
+	}
+	m.factRowsDirty = false
 }
 
 func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
@@ -3880,7 +3930,7 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
 	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
 	s.IdentityIndexReserveMax = max(s.IdentityIndexReserveMax, memory.identityIndexReserve)
 
-	factKeys := len(memory.factRows)
+	factKeys := memory.factIndexKeyCount()
 	s.FactIndexKeys += factKeys
 	s.FactIndexReserve += memory.factIndexReserve
 	s.FactIndexKeysMax = max(s.FactIndexKeysMax, factKeys)
@@ -3903,7 +3953,7 @@ func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 		Rows:              len(m.rows),
 		JoinIndexKeys:     len(m.indexes),
 		IdentityIndexKeys: len(m.identityRows),
-		FactIndexKeys:     len(m.factRows),
+		FactIndexKeys:     m.factIndexKeyCount(),
 	}
 	for _, bucket := range m.indexes {
 		depth := bucket.len()
@@ -3911,6 +3961,42 @@ func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 		diag.JoinBucketDepthMax = max(diag.JoinBucketDepthMax, depth)
 	}
 	return diag
+}
+
+func (m tokenHashMemory) factIndexKeyCount() int {
+	if !m.factRowsDirty {
+		return len(m.factRows)
+	}
+	if len(m.rows) == 0 {
+		return 0
+	}
+	seen := make(map[FactID]struct{}, len(m.rows))
+	for _, row := range m.rows {
+		if row.token.isZero() {
+			continue
+		}
+		if factIDs, ok := row.token.factIDs(); ok {
+			for i, id := range factIDs {
+				if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			continue
+		}
+		for current := row.token; !current.isZero(); current = current.parent() {
+			tokenRow, ok := current.resolve()
+			if !ok {
+				break
+			}
+			id := tokenRow.match.fact.ID()
+			if id.IsZero() || current.parent().containsFact(id) {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]ruleMatchResult, error) {

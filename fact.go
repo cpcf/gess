@@ -260,6 +260,7 @@ const (
 	duplicateIndexDoubleInt
 	duplicateIndexSingleScalar
 	duplicateIndexDoubleScalar
+	duplicateIndexStructural
 )
 
 type duplicateScalarKind uint8
@@ -333,6 +334,7 @@ type duplicateIndexKey struct {
 	first       duplicateScalarKey
 	second      duplicateScalarKey
 	stringKey   DuplicateKey
+	hash        uint64
 }
 
 func (k duplicateIndexKey) isZero() bool {
@@ -585,6 +587,9 @@ func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
 			template = resolved
 		}
 	}
+	if f.dupIndex.kind == duplicateIndexStructural {
+		return makeDuplicateKeyForTemplateWithSlots(f.name, template, nil, f.fieldSlots)
+	}
 	return f.dupIndex.publicKeyForTemplate(f.name, template)
 }
 
@@ -697,6 +702,10 @@ func makeDuplicateIndexForValidatedFact(name string, template Template, fields F
 		return index
 	}
 
+	if index, ok := makeStructuralDuplicateIndexForValidatedFact(template, slots); ok {
+		return index
+	}
+
 	if len(slots) > 0 {
 		duplicateKey := makeDuplicateKeyForTemplateWithSlots(name, template, fields, slots)
 		return duplicateIndexKey{
@@ -712,6 +721,21 @@ func makeDuplicateIndexForValidatedFact(name string, template Template, fields F
 		templateKey: template.key,
 		stringKey:   duplicateKey,
 	}
+}
+
+func makeStructuralDuplicateIndexForValidatedFact(template Template, slots []factSlot) (duplicateIndexKey, bool) {
+	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(slots) == 0 || len(template.fields) == 0 {
+		return duplicateIndexKey{}, false
+	}
+	hash, ok := structuralDuplicateSlotsHash(template, slots)
+	if !ok {
+		return duplicateIndexKey{}, false
+	}
+	return duplicateIndexKey{
+		kind:        duplicateIndexStructural,
+		templateKey: template.key,
+		hash:        hash,
+	}, true
 }
 
 func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
@@ -788,6 +812,101 @@ func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fie
 	default:
 		return duplicateIndexKey{}, false
 	}
+}
+
+const (
+	structuralDuplicateHashOffset = uint64(14695981039346656037)
+	structuralDuplicateHashPrime  = uint64(1099511628211)
+)
+
+func structuralDuplicateSlotsHash(template Template, slots []factSlot) (uint64, bool) {
+	hash := structuralDuplicateHashOffset
+	hash = structuralDuplicateHashString(hash, template.key.String())
+	for i, field := range template.fields {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		hash = structuralDuplicateHashString(hash, field.Name)
+		if !slot.ok {
+			hash = structuralDuplicateHashByte(hash, 0)
+			continue
+		}
+		var ok bool
+		hash, ok = structuralDuplicateHashValue(hash, slot.value)
+		if !ok {
+			return 0, false
+		}
+	}
+	return hash, true
+}
+
+func structuralDuplicateSlotsEqual(template Template, left, right []factSlot) bool {
+	for i := range template.fields {
+		var leftSlot, rightSlot factSlot
+		if i < len(left) {
+			leftSlot = left[i]
+		}
+		if i < len(right) {
+			rightSlot = right[i]
+		}
+		if leftSlot.ok != rightSlot.ok {
+			return false
+		}
+		if leftSlot.ok && !leftSlot.value.Equal(rightSlot.value) {
+			return false
+		}
+	}
+	return true
+}
+
+func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
+	if scalar, ok := duplicateScalarKeyFromValue(value); ok {
+		hash = structuralDuplicateHashByte(hash, 1)
+		hash = structuralDuplicateHashByte(hash, byte(scalar.kind))
+		hash = structuralDuplicateHashUint64(hash, scalar.bits)
+		return structuralDuplicateHashString(hash, scalar.stringValue), true
+	}
+	switch value.Kind() {
+	case ValueList:
+		hash = structuralDuplicateHashByte(hash, 6)
+		values, ok := value.data.([]Value)
+		if !ok {
+			return 0, false
+		}
+		hash = structuralDuplicateHashUint64(hash, uint64(len(values)))
+		for _, item := range values {
+			var itemOK bool
+			hash, itemOK = structuralDuplicateHashValue(hash, item)
+			if !itemOK {
+				return 0, false
+			}
+		}
+		return hash, true
+	default:
+		return 0, false
+	}
+}
+
+func structuralDuplicateHashString(hash uint64, value string) uint64 {
+	hash = structuralDuplicateHashUint64(hash, uint64(len(value)))
+	for i := range value {
+		hash = structuralDuplicateHashByte(hash, value[i])
+	}
+	return hash
+}
+
+func structuralDuplicateHashUint64(hash, value uint64) uint64 {
+	for shift := 0; shift < 64; shift += 8 {
+		hash = structuralDuplicateHashByte(hash, byte(value>>shift))
+	}
+	return hash
+}
+
+func structuralDuplicateHashByte(hash uint64, value byte) uint64 {
+	hash ^= uint64(value)
+	hash *= structuralDuplicateHashPrime
+	return hash
 }
 
 func duplicateFields(values Fields, template Template) Fields {
