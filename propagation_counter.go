@@ -123,6 +123,33 @@ type propagationCounterKey struct {
 	origin      propagationOrigin
 }
 
+type propagationBranchKey struct {
+	ownerKind      reteGraphBranchOwnerKind
+	ruleRevisionID RuleRevisionID
+	queryName      string
+	terminalID     reteGraphTerminalNodeID
+	branchID       int
+}
+
+func (k propagationBranchKey) valid() bool {
+	return k.ownerKind != "" && k.terminalID > 0 && k.branchID >= 0
+}
+
+func (k propagationBranchKey) String() string {
+	parts := []string{
+		"owner=" + string(k.ownerKind),
+		"terminal=" + strconv.Itoa(int(k.terminalID)),
+		"branch=" + strconv.Itoa(k.branchID),
+	}
+	switch k.ownerKind {
+	case reteGraphBranchOwnerRule:
+		parts = append(parts, "rule-revision="+k.ruleRevisionID.String())
+	case reteGraphBranchOwnerQuery:
+		parts = append(parts, "query="+k.queryName)
+	}
+	return strings.Join(parts, ",")
+}
+
 type propagationRuntimePath string
 
 const (
@@ -143,9 +170,11 @@ type propagationCounterLedger struct {
 	byTemplate           map[TemplateKey]*propagationCounterTotals
 	byOrigin             map[propagationOrigin]*propagationCounterTotals
 	byTemplateOrigin     map[propagationCounterKey]*propagationCounterTotals
+	byBranch             map[propagationBranchKey]*propagationCounterTotals
 	runtimePath          propagationRuntimePath
 	unsupportedReasons   map[string]int
 	terminalRowsRetained int
+	branchRowsRetained   map[propagationBranchKey]int
 	graphBetaMemory      reteGraphBetaMemoryStats
 }
 
@@ -154,6 +183,7 @@ type propagationCounterSpan struct {
 	templateKey TemplateKey
 	origin      propagationOrigin
 	totals      propagationCounterTotals
+	byBranch    map[propagationBranchKey]*propagationCounterTotals
 }
 
 type propagationCounterSnapshot struct {
@@ -163,6 +193,8 @@ type propagationCounterSnapshot struct {
 	ByTemplate           map[TemplateKey]propagationCounterTotals
 	ByOrigin             map[propagationOrigin]propagationCounterTotals
 	ByTemplateOrigin     map[propagationCounterKey]propagationCounterTotals
+	ByBranch             map[propagationBranchKey]propagationCounterTotals
+	BranchRowsRetained   map[propagationBranchKey]int
 	RuntimePath          propagationRuntimePath
 	UnsupportedReasons   map[string]int
 }
@@ -172,6 +204,7 @@ func newPropagationCounterLedger() *propagationCounterLedger {
 		byTemplate:       make(map[TemplateKey]*propagationCounterTotals),
 		byOrigin:         make(map[propagationOrigin]*propagationCounterTotals),
 		byTemplateOrigin: make(map[propagationCounterKey]*propagationCounterTotals),
+		byBranch:         make(map[propagationBranchKey]*propagationCounterTotals),
 		runtimePath:      propagationRuntimeUnknown,
 	}
 }
@@ -198,6 +231,8 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		ByTemplate:           make(map[TemplateKey]propagationCounterTotals, len(l.byTemplate)),
 		ByOrigin:             make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
 		ByTemplateOrigin:     make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
+		ByBranch:             make(map[propagationBranchKey]propagationCounterTotals, len(l.byBranch)),
+		BranchRowsRetained:   make(map[propagationBranchKey]int, len(l.branchRowsRetained)),
 		RuntimePath:          l.runtimePath,
 	}
 	if len(l.unsupportedReasons) > 0 {
@@ -217,6 +252,16 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 	for key, totals := range l.byTemplateOrigin {
 		if totals != nil {
 			out.ByTemplateOrigin[key] = *totals
+		}
+	}
+	for key, totals := range l.byBranch {
+		if totals != nil {
+			out.ByBranch[key] = *totals
+		}
+	}
+	for key, retained := range l.branchRowsRetained {
+		if retained > 0 {
+			out.BranchRowsRetained[key] = retained
 		}
 	}
 	return out
@@ -363,6 +408,14 @@ func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
 	s.totals.TerminalDeltasEmitted++
 }
 
+func (s *propagationCounterSpan) recordTerminalDeltaEmittedForBranch(key propagationBranchKey) {
+	totals := s.branchTotals(key)
+	if totals == nil {
+		return
+	}
+	totals.TerminalDeltasEmitted++
+}
+
 func (s *propagationCounterSpan) recordTerminalRowInserted() {
 	if s == nil || s.ledger == nil {
 		return
@@ -370,11 +423,42 @@ func (s *propagationCounterSpan) recordTerminalRowInserted() {
 	s.totals.TerminalRowsInserted++
 }
 
+func (s *propagationCounterSpan) recordTerminalRowInsertedForBranch(key propagationBranchKey) {
+	totals := s.branchTotals(key)
+	if totals == nil {
+		return
+	}
+	totals.TerminalRowsInserted++
+}
+
 func (s *propagationCounterSpan) recordTerminalRowDeduped() {
 	if s == nil || s.ledger == nil {
 		return
 	}
 	s.totals.TerminalRowsDeduped++
+}
+
+func (s *propagationCounterSpan) recordTerminalRowDedupedForBranch(key propagationBranchKey) {
+	totals := s.branchTotals(key)
+	if totals == nil {
+		return
+	}
+	totals.TerminalRowsDeduped++
+}
+
+func (s *propagationCounterSpan) branchTotals(key propagationBranchKey) *propagationCounterTotals {
+	if s == nil || s.ledger == nil || !key.valid() {
+		return nil
+	}
+	if s.byBranch == nil {
+		s.byBranch = make(map[propagationBranchKey]*propagationCounterTotals)
+	}
+	totals := s.byBranch[key]
+	if totals == nil {
+		totals = &propagationCounterTotals{}
+		s.byBranch[key] = totals
+	}
+	return totals
 }
 
 func (s *propagationCounterSpan) finish() {
@@ -390,6 +474,11 @@ func (s *propagationCounterSpan) finish() {
 	ledger.addTemplateTotals(s.templateKey, s.totals)
 	ledger.addOriginTotals(s.origin, s.totals)
 	ledger.addTemplateOriginTotals(s.templateKey, s.origin, s.totals)
+	for key, totals := range s.byBranch {
+		if totals != nil {
+			ledger.addBranchTotals(key, *totals)
+		}
+	}
 	s.ledger = nil
 }
 
@@ -442,6 +531,14 @@ func (l *propagationCounterLedger) recordTerminalDeltaRemoved() {
 	l.totals.TerminalDeltasRemoved++
 }
 
+func (l *propagationCounterLedger) recordTerminalDeltaRemovedForBranch(key propagationBranchKey) {
+	totals := l.branchTotals(key)
+	if totals == nil {
+		return
+	}
+	totals.TerminalDeltasRemoved++
+}
+
 func (l *propagationCounterLedger) recordNegativePropagationEvent() {
 	if l == nil {
 		return
@@ -470,6 +567,14 @@ func (l *propagationCounterLedger) recordTerminalRowRemoved() {
 	l.totals.TerminalRowsRemoved++
 }
 
+func (l *propagationCounterLedger) recordTerminalRowRemovedForBranch(key propagationBranchKey) {
+	totals := l.branchTotals(key)
+	if totals == nil {
+		return
+	}
+	totals.TerminalRowsRemoved++
+}
+
 func (l *propagationCounterLedger) setTerminalRowsRetained(retained int) {
 	if l == nil {
 		return
@@ -478,6 +583,26 @@ func (l *propagationCounterLedger) setTerminalRowsRetained(retained int) {
 		retained = 0
 	}
 	l.terminalRowsRetained = retained
+}
+
+func (l *propagationCounterLedger) setBranchRowsRetained(retained map[propagationBranchKey]int) {
+	if l == nil {
+		return
+	}
+	if len(retained) == 0 {
+		clear(l.branchRowsRetained)
+		return
+	}
+	if l.branchRowsRetained == nil {
+		l.branchRowsRetained = make(map[propagationBranchKey]int, len(retained))
+	} else {
+		clear(l.branchRowsRetained)
+	}
+	for key, count := range retained {
+		if key.valid() && count > 0 {
+			l.branchRowsRetained[key] = count
+		}
+	}
 }
 
 func (l *propagationCounterLedger) setGraphBetaMemoryStats(stats reteGraphBetaMemoryStats) {
@@ -546,6 +671,29 @@ func (l *propagationCounterLedger) addTemplateOriginTotals(templateKey TemplateK
 		l.byTemplateOrigin[key] = current
 	}
 	current.add(totals)
+}
+
+func (l *propagationCounterLedger) addBranchTotals(key propagationBranchKey, totals propagationCounterTotals) {
+	current := l.branchTotals(key)
+	if current == nil {
+		return
+	}
+	current.add(totals)
+}
+
+func (l *propagationCounterLedger) branchTotals(key propagationBranchKey) *propagationCounterTotals {
+	if l == nil || !key.valid() {
+		return nil
+	}
+	if l.byBranch == nil {
+		l.byBranch = make(map[propagationBranchKey]*propagationCounterTotals)
+	}
+	current := l.byBranch[key]
+	if current == nil {
+		current = &propagationCounterTotals{}
+		l.byBranch[key] = current
+	}
+	return current
 }
 
 func (s propagationCounterSnapshot) reportMetrics(report func(name string, value float64)) {
@@ -645,6 +793,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-template-count", float64(len(s.ByTemplate)))
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
+	report("propagation-branch-count", float64(len(s.ByBranch)))
+	report("propagation-branch-retained-count", float64(len(s.BranchRowsRetained)))
 	report("propagation-runtime-graph-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphBeta))
 	report("propagation-runtime-graph-alpha-only", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphAlpha))
 	report("propagation-runtime-unsupported", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeUnsupported))
@@ -745,9 +895,14 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-expression-predicate-errors/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateErrors),
 		"propagation-by-template=" + s.templateSummary(),
 		"propagation-by-origin=" + s.originSummary(),
+		"propagation-branch-count=" + strconv.Itoa(len(s.ByBranch)),
+		"propagation-branch-retained-count=" + strconv.Itoa(len(s.BranchRowsRetained)),
 	}
 	if summary := s.templateOriginSummary(); summary != "" {
 		fields = append(fields, "propagation-by-template-origin="+summary)
+	}
+	if summary := s.branchSummary(); summary != "" {
+		fields = append(fields, "propagation-by-branch="+summary)
 	}
 	return fields
 }
@@ -843,6 +998,39 @@ func (s propagationCounterSnapshot) templateOriginSummary() string {
 	return strings.Join(parts, ";")
 }
 
+func (s propagationCounterSnapshot) branchSummary() string {
+	if len(s.ByBranch) == 0 && len(s.BranchRowsRetained) == 0 {
+		return ""
+	}
+	keys := make([]propagationBranchKey, 0, len(s.ByBranch)+len(s.BranchRowsRetained))
+	seen := make(map[propagationBranchKey]struct{}, len(s.ByBranch)+len(s.BranchRowsRetained))
+	for key := range s.ByBranch {
+		keys = append(keys, key)
+		seen[key] = struct{}{}
+	}
+	for key := range s.BranchRowsRetained {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	slicesSortBranchKeys(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		totals := s.ByBranch[key]
+		parts = append(parts, formatPropagationBranchDistributionEntry(key.String(), totals, s.BranchRowsRetained[key]))
+	}
+	return strings.Join(parts, ";")
+}
+
+func formatPropagationBranchDistributionEntry(name string, totals propagationCounterTotals, retained int) string {
+	base := formatPropagationDistributionEntry(name, totals)
+	if len(base) == 0 || base[len(base)-1] != '}' {
+		return base
+	}
+	return base[:len(base)-1] + ",terminal-rows-retained=" + strconv.Itoa(retained) + "}"
+}
+
 func formatPropagationDistributionEntry(name string, totals propagationCounterTotals) string {
 	return name + "{" +
 		"asserts=" + strconv.Itoa(totals.Asserts) + "," +
@@ -904,5 +1092,14 @@ func slicesSortTemplateOriginKeys(keys []propagationCounterKey) {
 			return keys[i].templateKey < keys[j].templateKey
 		}
 		return keys[i].origin < keys[j].origin
+	})
+}
+
+func slicesSortBranchKeys(keys []propagationBranchKey) {
+	if len(keys) < 2 {
+		return
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i].String() < keys[j].String()
 	})
 }

@@ -2820,6 +2820,12 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
 				counters.recordTerminalRowRemoved()
+				for _, branchID := range row.terminalBranchIDs() {
+					if key, ok := m.terminalBranchKey(terminalNode.id, branchID); ok {
+						counters.recordTerminalDeltaRemovedForBranch(key)
+						counters.recordTerminalRowRemovedForBranch(key)
+					}
+				}
 			}
 		})
 		terminal.rows.removeContainingFact(id, counters)
@@ -2945,17 +2951,27 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
 	identity := m.terminalTokenIdentity(ruleRevisionID, token)
+	branchKey, haveBranchKey := m.terminalBranchKey(terminalID, branchID)
 	if !terminal.rows.insertTerminal(token, identity, branchID) {
 		if span != nil {
 			span.recordTerminalRowDeduped()
+			if haveBranchKey {
+				span.recordTerminalRowDedupedForBranch(branchKey)
+			}
 		}
 		return
 	}
 	if span != nil {
 		span.recordTerminalRowInserted()
+		if haveBranchKey {
+			span.recordTerminalRowInsertedForBranch(branchKey)
+		}
 	}
 	if span != nil {
 		span.recordTerminalDeltaEmitted()
+		if haveBranchKey {
+			span.recordTerminalDeltaEmittedForBranch(branchKey)
+		}
 	}
 	delta.added = append(delta.added, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
@@ -2982,6 +2998,12 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		if counters != nil {
 			counters.recordTerminalDeltaRemoved()
 			counters.recordTerminalRowRemoved()
+			for _, branchID := range row.terminalBranchIDs() {
+				if key, ok := m.terminalBranchKey(terminalID, branchID); ok {
+					counters.recordTerminalDeltaRemovedForBranch(key)
+					counters.recordTerminalRowRemovedForBranch(key)
+				}
+			}
 		}
 	})
 }
@@ -3008,6 +3030,10 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 		counters.recordTerminalDeltaRemoved()
 		counters.recordTerminalRowRemoved()
 		counters.recordNegativeTerminalRowRemoved()
+		if key, ok := m.terminalBranchKey(terminalID, branchID); ok {
+			counters.recordTerminalDeltaRemovedForBranch(key)
+			counters.recordTerminalRowRemovedForBranch(key)
+		}
 	}
 }
 
@@ -3408,14 +3434,45 @@ func (m *reteGraphBetaMemory) terminalAt(id reteGraphTerminalNodeID) *reteGraphT
 }
 
 func (m *reteGraphBetaMemory) terminalRuleRevision(id reteGraphTerminalNodeID) RuleRevisionID {
-	if m == nil || m.graph == nil || id <= 0 {
+	node := m.terminalNode(id)
+	if node == nil {
 		return ""
+	}
+	return node.ruleRevisionID
+}
+
+func (m *reteGraphBetaMemory) terminalBranchKey(id reteGraphTerminalNodeID, branchID int) (propagationBranchKey, bool) {
+	node := m.terminalNode(id)
+	if node == nil || branchID < 0 {
+		return propagationBranchKey{}, false
+	}
+	var ownerKind reteGraphBranchOwnerKind
+	switch node.kind {
+	case reteGraphTerminalRule:
+		ownerKind = reteGraphBranchOwnerRule
+	case reteGraphTerminalQuery:
+		ownerKind = reteGraphBranchOwnerQuery
+	default:
+		return propagationBranchKey{}, false
+	}
+	return propagationBranchKey{
+		ownerKind:      ownerKind,
+		ruleRevisionID: node.ruleRevisionID,
+		queryName:      node.queryName,
+		terminalID:     id,
+		branchID:       branchID,
+	}, true
+}
+
+func (m *reteGraphBetaMemory) terminalNode(id reteGraphTerminalNodeID) *reteGraphTerminalNode {
+	if m == nil || m.graph == nil || id <= 0 {
+		return nil
 	}
 	index := int(id) - 1
 	if index < 0 || index >= len(m.graph.terminalNodes) {
-		return ""
+		return nil
 	}
-	return m.graph.terminalNodes[index].ruleRevisionID
+	return &m.graph.terminalNodes[index]
 }
 
 func tokenRefKey(token tokenRef) graphTokenIdentityKey {
@@ -3574,6 +3631,38 @@ func (m *reteGraphBetaMemory) terminalRowCount() int {
 		}
 	}
 	return total
+}
+
+func (m *reteGraphBetaMemory) terminalRowsRetainedByBranch() map[propagationBranchKey]int {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	retained := make(map[propagationBranchKey]int)
+	for _, terminalNode := range m.graph.terminalNodes {
+		terminal := m.terminalAt(terminalNode.id)
+		if terminal == nil {
+			continue
+		}
+		for _, row := range terminal.rows.rows {
+			if row.token.isZero() {
+				continue
+			}
+			for _, support := range row.branchSupports {
+				if support.count <= 0 {
+					continue
+				}
+				key, ok := m.terminalBranchKey(terminalNode.id, support.branchID)
+				if !ok {
+					continue
+				}
+				retained[key]++
+			}
+		}
+	}
+	if len(retained) == 0 {
+		return nil
+	}
+	return retained
 }
 
 func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -1249,6 +1250,40 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	}
 	if got, want := snapshot.Totals.BetaJoinedTokensProduced, 1; got != want {
 		t.Fatalf("beta joined tokens produced = %d, want %d", got, want)
+	}
+	if got, want := len(snapshot.ByBranch), 1; got != want {
+		t.Fatalf("branch counter count = %d, want %d: %#v", got, want, snapshot.ByBranch)
+	}
+	var branchKey propagationBranchKey
+	var branchTotals propagationCounterTotals
+	for key, totals := range snapshot.ByBranch {
+		branchKey = key
+		branchTotals = totals
+	}
+	if branchKey.ownerKind != reteGraphBranchOwnerRule {
+		t.Fatalf("branch owner kind = %q, want %q", branchKey.ownerKind, reteGraphBranchOwnerRule)
+	}
+	if branchKey.terminalID == 0 {
+		t.Fatalf("branch terminal ID = %d, want non-zero", branchKey.terminalID)
+	}
+	if got, want := branchKey.branchID, 0; got != want {
+		t.Fatalf("branch ID = %d, want %d", got, want)
+	}
+	if got, want := branchTotals.TerminalRowsInserted, snapshot.Totals.TerminalRowsInserted; got != want {
+		t.Fatalf("branch terminal rows inserted = %d, want total %d", got, want)
+	}
+	if got, want := branchTotals.TerminalDeltasEmitted, snapshot.Totals.TerminalDeltasEmitted; got != want {
+		t.Fatalf("branch terminal deltas emitted = %d, want total %d", got, want)
+	}
+	if got, want := snapshot.BranchRowsRetained[branchKey], snapshot.TerminalRowsRetained; got != want {
+		t.Fatalf("branch terminal rows retained = %d, want total %d", got, want)
+	}
+	fields := strings.Join(snapshot.runnerFields(), "\n")
+	if !strings.Contains(fields, "propagation-by-branch=") {
+		t.Fatalf("runner fields missing branch summary: %s", fields)
+	}
+	if !strings.Contains(fields, "terminal-rows-retained="+strconv.Itoa(snapshot.TerminalRowsRetained)) {
+		t.Fatalf("runner fields missing branch retained rows: %s", fields)
 	}
 
 	if _, err := session.Modify(ctx, failingCandidate.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"group": "A", "score": 15})}); err != nil {
