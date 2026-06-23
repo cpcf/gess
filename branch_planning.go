@@ -293,15 +293,15 @@ func (ir branchPlanningIR) plannedNodes() []branchPlanningNode {
 			segment = append(segment, node)
 			continue
 		}
-		out = append(out, planBranchPlanningSegment(segment, out)...)
+		out = append(out, ir.planBranchPlanningSegment(segment, out)...)
 		segment = segment[:0]
 		out = append(out, cloneBranchPlanningNode(node))
 	}
-	out = append(out, planBranchPlanningSegment(segment, out)...)
+	out = append(out, ir.planBranchPlanningSegment(segment, out)...)
 	return out
 }
 
-func planBranchPlanningSegment(segment []branchPlanningNode, prior []branchPlanningNode) []branchPlanningNode {
+func (ir branchPlanningIR) planBranchPlanningSegment(segment []branchPlanningNode, prior []branchPlanningNode) []branchPlanningNode {
 	if len(segment) < 2 {
 		return cloneBranchPlanningNodes(segment)
 	}
@@ -314,7 +314,7 @@ func planBranchPlanningSegment(segment []branchPlanningNode, prior []branchPlann
 	remaining := cloneBranchPlanningNodes(segment)
 	out := make([]branchPlanningNode, 0, len(remaining))
 	for len(remaining) > 0 {
-		nextIndex := selectNextBranchPlanningNode(remaining, defined)
+		nextIndex := ir.selectNextBranchPlanningNode(remaining, defined)
 		next := remaining[nextIndex]
 		out = append(out, next)
 		for _, binding := range next.defines {
@@ -327,10 +327,17 @@ func planBranchPlanningSegment(segment []branchPlanningNode, prior []branchPlann
 	return out
 }
 
-func selectNextBranchPlanningNode(nodes []branchPlanningNode, defined map[string]struct{}) int {
+func (ir branchPlanningIR) selectNextBranchPlanningNode(nodes []branchPlanningNode, defined map[string]struct{}) int {
 	best := -1
 	for i, node := range nodes {
 		if !branchPlanningNodeReady(node, nodes, defined) {
+			continue
+		}
+		if best >= 0 && branchPlanningNodeConnectedToDefined(nodes[best], ir.joins, defined) && !branchPlanningNodeConnectedToDefined(node, ir.joins, defined) {
+			continue
+		}
+		if best >= 0 && !branchPlanningNodeConnectedToDefined(nodes[best], ir.joins, defined) && branchPlanningNodeConnectedToDefined(node, ir.joins, defined) {
+			best = i
 			continue
 		}
 		if best < 0 || branchPlanningNodeLess(node, nodes[best]) {
@@ -359,6 +366,37 @@ func branchPlanningNodeReady(node branchPlanningNode, remaining []branchPlanning
 		}
 	}
 	return true
+}
+
+func branchPlanningNodeConnectedToDefined(node branchPlanningNode, joins []branchPlanningJoin, defined map[string]struct{}) bool {
+	if len(defined) == 0 {
+		return true
+	}
+	for _, binding := range node.defines {
+		if branchPlanningBindingConnectedToDefined(binding, joins, defined) {
+			return true
+		}
+	}
+	return false
+}
+
+func branchPlanningBindingConnectedToDefined(binding string, joins []branchPlanningJoin, defined map[string]struct{}) bool {
+	if binding == "" || len(defined) == 0 {
+		return false
+	}
+	for _, join := range joins {
+		switch {
+		case join.leftBinding == binding:
+			if _, ok := defined[join.rightBinding]; ok {
+				return true
+			}
+		case join.rightBinding == binding:
+			if _, ok := defined[join.leftBinding]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func branchPlanningNodeLess(left, right branchPlanningNode) bool {

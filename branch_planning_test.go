@@ -110,6 +110,66 @@ func TestBranchPlanningIRReordersAndCanonicalizesJoins(t *testing.T) {
 	}
 }
 
+func TestBranchPlanningIRKeepsStarJoinConnectedToCurrentToken(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		{
+			spec: RuleConditionSpec{
+				Binding: "root",
+				Name:    "root",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Value: "target"},
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding: "event",
+				Name:    "event",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 50},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
+				},
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding: "detail",
+				Name:    "detail",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "code", Operator: FieldConstraintEqual, Value: "selected"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
+				},
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding: "tag",
+				Name:    "tag",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "label", Operator: FieldConstraintEqual, Value: "priority"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
+				},
+			},
+			visible: true,
+		},
+	})
+
+	planned := ir.normalizedConditions()
+	if got, want := conditionBindings(planned), []string{"root", "event", "detail", "tag"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
 func TestBranchPlanningIRPreservesJoinsWithoutReordering(t *testing.T) {
 	ir := newBranchPlanningIR(0, []normalizedRuleCondition{
 		{
@@ -280,4 +340,12 @@ func assertBranchPlanningNode(t *testing.T, node branchPlanningNode, defines, de
 	if node.barrier != barrier {
 		t.Fatalf("barrier = %q, want %q", node.barrier, barrier)
 	}
+}
+
+func conditionBindings(conditions []normalizedRuleCondition) []string {
+	out := make([]string, len(conditions))
+	for i, condition := range conditions {
+		out[i] = condition.spec.Binding
+	}
+	return out
 }

@@ -21,6 +21,11 @@ type graphRuleNetworkCase struct {
 	items int
 }
 
+type graphRuleNetworkReplaySnapshot struct {
+	Counters    propagationCounterSnapshot
+	Diagnostics reteGraphBetaMemoryDiagnostics
+}
+
 func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 	for _, tc := range graphRuleNetworkBenchmarkCases() {
 		name := fmt.Sprintf("%s/depth=%d/items=%d/matches=%d", tc.order, tc.depth, tc.items, graphRuleNetworkExpectedMatches(tc.depth, tc.items))
@@ -28,7 +33,7 @@ func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 			revision, templates := mustCompileGraphRuleNetworkBenchmark(b, tc)
 			facts := graphRuleNetworkFactSnapshots(b, revision, templates, tc.items)
 			expected := graphRuleNetworkExpectedMatches(tc.depth, tc.items)
-			counters := collectGraphRuleNetworkCounters(b, revision, facts)
+			snapshot := collectGraphRuleNetworkReplaySnapshot(b, revision, facts)
 
 			b.ReportAllocs()
 			defer func() {
@@ -37,7 +42,7 @@ func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 				b.ReportMetric(float64(authoredOrderRootCount), "roots")
 				b.ReportMetric(float64(len(facts)), "facts/replay")
 				b.ReportMetric(float64(expected), "terminal-rows/replay")
-				reportGraphRuleNetworkCounterMetrics(b, counters)
+				reportGraphRuleNetworkCounterMetrics(b, snapshot)
 			}()
 
 			memory := newReteGraphBetaMemory(revision, revision.graph, nil)
@@ -77,17 +82,34 @@ func TestGraphRuleNetworkAuthoredOrderBenchmarkValidatesCounters(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/depth=%d", tc.order, tc.depth), func(t *testing.T) {
 			revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
 			facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
-			counters := collectGraphRuleNetworkCounters(t, revision, facts)
-			if got, want := counters.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
+			snapshot := collectGraphRuleNetworkReplaySnapshot(t, revision, facts)
+			if got, want := snapshot.Counters.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
 				t.Fatalf("terminal rows retained = %d, want %d", got, want)
 			}
-			if counters.Totals.BetaBucketProbes == 0 {
+			if snapshot.Counters.Totals.BetaBucketProbes == 0 {
 				t.Fatal("beta bucket probes = 0, want graph beta joins exercised")
 			}
-			if counters.Totals.BetaJoinedTokensProduced == 0 {
+			if snapshot.Counters.Totals.BetaJoinedTokensProduced == 0 {
 				t.Fatal("joined tokens produced = 0, want graph beta joins exercised")
 			}
+			if snapshot.Diagnostics.MaxBetaRows == 0 {
+				t.Fatal("max beta rows = 0, want per-node beta memory diagnostics")
+			}
+			if got, want := snapshot.Diagnostics.TotalTerminalBranchRows, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
+				t.Fatalf("terminal branch rows = %d, want %d", got, want)
+			}
 		})
+	}
+}
+
+func TestGraphRuleNetworkDiagnosticsBoundDepthGrowth(t *testing.T) {
+	depth2 := collectGraphRuleNetworkReplaySnapshotForCase(t, graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 2, items: 256})
+	depth4 := collectGraphRuleNetworkReplaySnapshotForCase(t, graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 4, items: 256})
+	if depth4.Diagnostics.WidestRetainedBetaTokenWidth <= depth2.Diagnostics.WidestRetainedBetaTokenWidth {
+		t.Fatalf("depth-4 retained token width = %d, want greater than depth-2 width %d", depth4.Diagnostics.WidestRetainedBetaTokenWidth, depth2.Diagnostics.WidestRetainedBetaTokenWidth)
+	}
+	if depth4.Diagnostics.MaxBetaRows > depth2.Diagnostics.MaxBetaRows*2 {
+		t.Fatalf("depth-4 max beta rows = %d, want bounded by twice depth-2 max beta rows %d", depth4.Diagnostics.MaxBetaRows, depth2.Diagnostics.MaxBetaRows)
 	}
 }
 
@@ -155,7 +177,14 @@ func graphRuleNetworkFactSnapshots(t testing.TB, revision *Ruleset, templates au
 	return snapshot.Facts()
 }
 
-func collectGraphRuleNetworkCounters(t testing.TB, revision *Ruleset, facts []FactSnapshot) propagationCounterSnapshot {
+func collectGraphRuleNetworkReplaySnapshotForCase(t testing.TB, tc graphRuleNetworkCase) graphRuleNetworkReplaySnapshot {
+	t.Helper()
+	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
+	facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
+	return collectGraphRuleNetworkReplaySnapshot(t, revision, facts)
+}
+
+func collectGraphRuleNetworkReplaySnapshot(t testing.TB, revision *Ruleset, facts []FactSnapshot) graphRuleNetworkReplaySnapshot {
 	t.Helper()
 	memory := newReteGraphBetaMemory(revision, revision.graph, nil)
 	if memory == nil {
@@ -171,11 +200,15 @@ func collectGraphRuleNetworkCounters(t testing.TB, revision *Ruleset, facts []Fa
 	ledger.setTerminalRowsRetained(memory.terminalRowCount())
 	ledger.setBranchRowsRetained(memory.terminalRowsRetainedByBranch())
 	ledger.setGraphBetaMemoryStats(memory.memoryStats())
-	return ledger.snapshot()
+	return graphRuleNetworkReplaySnapshot{
+		Counters:    ledger.snapshot(),
+		Diagnostics: memory.diagnostics(),
+	}
 }
 
-func reportGraphRuleNetworkCounterMetrics(b *testing.B, counters propagationCounterSnapshot) {
+func reportGraphRuleNetworkCounterMetrics(b *testing.B, snapshot graphRuleNetworkReplaySnapshot) {
 	b.Helper()
+	counters := snapshot.Counters
 	b.ReportMetric(float64(counters.Totals.BetaBucketProbes), "beta-bucket-probes/replay")
 	b.ReportMetric(float64(counters.Totals.BetaBucketDepthTotal), "beta-bucket-depth-total/replay")
 	b.ReportMetric(float64(counters.Totals.BetaBucketDepthMax), "beta-bucket-depth-max")
@@ -191,6 +224,39 @@ func reportGraphRuleNetworkCounterMetrics(b *testing.B, counters propagationCoun
 	b.ReportMetric(float64(counters.TerminalRowsRetained), "terminal-rows-retained")
 	b.ReportMetric(float64(counters.GraphBetaMemory.TokenRows), "graph-token-rows-retained")
 	b.ReportMetric(float64(counters.GraphBetaMemory.JoinIndexKeys), "graph-join-index-keys")
+	reportGraphRuleNetworkDiagnosticMetrics(b, snapshot.Diagnostics)
+}
+
+func reportGraphRuleNetworkDiagnosticMetrics(b *testing.B, diagnostics reteGraphBetaMemoryDiagnostics) {
+	b.Helper()
+	b.ReportMetric(float64(len(diagnostics.BetaNodes)), "beta-node-count")
+	b.ReportMetric(float64(diagnostics.MaxBetaRows), "max-beta-node-token-rows")
+	b.ReportMetric(float64(diagnostics.MaxBetaLeftRows), "max-beta-left-token-rows")
+	b.ReportMetric(float64(diagnostics.MaxBetaRightRows), "max-beta-right-token-rows")
+	b.ReportMetric(float64(diagnostics.MaxBetaJoinIndexKeys), "max-beta-node-join-index-keys")
+	b.ReportMetric(float64(diagnostics.MaxBetaJoinBucketDepth), "max-beta-node-join-bucket-depth")
+	b.ReportMetric(float64(diagnostics.WidestRetainedBetaTokenWidth), "widest-retained-beta-token-width")
+	b.ReportMetric(float64(len(diagnostics.Terminals)), "terminal-node-count")
+	b.ReportMetric(float64(diagnostics.MaxTerminalRows), "max-terminal-node-token-rows")
+	b.ReportMetric(float64(diagnostics.TotalTerminalBranchRows), "terminal-branch-rows-retained")
+	b.ReportMetric(float64(diagnostics.MaxTerminalBranchRows), "max-terminal-branch-rows")
+	for _, node := range diagnostics.BetaNodes {
+		prefix := fmt.Sprintf("beta-node-%d", node.ID)
+		b.ReportMetric(float64(node.TotalRows), prefix+"-token-rows")
+		b.ReportMetric(float64(node.LeftRows), prefix+"-left-token-rows")
+		b.ReportMetric(float64(node.RightRows), prefix+"-right-token-rows")
+		b.ReportMetric(float64(node.TokenWidth), prefix+"-token-width")
+		b.ReportMetric(float64(node.TotalJoinIndexKeys), prefix+"-join-index-keys")
+		b.ReportMetric(float64(node.MaxJoinBucketDepth), prefix+"-join-bucket-depth-max")
+	}
+	for _, terminal := range diagnostics.Terminals {
+		prefix := fmt.Sprintf("terminal-node-%d", terminal.ID)
+		b.ReportMetric(float64(terminal.Rows), prefix+"-token-rows")
+		b.ReportMetric(float64(terminal.TokenWidth), prefix+"-token-width")
+		for branchID, rows := range terminal.BranchRows {
+			b.ReportMetric(float64(rows), fmt.Sprintf("%s-branch-%d-rows", prefix, branchID))
+		}
+	}
 }
 
 func graphRuleNetworkExpectedMatches(depth, items int) int {

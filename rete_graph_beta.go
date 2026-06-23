@@ -107,6 +107,62 @@ type reteGraphBetaMemoryStats struct {
 	FactIndexReserveMax     int
 }
 
+type reteGraphBetaMemoryDiagnostics struct {
+	BetaNodes                    []reteGraphBetaNodeMemoryDiagnostics
+	Terminals                    []reteGraphTerminalMemoryDiagnostics
+	MaxBetaRows                  int
+	MaxBetaLeftRows              int
+	MaxBetaRightRows             int
+	MaxBetaJoinIndexKeys         int
+	MaxBetaJoinBucketDepth       int
+	MaxTerminalRows              int
+	TotalTerminalBranchRows      int
+	MaxTerminalBranchRows        int
+	WidestRetainedBetaTokenWidth int
+}
+
+type reteGraphBetaNodeMemoryDiagnostics struct {
+	ID                   reteGraphBetaNodeID
+	Kind                 reteGraphBetaNodeKind
+	Left                 reteGraphStageRef
+	Right                reteGraphStageRef
+	TokenWidth           int
+	LeftRows             int
+	RightRows            int
+	TotalRows            int
+	LeftJoinIndexKeys    int
+	RightJoinIndexKeys   int
+	TotalJoinIndexKeys   int
+	LeftJoinBucketDepth  int
+	RightJoinBucketDepth int
+	MaxJoinBucketDepth   int
+	LeftJoinBucketTotal  int
+	RightJoinBucketTotal int
+	TotalJoinBucketDepth int
+	IdentityIndexKeys    int
+	FactIndexKeys        int
+}
+
+type reteGraphTerminalMemoryDiagnostics struct {
+	ID             reteGraphTerminalNodeID
+	Kind           reteGraphTerminalKind
+	RuleRevisionID RuleRevisionID
+	QueryName      string
+	Input          reteGraphStageRef
+	TokenWidth     int
+	Rows           int
+	BranchRows     map[int]int
+}
+
+type reteGraphTokenMemoryDiagnostics struct {
+	Rows                 int
+	JoinIndexKeys        int
+	JoinBucketDepthTotal int
+	JoinBucketDepthMax   int
+	IdentityIndexKeys    int
+	FactIndexKeys        int
+}
+
 type tokenHashMemory struct {
 	rows                 []graphTokenRow
 	indexes              map[betaJoinKey]graphTokenRowIDBucket
@@ -3706,6 +3762,90 @@ func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {
 	return stats
 }
 
+func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
+	if m == nil || m.graph == nil {
+		return reteGraphBetaMemoryDiagnostics{}
+	}
+	out := reteGraphBetaMemoryDiagnostics{
+		BetaNodes: make([]reteGraphBetaNodeMemoryDiagnostics, 0, len(m.graph.betaNodes)),
+		Terminals: make([]reteGraphTerminalMemoryDiagnostics, 0, len(m.graph.terminalNodes)),
+	}
+	for _, node := range m.graph.betaNodes {
+		memory := m.betaNodeMemoryAt(node.id)
+		var left, right reteGraphTokenMemoryDiagnostics
+		if memory != nil {
+			left = memory.left.diagnostics()
+			right = memory.right.diagnostics()
+		}
+		diag := reteGraphBetaNodeMemoryDiagnostics{
+			ID:                   node.id,
+			Kind:                 node.kind,
+			Left:                 node.left,
+			Right:                node.right,
+			TokenWidth:           m.graph.stageTokenWidth(reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)}),
+			LeftRows:             left.Rows,
+			RightRows:            right.Rows,
+			TotalRows:            left.Rows + right.Rows,
+			LeftJoinIndexKeys:    left.JoinIndexKeys,
+			RightJoinIndexKeys:   right.JoinIndexKeys,
+			TotalJoinIndexKeys:   left.JoinIndexKeys + right.JoinIndexKeys,
+			LeftJoinBucketDepth:  left.JoinBucketDepthMax,
+			RightJoinBucketDepth: right.JoinBucketDepthMax,
+			MaxJoinBucketDepth:   max(left.JoinBucketDepthMax, right.JoinBucketDepthMax),
+			LeftJoinBucketTotal:  left.JoinBucketDepthTotal,
+			RightJoinBucketTotal: right.JoinBucketDepthTotal,
+			TotalJoinBucketDepth: left.JoinBucketDepthTotal + right.JoinBucketDepthTotal,
+			IdentityIndexKeys:    left.IdentityIndexKeys + right.IdentityIndexKeys,
+			FactIndexKeys:        left.FactIndexKeys + right.FactIndexKeys,
+		}
+		if diag.TotalRows > 0 {
+			out.WidestRetainedBetaTokenWidth = max(out.WidestRetainedBetaTokenWidth, diag.TokenWidth)
+		}
+		out.MaxBetaRows = max(out.MaxBetaRows, diag.TotalRows)
+		out.MaxBetaLeftRows = max(out.MaxBetaLeftRows, diag.LeftRows)
+		out.MaxBetaRightRows = max(out.MaxBetaRightRows, diag.RightRows)
+		out.MaxBetaJoinIndexKeys = max(out.MaxBetaJoinIndexKeys, diag.TotalJoinIndexKeys)
+		out.MaxBetaJoinBucketDepth = max(out.MaxBetaJoinBucketDepth, diag.MaxJoinBucketDepth)
+		out.BetaNodes = append(out.BetaNodes, diag)
+	}
+	for _, node := range m.graph.terminalNodes {
+		terminal := m.terminalAt(node.id)
+		diag := reteGraphTerminalMemoryDiagnostics{
+			ID:             node.id,
+			Kind:           node.kind,
+			RuleRevisionID: node.ruleRevisionID,
+			QueryName:      node.queryName,
+			Input:          node.input,
+			TokenWidth:     m.graph.stageTokenWidth(node.input),
+			BranchRows:     make(map[int]int),
+		}
+		if terminal != nil {
+			diag.Rows = len(terminal.rows.rows)
+			for _, row := range terminal.rows.rows {
+				if row.token.isZero() {
+					continue
+				}
+				for _, support := range row.branchSupports {
+					if support.count <= 0 {
+						continue
+					}
+					diag.BranchRows[support.branchID]++
+				}
+			}
+		}
+		if len(diag.BranchRows) == 0 {
+			diag.BranchRows = nil
+		}
+		out.MaxTerminalRows = max(out.MaxTerminalRows, diag.Rows)
+		for _, rows := range diag.BranchRows {
+			out.TotalTerminalBranchRows += rows
+			out.MaxTerminalBranchRows = max(out.MaxTerminalBranchRows, rows)
+		}
+		out.Terminals = append(out.Terminals, diag)
+	}
+	return out
+}
+
 func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
 	if s == nil {
 		return
@@ -3736,6 +3876,32 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
 	s.FactIndexReserve += memory.factIndexReserve
 	s.FactIndexKeysMax = max(s.FactIndexKeysMax, factKeys)
 	s.FactIndexReserveMax = max(s.FactIndexReserveMax, memory.factIndexReserve)
+}
+
+func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGraphBetaNodeMemory {
+	if m == nil || id <= 0 {
+		return nil
+	}
+	index := int(id)
+	if index < 0 || index >= len(m.nodes) {
+		return nil
+	}
+	return m.nodes[index]
+}
+
+func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
+	diag := reteGraphTokenMemoryDiagnostics{
+		Rows:              len(m.rows),
+		JoinIndexKeys:     len(m.indexes),
+		IdentityIndexKeys: len(m.identityRows),
+		FactIndexKeys:     len(m.factRows),
+	}
+	for _, bucket := range m.indexes {
+		depth := bucket.len()
+		diag.JoinBucketDepthTotal += depth
+		diag.JoinBucketDepthMax = max(diag.JoinBucketDepthMax, depth)
+	}
+	return diag
 }
 
 func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]ruleMatchResult, error) {
