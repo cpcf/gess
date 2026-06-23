@@ -11,9 +11,10 @@ import (
 )
 
 const (
-	graphRuleNetworkHarnessModeReplay        = "graph-replay"
-	graphRuleNetworkHarnessModeSeedRun       = "seed-run"
-	graphRuleNetworkHarnessModeSeedRunValues = "seed-run-values"
+	graphRuleNetworkHarnessModeReplay             = "graph-replay"
+	graphRuleNetworkHarnessModeSeedRun            = "seed-run"
+	graphRuleNetworkHarnessModeSeedRunValues      = "seed-run-values"
+	graphRuleNetworkHarnessModeSeedRunValuesBatch = "seed-run-values-batch"
 )
 
 func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
@@ -25,8 +26,8 @@ func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
 	if mode == "" {
 		mode = graphRuleNetworkHarnessModeReplay
 	}
-	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun && mode != graphRuleNetworkHarnessModeSeedRunValues {
-		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q, %q, or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, graphRuleNetworkHarnessModeSeedRunValues, mode)
+	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun && mode != graphRuleNetworkHarnessModeSeedRunValues && mode != graphRuleNetworkHarnessModeSeedRunValuesBatch {
+		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q, %q, %q, or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, graphRuleNetworkHarnessModeSeedRunValues, graphRuleNetworkHarnessModeSeedRunValuesBatch, mode)
 	}
 
 	iterations := graphRuleNetworkHarnessEnvInt(t, "GESS_GRAPH_RULE_NETWORK_ITERATIONS", 3)
@@ -72,6 +73,8 @@ func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, itera
 		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFacts)
 	case graphRuleNetworkHarnessModeSeedRunValues:
 		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithTemplateValues)
+	case graphRuleNetworkHarnessModeSeedRunValuesBatch:
+		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithTemplateValueBatch)
 	default:
 		t.Fatalf("unsupported graph-rule-network harness mode %q", mode)
 	}
@@ -226,6 +229,63 @@ func seedAuthoredOrderFactsWithTemplateValues(t testing.TB, ctx context.Context,
 				newIntValue(int64(id)),
 			}, mutationOrigin{}); err != nil {
 				t.Fatalf("insertTemplateValues(block): %v", err)
+			}
+		}
+	}
+}
+
+func seedAuthoredOrderFactsWithTemplateValueBatch(t testing.TB, ctx context.Context, session *Session, templates authoredOrderBenchmarkTemplates, items int) {
+	t.Helper()
+	err := session.insertTemplateValuesBatchWithContext(ctx, func(batch *templateValueBatch) error {
+		seedAuthoredOrderFactsIntoTemplateValueBatch(t, batch, templates, items)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("insertTemplateValuesBatch: %v", err)
+	}
+}
+
+func seedAuthoredOrderFactsIntoTemplateValueBatch(t testing.TB, batch *templateValueBatch, templates authoredOrderBenchmarkTemplates, items int) {
+	t.Helper()
+	for id := range authoredOrderRootCount {
+		group := "other"
+		if authoredOrderRootSelected(id) {
+			group = "target"
+		}
+		if err := batch.insert(templates.root, []Value{
+			newBoolValue(true),
+			newStringValue(group),
+			newIntValue(int64(id)),
+		}); err != nil {
+			t.Fatalf("insertTemplateValuesBatch(root): %v", err)
+		}
+	}
+	for id := range items {
+		if err := batch.insert(templates.event, []Value{
+			newIntValue(int64(id)),
+			newIntValue(int64(id % authoredOrderRootCount)),
+			newIntValue(int64(authoredOrderScore(id))),
+		}); err != nil {
+			t.Fatalf("insertTemplateValuesBatch(event): %v", err)
+		}
+		if err := batch.insert(templates.detail, []Value{
+			newStringValue(authoredOrderDetailCode(id)),
+			newIntValue(int64(id)),
+		}); err != nil {
+			t.Fatalf("insertTemplateValuesBatch(detail): %v", err)
+		}
+		if err := batch.insert(templates.tag, []Value{
+			newIntValue(int64(id)),
+			newStringValue(authoredOrderTagLabel(id)),
+		}); err != nil {
+			t.Fatalf("insertTemplateValuesBatch(tag): %v", err)
+		}
+		if authoredOrderBlocked(id) {
+			if err := batch.insert(templates.block, []Value{
+				newBoolValue(true),
+				newIntValue(int64(id)),
+			}); err != nil {
+				t.Fatalf("insertTemplateValuesBatch(block): %v", err)
 			}
 		}
 	}

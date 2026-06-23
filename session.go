@@ -560,6 +560,71 @@ func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, 
 	return nil
 }
 
+type templateValueBatch struct {
+	ctx            context.Context
+	session        *Session
+	needsReconcile bool
+}
+
+func (s *Session) insertTemplateValuesBatchWithContext(ctx context.Context, fn func(*templateValueBatch) error) error {
+	if s == nil {
+		return ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	locked, ok := s.beginMutationForOrigin(mutationOrigin{})
+	if !ok {
+		return ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+
+	batch := &templateValueBatch{
+		ctx:     ctx,
+		session: s,
+	}
+	if fn != nil {
+		if err := fn(batch); err != nil {
+			if batch.needsReconcile {
+				s.markAgendaDirty()
+			}
+			return err
+		}
+	}
+	if batch.needsReconcile {
+		_, err := s.reconcileAgendaInternal(ctx)
+		return err
+	}
+	return nil
+}
+
+func (b *templateValueBatch) insert(templateKey TemplateKey, values []Value) error {
+	if b == nil || b.session == nil {
+		return ErrClosedSession
+	}
+	if b.ctx == nil {
+		b.ctx = context.Background()
+	}
+	if err := b.ctx.Err(); err != nil {
+		return err
+	}
+	session := b.session
+	_, template, inserted, _, err := session.insertTemplateValuesImmediate(b.ctx, templateKey, values, mutationOrigin{})
+	if err != nil {
+		return err
+	}
+	if inserted && session.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
+		b.needsReconcile = true
+	}
+	return nil
+}
+
 func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin, supportingFacts []FactID) (AssertResult, reteAgendaDelta, error) {
 	if s == nil || s.closed {
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
