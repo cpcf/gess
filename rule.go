@@ -614,6 +614,11 @@ type normalizedRuleConditionBranch struct {
 	conditions []normalizedRuleCondition
 }
 
+type normalizedRuleConditionExecutionBranch struct {
+	source int
+	branch normalizedRuleConditionBranch
+}
+
 type compiledConditionBranch struct {
 	id         int
 	conditions []RuleConditionBranchCondition
@@ -700,6 +705,153 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 		}
 	}
 	return []normalizedRuleConditionBranch{branch}, nil
+}
+
+const maxExpandedExecutionBranchesPerBranch = 16
+
+func expandRuleConditionBranchesForExecution(branches []normalizedRuleConditionBranch) []normalizedRuleConditionExecutionBranch {
+	if len(branches) == 0 {
+		return nil
+	}
+	out := make([]normalizedRuleConditionExecutionBranch, 0, len(branches))
+	for source, branch := range branches {
+		expanded := expandRuleConditionBranchForExecution(branch)
+		for _, execution := range expanded {
+			out = append(out, normalizedRuleConditionExecutionBranch{
+				source: source,
+				branch: execution,
+			})
+		}
+	}
+	return out
+}
+
+func expandRuleConditionBranchForExecution(branch normalizedRuleConditionBranch) []normalizedRuleConditionBranch {
+	expanded := []normalizedRuleConditionBranch{cloneNormalizedRuleConditionBranch(branch)}
+	for conditionIndex, condition := range branch.conditions {
+		if condition.negated || condition.isAggregate {
+			continue
+		}
+		for predicateIndex, predicate := range condition.spec.Predicates {
+			alternatives, ok := disjunctiveJoinPredicateAlternatives(predicate)
+			if !ok {
+				continue
+			}
+			if len(expanded)*len(alternatives) > maxExpandedExecutionBranchesPerBranch {
+				return []normalizedRuleConditionBranch{cloneNormalizedRuleConditionBranch(branch)}
+			}
+			next := make([]normalizedRuleConditionBranch, 0, len(expanded)*len(alternatives))
+			for _, existing := range expanded {
+				for _, alternative := range alternatives {
+					branchCopy := cloneNormalizedRuleConditionBranch(existing)
+					branchCopy.conditions[conditionIndex].spec.Predicates[predicateIndex] = cloneExpressionSpec(alternative)
+					next = append(next, branchCopy)
+				}
+			}
+			expanded = next
+		}
+	}
+	return expanded
+}
+
+func cloneNormalizedRuleConditionBranch(branch normalizedRuleConditionBranch) normalizedRuleConditionBranch {
+	out := normalizedRuleConditionBranch{
+		conditions: make([]normalizedRuleCondition, len(branch.conditions)),
+	}
+	for i, condition := range branch.conditions {
+		out.conditions[i] = cloneNormalizedRuleCondition(condition)
+	}
+	return out
+}
+
+func disjunctiveJoinPredicateAlternatives(spec ExpressionSpec) ([]ExpressionSpec, bool) {
+	var expression BooleanExpr
+	switch typed := spec.(type) {
+	case BooleanExpr:
+		expression = typed
+	case *BooleanExpr:
+		if typed == nil {
+			return nil, false
+		}
+		expression = *typed
+	default:
+		return nil, false
+	}
+	if expression.Operator != ExpressionBoolOr || len(expression.Operands) == 0 {
+		return nil, false
+	}
+	alternatives := make([]ExpressionSpec, 0, len(expression.Operands))
+	for _, operand := range expression.Operands {
+		if !isDisjunctiveJoinPredicateAlternative(operand) {
+			return nil, false
+		}
+		alternatives = append(alternatives, cloneExpressionSpec(operand))
+	}
+	return alternatives, true
+}
+
+func isDisjunctiveJoinPredicateAlternative(spec ExpressionSpec) bool {
+	var expression CompareExpr
+	switch typed := spec.(type) {
+	case CompareExpr:
+		expression = typed
+	case *CompareExpr:
+		if typed == nil {
+			return false
+		}
+		expression = *typed
+	default:
+		return false
+	}
+	if expression.Operator != ExpressionCompareEqual {
+		return false
+	}
+	return currentFieldAndBindingFieldExpression(expression.Left, expression.Right) ||
+		currentFieldAndBindingFieldExpression(expression.Right, expression.Left)
+}
+
+func currentFieldAndBindingFieldExpression(currentSpec, bindingSpec ExpressionSpec) bool {
+	currentPath, ok := currentFieldExpressionPath(currentSpec)
+	if !ok || !currentPath.topLevel() {
+		return false
+	}
+	bindingPath, ok := bindingFieldExpressionPath(bindingSpec)
+	return ok && bindingPath.topLevel()
+}
+
+func currentFieldExpressionPath(spec ExpressionSpec) (PathSpec, bool) {
+	switch expression := spec.(type) {
+	case CurrentFieldExpr:
+		path := pathOrField(expression.Path, expression.Field)
+		return path, path.root() != ""
+	case *CurrentFieldExpr:
+		if expression == nil {
+			return PathSpec{}, false
+		}
+		path := pathOrField(expression.Path, expression.Field)
+		return path, path.root() != ""
+	default:
+		return PathSpec{}, false
+	}
+}
+
+func bindingFieldExpressionPath(spec ExpressionSpec) (PathSpec, bool) {
+	switch expression := spec.(type) {
+	case BindingFieldExpr:
+		if strings.TrimSpace(expression.Binding) == "" {
+			return PathSpec{}, false
+		}
+		path := pathOrField(expression.Path, expression.Field)
+		return path, path.root() != ""
+	case *BindingFieldExpr:
+		if expression == nil || strings.TrimSpace(expression.Binding) == "" {
+			return PathSpec{}, false
+		}
+		path := pathOrField(expression.Path, expression.Field)
+		return path, path.root() != ""
+	default:
+		return PathSpec{}, false
+	}
 }
 
 func expandConditionTreeBranches(ruleName string, spec ConditionSpec) ([]normalizedRuleConditionBranch, error) {
@@ -1131,7 +1283,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	if err != nil {
 		return compiledRule{}, err
 	}
-	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
+	publicBranches := make([]compiledRuleConditionSet, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		publicBranchIR := newBranchPlanningIR(branchIndex, branch.conditions)
@@ -1144,7 +1296,13 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, publicBranch.conditions); err != nil {
 			return compiledRule{}, err
 		}
-		plannedBranchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
+		publicBranches[branchIndex] = publicBranch
+	}
+	executionBranches := expandRuleConditionBranchesForExecution(normalizedBranches)
+	compiledBranches := make([]compiledConditionBranch, 0, len(executionBranches))
+	for branchIndex, executionBranch := range executionBranches {
+		publicBranch := publicBranches[executionBranch.source]
+		plannedBranchIR := newReorderedBranchPlanningIR(branchIndex, executionBranch.branch.conditions)
 		plannedBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, plannedBranchIR, templatesByKey, false, nil, functions)
 		if err != nil {
 			return compiledRule{}, err
@@ -1159,11 +1317,11 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	conditionPlans := compiledBranches[0].plans
 	treeConditions := inspectionSet.treeConditions
 	conditionTree := buildRuleConditionTree(conditionTreeShape, treeConditions)
-	conditionBranches := make([]RuleConditionBranch, len(compiledBranches))
-	for i, branch := range compiledBranches {
+	conditionBranches := make([]RuleConditionBranch, len(publicBranches))
+	for i, branch := range publicBranches {
 		conditionBranches[i] = RuleConditionBranch{
-			id:         branch.id,
-			conditions: cloneRuleConditionBranchConditions(branch.conditions),
+			id:         i,
+			conditions: cloneRuleConditionBranchConditions(branch.branchConditions),
 		}
 	}
 

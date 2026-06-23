@@ -1020,6 +1020,116 @@ func TestDisjunctiveLiteralPredicateCompilesToAlphaMembershipConstraint(t *testi
 	}
 }
 
+func TestDisjunctiveJoinPredicateExpandsToHashJoinBranches(t *testing.T) {
+	workspace := NewWorkspace()
+	system := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "system",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	finding := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "finding",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "primary-system", Kind: ValueString, Required: true},
+			{Name: "secondary-system", Kind: ValueString, Required: true},
+		},
+	})
+	var fired []string
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ctx ActionContext) error {
+		fact, ok := ctx.Binding("finding")
+		if !ok {
+			return fmt.Errorf("missing finding binding")
+		}
+		id, ok := fact.Field("id")
+		if !ok {
+			return fmt.Errorf("missing id")
+		}
+		text, _ := id.AsString()
+		fired = append(fired, text)
+		return nil
+	}})
+	predicate := BooleanExpr{
+		Operator: ExpressionBoolOr,
+		Operands: []ExpressionSpec{
+			CompareExpr{
+				Operator: ExpressionCompareEqual,
+				Left:     CurrentFieldExpr{Field: "primary-system"},
+				Right:    BindingFieldExpr{Binding: "system", Field: "id"},
+			},
+			CompareExpr{
+				Operator: ExpressionCompareEqual,
+				Left:     CurrentFieldExpr{Field: "secondary-system"},
+				Right:    BindingFieldExpr{Binding: "system", Field: "id"},
+			},
+		},
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "system-finding",
+		Conditions: []RuleConditionSpec{
+			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "finding", TemplateKey: finding.Key(), Predicates: []ExpressionSpec{predicate}},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("system-finding")
+	if !ok {
+		t.Fatal("compiled revision missing system-finding")
+	}
+	if got := len(rule.ConditionBranches()); got != 1 {
+		t.Fatalf("public condition branches = %d, want 1", got)
+	}
+	if _, ok := rule.Conditions()[1].Predicates()[0].Expression().(BooleanExpr); !ok {
+		t.Fatalf("public predicate expression type = %T, want BooleanExpr", rule.Conditions()[1].Predicates()[0].Expression())
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.Plan.Branches), 2; got != want {
+		t.Fatalf("graph branches = %d, want %d", got, want)
+	}
+	var hashJoins, betaPredicates int
+	for _, node := range summary.BetaNodes {
+		hashJoins += len(node.hashJoins)
+		betaPredicates += len(node.predicates)
+	}
+	if hashJoins != 2 {
+		t.Fatalf("hash joins = %d, want 2", hashJoins)
+	}
+	if betaPredicates != 2 {
+		t.Fatalf("beta residual predicates = %d, want 2", betaPredicates)
+	}
+
+	session := mustSession(t, revision, "disjunctive-join-branches")
+	ctx := context.Background()
+	if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("AssertTemplate(system): %v", err)
+	}
+	for _, row := range []map[string]any{
+		{"id": "primary", "primary-system": "s-1", "secondary-system": "none"},
+		{"id": "secondary", "primary-system": "none", "secondary-system": "s-1"},
+		{"id": "both", "primary-system": "s-1", "secondary-system": "s-1"},
+		{"id": "neither", "primary-system": "none", "secondary-system": "none"},
+	} {
+		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("AssertTemplate(finding): %v", err)
+		}
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 3 {
+		t.Fatalf("fired = %d, want 3", result.Fired)
+	}
+	slices.Sort(fired)
+	if !slices.Equal(fired, []string{"both", "primary", "secondary"}) {
+		t.Fatalf("fired findings = %#v, want both, primary, secondary", fired)
+	}
+}
+
 func TestConditionTreeMatchPreservesExpressionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
