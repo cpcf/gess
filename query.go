@@ -253,7 +253,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 	graphBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
-		branchIR := newBranchPlanningIR(branchIndex, branch.conditions)
+		branchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
 		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, branchIR, templatesByKey, false, paramTypes)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
