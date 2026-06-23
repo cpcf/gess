@@ -88,6 +88,31 @@ func TestSessionQueryDoesNotFireRulesOrEmitFactEvents(t *testing.T) {
 	}
 }
 
+func TestSessionQueryInitializesGraphTerminalMemoryForQueryOnlyRuleset(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustQueryRevision(t)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatal("query-only session did not initialize graph beta memory")
+	}
+	if got := len(revision.graph.queryTerminalIDs["adults-by-dept"]); got == 0 {
+		t.Fatal("query graph terminal was not compiled")
+	}
+
+	rows, err := session.QueryAll(ctx, "adults-by-dept", QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+}
+
 func TestQueryIteratorCancellationReturnsNoPartialAllResults(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustQueryRevision(t)

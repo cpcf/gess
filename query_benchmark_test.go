@@ -7,7 +7,6 @@ import (
 )
 
 var benchmarkQueryRows []QueryRow
-var benchmarkJessLikeQueryRunResult RunResult
 
 type queryBenchmarkShape string
 
@@ -29,7 +28,7 @@ type queryBenchmarkRevision struct {
 	blockKey      TemplateKey
 }
 
-func BenchmarkSnapshotQueryVsJessLikeTriggerRuleScaling(b *testing.B) {
+func BenchmarkGraphTerminalQueryScaling(b *testing.B) {
 	cases := []queryBenchmarkCase{
 		{shape: queryBenchmarkSimple, factCount: 1_000},
 		{shape: queryBenchmarkSimple, factCount: 10_000},
@@ -44,30 +43,23 @@ func BenchmarkSnapshotQueryVsJessLikeTriggerRuleScaling(b *testing.B) {
 
 	for _, tc := range cases {
 		name := fmt.Sprintf("%s/facts=%d/rows=%d", tc.shape, tc.factCount, benchmarkQueryExpectedRows(tc.shape, tc.factCount))
-		b.Run(name+"/native-snapshot-query", func(b *testing.B) {
-			benchmarkNativeSnapshotQuery(b, tc)
-		})
-		b.Run(name+"/jess-like-trigger-rule", func(b *testing.B) {
-			benchmarkJessLikeTriggerRuleQuery(b, tc)
+		b.Run(name+"/graph-terminal-query", func(b *testing.B) {
+			benchmarkGraphTerminalQuery(b, tc)
 		})
 	}
 }
 
-func benchmarkNativeSnapshotQuery(b *testing.B, tc queryBenchmarkCase) {
+func benchmarkGraphTerminalQuery(b *testing.B, tc queryBenchmarkCase) {
 	b.Helper()
 	ctx := context.Background()
-	compiled := benchmarkNativeQueryRevision(b, tc.shape)
+	compiled := benchmarkQueryRevision(b, tc.shape)
 	initials := benchmarkQueryFacts(b, compiled, tc.factCount)
 	session, err := NewSession(compiled.revision, WithInitialFacts(initials...))
 	if err != nil {
 		b.Fatalf("NewSession: %v", err)
 	}
-	snapshot, err := session.Snapshot(ctx)
-	if err != nil {
-		b.Fatalf("Snapshot: %v", err)
-	}
 	queryName, args := benchmarkQueryInvocation(tc.shape)
-	rows, err := snapshot.QueryAll(ctx, queryName, args)
+	rows, err := session.QueryAll(ctx, queryName, args)
 	if err != nil {
 		b.Fatalf("warmup QueryAll: %v", err)
 	}
@@ -80,7 +72,7 @@ func benchmarkNativeSnapshotQuery(b *testing.B, tc queryBenchmarkCase) {
 	b.ReportMetric(float64(len(rows)), "rows/query")
 	b.ResetTimer()
 	for b.Loop() {
-		rows, err := snapshot.QueryAll(ctx, queryName, args)
+		rows, err := session.QueryAll(ctx, queryName, args)
 		if err != nil {
 			b.Fatalf("QueryAll: %v", err)
 		}
@@ -88,52 +80,7 @@ func benchmarkNativeSnapshotQuery(b *testing.B, tc queryBenchmarkCase) {
 	}
 }
 
-func benchmarkJessLikeTriggerRuleQuery(b *testing.B, tc queryBenchmarkCase) {
-	b.Helper()
-	ctx := context.Background()
-	compiled := benchmarkJessLikeQueryRevision(b, tc.shape)
-	initials := benchmarkQueryFacts(b, compiled, tc.factCount)
-	triggerFields := benchmarkQueryTriggerFields(b, tc.shape)
-	warmup := mustSession(b, compiled.revision, "jess-like-query-warmup")
-	for _, initial := range initials {
-		if _, err := warmup.AssertTemplate(ctx, initial.TemplateKey, initial.Fields); err != nil {
-			b.Fatalf("warmup AssertTemplate: %v", err)
-		}
-	}
-	if _, err := warmup.AssertTemplate(ctx, "query_trigger", triggerFields); err != nil {
-		b.Fatalf("warmup trigger assert: %v", err)
-	}
-	warmupResult, err := warmup.Run(ctx)
-	if err != nil {
-		b.Fatalf("warmup Run: %v", err)
-	}
-	expectedRows := benchmarkQueryExpectedRows(tc.shape, tc.factCount)
-	if warmupResult.Fired != expectedRows {
-		b.Fatalf("warmup fired = %d, want %d", warmupResult.Fired, expectedRows)
-	}
-	b.ReportAllocs()
-	b.ReportMetric(float64(tc.factCount), "facts")
-	b.ReportMetric(float64(warmupResult.Fired), "rows/query")
-	b.ResetTimer()
-	for b.Loop() {
-		b.StopTimer()
-		session, err := NewSession(compiled.revision, WithInitialFacts(initials...))
-		if err != nil {
-			b.Fatalf("NewSession: %v", err)
-		}
-		b.StartTimer()
-		if _, err := session.AssertTemplate(ctx, "query_trigger", triggerFields); err != nil {
-			b.Fatalf("AssertTemplate trigger: %v", err)
-		}
-		result, err := session.Run(ctx)
-		if err != nil {
-			b.Fatalf("Run: %v", err)
-		}
-		benchmarkJessLikeQueryRunResult = result
-	}
-}
-
-func benchmarkNativeQueryRevision(tb testing.TB, shape queryBenchmarkShape) queryBenchmarkRevision {
+func benchmarkQueryRevision(tb testing.TB, shape queryBenchmarkShape) queryBenchmarkRevision {
 	tb.Helper()
 	workspace, personKey, departmentKey, blockKey := benchmarkQueryWorkspace(tb)
 	switch shape {
@@ -143,35 +90,6 @@ func benchmarkNativeQueryRevision(tb testing.TB, shape queryBenchmarkShape) quer
 		mustAddBenchmarkJoinQuery(tb, workspace, personKey, departmentKey)
 	case queryBenchmarkNegation:
 		mustAddBenchmarkNegationQuery(tb, workspace, personKey, blockKey)
-	default:
-		tb.Fatalf("unsupported query benchmark shape %q", shape)
-	}
-	return queryBenchmarkRevision{
-		revision:      mustCompileWorkspace(tb, workspace),
-		personKey:     personKey,
-		departmentKey: departmentKey,
-		blockKey:      blockKey,
-	}
-}
-
-func benchmarkJessLikeQueryRevision(tb testing.TB, shape queryBenchmarkShape) queryBenchmarkRevision {
-	tb.Helper()
-	workspace, personKey, departmentKey, blockKey := benchmarkQueryWorkspace(tb)
-	trigger := mustAddTemplate(tb, workspace, TemplateSpec{
-		Name: "query_trigger",
-		Fields: []FieldSpec{
-			{Name: "dept", Kind: ValueString},
-			{Name: "region", Kind: ValueString},
-		},
-	})
-	mustAddAction(tb, workspace, ActionSpec{Name: "capture", Fn: func(ActionContext) error { return nil }})
-	switch shape {
-	case queryBenchmarkSimple:
-		mustAddBenchmarkSimpleJessLikeRule(tb, workspace, trigger.Key(), personKey)
-	case queryBenchmarkJoin:
-		mustAddBenchmarkJoinJessLikeRule(tb, workspace, trigger.Key(), personKey, departmentKey)
-	case queryBenchmarkNegation:
-		mustAddBenchmarkNegationJessLikeRule(tb, workspace, trigger.Key(), personKey, blockKey)
 	default:
 		tb.Fatalf("unsupported query benchmark shape %q", shape)
 	}
@@ -294,89 +212,6 @@ func mustAddBenchmarkNegationQuery(tb testing.TB, workspace *Workspace, personKe
 	}
 }
 
-func mustAddBenchmarkSimpleJessLikeRule(tb testing.TB, workspace *Workspace, triggerKey, personKey TemplateKey) {
-	tb.Helper()
-	mustAddRule(tb, workspace, RuleSpec{
-		Name: "simple-jess-like",
-		Conditions: []RuleConditionSpec{
-			{Binding: "q", TemplateKey: triggerKey},
-			{
-				Binding:     "p",
-				TemplateKey: personKey,
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "q", Field: "dept"}},
-				},
-				Predicates: []ExpressionSpec{
-					CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "age"}, Right: ConstExpr{Value: 18}},
-				},
-			},
-		},
-		Actions: []RuleActionSpec{{Name: "capture"}},
-	})
-}
-
-func mustAddBenchmarkJoinJessLikeRule(tb testing.TB, workspace *Workspace, triggerKey, personKey, departmentKey TemplateKey) {
-	tb.Helper()
-	mustAddRule(tb, workspace, RuleSpec{
-		Name: "join-jess-like",
-		Conditions: []RuleConditionSpec{
-			{Binding: "q", TemplateKey: triggerKey},
-			{
-				Binding:     "d",
-				TemplateKey: departmentKey,
-				FieldConstraints: []FieldConstraintSpec{
-					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "q", Field: "region"}},
-				},
-			},
-			{
-				Binding:     "p",
-				TemplateKey: personKey,
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "d", Field: "id"}},
-				},
-				Predicates: []ExpressionSpec{
-					CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "age"}, Right: ConstExpr{Value: 18}},
-				},
-			},
-		},
-		Actions: []RuleActionSpec{{Name: "capture"}},
-	})
-}
-
-func mustAddBenchmarkNegationJessLikeRule(tb testing.TB, workspace *Workspace, triggerKey, personKey, blockKey TemplateKey) {
-	tb.Helper()
-	mustAddRule(tb, workspace, RuleSpec{
-		Name: "negation-jess-like",
-		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "q", TemplateKey: triggerKey},
-			Match{
-				Binding:     "p",
-				TemplateKey: personKey,
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "q", Field: "dept"}},
-				},
-				Predicates: []ExpressionSpec{
-					CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "age"}, Right: ConstExpr{Value: 18}},
-				},
-			},
-			Not{Condition: Match{
-				Binding:     "b",
-				TemplateKey: blockKey,
-				FieldConstraints: []FieldConstraintSpec{
-					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "person_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "p", Field: "id"}},
-				},
-			}},
-		}},
-		Actions: []RuleActionSpec{{Name: "capture"}},
-	})
-}
-
 func benchmarkAdultPersonMatch(personKey TemplateKey, dept ExpressionSpec) Match {
 	return Match{
 		Binding:     "p",
@@ -398,19 +233,6 @@ func benchmarkQueryInvocation(shape queryBenchmarkShape) (string, QueryArgs) {
 		return "negation", QueryArgs{"dept": "dept-00"}
 	default:
 		return "", nil
-	}
-}
-
-func benchmarkQueryTriggerFields(tb testing.TB, shape queryBenchmarkShape) Fields {
-	tb.Helper()
-	switch shape {
-	case queryBenchmarkSimple, queryBenchmarkNegation:
-		return mustFields(tb, map[string]any{"dept": "dept-00"})
-	case queryBenchmarkJoin:
-		return mustFields(tb, map[string]any{"region": "region-0"})
-	default:
-		tb.Fatalf("unsupported query benchmark shape %q", shape)
-		return nil
 	}
 }
 

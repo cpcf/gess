@@ -238,6 +238,13 @@ func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTer
 	return nil, false, nil
 }
 
+func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, source Snapshot) ([]QueryRow, bool, error) {
+	if r == nil || r.revision == nil || r.graphBeta == nil {
+		return nil, false, nil
+	}
+	return r.graphBeta.queryRows(ctx, query, args, trigger, source)
+}
+
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
 	if r == nil {
 		return reteRuntimeMetrics{}
@@ -797,7 +804,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 		}
 		plan.rules = append(plan.rules, rulePlan)
 	}
-	plan.betaSupported = len(plan.rules) > 0
+	plan.betaSupported = len(plan.rules) > 0 || (revision.graph != nil && len(revision.graph.betaNodes) > 0)
 	plan.incrementalAgendaSupported = len(plan.rules) > 0
 	for _, rulePlan := range plan.rules {
 		rule, ok := revision.rulesByRevisionID[rulePlan.ruleRevisionID]

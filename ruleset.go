@@ -358,7 +358,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryOrder:            queryOrder,
 		conditionTemplateKeys: conditionTemplateKeys,
 		conditionNames:        conditionNames,
-		graph:                 compileReteGraph(compiledRules, templatesByKey),
+		graph:                 compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
 

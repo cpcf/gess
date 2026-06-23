@@ -164,16 +164,19 @@ func (q Query) Returns() []QueryReturn {
 }
 
 type compiledQuery struct {
-	name                 string
-	description          string
-	parameters           []QueryParameter
-	parameterTypes       map[string]ValueKind
-	conditions           []RuleCondition
-	treeConditions       []RuleCondition
-	conditionTree        RuleConditionTree
-	conditionBranches    []compiledConditionBranch
-	conditionBranchPlans []RuleConditionBranch
-	returns              []compiledQueryReturn
+	name                   string
+	description            string
+	parameters             []QueryParameter
+	parameterTypes         map[string]ValueKind
+	conditions             []RuleCondition
+	treeConditions         []RuleCondition
+	conditionTree          RuleConditionTree
+	conditionBranches      []compiledConditionBranch
+	graphConditionBranches []compiledConditionBranch
+	conditionBranchPlans   []RuleConditionBranch
+	returns                []compiledQueryReturn
+	returnAliases          []string
+	returnAliasIndex       map[string]int
 }
 
 type compiledQueryReturn struct {
@@ -247,6 +250,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 		return compiledQuery{}, markQueryValidation(err)
 	}
 	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
+	graphBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		compiledBranch, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, branch.conditions, templatesByKey, false, paramTypes)
@@ -263,6 +267,20 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 			conditions: compiledBranch.branchConditions,
 			plans:      compiledBranch.conditionPlans,
 		})
+		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, branchIndex, branch.conditions, templatesByKey, paramTypes)
+		if err != nil {
+			return compiledQuery{}, markQueryValidation(err)
+		}
+		if ok {
+			graphBranches = append(graphBranches, graphBranch)
+		}
+	}
+	if len(graphBranches) != len(normalizedBranches) {
+		return compiledQuery{}, &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "query cannot be compiled to graph terminal memory",
+			Err:      ErrQueryValidation,
+		}
 	}
 	conditionBranches := make([]RuleConditionBranch, len(compiledBranches))
 	for i, branch := range compiledBranches {
@@ -280,17 +298,22 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 		return compiledQuery{}, err
 	}
 
+	returnAliases, returnAliasIndex := compileQueryReturnIndexes(returns)
+
 	return compiledQuery{
-		name:                 normalized.Name,
-		description:          normalized.Description,
-		parameters:           params,
-		parameterTypes:       paramTypes,
-		conditions:           representative.conditions,
-		treeConditions:       inspectionSet.treeConditions,
-		conditionTree:        buildRuleConditionTree(conditionTreeShape, inspectionSet.treeConditions),
-		conditionBranches:    compiledBranches,
-		conditionBranchPlans: conditionBranches,
-		returns:              returns,
+		name:                   normalized.Name,
+		description:            normalized.Description,
+		parameters:             params,
+		parameterTypes:         paramTypes,
+		conditions:             representative.conditions,
+		treeConditions:         inspectionSet.treeConditions,
+		conditionTree:          buildRuleConditionTree(conditionTreeShape, inspectionSet.treeConditions),
+		conditionBranches:      compiledBranches,
+		graphConditionBranches: graphBranches,
+		conditionBranchPlans:   conditionBranches,
+		returns:                returns,
+		returnAliases:          returnAliases,
+		returnAliasIndex:       returnAliasIndex,
 	}, nil
 }
 
@@ -378,6 +401,240 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 	return returns, nil
 }
 
+func compileQueryReturnIndexes(returns []compiledQueryReturn) ([]string, map[string]int) {
+	aliases := make([]string, len(returns))
+	index := make(map[string]int, len(returns))
+	for i, ret := range returns {
+		aliases[i] = ret.alias
+		index[ret.alias] = i
+	}
+	return aliases, index
+}
+
+const internalQueryTriggerBinding = "__gess_query_trigger"
+
+func internalQueryTriggerName(queryName string) string {
+	return "__gess_query_trigger:" + queryName
+}
+
+func compileQueryGraphBranch(queryName string, queryRuleID RuleID, branchIndex int, branch []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, params map[string]ValueKind) (compiledConditionBranch, bool, error) {
+	if len(branch) == 0 {
+		return compiledConditionBranch{}, false, nil
+	}
+	lowered := make([]normalizedRuleCondition, 0, len(branch)+1)
+	lowered = append(lowered, normalizedRuleCondition{
+		spec: RuleConditionSpec{
+			Binding: internalQueryTriggerBinding,
+			Name:    internalQueryTriggerName(queryName),
+		},
+		visible: true,
+	})
+	for _, condition := range branch {
+		if condition.isAggregate {
+			return compiledConditionBranch{}, false, nil
+		}
+		next := condition
+		next.spec = lowerQueryConditionParams(condition.spec, params)
+		lowered = append(lowered, next)
+	}
+	compiled, err := compileNormalizedRuleConditionBranch(queryName, queryRuleID, lowered, templatesByKey, false)
+	if err != nil {
+		return compiledConditionBranch{}, false, err
+	}
+	return compiledConditionBranch{
+		id:         branchIndex,
+		conditions: compiled.branchConditions,
+		plans:      compiled.conditionPlans,
+	}, true, nil
+}
+
+func lowerQueryConditionParams(condition RuleConditionSpec, params map[string]ValueKind) RuleConditionSpec {
+	out := condition.clone()
+	if len(params) == 0 {
+		return out
+	}
+	predicates := out.Predicates
+	out.Predicates = make([]ExpressionSpec, 0, len(predicates))
+	for _, predicate := range predicates {
+		if join, ok := queryParamJoinFromPredicate(predicate, params); ok {
+			out.JoinConstraints = append(out.JoinConstraints, join)
+			continue
+		}
+		out.Predicates = append(out.Predicates, lowerQueryParamExpression(predicate, params))
+	}
+	return out
+}
+
+func queryParamJoinFromPredicate(spec ExpressionSpec, params map[string]ValueKind) (JoinConstraintSpec, bool) {
+	compare, ok := queryCompareExpr(spec)
+	if !ok {
+		return JoinConstraintSpec{}, false
+	}
+	operator, ok := fieldConstraintOperatorFromExpression(compare.Operator)
+	if !ok {
+		return JoinConstraintSpec{}, false
+	}
+	if field, ok := queryCurrentFieldExpr(compare.Left); ok {
+		if param, ok := queryParamExpr(compare.Right, params); ok {
+			return JoinConstraintSpec{
+				Field:    field,
+				Operator: operator,
+				Ref: FieldRef{
+					Binding: internalQueryTriggerBinding,
+					Field:   param,
+				},
+			}, true
+		}
+	}
+	if field, ok := queryCurrentFieldExpr(compare.Right); ok {
+		if param, ok := queryParamExpr(compare.Left, params); ok {
+			inverted, ok := invertFieldConstraintOperator(operator)
+			if !ok {
+				return JoinConstraintSpec{}, false
+			}
+			return JoinConstraintSpec{
+				Field:    field,
+				Operator: inverted,
+				Ref: FieldRef{
+					Binding: internalQueryTriggerBinding,
+					Field:   param,
+				},
+			}, true
+		}
+	}
+	return JoinConstraintSpec{}, false
+}
+
+func queryCompareExpr(spec ExpressionSpec) (CompareExpr, bool) {
+	switch expression := spec.(type) {
+	case CompareExpr:
+		return expression, true
+	case *CompareExpr:
+		if expression == nil {
+			return CompareExpr{}, false
+		}
+		return *expression, true
+	default:
+		return CompareExpr{}, false
+	}
+}
+
+func queryCurrentFieldExpr(spec ExpressionSpec) (string, bool) {
+	switch expression := spec.(type) {
+	case CurrentFieldExpr:
+		return strings.TrimSpace(expression.Field), strings.TrimSpace(expression.Field) != ""
+	case *CurrentFieldExpr:
+		if expression == nil {
+			return "", false
+		}
+		return strings.TrimSpace(expression.Field), strings.TrimSpace(expression.Field) != ""
+	default:
+		return "", false
+	}
+}
+
+func queryParamExpr(spec ExpressionSpec, params map[string]ValueKind) (string, bool) {
+	switch expression := spec.(type) {
+	case ParamExpr:
+		name := strings.TrimSpace(expression.Name)
+		_, ok := params[name]
+		return name, name != "" && ok
+	case *ParamExpr:
+		if expression == nil {
+			return "", false
+		}
+		name := strings.TrimSpace(expression.Name)
+		_, ok := params[name]
+		return name, name != "" && ok
+	default:
+		return "", false
+	}
+}
+
+func fieldConstraintOperatorFromExpression(operator ExpressionComparisonOperator) (FieldConstraintOperator, bool) {
+	switch operator {
+	case ExpressionCompareEqual:
+		return FieldConstraintEqual, true
+	case ExpressionCompareNotEqual:
+		return FieldConstraintNotEqual, true
+	case ExpressionCompareLessThan:
+		return FieldConstraintLessThan, true
+	case ExpressionCompareLessOrEqual:
+		return FieldConstraintLessOrEqual, true
+	case ExpressionCompareGreaterThan:
+		return FieldConstraintGreaterThan, true
+	case ExpressionCompareGreaterOrEqual:
+		return FieldConstraintGreaterOrEqual, true
+	default:
+		return FieldConstraintOpUnknown, false
+	}
+}
+
+func invertFieldConstraintOperator(operator FieldConstraintOperator) (FieldConstraintOperator, bool) {
+	switch operator {
+	case FieldConstraintEqual:
+		return FieldConstraintEqual, true
+	case FieldConstraintNotEqual:
+		return FieldConstraintNotEqual, true
+	case FieldConstraintLessThan:
+		return FieldConstraintGreaterThan, true
+	case FieldConstraintLessOrEqual:
+		return FieldConstraintGreaterOrEqual, true
+	case FieldConstraintGreaterThan:
+		return FieldConstraintLessThan, true
+	case FieldConstraintGreaterOrEqual:
+		return FieldConstraintLessOrEqual, true
+	default:
+		return FieldConstraintOpUnknown, false
+	}
+}
+
+func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind) ExpressionSpec {
+	switch expression := spec.(type) {
+	case ParamExpr:
+		name := strings.TrimSpace(expression.Name)
+		if _, ok := params[name]; ok {
+			return BindingFieldExpr{Binding: internalQueryTriggerBinding, Field: name}
+		}
+		return expression.clone()
+	case *ParamExpr:
+		if expression == nil {
+			return nil
+		}
+		return lowerQueryParamExpression(*expression, params)
+	case CompareExpr:
+		out := expression.clone()
+		out.Left = lowerQueryParamExpression(out.Left, params)
+		out.Right = lowerQueryParamExpression(out.Right, params)
+		return out
+	case *CompareExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		out.Left = lowerQueryParamExpression(out.Left, params)
+		out.Right = lowerQueryParamExpression(out.Right, params)
+		return &out
+	case BooleanExpr:
+		out := expression.clone()
+		for i := range out.Operands {
+			out.Operands[i] = lowerQueryParamExpression(out.Operands[i], params)
+		}
+		return out
+	case *BooleanExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		for i := range out.Operands {
+			out.Operands[i] = lowerQueryParamExpression(out.Operands[i], params)
+		}
+		return &out
+	default:
+		return cloneExpressionSpec(spec)
+	}
+}
+
 func expressionContainsCurrentField(spec ExpressionSpec) bool {
 	switch expression := spec.(type) {
 	case CurrentFieldExpr, *CurrentFieldExpr:
@@ -414,6 +671,8 @@ func markQueryValidation(err error) error {
 type QueryRow struct {
 	values map[string]queryRowValue
 	order  []string
+	index  map[string]int
+	items  []queryRowValue
 }
 
 type queryRowValue struct {
@@ -429,6 +688,17 @@ func (r QueryRow) Aliases() []string {
 }
 
 func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
+	if len(r.items) != 0 {
+		idx, ok := r.itemIndex(alias)
+		if !ok {
+			return FactSnapshot{}, false
+		}
+		item := r.items[idx]
+		if !item.hasFact {
+			return FactSnapshot{}, false
+		}
+		return item.fact.clone(), true
+	}
 	item, ok := r.values[alias]
 	if !ok || !item.hasFact {
 		return FactSnapshot{}, false
@@ -437,11 +707,38 @@ func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
 }
 
 func (r QueryRow) Value(alias string) (Value, bool) {
+	if len(r.items) != 0 {
+		idx, ok := r.itemIndex(alias)
+		if !ok {
+			return Value{}, false
+		}
+		item := r.items[idx]
+		if item.hasFact {
+			return Value{}, false
+		}
+		return cloneValue(item.value), true
+	}
 	item, ok := r.values[alias]
 	if !ok || item.hasFact {
 		return Value{}, false
 	}
 	return cloneValue(item.value), true
+}
+
+func (r QueryRow) itemIndex(alias string) (int, bool) {
+	if r.index != nil {
+		idx, ok := r.index[alias]
+		if ok && idx >= 0 && idx < len(r.items) {
+			return idx, true
+		}
+		return -1, false
+	}
+	for i, candidate := range r.order {
+		if candidate == alias {
+			return i, i < len(r.items)
+		}
+	}
+	return -1, false
 }
 
 type QueryIterator struct {
@@ -482,6 +779,19 @@ func (it *QueryIterator) All(ctx context.Context) ([]QueryRow, error) {
 }
 
 func (r QueryRow) clone() QueryRow {
+	if len(r.items) != 0 {
+		out := QueryRow{
+			order: append([]string(nil), r.order...),
+			index: r.index,
+			items: make([]queryRowValue, len(r.items)),
+		}
+		for i, value := range r.items {
+			value.fact = value.fact.clone()
+			value.value = cloneValue(value.value)
+			out.items[i] = value
+		}
+		return out
+	}
 	out := QueryRow{
 		values: make(map[string]queryRowValue, len(r.values)),
 		order:  append([]string(nil), r.order...),
@@ -503,11 +813,7 @@ func (s Snapshot) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 }
 
 func (s Snapshot) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
-	it, err := s.Query(ctx, name, args)
-	if err != nil {
-		return nil, err
-	}
-	return it.All(ctx)
+	return s.queryRows(ctx, name, args)
 }
 
 func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
@@ -528,23 +834,124 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	return query.materialize(ctx, s, compiledArgs)
+	if len(query.graphConditionBranches) == 0 {
+		return nil, fmt.Errorf("%w: query %q has no graph terminal plan", ErrUnsupportedRuntime, query.name)
+	}
+	runtime, err := newReteRuntime(s.revision)
+	if err != nil {
+		return nil, err
+	}
+	runtime.resetAlpha(s.facts)
+	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)
+	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, trigger, s)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
+	}
+	if !handled {
+		return nil, fmt.Errorf("%w: query %q has no graph terminal memory", ErrUnsupportedRuntime, query.name)
+	}
+	return rows, nil
 }
 
 func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
-	snapshot, err := s.Snapshot(ctx)
+	rows, ok, err := s.queryGraphRows(ctx, name, args)
 	if err != nil {
 		return nil, err
 	}
-	return snapshot.Query(ctx, name, args)
+	if !ok {
+		return nil, fmt.Errorf("%w: query %q has no graph terminal memory", ErrUnsupportedRuntime, name)
+	}
+	return &QueryIterator{rows: rows}, nil
 }
 
 func (s *Session) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
-	it, err := s.Query(ctx, name, args)
+	rows, ok, err := s.queryGraphRows(ctx, name, args)
 	if err != nil {
 		return nil, err
 	}
-	return it.All(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: query %q has no graph terminal memory", ErrUnsupportedRuntime, name)
+	}
+	return rows, nil
+}
+
+func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArgs) ([]QueryRow, bool, error) {
+	if s == nil || s.closed {
+		return nil, true, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if s.runGuardHeld() {
+		return nil, true, ErrConcurrencyMisuse
+	}
+	if !s.beginMutation() {
+		return nil, true, ErrConcurrencyMisuse
+	}
+	defer s.endMutation()
+	if s.closed {
+		return nil, true, ErrClosedSession
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if s.revision == nil {
+		return nil, true, ErrInvalidRuleset
+	}
+	query, ok := s.revision.query(strings.TrimSpace(name))
+	if !ok {
+		return nil, true, fmt.Errorf("%w: %s", ErrQueryNotFound, name)
+	}
+	compiledArgs, err := query.compileArgs(args)
+	if err != nil {
+		return nil, true, err
+	}
+	if s.rete == nil || s.rete.graphBeta == nil || len(query.graphConditionBranches) == 0 {
+		return nil, false, nil
+	}
+	trigger := s.queryTriggerFact(query, compiledArgs)
+	if trigger.ID().IsZero() {
+		return nil, false, nil
+	}
+	rows, handled, err := s.rete.queryRows(ctx, query, compiledArgs, trigger, Snapshot{revision: s.revision})
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: %v", ErrQueryExecution, err)
+	}
+	if !handled {
+		return nil, false, nil
+	}
+	return rows, true, nil
+}
+
+func (s *Session) queryTriggerFact(query compiledQuery, args map[string]Value) FactSnapshot {
+	if s == nil {
+		return FactSnapshot{}
+	}
+	return snapshotQueryTriggerFact(s.generation, query, args).withQueryTriggerRecency(s.nextRecency + 1)
+}
+
+func snapshotQueryTriggerFact(generation Generation, query compiledQuery, args map[string]Value) FactSnapshot {
+	fields := make(Fields, len(args))
+	for _, param := range query.parameters {
+		if value, ok := args[param.name]; ok {
+			fields[param.name] = cloneValue(value)
+		}
+	}
+	return FactSnapshot{
+		id:         newFactID(generation, ^uint64(0)),
+		name:       internalQueryTriggerName(query.name),
+		version:    1,
+		generation: generation,
+		fields:     fields,
+	}
+}
+
+func (f FactSnapshot) withQueryTriggerRecency(recency Recency) FactSnapshot {
+	f.recency = recency
+	return f
 }
 
 func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
@@ -574,89 +981,9 @@ func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
 	return values, nil
 }
 
-func (q compiledQuery) materialize(ctx context.Context, source Snapshot, args map[string]Value) ([]QueryRow, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	var rows []QueryRow
-	for _, branch := range q.conditionBranches {
-		plans := branch.plans
-		if len(plans) == 0 {
-			continue
-		}
-		var walk func(int, []conditionMatch) error
-		walk = func(conditionIndex int, selected []conditionMatch) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if conditionIndex == len(plans) {
-				row, err := q.materializeRow(source, selected, args)
-				if err != nil {
-					return err
-				}
-				rows = append(rows, row)
-				return nil
-			}
-
-			plan := plans[conditionIndex]
-			if plan.aggregate != nil {
-				bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return nil
-				}
-				next := make([]conditionMatch, len(selected)+len(bindings))
-				copy(next, selected)
-				for i, binding := range bindings {
-					next[len(selected)+i] = conditionMatch{
-						conditionID: plan.id,
-						bindingSlot: plan.bindingSlot + i,
-						value:       binding.value,
-						hasValue:    true,
-					}
-				}
-				return walk(conditionIndex+1, next)
-			}
-			if plan.negated {
-				matches, err := plan.scanWithBindingsAndParams(ctx, source, selected, args)
-				if err != nil {
-					return err
-				}
-				if len(matches) == 0 {
-					return walk(conditionIndex+1, selected)
-				}
-				return nil
-			}
-			matches, err := plan.scanWithBindingsAndParams(ctx, source, selected, args)
-			if err != nil {
-				return err
-			}
-			for _, match := range matches {
-				next := make([]conditionMatch, len(selected)+1)
-				copy(next, selected)
-				next[len(selected)] = match
-				if err := walk(conditionIndex+1, next); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if err := walk(0, nil); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
-		}
-	}
-	return rows, nil
-}
-
 func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
-	row := QueryRow{
-		values: make(map[string]queryRowValue, len(q.returns)),
-		order:  make([]string, 0, len(q.returns)),
-	}
-	for _, ret := range q.returns {
-		row.order = append(row.order, ret.alias)
+	row := q.newQueryRow()
+	for i, ret := range q.returns {
 		if ret.fact {
 			if ret.bindingSlot < 0 || ret.bindingSlot >= len(matches) {
 				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
@@ -666,7 +993,7 @@ func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch,
 			if !ok {
 				fact = match.fact.snapshot()
 			}
-			row.values[ret.alias] = queryRowValue{fact: fact, hasFact: true}
+			row.items[i] = queryRowValue{fact: fact, hasFact: true}
 			continue
 		}
 		value, ok, err := ret.expression.evaluateWithParams(conditionFactRef{}, matches, args)
@@ -676,7 +1003,54 @@ func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch,
 		if !ok {
 			value = NullValue()
 		}
-		row.values[ret.alias] = queryRowValue{value: value}
+		row.items[i] = queryRowValue{value: value}
 	}
 	return row, nil
+}
+
+func (q compiledQuery) materializeTokenRow(source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int) (QueryRow, error) {
+	return q.materializeTokenRowInto(source, token, args, bindingSlotOffset, make([]queryRowValue, len(q.returns)))
+}
+
+func (q compiledQuery) materializeTokenRowInto(source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int, items []queryRowValue) (QueryRow, error) {
+	if len(items) != len(q.returns) {
+		return QueryRow{}, fmt.Errorf("%w: malformed query row item count %d", ErrQueryExecution, len(items))
+	}
+	row := q.newQueryRowWithItems(items)
+	for i, ret := range q.returns {
+		if ret.fact {
+			tokenSlot := ret.bindingSlot + bindingSlotOffset
+			match, ok := tokenRefAtSlot(token, tokenSlot)
+			if !ok || match.hasValue {
+				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
+			}
+			fact, ok := source.Fact(match.fact.ID())
+			if !ok {
+				fact = match.fact.snapshot()
+			}
+			row.items[i] = queryRowValue{fact: fact, hasFact: true}
+			continue
+		}
+		value, ok, err := ret.expression.evaluateTokenWithParamsAndOffset(conditionFactRef{}, token, args, bindingSlotOffset)
+		if err != nil {
+			return QueryRow{}, err
+		}
+		if !ok {
+			value = NullValue()
+		}
+		row.items[i] = queryRowValue{value: value}
+	}
+	return row, nil
+}
+
+func (q compiledQuery) newQueryRow() QueryRow {
+	return q.newQueryRowWithItems(make([]queryRowValue, len(q.returns)))
+}
+
+func (q compiledQuery) newQueryRowWithItems(items []queryRowValue) QueryRow {
+	return QueryRow{
+		order: q.returnAliases,
+		index: q.returnAliasIndex,
+		items: items,
+	}
 }

@@ -840,6 +840,14 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 }
 
 func (e compiledExpression) evaluateToken(fact conditionFactRef, bindings tokenRef) (Value, bool, error) {
+	return e.evaluateTokenWithParamsAndOffset(fact, bindings, nil, 0)
+}
+
+func (e compiledExpression) evaluateTokenWithParams(fact conditionFactRef, bindings tokenRef, params map[string]Value) (Value, bool, error) {
+	return e.evaluateTokenWithParamsAndOffset(fact, bindings, params, 0)
+}
+
+func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int) (Value, bool, error) {
 	switch e.kind {
 	case expressionNodeConst:
 		return e.value, true, nil
@@ -850,7 +858,7 @@ func (e compiledExpression) evaluateToken(fact conditionFactRef, bindings tokenR
 		if e.bindingSlot < 0 {
 			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
 		}
-		match, ok := tokenRefAtSlot(bindings, e.bindingSlot)
+		match, ok := tokenRefAtSlot(bindings, e.bindingSlot+bindingSlotOffset)
 		if !ok {
 			return Value{}, false, nil
 		}
@@ -863,18 +871,27 @@ func (e compiledExpression) evaluateToken(fact conditionFactRef, bindings tokenR
 		if e.bindingSlot < 0 {
 			return Value{}, false, fmt.Errorf("%w: malformed expression binding slot %d", ErrMatcher, e.bindingSlot)
 		}
-		match, ok := tokenRefAtSlot(bindings, e.bindingSlot)
+		match, ok := tokenRefAtSlot(bindings, e.bindingSlot+bindingSlotOffset)
 		if !ok || !match.hasValue {
 			return Value{}, false, nil
 		}
 		return match.value, true, nil
+	case expressionNodeParam:
+		if e.paramName == "" {
+			return Value{}, false, fmt.Errorf("%w: malformed query parameter expression", ErrMatcher)
+		}
+		value, ok := params[e.paramName]
+		if !ok {
+			return Value{}, false, fmt.Errorf("%w: missing query argument %q", ErrQueryArgument, e.paramName)
+		}
+		return value, true, nil
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateToken(fact, bindings)
+			return operand.evaluateTokenWithParamsAndOffset(fact, bindings, params, bindingSlotOffset)
 		})
 	case expressionNodeBoolean:
 		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateToken(fact, bindings)
+			return operand.evaluateTokenWithParamsAndOffset(fact, bindings, params, bindingSlotOffset)
 		})
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)

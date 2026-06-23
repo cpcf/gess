@@ -14,6 +14,7 @@ type reteGraph struct {
 	aggregateNodes      []reteGraphAggregateNode
 	terminalNodes       []reteGraphTerminalNode
 	ruleBranchPlans     []reteGraphRuleBranchPlan
+	queryTerminalIDs    map[string][]reteGraphTerminalNodeID
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
 	routesByName        map[string][]reteGraphAlphaNodeID
 	alphaRouteTables    map[TemplateKey]*reteGraphAlphaRouteTable
@@ -42,6 +43,13 @@ type reteGraphBetaNodeKind uint8
 const (
 	reteGraphBetaNodeJoin reteGraphBetaNodeKind = iota + 1
 	reteGraphBetaNodeNot
+)
+
+type reteGraphTerminalKind uint8
+
+const (
+	reteGraphTerminalRule reteGraphTerminalKind = iota + 1
+	reteGraphTerminalQuery
 )
 
 type reteGraphStageRef struct {
@@ -84,7 +92,9 @@ type reteGraphAggregateNode struct {
 
 type reteGraphTerminalNode struct {
 	id             reteGraphTerminalNodeID
+	kind           reteGraphTerminalKind
 	ruleRevisionID RuleRevisionID
+	queryName      string
 	input          reteGraphStageRef
 }
 
@@ -167,7 +177,7 @@ type reteGraphAlphaRouteTable struct {
 	indexedFields []int
 }
 
-func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateKey]Template) *reteGraph {
+func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQuery, templatesByKey map[TemplateKey]Template) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
 		routesByName:        make(map[string][]reteGraphAlphaNodeID),
@@ -176,8 +186,9 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 		aggregatesByStage:   make(map[reteGraphStageRef][]reteGraphAggregateNodeID),
 		aggregateOuters:     make(map[reteGraphStageRef][]reteGraphAggregateNodeID),
 		terminalsByStage:    make(map[reteGraphStageRef][]reteGraphTerminalRoute),
+		queryTerminalIDs:    make(map[string][]reteGraphTerminalNodeID),
 	}
-	if len(compiledRules) == 0 {
+	if len(compiledRules) == 0 && len(compiledQueries) == 0 {
 		return graph
 	}
 
@@ -270,6 +281,7 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 			if terminalID == 0 {
 				graph.terminalNodes = append(graph.terminalNodes, reteGraphTerminalNode{
 					id:             reteGraphTerminalNodeID(len(graph.terminalNodes) + 1),
+					kind:           reteGraphTerminalRule,
 					ruleRevisionID: rule.revisionID,
 					input:          current,
 				})
@@ -287,7 +299,78 @@ func compileReteGraph(compiledRules []compiledRule, templatesByKey map[TemplateK
 		}
 	}
 
+	graph.compileQueryTerminals(compiledQueries, alphaIndex, betaIndex, templatesByKey)
 	return graph
+}
+
+func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) {
+	if g == nil {
+		return
+	}
+	for _, query := range compiledQueries {
+		for _, branch := range query.graphConditionBranches {
+			current, ok := g.compileConditionBranchStages(RuleRevisionID("query:"+query.name), branch, alphaIndex, betaIndex, templatesByKey)
+			if !ok {
+				continue
+			}
+			terminalID := reteGraphTerminalNodeID(len(g.terminalNodes) + 1)
+			g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{
+				id:        terminalID,
+				kind:      reteGraphTerminalQuery,
+				queryName: query.name,
+				input:     current,
+			})
+			g.queryTerminalIDs[query.name] = append(g.queryTerminalIDs[query.name], terminalID)
+			g.appendTerminal(current, reteGraphTerminalRoute{
+				terminalID: terminalID,
+				branchID:   branch.id,
+			})
+		}
+	}
+}
+
+func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) (reteGraphStageRef, bool) {
+	if g == nil || len(branch.plans) == 0 {
+		return reteGraphStageRef{}, false
+	}
+	var current reteGraphStageRef
+	haveStage := false
+	for conditionIndex, condition := range branch.plans {
+		alphaID := g.compileConditionAlphaForOwner(owner, condition, conditionIndex, alphaIndex, templatesByKey, true)
+		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+		if alphaID == 0 {
+			return reteGraphStageRef{}, false
+		}
+		if !haveStage {
+			current = alphaRef
+			haveStage = true
+			continue
+		}
+		betaKind := reteGraphBetaNodeJoin
+		if condition.negated {
+			betaKind = reteGraphBetaNodeNot
+		}
+		betaID, _ := g.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
+		if betaNode := g.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" && betaKind == reteGraphBetaNodeJoin {
+			betaNode.entry = graphTokenEntryForCondition(condition)
+		}
+		leftEntry := bindingTupleEntry{}
+		if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+			leftEntry = graphTokenEntryForCondition(branch.plans[conditionIndex-1])
+		}
+		g.appendStageSuccessor(current, reteGraphStageSuccessor{
+			betaNodeID: betaID,
+			side:       reteGraphBetaInputLeft,
+			entry:      leftEntry,
+		})
+		g.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
+			betaNodeID: betaID,
+			side:       reteGraphBetaInputRight,
+			entry:      graphTokenEntryForCondition(condition),
+		})
+		current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+	}
+	return current, haveStage
 }
 
 func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]Template) bool {
@@ -430,6 +513,7 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 	if terminalID != nil && *terminalID == 0 {
 		g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{
 			id:             reteGraphTerminalNodeID(len(g.terminalNodes) + 1),
+			kind:           reteGraphTerminalRule,
 			ruleRevisionID: rule.revisionID,
 			input:          current,
 		})
@@ -451,6 +535,10 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 }
 
 func (g *reteGraph) compileConditionAlpha(rule compiledRule, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) reteGraphAlphaNodeID {
+	return g.compileConditionAlphaForOwner(rule.revisionID, condition, conditionIndex, alphaIndex, templatesByKey, appendConsumer)
+}
+
+func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) reteGraphAlphaNodeID {
 	alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
 	alphaID, created := g.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
 	if alphaNode := g.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
@@ -459,7 +547,7 @@ func (g *reteGraph) compileConditionAlpha(rule compiledRule, condition compiledC
 	supportedAlpha := reteGraphSupportsAlpha(condition.target, templatesByKey)
 	if appendConsumer && supportedAlpha {
 		g.appendAlphaConsumer(alphaID, reteBetaConditionRoute{
-			ruleRevisionID: rule.revisionID,
+			ruleRevisionID: owner,
 			conditionIndex: conditionIndex,
 			conditionID:    condition.id,
 			bindingSlot:    condition.bindingSlot,

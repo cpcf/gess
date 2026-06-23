@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func BenchmarkReteRuntimeOrBranchExpansionVsJessLikeRules(b *testing.B) {
+func BenchmarkReteRuntimeOrBranchExpansionVsSeparateRules(b *testing.B) {
 	const factCount = 1000
 	ctx := context.Background()
 	facts := make([]SessionInitialFact, 0, factCount)
@@ -26,7 +26,7 @@ func BenchmarkReteRuntimeOrBranchExpansionVsJessLikeRules(b *testing.B) {
 		revision *Ruleset
 	}{
 		{name: "deduped-or", revision: benchmarkOrBranchRevision(b, false)},
-		{name: "jess-like-separate-rules", revision: benchmarkOrBranchRevision(b, true)},
+		{name: "separate-rules", revision: benchmarkOrBranchRevision(b, true)},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
