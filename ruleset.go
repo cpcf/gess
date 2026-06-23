@@ -363,6 +363,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	ruleOrder := make([]string, 0, len(w.rules))
 	conditionTemplateKeys := make(map[TemplateKey]struct{})
 	conditionNames := make(map[string]struct{})
+	queryConditionTemplateKeys := make(map[TemplateKey]struct{})
+	queryConditionNames := make(map[string]struct{})
 	for i, spec := range w.rules {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -418,47 +420,52 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queriesByName[query.name] = query
 		compiledQueries = append(compiledQueries, query)
 		queryOrder = append(queryOrder, query.name)
+		indexQueryConditionDependencies(query, queryConditionTemplateKeys, queryConditionNames)
 	}
 
 	return &Ruleset{
-		id:                    rulesetID(compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
-		templates:             templates,
-		templatesByKey:        templatesByKey,
-		templateOrder:         templateOrder,
-		actions:               actionsByName,
-		actionOrder:           actionOrder,
-		functions:             functionsByName,
-		functionOrder:         functionOrder,
-		rules:                 rulesByName,
-		rulesByID:             rulesByID,
-		rulesByRevisionID:     rulesByRevisionID,
-		ruleOrder:             ruleOrder,
-		queries:               queriesByName,
-		queryOrder:            queryOrder,
-		conditionTemplateKeys: conditionTemplateKeys,
-		conditionNames:        conditionNames,
-		graph:                 compileReteGraph(compiledRules, compiledQueries, templatesByKey),
+		id:                         rulesetID(compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
+		templates:                  templates,
+		templatesByKey:             templatesByKey,
+		templateOrder:              templateOrder,
+		actions:                    actionsByName,
+		actionOrder:                actionOrder,
+		functions:                  functionsByName,
+		functionOrder:              functionOrder,
+		rules:                      rulesByName,
+		rulesByID:                  rulesByID,
+		rulesByRevisionID:          rulesByRevisionID,
+		ruleOrder:                  ruleOrder,
+		queries:                    queriesByName,
+		queryOrder:                 queryOrder,
+		conditionTemplateKeys:      conditionTemplateKeys,
+		conditionNames:             conditionNames,
+		queryConditionTemplateKeys: queryConditionTemplateKeys,
+		queryConditionNames:        queryConditionNames,
+		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
 
 type Ruleset struct {
-	id                    RulesetID
-	templates             map[string]Template
-	templatesByKey        map[TemplateKey]Template
-	templateOrder         []string
-	actions               map[string]compiledAction
-	actionOrder           []string
-	functions             map[string]compiledPureFunction
-	functionOrder         []string
-	rules                 map[string]compiledRule
-	rulesByID             map[RuleID]compiledRule
-	rulesByRevisionID     map[RuleRevisionID]compiledRule
-	ruleOrder             []string
-	queries               map[string]compiledQuery
-	queryOrder            []string
-	conditionTemplateKeys map[TemplateKey]struct{}
-	conditionNames        map[string]struct{}
-	graph                 *reteGraph
+	id                         RulesetID
+	templates                  map[string]Template
+	templatesByKey             map[TemplateKey]Template
+	templateOrder              []string
+	actions                    map[string]compiledAction
+	actionOrder                []string
+	functions                  map[string]compiledPureFunction
+	functionOrder              []string
+	rules                      map[string]compiledRule
+	rulesByID                  map[RuleID]compiledRule
+	rulesByRevisionID          map[RuleRevisionID]compiledRule
+	ruleOrder                  []string
+	queries                    map[string]compiledQuery
+	queryOrder                 []string
+	conditionTemplateKeys      map[TemplateKey]struct{}
+	conditionNames             map[string]struct{}
+	queryConditionTemplateKeys map[TemplateKey]struct{}
+	queryConditionNames        map[string]struct{}
+	graph                      *reteGraph
 }
 
 const runFactReservePerRule = 64
@@ -723,6 +730,19 @@ func indexRuleConditionDependencies(rule compiledRule, templateKeys map[Template
 	}
 }
 
+func indexQueryConditionDependencies(query compiledQuery, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
+	for _, branch := range query.conditionBranches {
+		for _, plan := range branch.plans {
+			indexConditionTargetDependency(plan.target, templateKeys, names)
+			if plan.aggregate != nil {
+				for _, input := range plan.aggregate.inputPlans {
+					indexConditionTargetDependency(input.target, templateKeys, names)
+				}
+			}
+		}
+	}
+}
+
 func indexConditionTargetDependency(target conditionTarget, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
 	switch target.kind {
 	case conditionTargetTemplateKey:
@@ -751,6 +771,26 @@ func (r *Ruleset) factMayAffectRuleMatchesByTarget(name string, templateKey Temp
 	}
 	if name != "" {
 		if _, ok := r.conditionNames[name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Ruleset) factMayAffectReteByTarget(name string, templateKey TemplateKey) bool {
+	if r == nil {
+		return true
+	}
+	if r.factMayAffectRuleMatchesByTarget(name, templateKey) {
+		return true
+	}
+	if templateKey != "" {
+		if _, ok := r.queryConditionTemplateKeys[templateKey]; ok {
+			return true
+		}
+	}
+	if name != "" {
+		if _, ok := r.queryConditionNames[name]; ok {
 			return true
 		}
 	}

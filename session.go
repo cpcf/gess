@@ -1837,6 +1837,9 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 	if s == nil {
 		return reteAgendaDelta{}, nil
 	}
+	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.name, fact.templateKey) {
+		return reteAgendaDelta{}, nil
+	}
 	if s.rete == nil {
 		return reteAgendaDelta{}, s.rebuildReteRuntime(ctx, s.revision, s.detachedFactsByInsertionOrder())
 	}
@@ -1854,6 +1857,9 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 
 func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if s == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.name, fact.templateKey) {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete == nil {
