@@ -59,11 +59,9 @@ func (c FieldConstraint) clone() FieldConstraint {
 }
 
 type compiledFieldConstraint struct {
-	field     string
-	operator  FieldConstraintOperator
-	value     Value
-	fieldSlot int
-	access    compiledPathAccess
+	operator FieldConstraintOperator
+	value    Value
+	access   compiledPathAccess
 }
 
 func (o FieldConstraintOperator) valid() bool {
@@ -135,11 +133,9 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Operator: normalized.Operator,
 				Value:    NullValue(),
 			}, compiledFieldConstraint{
-				field:     normalized.Field,
-				operator:  normalized.Operator,
-				value:     NullValue(),
-				fieldSlot: access.rootSlot,
-				access:    access,
+				operator: normalized.Operator,
+				value:    NullValue(),
+				access:   access,
 			}, nil
 	}
 
@@ -166,11 +162,9 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Operator: normalized.Operator,
 			Value:    cloneValue(value),
 		}, compiledFieldConstraint{
-			field:     normalized.Field,
-			operator:  normalized.Operator,
-			value:     value,
-			fieldSlot: access.rootSlot,
-			access:    access,
+			operator: normalized.Operator,
+			value:    value,
+			access:   access,
 		}, nil
 }
 
@@ -262,31 +256,19 @@ func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, s
 }
 
 func (c compiledFieldConstraint) valueFromFact(fact conditionFactRef) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromFact(fact)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromFact(fact)
 }
 
 func (c compiledFieldConstraint) valueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromFactWithCounters(fact, span)
 }
 
 func (c compiledFieldConstraint) valueFromWorkingFact(fact *workingFact) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromWorkingFact(fact)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromWorkingFact(fact)
 }
 
 func (c compiledFieldConstraint) valueFromWorkingFactWithCounters(fact *workingFact, span *propagationCounterSpan) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromWorkingFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromWorkingFactWithCounters(fact, span)
 }
 
 func valuesComparableForEquality(left, right Value) bool {

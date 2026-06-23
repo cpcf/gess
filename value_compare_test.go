@@ -2,6 +2,10 @@ package gess
 
 import "testing"
 
+func testCompiledPathAccess(field string) compiledPathAccess {
+	return compiledPathAccess{path: fieldPath(field), root: field, rootSlot: -1}
+}
+
 func TestCompareValuesSemantics(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -60,7 +64,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "int equal",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpEqual,
 				value:    intValue(18),
 			},
@@ -70,7 +74,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "float greater",
 			constraint: compiledFieldConstraint{
-				field:    "score",
+				access:   testCompiledPathAccess("score"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    floatValue(20.25),
 			},
@@ -80,7 +84,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "safe int float less or equal",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpLessOrEqual,
 				value:    floatValue(18.0),
 			},
@@ -90,7 +94,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "unsafe int float greater",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    floatValue(float64(maxExactFloatInt + 1)),
 			},
@@ -102,7 +106,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "string less",
 			constraint: compiledFieldConstraint{
-				field:    "name",
+				access:   testCompiledPathAccess("name"),
 				operator: FieldConstraintOpLessThan,
 				value:    stringValue("Zoe"),
 			},
@@ -112,7 +116,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "incompatible type",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    stringValue("17"),
 			},
@@ -122,7 +126,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "missing field",
 			constraint: compiledFieldConstraint{
-				field:    "missing",
+				access:   testCompiledPathAccess("missing"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    intValue(1),
 			},
@@ -149,10 +153,10 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "int equal",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpEqual,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(other)}},
@@ -161,10 +165,10 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "safe mixed greater",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpGreaterThan,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
@@ -175,10 +179,10 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "missing ref field",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpEqual,
 				refBindingSlot: 0,
-				refField:       "missing",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("missing"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(other)}},
@@ -187,10 +191,10 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		{
 			name: "incompatible ref type",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpEqual,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{

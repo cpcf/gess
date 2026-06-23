@@ -330,8 +330,8 @@ func TestSessionModifyRebuildsDeclaredTemplateSlots(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	planConstraint := revision.rules["age-21"].conditionPlans[0].constraints[0]
-	if planConstraint.fieldSlot < 0 {
-		t.Fatalf("field slot = %d, want non-negative", planConstraint.fieldSlot)
+	if planConstraint.access.rootSlot < 0 {
+		t.Fatalf("field slot = %d, want non-negative", planConstraint.access.rootSlot)
 	}
 
 	session, err := NewSession(revision, WithSessionID("modify-slot-session"))

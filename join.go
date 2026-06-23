@@ -61,14 +61,10 @@ const (
 type compiledJoinConstraint struct {
 	path           []int
 	bindingSlot    int
-	field          string
-	fieldSlot      int
 	access         compiledPathAccess
 	operator       FieldConstraintOperator
 	refBinding     string
 	refBindingSlot int
-	refField       string
-	refFieldSlot   int
 	refAccess      compiledPathAccess
 	indexable      bool
 	indexKind      joinIndexKind
@@ -274,14 +270,10 @@ func compileJoinConstraintSpec(
 		}, compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
 			bindingSlot:    conditionIndex,
-			field:          normalized.Field,
-			fieldSlot:      access.rootSlot,
 			access:         access,
 			operator:       normalized.Operator,
 			refBinding:     normalized.Ref.Binding,
 			refBindingSlot: refSlot,
-			refField:       normalized.Ref.Field,
-			refFieldSlot:   refAccess.rootSlot,
 			refAccess:      refAccess,
 			indexable:      indexable,
 			indexKind:      indexKind,
@@ -366,29 +358,17 @@ func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []condit
 }
 
 func (c compiledJoinConstraint) leftValueFromFact(fact conditionFactRef) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromFact(fact)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromFact(fact)
 }
 
 func (c compiledJoinConstraint) leftValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
-	if !c.access.path.isZero() {
-		return c.access.valueFromFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(c.field, c.fieldSlot)
+	return c.access.valueFromFactWithCounters(fact, span)
 }
 
 func (c compiledJoinConstraint) rightValueFromFact(fact conditionFactRef) (Value, bool) {
-	if !c.refAccess.path.isZero() {
-		return c.refAccess.valueFromFact(fact)
-	}
-	return fact.compiledFieldValue(c.refField, c.refFieldSlot)
+	return c.refAccess.valueFromFact(fact)
 }
 
 func (c compiledJoinConstraint) rightValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
-	if !c.refAccess.path.isZero() {
-		return c.refAccess.valueFromFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(c.refField, c.refFieldSlot)
+	return c.refAccess.valueFromFactWithCounters(fact, span)
 }

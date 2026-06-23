@@ -59,7 +59,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "IntInt",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpEqual,
 				value:    intValue(18),
 			},
@@ -68,7 +68,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "FloatFloat",
 			constraint: compiledFieldConstraint{
-				field:    "score",
+				access:   testCompiledPathAccess("score"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    floatValue(20.0),
 			},
@@ -77,7 +77,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "SafeIntFloat",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpLessOrEqual,
 				value:    floatValue(18.0),
 			},
@@ -86,7 +86,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "StringEqual",
 			constraint: compiledFieldConstraint{
-				field:    "name",
+				access:   testCompiledPathAccess("name"),
 				operator: FieldConstraintOpEqual,
 				value:    stringValue("Ada"),
 			},
@@ -95,7 +95,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "StringOrder",
 			constraint: compiledFieldConstraint{
-				field:    "name",
+				access:   testCompiledPathAccess("name"),
 				operator: FieldConstraintOpLessThan,
 				value:    stringValue("Zoe"),
 			},
@@ -104,7 +104,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "UnsafeIntFloat",
 			constraint: compiledFieldConstraint{
-				field:    "age",
+				access:   testCompiledPathAccess("age"),
 				operator: FieldConstraintOpGreaterThan,
 				value:    floatValue(float64(maxExactFloatInt + 1)),
 			},
@@ -133,10 +133,10 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "IntInt",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpEqual,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
@@ -146,10 +146,10 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "SafeIntFloat",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpGreaterThan,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: fact,
 			bindings: []conditionMatch{{fact: newConditionFactRefFromSnapshot(FactSnapshot{fields: map[string]Value{
@@ -159,10 +159,10 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 		{
 			name: "UnsafeIntFloat",
 			constraint: compiledJoinConstraint{
-				field:          "age",
 				operator:       FieldConstraintOpGreaterThan,
 				refBindingSlot: 0,
-				refField:       "age",
+				access:         testCompiledPathAccess("age"),
+				refAccess:      testCompiledPathAccess("age"),
 			},
 			snapshot: unsafeFact,
 			bindings: []conditionMatch{{fact: unsafeRight}},

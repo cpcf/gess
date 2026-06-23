@@ -1742,8 +1742,7 @@ func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
 				predicate.expression.operands[1] = compiledExpression{
 					kind:        expressionNodeBindingField,
 					resultKind:  ValueInt,
-					field:       "age",
-					fieldSlot:   0,
+					access:      testCompiledPathAccess("age"),
 					binding:     "person",
 					bindingSlot: 0,
 				}
@@ -1766,7 +1765,6 @@ func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
 						kind:       expressionNodeConst,
 						resultKind: ValueInt,
 						value:      newIntValue(1),
-						fieldSlot:  -1,
 					}},
 				}
 			},
@@ -1819,8 +1817,8 @@ func TestReteGraphAlphaExpressionPredicateErrorsAreCounted(t *testing.T) {
 				resultKind: ValueBool,
 				compareOp:  ExpressionCompareUnknown,
 				operands: []compiledExpression{
-					{kind: expressionNodeCurrentField, resultKind: ValueInt, field: "score", fieldSlot: -1},
-					{kind: expressionNodeConst, resultKind: ValueInt, value: newIntValue(10), fieldSlot: -1},
+					{kind: expressionNodeCurrentField, resultKind: ValueInt, access: testCompiledPathAccess("score")},
+					{kind: expressionNodeConst, resultKind: ValueInt, value: newIntValue(10)},
 				},
 			},
 		}},

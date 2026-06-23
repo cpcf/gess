@@ -582,7 +582,7 @@ func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 		t.Fatalf("predicates = %d, want %d", got, want)
 	}
 	hashJoin := node.hashJoins[0]
-	if hashJoin.field != "group" || hashJoin.refBinding != "left" || hashJoin.refField != "group" {
+	if hashJoin.access.root != "group" || hashJoin.refBinding != "left" || hashJoin.refAccess.root != "group" {
 		t.Fatalf("hash join = %#v, want right.group == left.group", hashJoin)
 	}
 	if hashJoin.operator != FieldConstraintEqual {

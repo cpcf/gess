@@ -259,8 +259,8 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		planConstraint := revision.rules["closed-age"].conditionPlans[0].constraints[0]
-		if planConstraint.fieldSlot < 0 {
-			t.Fatalf("field slot = %d, want non-negative", planConstraint.fieldSlot)
+		if planConstraint.access.rootSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planConstraint.access.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("field-slot-session"))
@@ -313,8 +313,8 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		planConstraint := revision.rules["named-age"].conditionPlans[0].constraints[0]
-		if planConstraint.fieldSlot != -1 {
-			t.Fatalf("field slot = %d, want -1 for name-target conditions", planConstraint.fieldSlot)
+		if planConstraint.access.rootSlot != -1 {
+			t.Fatalf("field slot = %d, want -1 for name-target conditions", planConstraint.access.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("field-map-lookup-session"))
@@ -385,8 +385,8 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		}
 		for _, ruleName := range []string{"tag-exists", "tag-eq"} {
 			planConstraint := revision.rules[ruleName].conditionPlans[0].constraints[0]
-			if planConstraint.fieldSlot < 0 {
-				t.Fatalf("%s field slot = %d, want non-negative", ruleName, planConstraint.fieldSlot)
+			if planConstraint.access.rootSlot < 0 {
+				t.Fatalf("%s field slot = %d, want non-negative", ruleName, planConstraint.access.rootSlot)
 			}
 		}
 

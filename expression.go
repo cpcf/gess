@@ -275,8 +275,6 @@ type compiledExpression struct {
 	kind        expressionNodeKind
 	resultKind  ValueKind
 	value       Value
-	field       string
-	fieldSlot   int
 	access      compiledPathAccess
 	binding     string
 	bindingSlot int
@@ -428,7 +426,6 @@ func compileConstExpression(spec ConstExpr, ruleName string, conditionIndex, pre
 		kind:       expressionNodeConst,
 		resultKind: value.Kind(),
 		value:      value,
-		fieldSlot:  -1,
 	}, false, nil
 }
 
@@ -449,8 +446,6 @@ func compileCurrentFieldExpression(spec CurrentFieldExpr, ruleName string, condi
 	return compiledExpression{
 		kind:       expressionNodeCurrentField,
 		resultKind: kind,
-		field:      access.root,
-		fieldSlot:  access.rootSlot,
 		access:     access,
 	}, false, nil
 }
@@ -503,8 +498,6 @@ func compileBindingFieldExpression(
 	return compiledExpression{
 		kind:        expressionNodeBindingField,
 		resultKind:  kind,
-		field:       access.root,
-		fieldSlot:   access.rootSlot,
 		access:      access,
 		binding:     normalized.Binding,
 		bindingSlot: refSlot,
@@ -520,8 +513,6 @@ func compileHasPathExpression(spec HasPathExpr, ruleName string, conditionIndex,
 	return compiledExpression{
 		kind:       expressionNodeHasPath,
 		resultKind: ValueBool,
-		field:      access.root,
-		fieldSlot:  access.rootSlot,
 		access:     access,
 	}, false, nil
 }
@@ -549,7 +540,6 @@ func compileBindingValueExpression(
 		resultKind:  ValueAny,
 		binding:     normalized.Binding,
 		bindingSlot: refSlot,
-		fieldSlot:   -1,
 	}, true, nil
 }
 
@@ -572,7 +562,6 @@ func compileParamExpression(spec ParamExpr, ruleName string, conditionIndex, pre
 		kind:       expressionNodeParam,
 		resultKind: kind,
 		paramName:  normalized.Name,
-		fieldSlot:  -1,
 	}, false, nil
 }
 
@@ -607,7 +596,6 @@ func compileCompareExpression(
 		kind:       expressionNodeCompare,
 		resultKind: ValueBool,
 		compareOp:  spec.Operator,
-		fieldSlot:  -1,
 		operands:   []compiledExpression{left, right},
 	}, leftReferencesEarlier || rightReferencesEarlier, nil
 }
@@ -653,7 +641,6 @@ func compileBooleanExpression(
 		kind:       expressionNodeBoolean,
 		resultKind: ValueBool,
 		boolOp:     spec.Operator,
-		fieldSlot:  -1,
 		operands:   operands,
 	}, referencesEarlier, nil
 }
@@ -740,9 +727,9 @@ func (e compiledExpression) graphExecutable() bool {
 	case expressionNodeConst:
 		return e.resultKind != ""
 	case expressionNodeCurrentField:
-		return (e.access.root != "" || e.field != "") && e.resultKind != ""
+		return e.access.root != "" && e.resultKind != ""
 	case expressionNodeBindingField:
-		return e.binding != "" && (e.access.root != "" || e.field != "") && e.bindingSlot >= 0 && e.resultKind != ""
+		return e.binding != "" && e.access.root != "" && e.bindingSlot >= 0 && e.resultKind != ""
 	case expressionNodeBindingValue:
 		return e.binding != "" && e.bindingSlot >= 0 && e.resultKind != ""
 	case expressionNodeHasPath:
@@ -1001,31 +988,19 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffsetAndCounters(fact con
 }
 
 func (e compiledExpression) currentValueFromFact(fact conditionFactRef) (Value, bool) {
-	if !e.access.path.isZero() {
-		return e.access.valueFromFact(fact)
-	}
-	return fact.compiledFieldValue(e.field, e.fieldSlot)
+	return e.access.valueFromFact(fact)
 }
 
 func (e compiledExpression) currentValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
-	if !e.access.path.isZero() {
-		return e.access.valueFromFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(e.field, e.fieldSlot)
+	return e.access.valueFromFactWithCounters(fact, span)
 }
 
 func (e compiledExpression) bindingValueFromFact(fact conditionFactRef) (Value, bool) {
-	if !e.access.path.isZero() {
-		return e.access.valueFromFact(fact)
-	}
-	return fact.compiledFieldValue(e.field, e.fieldSlot)
+	return e.access.valueFromFact(fact)
 }
 
 func (e compiledExpression) bindingValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
-	if !e.access.path.isZero() {
-		return e.access.valueFromFactWithCounters(fact, span)
-	}
-	return fact.compiledFieldValue(e.field, e.fieldSlot)
+	return e.access.valueFromFactWithCounters(fact, span)
 }
 
 func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
@@ -1198,9 +1173,9 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(expression.value.canonicalKey())
 	case expressionNodeCurrentField:
 		b.WriteString(",field=")
-		b.WriteString(expression.field)
+		b.WriteString(expression.access.root)
 		b.WriteString(",field-slot=")
-		b.WriteString(fmt.Sprint(expression.fieldSlot))
+		b.WriteString(fmt.Sprint(expression.access.rootSlot))
 		b.WriteString(",path=")
 		b.WriteString(expression.access.display())
 	case expressionNodeBindingField:
@@ -1209,9 +1184,9 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(",binding-slot=")
 		b.WriteString(fmt.Sprint(expression.bindingSlot))
 		b.WriteString(",field=")
-		b.WriteString(expression.field)
+		b.WriteString(expression.access.root)
 		b.WriteString(",field-slot=")
-		b.WriteString(fmt.Sprint(expression.fieldSlot))
+		b.WriteString(fmt.Sprint(expression.access.rootSlot))
 		b.WriteString(",path=")
 		b.WriteString(expression.access.display())
 	case expressionNodeBindingValue:
@@ -1226,7 +1201,7 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(",path=")
 		b.WriteString(expression.access.display())
 		b.WriteString(",field-slot=")
-		b.WriteString(fmt.Sprint(expression.fieldSlot))
+		b.WriteString(fmt.Sprint(expression.access.rootSlot))
 	case expressionNodeCompare:
 		b.WriteString(",op=")
 		b.WriteString(string(expression.compareOp))

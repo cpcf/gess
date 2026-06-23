@@ -3651,7 +3651,7 @@ func graphBetaJoinKeyForLeftToken(node *reteGraphBetaNode, token tokenRef) (beta
 		if !ok {
 			return Value{}, false
 		}
-		return match.fact.compiledFieldValue(join.refField, join.refFieldSlot)
+		return join.rightValueFromFact(match.fact)
 	})
 }
 
@@ -3667,7 +3667,7 @@ func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (bet
 		return betaJoinKey{}, true
 	}
 	return betaJoinKeyForPlan(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool) {
-		return match.fact.compiledFieldValue(join.field, join.fieldSlot)
+		return join.leftValueFromFact(match.fact)
 	})
 }
 

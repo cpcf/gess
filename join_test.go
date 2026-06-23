@@ -229,12 +229,12 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 func TestBetaJoinKeyForPlanUsesTypedTwoValueKey(t *testing.T) {
 	plan := compiledConditionPlan{
 		joins: []compiledJoinConstraint{
-			{indexKind: joinIndexEquality, field: "stream"},
-			{indexKind: joinIndexEquality, field: "region"},
+			{indexKind: joinIndexEquality, access: testCompiledPathAccess("stream")},
+			{indexKind: joinIndexEquality, access: testCompiledPathAccess("region")},
 		},
 	}
 	key, ok := betaJoinKeyForPlan(plan, func(join compiledJoinConstraint) (Value, bool) {
-		switch join.field {
+		switch join.access.root {
 		case "stream":
 			return mustValue(t, 42), true
 		case "region":
@@ -291,11 +291,11 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		planJoin := revision.rules["join-eq"].conditionPlans[1].joins[0]
-		if planJoin.fieldSlot < 0 {
-			t.Fatalf("field slot = %d, want non-negative", planJoin.fieldSlot)
+		if planJoin.access.rootSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planJoin.access.rootSlot)
 		}
-		if planJoin.refFieldSlot < 0 {
-			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refFieldSlot)
+		if planJoin.refAccess.rootSlot < 0 {
+			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refAccess.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("join-slot-session"))
@@ -359,11 +359,11 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		planJoin := revision.rules["join-dynamic-ref"].conditionPlans[1].joins[0]
-		if planJoin.fieldSlot < 0 {
-			t.Fatalf("field slot = %d, want non-negative", planJoin.fieldSlot)
+		if planJoin.access.rootSlot < 0 {
+			t.Fatalf("field slot = %d, want non-negative", planJoin.access.rootSlot)
 		}
-		if planJoin.refFieldSlot != -1 {
-			t.Fatalf("ref field slot = %d, want -1 for dynamic reference", planJoin.refFieldSlot)
+		if planJoin.refAccess.rootSlot != -1 {
+			t.Fatalf("ref field slot = %d, want -1 for dynamic reference", planJoin.refAccess.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("join-dynamic-ref-session"))
@@ -430,11 +430,11 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		planJoin := revision.rules["join-dynamic-current"].conditionPlans[1].joins[0]
-		if planJoin.fieldSlot != -1 {
-			t.Fatalf("field slot = %d, want -1 for dynamic current conditions", planJoin.fieldSlot)
+		if planJoin.access.rootSlot != -1 {
+			t.Fatalf("field slot = %d, want -1 for dynamic current conditions", planJoin.access.rootSlot)
 		}
-		if planJoin.refFieldSlot < 0 {
-			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refFieldSlot)
+		if planJoin.refAccess.rootSlot < 0 {
+			t.Fatalf("ref field slot = %d, want non-negative", planJoin.refAccess.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("join-dynamic-current-session"))

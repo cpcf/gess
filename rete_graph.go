@@ -909,18 +909,18 @@ func (t *reteGraphAlphaRouteTable) singleIndexedField() (int, bool) {
 
 func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
 	for _, constraint := range constraints {
-		if constraint.operator != FieldConstraintOpEqual || constraint.fieldSlot < 0 || !constraint.access.topLevel() {
+		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
 			continue
 		}
 		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
 		if !ok {
 			continue
 		}
-		if !reteGraphAlphaRouteFieldKindMatches(template, constraint.fieldSlot, value.kind) {
+		if !reteGraphAlphaRouteFieldKindMatches(template, constraint.access.rootSlot, value.kind) {
 			continue
 		}
 		return reteGraphAlphaRouteSelector{
-			fieldSlot: constraint.fieldSlot,
+			fieldSlot: constraint.access.rootSlot,
 			value:     value,
 			enabled:   true,
 		}
@@ -1511,7 +1511,7 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	if !ok {
 		return compiledJoinConstraint{}, false
 	}
-	if current.field == "" || binding.field == "" || binding.binding == "" || binding.bindingSlot < 0 || !current.access.topLevel() || !binding.access.topLevel() {
+	if current.access.root == "" || binding.access.root == "" || binding.binding == "" || binding.bindingSlot < 0 || !current.access.topLevel() || !binding.access.topLevel() {
 		return compiledJoinConstraint{}, false
 	}
 	conditionIndex := -1
@@ -1521,13 +1521,11 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	return compiledJoinConstraint{
 		path:           cloneIntPath(predicate.path),
 		bindingSlot:    conditionIndex,
-		field:          current.field,
-		fieldSlot:      current.fieldSlot,
+		access:         current.access.clone(),
 		operator:       FieldConstraintOpEqual,
 		refBinding:     binding.binding,
 		refBindingSlot: binding.bindingSlot,
-		refField:       binding.field,
-		refFieldSlot:   binding.fieldSlot,
+		refAccess:      binding.access.clone(),
 		indexable:      true,
 		indexKind:      joinIndexEquality,
 	}, true
@@ -1573,15 +1571,13 @@ func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (
 	if !ok {
 		return compiledFieldConstraint{}, false
 	}
-	if current.field == "" || !current.access.topLevel() {
+	if current.access.root == "" || !current.access.topLevel() {
 		return compiledFieldConstraint{}, false
 	}
 	return compiledFieldConstraint{
-		field:     current.field,
-		operator:  operator,
-		value:     cloneValue(constant.value),
-		fieldSlot: current.fieldSlot,
-		access:    current.access.clone(),
+		operator: operator,
+		value:    cloneValue(constant.value),
+		access:   current.access.clone(),
 	}, true
 }
 
@@ -1678,11 +1674,11 @@ func serializeCompiledFieldConstraint(constraint compiledFieldConstraint) string
 	valueKey := constraint.value.canonicalKey()
 	return fmt.Sprintf(
 		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nvalue:%d:%s\nfield-slot:%d\n",
-		len(constraint.field), constraint.field,
+		len(constraint.access.root), constraint.access.root,
 		len(constraint.access.display()), constraint.access.display(),
 		len(constraint.operator), constraint.operator,
 		len(valueKey), valueKey,
-		constraint.fieldSlot,
+		constraint.access.rootSlot,
 	)
 }
 
@@ -1706,14 +1702,14 @@ func serializeCompiledJoinConstraints(joins []compiledJoinConstraint) string {
 func serializeCompiledJoinConstraint(join compiledJoinConstraint) string {
 	return fmt.Sprintf(
 		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nref-field:%d:%s\nref-path:%d:%s\nbinding-slot:%d\nref-binding-slot:%d\nfield-slot:%d\nref-field-slot:%d\n",
-		len(join.field), join.field,
+		len(join.access.root), join.access.root,
 		len(join.access.display()), join.access.display(),
 		len(join.operator), join.operator,
-		len(join.refField), join.refField,
+		len(join.refAccess.root), join.refAccess.root,
 		len(join.refAccess.display()), join.refAccess.display(),
 		join.bindingSlot,
 		join.refBindingSlot,
-		join.fieldSlot,
-		join.refFieldSlot,
+		join.access.rootSlot,
+		join.refAccess.rootSlot,
 	)
 }
