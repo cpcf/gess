@@ -46,6 +46,7 @@ type reteGraphBetaNodeKind uint8
 const (
 	reteGraphBetaNodeJoin reteGraphBetaNodeKind = iota + 1
 	reteGraphBetaNodeNot
+	reteGraphBetaNodeFilter
 )
 
 type reteGraphTerminalKind uint8
@@ -210,6 +211,7 @@ type reteGraphConditionOrderInspection struct {
 	Visible     bool
 	Negated     bool
 	Aggregate   bool
+	Test        bool
 	Target      conditionTarget
 }
 
@@ -315,6 +317,18 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 			plans := branch.plans
 
 			for conditionIndex, condition := range plans {
+				if condition.isTest {
+					if !haveStage {
+						continue
+					}
+					betaID, _ := graph.internBetaNode(betaIndex, reteGraphBetaNodeFilter, current, reteGraphStageRef{}, nil, condition.testPredicates)
+					graph.appendStageSuccessor(current, reteGraphStageSuccessor{
+						betaNodeID: betaID,
+						side:       reteGraphBetaInputLeft,
+					})
+					current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+					continue
+				}
 				alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
 				alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, condition.listPatterns, alphaPredicates)
 				alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
@@ -439,6 +453,18 @@ func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch co
 	var current reteGraphStageRef
 	haveStage := false
 	for conditionIndex, condition := range branch.plans {
+		if condition.isTest {
+			if !haveStage {
+				return reteGraphStageRef{}, false
+			}
+			betaID, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeFilter, current, reteGraphStageRef{}, nil, condition.testPredicates)
+			g.appendStageSuccessor(current, reteGraphStageSuccessor{
+				betaNodeID: betaID,
+				side:       reteGraphBetaInputLeft,
+			})
+			current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+			continue
+		}
 		alphaID := g.compileConditionAlphaForOwner(owner, condition, conditionIndex, alphaIndex, templatesByKey, true)
 		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
 		if alphaID == 0 {
@@ -810,7 +836,7 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		if leftWidth <= 0 {
 			return 0
 		}
-		if node.kind == reteGraphBetaNodeNot {
+		if node.kind == reteGraphBetaNodeNot || node.kind == reteGraphBetaNodeFilter {
 			return leftWidth
 		}
 		return leftWidth + 1
@@ -1362,6 +1388,7 @@ func inspectReteGraphPlannedOrder(plans []compiledConditionPlan) []reteGraphCond
 			Visible:     !plan.negated,
 			Negated:     plan.negated,
 			Aggregate:   plan.aggregate != nil,
+			Test:        plan.isTest,
 			Target:      plan.target,
 		}
 	}

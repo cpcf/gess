@@ -1303,6 +1303,167 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 	}
 }
 
+func TestStandaloneTestConditionCompilesToBetaFilter(t *testing.T) {
+	workspace := NewWorkspace()
+	system := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "system",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "risk", Kind: ValueInt, Required: true},
+		},
+	})
+	finding := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "finding",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "system-id", Kind: ValueString, Required: true},
+		},
+	})
+	var fired []string
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ctx ActionContext) error {
+		fact, ok := ctx.Binding("finding")
+		if !ok {
+			return fmt.Errorf("missing finding binding")
+		}
+		id, ok := fact.Field("id")
+		if !ok {
+			return fmt.Errorf("missing id")
+		}
+		text, _ := id.AsString()
+		fired = append(fired, text)
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "standalone-test",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "system", TemplateKey: system.Key()},
+			Match{
+				Binding:     "finding",
+				TemplateKey: finding.Key(),
+				JoinConstraints: []JoinConstraintSpec{{
+					Field:    "system-id",
+					Operator: FieldConstraintEqual,
+					Ref:      FieldRef{Binding: "system", Field: "id"},
+				}},
+			},
+			Test{Expression: CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     BindingFieldExpr{Binding: "system", Field: "risk"},
+				Right:    ConstExpr{Value: 90},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("standalone-test")
+	if !ok {
+		t.Fatal("compiled revision missing standalone-test")
+	}
+	children := rule.ConditionTree().Children()
+	if got, want := len(children), 3; got != want {
+		t.Fatalf("condition tree children = %d, want %d", got, want)
+	}
+	if got := children[2].Kind(); got != ConditionTreeKindTest {
+		t.Fatalf("third condition tree kind = %q, want test", got)
+	}
+	if _, ok := children[2].Test(); !ok {
+		t.Fatalf("third condition tree node missing test expression")
+	}
+	if got := len(rule.ConditionBranches()[0].Conditions()); got != 2 {
+		t.Fatalf("public branch conditions = %d, want 2 fact conditions", got)
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	var filterNodes int
+	for _, node := range summary.BetaNodes {
+		if node.kind != reteGraphBetaNodeFilter {
+			continue
+		}
+		filterNodes++
+		if got := len(node.predicates); got != 1 {
+			t.Fatalf("filter predicates = %d, want 1", got)
+		}
+	}
+	if filterNodes != 1 {
+		t.Fatalf("filter beta nodes = %d, want 1", filterNodes)
+	}
+	if got, want := len(summary.Plan.Branches), 1; got != want {
+		t.Fatalf("graph branches = %d, want %d", got, want)
+	}
+	if got := summary.Plan.Branches[0].PlannedOrder[2].Test; !got {
+		t.Fatalf("third planned node is not marked as test")
+	}
+
+	session := mustSession(t, revision, "standalone-test")
+	ctx := context.Background()
+	for _, row := range []map[string]any{
+		{"id": "s-1", "risk": 95},
+		{"id": "s-2", "risk": 50},
+	} {
+		if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("AssertTemplate(system): %v", err)
+		}
+	}
+	for _, row := range []map[string]any{
+		{"id": "match", "system-id": "s-1"},
+		{"id": "filtered", "system-id": "s-2"},
+	} {
+		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("AssertTemplate(finding): %v", err)
+		}
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("fired = %d, want 1", result.Fired)
+	}
+	if !slices.Equal(fired, []string{"match"}) {
+		t.Fatalf("fired findings = %#v, want match", fired)
+	}
+}
+
+func TestStandaloneTestConditionValidatesLocalBindingScope(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tree ConditionSpec
+	}{
+		{
+			name: "future-binding",
+			tree: And{Conditions: []ConditionSpec{
+				Test{Expression: BindingFieldExpr{Binding: "system", Field: "id"}},
+				Match{Binding: "system", Name: "system"},
+			}},
+		},
+		{
+			name: "current-field",
+			tree: And{Conditions: []ConditionSpec{
+				Match{Binding: "system", Name: "system"},
+				Test{Expression: CompareExpr{
+					Operator: ExpressionCompareEqual,
+					Left:     CurrentFieldExpr{Field: "id"},
+					Right:    ConstExpr{Value: "s-1"},
+				}},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, RuleSpec{
+				Name:          "invalid-test",
+				ConditionTree: tc.tree,
+				Actions:       []RuleActionSpec{{Name: "noop"}},
+			})
+			if _, err := workspace.Compile(context.Background()); err == nil {
+				t.Fatalf("Compile succeeded, want validation error")
+			}
+		})
+	}
+}
+
 func TestConditionTreeMatchPreservesExpressionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

@@ -2554,6 +2554,9 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	if node == nil {
 		return false
 	}
+	if node.kind == reteGraphBetaNodeFilter {
+		return m.insertFilterBetaInput(nodeID, side, node, token, span, delta)
+	}
 	if node.kind == reteGraphBetaNodeNot {
 		return m.insertNegativeBetaInput(nodeID, side, node, token, span, delta)
 	}
@@ -2652,6 +2655,33 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	return true
 }
 
+func (m *reteGraphBetaMemory) insertFilterBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || node == nil || token.isZero() {
+		return false
+	}
+	if side != reteGraphBetaInputLeft {
+		return false
+	}
+	ok, err := m.filterTokenMatches(node, token, span)
+	if err != nil {
+		return false
+	}
+	if !ok {
+		return true
+	}
+	nodeMemory := m.nodeMemory(nodeID)
+	inserted := nodeMemory.left.insert(token, betaJoinKey{})
+	if !inserted {
+		return true
+	}
+	if span != nil {
+		span.recordBetaInputInsert(side)
+		span.recordBetaJoinedTokenProduced()
+	}
+	m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, token, span, delta)
+	return true
+}
+
 func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) bool {
 	if m == nil || delta == nil || node == nil || token.isZero() {
 		return false
@@ -2737,6 +2767,9 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 	if node == nil {
 		return false
 	}
+	if node.kind == reteGraphBetaNodeFilter {
+		return m.removeFilterBetaInputToken(nodeID, side, node, token, counters, delta)
+	}
 	if node.kind == reteGraphBetaNodeNot {
 		return m.removeNegativeBetaInputToken(nodeID, side, node, token, counters, delta)
 	}
@@ -2769,6 +2802,25 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		counters.recordNegativeRowRemoved()
 	}
 	m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, joinKey, removed, counters, delta)
+	return true
+}
+
+func (m *reteGraphBetaMemory) removeFilterBetaInputToken(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || node == nil || token.isZero() {
+		return false
+	}
+	if side != reteGraphBetaInputLeft {
+		return false
+	}
+	nodeMemory := m.nodeMemory(nodeID)
+	removedRow, removedOK := nodeMemory.left.removeToken(token, counters)
+	if !removedOK {
+		return true
+	}
+	if counters != nil {
+		counters.recordNegativeRowRemoved()
+	}
+	m.propagateRemoveFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, removedRow.token, counters, delta)
 	return true
 }
 
@@ -2908,6 +2960,9 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 	if node == nil {
 		return false
 	}
+	if node.kind == reteGraphBetaNodeFilter {
+		return m.removeFilterBetaInputContainingFact(nodeID, side, node, id, counters, delta)
+	}
 	if node.kind == reteGraphBetaNodeNot {
 		return m.removeNegativeBetaInputContainingFact(nodeID, side, node, id, counters, delta)
 	}
@@ -2921,6 +2976,21 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 	default:
 		return false
 	}
+	if removed > 0 {
+		m.propagateRemoveFactFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, id, counters, delta)
+	}
+	return true
+}
+
+func (m *reteGraphBetaMemory) removeFilterBetaInputContainingFact(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || node == nil || id.IsZero() {
+		return false
+	}
+	if side != reteGraphBetaInputLeft {
+		return false
+	}
+	nodeMemory := m.nodeMemory(nodeID)
+	removed := nodeMemory.left.removeContainingFact(id, counters)
 	if removed > 0 {
 		m.propagateRemoveFactFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, id, counters, delta)
 	}
@@ -3493,6 +3563,9 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 	if node == nil {
 		return fmt.Errorf("%w: malformed query beta node", ErrQueryExecution)
 	}
+	if node.kind == reteGraphBetaNodeFilter {
+		return m.queryProbeFilterBetaInput(nodeID, side, node, token, collector)
+	}
 	if node.kind == reteGraphBetaNodeNot {
 		return m.queryProbeNegativeBetaInput(nodeID, side, node, token, collector)
 	}
@@ -3560,6 +3633,20 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 		return fmt.Errorf("%w: malformed query beta side", ErrQueryExecution)
 	}
 	return nil
+}
+
+func (m *reteGraphBetaMemory) queryProbeFilterBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, collector *reteGraphQueryCollector) error {
+	if side != reteGraphBetaInputLeft {
+		return nil
+	}
+	ok, err := m.filterTokenMatches(node, token, nil)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	return m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, token, collector)
 }
 
 func (m *reteGraphBetaMemory) queryProbeNegativeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, collector *reteGraphQueryCollector) error {
@@ -3894,6 +3981,17 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 		return false, nil
 	}
 	return true, nil
+}
+
+func (m *reteGraphBetaMemory) filterTokenMatches(node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan) (bool, error) {
+	if m == nil || node == nil {
+		return true, nil
+	}
+	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, conditionFactRef{}, token, span)
+	if err != nil {
+		return false, err
+	}
+	return ok, nil
 }
 
 func (m *reteGraphBetaMemory) negativeRightMatchCountForLeft(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {

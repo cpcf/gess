@@ -1009,6 +1009,11 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 		conditionPlan.betaSupported = true
 		return conditionPlan, nil
 	}
+	if condition.isTest {
+		conditionPlan.supported = true
+		conditionPlan.betaSupported = true
+		return conditionPlan, nil
+	}
 
 	var unsupported []reteUnsupportedReason
 	hashJoinCount := 0

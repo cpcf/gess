@@ -94,6 +94,18 @@ func (s Not) clone() Not {
 	return out
 }
 
+// Test evaluates a standalone boolean condition over earlier local bindings.
+type Test struct {
+	Expression ExpressionSpec
+}
+
+func (Test) conditionSpecNode() {}
+
+func (s Test) clone() Test {
+	s.Expression = cloneExpressionSpec(s.Expression)
+	return s
+}
+
 // Match is a positive fact match condition tree node.
 type Match RuleConditionSpec
 
@@ -126,6 +138,14 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case Not:
 		return condition.clone()
 	case *Not:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case Test:
+		return condition.clone()
+	case *Test:
 		if condition == nil {
 			return nil
 		}
@@ -341,6 +361,7 @@ const (
 	ConditionTreeKindUnknown    ConditionTreeKind = ""
 	ConditionTreeKindAnd        ConditionTreeKind = "and"
 	ConditionTreeKindMatch      ConditionTreeKind = "match"
+	ConditionTreeKindTest       ConditionTreeKind = "test"
 	ConditionTreeKindNot        ConditionTreeKind = "not"
 	ConditionTreeKindOr         ConditionTreeKind = "or"
 	ConditionTreeKindAccumulate ConditionTreeKind = "accumulate"
@@ -351,6 +372,8 @@ type RuleConditionTree struct {
 	children []RuleConditionTree
 	match    RuleCondition
 	hasMatch bool
+	test     ExpressionSpec
+	hasTest  bool
 }
 
 func (t RuleConditionTree) Kind() ConditionTreeKind {
@@ -372,6 +395,13 @@ func (t RuleConditionTree) Match() (RuleCondition, bool) {
 	return t.match.clone(), true
 }
 
+func (t RuleConditionTree) Test() (ExpressionSpec, bool) {
+	if !t.hasTest {
+		return nil, false
+	}
+	return cloneExpressionSpec(t.test), true
+}
+
 func (t RuleConditionTree) clone() RuleConditionTree {
 	out := t
 	out.children = make([]RuleConditionTree, len(t.children))
@@ -379,6 +409,7 @@ func (t RuleConditionTree) clone() RuleConditionTree {
 		out.children[i] = child.clone()
 	}
 	out.match = t.match.clone()
+	out.test = cloneExpressionSpec(t.test)
 	return out
 }
 
@@ -590,6 +621,7 @@ type compiledConditionTreeShape struct {
 	kind           ConditionTreeKind
 	children       []compiledConditionTreeShape
 	conditionIndex int
+	test           ExpressionSpec
 }
 
 func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
@@ -598,13 +630,16 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 	for i, child := range s.children {
 		out.children[i] = child.clone()
 	}
+	out.test = cloneExpressionSpec(s.test)
 	return out
 }
 
 type normalizedRuleCondition struct {
 	spec        RuleConditionSpec
 	aggregate   AccumulateCondition
+	test        ExpressionSpec
 	isAggregate bool
+	isTest      bool
 	path        []int
 	visible     bool
 	negated     bool
@@ -782,6 +817,38 @@ func expressionComparisonOperatorFromFieldConstraint(operator FieldConstraintOpe
 	default:
 		return ExpressionCompareUnknown, false
 	}
+}
+
+func expressionSpecReferencesCurrentFact(spec ExpressionSpec) bool {
+	switch expression := spec.(type) {
+	case nil:
+		return false
+	case CurrentFieldExpr, *CurrentFieldExpr, HasPathExpr, *HasPathExpr:
+		return true
+	case CallExpr:
+		if slices.ContainsFunc(expression.Args, expressionSpecReferencesCurrentFact) {
+			return true
+		}
+	case *CallExpr:
+		if expression != nil {
+			return expressionSpecReferencesCurrentFact(CallExpr(*expression))
+		}
+	case CompareExpr:
+		return expressionSpecReferencesCurrentFact(expression.Left) || expressionSpecReferencesCurrentFact(expression.Right)
+	case *CompareExpr:
+		if expression != nil {
+			return expressionSpecReferencesCurrentFact(CompareExpr(*expression))
+		}
+	case BooleanExpr:
+		if slices.ContainsFunc(expression.Operands, expressionSpecReferencesCurrentFact) {
+			return true
+		}
+	case *BooleanExpr:
+		if expression != nil {
+			return expressionSpecReferencesCurrentFact(BooleanExpr(*expression))
+		}
+	}
+	return false
 }
 
 const maxExpandedExecutionBranchesPerBranch = 16
@@ -972,6 +1039,29 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 			}
 		}
 		return expandNotConditionTreeBranches(ruleName, condition.Condition, path)
+	case Test:
+		if negated {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "test condition is not supported under not",
+			}
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				test:    cloneExpressionSpec(condition.Expression),
+				isTest:  true,
+				path:    cloneIntPath(path),
+				visible: false,
+			}},
+		}}, nil
+	case *Test:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, path, visible, negated)
 	case Match:
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
@@ -1104,6 +1194,11 @@ func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec, path []
 			RuleName: ruleName,
 			Reason:   "or condition is not supported under not",
 		}
+	case Test, *Test:
+		return nil, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "test condition is not supported under not",
+		}
 	default:
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -1165,6 +1260,33 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			}
 		}
 		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions, path)
+	case Test:
+		if negated {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "test condition is not supported under not",
+			}
+		}
+		index := len(*conditions)
+		*conditions = append(*conditions, normalizedRuleCondition{
+			test:    cloneExpressionSpec(condition.Expression),
+			isTest:  true,
+			path:    cloneIntPath(path),
+			visible: false,
+		})
+		return compiledConditionTreeShape{
+			kind:           ConditionTreeKindTest,
+			conditionIndex: index,
+			test:           cloneExpressionSpec(condition.Expression),
+		}, nil
+	case *Test:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenConditionTreeNode(ruleName, *condition, conditions, path, visible, negated)
 	case Match:
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
@@ -1576,6 +1698,34 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			})
 			continue
 		}
+		if node.isTest {
+			if node.test == nil {
+				return compiledRuleConditionSet{}, expressionValidationError(ruleName, i, 0, "", "test condition expression is required", nil)
+			}
+			if expressionSpecReferencesCurrentFact(node.test) {
+				return compiledRuleConditionSet{}, expressionValidationError(ruleName, i, 0, "", "test condition cannot reference the current fact", nil)
+			}
+			if len(conditions) == 0 {
+				return compiledRuleConditionSet{}, &ValidationError{
+					RuleName:          ruleName,
+					ConditionIndex:    i,
+					HasConditionIndex: true,
+					Reason:            "test condition requires an earlier visible binding",
+				}
+			}
+			_, planPredicate, err := compileExpressionPredicateSpecWithParams(node.test, ruleName, i, 0, nil, conditions, bindingSlots, templatesByKey, params, functions)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			planPredicate.placement = ExpressionPredicatePlacementBetaResidual
+			conditionPlans = append(conditionPlans, compiledConditionPlan{
+				path:           []int{i},
+				isTest:         true,
+				predicates:     []compiledExpressionPredicate{planPredicate},
+				testPredicates: []compiledExpressionPredicate{planPredicate},
+			})
+			continue
+		}
 		condition := node.spec
 		if condition.Binding == "" {
 			return compiledRuleConditionSet{}, &ValidationError{
@@ -1837,6 +1987,12 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 			match:    conditions[shape.conditionIndex].clone(),
 			hasMatch: true,
 		}
+	case ConditionTreeKindTest:
+		return RuleConditionTree{
+			kind:    ConditionTreeKindTest,
+			test:    cloneExpressionSpec(shape.test),
+			hasTest: true,
+		}
 	case ConditionTreeKindNot:
 		tree := RuleConditionTree{
 			kind:     ConditionTreeKindNot,
@@ -1925,6 +2081,12 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 		writeCompiledConditionTreeShapeHash(sum, rule.conditionTreeShape)
 		sum.Write([]byte("\ntree-conditions:"))
 		for _, plan := range rule.conditionPlans {
+			if plan.isTest {
+				sum.Write([]byte("test:"))
+				sum.Write([]byte(serializeCompiledExpressionPredicates(plan.testPredicates)))
+				sum.Write([]byte(";"))
+				continue
+			}
 			condition, ok := ruleTreeConditionByOrder(rule.treeConditions, plan.path)
 			if !ok {
 				continue
@@ -1981,6 +2143,12 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			for branchIndex, branch := range rule.conditionBranches {
 				sum.Write(fmt.Appendf(nil, "%d:", branchIndex))
 				for _, plan := range branch.plans {
+					if plan.isTest {
+						sum.Write([]byte("test:"))
+						sum.Write([]byte(serializeCompiledExpressionPredicates(plan.testPredicates)))
+						sum.Write([]byte(";"))
+						continue
+					}
 					sum.Write([]byte(plan.binding))
 					sum.Write([]byte(":"))
 					if plan.negated {
@@ -2015,6 +2183,9 @@ func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
 	if len(rule.conditionBranches) > 1 {
 		return true
 	}
+	if conditionTreeShapeContainsTest(rule.conditionTreeShape) {
+		return true
+	}
 	if len(rule.treeConditions) != len(rule.conditions) {
 		return true
 	}
@@ -2024,6 +2195,13 @@ func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
 		}
 	}
 	return false
+}
+
+func conditionTreeShapeContainsTest(shape compiledConditionTreeShape) bool {
+	if shape.kind == ConditionTreeKindTest {
+		return true
+	}
+	return slices.ContainsFunc(shape.children, conditionTreeShapeContainsTest)
 }
 
 func writeCompiledConditionTreeShapeHash(sum hashWriter, shape compiledConditionTreeShape) {

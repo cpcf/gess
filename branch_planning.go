@@ -190,6 +190,9 @@ func remapCompiledConditionPlanToPublicBranch(plan compiledConditionPlan, public
 	for i := range plan.predicates {
 		plan.predicates[i].expression = remapCompiledExpressionToPublicBranch(plan.predicates[i].expression, publicByBinding)
 	}
+	for i := range plan.testPredicates {
+		plan.testPredicates[i].expression = remapCompiledExpressionToPublicBranch(plan.testPredicates[i].expression, publicByBinding)
+	}
 	if plan.aggregate != nil {
 		aggregate := *plan.aggregate
 		aggregate.inputPlans = remapCompiledConditionPlansToPublicBranch(aggregate.inputPlans, compiledRuleConditionSet{conditions: publicConditionsFromBindingMap(publicByBinding)})
@@ -269,12 +272,13 @@ func cloneNormalizedRuleCondition(condition normalizedRuleCondition) normalizedR
 	out := condition
 	out.spec = condition.spec.clone()
 	out.aggregate = condition.aggregate.clone()
+	out.test = cloneExpressionSpec(condition.test)
 	out.path = cloneIntPath(condition.path)
 	return out
 }
 
 func extractBranchPlanningJoins(node *branchPlanningNode) []branchPlanningJoin {
-	if node == nil || node.condition.isAggregate {
+	if node == nil || node.condition.isAggregate || node.condition.isTest {
 		return nil
 	}
 	condition := &node.condition.spec
@@ -430,6 +434,9 @@ func branchPlanningNodeLess(left, right branchPlanningNode) bool {
 
 func branchPlanningSelectivityScore(node branchPlanningNode) int {
 	score := 1000
+	if node.condition.isTest {
+		return score + 10
+	}
 	condition := node.condition.spec
 	if strings.TrimSpace(condition.TemplateKey.String()) != "" || strings.TrimSpace(condition.Name) != "" {
 		score -= 10
@@ -447,7 +454,7 @@ func branchPlanningSelectivityScore(node branchPlanningNode) int {
 }
 
 func branchPlanningConditionMovable(condition normalizedRuleCondition) bool {
-	if condition.negated || condition.isAggregate {
+	if condition.negated || condition.isAggregate || condition.isTest {
 		return false
 	}
 	if strings.TrimSpace(condition.spec.Binding) == internalQueryTriggerBinding {
@@ -491,6 +498,9 @@ func branchPlanningDefinedBindings(condition normalizedRuleCondition) []string {
 		}
 		return sortedBranchPlanningBindings(bindings)
 	}
+	if condition.isTest {
+		return nil
+	}
 	if condition.visible {
 		addBranchPlanningBinding(bindings, condition.spec.Binding)
 		for _, pattern := range condition.spec.ListPatterns {
@@ -513,6 +523,10 @@ func branchPlanningDependencyBindings(condition normalizedRuleCondition) []strin
 		}
 		return sortedBranchPlanningBindings(bindings)
 	}
+	if condition.isTest {
+		addExpressionSpecBranchPlanningDependencies(bindings, condition.test)
+		return sortedBranchPlanningBindings(bindings)
+	}
 	addRuleConditionSpecBranchPlanningDependencies(bindings, condition.spec)
 	return sortedBranchPlanningBindings(bindings)
 }
@@ -524,6 +538,10 @@ func branchPlanningHardDependencyBindings(condition normalizedRuleCondition) []s
 		for _, spec := range condition.aggregate.Specs {
 			addExpressionSpecBranchPlanningDependencies(bindings, spec.Expression())
 		}
+		return sortedBranchPlanningBindings(bindings)
+	}
+	if condition.isTest {
+		addExpressionSpecBranchPlanningDependencies(bindings, condition.test)
 		return sortedBranchPlanningBindings(bindings)
 	}
 	addRuleConditionSpecReturnValueDependencies(bindings, condition.spec)

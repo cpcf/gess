@@ -30,19 +30,21 @@ type conditionTarget struct {
 }
 
 type compiledConditionPlan struct {
-	id           ConditionID
-	binding      string
-	bindingSlot  int
-	path         []int
-	negated      bool
-	aggregate    *compiledAggregatePlan
-	target       conditionTarget
-	constraints  []compiledFieldConstraint
-	listPatterns []compiledListPattern
-	joins        []compiledJoinConstraint
-	predicates   []compiledExpressionPredicate
-	indexable    bool
-	indexKind    conditionIndexKind
+	id             ConditionID
+	binding        string
+	bindingSlot    int
+	path           []int
+	negated        bool
+	aggregate      *compiledAggregatePlan
+	isTest         bool
+	target         conditionTarget
+	constraints    []compiledFieldConstraint
+	listPatterns   []compiledListPattern
+	joins          []compiledJoinConstraint
+	predicates     []compiledExpressionPredicate
+	testPredicates []compiledExpressionPredicate
+	indexable      bool
+	indexKind      conditionIndexKind
 }
 
 type conditionMatch struct {
@@ -65,6 +67,7 @@ func cloneCompiledConditionPlan(plan compiledConditionPlan) compiledConditionPla
 	out.listPatterns = cloneCompiledListPatterns(plan.listPatterns)
 	out.joins = cloneCompiledJoinConstraints(plan.joins)
 	out.predicates = cloneCompiledExpressionPredicates(plan.predicates)
+	out.testPredicates = cloneCompiledExpressionPredicates(plan.testPredicates)
 	if plan.aggregate != nil {
 		aggregate := *plan.aggregate
 		aggregate.inputPlans = make([]compiledConditionPlan, len(plan.aggregate.inputPlans))
@@ -338,6 +341,19 @@ func (p compiledConditionPlan) matchesPredicatesWithParams(ctx context.Context, 
 	return true, nil
 }
 
+func (p compiledConditionPlan) matchesTestBindings(ctx context.Context, bindings []conditionMatch) (bool, error) {
+	for _, predicate := range p.testPredicates {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		ok, err := predicate.matchesWithContextParams(ctx, conditionFactRef{}, bindings, nil)
+		if err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
+}
+
 func (p compiledConditionPlan) matchesListPatterns(ctx context.Context, fact conditionFactRef) (bool, error) {
 	if len(p.listPatterns) == 0 {
 		return true, nil
@@ -447,6 +463,13 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 		}
 
 		plan := r.conditionPlans[conditionIndex]
+		if plan.isTest {
+			ok, err := plan.matchesTestBindings(ctx, selected)
+			if err != nil || !ok {
+				return err
+			}
+			return walk(conditionIndex+1, selected, token)
+		}
 		if plan.aggregate != nil {
 			bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
 			if err != nil {
@@ -549,6 +572,13 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 			}
 
 			plan := plans[conditionIndex]
+			if plan.isTest {
+				ok, err := plan.matchesTestBindings(ctx, selected)
+				if err != nil || !ok {
+					return err
+				}
+				return walk(conditionIndex+1, selected)
+			}
 			if plan.aggregate != nil {
 				bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
 				if err != nil {
