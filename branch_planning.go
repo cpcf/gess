@@ -124,12 +124,10 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 		}
 		if leftIndex > rightIndex {
 			out[leftIndex].spec.JoinConstraints = append(out[leftIndex].spec.JoinConstraints, JoinConstraintSpec{
-				Field:    join.leftField,
 				Path:     join.leftPath.clone(),
 				Operator: join.operator,
 				Ref: FieldRef{
 					Binding: join.rightBinding,
-					Field:   join.rightField,
 					Path:    join.rightPath.clone(),
 				},
 			})
@@ -140,12 +138,10 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 			continue
 		}
 		out[rightIndex].spec.JoinConstraints = append(out[rightIndex].spec.JoinConstraints, JoinConstraintSpec{
-			Field:    join.rightField,
 			Path:     join.rightPath.clone(),
 			Operator: inverted,
 			Ref: FieldRef{
 				Binding: join.leftBinding,
-				Field:   join.leftField,
 				Path:    join.leftPath.clone(),
 			},
 		})

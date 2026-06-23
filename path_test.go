@@ -91,6 +91,7 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	session.attachPropagationCounters()
 	ctx := context.Background()
 	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"risk": 95}})); err != nil {
 		t.Fatalf("Assert matching event: %v", err)
@@ -108,6 +109,13 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 	}
 	if result.Fired != 1 {
 		t.Fatalf("fired = %d, want 1", result.Fired)
+	}
+	counters := session.propagationCounterSnapshot()
+	if counters.Totals.NestedPathEvaluations == 0 {
+		t.Fatalf("nested path evaluations = 0, want path diagnostics")
+	}
+	if counters.Totals.NestedPathMisses == 0 {
+		t.Fatalf("nested path misses = 0, want missing-path diagnostics")
 	}
 
 	summary := revision.reteGraphDebugSummary()
@@ -200,5 +208,127 @@ func TestClosedTemplateRejectsImpossibleNestedPath(t *testing.T) {
 	_, err := workspace.Compile(context.Background())
 	if !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("Compile error = %v, want ErrInvalidPath", err)
+	}
+}
+
+func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
+	cases := []struct {
+		name string
+		rule RuleSpec
+	}{
+		{
+			name: "field constraint",
+			rule: RuleSpec{
+				Name: "ambiguous-field-constraint",
+				Conditions: []RuleConditionSpec{{
+					Binding: "event",
+					Name:    "event",
+					FieldConstraints: []FieldConstraintSpec{{
+						Field:    "payload",
+						Path:     Path("payload", MapKey("risk")),
+						Operator: FieldConstraintEqual,
+						Value:    90,
+					}},
+				}},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			},
+		},
+		{
+			name: "join left",
+			rule: RuleSpec{
+				Name: "ambiguous-join-left",
+				Conditions: []RuleConditionSpec{
+					{Binding: "left", Name: "left"},
+					{
+						Binding: "right",
+						Name:    "right",
+						JoinConstraints: []JoinConstraintSpec{{
+							Field:    "payload",
+							Path:     Path("payload", MapKey("id")),
+							Operator: FieldConstraintEqual,
+							Ref:      FieldRef{Binding: "left", Field: "id"},
+						}},
+					},
+				},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			},
+		},
+		{
+			name: "join reference",
+			rule: RuleSpec{
+				Name: "ambiguous-join-ref",
+				Conditions: []RuleConditionSpec{
+					{Binding: "left", Name: "left"},
+					{
+						Binding: "right",
+						Name:    "right",
+						JoinConstraints: []JoinConstraintSpec{{
+							Field:    "id",
+							Operator: FieldConstraintEqual,
+							Ref: FieldRef{
+								Binding: "left",
+								Field:   "payload",
+								Path:    Path("payload", MapKey("id")),
+							},
+						}},
+					},
+				},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			},
+		},
+		{
+			name: "current field expression",
+			rule: RuleSpec{
+				Name: "ambiguous-current-expression",
+				Conditions: []RuleConditionSpec{{
+					Binding: "event",
+					Name:    "event",
+					Predicates: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left: CurrentFieldExpr{
+							Field: "payload",
+							Path:  Path("payload", MapKey("risk")),
+						},
+						Right: ConstExpr{Value: 90},
+					}},
+				}},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			},
+		},
+		{
+			name: "binding field expression",
+			rule: RuleSpec{
+				Name: "ambiguous-binding-expression",
+				Conditions: []RuleConditionSpec{
+					{Binding: "left", Name: "left"},
+					{
+						Binding: "right",
+						Name:    "right",
+						Predicates: []ExpressionSpec{CompareExpr{
+							Operator: ExpressionCompareEqual,
+							Left:     CurrentFieldExpr{Field: "id"},
+							Right: BindingFieldExpr{
+								Binding: "left",
+								Field:   "payload",
+								Path:    Path("payload", MapKey("id")),
+							},
+						}},
+					},
+				},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, tc.rule)
+			_, err := workspace.Compile(context.Background())
+			if !errors.Is(err, ErrInvalidPath) {
+				t.Fatalf("Compile error = %v, want ErrInvalidPath", err)
+			}
+		})
 	}
 }

@@ -35,8 +35,7 @@ type RuleFieldConstraintSpec = FieldConstraintSpec
 func (s FieldConstraintSpec) clone() FieldConstraintSpec {
 	out := s
 	out.Field = strings.TrimSpace(out.Field)
-	out.Path = pathOrField(out.Path, out.Field)
-	out.Field = out.Path.root()
+	out.Path = out.Path.clone()
 	out.Value = cloneSpecValue(out.Value)
 	return out
 }
@@ -79,7 +78,19 @@ func (o FieldConstraintOperator) valid() bool {
 }
 
 func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, conditionIndex, constraintIndex int, template *Template) (FieldConstraint, compiledFieldConstraint, error) {
+	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
+		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
+			RuleName:           ruleName,
+			ConditionIndex:     conditionIndex,
+			HasConditionIndex:  true,
+			ConstraintIndex:    constraintIndex,
+			HasConstraintIndex: true,
+			Reason:             "field constraint cannot set both field and path",
+			Err:                ErrInvalidPath,
+		}
+	}
 	normalized := spec.clone()
+	normalized.Path = pathOrField(normalized.Path, normalized.Field)
 	if normalized.Path.isZero() {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
@@ -90,6 +101,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Reason:             "field name is required",
 		}
 	}
+	normalized.Field = normalized.Path.root()
 	if !normalized.Operator.valid() {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
@@ -199,6 +211,15 @@ func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionI
 
 func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
 	value, ok := c.valueFromFact(fact)
+	return c.matchesValue(value, ok)
+}
+
+func (c compiledFieldConstraint) matchesWithCounters(fact conditionFactRef, span *propagationCounterSpan) bool {
+	value, ok := c.valueFromFactWithCounters(fact, span)
+	return c.matchesValue(value, ok)
+}
+
+func (c compiledFieldConstraint) matchesValue(value Value, ok bool) bool {
 	switch c.operator {
 	case FieldConstraintOpExists:
 		return ok
@@ -232,35 +253,12 @@ func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
 
 func (c compiledFieldConstraint) matchesWorking(fact *workingFact) bool {
 	value, ok := c.valueFromWorkingFact(fact)
-	switch c.operator {
-	case FieldConstraintOpExists:
-		return ok
-	case FieldConstraintOpEqual:
-		return ok && valuesComparableForEquality(value, c.value) && value.Equal(c.value)
-	case FieldConstraintOpNotEqual:
-		return ok && valuesComparableForEquality(value, c.value) && !value.Equal(c.value)
-	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
-		if !ok {
-			return false
-		}
-		comparison, comparable := compareValues(value, c.value)
-		if !comparable {
-			return false
-		}
-		switch c.operator {
-		case FieldConstraintOpLessThan:
-			return comparison < 0
-		case FieldConstraintOpLessOrEqual:
-			return comparison <= 0
-		case FieldConstraintOpGreaterThan:
-			return comparison > 0
-		case FieldConstraintOpGreaterOrEqual:
-			return comparison >= 0
-		}
-	default:
-		return false
-	}
-	return false
+	return c.matchesValue(value, ok)
+}
+
+func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, span *propagationCounterSpan) bool {
+	value, ok := c.valueFromWorkingFactWithCounters(fact, span)
+	return c.matchesValue(value, ok)
 }
 
 func (c compiledFieldConstraint) valueFromFact(fact conditionFactRef) (Value, bool) {
@@ -270,9 +268,23 @@ func (c compiledFieldConstraint) valueFromFact(fact conditionFactRef) (Value, bo
 	return fact.compiledFieldValue(c.field, c.fieldSlot)
 }
 
+func (c compiledFieldConstraint) valueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromFactWithCounters(fact, span)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
+}
+
 func (c compiledFieldConstraint) valueFromWorkingFact(fact *workingFact) (Value, bool) {
 	if !c.access.path.isZero() {
 		return c.access.valueFromWorkingFact(fact)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
+}
+
+func (c compiledFieldConstraint) valueFromWorkingFactWithCounters(fact *workingFact, span *propagationCounterSpan) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromWorkingFactWithCounters(fact, span)
 	}
 	return fact.compiledFieldValue(c.field, c.fieldSlot)
 }

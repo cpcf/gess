@@ -50,8 +50,7 @@ func (CurrentFieldExpr) expressionSpecNode() {}
 
 func (s CurrentFieldExpr) clone() CurrentFieldExpr {
 	s.Field = strings.TrimSpace(s.Field)
-	s.Path = pathOrField(s.Path, s.Field)
-	s.Field = s.Path.root()
+	s.Path = s.Path.clone()
 	return s
 }
 
@@ -66,8 +65,7 @@ func (BindingFieldExpr) expressionSpecNode() {}
 func (s BindingFieldExpr) clone() BindingFieldExpr {
 	s.Binding = strings.TrimSpace(s.Binding)
 	s.Field = strings.TrimSpace(s.Field)
-	s.Path = pathOrField(s.Path, s.Field)
-	s.Field = s.Path.root()
+	s.Path = s.Path.clone()
 	return s
 }
 
@@ -435,10 +433,15 @@ func compileConstExpression(spec ConstExpr, ruleName string, conditionIndex, pre
 }
 
 func compileCurrentFieldExpression(spec CurrentFieldExpr, ruleName string, conditionIndex, predicateIndex int, template *Template) (compiledExpression, bool, error) {
+	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, strings.TrimSpace(spec.Field), "current field expression cannot set both field and path", ErrInvalidPath)
+	}
 	normalized := spec.clone()
+	normalized.Path = pathOrField(normalized.Path, normalized.Field)
 	if normalized.Path.isZero() {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "current path expression requires a path", ErrInvalidPath)
 	}
+	normalized.Field = normalized.Path.root()
 	access, kind, err := compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, template, normalized.Path)
 	if err != nil {
 		return compiledExpression{}, false, err
@@ -460,13 +463,18 @@ func compileBindingFieldExpression(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 ) (compiledExpression, bool, error) {
+	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, strings.TrimSpace(spec.Field), "binding field expression cannot set both field and path", ErrInvalidPath)
+	}
 	normalized := spec.clone()
+	normalized.Path = pathOrField(normalized.Path, normalized.Field)
 	if normalized.Binding == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression requires a binding", nil)
 	}
 	if normalized.Path.isZero() {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding path expression requires a path", ErrInvalidPath)
 	}
+	normalized.Field = normalized.Path.root()
 	refSlot, ok := bindingSlots[normalized.Binding]
 	if !ok {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression must refer to an earlier condition", nil)
@@ -808,7 +816,7 @@ func expressionPredicatesMatchToken(predicates []compiledExpressionPredicate, fa
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		ok, err := predicate.matchesToken(fact, bindings)
+		ok, err := predicate.matchesTokenWithCounters(fact, bindings, span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()
@@ -830,7 +838,18 @@ func (p compiledExpressionPredicate) matches(fact conditionFactRef, bindings []c
 }
 
 func (p compiledExpressionPredicate) matchesWithParams(fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (bool, error) {
-	value, ok, err := p.expression.evaluateWithParams(fact, bindings, params)
+	value, ok, err := p.expression.evaluateWithParamsAndCounters(fact, bindings, params, nil)
+	if err != nil || !ok {
+		return false, err
+	}
+	if value.Kind() != ValueBool {
+		return false, nil
+	}
+	return value.boolValue, nil
+}
+
+func (p compiledExpressionPredicate) matchesWithCounters(fact conditionFactRef, bindings []conditionMatch, span *propagationCounterSpan) (bool, error) {
+	value, ok, err := p.expression.evaluateWithParamsAndCounters(fact, bindings, nil, span)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -841,7 +860,11 @@ func (p compiledExpressionPredicate) matchesWithParams(fact conditionFactRef, bi
 }
 
 func (p compiledExpressionPredicate) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
-	value, ok, err := p.expression.evaluateToken(fact, bindings)
+	return p.matchesTokenWithCounters(fact, bindings, nil)
+}
+
+func (p compiledExpressionPredicate) matchesTokenWithCounters(fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+	value, ok, err := p.expression.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, nil, 0, span)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -856,11 +879,15 @@ func (e compiledExpression) evaluate(fact conditionFactRef, bindings []condition
 }
 
 func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (Value, bool, error) {
+	return e.evaluateWithParamsAndCounters(fact, bindings, params, nil)
+}
+
+func (e compiledExpression) evaluateWithParamsAndCounters(fact conditionFactRef, bindings []conditionMatch, params map[string]Value, span *propagationCounterSpan) (Value, bool, error) {
 	switch e.kind {
 	case expressionNodeConst:
 		return e.value, true, nil
 	case expressionNodeCurrentField:
-		value, ok := e.currentValueFromFact(fact)
+		value, ok := e.currentValueFromFactWithCounters(fact, span)
 		return value, ok, nil
 	case expressionNodeBindingField:
 		if e.bindingSlot < 0 {
@@ -872,7 +899,7 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 		if bindings[e.bindingSlot].hasValue {
 			return Value{}, false, nil
 		}
-		value, ok := e.bindingValueFromFact(bindings[e.bindingSlot].fact)
+		value, ok := e.bindingValueFromFactWithCounters(bindings[e.bindingSlot].fact, span)
 		return value, ok, nil
 	case expressionNodeBindingValue:
 		if e.bindingSlot < 0 {
@@ -883,7 +910,7 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 		}
 		return bindings[e.bindingSlot].value, true, nil
 	case expressionNodeHasPath:
-		_, ok := e.access.valueFromFact(fact)
+		_, ok := e.access.valueFromFactWithCounters(fact, span)
 		return newBoolValue(ok), true, nil
 	case expressionNodeParam:
 		if e.paramName == "" {
@@ -896,11 +923,11 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 		return value, true, nil
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateWithParams(fact, bindings, params)
+			return operand.evaluateWithParamsAndCounters(fact, bindings, params, span)
 		})
 	case expressionNodeBoolean:
 		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateWithParams(fact, bindings, params)
+			return operand.evaluateWithParamsAndCounters(fact, bindings, params, span)
 		})
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
@@ -916,11 +943,15 @@ func (e compiledExpression) evaluateTokenWithParams(fact conditionFactRef, bindi
 }
 
 func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int) (Value, bool, error) {
+	return e.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, params, bindingSlotOffset, nil)
+}
+
+func (e compiledExpression) evaluateTokenWithParamsAndOffsetAndCounters(fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int, span *propagationCounterSpan) (Value, bool, error) {
 	switch e.kind {
 	case expressionNodeConst:
 		return e.value, true, nil
 	case expressionNodeCurrentField:
-		value, ok := e.currentValueFromFact(fact)
+		value, ok := e.currentValueFromFactWithCounters(fact, span)
 		return value, ok, nil
 	case expressionNodeBindingField:
 		if e.bindingSlot < 0 {
@@ -933,7 +964,7 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 		if match.hasValue {
 			return Value{}, false, nil
 		}
-		value, ok := e.bindingValueFromFact(match.fact)
+		value, ok := e.bindingValueFromFactWithCounters(match.fact, span)
 		return value, ok, nil
 	case expressionNodeBindingValue:
 		if e.bindingSlot < 0 {
@@ -945,7 +976,7 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 		}
 		return match.value, true, nil
 	case expressionNodeHasPath:
-		_, ok := e.access.valueFromFact(fact)
+		_, ok := e.access.valueFromFactWithCounters(fact, span)
 		return newBoolValue(ok), true, nil
 	case expressionNodeParam:
 		if e.paramName == "" {
@@ -958,11 +989,11 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 		return value, true, nil
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateTokenWithParamsAndOffset(fact, bindings, params, bindingSlotOffset)
+			return operand.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, params, bindingSlotOffset, span)
 		})
 	case expressionNodeBoolean:
 		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateTokenWithParamsAndOffset(fact, bindings, params, bindingSlotOffset)
+			return operand.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, params, bindingSlotOffset, span)
 		})
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
@@ -976,9 +1007,23 @@ func (e compiledExpression) currentValueFromFact(fact conditionFactRef) (Value, 
 	return fact.compiledFieldValue(e.field, e.fieldSlot)
 }
 
+func (e compiledExpression) currentValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	if !e.access.path.isZero() {
+		return e.access.valueFromFactWithCounters(fact, span)
+	}
+	return fact.compiledFieldValue(e.field, e.fieldSlot)
+}
+
 func (e compiledExpression) bindingValueFromFact(fact conditionFactRef) (Value, bool) {
 	if !e.access.path.isZero() {
 		return e.access.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(e.field, e.fieldSlot)
+}
+
+func (e compiledExpression) bindingValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	if !e.access.path.isZero() {
+		return e.access.valueFromFactWithCounters(fact, span)
 	}
 	return fact.compiledFieldValue(e.field, e.fieldSlot)
 }

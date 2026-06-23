@@ -3679,7 +3679,7 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 		if span != nil {
 			span.recordBetaResidualTest()
 		}
-		ok, err := join.matchesToken(fact, bindings)
+		ok, err := join.matchesTokenWithCounters(fact, bindings, span)
 		if err != nil {
 			return false, err
 		}

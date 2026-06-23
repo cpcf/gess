@@ -977,7 +977,7 @@ func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span 
 	}
 	ref := newConditionFactRefFromSnapshot(fact)
 	for _, constraint := range n.constraints {
-		if !constraint.matches(ref) {
+		if !constraint.matchesWithCounters(ref, span) {
 			return false
 		}
 	}
@@ -1008,7 +1008,7 @@ func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, span *
 		return false
 	}
 	for _, constraint := range n.constraints {
-		if !constraint.matchesWorking(fact) {
+		if !constraint.matchesWorkingWithCounters(fact, span) {
 			return false
 		}
 	}
@@ -1024,7 +1024,7 @@ func (n reteGraphAlphaNode) expressionPredicatesMatch(fact conditionFactRef, spa
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		ok, err := predicate.matches(fact, nil)
+		ok, err := predicate.matchesWithCounters(fact, nil, span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()

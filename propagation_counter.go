@@ -72,6 +72,8 @@ type propagationCounterTotals struct {
 	ExpressionPredicateTests    int
 	ExpressionPredicateFailures int
 	ExpressionPredicateErrors   int
+	NestedPathEvaluations       int
+	NestedPathMisses            int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -116,6 +118,8 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.ExpressionPredicateTests += other.ExpressionPredicateTests
 	t.ExpressionPredicateFailures += other.ExpressionPredicateFailures
 	t.ExpressionPredicateErrors += other.ExpressionPredicateErrors
+	t.NestedPathEvaluations += other.NestedPathEvaluations
+	t.NestedPathMisses += other.NestedPathMisses
 }
 
 type propagationCounterKey struct {
@@ -399,6 +403,16 @@ func (s *propagationCounterSpan) recordExpressionPredicateError() {
 		return
 	}
 	s.totals.ExpressionPredicateErrors++
+}
+
+func (s *propagationCounterSpan) recordNestedPathEvaluation(found bool) {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.NestedPathEvaluations++
+	if !found {
+		s.totals.NestedPathMisses++
+	}
 }
 
 func (s *propagationCounterSpan) recordTerminalDeltaEmitted() {
@@ -760,6 +774,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-expression-predicate-tests", float64(s.Totals.ExpressionPredicateTests))
 	report("propagation-expression-predicate-failures", float64(s.Totals.ExpressionPredicateFailures))
 	report("propagation-expression-predicate-errors", float64(s.Totals.ExpressionPredicateErrors))
+	report("propagation-nested-path-evaluations", float64(s.Totals.NestedPathEvaluations))
+	report("propagation-nested-path-misses", float64(s.Totals.NestedPathMisses))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -790,6 +806,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-expression-predicate-tests/rhs-assert", float64(s.Totals.ExpressionPredicateTests)/rhsAsserts)
 	report("propagation-expression-predicate-failures/rhs-assert", float64(s.Totals.ExpressionPredicateFailures)/rhsAsserts)
 	report("propagation-expression-predicate-errors/rhs-assert", float64(s.Totals.ExpressionPredicateErrors)/rhsAsserts)
+	report("propagation-nested-path-evaluations/rhs-assert", float64(s.Totals.NestedPathEvaluations)/rhsAsserts)
+	report("propagation-nested-path-misses/rhs-assert", float64(s.Totals.NestedPathMisses)/rhsAsserts)
 	report("propagation-template-count", float64(len(s.ByTemplate)))
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
@@ -868,6 +886,8 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-expression-predicate-tests=" + strconv.Itoa(s.Totals.ExpressionPredicateTests),
 		"propagation-expression-predicate-failures=" + strconv.Itoa(s.Totals.ExpressionPredicateFailures),
 		"propagation-expression-predicate-errors=" + strconv.Itoa(s.Totals.ExpressionPredicateErrors),
+		"propagation-nested-path-evaluations=" + strconv.Itoa(s.Totals.NestedPathEvaluations),
+		"propagation-nested-path-misses=" + strconv.Itoa(s.Totals.NestedPathMisses),
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),
@@ -893,6 +913,8 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-expression-predicate-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateTests),
 		"propagation-expression-predicate-failures/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateFailures),
 		"propagation-expression-predicate-errors/rhs-assert=" + s.perRHSAssertField(s.Totals.ExpressionPredicateErrors),
+		"propagation-nested-path-evaluations/rhs-assert=" + s.perRHSAssertField(s.Totals.NestedPathEvaluations),
+		"propagation-nested-path-misses/rhs-assert=" + s.perRHSAssertField(s.Totals.NestedPathMisses),
 		"propagation-by-template=" + s.templateSummary(),
 		"propagation-by-origin=" + s.originSummary(),
 		"propagation-branch-count=" + strconv.Itoa(len(s.ByBranch)),
@@ -1066,7 +1088,9 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"beta-joined-tokens-produced=" + strconv.Itoa(totals.BetaJoinedTokensProduced) + "," +
 		"expression-predicate-tests=" + strconv.Itoa(totals.ExpressionPredicateTests) + "," +
 		"expression-predicate-failures=" + strconv.Itoa(totals.ExpressionPredicateFailures) + "," +
-		"expression-predicate-errors=" + strconv.Itoa(totals.ExpressionPredicateErrors) + "}"
+		"expression-predicate-errors=" + strconv.Itoa(totals.ExpressionPredicateErrors) + "," +
+		"nested-path-evaluations=" + strconv.Itoa(totals.NestedPathEvaluations) + "," +
+		"nested-path-misses=" + strconv.Itoa(totals.NestedPathMisses) + "}"
 }
 
 func slicesSortTemplateKeys(keys []TemplateKey) {

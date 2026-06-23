@@ -455,12 +455,10 @@ func queryParamJoinFromPredicate(spec ExpressionSpec, params map[string]ValueKin
 	if path, ok := queryCurrentPathExpr(compare.Left); ok {
 		if param, ok := queryParamExpr(compare.Right, params); ok {
 			return JoinConstraintSpec{
-				Field:    path.root(),
 				Path:     path,
 				Operator: operator,
 				Ref: FieldRef{
 					Binding: internalQueryTriggerBinding,
-					Field:   param,
 					Path:    Path(param),
 				},
 			}, true
@@ -473,12 +471,10 @@ func queryParamJoinFromPredicate(spec ExpressionSpec, params map[string]ValueKin
 				return JoinConstraintSpec{}, false
 			}
 			return JoinConstraintSpec{
-				Field:    path.root(),
 				Path:     path,
 				Operator: inverted,
 				Ref: FieldRef{
 					Binding: internalQueryTriggerBinding,
-					Field:   param,
 					Path:    Path(param),
 				},
 			}, true
@@ -512,13 +508,15 @@ func queryCurrentFieldExpr(spec ExpressionSpec) (string, bool) {
 func queryCurrentPathExpr(spec ExpressionSpec) (PathSpec, bool) {
 	switch expression := spec.(type) {
 	case CurrentFieldExpr:
-		path := expression.clone().Path
+		normalized := expression.clone()
+		path := pathOrField(normalized.Path, normalized.Field)
 		return path, !path.isZero()
 	case *CurrentFieldExpr:
 		if expression == nil {
 			return PathSpec{}, false
 		}
-		path := expression.clone().Path
+		normalized := expression.clone()
+		path := pathOrField(normalized.Path, normalized.Field)
 		return path, !path.isZero()
 	default:
 		return PathSpec{}, false

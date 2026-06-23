@@ -60,6 +60,10 @@ func pathOrField(path PathSpec, field string) PathSpec {
 	return fieldPath(field)
 }
 
+func hasAmbiguousFieldAndPath(field string, path PathSpec) bool {
+	return strings.TrimSpace(field) != "" && !path.isZero()
+}
+
 func (p PathSpec) clone() PathSpec {
 	if len(p.Segments) == 0 {
 		return PathSpec{}
@@ -200,6 +204,10 @@ func (a compiledPathAccess) topLevel() bool {
 	return a.path.topLevel()
 }
 
+func (a compiledPathAccess) nested() bool {
+	return len(a.path.Segments) > 1
+}
+
 func (a compiledPathAccess) display() string {
 	return a.path.display()
 }
@@ -213,6 +221,14 @@ func (a compiledPathAccess) valueFromFact(fact conditionFactRef) (Value, bool) {
 		return Value{}, false
 	}
 	return resolveValuePathTail(value, a.path.Segments[1:])
+}
+
+func (a compiledPathAccess) valueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	value, ok := a.valueFromFact(fact)
+	if a.nested() && span != nil {
+		span.recordNestedPathEvaluation(ok)
+	}
+	return value, ok
 }
 
 func (a compiledPathAccess) valueFromSnapshot(fact FactSnapshot) (Value, bool) {
@@ -235,6 +251,14 @@ func (a compiledPathAccess) valueFromWorkingFact(fact *workingFact) (Value, bool
 		return Value{}, false
 	}
 	return resolveValuePathTail(value, a.path.Segments[1:])
+}
+
+func (a compiledPathAccess) valueFromWorkingFactWithCounters(fact *workingFact, span *propagationCounterSpan) (Value, bool) {
+	value, ok := a.valueFromWorkingFact(fact)
+	if a.nested() && span != nil {
+		span.recordNestedPathEvaluation(ok)
+	}
+	return value, ok
 }
 
 func resolveValuePathTail(value Value, segments []PathSegment) (Value, bool) {

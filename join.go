@@ -15,8 +15,7 @@ func (r FieldRef) clone() FieldRef {
 	out := r
 	out.Binding = strings.TrimSpace(out.Binding)
 	out.Field = strings.TrimSpace(out.Field)
-	out.Path = pathOrField(out.Path, out.Field)
-	out.Field = out.Path.root()
+	out.Path = out.Path.clone()
 	return out
 }
 
@@ -30,8 +29,7 @@ type JoinConstraintSpec struct {
 func (s JoinConstraintSpec) clone() JoinConstraintSpec {
 	out := s
 	out.Field = strings.TrimSpace(out.Field)
-	out.Path = pathOrField(out.Path, out.Field)
-	out.Field = out.Path.root()
+	out.Path = out.Path.clone()
 	out.Ref = out.Ref.clone()
 	return out
 }
@@ -81,6 +79,10 @@ func (c compiledJoinConstraint) isHashJoin() bool {
 }
 
 func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
+	return c.matchesTokenWithCounters(fact, bindings, nil)
+}
+
+func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
 	if c.refBindingSlot < 0 {
 		return false, fmt.Errorf("%w: malformed join binding slot %d", ErrMatcher, c.refBindingSlot)
 	}
@@ -89,12 +91,12 @@ func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tok
 		return false, nil
 	}
 
-	left, ok := c.leftValueFromFact(fact)
+	left, ok := c.leftValueFromFactWithCounters(fact, span)
 	if !ok {
 		return false, nil
 	}
 
-	right, ok := c.rightValueFromFact(match.fact)
+	right, ok := c.rightValueFromFactWithCounters(match.fact, span)
 	if !ok {
 		return false, nil
 	}
@@ -141,7 +143,31 @@ func compileJoinConstraintSpec(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 ) (JoinConstraint, compiledJoinConstraint, error) {
+	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
+		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
+			RuleName:          ruleName,
+			ConditionIndex:    conditionIndex,
+			HasConditionIndex: true,
+			JoinIndex:         joinIndex,
+			HasJoinIndex:      true,
+			Reason:            "join constraint cannot set both field and path",
+			Err:               ErrInvalidPath,
+		}
+	}
+	if hasAmbiguousFieldAndPath(spec.Ref.Field, spec.Ref.Path) {
+		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
+			RuleName:          ruleName,
+			ConditionIndex:    conditionIndex,
+			HasConditionIndex: true,
+			JoinIndex:         joinIndex,
+			HasJoinIndex:      true,
+			Reason:            "join reference cannot set both field and path",
+			Err:               ErrInvalidPath,
+		}
+	}
 	normalized := spec.clone()
+	normalized.Path = pathOrField(normalized.Path, normalized.Field)
+	normalized.Ref.Path = pathOrField(normalized.Ref.Path, normalized.Ref.Field)
 	if normalized.Path.isZero() {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -153,6 +179,7 @@ func compileJoinConstraintSpec(
 			Err:               ErrInvalidPath,
 		}
 	}
+	normalized.Field = normalized.Path.root()
 	if normalized.Ref.Binding == "" {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -174,6 +201,7 @@ func compileJoinConstraintSpec(
 			Err:               ErrInvalidPath,
 		}
 	}
+	normalized.Ref.Field = normalized.Ref.Path.root()
 	if !validJoinOperator(normalized.Operator) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -344,9 +372,23 @@ func (c compiledJoinConstraint) leftValueFromFact(fact conditionFactRef) (Value,
 	return fact.compiledFieldValue(c.field, c.fieldSlot)
 }
 
+func (c compiledJoinConstraint) leftValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromFactWithCounters(fact, span)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
+}
+
 func (c compiledJoinConstraint) rightValueFromFact(fact conditionFactRef) (Value, bool) {
 	if !c.refAccess.path.isZero() {
 		return c.refAccess.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(c.refField, c.refFieldSlot)
+}
+
+func (c compiledJoinConstraint) rightValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
+	if !c.refAccess.path.isZero() {
+		return c.refAccess.valueFromFactWithCounters(fact, span)
 	}
 	return fact.compiledFieldValue(c.refField, c.refFieldSlot)
 }
