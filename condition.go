@@ -367,8 +367,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			return err
 		}
 		if conditionIndex == len(r.conditionPlans) {
-			matches := make([]conditionMatch, len(selected))
-			copy(matches, selected)
+			matches := compactSelectedConditionMatches(selected)
 			sets = append(sets, bindingSet{matches: matches, token: token})
 			return nil
 		}
@@ -392,7 +391,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 					value:       binding.value,
 					hasValue:    true,
 				}
-				next[len(selected)+i] = match
+				next = selectedConditionMatchesWithMatch(next, match)
 				entry := bindingTupleEntryForMatchUnchecked(r, plan, match)
 				nextToken = newMatchToken(nextToken, entry, match, 0, source.sourceGeneration())
 			}
@@ -404,9 +403,7 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			return err
 		}
 		for _, match := range matches {
-			next := make([]conditionMatch, len(selected)+1)
-			copy(next, selected)
-			next[len(selected)] = match
+			next := selectedConditionMatchesWithMatch(selected, match)
 			entry := plan.bindingTupleEntry(match)
 			nextToken := newMatchToken(token, entry, match, match.fact.Recency(), source.sourceGeneration())
 			if err := walk(conditionIndex+1, next, nextToken); err != nil {
@@ -454,7 +451,7 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 				return err
 			}
 			if conditionIndex == len(plans) {
-				candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), selected)
+				candidate, err := buildMatchCandidateFromMatches(r, source.sourceGeneration(), compactSelectedConditionMatches(selected))
 				if err != nil {
 					return err
 				}
@@ -477,19 +474,17 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 				next := make([]conditionMatch, len(selected)+len(bindings))
 				copy(next, selected)
 				for i, binding := range bindings {
-					next[len(selected)+i] = conditionMatch{
+					next = selectedConditionMatchesWithMatch(next, conditionMatch{
 						conditionID: plan.id,
 						bindingSlot: plan.bindingSlot + i,
 						value:       binding.value,
 						hasValue:    true,
-					}
+					})
 				}
 				return walk(conditionIndex+1, next)
 			}
 			yield := func(match conditionMatch) error {
-				next := make([]conditionMatch, len(selected)+1)
-				copy(next, selected)
-				next[len(selected)] = match
+				next := selectedConditionMatchesWithMatch(selected, match)
 				return walk(conditionIndex+1, next)
 			}
 			if alphaSource != nil {
@@ -504,5 +499,39 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 			return nil, err
 		}
 	}
+	sortMatchCandidates(nil, candidates)
 	return candidates, nil
+}
+
+func selectedConditionMatchesWithMatch(selected []conditionMatch, match conditionMatch) []conditionMatch {
+	if match.bindingSlot < 0 {
+		next := make([]conditionMatch, len(selected)+1)
+		copy(next, selected)
+		next[len(selected)] = match
+		return next
+	}
+	if match.bindingSlot < len(selected) {
+		next := make([]conditionMatch, len(selected))
+		copy(next, selected)
+		next[match.bindingSlot] = match
+		return next
+	}
+	next := make([]conditionMatch, match.bindingSlot+1)
+	copy(next, selected)
+	next[match.bindingSlot] = match
+	return next
+}
+
+func compactSelectedConditionMatches(selected []conditionMatch) []conditionMatch {
+	if len(selected) == 0 {
+		return nil
+	}
+	out := make([]conditionMatch, 0, len(selected))
+	for _, match := range selected {
+		if match.conditionID == "" && !match.hasValue && match.fact.ID().IsZero() {
+			continue
+		}
+		out = append(out, match)
+	}
+	return out
 }

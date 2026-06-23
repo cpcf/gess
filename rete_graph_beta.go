@@ -1500,7 +1500,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			continue
 		}
 		m.recordAlphaFact(alphaNodeID, match.fact)
-		token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), span)
+		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1524,7 +1524,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				continue
 			}
 			m.recordAlphaFact(alphaNodeID, match.fact)
-			token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), span)
+			token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
 			if token.isZero() || !m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta) {
 				delta.supported = false
 			}
@@ -1550,7 +1550,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			continue
 		}
 		m.recordAlphaFact(alphaNodeID, match.fact)
-		token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), span)
+		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1578,7 +1578,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), nil)
+		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1601,7 +1601,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 				delta.supported = false
 				continue
 			}
-			token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), nil)
+			token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
 			if token.isZero() || !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 				delta.supported = false
 			}
@@ -1625,7 +1625,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newTokenRef(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation(), nil)
+		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -3491,18 +3491,35 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 	return row.match, true
 }
 
+func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {
+	match.conditionID = entry.conditionID
+	match.bindingSlot = entry.bindingSlot
+	return match
+}
+
 func tokenConditionMatches(token tokenRef) ([]conditionMatch, bool) {
 	row, ok := token.resolve()
 	if !ok {
 		return nil, false
 	}
 	matches := make([]conditionMatch, row.size)
-	for i := range matches {
-		match, ok := token.matchAt(i)
+	seen := make([]bool, row.size)
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
 		if !ok {
 			return nil, false
 		}
-		matches[i] = match
+		slot := row.match.bindingSlot
+		if slot < 0 || slot >= len(matches) || seen[slot] {
+			return nil, false
+		}
+		matches[slot] = row.match
+		seen[slot] = true
+	}
+	for _, ok := range seen {
+		if !ok {
+			return nil, false
+		}
 	}
 	return matches, true
 }

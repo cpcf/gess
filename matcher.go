@@ -378,7 +378,14 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 	var path []int
 	size := token.size()
 	pathLen := token.pathLen()
-	if scratch != nil {
+	haveEntries := false
+	if publicEntries, publicFactIDs, publicFactVersions, publicPath, ok := terminalTokenBindingTuple(rule, token); ok {
+		entries = publicEntries
+		factIDs = publicFactIDs
+		factVersions = publicFactVersions
+		path = publicPath
+		haveEntries = true
+	} else if scratch != nil {
 		entries, factIDs, factVersions, path = scratch.tokenBuffers(size, pathLen)
 	} else {
 		entries = make([]bindingTupleEntry, size)
@@ -386,8 +393,10 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		factVersions = make([]FactVersion, size)
 		path = make([]int, pathLen)
 	}
-	if _, _, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
-		return matchCandidate{}, err
+	if !haveEntries {
+		if _, _, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
+			return matchCandidate{}, err
+		}
 	}
 
 	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)

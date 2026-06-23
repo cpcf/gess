@@ -1107,20 +1107,29 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
-		branchIR := newBranchPlanningIR(branchIndex, branch.conditions)
-		compiledBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, branchIR, templatesByKey, false, nil)
+		publicBranchIR := newBranchPlanningIR(branchIndex, branch.conditions)
+		publicBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, publicBranchIR, templatesByKey, false, nil)
 		if err != nil {
 			return compiledRule{}, err
 		}
 		if branchIndex == 0 {
-			representative = compiledBranch
-		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, compiledBranch.conditions); err != nil {
+			representative = publicBranch
+		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, publicBranch.conditions); err != nil {
 			return compiledRule{}, err
 		}
-		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
+		plannedBranchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
+		plannedBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, plannedBranchIR, templatesByKey, false, nil)
+		if err != nil {
+			return compiledRule{}, err
+		}
+		compiledBranches = append(compiledBranches, compiledConditionBranch{
+			id:         branchIndex,
+			conditions: publicBranch.branchConditions,
+			plans:      remapCompiledConditionPlansToPublicBranch(plannedBranch.conditionPlans, publicBranch),
+		})
 	}
 	conditions := representative.conditions
-	conditionPlans := representative.conditionPlans
+	conditionPlans := compiledBranches[0].plans
 	treeConditions := inspectionSet.treeConditions
 	conditionTree := buildRuleConditionTree(conditionTreeShape, treeConditions)
 	conditionBranches := make([]RuleConditionBranch, len(compiledBranches))

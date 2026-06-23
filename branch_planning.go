@@ -159,6 +159,94 @@ func compiledConditionBranchFromPlanningIR(ir branchPlanningIR, compiled compile
 	}
 }
 
+func remapCompiledConditionPlansToPublicBranch(plans []compiledConditionPlan, public compiledRuleConditionSet) []compiledConditionPlan {
+	if len(plans) == 0 {
+		return nil
+	}
+	publicByBinding := make(map[string]RuleCondition, len(public.conditions))
+	for _, condition := range public.conditions {
+		publicByBinding[condition.binding] = condition
+	}
+	out := make([]compiledConditionPlan, len(plans))
+	for i, plan := range plans {
+		out[i] = remapCompiledConditionPlanToPublicBranch(plan, publicByBinding)
+	}
+	return out
+}
+
+func remapCompiledConditionPlanToPublicBranch(plan compiledConditionPlan, publicByBinding map[string]RuleCondition) compiledConditionPlan {
+	if public, ok := publicByBinding[plan.binding]; ok {
+		plan.id = public.id
+		plan.bindingSlot = public.order
+	}
+	for i := range plan.joins {
+		plan.joins[i] = remapCompiledJoinConstraintToPublicBranch(plan.joins[i], plan.bindingSlot, publicByBinding)
+	}
+	for i := range plan.predicates {
+		plan.predicates[i].expression = remapCompiledExpressionToPublicBranch(plan.predicates[i].expression, publicByBinding)
+	}
+	if plan.aggregate != nil {
+		aggregate := *plan.aggregate
+		aggregate.inputPlans = remapCompiledConditionPlansToPublicBranch(aggregate.inputPlans, compiledRuleConditionSet{conditions: publicConditionsFromBindingMap(publicByBinding)})
+		aggregate.specs = append([]compiledAggregateSpec(nil), aggregate.specs...)
+		firstSlot := -1
+		for i := range aggregate.specs {
+			if public, ok := publicByBinding[aggregate.specs[i].binding]; ok {
+				if firstSlot < 0 || public.order < firstSlot {
+					firstSlot = public.order
+				}
+			}
+			aggregate.specs[i].expression = remapCompiledExpressionToPublicBranch(aggregate.specs[i].expression, publicByBinding)
+		}
+		if firstSlot >= 0 {
+			plan.bindingSlot = firstSlot
+			if public := publicConditionAtOrder(publicByBinding, firstSlot); public.id != "" {
+				plan.id = public.id
+			}
+		}
+		plan.aggregate = &aggregate
+	}
+	return plan
+}
+
+func remapCompiledJoinConstraintToPublicBranch(join compiledJoinConstraint, bindingSlot int, publicByBinding map[string]RuleCondition) compiledJoinConstraint {
+	join.bindingSlot = bindingSlot
+	if public, ok := publicByBinding[join.refBinding]; ok {
+		join.refBindingSlot = public.order
+	}
+	return join
+}
+
+func remapCompiledExpressionToPublicBranch(expression compiledExpression, publicByBinding map[string]RuleCondition) compiledExpression {
+	if public, ok := publicByBinding[expression.binding]; ok {
+		expression.bindingSlot = public.order
+	}
+	for i := range expression.operands {
+		expression.operands[i] = remapCompiledExpressionToPublicBranch(expression.operands[i], publicByBinding)
+	}
+	return expression
+}
+
+func publicConditionsFromBindingMap(publicByBinding map[string]RuleCondition) []RuleCondition {
+	if len(publicByBinding) == 0 {
+		return nil
+	}
+	out := make([]RuleCondition, 0, len(publicByBinding))
+	for _, condition := range publicByBinding {
+		out = append(out, condition)
+	}
+	return out
+}
+
+func publicConditionAtOrder(publicByBinding map[string]RuleCondition, order int) RuleCondition {
+	for _, condition := range publicByBinding {
+		if condition.order == order {
+			return condition
+		}
+	}
+	return RuleCondition{}
+}
+
 func cloneNormalizedRuleCondition(condition normalizedRuleCondition) normalizedRuleCondition {
 	out := condition
 	out.spec = condition.spec.clone()

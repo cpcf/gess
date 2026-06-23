@@ -273,7 +273,9 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 	}
 	out := *act
 	out.bindings = nil
-	if act.token.isZero() {
+	if len(act.factIDs) > 0 {
+		out.factIDs = cloneFactIDs(act.factIDs)
+	} else if act.token.isZero() {
 		out.factIDs = cloneFactIDs(act.factIDs)
 	} else {
 		out.factIDs = nil
@@ -1724,6 +1726,9 @@ func cloneActivationFactIDs(act *activation) []FactID {
 	if act == nil {
 		return nil
 	}
+	if len(act.factIDs) > 0 {
+		return cloneFactIDs(act.factIDs)
+	}
 	if act.token.isZero() {
 		return cloneFactIDs(act.factIDs)
 	}
@@ -1741,6 +1746,9 @@ func cloneActivationFactIDs(act *activation) []FactID {
 func cloneActivationFactVersions(act *activation) []FactVersion {
 	if act == nil {
 		return nil
+	}
+	if len(act.factVersions) > 0 {
+		return cloneFactVersions(act.factVersions)
 	}
 	if act.token.isZero() {
 		return cloneFactVersions(act.factVersions)
@@ -1856,6 +1864,11 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.generation = tokenRefGeneration(token)
 	dst.identity = identity
 	dst.token = token
+	if _, factIDs, factVersions, path, ok := terminalTokenBindingTuple(rule, token); ok {
+		dst.factIDs = factIDs
+		dst.factVersions = factVersions
+		dst.path = path
+	}
 	dst.salience = rule.salience
 	dst.maxRecency = token.maxRecency()
 	dst.aggregateRecency = token.aggregateRecency()
@@ -1865,20 +1878,9 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 }
 
 func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candidateIdentity {
-	identityState, count, ok := terminalTokenIdentityStateForRule(rule, token, candidateIdentityHashStart(tokenRefGeneration(token)), 0)
+	entries, _, _, _, ok := terminalTokenBindingTuple(rule, token)
 	if ok {
-		identity := candidateIdentity{
-			generation: tokenRefGeneration(token),
-			count:      count,
-			key: candidateIdentityKey{
-				scopeHash: rule.identityScopeHash,
-				hash:      candidateIdentityHashFinish(identityState, count),
-			},
-		}
-		if identity.key.scopeHash == 0 {
-			identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
-		}
-		return identity
+		return candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, tokenRefGeneration(token), entries)
 	}
 	identity := candidateIdentity{
 		generation: tokenRefGeneration(token),
@@ -1892,6 +1894,64 @@ func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candid
 		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
 	}
 	return identity
+}
+
+func terminalTokenBindingTuple(rule compiledRule, token tokenRef) ([]bindingTupleEntry, []FactID, []FactVersion, []int, bool) {
+	if token.isZero() || len(rule.conditions) == 0 {
+		return nil, nil, nil, nil, false
+	}
+	matches, ok := tokenPublicMatchesForRule(rule, token)
+	if !ok {
+		return nil, nil, nil, nil, false
+	}
+	entries := make([]bindingTupleEntry, len(matches))
+	factIDs := make([]FactID, len(matches))
+	factVersions := make([]FactVersion, len(matches))
+	pathLen := 0
+	for i, match := range matches {
+		entry, err := bindingTupleEntryForMatch(rule, match)
+		if err != nil {
+			return nil, nil, nil, nil, false
+		}
+		entries[i] = entry
+		factIDs[i] = entry.factID
+		factVersions[i] = entry.factVersion
+		pathLen += len(entry.conditionPath)
+	}
+	path := make([]int, 0, pathLen)
+	for _, entry := range entries {
+		path = append(path, entry.conditionPath...)
+	}
+	return entries, factIDs, factVersions, path, true
+}
+
+func tokenPublicMatchesForRule(rule compiledRule, token tokenRef) ([]conditionMatch, bool) {
+	if token.isZero() || len(rule.conditions) == 0 {
+		return nil, false
+	}
+	matches := make([]conditionMatch, len(rule.conditions))
+	seen := make([]bool, len(rule.conditions))
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return nil, false
+		}
+		slot := row.match.bindingSlot
+		if slot < 0 {
+			continue
+		}
+		if slot >= len(matches) || seen[slot] {
+			return nil, false
+		}
+		matches[slot] = row.match
+		seen[slot] = true
+	}
+	for _, ok := range seen {
+		if !ok {
+			return nil, false
+		}
+	}
+	return matches, true
 }
 
 func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state uint64, count int) (uint64, int, bool) {

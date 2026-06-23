@@ -301,8 +301,11 @@ func (c ActionContext) materializeAllBindings() error {
 		if c.bindings.entryAt(i).hasValue {
 			continue
 		}
+		entry := c.bindings.entryAt(i)
+		if entry.factID.IsZero() || entry.factID.Sequence() == 0 {
+			continue
+		}
 		if _, ok := c.materializeBindingLocked(i); !ok {
-			entry := c.bindings.entryAt(i)
 			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.ActivationID())
 		}
 	}
@@ -457,7 +460,7 @@ func (s *actionContextBindingState) len() int {
 		return 0
 	}
 	if !s.token.isZero() {
-		return tokenRefSize(s.token)
+		return len(s.conditions)
 	}
 	return len(s.entries)
 }
@@ -467,7 +470,7 @@ func (s *actionContextBindingState) entryAt(index int) bindingTupleEntry {
 		return bindingTupleEntry{}
 	}
 	if !s.token.isZero() {
-		match, ok := s.token.matchAt(index)
+		match, ok := tokenRefAtSlot(s.token, index)
 		if !ok || match.bindingSlot < 0 || match.bindingSlot >= len(s.conditions) {
 			return bindingTupleEntry{}
 		}
@@ -667,7 +670,7 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
 	factCount := activationFactCount(&activation)
-	if len(activation.bindings) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
+	if activation.token.isZero() && len(activation.bindings) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
@@ -702,11 +705,8 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 }
 
 func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation) error {
-	if tokenRefSize(activation.token) != len(rule.conditions) {
-		return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
-	}
 	for i := range rule.conditions {
-		match, ok := activation.token.matchAt(i)
+		match, ok := tokenRefAtSlot(activation.token, i)
 		if !ok {
 			return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
 		}
@@ -714,6 +714,9 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 			continue
 		}
 		factID := match.fact.ID()
+		if factID.IsZero() || factID.Sequence() == 0 {
+			continue
+		}
 		fact, ok := s.workingFactByID(factID)
 		if !ok {
 			return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())

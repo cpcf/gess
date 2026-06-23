@@ -410,14 +410,11 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 		if !ok {
 			return conditionMatch{}, false
 		}
-		if row.size == slot+1 {
+		if row.match.bindingSlot == slot {
 			return row.match, true
 		}
-		if row.size <= slot {
-			return conditionMatch{}, false
-		}
 	}
-	return conditionMatch{}, false
+	return token.matchAt(slot)
 }
 
 func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compiledJoinConstraint) (Value, bool)) (betaJoinKey, bool) {
