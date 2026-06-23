@@ -18,6 +18,7 @@ var (
 	ErrMatcher                   = errors.New("gess: matcher error")
 	ErrUnsupportedRuntime        = errors.New("gess: unsupported runtime")
 	ErrInvalidPath               = errors.New("gess: invalid path")
+	ErrInvalidListPattern        = errors.New("gess: invalid list pattern")
 	ErrAggregateValidation       = errors.New("gess: aggregate validation failed")
 	ErrAggregateEvaluation       = errors.New("gess: aggregate evaluation failed")
 	ErrQueryNotFound             = errors.New("gess: query not found")

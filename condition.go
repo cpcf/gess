@@ -30,18 +30,19 @@ type conditionTarget struct {
 }
 
 type compiledConditionPlan struct {
-	id          ConditionID
-	binding     string
-	bindingSlot int
-	path        []int
-	negated     bool
-	aggregate   *compiledAggregatePlan
-	target      conditionTarget
-	constraints []compiledFieldConstraint
-	joins       []compiledJoinConstraint
-	predicates  []compiledExpressionPredicate
-	indexable   bool
-	indexKind   conditionIndexKind
+	id           ConditionID
+	binding      string
+	bindingSlot  int
+	path         []int
+	negated      bool
+	aggregate    *compiledAggregatePlan
+	target       conditionTarget
+	constraints  []compiledFieldConstraint
+	listPatterns []compiledListPattern
+	joins        []compiledJoinConstraint
+	predicates   []compiledExpressionPredicate
+	indexable    bool
+	indexKind    conditionIndexKind
 }
 
 type conditionMatch struct {
@@ -55,6 +56,25 @@ type conditionMatch struct {
 type bindingSet struct {
 	matches []conditionMatch
 	token   *matchToken
+}
+
+func cloneCompiledConditionPlan(plan compiledConditionPlan) compiledConditionPlan {
+	out := plan
+	out.path = cloneIntPath(plan.path)
+	out.constraints = cloneCompiledFieldConstraints(plan.constraints)
+	out.listPatterns = cloneCompiledListPatterns(plan.listPatterns)
+	out.joins = cloneCompiledJoinConstraints(plan.joins)
+	out.predicates = cloneCompiledExpressionPredicates(plan.predicates)
+	if plan.aggregate != nil {
+		aggregate := *plan.aggregate
+		aggregate.inputPlans = make([]compiledConditionPlan, len(plan.aggregate.inputPlans))
+		for i, input := range plan.aggregate.inputPlans {
+			aggregate.inputPlans[i] = cloneCompiledConditionPlan(input)
+		}
+		aggregate.specs = append([]compiledAggregateSpec(nil), plan.aggregate.specs...)
+		out.aggregate = &aggregate
+	}
+	return out
 }
 
 func isValidBindingName(name string) bool {
@@ -72,7 +92,7 @@ func isValidBindingName(name string) bool {
 	return true
 }
 
-func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, joins []JoinConstraint, predicates []compiledExpressionPredicate, negated bool) ConditionID {
+func conditionIDFor(ruleID RuleID, order int, binding string, name string, templateKey TemplateKey, constraints []FieldConstraint, listPatterns []compiledListPattern, joins []JoinConstraint, predicates []compiledExpressionPredicate, negated bool) ConditionID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/condition/v1\n"))
 	sum.Write([]byte("rule:"))
@@ -97,6 +117,8 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 		sum.Write([]byte(constraint.Value.String()))
 		sum.Write([]byte(";"))
 	}
+	sum.Write([]byte("\nlist-patterns:"))
+	sum.Write([]byte(serializeCompiledListPatterns(listPatterns)))
 	sum.Write([]byte("\njoins:"))
 	for _, join := range joins {
 		sum.Write([]byte(join.Path.display()))
@@ -210,6 +232,13 @@ func (p compiledConditionPlan) forEachMatchWithBindingsAndParams(ctx context.Con
 		if !ok {
 			continue
 		}
+		ok, err = p.matchesListPatterns(ctx, ref)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
 		ok, err = p.matchesPredicatesWithParams(ctx, ref, bindings, params)
 		if err != nil {
 			return err
@@ -245,6 +274,13 @@ func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context
 		}
 		ref := newConditionFactRefFromSnapshot(fact)
 		ok, err := p.matchesJoins(ctx, ref, bindings)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			continue
+		}
+		ok, err = p.matchesListPatterns(ctx, ref)
 		if err != nil {
 			return err
 		}
@@ -300,6 +336,44 @@ func (p compiledConditionPlan) matchesPredicatesWithParams(ctx context.Context, 
 		}
 	}
 	return true, nil
+}
+
+func (p compiledConditionPlan) matchesListPatterns(ctx context.Context, fact conditionFactRef) (bool, error) {
+	if len(p.listPatterns) == 0 {
+		return true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	for _, pattern := range p.listPatterns {
+		_, ok, err := pattern.matchesFact(fact, tokenRef{})
+		if err != nil || !ok {
+			return ok, err
+		}
+	}
+	return true, nil
+}
+
+func (p compiledConditionPlan) listPatternCaptureMatches(fact conditionFactRef) ([]conditionMatch, bool, error) {
+	if len(p.listPatterns) == 0 {
+		return nil, true, nil
+	}
+	var out []conditionMatch
+	for _, pattern := range p.listPatterns {
+		captures, ok, err := pattern.matchesFact(fact, tokenRef{})
+		if err != nil || !ok {
+			return nil, ok, err
+		}
+		for _, capture := range captures {
+			out = append(out, conditionMatch{
+				conditionID: p.id,
+				bindingSlot: capture.bindingSlot,
+				value:       cloneValue(capture.value),
+				hasValue:    true,
+			})
+		}
+	}
+	return out, true, nil
 }
 
 func (p compiledConditionPlan) matchesFact(fact conditionFactRef) bool {
@@ -406,6 +480,18 @@ func (r compiledRule) matchBindingSets(ctx context.Context, source factSource) (
 			next := selectedConditionMatchesWithMatch(selected, match)
 			entry := plan.bindingTupleEntry(match)
 			nextToken := newMatchToken(token, entry, match, match.fact.Recency(), source.sourceGeneration())
+			captures, ok, err := plan.listPatternCaptureMatches(match.fact)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			for _, capture := range captures {
+				next = selectedConditionMatchesWithMatch(next, capture)
+				captureEntry := bindingTupleEntryForMatchUnchecked(r, plan, capture)
+				nextToken = newMatchToken(nextToken, captureEntry, capture, 0, source.sourceGeneration())
+			}
 			if err := walk(conditionIndex+1, next, nextToken); err != nil {
 				return err
 			}
@@ -485,6 +571,16 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 			}
 			yield := func(match conditionMatch) error {
 				next := selectedConditionMatchesWithMatch(selected, match)
+				captures, ok, err := plan.listPatternCaptureMatches(match.fact)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					return nil
+				}
+				for _, capture := range captures {
+					next = selectedConditionMatchesWithMatch(next, capture)
+				}
 				return walk(conditionIndex+1, next)
 			}
 			if alphaSource != nil {

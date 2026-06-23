@@ -59,13 +59,14 @@ type reteGraphStageRef struct {
 }
 
 type reteGraphAlphaNode struct {
-	id          reteGraphAlphaNodeID
-	target      conditionTarget
-	constraints []compiledFieldConstraint
-	predicates  []compiledExpressionPredicate
-	consumers   []reteBetaConditionRoute
-	entry       bindingTupleEntry
-	route       reteGraphAlphaRouteSelector
+	id           reteGraphAlphaNodeID
+	target       conditionTarget
+	constraints  []compiledFieldConstraint
+	listPatterns []compiledListPattern
+	predicates   []compiledExpressionPredicate
+	consumers    []reteBetaConditionRoute
+	entry        bindingTupleEntry
+	route        reteGraphAlphaRouteSelector
 }
 
 type reteGraphBetaNode struct {
@@ -140,14 +141,15 @@ const (
 )
 
 type reteGraphAlphaNodeInspection struct {
-	ID          reteGraphAlphaNodeID
-	Target      conditionTarget
-	Constraints []compiledFieldConstraint
-	Predicates  []compiledExpressionPredicate
-	Route       reteGraphAlphaRouteSelector
-	Consumers   []reteBetaConditionRoute
-	Entry       bindingTupleEntry
-	MemoryKind  reteGraphMemoryKind
+	ID           reteGraphAlphaNodeID
+	Target       conditionTarget
+	Constraints  []compiledFieldConstraint
+	ListPatterns []compiledListPattern
+	Predicates   []compiledExpressionPredicate
+	Route        reteGraphAlphaRouteSelector
+	Consumers    []reteBetaConditionRoute
+	Entry        bindingTupleEntry
+	MemoryKind   reteGraphMemoryKind
 }
 
 type reteGraphBetaNodeInspection struct {
@@ -230,9 +232,10 @@ type reteGraphTerminalRoute struct {
 }
 
 type reteGraphAlphaKey struct {
-	target      reteGraphTargetKey
-	constraints string
-	predicates  string
+	target       reteGraphTargetKey
+	constraints  string
+	listPatterns string
+	predicates   string
 }
 
 type reteGraphTargetKey struct {
@@ -311,7 +314,7 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 
 			for conditionIndex, condition := range plans {
 				alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
-				alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
+				alphaID, created := graph.internAlphaNode(alphaIndex, condition.target, alphaConstraints, condition.listPatterns, alphaPredicates)
 				alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
 				if alphaNode := graph.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
 					alphaNode.entry = graphTokenEntryForCondition(condition)
@@ -639,7 +642,7 @@ func (g *reteGraph) compileConditionAlpha(rule compiledRule, condition compiledC
 
 func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) reteGraphAlphaNodeID {
 	alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
-	alphaID, created := g.internAlphaNode(alphaIndex, condition.target, alphaConstraints, alphaPredicates)
+	alphaID, created := g.internAlphaNode(alphaIndex, condition.target, alphaConstraints, condition.listPatterns, alphaPredicates)
 	if alphaNode := g.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
 		alphaNode.entry = graphTokenEntryForCondition(condition)
 	}
@@ -715,7 +718,7 @@ func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateK
 	}
 }
 
-func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint, predicates []compiledExpressionPredicate) (reteGraphAlphaNodeID, bool) {
+func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNodeID, target conditionTarget, constraints []compiledFieldConstraint, listPatterns []compiledListPattern, predicates []compiledExpressionPredicate) (reteGraphAlphaNodeID, bool) {
 	if g == nil {
 		return 0, false
 	}
@@ -725,8 +728,9 @@ func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNo
 			name:        target.name,
 			templateKey: target.templateKey,
 		},
-		constraints: serializeCompiledFieldConstraints(constraints),
-		predicates:  serializeCompiledExpressionPredicates(predicates),
+		constraints:  serializeCompiledFieldConstraints(constraints),
+		listPatterns: serializeCompiledListPatterns(listPatterns),
+		predicates:   serializeCompiledExpressionPredicates(predicates),
 	}
 	if id, ok := index[key]; ok {
 		return id, false
@@ -734,10 +738,11 @@ func (g *reteGraph) internAlphaNode(index map[reteGraphAlphaKey]reteGraphAlphaNo
 
 	id := reteGraphAlphaNodeID(len(g.alphaNodes) + 1)
 	g.alphaNodes = append(g.alphaNodes, reteGraphAlphaNode{
-		id:          id,
-		target:      target,
-		constraints: cloneCompiledFieldConstraints(constraints),
-		predicates:  cloneCompiledExpressionPredicates(predicates),
+		id:           id,
+		target:       target,
+		constraints:  cloneCompiledFieldConstraints(constraints),
+		listPatterns: cloneCompiledListPatterns(listPatterns),
+		predicates:   cloneCompiledExpressionPredicates(predicates),
 	})
 	index[key] = id
 	return id, true
@@ -981,6 +986,9 @@ func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span 
 			return false
 		}
 	}
+	if !n.listPatternsMatch(ref, tokenRef{}) {
+		return false
+	}
 	if !n.expressionPredicatesMatch(ref, span) {
 		return false
 	}
@@ -1013,10 +1021,37 @@ func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, span *
 		}
 	}
 	ref := newConditionFactRefFromWorkingFact(fact)
+	if !n.listPatternsMatch(ref, tokenRef{}) {
+		return false
+	}
 	if !n.expressionPredicatesMatch(ref, span) {
 		return false
 	}
 	return true
+}
+
+func (n reteGraphAlphaNode) listPatternsMatch(fact conditionFactRef, bindings tokenRef) bool {
+	for _, pattern := range n.listPatterns {
+		if _, ok, err := pattern.matchesFact(fact, bindings); err != nil || !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (n reteGraphAlphaNode) listPatternCaptures(fact conditionFactRef, bindings tokenRef) ([]listPatternCapture, bool) {
+	if len(n.listPatterns) == 0 {
+		return nil, true
+	}
+	var out []listPatternCapture
+	for _, pattern := range n.listPatterns {
+		captures, ok, err := pattern.matchesFact(fact, bindings)
+		if err != nil || !ok {
+			return nil, false
+		}
+		out = append(out, captures...)
+	}
+	return out, true
 }
 
 func (n reteGraphAlphaNode) expressionPredicatesMatch(fact conditionFactRef, span *propagationCounterSpan) bool {
@@ -1155,14 +1190,15 @@ func (g *reteGraph) inspectAlphaNodes() []reteGraphAlphaNodeInspection {
 	out := make([]reteGraphAlphaNodeInspection, len(g.alphaNodes))
 	for i, node := range g.alphaNodes {
 		out[i] = reteGraphAlphaNodeInspection{
-			ID:          node.id,
-			Target:      node.target,
-			Constraints: cloneCompiledFieldConstraints(node.constraints),
-			Predicates:  cloneCompiledExpressionPredicates(node.predicates),
-			Route:       node.route,
-			Consumers:   cloneReteGraphAlphaConsumers(node.consumers),
-			Entry:       cloneBindingTupleEntry(node.entry),
-			MemoryKind:  reteGraphMemoryAlphaFactSet,
+			ID:           node.id,
+			Target:       node.target,
+			Constraints:  cloneCompiledFieldConstraints(node.constraints),
+			ListPatterns: cloneCompiledListPatterns(node.listPatterns),
+			Predicates:   cloneCompiledExpressionPredicates(node.predicates),
+			Route:        node.route,
+			Consumers:    cloneReteGraphAlphaConsumers(node.consumers),
+			Entry:        cloneBindingTupleEntry(node.entry),
+			MemoryKind:   reteGraphMemoryAlphaFactSet,
 		}
 	}
 	return out
@@ -1334,6 +1370,7 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 	for i, node := range in {
 		out[i] = node
 		out[i].constraints = cloneCompiledFieldConstraints(node.constraints)
+		out[i].listPatterns = cloneCompiledListPatterns(node.listPatterns)
 		out[i].predicates = cloneCompiledExpressionPredicates(node.predicates)
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 		out[i].entry = cloneBindingTupleEntry(node.entry)

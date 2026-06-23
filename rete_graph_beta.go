@@ -1605,6 +1605,11 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 	if source.kind == reteGraphStageAlpha {
 		alphaNodeID = reteGraphAlphaNodeID(source.id)
 	}
+	captures, capturesOK := m.alphaListPatternCaptures(source, match)
+	if !capturesOK {
+		delta.supported = false
+		return
+	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
 		entry := terminal.entry
 		if entry.conditionID == "" {
@@ -1615,7 +1620,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			continue
 		}
 		m.recordAlphaFact(alphaNodeID, match.fact)
-		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
+		token := m.newAlphaTokenRef(entry, match, captures, span)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1639,7 +1644,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				continue
 			}
 			m.recordAlphaFact(alphaNodeID, match.fact)
-			token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
+			token := m.newAlphaTokenRef(entry, match, captures, span)
 			if token.isZero() || !m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta) {
 				delta.supported = false
 			}
@@ -1650,7 +1655,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				bindingSlot: successor.entry.bindingSlot,
 				fact:        match.fact,
 			}
-			token := m.newTokenRef(tokenRef{}, successor.entry, edgeMatch, match.fact.Recency(), match.fact.Generation(), span)
+			token := m.newAlphaTokenRef(successor.entry, edgeMatch, captures, span)
 			if token.isZero() || !m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta) {
 				delta.supported = false
 			}
@@ -1665,7 +1670,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			continue
 		}
 		m.recordAlphaFact(alphaNodeID, match.fact)
-		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
+		token := m.newAlphaTokenRef(entry, match, captures, span)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1684,6 +1689,11 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 	if counters != nil {
 		counters.recordNegativePropagationEvent()
 	}
+	captures, capturesOK := m.alphaListPatternCaptures(source, match)
+	if !capturesOK {
+		delta.supported = false
+		return
+	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
 		entry := terminal.entry
 		if entry.conditionID == "" {
@@ -1693,7 +1703,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
+		token := m.newAlphaTokenRef(entry, match, captures, nil)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1716,7 +1726,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 				delta.supported = false
 				continue
 			}
-			token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
+			token := m.newAlphaTokenRef(entry, match, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 				delta.supported = false
 			}
@@ -1726,7 +1736,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 				bindingSlot: successor.entry.bindingSlot,
 				fact:        match.fact,
 			}
-			token := m.newTokenRef(tokenRef{}, successor.entry, edgeMatch, match.fact.Recency(), match.fact.Generation(), nil)
+			token := m.newAlphaTokenRef(successor.entry, edgeMatch, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 				delta.supported = false
 			}
@@ -1740,7 +1750,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), nil)
+		token := m.newAlphaTokenRef(entry, match, captures, nil)
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -1750,6 +1760,47 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 	for _, aggregateID := range m.graph.aggregatesByStage[source] {
 		m.removeAggregateInput(aggregateID, match, counters, delta)
 	}
+}
+
+func (m *reteGraphBetaMemory) alphaListPatternCaptures(source reteGraphStageRef, match conditionMatch) ([]listPatternCapture, bool) {
+	if m == nil || m.graph == nil || source.kind != reteGraphStageAlpha {
+		return nil, true
+	}
+	node := m.graph.alphaNode(reteGraphAlphaNodeID(source.id))
+	if node == nil {
+		return nil, false
+	}
+	return node.listPatternCaptures(match.fact, tokenRef{})
+}
+
+func (m *reteGraphBetaMemory) newAlphaTokenRef(entry bindingTupleEntry, match conditionMatch, captures []listPatternCapture, span *propagationCounterSpan) tokenRef {
+	if m == nil {
+		return tokenRef{}
+	}
+	token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
+	if token.isZero() {
+		return tokenRef{}
+	}
+	for _, capture := range captures {
+		captureEntry := bindingTupleEntry{
+			binding:        capture.binding,
+			bindingSlot:    capture.bindingSlot,
+			conditionOrder: capture.bindingSlot,
+			conditionID:    entry.conditionID,
+			conditionPath:  cloneIntPath(entry.conditionPath),
+		}
+		captureMatch := conditionMatch{
+			conditionID: entry.conditionID,
+			bindingSlot: capture.bindingSlot,
+			value:       cloneValue(capture.value),
+			hasValue:    true,
+		}
+		token = m.newTokenRef(token, captureEntry, captureMatch, 0, match.fact.Generation(), span)
+		if token.isZero() {
+			return tokenRef{}
+		}
+	}
+	return token
 }
 
 func (m *reteGraphBetaMemory) insertAggregateInput(id reteGraphAggregateNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) {
@@ -1793,8 +1844,12 @@ func (m *reteGraphBetaMemory) insertAggregateToken(id reteGraphAggregateNodeID, 
 	}
 	node := m.graph.aggregateNode(id)
 	memory := m.aggregateMemory(id)
-	match, ok := tokenLastMatch(token)
-	if node == nil || memory == nil || !ok {
+	if node == nil || memory == nil {
+		delta.supported = false
+		return
+	}
+	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
+	if !ok {
 		delta.supported = false
 		return
 	}
@@ -2506,7 +2561,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if rightRow == nil || rightRow.token.isZero() {
 				continue
 			}
-			rightMatch, ok := tokenLastMatch(rightRow.token)
+			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 			if !ok {
 				continue
 			}
@@ -2515,7 +2570,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			} else if !ok {
 				continue
 			}
-			output := m.newTokenRef(token, entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation(), span)
+			output := m.appendTokenRows(token, rightRow.token, span)
 			if output.isZero() {
 				continue
 			}
@@ -2525,7 +2580,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, span, delta)
 		}
 	case reteGraphBetaInputRight:
-		currentMatch, ok := tokenLastMatch(token)
+		currentMatch, ok := tokenFactMatchForBindingSlot(token, node.entry.bindingSlot)
 		if !ok {
 			return false
 		}
@@ -2547,7 +2602,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			} else if !ok {
 				continue
 			}
-			output := m.newTokenRef(leftRow.token, entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation(), span)
+			output := m.appendTokenRows(leftRow.token, token, span)
 			if output.isZero() {
 				continue
 			}
@@ -2762,7 +2817,7 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 			if rightRow == nil || rightRow.token.isZero() {
 				continue
 			}
-			rightMatch, ok := tokenLastMatch(rightRow.token)
+			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 			if !ok {
 				continue
 			}
@@ -3258,6 +3313,10 @@ func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef,
 	if m == nil || collector == nil {
 		return nil
 	}
+	captures, capturesOK := m.alphaListPatternCaptures(source, match)
+	if !capturesOK {
+		return fmt.Errorf("%w: malformed query list pattern captures", ErrQueryExecution)
+	}
 	for _, terminal := range m.graph.terminalsByStage[source] {
 		if _, ok := collector.terminal[terminal.terminalID]; !ok {
 			continue
@@ -3269,7 +3328,7 @@ func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef,
 		if entry.conditionID == "" {
 			return fmt.Errorf("%w: malformed query alpha terminal", ErrQueryExecution)
 		}
-		token := collector.tokenArena.add(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation())
+		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
 		if token.isZero() {
 			return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 		}
@@ -3294,7 +3353,7 @@ func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef,
 			if entry.conditionID == "" {
 				return fmt.Errorf("%w: malformed query left input", ErrQueryExecution)
 			}
-			token := collector.tokenArena.add(tokenRef{}, entry, match, match.fact.Recency(), match.fact.Generation())
+			token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
 			if token.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
@@ -3307,7 +3366,7 @@ func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef,
 				bindingSlot: successor.entry.bindingSlot,
 				fact:        match.fact,
 			}
-			token := collector.tokenArena.add(tokenRef{}, successor.entry, edgeMatch, match.fact.Recency(), match.fact.Generation())
+			token := queryAlphaTokenRef(collector.tokenArena, successor.entry, edgeMatch, captures)
 			if token.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
@@ -3348,6 +3407,36 @@ func (m *reteGraphBetaMemory) queryPropagateFromStage(source reteGraphStageRef, 
 	return nil
 }
 
+func queryAlphaTokenRef(arena *tokenArena, entry bindingTupleEntry, match conditionMatch, captures []listPatternCapture) tokenRef {
+	if arena == nil {
+		return tokenRef{}
+	}
+	token := arena.add(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation())
+	if token.isZero() {
+		return tokenRef{}
+	}
+	for _, capture := range captures {
+		captureEntry := bindingTupleEntry{
+			binding:        capture.binding,
+			bindingSlot:    capture.bindingSlot,
+			conditionOrder: capture.bindingSlot,
+			conditionID:    entry.conditionID,
+			conditionPath:  cloneIntPath(entry.conditionPath),
+		}
+		captureMatch := conditionMatch{
+			conditionID: entry.conditionID,
+			bindingSlot: capture.bindingSlot,
+			value:       cloneValue(capture.value),
+			hasValue:    true,
+		}
+		token = arena.add(token, captureEntry, captureMatch, 0, match.fact.Generation())
+		if token.isZero() {
+			return tokenRef{}
+		}
+	}
+	return token
+}
+
 func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, entry bindingTupleEntry, collector *reteGraphQueryCollector) error {
 	node := m.graph.betaNode(nodeID)
 	if node == nil {
@@ -3379,7 +3468,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 			} else if !ok {
 				continue
 			}
-			output := collector.tokenArena.add(token, entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation())
+			output := queryAppendTokenRows(collector.tokenArena, token, rightRow.token)
 			if output.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
@@ -3388,7 +3477,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 			}
 		}
 	case reteGraphBetaInputRight:
-		currentMatch, ok := tokenLastMatch(token)
+		currentMatch, ok := tokenFactMatchForBindingSlot(token, node.entry.bindingSlot)
 		if !ok {
 			return fmt.Errorf("%w: malformed query right token", ErrQueryExecution)
 		}
@@ -3408,7 +3497,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 			} else if !ok {
 				continue
 			}
-			output := collector.tokenArena.add(leftRow.token, entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation())
+			output := queryAppendTokenRows(collector.tokenArena, leftRow.token, token)
 			if output.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
@@ -3604,6 +3693,62 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 		return conditionMatch{}, false
 	}
 	return row.match, true
+}
+
+func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMatch, bool) {
+	if bindingSlot >= 0 {
+		if match, ok := tokenRefAtSlot(token, bindingSlot); ok && !match.hasValue {
+			return match, true
+		}
+	}
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return conditionMatch{}, false
+		}
+		if !row.match.hasValue {
+			return row.match, true
+		}
+	}
+	return conditionMatch{}, false
+}
+
+func (m *reteGraphBetaMemory) appendTokenRows(parent tokenRef, token tokenRef, span *propagationCounterSpan) tokenRef {
+	if m == nil || token.isZero() {
+		return parent
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return tokenRef{}
+	}
+	parent = m.appendTokenRows(parent, token.parent(), span)
+	if parent.isZero() && !token.parent().isZero() {
+		return tokenRef{}
+	}
+	recency := Recency(0)
+	if !row.match.hasValue {
+		recency = row.match.fact.Recency()
+	}
+	return m.newTokenRef(parent, row.entry, row.match, recency, row.generation, span)
+}
+
+func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) tokenRef {
+	if arena == nil || token.isZero() {
+		return parent
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return tokenRef{}
+	}
+	parent = queryAppendTokenRows(arena, parent, token.parent())
+	if parent.isZero() && !token.parent().isZero() {
+		return tokenRef{}
+	}
+	recency := Recency(0)
+	if !row.match.hasValue {
+		recency = row.match.fact.Recency()
+	}
+	return arena.add(parent, row.entry, row.match, recency, row.generation)
 }
 
 func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {

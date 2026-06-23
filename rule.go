@@ -14,6 +14,7 @@ type RuleConditionSpec struct {
 	Name             string
 	TemplateKey      TemplateKey
 	FieldConstraints []FieldConstraintSpec
+	ListPatterns     []ListPatternSpec
 	JoinConstraints  []JoinConstraintSpec
 	Predicates       []ExpressionSpec
 }
@@ -26,6 +27,10 @@ func (s RuleConditionSpec) clone() RuleConditionSpec {
 	out.FieldConstraints = make([]FieldConstraintSpec, len(s.FieldConstraints))
 	for i, constraint := range s.FieldConstraints {
 		out.FieldConstraints[i] = constraint.clone()
+	}
+	out.ListPatterns = make([]ListPatternSpec, len(s.ListPatterns))
+	for i, pattern := range s.ListPatterns {
+		out.ListPatterns[i] = pattern.clone()
 	}
 	out.JoinConstraints = make([]JoinConstraintSpec, len(s.JoinConstraints))
 	for i, constraint := range s.JoinConstraints {
@@ -196,6 +201,7 @@ type RuleCondition struct {
 	name             string
 	templateKey      TemplateKey
 	fieldConstraints []FieldConstraint
+	listPatterns     []RuleListPattern
 	joinConstraints  []JoinConstraint
 	predicates       []ExpressionPredicate
 	order            int
@@ -225,6 +231,14 @@ func (c RuleCondition) FieldConstraints() []FieldConstraint {
 	return out
 }
 
+func (c RuleCondition) ListPatterns() []RuleListPattern {
+	out := make([]RuleListPattern, len(c.listPatterns))
+	for i, pattern := range c.listPatterns {
+		out[i] = pattern.clone()
+	}
+	return out
+}
+
 func (c RuleCondition) JoinConstraints() []JoinConstraint {
 	out := make([]JoinConstraint, len(c.joinConstraints))
 	for i, constraint := range c.joinConstraints {
@@ -246,6 +260,10 @@ func (c RuleCondition) clone() RuleCondition {
 	out.fieldConstraints = make([]FieldConstraint, len(c.fieldConstraints))
 	for i, constraint := range c.fieldConstraints {
 		out.fieldConstraints[i] = constraint.clone()
+	}
+	out.listPatterns = make([]RuleListPattern, len(c.listPatterns))
+	for i, pattern := range c.listPatterns {
+		out.listPatterns[i] = pattern.clone()
 	}
 	out.joinConstraints = make([]JoinConstraint, len(c.joinConstraints))
 	for i, constraint := range c.joinConstraints {
@@ -509,6 +527,13 @@ func (r compiledRule) conditionPlanForBindingSlot(bindingSlot int) (compiledCond
 		if plan.bindingSlot == bindingSlot {
 			return plan, true
 		}
+		for _, pattern := range plan.listPatterns {
+			for _, element := range pattern.elements {
+				if element.kind == ListPatternElementSegment && element.bindingSlot == bindingSlot {
+					return plan, true
+				}
+			}
+		}
 		if plan.aggregate != nil && bindingSlot >= plan.bindingSlot && bindingSlot < plan.bindingSlot+len(plan.aggregate.specs) {
 			return plan, true
 		}
@@ -602,7 +627,9 @@ func (b compiledConditionBranch) clone() compiledConditionBranch {
 		out.conditions[i] = condition.clone()
 	}
 	out.plans = make([]compiledConditionPlan, len(b.plans))
-	copy(out.plans, b.plans)
+	for i, plan := range b.plans {
+		out.plans[i] = cloneCompiledConditionPlan(plan)
+	}
 	return out
 }
 
@@ -1399,6 +1426,22 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			compiledConstraints = append(compiledConstraints, planConstraint)
 		}
 
+		if !node.visible && listPatternsHaveSegment(condition.ListPatterns) {
+			return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding is not supported inside non-visible conditions", ErrInvalidListPattern)
+		}
+		listPatterns, compiledListPatterns, listPatternBindings, err := compileListPatternSpecs(condition.ListPatterns, ruleName, i, template, conditions, bindingSlots, params)
+		if err != nil {
+			return compiledRuleConditionSet{}, err
+		}
+		for _, result := range listPatternBindings {
+			if result.binding == condition.Binding {
+				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with condition binding", ErrInvalidListPattern)
+			}
+			if _, exists := allBindingSlots[result.binding]; exists {
+				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with an existing binding", ErrInvalidListPattern)
+			}
+		}
+
 		joinConstraints := make([]JoinConstraint, 0, len(condition.JoinConstraints))
 		compiledJoins := make([]compiledJoinConstraint, 0, len(condition.JoinConstraints))
 		for joinIndex, joinConstraint := range condition.JoinConstraints {
@@ -1421,13 +1464,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			compiledPredicates = append(compiledPredicates, planPredicate)
 		}
 
-		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, joinConstraints, compiledPredicates, node.negated)
+		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, compiledListPatterns, joinConstraints, compiledPredicates, node.negated)
 		compiledCondition := RuleCondition{
 			id:               conditionID,
 			binding:          condition.Binding,
 			name:             condition.Name,
 			templateKey:      condition.TemplateKey,
 			fieldConstraints: fieldConstraints,
+			listPatterns:     listPatterns,
 			joinConstraints:  joinConstraints,
 			predicates:       predicates,
 			order:            i,
@@ -1441,6 +1485,20 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				conditions = append(conditions, compiledCondition)
 			}
 		}
+		for j := range listPatternBindings {
+			listPatternBindings[j].id = conditionID
+			listPatternBindings[j].order = len(conditions)
+			conditions = append(conditions, listPatternBindings[j])
+			bindingSlots[listPatternBindings[j].binding] = listPatternBindings[j].order
+			allBindingSlots[listPatternBindings[j].binding] = listPatternBindings[j].order
+			for patternIndex := range compiledListPatterns {
+				for elementIndex := range compiledListPatterns[patternIndex].elements {
+					if compiledListPatterns[patternIndex].elements[elementIndex].binding == listPatternBindings[j].binding {
+						compiledListPatterns[patternIndex].elements[elementIndex].bindingSlot = listPatternBindings[j].order
+					}
+				}
+			}
+		}
 		treeConditions = append(treeConditions, compiledCondition.clone())
 		branchConditions = append(branchConditions, RuleConditionBranchCondition{
 			condition: compiledCondition.clone(),
@@ -1449,17 +1507,18 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			negated:   node.negated,
 		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
-			id:          conditionID,
-			binding:     condition.Binding,
-			bindingSlot: publicBindingSlot,
-			path:        []int{i},
-			negated:     node.negated,
-			target:      target,
-			constraints: compiledConstraints,
-			joins:       compiledJoins,
-			predicates:  compiledPredicates,
-			indexable:   true,
-			indexKind:   indexKind,
+			id:           conditionID,
+			binding:      condition.Binding,
+			bindingSlot:  publicBindingSlot,
+			path:         []int{i},
+			negated:      node.negated,
+			target:       target,
+			constraints:  compiledConstraints,
+			listPatterns: compiledListPatterns,
+			joins:        compiledJoins,
+			predicates:   compiledPredicates,
+			indexable:    true,
+			indexKind:    indexKind,
 		})
 		allBindingSlots[condition.Binding] = i
 		if node.visible {
@@ -1589,6 +1648,21 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte(","))
 		}
 		sum.Write([]byte("|"))
+		for _, pattern := range condition.listPatterns {
+			sum.Write([]byte(pattern.Path().display()))
+			sum.Write([]byte(":"))
+			for _, element := range pattern.Elements() {
+				sum.Write([]byte(string(element.Kind())))
+				sum.Write([]byte(":"))
+				sum.Write([]byte(element.Binding()))
+				sum.Write([]byte(","))
+			}
+			sum.Write([]byte(";"))
+		}
+		if condition.order >= 0 && condition.order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.order].listPatterns) > 0 {
+			sum.Write([]byte(serializeCompiledListPatterns(rule.conditionPlans[condition.order].listPatterns)))
+		}
+		sum.Write([]byte("|"))
 		for _, join := range condition.joinConstraints {
 			sum.Write([]byte(join.Field))
 			sum.Write([]byte("="))
@@ -1633,6 +1707,18 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 				sum.Write([]byte(","))
 			}
 			sum.Write([]byte("|"))
+			for _, pattern := range condition.listPatterns {
+				sum.Write([]byte(pattern.Path().display()))
+				sum.Write([]byte(":"))
+				for _, element := range pattern.Elements() {
+					sum.Write([]byte(string(element.Kind())))
+					sum.Write([]byte(":"))
+					sum.Write([]byte(element.Binding()))
+					sum.Write([]byte(","))
+				}
+				sum.Write([]byte(";"))
+			}
+			sum.Write([]byte("|"))
 			for _, join := range condition.joinConstraints {
 				sum.Write([]byte(join.Field))
 				sum.Write([]byte("="))
@@ -1664,6 +1750,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 					sum.Write([]byte(plan.target.templateKey.String()))
 					sum.Write([]byte(":"))
 					sum.Write([]byte(serializeCompiledFieldConstraints(plan.constraints)))
+					sum.Write([]byte("|"))
+					sum.Write([]byte(serializeCompiledListPatterns(plan.listPatterns)))
 					sum.Write([]byte("|"))
 					sum.Write([]byte(serializeCompiledJoinConstraints(plan.joins)))
 					sum.Write([]byte("|"))

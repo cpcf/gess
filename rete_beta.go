@@ -27,6 +27,7 @@ func (r tokenRef) isZero() bool {
 type tokenRow struct {
 	slotGeneration   uint64
 	parent           tokenHandle
+	entry            bindingTupleEntry
 	match            conditionMatch
 	size             int
 	factSpanStart    int
@@ -159,6 +160,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		identityEntry.factID = match.fact.ID()
 		identityEntry.factVersion = match.fact.Version()
 	}
+	row.entry = cloneBindingTupleEntry(identityEntry)
 	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
 
 	a.count++

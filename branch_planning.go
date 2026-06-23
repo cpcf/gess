@@ -181,6 +181,9 @@ func remapCompiledConditionPlanToPublicBranch(plan compiledConditionPlan, public
 		plan.id = public.id
 		plan.bindingSlot = public.order
 	}
+	for i := range plan.listPatterns {
+		plan.listPatterns[i] = remapCompiledListPatternToPublicBranch(plan.listPatterns[i], publicByBinding)
+	}
 	for i := range plan.joins {
 		plan.joins[i] = remapCompiledJoinConstraintToPublicBranch(plan.joins[i], plan.bindingSlot, publicByBinding)
 	}
@@ -209,6 +212,19 @@ func remapCompiledConditionPlanToPublicBranch(plan compiledConditionPlan, public
 		plan.aggregate = &aggregate
 	}
 	return plan
+}
+
+func remapCompiledListPatternToPublicBranch(pattern compiledListPattern, publicByBinding map[string]RuleCondition) compiledListPattern {
+	for i := range pattern.elements {
+		element := &pattern.elements[i]
+		if element.binding == "" {
+			continue
+		}
+		if public, ok := publicByBinding[element.binding]; ok {
+			element.bindingSlot = public.order
+		}
+	}
+	return pattern
 }
 
 func remapCompiledJoinConstraintToPublicBranch(join compiledJoinConstraint, bindingSlot int, publicByBinding map[string]RuleCondition) compiledJoinConstraint {
@@ -425,6 +441,7 @@ func branchPlanningSelectivityScore(node branchPlanningNode) int {
 		}
 		score -= 25
 	}
+	score -= len(condition.ListPatterns) * 25
 	score += len(condition.Predicates) * 10
 	return score
 }
@@ -476,6 +493,13 @@ func branchPlanningDefinedBindings(condition normalizedRuleCondition) []string {
 	}
 	if condition.visible {
 		addBranchPlanningBinding(bindings, condition.spec.Binding)
+		for _, pattern := range condition.spec.ListPatterns {
+			for _, element := range pattern.Elements {
+				if element.Kind == ListPatternElementSegment {
+					addBranchPlanningBinding(bindings, element.Binding)
+				}
+			}
+		}
 	}
 	return sortedBranchPlanningBindings(bindings)
 }
@@ -560,6 +584,11 @@ func addRuleConditionSpecBranchPlanningDependencies(bindings map[string]struct{}
 	}
 	for _, predicate := range condition.Predicates {
 		addExpressionSpecBranchPlanningDependencies(bindings, predicate)
+	}
+	for _, pattern := range condition.ListPatterns {
+		for _, element := range pattern.Elements {
+			addExpressionSpecBranchPlanningDependencies(bindings, element.Expression)
+		}
 	}
 }
 

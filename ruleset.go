@@ -763,6 +763,8 @@ func rulesetID(templates []Template, actions []compiledAction, rules []compiledR
 				sum.Write(fmt.Appendf(nil, "plan:%s:%s:%d:%t:%s:%s:", plan.id, plan.binding, plan.bindingSlot, plan.negated, plan.target.name, plan.target.templateKey))
 				sum.Write([]byte(serializeCompiledFieldConstraints(plan.constraints)))
 				sum.Write([]byte("|"))
+				sum.Write([]byte(serializeCompiledListPatterns(plan.listPatterns)))
+				sum.Write([]byte("|"))
 				sum.Write([]byte(serializeCompiledJoinConstraints(plan.joins)))
 				sum.Write([]byte("|"))
 				sum.Write([]byte(serializeCompiledExpressionPredicates(plan.predicates)))
