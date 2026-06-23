@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 )
 
 type reteGraph struct {
@@ -1501,6 +1502,8 @@ func cloneCompiledFieldConstraints(in []compiledFieldConstraint) []compiledField
 	out := make([]compiledFieldConstraint, len(in))
 	for i, constraint := range in {
 		out[i] = constraint
+		out[i].value = cloneValue(constraint.value)
+		out[i].values = cloneValueSlice(constraint.values)
 		out[i].access = constraint.access.clone()
 	}
 	return out
@@ -1675,6 +1678,9 @@ func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (
 		return compiledFieldConstraint{}, false
 	}
 	expression := predicate.expression
+	if constraint, ok := expressionPredicateAlphaMembershipConstraint(expression); ok {
+		return constraint, true
+	}
 	if expression.kind != expressionNodeCompare || len(expression.operands) != 2 {
 		return compiledFieldConstraint{}, false
 	}
@@ -1690,6 +1696,51 @@ func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (
 		value:    cloneValue(constant.value),
 		access:   current.access.clone(),
 	}, true
+}
+
+func expressionPredicateAlphaMembershipConstraint(expression compiledExpression) (compiledFieldConstraint, bool) {
+	if expression.kind != expressionNodeBoolean || expression.boolOp != ExpressionBoolOr || len(expression.operands) == 0 {
+		return compiledFieldConstraint{}, false
+	}
+
+	var access compiledPathAccess
+	values := make([]Value, 0, len(expression.operands))
+	seen := make(map[string]struct{}, len(expression.operands))
+	for i, operand := range expression.operands {
+		current, constant, operator, ok := expressionPredicateAlphaConstraintOperandsForMembership(operand)
+		if !ok || operator != FieldConstraintOpEqual {
+			return compiledFieldConstraint{}, false
+		}
+		if current.access.root == "" || !current.access.topLevel() {
+			return compiledFieldConstraint{}, false
+		}
+		if i == 0 {
+			access = current.access.clone()
+		} else if current.access.display() != access.display() {
+			return compiledFieldConstraint{}, false
+		}
+		key := constant.value.canonicalKey()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		values = append(values, cloneValue(constant.value))
+	}
+	if len(values) == 0 {
+		return compiledFieldConstraint{}, false
+	}
+	return compiledFieldConstraint{
+		operator: fieldConstraintOpIn,
+		values:   values,
+		access:   access,
+	}, true
+}
+
+func expressionPredicateAlphaConstraintOperandsForMembership(expression compiledExpression) (compiledExpression, compiledExpression, FieldConstraintOperator, bool) {
+	if expression.kind != expressionNodeCompare || len(expression.operands) != 2 {
+		return compiledExpression{}, compiledExpression{}, "", false
+	}
+	return expressionPredicateAlphaConstraintOperands(expression.operands[0], expression.operands[1], expression.compareOp)
 }
 
 func expressionPredicateAlphaConstraintOperands(left, right compiledExpression, operator ExpressionComparisonOperator) (compiledExpression, compiledExpression, FieldConstraintOperator, bool) {
@@ -1783,12 +1834,19 @@ func serializeCompiledFieldConstraints(constraints []compiledFieldConstraint) st
 
 func serializeCompiledFieldConstraint(constraint compiledFieldConstraint) string {
 	valueKey := constraint.value.canonicalKey()
+	valueKeys := make([]string, 0, len(constraint.values))
+	for _, value := range constraint.values {
+		valueKeys = append(valueKeys, value.canonicalKey())
+	}
+	sort.Strings(valueKeys)
+	valuesKey := strings.Join(valueKeys, ",")
 	return fmt.Sprintf(
-		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nvalue:%d:%s\nfield-slot:%d\n",
+		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nvalue:%d:%s\nvalues:%d:%s\nfield-slot:%d\n",
 		len(constraint.access.root), constraint.access.root,
 		len(constraint.access.display()), constraint.access.display(),
 		len(constraint.operator), constraint.operator,
 		len(valueKey), valueKey,
+		len(valuesKey), valuesKey,
 		constraint.access.rootSlot,
 	)
 }

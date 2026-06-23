@@ -13,6 +13,7 @@ const (
 	FieldConstraintOpLessOrEqual    FieldConstraintOperator = "lte"
 	FieldConstraintOpGreaterThan    FieldConstraintOperator = "gt"
 	FieldConstraintOpGreaterOrEqual FieldConstraintOperator = "gte"
+	fieldConstraintOpIn             FieldConstraintOperator = "in"
 
 	FieldConstraintExists         = FieldConstraintOpExists
 	FieldConstraintEqual          = FieldConstraintOpEqual
@@ -61,6 +62,7 @@ func (c FieldConstraint) clone() FieldConstraint {
 type compiledFieldConstraint struct {
 	operator FieldConstraintOperator
 	value    Value
+	values   []Value
 	access   compiledPathAccess
 }
 
@@ -221,6 +223,16 @@ func (c compiledFieldConstraint) matchesValue(value Value, ok bool) bool {
 		return ok && valuesComparableForEquality(value, c.value) && value.Equal(c.value)
 	case FieldConstraintOpNotEqual:
 		return ok && valuesComparableForEquality(value, c.value) && !value.Equal(c.value)
+	case fieldConstraintOpIn:
+		if !ok {
+			return false
+		}
+		for _, allowed := range c.values {
+			if valuesComparableForEquality(value, allowed) && value.Equal(allowed) {
+				return true
+			}
+		}
+		return false
 	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		if !ok {
 			return false

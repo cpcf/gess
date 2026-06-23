@@ -3,7 +3,9 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -928,6 +930,93 @@ func TestExpressionPredicatesAffectRuleIdentity(t *testing.T) {
 	}
 	if rule18.Conditions()[0].ID() == rule21.Conditions()[0].ID() {
 		t.Fatalf("condition ID did not change after expression edit: %q", rule18.Conditions()[0].ID())
+	}
+}
+
+func TestDisjunctiveLiteralPredicateCompilesToAlphaMembershipConstraint(t *testing.T) {
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	var fired []string
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ctx ActionContext) error {
+		fact, ok := ctx.Binding("event")
+		if !ok {
+			return fmt.Errorf("missing event binding")
+		}
+		status, ok := fact.Field("status")
+		if !ok {
+			return fmt.Errorf("missing status")
+		}
+		text, _ := status.AsString()
+		fired = append(fired, text)
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "status-membership",
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Name:    event.Name(),
+			Predicates: []ExpressionSpec{BooleanExpr{
+				Operator: ExpressionBoolOr,
+				Operands: []ExpressionSpec{
+					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "status"}, Right: ConstExpr{Value: "open"}},
+					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "status"}, Right: ConstExpr{Value: "pending"}},
+				},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("status-membership")
+	if !ok {
+		t.Fatal("compiled revision missing status-membership")
+	}
+	if _, ok := rule.Conditions()[0].Predicates()[0].Expression().(BooleanExpr); !ok {
+		t.Fatalf("public predicate expression type = %T, want BooleanExpr", rule.Conditions()[0].Predicates()[0].Expression())
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	var membershipConstraints, alphaPredicates int
+	for _, node := range summary.AlphaNodes {
+		alphaPredicates += len(node.predicates)
+		for _, constraint := range node.constraints {
+			if constraint.operator == fieldConstraintOpIn {
+				membershipConstraints++
+				if got, want := len(constraint.values), 2; got != want {
+					t.Fatalf("membership values = %d, want %d", got, want)
+				}
+			}
+		}
+	}
+	if membershipConstraints != 1 {
+		t.Fatalf("membership alpha constraints = %d, want 1", membershipConstraints)
+	}
+	if alphaPredicates != 0 {
+		t.Fatalf("alpha expression predicates = %d, want 0", alphaPredicates)
+	}
+
+	session := mustSession(t, revision, "disjunctive-literal-membership")
+	ctx := context.Background()
+	for _, status := range []string{"open", "closed", "pending"} {
+		if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"status": status})); err != nil {
+			t.Fatalf("AssertTemplate(%s): %v", status, err)
+		}
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 2 {
+		t.Fatalf("fired = %d, want 2", result.Fired)
+	}
+	slices.Sort(fired)
+	if !slices.Equal(fired, []string{"open", "pending"}) {
+		t.Fatalf("fired statuses = %#v, want open and pending", fired)
 	}
 }
 
