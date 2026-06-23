@@ -61,6 +61,8 @@ type propagationCounterTotals struct {
 	BetaLeftInputInserts        int
 	BetaRightInputInserts       int
 	BetaBucketProbes            int
+	BetaJoinIndexHits           int
+	BetaJoinIndexMisses         int
 	BetaBucketDepthTotal        int
 	BetaBucketDepthMax          int
 	BetaCandidateRowsScanned    int
@@ -103,6 +105,8 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.BetaLeftInputInserts += other.BetaLeftInputInserts
 	t.BetaRightInputInserts += other.BetaRightInputInserts
 	t.BetaBucketProbes += other.BetaBucketProbes
+	t.BetaJoinIndexHits += other.BetaJoinIndexHits
+	t.BetaJoinIndexMisses += other.BetaJoinIndexMisses
 	t.BetaBucketDepthTotal += other.BetaBucketDepthTotal
 	t.BetaBucketDepthMax = max(t.BetaBucketDepthMax, other.BetaBucketDepthMax)
 	t.BetaCandidateRowsScanned += other.BetaCandidateRowsScanned
@@ -294,6 +298,11 @@ func (s *propagationCounterSpan) recordBetaBucketProbe(depth int) {
 		depth = 0
 	}
 	s.totals.BetaBucketProbes++
+	if depth > 0 {
+		s.totals.BetaJoinIndexHits++
+	} else {
+		s.totals.BetaJoinIndexMisses++
+	}
 	s.totals.BetaBucketDepthTotal += depth
 	s.totals.BetaBucketDepthMax = max(s.totals.BetaBucketDepthMax, depth)
 }
@@ -591,6 +600,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-left-input-inserts", float64(s.Totals.BetaLeftInputInserts))
 	report("propagation-beta-right-input-inserts", float64(s.Totals.BetaRightInputInserts))
 	report("propagation-beta-bucket-probes", float64(s.Totals.BetaBucketProbes))
+	report("propagation-beta-join-index-hits", float64(s.Totals.BetaJoinIndexHits))
+	report("propagation-beta-join-index-misses", float64(s.Totals.BetaJoinIndexMisses))
 	report("propagation-beta-bucket-depth-total", float64(s.Totals.BetaBucketDepthTotal))
 	report("propagation-beta-bucket-depth-max", float64(s.Totals.BetaBucketDepthMax))
 	report("propagation-beta-bucket-depth-mean", float64(s.Totals.BetaBucketDepthTotal)/float64(max(1, s.Totals.BetaBucketProbes)))
@@ -621,6 +632,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-beta-left-input-inserts/rhs-assert", float64(s.Totals.BetaLeftInputInserts)/rhsAsserts)
 	report("propagation-beta-right-input-inserts/rhs-assert", float64(s.Totals.BetaRightInputInserts)/rhsAsserts)
 	report("propagation-beta-bucket-probes/rhs-assert", float64(s.Totals.BetaBucketProbes)/rhsAsserts)
+	report("propagation-beta-join-index-hits/rhs-assert", float64(s.Totals.BetaJoinIndexHits)/rhsAsserts)
+	report("propagation-beta-join-index-misses/rhs-assert", float64(s.Totals.BetaJoinIndexMisses)/rhsAsserts)
 	report("propagation-beta-bucket-depth-total/rhs-assert", float64(s.Totals.BetaBucketDepthTotal)/rhsAsserts)
 	report("propagation-beta-candidate-rows-scanned/rhs-assert", float64(s.Totals.BetaCandidateRowsScanned)/rhsAsserts)
 	report("propagation-beta-residual-tests/rhs-assert", float64(s.Totals.BetaResidualTests)/rhsAsserts)
@@ -693,6 +706,8 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-left-input-inserts=" + strconv.Itoa(s.Totals.BetaLeftInputInserts),
 		"propagation-beta-right-input-inserts=" + strconv.Itoa(s.Totals.BetaRightInputInserts),
 		"propagation-beta-bucket-probes=" + strconv.Itoa(s.Totals.BetaBucketProbes),
+		"propagation-beta-join-index-hits=" + strconv.Itoa(s.Totals.BetaJoinIndexHits),
+		"propagation-beta-join-index-misses=" + strconv.Itoa(s.Totals.BetaJoinIndexMisses),
 		"propagation-beta-bucket-depth-total=" + strconv.Itoa(s.Totals.BetaBucketDepthTotal),
 		"propagation-beta-bucket-depth-max=" + strconv.Itoa(s.Totals.BetaBucketDepthMax),
 		"propagation-beta-bucket-depth-mean=" + s.betaBucketDepthMeanField(),
@@ -718,6 +733,8 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-beta-left-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaLeftInputInserts),
 		"propagation-beta-right-input-inserts/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaRightInputInserts),
 		"propagation-beta-bucket-probes/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketProbes),
+		"propagation-beta-join-index-hits/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaJoinIndexHits),
+		"propagation-beta-join-index-misses/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaJoinIndexMisses),
 		"propagation-beta-bucket-depth-total/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaBucketDepthTotal),
 		"propagation-beta-candidate-rows-scanned/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaCandidateRowsScanned),
 		"propagation-beta-residual-tests/rhs-assert=" + s.perRHSAssertField(s.Totals.BetaResidualTests),
@@ -851,6 +868,8 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"beta-left-input-inserts=" + strconv.Itoa(totals.BetaLeftInputInserts) + "," +
 		"beta-right-input-inserts=" + strconv.Itoa(totals.BetaRightInputInserts) + "," +
 		"beta-bucket-probes=" + strconv.Itoa(totals.BetaBucketProbes) + "," +
+		"beta-join-index-hits=" + strconv.Itoa(totals.BetaJoinIndexHits) + "," +
+		"beta-join-index-misses=" + strconv.Itoa(totals.BetaJoinIndexMisses) + "," +
 		"beta-bucket-depth-total=" + strconv.Itoa(totals.BetaBucketDepthTotal) + "," +
 		"beta-bucket-depth-max=" + strconv.Itoa(totals.BetaBucketDepthMax) + "," +
 		"beta-candidate-rows-scanned=" + strconv.Itoa(totals.BetaCandidateRowsScanned) + "," +
