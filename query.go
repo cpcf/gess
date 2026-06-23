@@ -253,7 +253,8 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 	graphBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
-		compiledBranch, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, branch.conditions, templatesByKey, false, paramTypes)
+		branchIR := newBranchPlanningIR(branchIndex, branch.conditions)
+		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, branchIR, templatesByKey, false, paramTypes)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -262,11 +263,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, compiledBranch.conditions); err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
-		compiledBranches = append(compiledBranches, compiledConditionBranch{
-			id:         branchIndex,
-			conditions: compiledBranch.branchConditions,
-			plans:      compiledBranch.conditionPlans,
-		})
+		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
 		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, branchIndex, branch.conditions, templatesByKey, paramTypes)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
@@ -418,34 +415,15 @@ func internalQueryTriggerName(queryName string) string {
 }
 
 func compileQueryGraphBranch(queryName string, queryRuleID RuleID, branchIndex int, branch []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, params map[string]ValueKind) (compiledConditionBranch, bool, error) {
-	if len(branch) == 0 {
+	branchIR, ok := newQueryGraphBranchPlanningIR(queryName, branchIndex, branch, params)
+	if !ok {
 		return compiledConditionBranch{}, false, nil
 	}
-	lowered := make([]normalizedRuleCondition, 0, len(branch)+1)
-	lowered = append(lowered, normalizedRuleCondition{
-		spec: RuleConditionSpec{
-			Binding: internalQueryTriggerBinding,
-			Name:    internalQueryTriggerName(queryName),
-		},
-		visible: true,
-	})
-	for _, condition := range branch {
-		if condition.isAggregate {
-			return compiledConditionBranch{}, false, nil
-		}
-		next := condition
-		next.spec = lowerQueryConditionParams(condition.spec, params)
-		lowered = append(lowered, next)
-	}
-	compiled, err := compileNormalizedRuleConditionBranch(queryName, queryRuleID, lowered, templatesByKey, false)
+	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, branchIR, templatesByKey, false, nil)
 	if err != nil {
 		return compiledConditionBranch{}, false, err
 	}
-	return compiledConditionBranch{
-		id:         branchIndex,
-		conditions: compiled.branchConditions,
-		plans:      compiled.conditionPlans,
-	}, true, nil
+	return compiledConditionBranchFromPlanningIR(branchIR, compiled), true, nil
 }
 
 func lowerQueryConditionParams(condition RuleConditionSpec, params map[string]ValueKind) RuleConditionSpec {

@@ -1107,7 +1107,8 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
-		compiledBranch, err := compileNormalizedRuleConditionBranch(normalized.Name, ruleID, branch.conditions, templatesByKey, false)
+		branchIR := newBranchPlanningIR(branchIndex, branch.conditions)
+		compiledBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, branchIR, templatesByKey, false, nil)
 		if err != nil {
 			return compiledRule{}, err
 		}
@@ -1116,11 +1117,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		} else if err := validateBranchBindingContract(normalized.Name, representative.conditions, compiledBranch.conditions); err != nil {
 			return compiledRule{}, err
 		}
-		compiledBranches = append(compiledBranches, compiledConditionBranch{
-			id:         branchIndex,
-			conditions: compiledBranch.branchConditions,
-			plans:      compiledBranch.conditionPlans,
-		})
+		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
 	}
 	conditions := representative.conditions
 	conditionPlans := representative.conditionPlans
