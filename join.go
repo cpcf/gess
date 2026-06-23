@@ -8,17 +8,21 @@ import (
 type FieldRef struct {
 	Binding string
 	Field   string
+	Path    PathSpec
 }
 
 func (r FieldRef) clone() FieldRef {
 	out := r
 	out.Binding = strings.TrimSpace(out.Binding)
 	out.Field = strings.TrimSpace(out.Field)
+	out.Path = pathOrField(out.Path, out.Field)
+	out.Field = out.Path.root()
 	return out
 }
 
 type JoinConstraintSpec struct {
 	Field    string
+	Path     PathSpec
 	Operator FieldConstraintOperator
 	Ref      FieldRef
 }
@@ -26,12 +30,15 @@ type JoinConstraintSpec struct {
 func (s JoinConstraintSpec) clone() JoinConstraintSpec {
 	out := s
 	out.Field = strings.TrimSpace(out.Field)
+	out.Path = pathOrField(out.Path, out.Field)
+	out.Field = out.Path.root()
 	out.Ref = out.Ref.clone()
 	return out
 }
 
 type JoinConstraint struct {
 	Field    string
+	Path     PathSpec
 	Operator FieldConstraintOperator
 	Ref      FieldRef
 }
@@ -39,6 +46,7 @@ type JoinConstraint struct {
 func (c JoinConstraint) clone() JoinConstraint {
 	return JoinConstraint{
 		Field:    c.Field,
+		Path:     c.Path.clone(),
 		Operator: c.Operator,
 		Ref:      c.Ref.clone(),
 	}
@@ -57,11 +65,13 @@ type compiledJoinConstraint struct {
 	bindingSlot    int
 	field          string
 	fieldSlot      int
+	access         compiledPathAccess
 	operator       FieldConstraintOperator
 	refBinding     string
 	refBindingSlot int
 	refField       string
 	refFieldSlot   int
+	refAccess      compiledPathAccess
 	indexable      bool
 	indexKind      joinIndexKind
 }
@@ -79,12 +89,12 @@ func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tok
 		return false, nil
 	}
 
-	left, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	left, ok := c.leftValueFromFact(fact)
 	if !ok {
 		return false, nil
 	}
 
-	right, ok := match.fact.compiledFieldValue(c.refField, c.refFieldSlot)
+	right, ok := c.rightValueFromFact(match.fact)
 	if !ok {
 		return false, nil
 	}
@@ -132,14 +142,15 @@ func compileJoinConstraintSpec(
 	templatesByKey map[TemplateKey]Template,
 ) (JoinConstraint, compiledJoinConstraint, error) {
 	normalized := spec.clone()
-	if normalized.Field == "" {
+	if normalized.Path.isZero() {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
 			ConditionIndex:    conditionIndex,
 			HasConditionIndex: true,
 			JoinIndex:         joinIndex,
 			HasJoinIndex:      true,
-			Reason:            "join field name is required",
+			Reason:            "join path is required",
+			Err:               ErrInvalidPath,
 		}
 	}
 	if normalized.Ref.Binding == "" {
@@ -152,14 +163,15 @@ func compileJoinConstraintSpec(
 			Reason:            "join binding reference is required",
 		}
 	}
-	if normalized.Ref.Field == "" {
+	if normalized.Ref.Path.isZero() {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
 			ConditionIndex:    conditionIndex,
 			HasConditionIndex: true,
 			JoinIndex:         joinIndex,
 			HasJoinIndex:      true,
-			Reason:            "join field reference is required",
+			Reason:            "join path reference is required",
+			Err:               ErrInvalidPath,
 		}
 	}
 	if !validJoinOperator(normalized.Operator) {
@@ -173,22 +185,9 @@ func compileJoinConstraintSpec(
 		}
 	}
 
-	fieldSlot := -1
-	if template != nil && template.closed {
-		slot, ok := template.fieldSlot(normalized.Field)
-		if !ok {
-			return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
-				RuleName:          ruleName,
-				TemplateName:      template.name,
-				FieldName:         normalized.Field,
-				ConditionIndex:    conditionIndex,
-				HasConditionIndex: true,
-				JoinIndex:         joinIndex,
-				HasJoinIndex:      true,
-				Reason:            "unknown field",
-			}
-		}
-		fieldSlot = slot
+	access, err := compileJoinPathAccess(normalized.Path, ruleName, conditionIndex, joinIndex, template)
+	if err != nil {
+		return JoinConstraint{}, compiledJoinConstraint{}, err
 	}
 
 	refSlot, ok := bindingSlots[normalized.Ref.Binding]
@@ -207,27 +206,27 @@ func compileJoinConstraintSpec(
 	}
 
 	refCondition := conditions[refSlot]
-	refFieldSlot := -1
+	refAccess := compiledPathAccess{path: normalized.Ref.Path.clone(), root: normalized.Ref.Path.root(), rootSlot: -1}
+	if err := normalized.Ref.Path.validate(); err != nil {
+		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
+			RuleName:          ruleName,
+			FieldName:         normalized.Ref.Path.root(),
+			ConditionIndex:    conditionIndex,
+			HasConditionIndex: true,
+			JoinIndex:         joinIndex,
+			HasJoinIndex:      true,
+			Reason:            "invalid path",
+			Err:               err,
+		}
+	}
 	if refCondition.templateKey != "" {
 		refTemplate, ok := templatesByKey[refCondition.templateKey]
 		if !ok {
 			return JoinConstraint{}, compiledJoinConstraint{}, fmt.Errorf("%w: missing template for join binding %q", ErrMatcher, normalized.Ref.Binding)
 		}
-		if refTemplate.closed {
-			slot, ok := refTemplate.fieldSlot(normalized.Ref.Field)
-			if !ok {
-				return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
-					RuleName:          ruleName,
-					TemplateName:      refTemplate.name,
-					FieldName:         normalized.Ref.Field,
-					ConditionIndex:    conditionIndex,
-					HasConditionIndex: true,
-					JoinIndex:         joinIndex,
-					HasJoinIndex:      true,
-					Reason:            "unknown field",
-				}
-			}
-			refFieldSlot = slot
+		refAccess, err = compileJoinPathAccess(normalized.Ref.Path, ruleName, conditionIndex, joinIndex, &refTemplate)
+		if err != nil {
+			return JoinConstraint{}, compiledJoinConstraint{}, err
 		}
 	}
 
@@ -237,23 +236,63 @@ func compileJoinConstraintSpec(
 		indexKind = joinIndexNumericComparison
 	}
 
+	indexable := access.topLevel() && refAccess.topLevel()
+
 	return JoinConstraint{
 			Field:    normalized.Field,
+			Path:     normalized.Path.clone(),
 			Operator: normalized.Operator,
 			Ref:      normalized.Ref.clone(),
 		}, compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
 			bindingSlot:    conditionIndex,
 			field:          normalized.Field,
-			fieldSlot:      fieldSlot,
+			fieldSlot:      access.rootSlot,
+			access:         access,
 			operator:       normalized.Operator,
 			refBinding:     normalized.Ref.Binding,
 			refBindingSlot: refSlot,
 			refField:       normalized.Ref.Field,
-			refFieldSlot:   refFieldSlot,
-			indexable:      true,
+			refFieldSlot:   refAccess.rootSlot,
+			refAccess:      refAccess,
+			indexable:      indexable,
 			indexKind:      indexKind,
 		}, nil
+}
+
+func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinIndex int, template *Template) (compiledPathAccess, error) {
+	if template != nil && template.closed && path.root() != "" {
+		if _, ok := template.fieldSlot(path.root()); !ok {
+			return compiledPathAccess{}, &ValidationError{
+				RuleName:          ruleName,
+				TemplateName:      template.name,
+				FieldName:         path.root(),
+				ConditionIndex:    conditionIndex,
+				HasConditionIndex: true,
+				JoinIndex:         joinIndex,
+				HasJoinIndex:      true,
+				Reason:            "unknown field",
+			}
+		}
+	}
+	access, _, err := compilePathAccess(path, template)
+	if err != nil {
+		validation := &ValidationError{
+			RuleName:          ruleName,
+			FieldName:         path.root(),
+			ConditionIndex:    conditionIndex,
+			HasConditionIndex: true,
+			JoinIndex:         joinIndex,
+			HasJoinIndex:      true,
+			Reason:            "invalid path",
+			Err:               err,
+		}
+		if template != nil {
+			validation.TemplateName = template.name
+		}
+		return compiledPathAccess{}, validation
+	}
+	return access, nil
 }
 
 func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []conditionMatch) (bool, error) {
@@ -264,13 +303,13 @@ func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []condit
 		return false, nil
 	}
 
-	left, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	left, ok := c.leftValueFromFact(fact)
 	if !ok {
 		return false, nil
 	}
 
 	rightFact := bindings[c.refBindingSlot].fact
-	right, ok := rightFact.compiledFieldValue(c.refField, c.refFieldSlot)
+	right, ok := c.rightValueFromFact(rightFact)
 	if !ok {
 		return false, nil
 	}
@@ -296,4 +335,18 @@ func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []condit
 	}
 
 	return false, nil
+}
+
+func (c compiledJoinConstraint) leftValueFromFact(fact conditionFactRef) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
+}
+
+func (c compiledJoinConstraint) rightValueFromFact(fact conditionFactRef) (Value, bool) {
+	if !c.refAccess.path.isZero() {
+		return c.refAccess.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(c.refField, c.refFieldSlot)
 }

@@ -90,7 +90,7 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 	sum.Write([]byte(templateKey.String()))
 	sum.Write([]byte("\nconstraints:"))
 	for _, constraint := range constraints {
-		sum.Write([]byte(constraint.Field))
+		sum.Write([]byte(constraint.Path.display()))
 		sum.Write([]byte(":"))
 		sum.Write([]byte(string(constraint.Operator)))
 		sum.Write([]byte(":"))
@@ -99,13 +99,13 @@ func conditionIDFor(ruleID RuleID, order int, binding string, name string, templ
 	}
 	sum.Write([]byte("\njoins:"))
 	for _, join := range joins {
-		sum.Write([]byte(join.Field))
+		sum.Write([]byte(join.Path.display()))
 		sum.Write([]byte(":"))
 		sum.Write([]byte(string(join.Operator)))
 		sum.Write([]byte(":"))
 		sum.Write([]byte(join.Ref.Binding))
 		sum.Write([]byte("."))
-		sum.Write([]byte(join.Ref.Field))
+		sum.Write([]byte(join.Ref.Path.display()))
 		sum.Write([]byte(";"))
 	}
 	if len(predicates) > 0 {

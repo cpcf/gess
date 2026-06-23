@@ -33,9 +33,11 @@ type branchPlanningNode struct {
 type branchPlanningJoin struct {
 	leftBinding  string
 	leftField    string
+	leftPath     PathSpec
 	operator     FieldConstraintOperator
 	rightBinding string
 	rightField   string
+	rightPath    PathSpec
 }
 
 func newBranchPlanningIR(branchID int, conditions []normalizedRuleCondition) branchPlanningIR {
@@ -123,10 +125,12 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 		if leftIndex > rightIndex {
 			out[leftIndex].spec.JoinConstraints = append(out[leftIndex].spec.JoinConstraints, JoinConstraintSpec{
 				Field:    join.leftField,
+				Path:     join.leftPath.clone(),
 				Operator: join.operator,
 				Ref: FieldRef{
 					Binding: join.rightBinding,
 					Field:   join.rightField,
+					Path:    join.rightPath.clone(),
 				},
 			})
 			continue
@@ -137,10 +141,12 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 		}
 		out[rightIndex].spec.JoinConstraints = append(out[rightIndex].spec.JoinConstraints, JoinConstraintSpec{
 			Field:    join.rightField,
+			Path:     join.rightPath.clone(),
 			Operator: inverted,
 			Ref: FieldRef{
 				Binding: join.leftBinding,
 				Field:   join.leftField,
+				Path:    join.leftPath.clone(),
 			},
 		})
 	}
@@ -273,9 +279,11 @@ func extractBranchPlanningJoins(node *branchPlanningNode) []branchPlanningJoin {
 		joins = append(joins, branchPlanningJoin{
 			leftBinding:  leftBinding,
 			leftField:    strings.TrimSpace(join.Field),
+			leftPath:     pathOrField(join.Path, join.Field),
 			operator:     join.Operator,
 			rightBinding: rightBinding,
 			rightField:   strings.TrimSpace(join.Ref.Field),
+			rightPath:    pathOrField(join.Ref.Path, join.Ref.Field),
 		})
 	}
 	condition.JoinConstraints = nil

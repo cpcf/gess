@@ -25,6 +25,7 @@ const (
 
 type FieldConstraintSpec struct {
 	Field    string
+	Path     PathSpec
 	Operator FieldConstraintOperator
 	Value    any
 }
@@ -34,12 +35,15 @@ type RuleFieldConstraintSpec = FieldConstraintSpec
 func (s FieldConstraintSpec) clone() FieldConstraintSpec {
 	out := s
 	out.Field = strings.TrimSpace(out.Field)
+	out.Path = pathOrField(out.Path, out.Field)
+	out.Field = out.Path.root()
 	out.Value = cloneSpecValue(out.Value)
 	return out
 }
 
 type FieldConstraint struct {
 	Field    string
+	Path     PathSpec
 	Operator FieldConstraintOperator
 	Value    Value
 }
@@ -49,6 +53,7 @@ type RuleFieldConstraint = FieldConstraint
 func (c FieldConstraint) clone() FieldConstraint {
 	return FieldConstraint{
 		Field:    c.Field,
+		Path:     c.Path.clone(),
 		Operator: c.Operator,
 		Value:    cloneValue(c.Value),
 	}
@@ -59,6 +64,7 @@ type compiledFieldConstraint struct {
 	operator  FieldConstraintOperator
 	value     Value
 	fieldSlot int
+	access    compiledPathAccess
 }
 
 func (o FieldConstraintOperator) valid() bool {
@@ -74,7 +80,7 @@ func (o FieldConstraintOperator) valid() bool {
 
 func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, conditionIndex, constraintIndex int, template *Template) (FieldConstraint, compiledFieldConstraint, error) {
 	normalized := spec.clone()
-	if normalized.Field == "" {
+	if normalized.Path.isZero() {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
 			ConditionIndex:     conditionIndex,
@@ -106,34 +112,22 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Reason:             "exists constraint must not set a value",
 			}
 		}
-
-		fieldSlot := -1
-		if template != nil && template.closed {
-			slot, ok := template.fieldSlot(normalized.Field)
-			if !ok {
-				return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
-					RuleName:           ruleName,
-					TemplateName:       template.name,
-					FieldName:          normalized.Field,
-					ConditionIndex:     conditionIndex,
-					HasConditionIndex:  true,
-					ConstraintIndex:    constraintIndex,
-					HasConstraintIndex: true,
-					Reason:             "unknown field",
-				}
-			}
-			fieldSlot = slot
+		access, err := compileFieldConstraintPathAccess(normalized.Path, ruleName, conditionIndex, constraintIndex, template)
+		if err != nil {
+			return FieldConstraint{}, compiledFieldConstraint{}, err
 		}
 
 		return FieldConstraint{
 				Field:    normalized.Field,
+				Path:     normalized.Path.clone(),
 				Operator: normalized.Operator,
 				Value:    NullValue(),
 			}, compiledFieldConstraint{
 				field:     normalized.Field,
 				operator:  normalized.Operator,
 				value:     NullValue(),
-				fieldSlot: fieldSlot,
+				fieldSlot: access.rootSlot,
+				access:    access,
 			}, nil
 	}
 
@@ -149,14 +143,32 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Err:                err,
 		}
 	}
-	fieldSlot := -1
-	if template != nil && template.closed {
-		slot, ok := template.fieldSlot(normalized.Field)
-		if !ok {
-			return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
+	access, err := compileFieldConstraintPathAccess(normalized.Path, ruleName, conditionIndex, constraintIndex, template)
+	if err != nil {
+		return FieldConstraint{}, compiledFieldConstraint{}, err
+	}
+
+	return FieldConstraint{
+			Field:    normalized.Field,
+			Path:     normalized.Path.clone(),
+			Operator: normalized.Operator,
+			Value:    cloneValue(value),
+		}, compiledFieldConstraint{
+			field:     normalized.Field,
+			operator:  normalized.Operator,
+			value:     value,
+			fieldSlot: access.rootSlot,
+			access:    access,
+		}, nil
+}
+
+func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionIndex, constraintIndex int, template *Template) (compiledPathAccess, error) {
+	if template != nil && template.closed && path.root() != "" {
+		if _, ok := template.fieldSlot(path.root()); !ok {
+			return compiledPathAccess{}, &ValidationError{
 				RuleName:           ruleName,
 				TemplateName:       template.name,
-				FieldName:          normalized.Field,
+				FieldName:          path.root(),
 				ConditionIndex:     conditionIndex,
 				HasConditionIndex:  true,
 				ConstraintIndex:    constraintIndex,
@@ -164,23 +176,29 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Reason:             "unknown field",
 			}
 		}
-		fieldSlot = slot
 	}
-
-	return FieldConstraint{
-			Field:    normalized.Field,
-			Operator: normalized.Operator,
-			Value:    cloneValue(value),
-		}, compiledFieldConstraint{
-			field:     normalized.Field,
-			operator:  normalized.Operator,
-			value:     value,
-			fieldSlot: fieldSlot,
-		}, nil
+	access, _, err := compilePathAccess(path, template)
+	if err != nil {
+		validation := &ValidationError{
+			RuleName:           ruleName,
+			FieldName:          path.root(),
+			ConditionIndex:     conditionIndex,
+			HasConditionIndex:  true,
+			ConstraintIndex:    constraintIndex,
+			HasConstraintIndex: true,
+			Reason:             "invalid path",
+			Err:                err,
+		}
+		if template != nil {
+			validation.TemplateName = template.name
+		}
+		return compiledPathAccess{}, validation
+	}
+	return access, nil
 }
 
 func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
-	value, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	value, ok := c.valueFromFact(fact)
 	switch c.operator {
 	case FieldConstraintOpExists:
 		return ok
@@ -213,7 +231,7 @@ func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
 }
 
 func (c compiledFieldConstraint) matchesWorking(fact *workingFact) bool {
-	value, ok := fact.compiledFieldValue(c.field, c.fieldSlot)
+	value, ok := c.valueFromWorkingFact(fact)
 	switch c.operator {
 	case FieldConstraintOpExists:
 		return ok
@@ -243,6 +261,20 @@ func (c compiledFieldConstraint) matchesWorking(fact *workingFact) bool {
 		return false
 	}
 	return false
+}
+
+func (c compiledFieldConstraint) valueFromFact(fact conditionFactRef) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
+}
+
+func (c compiledFieldConstraint) valueFromWorkingFact(fact *workingFact) (Value, bool) {
+	if !c.access.path.isZero() {
+		return c.access.valueFromWorkingFact(fact)
+	}
+	return fact.compiledFieldValue(c.field, c.fieldSlot)
 }
 
 func valuesComparableForEquality(left, right Value) bool {

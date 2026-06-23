@@ -43,18 +43,22 @@ func (s ConstExpr) clone() ConstExpr {
 
 type CurrentFieldExpr struct {
 	Field string
+	Path  PathSpec
 }
 
 func (CurrentFieldExpr) expressionSpecNode() {}
 
 func (s CurrentFieldExpr) clone() CurrentFieldExpr {
 	s.Field = strings.TrimSpace(s.Field)
+	s.Path = pathOrField(s.Path, s.Field)
+	s.Field = s.Path.root()
 	return s
 }
 
 type BindingFieldExpr struct {
 	Binding string
 	Field   string
+	Path    PathSpec
 }
 
 func (BindingFieldExpr) expressionSpecNode() {}
@@ -62,7 +66,32 @@ func (BindingFieldExpr) expressionSpecNode() {}
 func (s BindingFieldExpr) clone() BindingFieldExpr {
 	s.Binding = strings.TrimSpace(s.Binding)
 	s.Field = strings.TrimSpace(s.Field)
+	s.Path = pathOrField(s.Path, s.Field)
+	s.Field = s.Path.root()
 	return s
+}
+
+type HasPathExpr struct {
+	Path PathSpec
+}
+
+func (HasPathExpr) expressionSpecNode() {}
+
+func (s HasPathExpr) clone() HasPathExpr {
+	s.Path = s.Path.clone()
+	return s
+}
+
+func CurrentPath(path PathSpec) CurrentFieldExpr {
+	return CurrentFieldExpr{Path: path.clone()}
+}
+
+func BindingPath(binding string, path PathSpec) BindingFieldExpr {
+	return BindingFieldExpr{Binding: binding, Path: path.clone()}
+}
+
+func HasPath(path PathSpec) HasPathExpr {
+	return HasPathExpr{Path: path.clone()}
 }
 
 type BindingValueExpr struct {
@@ -147,6 +176,14 @@ func cloneExpressionSpec(spec ExpressionSpec) ExpressionSpec {
 		}
 		cloned := expression.clone()
 		return &cloned
+	case HasPathExpr:
+		return expression.clone()
+	case *HasPathExpr:
+		if expression == nil {
+			return nil
+		}
+		cloned := expression.clone()
+		return &cloned
 	case BindingValueExpr:
 		return expression.clone()
 	case *BindingValueExpr:
@@ -223,6 +260,7 @@ const (
 	expressionNodeCurrentField expressionNodeKind = "current-field"
 	expressionNodeBindingField expressionNodeKind = "binding-field"
 	expressionNodeBindingValue expressionNodeKind = "binding-value"
+	expressionNodeHasPath      expressionNodeKind = "has-path"
 	expressionNodeParam        expressionNodeKind = "param"
 	expressionNodeCompare      expressionNodeKind = "compare"
 	expressionNodeBoolean      expressionNodeKind = "boolean"
@@ -241,6 +279,7 @@ type compiledExpression struct {
 	value       Value
 	field       string
 	fieldSlot   int
+	access      compiledPathAccess
 	binding     string
 	bindingSlot int
 	paramName   string
@@ -342,6 +381,13 @@ func compileExpressionSpecWithParams(
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
 		return compileBindingFieldExpression(*expression, ruleName, conditionIndex, predicateIndex, conditions, bindingSlots, templatesByKey)
+	case HasPathExpr:
+		return compileHasPathExpression(expression, ruleName, conditionIndex, predicateIndex, template)
+	case *HasPathExpr:
+		if expression == nil {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
+		}
+		return compileHasPathExpression(*expression, ruleName, conditionIndex, predicateIndex, template)
 	case BindingValueExpr:
 		return compileBindingValueExpression(expression, ruleName, conditionIndex, predicateIndex, conditions, bindingSlots)
 	case *BindingValueExpr:
@@ -390,18 +436,19 @@ func compileConstExpression(spec ConstExpr, ruleName string, conditionIndex, pre
 
 func compileCurrentFieldExpression(spec CurrentFieldExpr, ruleName string, conditionIndex, predicateIndex int, template *Template) (compiledExpression, bool, error) {
 	normalized := spec.clone()
-	if normalized.Field == "" {
-		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "current field expression requires a field", nil)
+	if normalized.Path.isZero() {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "current path expression requires a path", ErrInvalidPath)
 	}
-	fieldSlot, kind, err := compileExpressionFieldRef(ruleName, conditionIndex, predicateIndex, template, normalized.Field)
+	access, kind, err := compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, template, normalized.Path)
 	if err != nil {
 		return compiledExpression{}, false, err
 	}
 	return compiledExpression{
 		kind:       expressionNodeCurrentField,
 		resultKind: kind,
-		field:      normalized.Field,
-		fieldSlot:  fieldSlot,
+		field:      access.root,
+		fieldSlot:  access.rootSlot,
+		access:     access,
 	}, false, nil
 }
 
@@ -417,8 +464,8 @@ func compileBindingFieldExpression(
 	if normalized.Binding == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression requires a binding", nil)
 	}
-	if normalized.Field == "" {
-		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression requires a field", nil)
+	if normalized.Path.isZero() {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding path expression requires a path", ErrInvalidPath)
 	}
 	refSlot, ok := bindingSlots[normalized.Binding]
 	if !ok {
@@ -429,7 +476,7 @@ func compileBindingFieldExpression(
 	}
 
 	refCondition := conditions[refSlot]
-	fieldSlot := -1
+	access := compiledPathAccess{path: normalized.Path.clone(), root: normalized.Path.root(), rootSlot: -1}
 	kind := ValueAny
 	if refCondition.templateKey != "" {
 		refTemplate, ok := templatesByKey[refCondition.templateKey]
@@ -437,20 +484,38 @@ func compileBindingFieldExpression(
 			return compiledExpression{}, false, fmt.Errorf("%w: missing template for expression binding %q", ErrMatcher, normalized.Binding)
 		}
 		var err error
-		fieldSlot, kind, err = compileExpressionFieldRef(ruleName, conditionIndex, predicateIndex, &refTemplate, normalized.Field)
+		access, kind, err = compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, &refTemplate, normalized.Path)
 		if err != nil {
 			return compiledExpression{}, false, err
 		}
+	} else if err := normalized.Path.validate(); err != nil {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, normalized.Path.root(), "invalid path", err)
 	}
 
 	return compiledExpression{
 		kind:        expressionNodeBindingField,
 		resultKind:  kind,
-		field:       normalized.Field,
-		fieldSlot:   fieldSlot,
+		field:       access.root,
+		fieldSlot:   access.rootSlot,
+		access:      access,
 		binding:     normalized.Binding,
 		bindingSlot: refSlot,
 	}, true, nil
+}
+
+func compileHasPathExpression(spec HasPathExpr, ruleName string, conditionIndex, predicateIndex int, template *Template) (compiledExpression, bool, error) {
+	normalized := spec.clone()
+	access, _, err := compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, template, normalized.Path)
+	if err != nil {
+		return compiledExpression{}, false, err
+	}
+	return compiledExpression{
+		kind:       expressionNodeHasPath,
+		resultKind: ValueBool,
+		field:      access.root,
+		fieldSlot:  access.rootSlot,
+		access:     access,
+	}, false, nil
 }
 
 func compileBindingValueExpression(
@@ -585,19 +650,17 @@ func compileBooleanExpression(
 	}, referencesEarlier, nil
 }
 
-func compileExpressionFieldRef(ruleName string, conditionIndex, predicateIndex int, template *Template, field string) (int, ValueKind, error) {
-	if template == nil || !template.closed {
-		return -1, ValueAny, nil
+func compileExpressionPathRef(ruleName string, conditionIndex, predicateIndex int, template *Template, path PathSpec) (compiledPathAccess, ValueKind, error) {
+	if template != nil && template.closed && path.root() != "" {
+		if _, ok := template.fieldSlot(path.root()); !ok {
+			return compiledPathAccess{}, "", expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "unknown field", nil)
+		}
 	}
-	slot, ok := template.fieldSlot(field)
-	if !ok {
-		return -1, "", expressionValidationError(ruleName, conditionIndex, predicateIndex, field, "unknown field", nil)
+	access, kind, err := compilePathAccess(path, template)
+	if err != nil {
+		return compiledPathAccess{}, "", expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "invalid path", err)
 	}
-	kind := ValueAny
-	if spec, ok := template.fieldsByName[field]; ok {
-		kind = spec.Kind
-	}
-	return slot, kind, nil
+	return access, kind, nil
 }
 
 func validExpressionComparisonOperator(operator ExpressionComparisonOperator) bool {
@@ -669,11 +732,13 @@ func (e compiledExpression) graphExecutable() bool {
 	case expressionNodeConst:
 		return e.resultKind != ""
 	case expressionNodeCurrentField:
-		return e.field != "" && e.resultKind != ""
+		return (e.access.root != "" || e.field != "") && e.resultKind != ""
 	case expressionNodeBindingField:
-		return e.binding != "" && e.field != "" && e.bindingSlot >= 0 && e.resultKind != ""
+		return e.binding != "" && (e.access.root != "" || e.field != "") && e.bindingSlot >= 0 && e.resultKind != ""
 	case expressionNodeBindingValue:
 		return e.binding != "" && e.bindingSlot >= 0 && e.resultKind != ""
+	case expressionNodeHasPath:
+		return e.access.root != "" && e.resultKind == ValueBool
 	case expressionNodeParam:
 		return e.paramName != "" && e.resultKind != ""
 	case expressionNodeCompare:
@@ -795,7 +860,7 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 	case expressionNodeConst:
 		return e.value, true, nil
 	case expressionNodeCurrentField:
-		value, ok := fact.compiledFieldValue(e.field, e.fieldSlot)
+		value, ok := e.currentValueFromFact(fact)
 		return value, ok, nil
 	case expressionNodeBindingField:
 		if e.bindingSlot < 0 {
@@ -807,7 +872,7 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 		if bindings[e.bindingSlot].hasValue {
 			return Value{}, false, nil
 		}
-		value, ok := bindings[e.bindingSlot].fact.compiledFieldValue(e.field, e.fieldSlot)
+		value, ok := e.bindingValueFromFact(bindings[e.bindingSlot].fact)
 		return value, ok, nil
 	case expressionNodeBindingValue:
 		if e.bindingSlot < 0 {
@@ -817,6 +882,9 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 			return Value{}, false, nil
 		}
 		return bindings[e.bindingSlot].value, true, nil
+	case expressionNodeHasPath:
+		_, ok := e.access.valueFromFact(fact)
+		return newBoolValue(ok), true, nil
 	case expressionNodeParam:
 		if e.paramName == "" {
 			return Value{}, false, fmt.Errorf("%w: malformed query parameter expression", ErrMatcher)
@@ -852,7 +920,7 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 	case expressionNodeConst:
 		return e.value, true, nil
 	case expressionNodeCurrentField:
-		value, ok := fact.compiledFieldValue(e.field, e.fieldSlot)
+		value, ok := e.currentValueFromFact(fact)
 		return value, ok, nil
 	case expressionNodeBindingField:
 		if e.bindingSlot < 0 {
@@ -865,7 +933,7 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 		if match.hasValue {
 			return Value{}, false, nil
 		}
-		value, ok := match.fact.compiledFieldValue(e.field, e.fieldSlot)
+		value, ok := e.bindingValueFromFact(match.fact)
 		return value, ok, nil
 	case expressionNodeBindingValue:
 		if e.bindingSlot < 0 {
@@ -876,6 +944,9 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 			return Value{}, false, nil
 		}
 		return match.value, true, nil
+	case expressionNodeHasPath:
+		_, ok := e.access.valueFromFact(fact)
+		return newBoolValue(ok), true, nil
 	case expressionNodeParam:
 		if e.paramName == "" {
 			return Value{}, false, fmt.Errorf("%w: malformed query parameter expression", ErrMatcher)
@@ -896,6 +967,20 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
 	}
+}
+
+func (e compiledExpression) currentValueFromFact(fact conditionFactRef) (Value, bool) {
+	if !e.access.path.isZero() {
+		return e.access.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(e.field, e.fieldSlot)
+}
+
+func (e compiledExpression) bindingValueFromFact(fact conditionFactRef) (Value, bool) {
+	if !e.access.path.isZero() {
+		return e.access.valueFromFact(fact)
+	}
+	return fact.compiledFieldValue(e.field, e.fieldSlot)
 }
 
 func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
@@ -1031,6 +1116,7 @@ func cloneCompiledExpressionPredicates(in []compiledExpressionPredicate) []compi
 
 func (e compiledExpression) clone() compiledExpression {
 	e.value = cloneValue(e.value)
+	e.access = e.access.clone()
 	operands := e.operands
 	e.operands = make([]compiledExpression, len(operands))
 	for i, operand := range operands {
@@ -1070,6 +1156,8 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(expression.field)
 		b.WriteString(",field-slot=")
 		b.WriteString(fmt.Sprint(expression.fieldSlot))
+		b.WriteString(",path=")
+		b.WriteString(expression.access.display())
 	case expressionNodeBindingField:
 		b.WriteString(",binding=")
 		b.WriteString(expression.binding)
@@ -1079,6 +1167,8 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(expression.field)
 		b.WriteString(",field-slot=")
 		b.WriteString(fmt.Sprint(expression.fieldSlot))
+		b.WriteString(",path=")
+		b.WriteString(expression.access.display())
 	case expressionNodeBindingValue:
 		b.WriteString(",binding=")
 		b.WriteString(expression.binding)
@@ -1087,6 +1177,11 @@ func serializeCompiledExpression(expression compiledExpression) string {
 	case expressionNodeParam:
 		b.WriteString(",param=")
 		b.WriteString(expression.paramName)
+	case expressionNodeHasPath:
+		b.WriteString(",path=")
+		b.WriteString(expression.access.display())
+		b.WriteString(",field-slot=")
+		b.WriteString(fmt.Sprint(expression.fieldSlot))
 	case expressionNodeCompare:
 		b.WriteString(",op=")
 		b.WriteString(string(expression.compareOp))

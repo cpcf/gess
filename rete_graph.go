@@ -909,7 +909,7 @@ func (t *reteGraphAlphaRouteTable) singleIndexedField() (int, bool) {
 
 func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
 	for _, constraint := range constraints {
-		if constraint.operator != FieldConstraintOpEqual || constraint.fieldSlot < 0 {
+		if constraint.operator != FieldConstraintOpEqual || constraint.fieldSlot < 0 || !constraint.access.topLevel() {
 			continue
 		}
 		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
@@ -1447,7 +1447,10 @@ func cloneCompiledFieldConstraints(in []compiledFieldConstraint) []compiledField
 		return nil
 	}
 	out := make([]compiledFieldConstraint, len(in))
-	copy(out, in)
+	for i, constraint := range in {
+		out[i] = constraint
+		out[i].access = constraint.access.clone()
+	}
 	return out
 }
 
@@ -1459,6 +1462,8 @@ func cloneCompiledJoinConstraints(in []compiledJoinConstraint) []compiledJoinCon
 	for i, constraint := range in {
 		out[i] = constraint
 		out[i].path = append([]int(nil), constraint.path...)
+		out[i].access = constraint.access.clone()
+		out[i].refAccess = constraint.refAccess.clone()
 	}
 	return out
 }
@@ -1506,7 +1511,7 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	if !ok {
 		return compiledJoinConstraint{}, false
 	}
-	if current.field == "" || binding.field == "" || binding.binding == "" || binding.bindingSlot < 0 {
+	if current.field == "" || binding.field == "" || binding.binding == "" || binding.bindingSlot < 0 || !current.access.topLevel() || !binding.access.topLevel() {
 		return compiledJoinConstraint{}, false
 	}
 	conditionIndex := -1
@@ -1568,7 +1573,7 @@ func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (
 	if !ok {
 		return compiledFieldConstraint{}, false
 	}
-	if current.field == "" {
+	if current.field == "" || !current.access.topLevel() {
 		return compiledFieldConstraint{}, false
 	}
 	return compiledFieldConstraint{
@@ -1576,6 +1581,7 @@ func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (
 		operator:  operator,
 		value:     cloneValue(constant.value),
 		fieldSlot: current.fieldSlot,
+		access:    current.access.clone(),
 	}, true
 }
 
@@ -1671,8 +1677,9 @@ func serializeCompiledFieldConstraints(constraints []compiledFieldConstraint) st
 func serializeCompiledFieldConstraint(constraint compiledFieldConstraint) string {
 	valueKey := constraint.value.canonicalKey()
 	return fmt.Sprintf(
-		"field:%d:%s\noperator:%d:%s\nvalue:%d:%s\nfield-slot:%d\n",
+		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nvalue:%d:%s\nfield-slot:%d\n",
 		len(constraint.field), constraint.field,
+		len(constraint.access.display()), constraint.access.display(),
 		len(constraint.operator), constraint.operator,
 		len(valueKey), valueKey,
 		constraint.fieldSlot,
@@ -1698,10 +1705,12 @@ func serializeCompiledJoinConstraints(joins []compiledJoinConstraint) string {
 
 func serializeCompiledJoinConstraint(join compiledJoinConstraint) string {
 	return fmt.Sprintf(
-		"field:%d:%s\noperator:%d:%s\nref-field:%d:%s\nbinding-slot:%d\nref-binding-slot:%d\nfield-slot:%d\nref-field-slot:%d\n",
+		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nref-field:%d:%s\nref-path:%d:%s\nbinding-slot:%d\nref-binding-slot:%d\nfield-slot:%d\nref-field-slot:%d\n",
 		len(join.field), join.field,
+		len(join.access.display()), join.access.display(),
 		len(join.operator), join.operator,
 		len(join.refField), join.refField,
+		len(join.refAccess.display()), join.refAccess.display(),
 		join.bindingSlot,
 		join.refBindingSlot,
 		join.fieldSlot,

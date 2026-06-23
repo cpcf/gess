@@ -452,30 +452,34 @@ func queryParamJoinFromPredicate(spec ExpressionSpec, params map[string]ValueKin
 	if !ok {
 		return JoinConstraintSpec{}, false
 	}
-	if field, ok := queryCurrentFieldExpr(compare.Left); ok {
+	if path, ok := queryCurrentPathExpr(compare.Left); ok {
 		if param, ok := queryParamExpr(compare.Right, params); ok {
 			return JoinConstraintSpec{
-				Field:    field,
+				Field:    path.root(),
+				Path:     path,
 				Operator: operator,
 				Ref: FieldRef{
 					Binding: internalQueryTriggerBinding,
 					Field:   param,
+					Path:    Path(param),
 				},
 			}, true
 		}
 	}
-	if field, ok := queryCurrentFieldExpr(compare.Right); ok {
+	if path, ok := queryCurrentPathExpr(compare.Right); ok {
 		if param, ok := queryParamExpr(compare.Left, params); ok {
 			inverted, ok := invertFieldConstraintOperator(operator)
 			if !ok {
 				return JoinConstraintSpec{}, false
 			}
 			return JoinConstraintSpec{
-				Field:    field,
+				Field:    path.root(),
+				Path:     path,
 				Operator: inverted,
 				Ref: FieldRef{
 					Binding: internalQueryTriggerBinding,
 					Field:   param,
+					Path:    Path(param),
 				},
 			}, true
 		}
@@ -498,16 +502,26 @@ func queryCompareExpr(spec ExpressionSpec) (CompareExpr, bool) {
 }
 
 func queryCurrentFieldExpr(spec ExpressionSpec) (string, bool) {
+	path, ok := queryCurrentPathExpr(spec)
+	if !ok {
+		return "", false
+	}
+	return path.root(), true
+}
+
+func queryCurrentPathExpr(spec ExpressionSpec) (PathSpec, bool) {
 	switch expression := spec.(type) {
 	case CurrentFieldExpr:
-		return strings.TrimSpace(expression.Field), strings.TrimSpace(expression.Field) != ""
+		path := expression.clone().Path
+		return path, !path.isZero()
 	case *CurrentFieldExpr:
 		if expression == nil {
-			return "", false
+			return PathSpec{}, false
 		}
-		return strings.TrimSpace(expression.Field), strings.TrimSpace(expression.Field) != ""
+		path := expression.clone().Path
+		return path, !path.isZero()
 	default:
-		return "", false
+		return PathSpec{}, false
 	}
 }
 
@@ -572,7 +586,7 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 	case ParamExpr:
 		name := strings.TrimSpace(expression.Name)
 		if _, ok := params[name]; ok {
-			return BindingFieldExpr{Binding: internalQueryTriggerBinding, Field: name}
+			return BindingPath(internalQueryTriggerBinding, Path(name))
 		}
 		return expression.clone()
 	case *ParamExpr:
@@ -615,7 +629,7 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 
 func expressionContainsCurrentField(spec ExpressionSpec) bool {
 	switch expression := spec.(type) {
-	case CurrentFieldExpr, *CurrentFieldExpr:
+	case CurrentFieldExpr, *CurrentFieldExpr, HasPathExpr, *HasPathExpr:
 		return true
 	case CompareExpr:
 		return expressionContainsCurrentField(expression.Left) || expressionContainsCurrentField(expression.Right)

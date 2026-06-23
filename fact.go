@@ -83,6 +83,18 @@ func (f FactSnapshot) Field(name string) (Value, bool) {
 	return cloneValue(value), true
 }
 
+func (f FactSnapshot) Path(path PathSpec) (Value, bool, error) {
+	access, _, err := compilePathAccess(path, nil)
+	if err != nil {
+		return Value{}, false, err
+	}
+	value, ok := access.valueFromSnapshot(f)
+	if !ok {
+		return Value{}, false, nil
+	}
+	return cloneValue(value), true, nil
+}
+
 func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
 	if slot >= 0 && slot < len(f.fieldSlots) {
 		resolved := f.fieldSlots[slot]
