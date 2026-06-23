@@ -1111,7 +1111,8 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 			Reason:       "unknown template key",
 		}
 	}
-	state := s.clonedFactWorkspace()
+	state := s.activeFactWorkspace()
+	mark := state.markGeneratedFactInsert()
 	fieldSlots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(template.fields))
 	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 	if err != nil {
@@ -1121,7 +1122,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 
 	fact, _, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
 	if err != nil {
-		state.rollbackGeneratedFactSlots(slotMark)
+		state.rollbackGeneratedFactInsert(mark, nil)
 		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 	if !inserted {
@@ -1138,6 +1139,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		if span != nil {
 			span.finish()
 		}
+		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
 		return nil, Template{}, false, agendaDelta, err
 	}
@@ -2465,6 +2467,15 @@ type factWorkspace struct {
 	factTargetIndexesDirty bool
 }
 
+type factWorkspaceInsertMark struct {
+	sequence               uint64
+	recency                Recency
+	factsLen               int
+	insertionOrderLen      int
+	slotStorageLen         int
+	factTargetIndexesDirty bool
+}
+
 type duplicateSingleIntIndexKey struct {
 	templateKey TemplateKey
 	value       int64
@@ -2900,6 +2911,49 @@ func (w *factWorkspace) rollbackGeneratedFactSlots(mark int) {
 		w.slotStorage[i] = factSlot{}
 	}
 	w.slotStorage = w.slotStorage[:mark]
+}
+
+func (w *factWorkspace) markGeneratedFactInsert() factWorkspaceInsertMark {
+	if w == nil {
+		return factWorkspaceInsertMark{}
+	}
+	return factWorkspaceInsertMark{
+		sequence:               w.sequence,
+		recency:                w.recency,
+		factsLen:               len(w.facts),
+		insertionOrderLen:      len(w.insertionOrder),
+		slotStorageLen:         len(w.slotStorage),
+		factTargetIndexesDirty: w.factTargetIndexesDirty,
+	}
+}
+
+func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark, fact *workingFact) {
+	if w == nil {
+		return
+	}
+	if fact != nil {
+		if !fact.dupIndex.isZero() {
+			w.factsByDuplicate.deleteFact(fact.dupIndex, fact.id)
+		}
+		w.removeFactTargetIndexes(fact.templateKey, fact.name, fact.id)
+		delete(w.factsByID, fact.id)
+	}
+	w.sequence = mark.sequence
+	w.recency = mark.recency
+	w.factTargetIndexesDirty = mark.factTargetIndexesDirty
+	if mark.insertionOrderLen >= 0 && mark.insertionOrderLen <= len(w.insertionOrder) {
+		for i := mark.insertionOrderLen; i < len(w.insertionOrder); i++ {
+			w.insertionOrder[i] = FactID{}
+		}
+		w.insertionOrder = w.insertionOrder[:mark.insertionOrderLen]
+	}
+	if mark.factsLen >= 0 && mark.factsLen <= len(w.facts) {
+		for i := mark.factsLen; i < len(w.facts); i++ {
+			w.facts[i] = workingFact{}
+		}
+		w.facts = w.facts[:mark.factsLen]
+	}
+	w.rollbackGeneratedFactSlots(mark.slotStorageLen)
 }
 
 func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
