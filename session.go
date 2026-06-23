@@ -1000,7 +1000,8 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
-	state := s.clonedFactWorkspace()
+	state := s.activeFactWorkspace()
+	mark := state.markGeneratedFactInsert()
 	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
 	if err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
@@ -1052,6 +1053,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		if span != nil {
 			span.finish()
 		}
+		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
