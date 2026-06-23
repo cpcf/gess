@@ -526,6 +526,7 @@ func branchPlanningHardDependencyBindings(condition normalizedRuleCondition) []s
 		}
 		return sortedBranchPlanningBindings(bindings)
 	}
+	addRuleConditionSpecReturnValueDependencies(bindings, condition.spec)
 	for _, predicate := range condition.spec.Predicates {
 		addExpressionSpecBranchPlanningDependencies(bindings, predicate)
 	}
@@ -582,6 +583,7 @@ func addRuleConditionSpecBranchPlanningDependencies(bindings map[string]struct{}
 	for _, join := range condition.JoinConstraints {
 		addBranchPlanningBinding(bindings, join.Ref.Binding)
 	}
+	addRuleConditionSpecReturnValueDependencies(bindings, condition)
 	for _, predicate := range condition.Predicates {
 		addExpressionSpecBranchPlanningDependencies(bindings, predicate)
 	}
@@ -589,6 +591,16 @@ func addRuleConditionSpecBranchPlanningDependencies(bindings map[string]struct{}
 		for _, element := range pattern.Elements {
 			addExpressionSpecBranchPlanningDependencies(bindings, element.Expression)
 		}
+	}
+}
+
+func addRuleConditionSpecReturnValueDependencies(bindings map[string]struct{}, condition RuleConditionSpec) {
+	for _, constraint := range condition.FieldConstraints {
+		expression, ok := fieldConstraintReturnValueExpression(constraint.Value)
+		if !ok {
+			continue
+		}
+		addExpressionSpecBranchPlanningDependencies(bindings, expression)
 	}
 }
 
@@ -606,6 +618,16 @@ func addExpressionSpecBranchPlanningDependencies(bindings map[string]struct{}, s
 	case *BindingValueExpr:
 		if expression != nil {
 			addBranchPlanningBinding(bindings, expression.Binding)
+		}
+	case CallExpr:
+		for _, arg := range expression.Args {
+			addExpressionSpecBranchPlanningDependencies(bindings, arg)
+		}
+	case *CallExpr:
+		if expression != nil {
+			for _, arg := range expression.Args {
+				addExpressionSpecBranchPlanningDependencies(bindings, arg)
+			}
 		}
 	case CompareExpr:
 		addExpressionSpecBranchPlanningDependencies(bindings, expression.Left)

@@ -1130,6 +1130,179 @@ func TestDisjunctiveJoinPredicateExpandsToHashJoinBranches(t *testing.T) {
 	}
 }
 
+func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
+	workspace := NewWorkspace()
+	system := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "system",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "risk", Kind: ValueInt, Required: true},
+			{Name: "band", Kind: ValueString, Required: true},
+		},
+	})
+	finding := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "finding",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "system-id", Kind: ValueString, Required: true},
+			{Name: "band", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "risk-band",
+		Args:   []ValueKind{ValueInt},
+		Return: ValueString,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			risk, _ := args[0].AsInt64()
+			if risk >= 90 {
+				return NewValue("high")
+			}
+			return NewValue("low")
+		},
+	})
+	var fired []string
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ctx ActionContext) error {
+		fact, ok := ctx.Binding("finding")
+		if !ok {
+			fact, ok = ctx.Binding("system")
+			if !ok {
+				return fmt.Errorf("missing record binding")
+			}
+		}
+		id, ok := fact.Field("id")
+		if !ok {
+			return fmt.Errorf("missing id")
+		}
+		text, _ := id.AsString()
+		fired = append(fired, text)
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "literal-return-value",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "system",
+			TemplateKey: system.Key(),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "band",
+				Operator: FieldConstraintEqual,
+				Value:    ConstExpr{Value: "high"},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "binding-return-value",
+		Conditions: []RuleConditionSpec{
+			{Binding: "system", TemplateKey: system.Key()},
+			{
+				Binding:     "finding",
+				TemplateKey: finding.Key(),
+				FieldConstraints: []FieldConstraintSpec{{
+					Field:    "system-id",
+					Operator: FieldConstraintEqual,
+					Value:    BindingFieldExpr{Binding: "system", Field: "id"},
+				}},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "function-return-value",
+		Conditions: []RuleConditionSpec{
+			{Binding: "system", TemplateKey: system.Key()},
+			{
+				Binding:     "finding",
+				TemplateKey: finding.Key(),
+				JoinConstraints: []JoinConstraintSpec{{
+					Field:    "system-id",
+					Operator: FieldConstraintEqual,
+					Ref:      FieldRef{Binding: "system", Field: "id"},
+				}},
+				FieldConstraints: []FieldConstraintSpec{{
+					Field:    "band",
+					Operator: FieldConstraintEqual,
+					Value:    Call("risk-band", BindingFieldExpr{Binding: "system", Field: "risk"}),
+				}},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	literal, ok := revision.Rule("literal-return-value")
+	if !ok {
+		t.Fatal("compiled revision missing literal-return-value")
+	}
+	if got := len(literal.Conditions()[0].FieldConstraints()); got != 1 {
+		t.Fatalf("literal field constraints = %d, want 1", got)
+	}
+	if got := len(literal.Conditions()[0].Predicates()); got != 0 {
+		t.Fatalf("literal predicates = %d, want 0", got)
+	}
+	binding, ok := revision.Rule("binding-return-value")
+	if !ok {
+		t.Fatal("compiled revision missing binding-return-value")
+	}
+	if got := len(binding.Conditions()[1].FieldConstraints()); got != 0 {
+		t.Fatalf("binding field constraints = %d, want 0", got)
+	}
+	if got := len(binding.Conditions()[1].Predicates()); got != 1 {
+		t.Fatalf("binding predicates = %d, want 1", got)
+	}
+	function, ok := revision.Rule("function-return-value")
+	if !ok {
+		t.Fatal("compiled revision missing function-return-value")
+	}
+	if got := len(function.Conditions()[1].Predicates()); got != 1 {
+		t.Fatalf("function predicates = %d, want 1", got)
+	}
+
+	summary := revision.reteGraphDebugSummary()
+	var alphaConstraints, hashJoins, betaPredicates int
+	for _, node := range summary.AlphaNodes {
+		alphaConstraints += len(node.constraints)
+	}
+	for _, node := range summary.BetaNodes {
+		hashJoins += len(node.hashJoins)
+		betaPredicates += len(node.predicates)
+	}
+	if alphaConstraints != 1 {
+		t.Fatalf("alpha constraints = %d, want 1", alphaConstraints)
+	}
+	if hashJoins != 2 {
+		t.Fatalf("hash joins = %d, want 2", hashJoins)
+	}
+	if betaPredicates != 2 {
+		t.Fatalf("beta predicates = %d, want 2", betaPredicates)
+	}
+
+	session := mustSession(t, revision, "return-value-constraints")
+	ctx := context.Background()
+	if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1", "risk": 95, "band": "high"})); err != nil {
+		t.Fatalf("AssertTemplate(system): %v", err)
+	}
+	for _, row := range []map[string]any{
+		{"id": "match", "system-id": "s-1", "band": "high"},
+		{"id": "wrong-band", "system-id": "s-1", "band": "low"},
+		{"id": "wrong-system", "system-id": "s-2", "band": "high"},
+	} {
+		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("AssertTemplate(finding): %v", err)
+		}
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 4 {
+		t.Fatalf("fired = %d, want 4", result.Fired)
+	}
+	slices.Sort(fired)
+	if !slices.Equal(fired, []string{"match", "match", "s-1", "wrong-band"}) {
+		t.Fatalf("fired records = %#v, want literal system plus matching return-value rules", fired)
+	}
+}
+
 func TestConditionTreeMatchPreservesExpressionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

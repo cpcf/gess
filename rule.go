@@ -707,6 +707,83 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 	return []normalizedRuleConditionBranch{branch}, nil
 }
 
+func lowerReturnValueFieldConstraints(constraints []FieldConstraintSpec) ([]FieldConstraintSpec, []ExpressionSpec) {
+	if len(constraints) == 0 {
+		return nil, nil
+	}
+	fieldConstraints := make([]FieldConstraintSpec, 0, len(constraints))
+	predicates := make([]ExpressionSpec, 0)
+	for _, constraint := range constraints {
+		expression, ok := fieldConstraintReturnValueExpression(constraint.Value)
+		if !ok {
+			fieldConstraints = append(fieldConstraints, constraint)
+			continue
+		}
+		if constant, ok := constExpressionValue(expression); ok {
+			out := constraint.clone()
+			out.Value = cloneSpecValue(constant)
+			fieldConstraints = append(fieldConstraints, out)
+			continue
+		}
+		operator, ok := expressionComparisonOperatorFromFieldConstraint(constraint.Operator)
+		if !ok {
+			fieldConstraints = append(fieldConstraints, constraint)
+			continue
+		}
+		predicates = append(predicates, CompareExpr{
+			Operator: operator,
+			Left:     CurrentPath(pathOrField(constraint.Path, constraint.Field)),
+			Right:    cloneExpressionSpec(expression),
+		})
+	}
+	return fieldConstraints, predicates
+}
+
+func fieldConstraintReturnValueExpression(value any) (ExpressionSpec, bool) {
+	switch expression := value.(type) {
+	case ExpressionSpec:
+		if expression == nil {
+			return nil, false
+		}
+		return cloneExpressionSpec(expression), true
+	default:
+		return nil, false
+	}
+}
+
+func constExpressionValue(spec ExpressionSpec) (any, bool) {
+	switch expression := spec.(type) {
+	case ConstExpr:
+		return cloneSpecValue(expression.Value), true
+	case *ConstExpr:
+		if expression == nil {
+			return nil, false
+		}
+		return cloneSpecValue(expression.Value), true
+	default:
+		return nil, false
+	}
+}
+
+func expressionComparisonOperatorFromFieldConstraint(operator FieldConstraintOperator) (ExpressionComparisonOperator, bool) {
+	switch operator {
+	case FieldConstraintOpEqual:
+		return ExpressionCompareEqual, true
+	case FieldConstraintOpNotEqual:
+		return ExpressionCompareNotEqual, true
+	case FieldConstraintOpLessThan:
+		return ExpressionCompareLessThan, true
+	case FieldConstraintOpLessOrEqual:
+		return ExpressionCompareLessOrEqual, true
+	case FieldConstraintOpGreaterThan:
+		return ExpressionCompareGreaterThan, true
+	case FieldConstraintOpGreaterOrEqual:
+		return ExpressionCompareGreaterOrEqual, true
+	default:
+		return ExpressionCompareUnknown, false
+	}
+}
+
 const maxExpandedExecutionBranchesPerBranch = 16
 
 func expandRuleConditionBranchesForExecution(branches []normalizedRuleConditionBranch) []normalizedRuleConditionExecutionBranch {
@@ -1573,9 +1650,10 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			template = &templateValue
 		}
 
-		fieldConstraints := make([]FieldConstraint, 0, len(condition.FieldConstraints))
-		compiledConstraints := make([]compiledFieldConstraint, 0, len(condition.FieldConstraints))
-		for constraintIndex, constraint := range condition.FieldConstraints {
+		constraintSpecs, returnValuePredicates := lowerReturnValueFieldConstraints(condition.FieldConstraints)
+		fieldConstraints := make([]FieldConstraint, 0, len(constraintSpecs))
+		compiledConstraints := make([]compiledFieldConstraint, 0, len(constraintSpecs))
+		for constraintIndex, constraint := range constraintSpecs {
 			compiledConstraint, planConstraint, err := compileFieldConstraintSpec(constraint, ruleName, i, constraintIndex, template)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
@@ -1611,9 +1689,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			compiledJoins = append(compiledJoins, planJoin)
 		}
 
-		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
-		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
-		for predicateIndex, predicate := range condition.Predicates {
+		predicateSpecs := make([]ExpressionSpec, 0, len(returnValuePredicates)+len(condition.Predicates))
+		predicateSpecs = append(predicateSpecs, returnValuePredicates...)
+		for _, predicate := range condition.Predicates {
+			predicateSpecs = append(predicateSpecs, cloneExpressionSpec(predicate))
+		}
+		predicates := make([]ExpressionPredicate, 0, len(predicateSpecs))
+		compiledPredicates := make([]compiledExpressionPredicate, 0, len(predicateSpecs))
+		for predicateIndex, predicate := range predicateSpecs {
 			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParams(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
