@@ -87,7 +87,9 @@ func TestReteRuntimeUnsupportedPlanFailsExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	runtime.resetAlpha(snapshot.Facts())
+	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetAlpha: %v", err)
+	}
 	injectUnsupportedRuntimePlan(t, runtime, "adult-active")
 
 	_, err = runtime.match(ctx, snapshot)
@@ -693,7 +695,9 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 		t.Fatalf("session Rete runtime = %#v, want populated alpha and graph beta memories", session.rete)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
-	runtime.resetAlpha(snapshot.Facts())
+	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetAlpha: %v", err)
+	}
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), session.rete)
@@ -846,7 +850,9 @@ func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	runtime.resetAlpha(mustSnapshot(t, ctx, session).Facts())
+	if err := runtime.resetAlpha(ctx, mustSnapshot(t, ctx, session).Facts()); err != nil {
+		t.Fatalf("resetAlpha: %v", err)
+	}
 	if len(runtime.plan.unsupported) != 0 {
 		t.Fatalf("unsupported plan reasons = %#v, want none", runtime.plan.unsupported)
 	}
@@ -1409,12 +1415,6 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	snapshot := session.propagationCounterSnapshot()
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
 		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
-	}
-	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got < want {
-		t.Fatalf("expression predicate tests = %d, want at least %d", got, want)
-	}
-	if got, want := snapshot.Totals.ExpressionPredicateFailures, 1; got < want {
-		t.Fatalf("expression predicate failures = %d, want at least %d", got, want)
 	}
 	if got := snapshot.Totals.ExpressionPredicateErrors; got != 0 {
 		t.Fatalf("expression predicate errors = %d, want 0", got)

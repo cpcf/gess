@@ -21,6 +21,8 @@ var (
 	ErrInvalidListPattern        = errors.New("gess: invalid list pattern")
 	ErrAggregateValidation       = errors.New("gess: aggregate validation failed")
 	ErrAggregateEvaluation       = errors.New("gess: aggregate evaluation failed")
+	ErrFunctionValidation        = errors.New("gess: function validation failed")
+	ErrFunctionEvaluation        = errors.New("gess: function evaluation failed")
 	ErrQueryNotFound             = errors.New("gess: query not found")
 	ErrQueryArgument             = errors.New("gess: query argument failed")
 	ErrQueryValidation           = errors.New("gess: query validation failed")

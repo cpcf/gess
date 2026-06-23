@@ -171,6 +171,7 @@ func compileListPatternSpecs(
 	conditions []RuleCondition,
 	bindingSlots map[string]int,
 	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
 ) ([]RuleListPattern, []compiledListPattern, []RuleCondition, error) {
 	if len(specs) == 0 {
 		return nil, nil, nil, nil
@@ -206,7 +207,7 @@ func compileListPatternSpecs(
 				if element.Expression == nil {
 					return nil, nil, nil, listPatternValidationError(ruleName, conditionIndex, patternIndex, "list element requires an expression", ErrInvalidListPattern)
 				}
-				expression, referencesEarlier, err := compileExpressionSpecWithParams(element.Expression, ruleName, conditionIndex, elementIndex, nil, conditions, bindingSlots, nil, params)
+				expression, referencesEarlier, err := compileExpressionSpecWithParams(element.Expression, ruleName, conditionIndex, elementIndex, nil, conditions, bindingSlots, nil, params, functions)
 				if err != nil {
 					return nil, nil, nil, markListPatternValidation(err)
 				}

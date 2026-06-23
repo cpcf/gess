@@ -217,6 +217,7 @@ const (
 	RetractMissing              RetractStatus = "missing"
 	RetractStale                RetractStatus = "stale"
 	RetractClosed               RetractStatus = "closed"
+	RetractValidationFailure    RetractStatus = "validation_failure"
 	RetractConcurrencyMisuse    RetractStatus = "concurrency_misuse"
 )
 

@@ -45,16 +45,23 @@ func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 				reportGraphRuleNetworkCounterMetrics(b, snapshot)
 			}()
 
-			memory := newReteGraphBetaMemory(revision, revision.graph, nil)
+			memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
+			if err != nil {
+				b.Fatalf("newReteGraphBetaMemory: %v", err)
+			}
 			if memory == nil {
 				b.Fatal("newReteGraphBetaMemory returned nil")
 			}
 
 			b.ResetTimer()
 			for b.Loop() {
-				memory.resetFacts(nil)
+				if err := memory.resetFacts(context.Background(), nil); err != nil {
+					b.Fatalf("resetFacts: %v", err)
+				}
 				for _, fact := range facts {
-					memory.insertFact(fact, nil)
+					if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+						b.Fatalf("insertFact: %v", err)
+					}
 				}
 				deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
 				if err != nil {
@@ -117,13 +124,20 @@ func TestGraphRuleNetworkReplayBuildsFactSourceIndexesLazily(t *testing.T) {
 	tc := graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 4, items: 256}
 	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
 	facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
-	memory := newReteGraphBetaMemory(revision, revision.graph, nil)
+	memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemory: %v", err)
+	}
 	if memory == nil {
 		t.Fatal("newReteGraphBetaMemory returned nil")
 	}
-	memory.resetFacts(nil)
+	if err := memory.resetFacts(context.Background(), nil); err != nil {
+		t.Fatalf("resetFacts: %v", err)
+	}
 	for _, fact := range facts {
-		memory.insertFact(fact, nil)
+		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+			t.Fatalf("insertFact: %v", err)
+		}
 	}
 	if !memory.factTargetIndexesDirty {
 		t.Fatal("fact target indexes should stay dirty until generic fact source access")
@@ -278,15 +292,22 @@ func collectGraphRuleNetworkReplaySnapshotForCase(t testing.TB, tc graphRuleNetw
 
 func collectGraphRuleNetworkReplaySnapshot(t testing.TB, revision *Ruleset, facts []FactSnapshot) graphRuleNetworkReplaySnapshot {
 	t.Helper()
-	memory := newReteGraphBetaMemory(revision, revision.graph, nil)
+	memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemory: %v", err)
+	}
 	if memory == nil {
 		t.Fatal("newReteGraphBetaMemory returned nil")
 	}
 	ledger := newPropagationCounterLedger()
-	memory.resetFacts(nil)
+	if err := memory.resetFacts(context.Background(), nil); err != nil {
+		t.Fatalf("resetFacts: %v", err)
+	}
 	for _, fact := range facts {
 		span := ledger.beginAssert(fact.TemplateKey(), mutationOrigin{})
-		memory.insertFact(fact, &span)
+		if _, err := memory.insertFact(context.Background(), fact, &span); err != nil {
+			t.Fatalf("insertFact: %v", err)
+		}
 		span.finish()
 	}
 	ledger.setTerminalRowsRetained(memory.terminalRowCount())

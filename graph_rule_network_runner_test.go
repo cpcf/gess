@@ -91,7 +91,10 @@ func runGraphRuleNetworkReplayHarnessCase(t *testing.T, tc graphRuleNetworkCase,
 	facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
 	expected := graphRuleNetworkExpectedMatches(tc.depth, tc.items)
 
-	memory := newReteGraphBetaMemory(revision, revision.graph, nil)
+	memory, err := newReteGraphBetaMemory(ctx, revision, revision.graph, nil)
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemory: %v", err)
+	}
 	if memory == nil {
 		t.Fatal("newReteGraphBetaMemory returned nil")
 	}
@@ -379,9 +382,13 @@ func authoredOrderPreparedSeedSlotCount(items int) int {
 
 func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraphBetaMemory, facts []FactSnapshot, expected int, phase string) {
 	t.Helper()
-	memory.resetFacts(nil)
+	if err := memory.resetFacts(ctx, nil); err != nil {
+		t.Fatalf("%s resetFacts: %v", phase, err)
+	}
 	for _, fact := range facts {
-		memory.insertFact(fact, nil)
+		if _, err := memory.insertFact(ctx, fact, nil); err != nil {
+			t.Fatalf("%s insertFact: %v", phase, err)
+		}
 	}
 	deltas, ok, err := memory.currentTerminalTokenDeltas(ctx)
 	if err != nil {

@@ -66,6 +66,13 @@ type logicalSupportEdgeRecord struct {
 	source logicalSupportSourceKey
 }
 
+type logicalSupportState struct {
+	edges    map[SupportID]logicalSupportEdgeRecord
+	bySource map[logicalSupportSourceKey]map[SupportID]struct{}
+	byFact   map[FactID]map[SupportID]struct{}
+	counters LogicalSupportCounters
+}
+
 func logicalSupportID(source logicalSupportSourceKey, factID FactID) SupportID {
 	if source.activationID.IsZero() || factID.IsZero() {
 		return ""
@@ -370,6 +377,73 @@ func (s *Session) clearLogicalSupports() {
 	s.logicalSupportCounters.CurrentLogicalFacts = 0
 	s.logicalSupportCounters.CurrentStatedAndLogicalFacts = 0
 	s.logicalSupportCounters.CurrentSupportEdges = 0
+}
+
+func (s *Session) captureLogicalSupportState() logicalSupportState {
+	if s == nil {
+		return logicalSupportState{}
+	}
+	return logicalSupportState{
+		edges:    cloneLogicalSupportEdges(s.logicalSupportEdges),
+		bySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
+		byFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
+		counters: s.logicalSupportCounters,
+	}
+}
+
+func (s *Session) restoreLogicalSupportState(state logicalSupportState) {
+	if s == nil {
+		return
+	}
+	s.logicalSupportEdges = state.edges
+	s.logicalSupportBySource = state.bySource
+	s.logicalSupportByFact = state.byFact
+	s.logicalSupportCounters = state.counters
+}
+
+func cloneLogicalSupportEdges(in map[SupportID]logicalSupportEdgeRecord) map[SupportID]logicalSupportEdgeRecord {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[SupportID]logicalSupportEdgeRecord, len(in))
+	for key, record := range in {
+		record.edge = record.edge.clone()
+		out[key] = record
+	}
+	return out
+}
+
+func cloneLogicalSupportSourceIndex(in map[logicalSupportSourceKey]map[SupportID]struct{}) map[logicalSupportSourceKey]map[SupportID]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[logicalSupportSourceKey]map[SupportID]struct{}, len(in))
+	for key, ids := range in {
+		out[key] = cloneSupportIDSet(ids)
+	}
+	return out
+}
+
+func cloneLogicalSupportFactIndex(in map[FactID]map[SupportID]struct{}) map[FactID]map[SupportID]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[FactID]map[SupportID]struct{}, len(in))
+	for key, ids := range in {
+		out[key] = cloneSupportIDSet(ids)
+	}
+	return out
+}
+
+func cloneSupportIDSet(in map[SupportID]struct{}) map[SupportID]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[SupportID]struct{}, len(in))
+	for key := range in {
+		out[key] = struct{}{}
+	}
+	return out
 }
 
 func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventType, edge LogicalSupportEdge) {

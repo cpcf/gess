@@ -1096,7 +1096,7 @@ func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions
 	}, nil
 }
 
-func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templatesByKey map[TemplateKey]Template, actionsByName map[string]compiledAction) (compiledRule, error) {
+func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templatesByKey map[TemplateKey]Template, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction) (compiledRule, error) {
 	normalized, err := normalizeRuleSpec(spec)
 	if err != nil {
 		return compiledRule{}, err
@@ -1127,7 +1127,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		}
 	}
 
-	inspectionSet, err := compileNormalizedRuleConditionBranch(normalized.Name, ruleID, normalizedConditions, templatesByKey, true)
+	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, ruleID, normalizedConditions, templatesByKey, true, nil, functions)
 	if err != nil {
 		return compiledRule{}, err
 	}
@@ -1135,7 +1135,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		publicBranchIR := newBranchPlanningIR(branchIndex, branch.conditions)
-		publicBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, publicBranchIR, templatesByKey, false, nil)
+		publicBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, publicBranchIR, templatesByKey, false, nil, functions)
 		if err != nil {
 			return compiledRule{}, err
 		}
@@ -1145,7 +1145,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			return compiledRule{}, err
 		}
 		plannedBranchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
-		plannedBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, plannedBranchIR, templatesByKey, false, nil)
+		plannedBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, plannedBranchIR, templatesByKey, false, nil, functions)
 		if err != nil {
 			return compiledRule{}, err
 		}
@@ -1226,18 +1226,18 @@ type compiledRuleConditionSet struct {
 }
 
 func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool) (compiledRuleConditionSet, error) {
-	return compileNormalizedRuleConditionBranchWithOuter(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil)
+	return compileNormalizedRuleConditionBranchWithOuter(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil, nil)
 }
 
-func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int) (compiledRuleConditionSet, error) {
-	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, outerConditions, outerBindingSlots, nil)
+func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, outerConditions, outerBindingSlots, nil, functions)
 }
 
-func compileNormalizedRuleConditionBranchWithParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, params map[string]ValueKind) (compiledRuleConditionSet, error) {
-	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil, params)
+func compileNormalizedRuleConditionBranchWithParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil, params, functions)
 }
 
-func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int, params map[string]ValueKind) (compiledRuleConditionSet, error) {
+func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
 	bindingSlots := make(map[string]int, len(normalizedConditions))
 	maps.Copy(bindingSlots, outerBindingSlots)
 	allBindingSlots := make(map[string]int, len(normalizedConditions))
@@ -1278,7 +1278,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 					}
 				}
 			}
-			inputSet, err := compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots, params)
+			inputSet, err := compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots, params, functions)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -1298,7 +1298,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			for j, condition := range inputSet.conditions {
 				inputBindingSlots[condition.binding] = j
 			}
-			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputSet.conditions, inputBindingSlots, templatesByKey)
+			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputSet.conditions, inputBindingSlots, templatesByKey, functions)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -1429,7 +1429,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		if !node.visible && listPatternsHaveSegment(condition.ListPatterns) {
 			return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding is not supported inside non-visible conditions", ErrInvalidListPattern)
 		}
-		listPatterns, compiledListPatterns, listPatternBindings, err := compileListPatternSpecs(condition.ListPatterns, ruleName, i, template, conditions, bindingSlots, params)
+		listPatterns, compiledListPatterns, listPatternBindings, err := compileListPatternSpecs(condition.ListPatterns, ruleName, i, template, conditions, bindingSlots, params, functions)
 		if err != nil {
 			return compiledRuleConditionSet{}, err
 		}
@@ -1456,12 +1456,12 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
 		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
 		for predicateIndex, predicate := range condition.Predicates {
-			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParams(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParams(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
 			predicates = append(predicates, compiledPredicate)
-			compiledPredicates = append(compiledPredicates, planPredicate)
+			compiledPredicates = append(compiledPredicates, splitCompiledExpressionPredicate(planPredicate)...)
 		}
 
 		conditionID := conditionIDFor(ruleID, i, condition.Binding, condition.Name, condition.TemplateKey, fieldConstraints, compiledListPatterns, joinConstraints, compiledPredicates, node.negated)

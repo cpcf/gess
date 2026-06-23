@@ -111,7 +111,7 @@ type compiledAggregatePlan struct {
 	specs      []compiledAggregateSpec
 }
 
-func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template) ([]compiledAggregateSpec, []RuleCondition, error) {
+func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) ([]compiledAggregateSpec, []RuleCondition, error) {
 	if len(specs) == 0 {
 		return nil, nil, aggregateValidationError(ruleName, conditionIndex, -1, "accumulate requires at least one aggregate spec", nil)
 	}
@@ -139,7 +139,7 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 			if normalized.expression == nil {
 				return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "aggregate expression is required", nil)
 			}
-			expression, _, err := compileExpressionSpec(normalized.expression, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey)
+			expression, _, err := compileExpressionSpecWithParams(normalized.expression, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey, nil, functions)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -222,7 +222,7 @@ func (p compiledAggregatePlan) evaluate(ctx context.Context, source factSource, 
 				current = selected[len(selected)-1].fact
 			}
 			for i := range states {
-				if err := states[i].add(current, selected); err != nil {
+				if err := states[i].add(ctx, current, selected); err != nil {
 					return err
 				}
 			}
@@ -261,12 +261,15 @@ type aggregateState struct {
 	values     []Value
 }
 
-func (s *aggregateState) add(current conditionFactRef, bindings []conditionMatch) error {
+func (s *aggregateState) add(ctx context.Context, current conditionFactRef, bindings []conditionMatch) error {
 	s.count++
 	if s.spec.kind == AggregateCount {
 		return nil
 	}
-	value, ok, err := s.spec.expression.evaluate(current, bindings)
+	value, ok, err := s.spec.expression.evaluateWithContextParamsAndCounters(ctx, current, bindings, nil, &FunctionEvaluationError{
+		ConditionIndex: -1,
+		PredicateIndex: -1,
+	}, nil)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrAggregateEvaluation, err)
 	}

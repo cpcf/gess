@@ -1,6 +1,9 @@
 package gess
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
 	workspace := NewWorkspace()
@@ -590,6 +593,289 @@ func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	}
 	if node.predicates[0].placement != ExpressionPredicatePlacementBetaResidual {
 		t.Fatalf("predicate placement = %v, want beta residual", node.predicates[0].placement)
+	}
+}
+
+func TestReteGraphIndexesEqualityComparatorFunctionPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:               "same-group",
+		Args:               []ValueKind{ValueString, ValueString},
+		Return:             ValueBool,
+		EqualityComparator: true,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			left, _ := args[0].AsString()
+			right, _ := args[1].AsString()
+			return NewValue(left == right)
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "function-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{
+					Call("same-group", CurrentFieldExpr{Field: "group"}, BindingFieldExpr{Binding: "left", Field: "group"}),
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+	hashJoin := node.hashJoins[0]
+	if hashJoin.access.root != "group" || hashJoin.refBinding != "left" || hashJoin.refAccess.root != "group" {
+		t.Fatalf("hash join = %#v, want right.group == left.group", hashJoin)
+	}
+}
+
+func TestReteGraphLeavesUncertifiedFunctionPredicatesResidual(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "same-group",
+		Args:   []ValueKind{ValueString, ValueString},
+		Return: ValueBool,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			left, _ := args[0].AsString()
+			right, _ := args[1].AsString()
+			return NewValue(left == right)
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "function-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{
+					Call("same-group", CurrentFieldExpr{Field: "group"}, BindingFieldExpr{Binding: "left", Field: "group"}),
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got := len(node.hashJoins); got != 0 {
+		t.Fatalf("hash joins = %d, want 0", got)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+}
+
+func TestReteGraphIndexesConjunctivePredicateTerms(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "high-score-for-group",
+		Args:   []ValueKind{ValueInt, ValueString},
+		Return: ValueBool,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			score, _ := args[0].AsInt64()
+			group, _ := args[1].AsString()
+			return NewValue(score >= 90 && group != "")
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "conjunctive-predicate-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{
+					BooleanExpr{
+						Operator: ExpressionBoolAnd,
+						Operands: []ExpressionSpec{
+							CompareExpr{
+								Operator: ExpressionCompareGreaterOrEqual,
+								Left:     CurrentFieldExpr{Field: "score"},
+								Right:    ConstExpr{Value: 50},
+							},
+							CompareExpr{
+								Operator: ExpressionCompareEqual,
+								Left:     CurrentFieldExpr{Field: "group"},
+								Right:    BindingFieldExpr{Binding: "left", Field: "group"},
+							},
+							Call("high-score-for-group", CurrentFieldExpr{Field: "score"}, BindingFieldExpr{Binding: "left", Field: "group"}),
+						},
+					},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	var alphaConstraints int
+	for _, node := range summary.AlphaNodes {
+		alphaConstraints += len(node.constraints)
+	}
+	if alphaConstraints != 1 {
+		t.Fatalf("alpha constraints = %d, want 1", alphaConstraints)
+	}
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.predicates), 2; got != want {
+		t.Fatalf("beta residual predicates = %d, want %d", got, want)
+	}
+}
+
+func TestReteGraphIndexesNegatedComparisonPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "not-closed",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{BooleanExpr{
+				Operator: ExpressionBoolNot,
+				Operands: []ExpressionSpec{CompareExpr{
+					Operator: ExpressionCompareEqual,
+					Left:     CurrentFieldExpr{Field: "status"},
+					Right:    ConstExpr{Value: "closed"},
+				}},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	var alphaConstraints, alphaPredicates int
+	for _, node := range summary.AlphaNodes {
+		alphaConstraints += len(node.constraints)
+		alphaPredicates += len(node.predicates)
+	}
+	if alphaConstraints != 1 {
+		t.Fatalf("alpha constraints = %d, want 1", alphaConstraints)
+	}
+	if alphaPredicates != 0 {
+		t.Fatalf("alpha predicates = %d, want 0", alphaPredicates)
+	}
+}
+
+func TestReteGraphIndexesNegatedNotEqualJoinPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "not-not-equal-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{BooleanExpr{
+					Operator: ExpressionBoolNot,
+					Operands: []ExpressionSpec{CompareExpr{
+						Operator: ExpressionCompareNotEqual,
+						Left:     CurrentFieldExpr{Field: "group"},
+						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
+					}},
+				}},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got := len(node.predicates); got != 1 {
+		t.Fatalf("beta residual predicates = %d, want 1 semantic predicate", got)
 	}
 }
 

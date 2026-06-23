@@ -72,6 +72,9 @@ type propagationCounterTotals struct {
 	ExpressionPredicateTests    int
 	ExpressionPredicateFailures int
 	ExpressionPredicateErrors   int
+	FunctionCalls               int
+	FunctionErrors              int
+	FunctionCancellations       int
 	NestedPathEvaluations       int
 	NestedPathMisses            int
 }
@@ -118,6 +121,9 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.ExpressionPredicateTests += other.ExpressionPredicateTests
 	t.ExpressionPredicateFailures += other.ExpressionPredicateFailures
 	t.ExpressionPredicateErrors += other.ExpressionPredicateErrors
+	t.FunctionCalls += other.FunctionCalls
+	t.FunctionErrors += other.FunctionErrors
+	t.FunctionCancellations += other.FunctionCancellations
 	t.NestedPathEvaluations += other.NestedPathEvaluations
 	t.NestedPathMisses += other.NestedPathMisses
 }
@@ -403,6 +409,27 @@ func (s *propagationCounterSpan) recordExpressionPredicateError() {
 		return
 	}
 	s.totals.ExpressionPredicateErrors++
+}
+
+func (s *propagationCounterSpan) recordFunctionCall() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.FunctionCalls++
+}
+
+func (s *propagationCounterSpan) recordFunctionError() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.FunctionErrors++
+}
+
+func (s *propagationCounterSpan) recordFunctionCancellation() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.FunctionCancellations++
 }
 
 func (s *propagationCounterSpan) recordNestedPathEvaluation(found bool) {
@@ -774,6 +801,9 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-expression-predicate-tests", float64(s.Totals.ExpressionPredicateTests))
 	report("propagation-expression-predicate-failures", float64(s.Totals.ExpressionPredicateFailures))
 	report("propagation-expression-predicate-errors", float64(s.Totals.ExpressionPredicateErrors))
+	report("propagation-function-calls", float64(s.Totals.FunctionCalls))
+	report("propagation-function-errors", float64(s.Totals.FunctionErrors))
+	report("propagation-function-cancellations", float64(s.Totals.FunctionCancellations))
 	report("propagation-nested-path-evaluations", float64(s.Totals.NestedPathEvaluations))
 	report("propagation-nested-path-misses", float64(s.Totals.NestedPathMisses))
 
@@ -886,6 +916,9 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-expression-predicate-tests=" + strconv.Itoa(s.Totals.ExpressionPredicateTests),
 		"propagation-expression-predicate-failures=" + strconv.Itoa(s.Totals.ExpressionPredicateFailures),
 		"propagation-expression-predicate-errors=" + strconv.Itoa(s.Totals.ExpressionPredicateErrors),
+		"propagation-function-calls=" + strconv.Itoa(s.Totals.FunctionCalls),
+		"propagation-function-errors=" + strconv.Itoa(s.Totals.FunctionErrors),
+		"propagation-function-cancellations=" + strconv.Itoa(s.Totals.FunctionCancellations),
 		"propagation-nested-path-evaluations=" + strconv.Itoa(s.Totals.NestedPathEvaluations),
 		"propagation-nested-path-misses=" + strconv.Itoa(s.Totals.NestedPathMisses),
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
@@ -1089,6 +1122,9 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"expression-predicate-tests=" + strconv.Itoa(totals.ExpressionPredicateTests) + "," +
 		"expression-predicate-failures=" + strconv.Itoa(totals.ExpressionPredicateFailures) + "," +
 		"expression-predicate-errors=" + strconv.Itoa(totals.ExpressionPredicateErrors) + "," +
+		"function-calls=" + strconv.Itoa(totals.FunctionCalls) + "," +
+		"function-errors=" + strconv.Itoa(totals.FunctionErrors) + "," +
+		"function-cancellations=" + strconv.Itoa(totals.FunctionCancellations) + "," +
 		"nested-path-evaluations=" + strconv.Itoa(totals.NestedPathEvaluations) + "," +
 		"nested-path-misses=" + strconv.Itoa(totals.NestedPathMisses) + "}"
 }

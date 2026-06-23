@@ -327,7 +327,7 @@ func (p compiledConditionPlan) matchesPredicatesWithParams(ctx context.Context, 
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		ok, err := predicate.matchesWithParams(fact, bindings, params)
+		ok, err := predicate.matchesWithContextParams(ctx, fact, bindings, params)
 		if err != nil {
 			return false, err
 		}

@@ -12,6 +12,7 @@ import (
 type Workspace struct {
 	templates []TemplateSpec
 	actions   []ActionSpec
+	functions []PureFunctionSpec
 	rules     []RuleSpec
 	queries   []QuerySpec
 }
@@ -97,6 +98,60 @@ func (w *Workspace) RemoveAction(name string) error {
 	}
 
 	w.actions = append(w.actions[:idx], w.actions[idx+1:]...)
+	return nil
+}
+
+func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
+	normalized, err := compilePureFunctionSpec(spec, len(w.functions))
+	if err != nil {
+		return err
+	}
+	if _, ok := w.functionIndex(normalized.name); ok {
+		return &ValidationError{
+			Reason: "duplicate function",
+			Err:    ErrFunctionValidation,
+		}
+	}
+
+	w.functions = append(w.functions, spec.clone())
+	return nil
+}
+
+func (w *Workspace) ReplaceFunction(spec PureFunctionSpec) error {
+	normalized, err := compilePureFunctionSpec(spec, 0)
+	if err != nil {
+		return err
+	}
+	idx, ok := w.functionIndex(normalized.name)
+	if !ok {
+		return &ValidationError{
+			Reason: "function not found",
+			Err:    ErrFunctionValidation,
+		}
+	}
+
+	w.functions[idx] = spec.clone()
+	return nil
+}
+
+func (w *Workspace) RemoveFunction(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ValidationError{
+			Reason: "function name is required",
+			Err:    ErrFunctionValidation,
+		}
+	}
+
+	idx, ok := w.functionIndex(name)
+	if !ok {
+		return &ValidationError{
+			Reason: "function not found",
+			Err:    ErrFunctionValidation,
+		}
+	}
+
+	w.functions = append(w.functions[:idx], w.functions[idx+1:]...)
 	return nil
 }
 
@@ -279,6 +334,28 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		actionOrder = append(actionOrder, action.name)
 	}
 
+	compiledFunctions := make([]compiledPureFunction, 0, len(w.functions))
+	functionsByName := make(map[string]compiledPureFunction, len(w.functions))
+	functionOrder := make([]string, 0, len(w.functions))
+	for i, spec := range w.functions {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		function, err := compilePureFunctionSpec(spec, i)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := functionsByName[function.name]; exists {
+			return nil, &ValidationError{
+				Reason: "duplicate function",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		functionsByName[function.name] = function
+		compiledFunctions = append(compiledFunctions, function)
+		functionOrder = append(functionOrder, function.name)
+	}
+
 	compiledRules := make([]compiledRule, 0, len(w.rules))
 	rulesByName := make(map[string]compiledRule, len(w.rules))
 	rulesByID := make(map[RuleID]compiledRule, len(w.rules))
@@ -294,7 +371,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if ruleID.IsZero() {
 			ruleID = RuleID(strings.TrimSpace(spec.Name))
 		}
-		rule, err := compileRuleSpec(spec, ruleID, i, templatesByKey, actionsByName)
+		rule, err := compileRuleSpec(spec, ruleID, i, templatesByKey, actionsByName, functionsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -331,7 +408,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		query, err := compileQuerySpec(spec, templatesByKey)
+		query, err := compileQuerySpec(spec, templatesByKey, functionsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -344,12 +421,14 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	}
 
 	return &Ruleset{
-		id:                    rulesetID(compiledTemplates, compiledActions, compiledRules, compiledQueries),
+		id:                    rulesetID(compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
 		templates:             templates,
 		templatesByKey:        templatesByKey,
 		templateOrder:         templateOrder,
 		actions:               actionsByName,
 		actionOrder:           actionOrder,
+		functions:             functionsByName,
+		functionOrder:         functionOrder,
 		rules:                 rulesByName,
 		rulesByID:             rulesByID,
 		rulesByRevisionID:     rulesByRevisionID,
@@ -369,6 +448,8 @@ type Ruleset struct {
 	templateOrder         []string
 	actions               map[string]compiledAction
 	actionOrder           []string
+	functions             map[string]compiledPureFunction
+	functionOrder         []string
 	rules                 map[string]compiledRule
 	rulesByID             map[RuleID]compiledRule
 	rulesByRevisionID     map[RuleRevisionID]compiledRule
@@ -536,6 +617,28 @@ func (r *Ruleset) Actions() []Action {
 	return out
 }
 
+func (r *Ruleset) Function(name string) (PureFunctionDefinition, bool) {
+	if r == nil {
+		return PureFunctionDefinition{}, false
+	}
+	function, ok := r.functions[strings.TrimSpace(name)]
+	if !ok {
+		return PureFunctionDefinition{}, false
+	}
+	return function.inspect(), true
+}
+
+func (r *Ruleset) Functions() []PureFunctionDefinition {
+	if r == nil {
+		return nil
+	}
+	out := make([]PureFunctionDefinition, 0, len(r.functionOrder))
+	for _, name := range r.functionOrder {
+		out = append(out, r.functions[name].inspect())
+	}
+	return out
+}
+
 func (r *Ruleset) Rule(name string) (Rule, bool) {
 	if r == nil {
 		return Rule{}, false
@@ -664,6 +767,16 @@ func (w *Workspace) actionIndex(name string) (int, bool) {
 	return -1, false
 }
 
+func (w *Workspace) functionIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, function := range w.functions {
+		if strings.TrimSpace(function.Name) == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 func (w *Workspace) ruleIndex(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	for i, rule := range w.rules {
@@ -693,7 +806,7 @@ func (w *Workspace) queryIndex(name string) (int, bool) {
 	return -1, false
 }
 
-func rulesetID(templates []Template, actions []compiledAction, rules []compiledRule, queries []compiledQuery) RulesetID {
+func rulesetID(templates []Template, actions []compiledAction, functions []compiledPureFunction, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
 	for _, template := range templates {
@@ -723,6 +836,16 @@ func rulesetID(templates []Template, actions []compiledAction, rules []compiledR
 	sum.Write([]byte("actions:\n"))
 	for _, action := range actions {
 		sum.Write(fmt.Appendf(nil, "action:%s:%d:%t\n", action.name, action.order, action.skipBindingFreeze))
+	}
+
+	sum.Write([]byte("functions:\n"))
+	for _, function := range functions {
+		sum.Write(fmt.Appendf(nil, "function:%s:%d:%s:", function.name, function.order, function.ret))
+		for _, arg := range function.args {
+			sum.Write([]byte(arg))
+			sum.Write([]byte(","))
+		}
+		sum.Write([]byte("\n"))
 	}
 
 	sum.Write([]byte("rules:\n"))

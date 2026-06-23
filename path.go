@@ -25,9 +25,10 @@ type PathSpec struct {
 }
 
 type compiledPathAccess struct {
-	path     PathSpec
-	root     string
-	rootSlot int
+	path               PathSpec
+	root               string
+	rootSlot           int
+	presenceGuaranteed bool
 }
 
 func Path(root string, segments ...PathSegment) PathSpec {
@@ -173,6 +174,7 @@ func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, V
 	access.rootSlot = slot
 	if spec, ok := template.fieldsByName[root]; ok {
 		kind = spec.Kind
+		access.presenceGuaranteed = spec.Required || spec.HasDefault
 	}
 	if len(normalized.Segments) > 1 {
 		switch kind {

@@ -1,6 +1,8 @@
 package gess
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -116,6 +118,31 @@ func (s ParamExpr) clone() ParamExpr {
 	return s
 }
 
+type CallExpr struct {
+	Name string
+	Args []ExpressionSpec
+}
+
+func (CallExpr) expressionSpecNode() {}
+
+func Call(name string, args ...ExpressionSpec) CallExpr {
+	out := CallExpr{Name: strings.TrimSpace(name), Args: make([]ExpressionSpec, len(args))}
+	for i, arg := range args {
+		out.Args[i] = cloneExpressionSpec(arg)
+	}
+	return out
+}
+
+func (s CallExpr) clone() CallExpr {
+	s.Name = strings.TrimSpace(s.Name)
+	args := s.Args
+	s.Args = make([]ExpressionSpec, len(args))
+	for i, arg := range args {
+		s.Args[i] = cloneExpressionSpec(arg)
+	}
+	return s
+}
+
 type CompareExpr struct {
 	Operator ExpressionComparisonOperator
 	Left     ExpressionSpec
@@ -198,6 +225,14 @@ func cloneExpressionSpec(spec ExpressionSpec) ExpressionSpec {
 		}
 		cloned := expression.clone()
 		return &cloned
+	case CallExpr:
+		return expression.clone()
+	case *CallExpr:
+		if expression == nil {
+			return nil
+		}
+		cloned := expression.clone()
+		return &cloned
 	case CompareExpr:
 		return expression.clone()
 	case *CompareExpr:
@@ -260,12 +295,14 @@ const (
 	expressionNodeBindingValue expressionNodeKind = "binding-value"
 	expressionNodeHasPath      expressionNodeKind = "has-path"
 	expressionNodeParam        expressionNodeKind = "param"
+	expressionNodeCall         expressionNodeKind = "call"
 	expressionNodeCompare      expressionNodeKind = "compare"
 	expressionNodeBoolean      expressionNodeKind = "boolean"
 )
 
 type compiledExpressionPredicate struct {
 	path       []int
+	ruleName   string
 	expression compiledExpression
 	placement  ExpressionPredicatePlacement
 	order      int
@@ -279,6 +316,7 @@ type compiledExpression struct {
 	binding     string
 	bindingSlot int
 	paramName   string
+	function    compiledPureFunction
 	compareOp   ExpressionComparisonOperator
 	boolOp      ExpressionBooleanOperator
 	operands    []compiledExpression
@@ -293,7 +331,7 @@ func compileExpressionPredicateSpec(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
-	return compileExpressionPredicateSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil)
+	return compileExpressionPredicateSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil, nil)
 }
 
 func compileExpressionPredicateSpecWithParams(
@@ -305,11 +343,12 @@ func compileExpressionPredicateSpecWithParams(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
 	if spec == nil {
 		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression predicate is required", nil)
 	}
-	expression, referencesEarlierBinding, err := compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+	expression, referencesEarlierBinding, err := compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	if err != nil {
 		return ExpressionPredicate{}, compiledExpressionPredicate{}, err
 	}
@@ -327,6 +366,7 @@ func compileExpressionPredicateSpecWithParams(
 			order:      predicateIndex,
 		}, compiledExpressionPredicate{
 			path:       []int{conditionIndex, predicateIndex},
+			ruleName:   ruleName,
 			expression: expression,
 			placement:  placement,
 			order:      predicateIndex,
@@ -342,7 +382,7 @@ func compileExpressionSpec(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 ) (compiledExpression, bool, error) {
-	return compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil)
+	return compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil, nil)
 }
 
 func compileExpressionSpecWithParams(
@@ -354,6 +394,7 @@ func compileExpressionSpecWithParams(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
 ) (compiledExpression, bool, error) {
 	switch expression := spec.(type) {
 	case ConstExpr:
@@ -398,20 +439,27 @@ func compileExpressionSpecWithParams(
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
 		return compileParamExpression(*expression, ruleName, conditionIndex, predicateIndex, params)
+	case CallExpr:
+		return compileCallExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
+	case *CallExpr:
+		if expression == nil {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
+		}
+		return compileCallExpression(*expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	case CompareExpr:
-		return compileCompareExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+		return compileCompareExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	case *CompareExpr:
 		if expression == nil {
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
-		return compileCompareExpression(*expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+		return compileCompareExpression(*expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	case BooleanExpr:
-		return compileBooleanExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+		return compileBooleanExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	case *BooleanExpr:
 		if expression == nil {
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
-		return compileBooleanExpression(*expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+		return compileBooleanExpression(*expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	default:
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "unsupported expression node", nil)
 	}
@@ -565,6 +613,52 @@ func compileParamExpression(spec ParamExpr, ruleName string, conditionIndex, pre
 	}, false, nil
 }
 
+func compileCallExpression(
+	spec CallExpr,
+	ruleName string,
+	conditionIndex, predicateIndex int,
+	template *Template,
+	conditions []RuleCondition,
+	bindingSlots map[string]int,
+	templatesByKey map[TemplateKey]Template,
+	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
+) (compiledExpression, bool, error) {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call requires a name", ErrFunctionValidation)
+	}
+	function, ok := functions[normalized.Name]
+	if !ok {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "unknown function", ErrFunctionValidation)
+	}
+	if len(normalized.Args) != len(function.args) {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call arity mismatch", ErrFunctionValidation)
+	}
+	operands := make([]compiledExpression, 0, len(normalized.Args))
+	referencesEarlier := false
+	for i, argSpec := range normalized.Args {
+		if argSpec == nil {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call argument is required", ErrFunctionValidation)
+		}
+		arg, argReferencesEarlier, err := compileExpressionSpecWithParams(argSpec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
+		if err != nil {
+			return compiledExpression{}, false, err
+		}
+		if !expressionKindAssignable(function.args[i], arg.resultKind) {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call argument has incompatible type", ErrFunctionValidation)
+		}
+		operands = append(operands, arg)
+		referencesEarlier = referencesEarlier || argReferencesEarlier
+	}
+	return compiledExpression{
+		kind:       expressionNodeCall,
+		resultKind: function.ret,
+		function:   function,
+		operands:   operands,
+	}, referencesEarlier, nil
+}
+
 func compileCompareExpression(
 	spec CompareExpr,
 	ruleName string,
@@ -574,6 +668,7 @@ func compileCompareExpression(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
 ) (compiledExpression, bool, error) {
 	if !validExpressionComparisonOperator(spec.Operator) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "invalid expression comparison operator", nil)
@@ -581,11 +676,11 @@ func compileCompareExpression(
 	if spec.Left == nil || spec.Right == nil {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "comparison expression requires left and right operands", nil)
 	}
-	left, leftReferencesEarlier, err := compileExpressionSpecWithParams(spec.Left, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+	left, leftReferencesEarlier, err := compileExpressionSpecWithParams(spec.Left, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	if err != nil {
 		return compiledExpression{}, false, err
 	}
-	right, rightReferencesEarlier, err := compileExpressionSpecWithParams(spec.Right, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+	right, rightReferencesEarlier, err := compileExpressionSpecWithParams(spec.Right, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 	if err != nil {
 		return compiledExpression{}, false, err
 	}
@@ -609,6 +704,7 @@ func compileBooleanExpression(
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]Template,
 	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
 ) (compiledExpression, bool, error) {
 	if !validExpressionBooleanOperator(spec.Operator) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "invalid expression boolean operator", nil)
@@ -626,7 +722,7 @@ func compileBooleanExpression(
 		if operandSpec == nil {
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "boolean expression operand is required", nil)
 		}
-		operand, operandReferencesEarlier, err := compileExpressionSpecWithParams(operandSpec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
+		operand, operandReferencesEarlier, err := compileExpressionSpecWithParams(operandSpec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions)
 		if err != nil {
 			return compiledExpression{}, false, err
 		}
@@ -702,6 +798,16 @@ func expressionKindsNumeric(left, right ValueKind) bool {
 	return false
 }
 
+func expressionKindAssignable(want, got ValueKind) bool {
+	if want == "" || want == ValueAny || got == ValueAny {
+		return true
+	}
+	if want == got {
+		return true
+	}
+	return expressionKindsNumeric(want, got)
+}
+
 func (p compiledExpressionPredicate) graphExecutable() bool {
 	switch p.placement {
 	case ExpressionPredicatePlacementAlpha, ExpressionPredicatePlacementBetaResidual:
@@ -736,6 +842,15 @@ func (e compiledExpression) graphExecutable() bool {
 		return e.access.root != "" && e.resultKind == ValueBool
 	case expressionNodeParam:
 		return e.paramName != "" && e.resultKind != ""
+	case expressionNodeCall:
+		if e.function.name == "" || e.function.fn == nil || e.resultKind == "" || len(e.operands) != len(e.function.args) {
+			return false
+		}
+		for i, operand := range e.operands {
+			if !expressionKindAssignable(e.function.args[i], operand.resultKind) {
+				return false
+			}
+		}
 	case expressionNodeCompare:
 		if !validExpressionComparisonOperator(e.compareOp) || len(e.operands) != 2 || e.resultKind != ValueBool {
 			return false
@@ -769,6 +884,18 @@ func (e compiledExpression) graphExecutable() bool {
 	return true
 }
 
+func (e compiledExpression) containsFunctionCall() bool {
+	if e.kind == expressionNodeCall {
+		return true
+	}
+	for _, operand := range e.operands {
+		if operand.containsFunctionCall() {
+			return true
+		}
+	}
+	return false
+}
+
 func (e compiledExpression) referencesBinding() bool {
 	switch e.kind {
 	case expressionNodeBindingField:
@@ -786,12 +913,25 @@ func (e compiledExpression) referencesBinding() bool {
 }
 
 func expressionPredicatesMatch(predicates []compiledExpressionPredicate, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
+	return expressionPredicatesMatchWithContextAndCounters(context.Background(), predicates, fact, bindings, nil)
+}
+
+func expressionPredicatesMatchWithContextAndCounters(ctx context.Context, predicates []compiledExpressionPredicate, fact conditionFactRef, bindings []conditionMatch, span *propagationCounterSpan) (bool, error) {
 	for _, predicate := range predicates {
-		ok, err := predicate.matches(fact, bindings)
+		if span != nil {
+			span.recordExpressionPredicateTest()
+		}
+		ok, err := predicate.matchesWithContextParamsAndCounters(ctx, fact, bindings, nil, span)
 		if err != nil {
+			if span != nil {
+				span.recordExpressionPredicateError()
+			}
 			return false, err
 		}
 		if !ok {
+			if span != nil {
+				span.recordExpressionPredicateFailure()
+			}
 			return false, nil
 		}
 	}
@@ -799,11 +939,15 @@ func expressionPredicatesMatch(predicates []compiledExpressionPredicate, fact co
 }
 
 func expressionPredicatesMatchToken(predicates []compiledExpressionPredicate, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+	return expressionPredicatesMatchTokenWithContext(context.Background(), predicates, fact, bindings, span)
+}
+
+func expressionPredicatesMatchTokenWithContext(ctx context.Context, predicates []compiledExpressionPredicate, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
 	for _, predicate := range predicates {
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		ok, err := predicate.matchesTokenWithCounters(fact, bindings, span)
+		ok, err := predicate.matchesTokenWithContextAndCounters(ctx, fact, bindings, span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()
@@ -825,7 +969,15 @@ func (p compiledExpressionPredicate) matches(fact conditionFactRef, bindings []c
 }
 
 func (p compiledExpressionPredicate) matchesWithParams(fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (bool, error) {
-	value, ok, err := p.expression.evaluateWithParamsAndCounters(fact, bindings, params, nil)
+	return p.matchesWithContextParamsAndCounters(context.Background(), fact, bindings, params, nil)
+}
+
+func (p compiledExpressionPredicate) matchesWithContextParams(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (bool, error) {
+	return p.matchesWithContextParamsAndCounters(ctx, fact, bindings, params, nil)
+}
+
+func (p compiledExpressionPredicate) matchesWithContextParamsAndCounters(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value, span *propagationCounterSpan) (bool, error) {
+	value, ok, err := p.expression.evaluateWithContextParamsAndCounters(ctx, fact, bindings, params, p.functionEvaluationMeta(), span)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -836,14 +988,7 @@ func (p compiledExpressionPredicate) matchesWithParams(fact conditionFactRef, bi
 }
 
 func (p compiledExpressionPredicate) matchesWithCounters(fact conditionFactRef, bindings []conditionMatch, span *propagationCounterSpan) (bool, error) {
-	value, ok, err := p.expression.evaluateWithParamsAndCounters(fact, bindings, nil, span)
-	if err != nil || !ok {
-		return false, err
-	}
-	if value.Kind() != ValueBool {
-		return false, nil
-	}
-	return value.boolValue, nil
+	return p.matchesWithContextParamsAndCounters(context.Background(), fact, bindings, nil, span)
 }
 
 func (p compiledExpressionPredicate) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
@@ -851,7 +996,11 @@ func (p compiledExpressionPredicate) matchesToken(fact conditionFactRef, binding
 }
 
 func (p compiledExpressionPredicate) matchesTokenWithCounters(fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
-	value, ok, err := p.expression.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, nil, 0, span)
+	return p.matchesTokenWithContextAndCounters(context.Background(), fact, bindings, span)
+}
+
+func (p compiledExpressionPredicate) matchesTokenWithContextAndCounters(ctx context.Context, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+	value, ok, err := p.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, bindings, nil, 0, p.functionEvaluationMeta(), span)
 	if err != nil || !ok {
 		return false, err
 	}
@@ -859,6 +1008,21 @@ func (p compiledExpressionPredicate) matchesTokenWithCounters(fact conditionFact
 		return false, nil
 	}
 	return value.boolValue, nil
+}
+
+func (p compiledExpressionPredicate) functionEvaluationMeta() *FunctionEvaluationError {
+	meta := &FunctionEvaluationError{
+		RuleName:       p.ruleName,
+		ConditionIndex: -1,
+		PredicateIndex: p.order,
+	}
+	if len(p.path) > 0 {
+		meta.ConditionIndex = p.path[0]
+	}
+	if len(p.path) > 1 {
+		meta.PredicateIndex = p.path[1]
+	}
+	return meta
 }
 
 func (e compiledExpression) evaluate(fact conditionFactRef, bindings []conditionMatch) (Value, bool, error) {
@@ -870,6 +1034,17 @@ func (e compiledExpression) evaluateWithParams(fact conditionFactRef, bindings [
 }
 
 func (e compiledExpression) evaluateWithParamsAndCounters(fact conditionFactRef, bindings []conditionMatch, params map[string]Value, span *propagationCounterSpan) (Value, bool, error) {
+	return e.evaluateWithContextParamsAndCounters(context.Background(), fact, bindings, params, nil, span)
+}
+
+func (e compiledExpression) evaluateWithContextParams(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (Value, bool, error) {
+	return e.evaluateWithContextParamsAndCounters(ctx, fact, bindings, params, nil, nil)
+}
+
+func (e compiledExpression) evaluateWithContextParamsAndCounters(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value, meta *FunctionEvaluationError, span *propagationCounterSpan) (Value, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	switch e.kind {
 	case expressionNodeConst:
 		return e.value, true, nil
@@ -908,13 +1083,17 @@ func (e compiledExpression) evaluateWithParamsAndCounters(fact conditionFactRef,
 			return Value{}, false, fmt.Errorf("%w: missing query argument %q", ErrQueryArgument, e.paramName)
 		}
 		return value, true, nil
+	case expressionNodeCall:
+		return e.evaluateCall(ctx, meta, span, func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluateWithContextParamsAndCounters(ctx, fact, bindings, params, meta, span)
+		})
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateWithParamsAndCounters(fact, bindings, params, span)
+			return operand.evaluateWithContextParamsAndCounters(ctx, fact, bindings, params, meta, span)
 		})
 	case expressionNodeBoolean:
 		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateWithParamsAndCounters(fact, bindings, params, span)
+			return operand.evaluateWithContextParamsAndCounters(ctx, fact, bindings, params, meta, span)
 		})
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
@@ -934,6 +1113,17 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffset(fact conditionFactR
 }
 
 func (e compiledExpression) evaluateTokenWithParamsAndOffsetAndCounters(fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int, span *propagationCounterSpan) (Value, bool, error) {
+	return e.evaluateTokenWithContextParamsOffsetAndCounters(context.Background(), fact, bindings, params, bindingSlotOffset, nil, span)
+}
+
+func (e compiledExpression) evaluateTokenWithContextParamsOffset(ctx context.Context, fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int) (Value, bool, error) {
+	return e.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, bindings, params, bindingSlotOffset, nil, nil)
+}
+
+func (e compiledExpression) evaluateTokenWithContextParamsOffsetAndCounters(ctx context.Context, fact conditionFactRef, bindings tokenRef, params map[string]Value, bindingSlotOffset int, meta *FunctionEvaluationError, span *propagationCounterSpan) (Value, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	switch e.kind {
 	case expressionNodeConst:
 		return e.value, true, nil
@@ -974,13 +1164,17 @@ func (e compiledExpression) evaluateTokenWithParamsAndOffsetAndCounters(fact con
 			return Value{}, false, fmt.Errorf("%w: missing query argument %q", ErrQueryArgument, e.paramName)
 		}
 		return value, true, nil
+	case expressionNodeCall:
+		return e.evaluateCall(ctx, meta, span, func(operand compiledExpression) (Value, bool, error) {
+			return operand.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, bindings, params, bindingSlotOffset, meta, span)
+		})
 	case expressionNodeCompare:
 		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, params, bindingSlotOffset, span)
+			return operand.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, bindings, params, bindingSlotOffset, meta, span)
 		})
 	case expressionNodeBoolean:
 		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
-			return operand.evaluateTokenWithParamsAndOffsetAndCounters(fact, bindings, params, bindingSlotOffset, span)
+			return operand.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, bindings, params, bindingSlotOffset, meta, span)
 		})
 	default:
 		return Value{}, false, fmt.Errorf("%w: unsupported expression node %q", ErrMatcher, e.kind)
@@ -1001,6 +1195,83 @@ func (e compiledExpression) bindingValueFromFact(fact conditionFactRef) (Value, 
 
 func (e compiledExpression) bindingValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
 	return e.access.valueFromFactWithCounters(fact, span)
+}
+
+func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEvaluationError, span *propagationCounterSpan, eval func(compiledExpression) (Value, bool, error)) (value Value, ok bool, err error) {
+	if e.function.name == "" || e.function.fn == nil {
+		return Value{}, false, fmt.Errorf("%w: malformed function call", ErrFunctionEvaluation)
+	}
+	if span != nil {
+		span.recordFunctionCall()
+	}
+	if len(e.operands) != len(e.function.args) {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("arity mismatch: got %d args, want %d", len(e.operands), len(e.function.args)))
+	}
+	if err := ctx.Err(); err != nil {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
+	}
+	args := make([]Value, len(e.operands))
+	for i, operand := range e.operands {
+		arg, argOK, err := eval(operand)
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[i], arg.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", i, arg.Kind(), e.function.args[i]))
+		}
+		args[i] = cloneValue(arg)
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			value = Value{}
+			ok = false
+			err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+		}
+	}()
+	value, err = e.function.fn(ctx, args)
+	if err != nil {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
+	}
+	value = cloneValue(value)
+	if value.Kind() == "" {
+		value = NullValue()
+	}
+	if !expressionKindAssignable(e.function.ret, value.Kind()) {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("return has kind %s, want %s", value.Kind(), e.function.ret))
+	}
+	canonical, err := canonicalValue(value)
+	if err != nil {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
+	}
+	return canonical, true, nil
+}
+
+func recordFunctionEvaluationError(span *propagationCounterSpan, meta *FunctionEvaluationError, functionName string, err error) error {
+	if span != nil {
+		span.recordFunctionError()
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			span.recordFunctionCancellation()
+		}
+	}
+	return functionEvaluationError(meta, functionName, err)
+}
+
+func functionEvaluationError(meta *FunctionEvaluationError, functionName string, err error) error {
+	out := &FunctionEvaluationError{FunctionName: functionName, Err: err}
+	if meta != nil {
+		out.RuleName = meta.RuleName
+		out.QueryName = meta.QueryName
+		out.ConditionIndex = meta.ConditionIndex
+		out.PredicateIndex = meta.PredicateIndex
+		if out.FunctionName == "" {
+			out.FunctionName = meta.FunctionName
+		}
+	}
+	return out
 }
 
 func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
@@ -1134,6 +1405,114 @@ func cloneCompiledExpressionPredicates(in []compiledExpressionPredicate) []compi
 	return out
 }
 
+func splitCompiledExpressionPredicate(predicate compiledExpressionPredicate) []compiledExpressionPredicate {
+	predicate.expression = optimizeCompiledPredicateExpression(predicate.expression)
+	predicate.placement = expressionPredicatePlacementForExpression(predicate.expression)
+	operands := flattenedAndExpressions(predicate.expression)
+	if len(operands) <= 1 {
+		return []compiledExpressionPredicate{predicate}
+	}
+	out := make([]compiledExpressionPredicate, 0, len(operands))
+	for i, operand := range operands {
+		next := predicate
+		next.expression = optimizeCompiledPredicateExpression(operand)
+		next.placement = expressionPredicatePlacementForExpression(next.expression)
+		next.path = append(cloneIntPath(predicate.path), i)
+		out = append(out, next)
+	}
+	return out
+}
+
+func expressionPredicatePlacementForExpression(expression compiledExpression) ExpressionPredicatePlacement {
+	if expression.referencesBinding() {
+		return ExpressionPredicatePlacementBetaResidual
+	}
+	return ExpressionPredicatePlacementAlpha
+}
+
+func optimizeCompiledPredicateExpression(expression compiledExpression) compiledExpression {
+	expression = expression.clone()
+	for i := range expression.operands {
+		expression.operands[i] = optimizeCompiledPredicateExpression(expression.operands[i])
+	}
+	if expression.kind != expressionNodeBoolean || expression.boolOp != ExpressionBoolNot || len(expression.operands) != 1 {
+		return expression
+	}
+	operand := expression.operands[0]
+	if inverted, ok := invertCompiledComparisonExpression(operand); ok {
+		return inverted
+	}
+	if operand.kind == expressionNodeConst && operand.resultKind == ValueBool {
+		return compiledExpression{
+			kind:       expressionNodeConst,
+			resultKind: ValueBool,
+			value:      newBoolValue(!operand.value.boolValue),
+		}
+	}
+	return expression
+}
+
+func invertCompiledComparisonExpression(expression compiledExpression) (compiledExpression, bool) {
+	if expression.kind != expressionNodeCompare || len(expression.operands) != 2 {
+		return compiledExpression{}, false
+	}
+	operator, ok := invertExpressionComparisonOperator(expression.compareOp)
+	if !ok || !expressionComparisonOperandsGuaranteed(expression.operands[0], expression.operands[1]) {
+		return compiledExpression{}, false
+	}
+	out := expression.clone()
+	out.compareOp = operator
+	return out, true
+}
+
+func expressionComparisonOperandsGuaranteed(left, right compiledExpression) bool {
+	if left.resultKind == ValueAny || right.resultKind == ValueAny || !expressionOperandsComparable(ExpressionCompareEqual, left.resultKind, right.resultKind) {
+		return false
+	}
+	return expressionValueGuaranteed(left) && expressionValueGuaranteed(right)
+}
+
+func expressionValueGuaranteed(expression compiledExpression) bool {
+	switch expression.kind {
+	case expressionNodeConst:
+		return true
+	case expressionNodeCurrentField, expressionNodeBindingField:
+		return expression.access.topLevel() && expression.access.presenceGuaranteed
+	default:
+		return false
+	}
+}
+
+func invertExpressionComparisonOperator(operator ExpressionComparisonOperator) (ExpressionComparisonOperator, bool) {
+	switch operator {
+	case ExpressionCompareEqual:
+		return ExpressionCompareNotEqual, true
+	case ExpressionCompareNotEqual:
+		return ExpressionCompareEqual, true
+	case ExpressionCompareLessThan:
+		return ExpressionCompareGreaterOrEqual, true
+	case ExpressionCompareLessOrEqual:
+		return ExpressionCompareGreaterThan, true
+	case ExpressionCompareGreaterThan:
+		return ExpressionCompareLessOrEqual, true
+	case ExpressionCompareGreaterOrEqual:
+		return ExpressionCompareLessThan, true
+	default:
+		return "", false
+	}
+}
+
+func flattenedAndExpressions(expression compiledExpression) []compiledExpression {
+	if expression.kind != expressionNodeBoolean || expression.boolOp != ExpressionBoolAnd {
+		return []compiledExpression{expression}
+	}
+	out := make([]compiledExpression, 0, len(expression.operands))
+	for _, operand := range expression.operands {
+		out = append(out, flattenedAndExpressions(operand)...)
+	}
+	return out
+}
+
 func (e compiledExpression) clone() compiledExpression {
 	e.value = cloneValue(e.value)
 	e.access = e.access.clone()
@@ -1197,6 +1576,14 @@ func serializeCompiledExpression(expression compiledExpression) string {
 	case expressionNodeParam:
 		b.WriteString(",param=")
 		b.WriteString(expression.paramName)
+	case expressionNodeCall:
+		b.WriteString(",function=")
+		b.WriteString(expression.function.name)
+		b.WriteString(",args=")
+		for _, arg := range expression.function.args {
+			b.WriteString(string(arg))
+			b.WriteByte(',')
+		}
 	case expressionNodeHasPath:
 		b.WriteString(",path=")
 		b.WriteString(expression.access.display())

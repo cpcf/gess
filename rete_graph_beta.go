@@ -10,6 +10,7 @@ import (
 type reteGraphBetaMemory struct {
 	revision               *Ruleset
 	graph                  *reteGraph
+	evalCtx                context.Context
 	nodes                  []*reteGraphBetaNodeMemory
 	aggregates             []*reteGraphAggregateNodeMemory
 	terminals              []*reteGraphTerminalMemory
@@ -363,9 +364,9 @@ func (b graphTokenRowIDBucket) reset() graphTokenRowIDBucket {
 	return b
 }
 
-func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSnapshot) *reteGraphBetaMemory {
+func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot) (*reteGraphBetaMemory, error) {
 	if revision == nil || graph == nil {
-		return nil
+		return nil, nil
 	}
 	rowCapacity := graphBetaTokenMemoryCapacity(revision, len(facts))
 	arenaCapacity := graphBetaTokenArenaCapacity(revision, len(facts))
@@ -381,8 +382,31 @@ func newReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, facts []FactSna
 	memory.arena.reserve(arenaCapacity)
 	memory.reserveMemories(rowCapacity)
 	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
-	memory.resetFacts(facts)
-	return memory
+	if err := memory.resetFacts(ctx, facts); err != nil {
+		return nil, err
+	}
+	return memory, nil
+}
+
+func (m *reteGraphBetaMemory) pushEvalContext(ctx context.Context) func() {
+	if m == nil {
+		return func() {}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	previous := m.evalCtx
+	m.evalCtx = ctx
+	return func() {
+		m.evalCtx = previous
+	}
+}
+
+func (m *reteGraphBetaMemory) context() context.Context {
+	if m != nil && m.evalCtx != nil {
+		return m.evalCtx
+	}
+	return context.Background()
 }
 
 func graphBetaTokenMemoryCapacity(revision *Ruleset, initialFacts int) int {
@@ -1037,9 +1061,9 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 	}
 }
 
-func (m *reteGraphBetaMemory) resetFacts(facts []FactSnapshot) {
+func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapshot) error {
 	if m == nil || m.graph == nil {
-		return
+		return nil
 	}
 	if len(m.alphaFacts) != len(m.graph.alphaNodes)+1 || len(m.alphaConditions) != len(m.graph.alphaNodes)+1 {
 		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, len(facts)))
@@ -1053,8 +1077,11 @@ func (m *reteGraphBetaMemory) resetFacts(facts []FactSnapshot) {
 	m.setFacts(facts)
 	m.initializeAggregateOutputs()
 	for _, fact := range facts {
-		m.insertFact(fact, nil)
+		if _, err := m.insertFact(ctx, fact, nil); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
@@ -1198,14 +1225,15 @@ func (m *reteGraphAggregateBucket) clear() {
 	m.hasValue = false
 }
 
-func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCounterSpan) reteAgendaDelta {
+func (m *reteGraphBetaMemory) insertFact(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
+	defer m.pushEvalContext(ctx)()
 	m.upsertFactSource(fact)
 	routeIDs := m.snapshotAlphaRouteIDsForFact(fact)
 	if len(routeIDs) == 0 {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
 
 	delta := m.beginTerminalTokenDelta()
@@ -1218,7 +1246,11 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		if !node.matchesSnapshotWithCounters(fact, span) {
+		ok, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, span)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
 			continue
 		}
 		if span != nil {
@@ -1233,7 +1265,7 @@ func (m *reteGraphBetaMemory) insertFact(fact FactSnapshot, span *propagationCou
 			delta.supported = false
 		}
 	}
-	return m.finishTerminalTokenDelta(delta)
+	return m.finishTerminalTokenDelta(delta), nil
 }
 
 func (m *reteGraphBetaMemory) upsertFactSource(fact FactSnapshot) {
@@ -1350,13 +1382,14 @@ func (m *reteGraphBetaMemory) removeFactTargetIndexes(fact FactSnapshot) {
 	}
 }
 
-func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propagationCounterSpan) reteAgendaDelta {
+func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil || fact == nil {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
+	defer m.pushEvalContext(ctx)()
 	routeIDs := m.workingAlphaRouteIDsForFact(fact)
 	if len(routeIDs) == 0 {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
 
 	delta := m.beginTerminalTokenDelta()
@@ -1369,7 +1402,11 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		if !node.matchesWorkingWithCounters(fact, span) {
+		ok, err := node.matchesWorkingWithContextAndCounters(ctx, fact, span)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
 			continue
 		}
 		if span != nil {
@@ -1384,7 +1421,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(fact *workingFact, span *propa
 			delta.supported = false
 		}
 	}
-	return m.finishTerminalTokenDelta(delta)
+	return m.finishTerminalTokenDelta(delta), nil
 }
 
 func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFact(fact FactSnapshot) []reteGraphAlphaNodeID {
@@ -2931,10 +2968,11 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputContainingFact(nodeID reteG
 	return true
 }
 
-func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
+func (m *reteGraphBetaMemory) removeFact(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
+	defer m.pushEvalContext(ctx)()
 	delta := reteAgendaDelta{supported: true}
 	id := fact.ID()
 	defer m.removeFactSource(id)
@@ -2943,7 +2981,7 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 		nodeIDs = m.snapshotAlphaRouteIDsForFact(fact)
 		if len(nodeIDs) == 0 {
 			m.removeAlphaFact(id)
-			return delta
+			return delta, nil
 		}
 	}
 	for _, nodeID := range nodeIDs {
@@ -2952,7 +2990,11 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 			delta.supported = false
 			continue
 		}
-		if !node.matchesSnapshot(fact) {
+		ok, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, nil)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
 			continue
 		}
 		match := conditionMatch{
@@ -2963,7 +3005,7 @@ func (m *reteGraphBetaMemory) removeFact(fact FactSnapshot, counters *propagatio
 		m.propagateRemoveAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, counters, &delta)
 	}
 	m.removeAlphaFact(id)
-	return delta
+	return delta, nil
 }
 
 func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagationCounterLedger) reteAgendaDelta {
@@ -3054,18 +3096,25 @@ func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
 	return m.alphaFactCounts[conditionID]
 }
 
-func (m *reteGraphBetaMemory) updateFact(before, after FactSnapshot, counters *propagationCounterLedger) reteAgendaDelta {
+func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if m == nil {
-		return reteAgendaDelta{}
+		return reteAgendaDelta{}, nil
 	}
-	removed := m.removeFact(before, counters)
-	added := m.insertFact(after, nil)
+	defer m.pushEvalContext(ctx)()
+	removed, err := m.removeFact(ctx, before, counters)
+	if err != nil {
+		return removed, err
+	}
+	added, err := m.insertFact(ctx, after, nil)
+	if err != nil {
+		return added, err
+	}
 	addedTokens, removedTokens := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
 	return reteAgendaDelta{
 		supported: removed.supported && added.supported,
 		added:     addedTokens,
 		removed:   removedTokens,
-	}
+	}, nil
 }
 
 func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta) {
@@ -3208,6 +3257,7 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 }
 
 func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
+	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {
 		return nil, false, nil
 	}
@@ -3246,6 +3296,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 }
 
 func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, source Snapshot) ([]QueryRow, bool, error) {
+	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {
 		return nil, false, nil
 	}
@@ -3537,7 +3588,7 @@ func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collecto
 	if token.size() == 0 {
 		return fmt.Errorf("%w: malformed query terminal token", ErrQueryExecution)
 	}
-	row, err := collector.query.materializeTokenRow(collector.source, token, collector.args, 1)
+	row, err := collector.query.materializeTokenRow(collector.ctx, collector.source, token, collector.args, 1)
 	if err != nil {
 		return err
 	}
@@ -3835,7 +3886,7 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 			return false, nil
 		}
 	}
-	ok, err := expressionPredicatesMatchToken(node.predicates, fact, bindings, span)
+	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, fact, bindings, span)
 	if err != nil {
 		return false, err
 	}

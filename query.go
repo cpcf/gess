@@ -215,7 +215,7 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 	return out
 }
 
-func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (compiledQuery, error) {
+func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) (compiledQuery, error) {
 	normalized := spec.clone()
 	if normalized.Name == "" {
 		return compiledQuery{}, &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
@@ -245,7 +245,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 	}
 
 	queryRuleID := RuleID("query:" + normalized.Name)
-	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalizedConditions, templatesByKey, true, paramTypes)
+	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalizedConditions, templatesByKey, true, paramTypes, functions)
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
 	}
@@ -254,7 +254,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		branchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
-		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, branchIR, templatesByKey, false, paramTypes)
+		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, branchIR, templatesByKey, false, paramTypes, functions)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -264,7 +264,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 			return compiledQuery{}, markQueryValidation(err)
 		}
 		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
-		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, branchIndex, branch.conditions, templatesByKey, paramTypes)
+		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, branchIndex, branch.conditions, templatesByKey, paramTypes, functions)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -290,7 +290,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template) (
 	for i, condition := range representative.conditions {
 		bindingSlots[condition.binding] = i
 	}
-	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templatesByKey, paramTypes)
+	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templatesByKey, paramTypes, functions)
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -346,7 +346,7 @@ func validQueryParameterKind(kind ValueKind) bool {
 	}
 }
 
-func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, params map[string]ValueKind) ([]compiledQueryReturn, error) {
+func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction) ([]compiledQueryReturn, error) {
 	returns := make([]compiledQueryReturn, 0, len(specs))
 	aliases := make(map[string]struct{}, len(specs))
 	for i, spec := range specs {
@@ -383,7 +383,7 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 		if expressionContainsCurrentField(spec.Expression) {
 			return nil, &ValidationError{RuleName: queryName, Reason: "query return value expressions cannot use current field references", Err: ErrQueryValidation}
 		}
-		expression, _, err := compileExpressionSpecWithParams(spec.Expression, queryName, -1, i, nil, conditions, bindingSlots, templatesByKey, params)
+		expression, _, err := compileExpressionSpecWithParams(spec.Expression, queryName, -1, i, nil, conditions, bindingSlots, templatesByKey, params, functions)
 		if err != nil {
 			return nil, markQueryValidation(err)
 		}
@@ -414,12 +414,12 @@ func internalQueryTriggerName(queryName string) string {
 	return "__gess_query_trigger:" + queryName
 }
 
-func compileQueryGraphBranch(queryName string, queryRuleID RuleID, branchIndex int, branch []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, params map[string]ValueKind) (compiledConditionBranch, bool, error) {
+func compileQueryGraphBranch(queryName string, queryRuleID RuleID, branchIndex int, branch []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledConditionBranch, bool, error) {
 	branchIR, ok := newQueryGraphBranchPlanningIR(queryName, branchIndex, branch, params)
 	if !ok {
 		return compiledConditionBranch{}, false, nil
 	}
-	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, branchIR, templatesByKey, false, nil)
+	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, branchIR, templatesByKey, false, nil, functions)
 	if err != nil {
 		return compiledConditionBranch{}, false, err
 	}
@@ -620,6 +620,21 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 			out.Operands[i] = lowerQueryParamExpression(out.Operands[i], params)
 		}
 		return &out
+	case CallExpr:
+		out := expression.clone()
+		for i := range out.Args {
+			out.Args[i] = lowerQueryParamExpression(out.Args[i], params)
+		}
+		return out
+	case *CallExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		for i := range out.Args {
+			out.Args[i] = lowerQueryParamExpression(out.Args[i], params)
+		}
+		return &out
 	default:
 		return cloneExpressionSpec(spec)
 	}
@@ -638,6 +653,10 @@ func expressionContainsCurrentField(spec ExpressionSpec) bool {
 			return true
 		}
 	case *BooleanExpr:
+		return expression != nil && expressionContainsCurrentField(*expression)
+	case CallExpr:
+		return slices.ContainsFunc(expression.Args, expressionContainsCurrentField)
+	case *CallExpr:
 		return expression != nil && expressionContainsCurrentField(*expression)
 	}
 	return false
@@ -831,7 +850,9 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	runtime.resetAlpha(s.facts)
+	if err := runtime.resetAlpha(ctx, s.facts); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
+	}
 	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)
 	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, trigger, s)
 	if err != nil {
@@ -971,7 +992,7 @@ func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
 	return values, nil
 }
 
-func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
+func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
 	row := q.newQueryRow()
 	for i, ret := range q.returns {
 		if ret.fact {
@@ -986,7 +1007,11 @@ func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch,
 			row.items[i] = queryRowValue{fact: fact, hasFact: true}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithParams(conditionFactRef{}, matches, args)
+		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args, &FunctionEvaluationError{
+			QueryName:      q.name,
+			ConditionIndex: -1,
+			PredicateIndex: ret.order,
+		}, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
@@ -998,11 +1023,11 @@ func (q compiledQuery) materializeRow(source Snapshot, matches []conditionMatch,
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenRow(source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int) (QueryRow, error) {
-	return q.materializeTokenRowInto(source, token, args, bindingSlotOffset, make([]queryRowValue, len(q.returns)))
+func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int) (QueryRow, error) {
+	return q.materializeTokenRowInto(ctx, source, token, args, bindingSlotOffset, make([]queryRowValue, len(q.returns)))
 }
 
-func (q compiledQuery) materializeTokenRowInto(source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int, items []queryRowValue) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int, items []queryRowValue) (QueryRow, error) {
 	if len(items) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row item count %d", ErrQueryExecution, len(items))
 	}
@@ -1021,7 +1046,11 @@ func (q compiledQuery) materializeTokenRowInto(source Snapshot, token tokenRef, 
 			row.items[i] = queryRowValue{fact: fact, hasFact: true}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithParamsAndOffset(conditionFactRef{}, token, args, bindingSlotOffset)
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+			QueryName:      q.name,
+			ConditionIndex: -1,
+			PredicateIndex: ret.order,
+		}, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}

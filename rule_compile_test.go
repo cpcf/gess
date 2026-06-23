@@ -1034,6 +1034,116 @@ func TestExpressionPredicateInspectionIsImmutable(t *testing.T) {
 	}
 }
 
+func TestExpressionPredicatesSplitConjunctiveCompiledPlan(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "conjunctive-expression",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{BooleanExpr{
+					Operator: ExpressionBoolAnd,
+					Operands: []ExpressionSpec{
+						CompareExpr{
+							Operator: ExpressionCompareGreaterOrEqual,
+							Left:     CurrentFieldExpr{Field: "score"},
+							Right:    ConstExpr{Value: 90},
+						},
+						CompareExpr{
+							Operator: ExpressionCompareEqual,
+							Left:     CurrentFieldExpr{Field: "group"},
+							Right:    BindingFieldExpr{Binding: "left", Field: "group"},
+						},
+					},
+				}},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("conjunctive-expression")
+	if !ok {
+		t.Fatal("compiled revision missing conjunctive-expression")
+	}
+	if got, want := len(rule.Conditions()[1].Predicates()), 1; got != want {
+		t.Fatalf("public predicates = %d, want %d", got, want)
+	}
+	if _, ok := rule.Conditions()[1].Predicates()[0].Expression().(BooleanExpr); !ok {
+		t.Fatalf("public predicate expression type = %T, want BooleanExpr", rule.Conditions()[1].Predicates()[0].Expression())
+	}
+	compiled := revision.rules["conjunctive-expression"]
+	plan := compiled.conditionPlans[1]
+	if got, want := len(plan.predicates), 2; got != want {
+		t.Fatalf("compiled predicates = %d, want %d", got, want)
+	}
+	if got := plan.predicates[0].placement; got != ExpressionPredicatePlacementAlpha {
+		t.Fatalf("compiled first predicate placement = %q, want alpha", got)
+	}
+	if got := plan.predicates[1].placement; got != ExpressionPredicatePlacementBetaResidual {
+		t.Fatalf("compiled second predicate placement = %q, want beta residual", got)
+	}
+}
+
+func TestExpressionPredicatesInvertGuaranteedNegatedComparisons(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "negated-comparison",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{BooleanExpr{
+				Operator: ExpressionBoolNot,
+				Operands: []ExpressionSpec{CompareExpr{
+					Operator: ExpressionCompareGreaterOrEqual,
+					Left:     CurrentFieldExpr{Field: "age"},
+					Right:    ConstExpr{Value: 18},
+				}},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("negated-comparison")
+	if !ok {
+		t.Fatal("compiled revision missing negated-comparison")
+	}
+	if _, ok := rule.Conditions()[0].Predicates()[0].Expression().(BooleanExpr); !ok {
+		t.Fatalf("public predicate expression type = %T, want BooleanExpr", rule.Conditions()[0].Predicates()[0].Expression())
+	}
+	compiled := revision.rules["negated-comparison"]
+	plan := compiled.conditionPlans[0]
+	if got, want := len(plan.predicates), 1; got != want {
+		t.Fatalf("compiled predicates = %d, want %d", got, want)
+	}
+	expression := plan.predicates[0].expression
+	if expression.kind != expressionNodeCompare || expression.compareOp != ExpressionCompareLessThan {
+		t.Fatalf("compiled expression = (%s, %s), want compare lt", expression.kind, expression.compareOp)
+	}
+}
+
 func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

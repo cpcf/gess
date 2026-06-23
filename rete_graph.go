@@ -1,6 +1,7 @@
 package gess
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -964,70 +965,84 @@ func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, b
 }
 
 func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {
-	return n.matchesSnapshotWithCounters(fact, nil)
+	ok, _ := n.matchesSnapshotWithContextAndCounters(context.Background(), fact, nil)
+	return ok
 }
 
 func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span *propagationCounterSpan) bool {
+	ok, _ := n.matchesSnapshotWithContextAndCounters(context.Background(), fact, span)
+	return ok
+}
+
+func (n reteGraphAlphaNode) matchesSnapshotWithContextAndCounters(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
 	switch n.target.kind {
 	case conditionTargetTemplateKey:
 		if fact.TemplateKey() != n.target.templateKey {
-			return false
+			return false, nil
 		}
 	case conditionTargetName:
 		if fact.Name() != n.target.name {
-			return false
+			return false, nil
 		}
 	default:
-		return false
+		return false, nil
 	}
 	ref := newConditionFactRefFromSnapshot(fact)
 	for _, constraint := range n.constraints {
 		if !constraint.matchesWithCounters(ref, span) {
-			return false
+			return false, nil
 		}
 	}
 	if !n.listPatternsMatch(ref, tokenRef{}) {
-		return false
+		return false, nil
 	}
-	if !n.expressionPredicatesMatch(ref, span) {
-		return false
+	ok, err := n.expressionPredicatesMatch(ctx, ref, span)
+	if err != nil || !ok {
+		return ok, err
 	}
-	return true
+	return true, nil
 }
 
 func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
-	return n.matchesWorkingWithCounters(fact, nil)
+	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, nil)
+	return ok
 }
 
 func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, span *propagationCounterSpan) bool {
+	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, span)
+	return ok
+}
+
+func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (bool, error) {
 	if fact == nil {
-		return false
+		return false, nil
 	}
 	switch n.target.kind {
 	case conditionTargetTemplateKey:
 		if fact.templateKey != n.target.templateKey {
-			return false
+			return false, nil
 		}
 	case conditionTargetName:
 		if fact.name != n.target.name {
-			return false
+			return false, nil
 		}
 	default:
-		return false
+		return false, nil
 	}
 	for _, constraint := range n.constraints {
 		if !constraint.matchesWorkingWithCounters(fact, span) {
-			return false
+			return false, nil
 		}
 	}
 	ref := newConditionFactRefFromWorkingFact(fact)
 	if !n.listPatternsMatch(ref, tokenRef{}) {
-		return false
+		return false, nil
 	}
-	if !n.expressionPredicatesMatch(ref, span) {
-		return false
+	ok, err := n.expressionPredicatesMatch(ctx, ref, span)
+	if err != nil || !ok {
+		return ok, err
 	}
-	return true
+	return true, nil
 }
 
 func (n reteGraphAlphaNode) listPatternsMatch(fact conditionFactRef, bindings tokenRef) bool {
@@ -1054,26 +1069,26 @@ func (n reteGraphAlphaNode) listPatternCaptures(fact conditionFactRef, bindings 
 	return out, true
 }
 
-func (n reteGraphAlphaNode) expressionPredicatesMatch(fact conditionFactRef, span *propagationCounterSpan) bool {
+func (n reteGraphAlphaNode) expressionPredicatesMatch(ctx context.Context, fact conditionFactRef, span *propagationCounterSpan) (bool, error) {
 	for _, predicate := range n.predicates {
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		ok, err := predicate.matchesWithCounters(fact, nil, span)
+		ok, err := predicate.matchesWithContextParamsAndCounters(ctx, fact, nil, nil, span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()
 			}
-			return false
+			return false, err
 		}
 		if !ok {
 			if span != nil {
 				span.recordExpressionPredicateFailure()
 			}
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 func (g *reteGraph) internBetaNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, kind reteGraphBetaNodeKind, left, right reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
@@ -1539,6 +1554,12 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	if predicate.placement != ExpressionPredicatePlacementBetaResidual {
 		return compiledJoinConstraint{}, false
 	}
+	if join, ok := expressionPredicateFunctionHashJoin(predicate); ok {
+		return join, true
+	}
+	if predicate.expression.containsFunctionCall() {
+		return compiledJoinConstraint{}, false
+	}
 	expression := predicate.expression
 	if expression.kind != expressionNodeCompare || expression.compareOp != ExpressionCompareEqual || len(expression.operands) != 2 {
 		return compiledJoinConstraint{}, false
@@ -1551,6 +1572,56 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	if current.access.root == "" || binding.access.root == "" || binding.binding == "" || binding.bindingSlot < 0 || !current.access.topLevel() || !binding.access.topLevel() {
 		return compiledJoinConstraint{}, false
 	}
+	return newExpressionPredicateHashJoin(predicate, current, binding), true
+}
+
+func expressionPredicateFunctionHashJoin(predicate compiledExpressionPredicate) (compiledJoinConstraint, bool) {
+	call, ok := expressionPredicateEqualityFunctionCall(predicate.expression)
+	if !ok {
+		return compiledJoinConstraint{}, false
+	}
+	current, binding, ok := expressionPredicateHashJoinOperands(call.operands[0], call.operands[1])
+	if !ok {
+		return compiledJoinConstraint{}, false
+	}
+	if current.access.root == "" || binding.access.root == "" || binding.binding == "" || binding.bindingSlot < 0 || !current.access.topLevel() || !binding.access.topLevel() {
+		return compiledJoinConstraint{}, false
+	}
+	return newExpressionPredicateHashJoin(predicate, current, binding), true
+}
+
+func expressionPredicateEqualityFunctionCall(expression compiledExpression) (compiledExpression, bool) {
+	if expression.kind == expressionNodeCall {
+		return expressionEqualityFunctionCall(expression)
+	}
+	if expression.kind != expressionNodeCompare || expression.compareOp != ExpressionCompareEqual || len(expression.operands) != 2 {
+		return compiledExpression{}, false
+	}
+	if call, ok := expressionEqualityFunctionCompareOperand(expression.operands[0], expression.operands[1]); ok {
+		return call, true
+	}
+	return expressionEqualityFunctionCompareOperand(expression.operands[1], expression.operands[0])
+}
+
+func expressionEqualityFunctionCompareOperand(call, constant compiledExpression) (compiledExpression, bool) {
+	if constant.kind != expressionNodeConst || constant.resultKind != ValueBool {
+		return compiledExpression{}, false
+	}
+	boolValue, ok := constant.value.AsBool()
+	if !ok || !boolValue {
+		return compiledExpression{}, false
+	}
+	return expressionEqualityFunctionCall(call)
+}
+
+func expressionEqualityFunctionCall(expression compiledExpression) (compiledExpression, bool) {
+	if expression.kind != expressionNodeCall || !expression.function.equalityComparator || expression.resultKind != ValueBool || len(expression.operands) != 2 {
+		return compiledExpression{}, false
+	}
+	return expression, true
+}
+
+func newExpressionPredicateHashJoin(predicate compiledExpressionPredicate, current, binding compiledExpression) compiledJoinConstraint {
 	conditionIndex := -1
 	if len(predicate.path) > 0 {
 		conditionIndex = predicate.path[0]
@@ -1565,7 +1636,7 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 		refAccess:      binding.access.clone(),
 		indexable:      true,
 		indexKind:      joinIndexEquality,
-	}, true
+	}
 }
 
 func expressionPredicateHashJoinOperands(left, right compiledExpression) (compiledExpression, compiledExpression, bool) {
@@ -1598,6 +1669,9 @@ func graphAlphaConstraintsAndPredicates(constraints []compiledFieldConstraint, p
 
 func expressionPredicateAlphaConstraint(predicate compiledExpressionPredicate) (compiledFieldConstraint, bool) {
 	if predicate.placement != ExpressionPredicatePlacementAlpha {
+		return compiledFieldConstraint{}, false
+	}
+	if predicate.expression.containsFunctionCall() {
 		return compiledFieldConstraint{}, false
 	}
 	expression := predicate.expression
