@@ -2,6 +2,177 @@ package gess
 
 import "testing"
 
+func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+			{Name: "floor", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "eligible-person",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "p",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+				},
+			},
+			{
+				Binding:     "d",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "p", Field: "dept"}},
+					{Field: "floor", Operator: FieldConstraintLessOrEqual, Ref: FieldRef{Binding: "p", Field: "score"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "people-by-region",
+		Parameters: []QueryParameterSpec{{Name: "region", Kind: ValueString}},
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "d",
+				TemplateKey: department.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "region"}, Right: ParamExpr{Name: "region"}},
+				},
+			},
+			{
+				Binding:     "p",
+				TemplateKey: person.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "d", Field: "id"}},
+				},
+			},
+		},
+		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"})},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	plan := summary.Plan
+	if got, want := len(plan.AlphaNodes), 4; got != want {
+		t.Fatalf("plan alpha nodes = %d, want %d", got, want)
+	}
+	if got, want := len(plan.TerminalNodes), 2; got != want {
+		t.Fatalf("plan terminal nodes = %d, want %d", got, want)
+	}
+	if got, want := len(plan.Branches), 2; got != want {
+		t.Fatalf("plan branches = %d, want %d", got, want)
+	}
+	for _, alpha := range plan.AlphaNodes {
+		if alpha.MemoryKind != reteGraphMemoryAlphaFactSet {
+			t.Fatalf("alpha %d memory kind = %q, want %q", alpha.ID, alpha.MemoryKind, reteGraphMemoryAlphaFactSet)
+		}
+	}
+	for _, terminal := range plan.TerminalNodes {
+		if terminal.MemoryKind != reteGraphMemoryTerminalTokens {
+			t.Fatalf("terminal %d memory kind = %q, want %q", terminal.ID, terminal.MemoryKind, reteGraphMemoryTerminalTokens)
+		}
+		if terminal.TokenWidth == 0 {
+			t.Fatalf("terminal %d token width = 0, want positive", terminal.ID)
+		}
+	}
+
+	var mixedJoin reteGraphBetaNodeInspection
+	for _, beta := range plan.BetaNodes {
+		if beta.MemoryKind != reteGraphMemoryBetaTokenHash {
+			t.Fatalf("beta %d memory kind = %q, want %q", beta.ID, beta.MemoryKind, reteGraphMemoryBetaTokenHash)
+		}
+		if len(beta.HashJoins) == 1 && len(beta.ResidualJoins) == 1 {
+			mixedJoin = beta
+		}
+	}
+	if mixedJoin.ID == 0 {
+		t.Fatalf("missing beta node with one hash join and one residual join: %#v", plan.BetaNodes)
+	}
+	if got, want := mixedJoin.TokenWidth, 2; got != want {
+		t.Fatalf("mixed join token width = %d, want %d", got, want)
+	}
+
+	ruleBranch := findPlanInspectionBranch(t, plan.Branches, reteGraphBranchOwnerRule, "eligible-person", "")
+	if got, want := len(ruleBranch.AuthoredOrder), 2; got != want {
+		t.Fatalf("rule authored conditions = %d, want %d", got, want)
+	}
+	if got, want := len(ruleBranch.PlannedOrder), 2; got != want {
+		t.Fatalf("rule planned conditions = %d, want %d", got, want)
+	}
+	if got, want := ruleBranch.AuthoredOrder[0].Binding, "p"; got != want {
+		t.Fatalf("rule authored first binding = %q, want %q", got, want)
+	}
+	if got, want := ruleBranch.PlannedOrder[1].Binding, "d"; got != want {
+		t.Fatalf("rule planned second binding = %q, want %q", got, want)
+	}
+	if ruleBranch.TerminalID == 0 {
+		t.Fatalf("rule terminal ID is zero")
+	}
+
+	queryBranch := findPlanInspectionBranch(t, plan.Branches, reteGraphBranchOwnerQuery, "", "people-by-region")
+	if got, want := len(queryBranch.AuthoredOrder), 2; got != want {
+		t.Fatalf("query authored conditions = %d, want %d", got, want)
+	}
+	if got, want := len(queryBranch.PlannedOrder), 3; got != want {
+		t.Fatalf("query planned conditions = %d, want hidden trigger plus authored conditions (%d)", got, want)
+	}
+	if got, want := queryBranch.PlannedOrder[0].Binding, internalQueryTriggerBinding; got != want {
+		t.Fatalf("query planned first binding = %q, want %q", got, want)
+	}
+	if got, want := queryBranch.PlannedOrder[0].Target.name, internalQueryTriggerName("people-by-region"); got != want {
+		t.Fatalf("query trigger target = %q, want %q", got, want)
+	}
+	if queryBranch.TerminalID == 0 {
+		t.Fatalf("query terminal ID is zero")
+	}
+
+	if len(summary.Plan.Branches[0].AuthoredOrder[0].Path) == 0 {
+		t.Fatalf("expected authored condition path for immutability check")
+	}
+	summary.Plan.Branches[0].AuthoredOrder[0].Path[0] = 99
+	again := revision.reteGraphDebugSummary()
+	if got := again.Plan.Branches[0].AuthoredOrder[0].Path[0]; got == 99 {
+		t.Fatalf("plan inspection leaked mutable condition path")
+	}
+}
+
+func findPlanInspectionBranch(t *testing.T, branches []reteGraphBranchInspection, owner reteGraphBranchOwnerKind, ruleName string, queryName string) reteGraphBranchInspection {
+	t.Helper()
+	for _, branch := range branches {
+		if branch.OwnerKind != owner {
+			continue
+		}
+		switch owner {
+		case reteGraphBranchOwnerRule:
+			if branch.RuleName == ruleName {
+				return branch
+			}
+		case reteGraphBranchOwnerQuery:
+			if branch.QueryName == queryName {
+				return branch
+			}
+		}
+	}
+	t.Fatalf("missing plan branch owner=%q rule=%q query=%q in %#v", owner, ruleName, queryName, branches)
+	return reteGraphBranchInspection{}
+}
+
 func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

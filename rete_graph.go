@@ -14,6 +14,7 @@ type reteGraph struct {
 	aggregateNodes      []reteGraphAggregateNode
 	terminalNodes       []reteGraphTerminalNode
 	ruleBranchPlans     []reteGraphRuleBranchPlan
+	branchInspections   []reteGraphBranchInspection
 	queryTerminalIDs    map[string][]reteGraphTerminalNodeID
 	routesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
 	routesByName        map[string][]reteGraphAlphaNodeID
@@ -111,6 +112,101 @@ type reteGraphDebugSummary struct {
 	RuleBranchPlans     []reteGraphRuleBranchPlan
 	RoutesByTemplateKey map[TemplateKey][]reteGraphAlphaNodeID
 	RoutesByName        map[string][]reteGraphAlphaNodeID
+	Plan                reteGraphPlanInspection
+}
+
+type reteGraphPlanInspection struct {
+	AlphaNodes     []reteGraphAlphaNodeInspection
+	BetaNodes      []reteGraphBetaNodeInspection
+	AggregateNodes []reteGraphAggregateNodeInspection
+	TerminalNodes  []reteGraphTerminalNodeInspection
+	Branches       []reteGraphBranchInspection
+}
+
+type reteGraphMemoryKind string
+
+const (
+	reteGraphMemoryAlphaFactSet   reteGraphMemoryKind = "alpha-fact-set"
+	reteGraphMemoryBetaTokenHash  reteGraphMemoryKind = "beta-token-hash"
+	reteGraphMemoryAggregate      reteGraphMemoryKind = "aggregate-bucket"
+	reteGraphMemoryTerminalTokens reteGraphMemoryKind = "terminal-token-hash"
+)
+
+type reteGraphBranchOwnerKind string
+
+const (
+	reteGraphBranchOwnerRule  reteGraphBranchOwnerKind = "rule"
+	reteGraphBranchOwnerQuery reteGraphBranchOwnerKind = "query"
+)
+
+type reteGraphAlphaNodeInspection struct {
+	ID          reteGraphAlphaNodeID
+	Target      conditionTarget
+	Constraints []compiledFieldConstraint
+	Predicates  []compiledExpressionPredicate
+	Route       reteGraphAlphaRouteSelector
+	Consumers   []reteBetaConditionRoute
+	Entry       bindingTupleEntry
+	MemoryKind  reteGraphMemoryKind
+}
+
+type reteGraphBetaNodeInspection struct {
+	ID            reteGraphBetaNodeID
+	Kind          reteGraphBetaNodeKind
+	Left          reteGraphStageRef
+	Right         reteGraphStageRef
+	Joins         []compiledJoinConstraint
+	HashJoins     []compiledJoinConstraint
+	ResidualJoins []compiledJoinConstraint
+	Predicates    []compiledExpressionPredicate
+	Entry         bindingTupleEntry
+	TokenWidth    int
+	MemoryKind    reteGraphMemoryKind
+}
+
+type reteGraphAggregateNodeInspection struct {
+	ID          reteGraphAggregateNodeID
+	Input       reteGraphStageRef
+	Outer       reteGraphStageRef
+	ConditionID ConditionID
+	BindingSlot int
+	Specs       []compiledAggregateSpec
+	TokenWidth  int
+	MemoryKind  reteGraphMemoryKind
+}
+
+type reteGraphTerminalNodeInspection struct {
+	ID             reteGraphTerminalNodeID
+	Kind           reteGraphTerminalKind
+	RuleRevisionID RuleRevisionID
+	QueryName      string
+	Input          reteGraphStageRef
+	TokenWidth     int
+	MemoryKind     reteGraphMemoryKind
+}
+
+type reteGraphBranchInspection struct {
+	OwnerKind      reteGraphBranchOwnerKind
+	RuleID         RuleID
+	RuleName       string
+	RuleRevisionID RuleRevisionID
+	QueryName      string
+	BranchID       int
+	AuthoredOrder  []reteGraphConditionOrderInspection
+	PlannedOrder   []reteGraphConditionOrderInspection
+	TerminalID     reteGraphTerminalNodeID
+}
+
+type reteGraphConditionOrderInspection struct {
+	Order       int
+	ConditionID ConditionID
+	Binding     string
+	BindingSlot int
+	Path        []int
+	Visible     bool
+	Negated     bool
+	Aggregate   bool
+	Target      conditionTarget
 }
 
 type reteGraphBetaInputSide uint8
@@ -296,6 +392,7 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 				entry:      terminalEntry,
 				branchID:   branch.id,
 			})
+			graph.branchInspections = append(graph.branchInspections, inspectReteGraphRuleBranch(rule, branch, terminalID))
 		}
 	}
 
@@ -325,6 +422,7 @@ func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alpha
 				terminalID: terminalID,
 				branchID:   branch.id,
 			})
+			g.branchInspections = append(g.branchInspections, inspectReteGraphQueryBranch(query, branch, terminalID))
 		}
 	}
 }
@@ -531,6 +629,7 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 		terminalID: *terminalID,
 		branchID:   branch.id,
 	})
+	g.branchInspections = append(g.branchInspections, inspectReteGraphRuleBranch(rule, branch, *terminalID))
 	return true
 }
 
@@ -1032,7 +1131,103 @@ func (g *reteGraph) debugSummary() reteGraphDebugSummary {
 		RuleBranchPlans:     cloneReteGraphRuleBranchPlans(g.ruleBranchPlans),
 		RoutesByTemplateKey: cloneReteGraphAlphaRoutes(g.routesByTemplateKey),
 		RoutesByName:        cloneReteGraphNameRoutes(g.routesByName),
+		Plan:                g.inspectPlan(),
 	}
+}
+
+func (g *reteGraph) inspectPlan() reteGraphPlanInspection {
+	if g == nil {
+		return reteGraphPlanInspection{}
+	}
+	return reteGraphPlanInspection{
+		AlphaNodes:     g.inspectAlphaNodes(),
+		BetaNodes:      g.inspectBetaNodes(),
+		AggregateNodes: g.inspectAggregateNodes(),
+		TerminalNodes:  g.inspectTerminalNodes(),
+		Branches:       cloneReteGraphBranchInspections(g.branchInspections),
+	}
+}
+
+func (g *reteGraph) inspectAlphaNodes() []reteGraphAlphaNodeInspection {
+	if g == nil || len(g.alphaNodes) == 0 {
+		return nil
+	}
+	out := make([]reteGraphAlphaNodeInspection, len(g.alphaNodes))
+	for i, node := range g.alphaNodes {
+		out[i] = reteGraphAlphaNodeInspection{
+			ID:          node.id,
+			Target:      node.target,
+			Constraints: cloneCompiledFieldConstraints(node.constraints),
+			Predicates:  cloneCompiledExpressionPredicates(node.predicates),
+			Route:       node.route,
+			Consumers:   cloneReteGraphAlphaConsumers(node.consumers),
+			Entry:       cloneBindingTupleEntry(node.entry),
+			MemoryKind:  reteGraphMemoryAlphaFactSet,
+		}
+	}
+	return out
+}
+
+func (g *reteGraph) inspectBetaNodes() []reteGraphBetaNodeInspection {
+	if g == nil || len(g.betaNodes) == 0 {
+		return nil
+	}
+	out := make([]reteGraphBetaNodeInspection, len(g.betaNodes))
+	for i, node := range g.betaNodes {
+		out[i] = reteGraphBetaNodeInspection{
+			ID:            node.id,
+			Kind:          node.kind,
+			Left:          node.left,
+			Right:         node.right,
+			Joins:         cloneCompiledJoinConstraints(node.joins),
+			HashJoins:     cloneCompiledJoinConstraints(node.hashJoins),
+			ResidualJoins: cloneCompiledJoinConstraints(node.residualJoins),
+			Predicates:    cloneCompiledExpressionPredicates(node.predicates),
+			Entry:         cloneBindingTupleEntry(node.entry),
+			TokenWidth:    g.stageTokenWidth(reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)}),
+			MemoryKind:    reteGraphMemoryBetaTokenHash,
+		}
+	}
+	return out
+}
+
+func (g *reteGraph) inspectAggregateNodes() []reteGraphAggregateNodeInspection {
+	if g == nil || len(g.aggregateNodes) == 0 {
+		return nil
+	}
+	out := make([]reteGraphAggregateNodeInspection, len(g.aggregateNodes))
+	for i, node := range g.aggregateNodes {
+		out[i] = reteGraphAggregateNodeInspection{
+			ID:          node.id,
+			Input:       node.input,
+			Outer:       node.outer,
+			ConditionID: node.conditionID,
+			BindingSlot: node.bindingSlot,
+			Specs:       cloneCompiledAggregateSpecs(node.specs),
+			TokenWidth:  g.stageTokenWidth(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(node.id)}),
+			MemoryKind:  reteGraphMemoryAggregate,
+		}
+	}
+	return out
+}
+
+func (g *reteGraph) inspectTerminalNodes() []reteGraphTerminalNodeInspection {
+	if g == nil || len(g.terminalNodes) == 0 {
+		return nil
+	}
+	out := make([]reteGraphTerminalNodeInspection, len(g.terminalNodes))
+	for i, node := range g.terminalNodes {
+		out[i] = reteGraphTerminalNodeInspection{
+			ID:             node.id,
+			Kind:           node.kind,
+			RuleRevisionID: node.ruleRevisionID,
+			QueryName:      node.queryName,
+			Input:          node.input,
+			TokenWidth:     g.stageTokenWidth(node.input),
+			MemoryKind:     reteGraphMemoryTerminalTokens,
+		}
+	}
+	return out
 }
 
 func (r *Ruleset) reteGraphDebugSummary() reteGraphDebugSummary {
@@ -1040,6 +1235,95 @@ func (r *Ruleset) reteGraphDebugSummary() reteGraphDebugSummary {
 		return reteGraphDebugSummary{}
 	}
 	return r.graph.debugSummary()
+}
+
+func inspectReteGraphRuleBranch(rule compiledRule, branch compiledConditionBranch, terminalID reteGraphTerminalNodeID) reteGraphBranchInspection {
+	return reteGraphBranchInspection{
+		OwnerKind:      reteGraphBranchOwnerRule,
+		RuleID:         rule.id,
+		RuleName:       rule.name,
+		RuleRevisionID: rule.revisionID,
+		BranchID:       branch.id,
+		AuthoredOrder:  inspectReteGraphAuthoredOrder(branch.conditions),
+		PlannedOrder:   inspectReteGraphPlannedOrder(branch.plans),
+		TerminalID:     terminalID,
+	}
+}
+
+func inspectReteGraphQueryBranch(query compiledQuery, branch compiledConditionBranch, terminalID reteGraphTerminalNodeID) reteGraphBranchInspection {
+	return reteGraphBranchInspection{
+		OwnerKind:     reteGraphBranchOwnerQuery,
+		QueryName:     query.name,
+		BranchID:      branch.id,
+		AuthoredOrder: inspectReteGraphQueryAuthoredOrder(query, branch.id),
+		PlannedOrder:  inspectReteGraphPlannedOrder(branch.plans),
+		TerminalID:    terminalID,
+	}
+}
+
+func inspectReteGraphQueryAuthoredOrder(query compiledQuery, branchID int) []reteGraphConditionOrderInspection {
+	for _, branch := range query.conditionBranchPlans {
+		if branch.id == branchID {
+			return inspectReteGraphAuthoredOrder(branch.conditions)
+		}
+	}
+	return nil
+}
+
+func inspectReteGraphAuthoredOrder(conditions []RuleConditionBranchCondition) []reteGraphConditionOrderInspection {
+	if len(conditions) == 0 {
+		return nil
+	}
+	out := make([]reteGraphConditionOrderInspection, len(conditions))
+	for i, condition := range conditions {
+		public := condition.condition
+		out[i] = reteGraphConditionOrderInspection{
+			Order:       i,
+			ConditionID: public.id,
+			Binding:     public.binding,
+			BindingSlot: public.order,
+			Path:        condition.Path(),
+			Visible:     condition.visible,
+			Negated:     condition.negated,
+			Target: conditionTarget{
+				kind:        conditionTargetKindForRuleCondition(public),
+				name:        public.name,
+				templateKey: public.templateKey,
+			},
+		}
+	}
+	return out
+}
+
+func inspectReteGraphPlannedOrder(plans []compiledConditionPlan) []reteGraphConditionOrderInspection {
+	if len(plans) == 0 {
+		return nil
+	}
+	out := make([]reteGraphConditionOrderInspection, len(plans))
+	for i, plan := range plans {
+		out[i] = reteGraphConditionOrderInspection{
+			Order:       i,
+			ConditionID: plan.id,
+			Binding:     plan.binding,
+			BindingSlot: plan.bindingSlot,
+			Path:        cloneIntPath(plan.path),
+			Visible:     !plan.negated,
+			Negated:     plan.negated,
+			Aggregate:   plan.aggregate != nil,
+			Target:      plan.target,
+		}
+	}
+	return out
+}
+
+func conditionTargetKindForRuleCondition(condition RuleCondition) conditionTargetKind {
+	if condition.templateKey != "" {
+		return conditionTargetTemplateKey
+	}
+	if condition.name != "" {
+		return conditionTargetName
+	}
+	return conditionTargetUnknown
 }
 
 func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
@@ -1090,6 +1374,31 @@ func cloneReteGraphRuleBranchPlans(in []reteGraphRuleBranchPlan) []reteGraphRule
 	for i, plan := range in {
 		out[i] = plan
 		out[i].conditions = cloneRuleConditionBranchConditions(plan.conditions)
+	}
+	return out
+}
+
+func cloneReteGraphBranchInspections(in []reteGraphBranchInspection) []reteGraphBranchInspection {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphBranchInspection, len(in))
+	for i, branch := range in {
+		out[i] = branch
+		out[i].AuthoredOrder = cloneReteGraphConditionOrderInspections(branch.AuthoredOrder)
+		out[i].PlannedOrder = cloneReteGraphConditionOrderInspections(branch.PlannedOrder)
+	}
+	return out
+}
+
+func cloneReteGraphConditionOrderInspections(in []reteGraphConditionOrderInspection) []reteGraphConditionOrderInspection {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphConditionOrderInspection, len(in))
+	for i, condition := range in {
+		out[i] = condition
+		out[i].Path = cloneIntPath(condition.Path)
 	}
 	return out
 }
