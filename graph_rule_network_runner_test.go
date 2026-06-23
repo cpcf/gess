@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	graphRuleNetworkHarnessModeReplay  = "graph-replay"
-	graphRuleNetworkHarnessModeSeedRun = "seed-run"
+	graphRuleNetworkHarnessModeReplay        = "graph-replay"
+	graphRuleNetworkHarnessModeSeedRun       = "seed-run"
+	graphRuleNetworkHarnessModeSeedRunValues = "seed-run-values"
 )
 
 func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
@@ -24,8 +25,8 @@ func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
 	if mode == "" {
 		mode = graphRuleNetworkHarnessModeReplay
 	}
-	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun {
-		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, mode)
+	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun && mode != graphRuleNetworkHarnessModeSeedRunValues {
+		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q, %q, or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, graphRuleNetworkHarnessModeSeedRunValues, mode)
 	}
 
 	iterations := graphRuleNetworkHarnessEnvInt(t, "GESS_GRAPH_RULE_NETWORK_ITERATIONS", 3)
@@ -68,7 +69,9 @@ func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, itera
 	case graphRuleNetworkHarnessModeReplay:
 		runGraphRuleNetworkReplayHarnessCase(t, tc, iterations, warmup)
 	case graphRuleNetworkHarnessModeSeedRun:
-		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup)
+		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFacts)
+	case graphRuleNetworkHarnessModeSeedRunValues:
+		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithTemplateValues)
 	default:
 		t.Fatalf("unsupported graph-rule-network harness mode %q", mode)
 	}
@@ -119,7 +122,7 @@ func runGraphRuleNetworkReplayHarnessCase(t *testing.T, tc graphRuleNetworkCase,
 	)
 }
 
-func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int) {
+func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase, iterations, warmup int, mode string, seed func(testing.TB, context.Context, *Session, authoredOrderBenchmarkTemplates, int)) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -130,7 +133,7 @@ func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase
 	for i := range warmup {
 		session := mustSession(t, revision, SessionID(fmt.Sprintf("graph-rule-network-seed-warmup-%s-%d-%d-%d", tc.order, tc.depth, tc.items, i)))
 		session.attachPropagationCounters()
-		seedAuthoredOrderFacts(t, ctx, session, templates, tc.items)
+		seed(t, ctx, session, templates, tc.items)
 		result, err := session.Run(ctx)
 		if err != nil {
 			t.Fatalf("warmup Run: %v", err)
@@ -149,7 +152,7 @@ func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase
 	runtime.ReadMemStats(&before)
 	start := time.Now()
 	for i, session := range sessions {
-		seedAuthoredOrderFacts(t, ctx, session, templates, tc.items)
+		seed(t, ctx, session, templates, tc.items)
 		result, err := session.Run(ctx)
 		if err != nil {
 			t.Fatalf("benchmark Run: %v", err)
@@ -167,8 +170,8 @@ func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase
 	allocBytes := after.TotalAlloc - before.TotalAlloc
 	allocs := after.Mallocs - before.Mallocs
 	fmt.Printf(
-		"GESS_RUNNER|graph-rule-network|seed-run|order=%s|depth=%d|items=%d|rules=1|initial-facts=%d|fired=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f|alloc-bytes/op=%.0f|allocs/op=%.0f|graph-token-rows-retained=%d|terminal-rows-retained=%d|beta-bucket-probes=%d|beta-candidate-rows-scanned=%d|beta-joined-tokens=%d|tokens-created=%d\n",
-		tc.order, tc.depth, tc.items, initialFacts, expected, iterations, warmup, elapsed.Nanoseconds(),
+		"GESS_RUNNER|graph-rule-network|%s|order=%s|depth=%d|items=%d|rules=1|initial-facts=%d|fired=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f|alloc-bytes/op=%.0f|allocs/op=%.0f|graph-token-rows-retained=%d|terminal-rows-retained=%d|beta-bucket-probes=%d|beta-candidate-rows-scanned=%d|beta-joined-tokens=%d|tokens-created=%d\n",
+		mode, tc.order, tc.depth, tc.items, initialFacts, expected, iterations, warmup, elapsed.Nanoseconds(),
 		float64(elapsed.Nanoseconds())/float64(iterations),
 		float64(allocBytes)/float64(iterations),
 		float64(allocs)/float64(iterations),
@@ -179,6 +182,53 @@ func runGraphRuleNetworkSeedRunHarnessCase(t *testing.T, tc graphRuleNetworkCase
 		snapshot.Totals.BetaJoinedTokensProduced,
 		snapshot.Totals.TokensCreated,
 	)
+}
+
+func seedAuthoredOrderFactsWithTemplateValues(t testing.TB, ctx context.Context, session *Session, templates authoredOrderBenchmarkTemplates, items int) {
+	t.Helper()
+	// Template value assertions use compiled slot order; template compilation sorts fields by name.
+	for id := range authoredOrderRootCount {
+		group := "other"
+		if authoredOrderRootSelected(id) {
+			group = "target"
+		}
+		if err := session.insertTemplateValuesWithContextAndOrigin(ctx, templates.root, []Value{
+			newBoolValue(true),
+			newStringValue(group),
+			newIntValue(int64(id)),
+		}, mutationOrigin{}); err != nil {
+			t.Fatalf("insertTemplateValues(root): %v", err)
+		}
+	}
+	for id := range items {
+		if err := session.insertTemplateValuesWithContextAndOrigin(ctx, templates.event, []Value{
+			newIntValue(int64(id)),
+			newIntValue(int64(id % authoredOrderRootCount)),
+			newIntValue(int64(authoredOrderScore(id))),
+		}, mutationOrigin{}); err != nil {
+			t.Fatalf("insertTemplateValues(event): %v", err)
+		}
+		if err := session.insertTemplateValuesWithContextAndOrigin(ctx, templates.detail, []Value{
+			newStringValue(authoredOrderDetailCode(id)),
+			newIntValue(int64(id)),
+		}, mutationOrigin{}); err != nil {
+			t.Fatalf("insertTemplateValues(detail): %v", err)
+		}
+		if err := session.insertTemplateValuesWithContextAndOrigin(ctx, templates.tag, []Value{
+			newIntValue(int64(id)),
+			newStringValue(authoredOrderTagLabel(id)),
+		}, mutationOrigin{}); err != nil {
+			t.Fatalf("insertTemplateValues(tag): %v", err)
+		}
+		if authoredOrderBlocked(id) {
+			if err := session.insertTemplateValuesWithContextAndOrigin(ctx, templates.block, []Value{
+				newBoolValue(true),
+				newIntValue(int64(id)),
+			}, mutationOrigin{}); err != nil {
+				t.Fatalf("insertTemplateValues(block): %v", err)
+			}
+		}
+	}
 }
 
 func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraphBetaMemory, facts []FactSnapshot, expected int, phase string) {
