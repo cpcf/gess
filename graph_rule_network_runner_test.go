@@ -15,6 +15,7 @@ const (
 	graphRuleNetworkHarnessModeSeedRun            = "seed-run"
 	graphRuleNetworkHarnessModeSeedRunValues      = "seed-run-values"
 	graphRuleNetworkHarnessModeSeedRunValuesBatch = "seed-run-values-batch"
+	graphRuleNetworkHarnessModeSeedRunPrepared    = "seed-run-prepared"
 )
 
 func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
@@ -26,8 +27,8 @@ func TestGraphRuleNetworkRunOnlyHarness(t *testing.T) {
 	if mode == "" {
 		mode = graphRuleNetworkHarnessModeReplay
 	}
-	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun && mode != graphRuleNetworkHarnessModeSeedRunValues && mode != graphRuleNetworkHarnessModeSeedRunValuesBatch {
-		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q, %q, %q, or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, graphRuleNetworkHarnessModeSeedRunValues, graphRuleNetworkHarnessModeSeedRunValuesBatch, mode)
+	if mode != graphRuleNetworkHarnessModeReplay && mode != graphRuleNetworkHarnessModeSeedRun && mode != graphRuleNetworkHarnessModeSeedRunValues && mode != graphRuleNetworkHarnessModeSeedRunValuesBatch && mode != graphRuleNetworkHarnessModeSeedRunPrepared {
+		t.Fatalf("GESS_GRAPH_RULE_NETWORK_MODE must be %q, %q, %q, %q, or %q, got %q", graphRuleNetworkHarnessModeReplay, graphRuleNetworkHarnessModeSeedRun, graphRuleNetworkHarnessModeSeedRunValues, graphRuleNetworkHarnessModeSeedRunValuesBatch, graphRuleNetworkHarnessModeSeedRunPrepared, mode)
 	}
 
 	iterations := graphRuleNetworkHarnessEnvInt(t, "GESS_GRAPH_RULE_NETWORK_ITERATIONS", 3)
@@ -75,6 +76,8 @@ func runGraphRuleNetworkHarnessCase(t *testing.T, tc graphRuleNetworkCase, itera
 		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithTemplateValues)
 	case graphRuleNetworkHarnessModeSeedRunValuesBatch:
 		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithTemplateValueBatch)
+	case graphRuleNetworkHarnessModeSeedRunPrepared:
+		runGraphRuleNetworkSeedRunHarnessCase(t, tc, iterations, warmup, mode, seedAuthoredOrderFactsWithPreparedTemplateValues)
 	default:
 		t.Fatalf("unsupported graph-rule-network harness mode %q", mode)
 	}
@@ -286,6 +289,78 @@ func seedAuthoredOrderFactsIntoTemplateValueBatch(t testing.TB, batch *templateV
 				newIntValue(int64(id)),
 			}); err != nil {
 				t.Fatalf("insertTemplateValuesBatch(block): %v", err)
+			}
+		}
+	}
+}
+
+func seedAuthoredOrderFactsWithPreparedTemplateValues(t testing.TB, ctx context.Context, session *Session, templates authoredOrderBenchmarkTemplates, items int) {
+	t.Helper()
+	root := mustPrepareTemplateValueInserter(t, session, templates.root)
+	event := mustPrepareTemplateValueInserter(t, session, templates.event)
+	detail := mustPrepareTemplateValueInserter(t, session, templates.detail)
+	tag := mustPrepareTemplateValueInserter(t, session, templates.tag)
+	block := mustPrepareTemplateValueInserter(t, session, templates.block)
+
+	err := session.insertPreparedTemplateValuesBatchWithContext(ctx, func(batch *preparedTemplateValueBatch) error {
+		seedAuthoredOrderFactsIntoPreparedTemplateValueBatch(t, batch, root, event, detail, tag, block, items)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("insertPreparedTemplateValuesBatch: %v", err)
+	}
+}
+
+func mustPrepareTemplateValueInserter(t testing.TB, session *Session, templateKey TemplateKey) preparedTemplateValueInserter {
+	t.Helper()
+	inserter, err := session.prepareTemplateValueInserter(templateKey)
+	if err != nil {
+		t.Fatalf("prepareTemplateValueInserter(%s): %v", templateKey, err)
+	}
+	return inserter
+}
+
+func seedAuthoredOrderFactsIntoPreparedTemplateValueBatch(t testing.TB, batch *preparedTemplateValueBatch, root, event, detail, tag, block preparedTemplateValueInserter, items int) {
+	t.Helper()
+	for id := range authoredOrderRootCount {
+		group := "other"
+		if authoredOrderRootSelected(id) {
+			group = "target"
+		}
+		if err := root.insert3(batch,
+			newBoolValue(true),
+			newStringValue(group),
+			newIntValue(int64(id)),
+		); err != nil {
+			t.Fatalf("insertPreparedTemplateValues(root): %v", err)
+		}
+	}
+	for id := range items {
+		if err := event.insert3(batch,
+			newIntValue(int64(id)),
+			newIntValue(int64(id%authoredOrderRootCount)),
+			newIntValue(int64(authoredOrderScore(id))),
+		); err != nil {
+			t.Fatalf("insertPreparedTemplateValues(event): %v", err)
+		}
+		if err := detail.insert2(batch,
+			newStringValue(authoredOrderDetailCode(id)),
+			newIntValue(int64(id)),
+		); err != nil {
+			t.Fatalf("insertPreparedTemplateValues(detail): %v", err)
+		}
+		if err := tag.insert2(batch,
+			newIntValue(int64(id)),
+			newStringValue(authoredOrderTagLabel(id)),
+		); err != nil {
+			t.Fatalf("insertPreparedTemplateValues(tag): %v", err)
+		}
+		if authoredOrderBlocked(id) {
+			if err := block.insert2(batch,
+				newBoolValue(true),
+				newIntValue(int64(id)),
+			); err != nil {
+				t.Fatalf("insertPreparedTemplateValues(block): %v", err)
 			}
 		}
 	}

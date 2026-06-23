@@ -625,6 +625,195 @@ func (b *templateValueBatch) insert(templateKey TemplateKey, values []Value) err
 	return nil
 }
 
+type preparedTemplateValueInserter struct {
+	template Template
+}
+
+type preparedTemplateValueBatch struct {
+	ctx            context.Context
+	session        *Session
+	state          factWorkspace
+	needsReconcile bool
+}
+
+func (s *Session) prepareTemplateValueInserter(templateKey TemplateKey) (preparedTemplateValueInserter, error) {
+	if s == nil || s.closed {
+		return preparedTemplateValueInserter{}, ErrClosedSession
+	}
+	template, ok := s.revision.templateByKey(templateKey)
+	if !ok {
+		return preparedTemplateValueInserter{}, &ValidationError{
+			TemplateName: string(templateKey),
+			Reason:       "unknown template key",
+		}
+	}
+	if !template.closed {
+		return preparedTemplateValueInserter{}, &ValidationError{
+			TemplateName: template.Name(),
+			Reason:       "template values require a fixed template",
+		}
+	}
+	return preparedTemplateValueInserter{template: template}, nil
+}
+
+func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Context, fn func(*preparedTemplateValueBatch) error) error {
+	if s == nil {
+		return ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	locked, ok := s.beginMutationForOrigin(mutationOrigin{})
+	if !ok {
+		return ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+
+	batch := &preparedTemplateValueBatch{
+		ctx:     ctx,
+		session: s,
+		state:   s.activeFactWorkspace(),
+	}
+	if fn != nil {
+		if err := fn(batch); err != nil {
+			s.commitFactWorkspace(batch.state)
+			if batch.needsReconcile {
+				s.markAgendaDirty()
+			}
+			return err
+		}
+	}
+	s.commitFactWorkspace(batch.state)
+	if batch.needsReconcile {
+		_, err := s.reconcileAgendaInternal(ctx)
+		return err
+	}
+	return nil
+}
+
+func (p preparedTemplateValueInserter) insert2(b *preparedTemplateValueBatch, v0, v1 Value) error {
+	if len(p.template.fields) != 2 {
+		return &ValidationError{
+			TemplateName: p.template.Name(),
+			Reason:       "prepared value count does not match template field count",
+		}
+	}
+	if b == nil || b.session == nil {
+		return ErrClosedSession
+	}
+	if b.ctx == nil {
+		b.ctx = context.Background()
+	}
+	if err := b.ctx.Err(); err != nil {
+		return err
+	}
+	slots, slotMark := b.state.reserveGeneratedFactSlots(b.session.revision, len(p.template.fields))
+	if err := p.setPreparedSlot(slots, 0, v0); err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	if err := p.setPreparedSlot(slots, 1, v1); err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	return p.insertPreparedSlots(b, slots, slotMark)
+}
+
+func (p preparedTemplateValueInserter) insert3(b *preparedTemplateValueBatch, v0, v1, v2 Value) error {
+	if len(p.template.fields) != 3 {
+		return &ValidationError{
+			TemplateName: p.template.Name(),
+			Reason:       "prepared value count does not match template field count",
+		}
+	}
+	if b == nil || b.session == nil {
+		return ErrClosedSession
+	}
+	if b.ctx == nil {
+		b.ctx = context.Background()
+	}
+	if err := b.ctx.Err(); err != nil {
+		return err
+	}
+	slots, slotMark := b.state.reserveGeneratedFactSlots(b.session.revision, len(p.template.fields))
+	if err := p.setPreparedSlot(slots, 0, v0); err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	if err := p.setPreparedSlot(slots, 1, v1); err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	if err := p.setPreparedSlot(slots, 2, v2); err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	return p.insertPreparedSlots(b, slots, slotMark)
+}
+
+func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateValueBatch, slots []factSlot, slotMark int) error {
+	session := b.session
+	fact, _, inserted, err := b.state.insertPreparedGeneratedFactSlots(session.revision, session.generation, p.template, slots, slotMark)
+	if err != nil {
+		b.state.rollbackGeneratedFactSlots(slotMark)
+		return err
+	}
+	if !inserted {
+		return nil
+	}
+
+	var span *propagationCounterSpan
+	if session.propagationCounters != nil {
+		counterSpan := session.propagationCounters.beginAssert(p.template.Key(), mutationOrigin{})
+		span = &counterSpan
+	}
+	session.updateReteAlphaAfterAssertGenerated(fact, mutationOrigin{}, span)
+	if span != nil {
+		span.finish()
+	}
+	if session.revision.factMayAffectRuleMatchesByTarget(p.template.Name(), p.template.Key()) {
+		b.needsReconcile = true
+	}
+	return nil
+}
+
+func (p preparedTemplateValueInserter) setPreparedSlot(slots []factSlot, index int, value Value) error {
+	field := p.template.fields[index]
+	kind := field.Kind
+	var allowed []Value
+	if len(p.template.fieldValidation) == len(p.template.fields) {
+		validation := p.template.fieldValidation[index]
+		kind = validation.kind
+		allowed = validation.allowedValues
+	} else {
+		allowed = p.template.fieldAllowed[field.Name]
+	}
+	if kind != ValueAny && !isValueCompatibleWithKind(kind, value) {
+		return &ValidationError{
+			TemplateName: p.template.Name(),
+			FieldName:    field.Name,
+			Reason:       "invalid type",
+		}
+	}
+	if len(allowed) > 0 && !valueAllowed(allowed, value) {
+		return &ValidationError{
+			TemplateName: p.template.Name(),
+			FieldName:    field.Name,
+			Reason:       "value not in allowed set",
+		}
+	}
+	slots[index].value = cloneValue(value)
+	slots[index].ok = true
+	slots[index].presence = fieldPresenceExplicit
+	return nil
+}
+
 func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, templateKey TemplateKey, fields Fields, origin mutationOrigin, supportingFacts []FactID) (AssertResult, reteAgendaDelta, error) {
 	if s == nil || s.closed {
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession

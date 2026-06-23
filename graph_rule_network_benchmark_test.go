@@ -168,6 +168,34 @@ func TestGraphRuleNetworkTemplateValueBatchSeedRuns(t *testing.T) {
 	}
 }
 
+func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
+	ctx := context.Background()
+	tc := graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 4, items: 256}
+	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
+	session := mustSession(t, revision, SessionID("graph-rule-network-prepared-template-value"))
+	session.attachPropagationCounters()
+
+	seedAuthoredOrderFactsWithPreparedTemplateValues(t, ctx, session, templates, tc.items)
+	if got, want := len(session.factsByID), authoredOrderInitialFacts(tc.items); got != want {
+		t.Fatalf("facts retained = %d, want %d", got, want)
+	}
+	if session.agendaDirty || !session.agendaReady {
+		t.Fatalf("agenda state after prepared seed = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != graphRuleNetworkExpectedMatches(tc.depth, tc.items) {
+		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, graphRuleNetworkExpectedMatches(tc.depth, tc.items))
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
+		t.Fatalf("terminal rows retained = %d, want %d", got, want)
+	}
+}
+
 func graphRuleNetworkBenchmarkCases() []graphRuleNetworkCase {
 	orders := []graphRuleNetworkOrder{graphRuleNetworkSelective, graphRuleNetworkBroad}
 	depthItems := []struct {
