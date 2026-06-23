@@ -13,6 +13,7 @@ type Workspace struct {
 	templates []TemplateSpec
 	actions   []ActionSpec
 	rules     []RuleSpec
+	queries   []QuerySpec
 }
 
 func NewWorkspace() *Workspace {
@@ -174,6 +175,44 @@ func (w *Workspace) RemoveRule(name string) error {
 	return nil
 }
 
+func (w *Workspace) AddQuery(spec QuerySpec) error {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
+	}
+	if _, ok := w.queryIndex(normalized.Name); ok {
+		return &ValidationError{RuleName: normalized.Name, Reason: "duplicate query", Err: ErrQueryValidation}
+	}
+	w.queries = append(w.queries, normalized)
+	return nil
+}
+
+func (w *Workspace) ReplaceQuery(spec QuerySpec) error {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
+	}
+	idx, ok := w.queryIndex(normalized.Name)
+	if !ok {
+		return &ValidationError{RuleName: normalized.Name, Reason: "query not found", Err: ErrQueryNotFound}
+	}
+	w.queries[idx] = normalized
+	return nil
+}
+
+func (w *Workspace) RemoveQuery(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
+	}
+	idx, ok := w.queryIndex(name)
+	if !ok {
+		return &ValidationError{RuleName: name, Reason: "query not found", Err: ErrQueryNotFound}
+	}
+	w.queries = append(w.queries[:idx], w.queries[idx+1:]...)
+	return nil
+}
+
 func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -285,8 +324,27 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		indexRuleConditionDependencies(rule, conditionTemplateKeys, conditionNames)
 	}
 
+	compiledQueries := make([]compiledQuery, 0, len(w.queries))
+	queriesByName := make(map[string]compiledQuery, len(w.queries))
+	queryOrder := make([]string, 0, len(w.queries))
+	for _, spec := range w.queries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		query, err := compileQuerySpec(spec, templatesByKey)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := queriesByName[query.name]; exists {
+			return nil, &ValidationError{RuleName: query.name, Reason: "duplicate query", Err: ErrQueryValidation}
+		}
+		queriesByName[query.name] = query
+		compiledQueries = append(compiledQueries, query)
+		queryOrder = append(queryOrder, query.name)
+	}
+
 	return &Ruleset{
-		id:                    rulesetID(compiledTemplates, compiledActions, compiledRules),
+		id:                    rulesetID(compiledTemplates, compiledActions, compiledRules, compiledQueries),
 		templates:             templates,
 		templatesByKey:        templatesByKey,
 		templateOrder:         templateOrder,
@@ -296,6 +354,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		rulesByID:             rulesByID,
 		rulesByRevisionID:     rulesByRevisionID,
 		ruleOrder:             ruleOrder,
+		queries:               queriesByName,
+		queryOrder:            queryOrder,
 		conditionTemplateKeys: conditionTemplateKeys,
 		conditionNames:        conditionNames,
 		graph:                 compileReteGraph(compiledRules, templatesByKey),
@@ -313,6 +373,8 @@ type Ruleset struct {
 	rulesByID             map[RuleID]compiledRule
 	rulesByRevisionID     map[RuleRevisionID]compiledRule
 	ruleOrder             []string
+	queries               map[string]compiledQuery
+	queryOrder            []string
 	conditionTemplateKeys map[TemplateKey]struct{}
 	conditionNames        map[string]struct{}
 	graph                 *reteGraph
@@ -518,6 +580,33 @@ func (r *Ruleset) Rules() []Rule {
 	return out
 }
 
+func (r *Ruleset) Query(name string) (Query, bool) {
+	query, ok := r.query(name)
+	if !ok {
+		return Query{}, false
+	}
+	return query.inspect(), true
+}
+
+func (r *Ruleset) query(name string) (compiledQuery, bool) {
+	if r == nil {
+		return compiledQuery{}, false
+	}
+	query, ok := r.queries[strings.TrimSpace(name)]
+	return query, ok
+}
+
+func (r *Ruleset) Queries() []Query {
+	if r == nil {
+		return nil
+	}
+	out := make([]Query, 0, len(r.queryOrder))
+	for _, name := range r.queryOrder {
+		out = append(out, r.queries[name].inspect())
+	}
+	return out
+}
+
 func indexRuleConditionDependencies(rule compiledRule, templateKeys map[TemplateKey]struct{}, names map[string]struct{}) {
 	for _, branch := range rule.executionConditionBranches() {
 		for _, plan := range branch.plans {
@@ -594,7 +683,17 @@ func (w *Workspace) ruleIndexByID(id RuleID) (int, bool) {
 	return -1, false
 }
 
-func rulesetID(templates []Template, actions []compiledAction, rules []compiledRule) RulesetID {
+func (w *Workspace) queryIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, query := range w.queries {
+		if strings.TrimSpace(query.Name) == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func rulesetID(templates []Template, actions []compiledAction, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
 	for _, template := range templates {
@@ -645,6 +744,33 @@ func rulesetID(templates []Template, actions []compiledAction, rules []compiledR
 		sum.Write(fmt.Appendf(nil, "action-count:%d\n", len(rule.actions)))
 		for _, action := range rule.actions {
 			sum.Write(fmt.Appendf(nil, "action:%d:%s\n", action.order, action.name))
+		}
+	}
+
+	sum.Write([]byte("queries:\n"))
+	for _, query := range queries {
+		sum.Write(fmt.Appendf(nil, "query:%s:%d\n", query.name, len(query.parameters)))
+		for _, param := range query.parameters {
+			sum.Write(fmt.Appendf(nil, "param:%d:%s:%s\n", param.order, param.name, param.kind))
+		}
+		sum.Write(fmt.Appendf(nil, "condition-count:%d\n", len(query.conditions)))
+		for _, condition := range query.conditions {
+			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s:%s\n", condition.order, condition.id, condition.binding, condition.name, condition.templateKey))
+		}
+		for branchIndex, branch := range query.conditionBranches {
+			sum.Write(fmt.Appendf(nil, "branch:%d:\n", branchIndex))
+			for _, plan := range branch.plans {
+				sum.Write(fmt.Appendf(nil, "plan:%s:%s:%d:%t:%s:%s:", plan.id, plan.binding, plan.bindingSlot, plan.negated, plan.target.name, plan.target.templateKey))
+				sum.Write([]byte(serializeCompiledFieldConstraints(plan.constraints)))
+				sum.Write([]byte("|"))
+				sum.Write([]byte(serializeCompiledJoinConstraints(plan.joins)))
+				sum.Write([]byte("|"))
+				sum.Write([]byte(serializeCompiledExpressionPredicates(plan.predicates)))
+				sum.Write([]byte("\n"))
+			}
+		}
+		for _, ret := range query.returns {
+			sum.Write(fmt.Appendf(nil, "return:%d:%s:%t:%s:%s\n", ret.order, ret.alias, ret.fact, ret.binding, serializeCompiledExpression(ret.expression)))
 		}
 	}
 

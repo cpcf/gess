@@ -144,6 +144,10 @@ func (p compiledConditionPlan) scan(ctx context.Context, source factSource) ([]c
 }
 
 func (p compiledConditionPlan) scanWithBindings(ctx context.Context, source factSource, bindings []conditionMatch) ([]conditionMatch, error) {
+	return p.scanWithBindingsAndParams(ctx, source, bindings, nil)
+}
+
+func (p compiledConditionPlan) scanWithBindingsAndParams(ctx context.Context, source factSource, bindings []conditionMatch, params map[string]Value) ([]conditionMatch, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -155,7 +159,7 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, source fact
 	}
 
 	matches := make([]conditionMatch, 0)
-	err := p.forEachMatchWithBindings(ctx, source, bindings, func(match conditionMatch) error {
+	err := p.forEachMatchWithBindingsAndParams(ctx, source, bindings, params, func(match conditionMatch) error {
 		matches = append(matches, match)
 		return nil
 	})
@@ -166,6 +170,10 @@ func (p compiledConditionPlan) scanWithBindings(ctx context.Context, source fact
 }
 
 func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, source factSource, bindings []conditionMatch, yield func(conditionMatch) error) error {
+	return p.forEachMatchWithBindingsAndParams(ctx, source, bindings, nil, yield)
+}
+
+func (p compiledConditionPlan) forEachMatchWithBindingsAndParams(ctx context.Context, source factSource, bindings []conditionMatch, params map[string]Value, yield func(conditionMatch) error) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -202,7 +210,7 @@ func (p compiledConditionPlan) forEachMatchWithBindings(ctx context.Context, sou
 		if !ok {
 			continue
 		}
-		ok, err = p.matchesPredicates(ctx, ref, bindings)
+		ok, err = p.matchesPredicatesWithParams(ctx, ref, bindings, params)
 		if err != nil {
 			return err
 		}
@@ -275,11 +283,15 @@ func (p compiledConditionPlan) matchesJoins(ctx context.Context, fact conditionF
 }
 
 func (p compiledConditionPlan) matchesPredicates(ctx context.Context, fact conditionFactRef, bindings []conditionMatch) (bool, error) {
+	return p.matchesPredicatesWithParams(ctx, fact, bindings, nil)
+}
+
+func (p compiledConditionPlan) matchesPredicatesWithParams(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value) (bool, error) {
 	for _, predicate := range p.predicates {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		ok, err := predicate.matches(fact, bindings)
+		ok, err := predicate.matchesWithParams(fact, bindings, params)
 		if err != nil {
 			return false, err
 		}

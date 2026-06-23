@@ -1197,6 +1197,14 @@ func compileNormalizedRuleConditionBranch(ruleName string, ruleID RuleID, normal
 }
 
 func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, outerConditions, outerBindingSlots, nil)
+}
+
+func compileNormalizedRuleConditionBranchWithParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, params map[string]ValueKind) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, normalizedConditions, templatesByKey, allowDuplicateBindings, nil, nil, params)
+}
+
+func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, ruleID RuleID, normalizedConditions []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, outerConditions []RuleCondition, outerBindingSlots map[string]int, params map[string]ValueKind) (compiledRuleConditionSet, error) {
 	bindingSlots := make(map[string]int, len(normalizedConditions))
 	maps.Copy(bindingSlots, outerBindingSlots)
 	allBindingSlots := make(map[string]int, len(normalizedConditions))
@@ -1237,7 +1245,7 @@ func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleI
 					}
 				}
 			}
-			inputSet, err := compileNormalizedRuleConditionBranchWithOuter(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots)
+			inputSet, err := compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots, params)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -1399,7 +1407,7 @@ func compileNormalizedRuleConditionBranchWithOuter(ruleName string, ruleID RuleI
 		predicates := make([]ExpressionPredicate, 0, len(condition.Predicates))
 		compiledPredicates := make([]compiledExpressionPredicate, 0, len(condition.Predicates))
 		for predicateIndex, predicate := range condition.Predicates {
-			compiledPredicate, planPredicate, err := compileExpressionPredicateSpec(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey)
+			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParams(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templatesByKey, params)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}

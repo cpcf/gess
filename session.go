@@ -2027,6 +2027,7 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 	snapshot := Snapshot{
 		sessionID:  s.id,
 		rulesetID:  s.revision.ID(),
+		revision:   s.revision,
 		generation: s.generation,
 		facts:      facts,
 		support:    s.currentSupportGraph(),

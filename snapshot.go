@@ -9,6 +9,7 @@ import (
 type Snapshot struct {
 	sessionID  SessionID
 	rulesetID  RulesetID
+	revision   *Ruleset
 	generation Generation
 	facts      []FactSnapshot
 	support    SupportGraph
