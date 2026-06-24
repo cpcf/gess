@@ -830,6 +830,7 @@ func validateMixedCascadeHarnessSession(t testing.TB, session *Session, result R
 
 func assertMixedCascadeTemplateCount(t testing.TB, session *Session, phase string, template string, want int) {
 	t.Helper()
+	session.ensureFactTargetIndexes()
 	if got := len(session.factsByTemplate[TemplateKey(template)]); got != want {
 		t.Fatalf("%s %s fact count = %d, want %d", phase, template, got, want)
 	}

@@ -1491,6 +1491,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	next := &s.resetWorkspace
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
+	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
 	next.reserveSlotStorage(s.revision.estimatedRunSlotCapacity(cap(next.facts)))
 	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)

@@ -700,6 +700,7 @@ func validateLargeSteadyStateHarnessSession(t testing.TB, session *Session, resu
 
 func assertLargeSteadyStateTemplateCount(t testing.TB, session *Session, phase string, template string, want int) {
 	t.Helper()
+	session.ensureFactTargetIndexes()
 	if got := len(session.factsByTemplate[TemplateKey(template)]); got != want {
 		t.Fatalf("%s %s fact count = %d, want %d", phase, template, got, want)
 	}
@@ -761,6 +762,7 @@ func assertLargeSteadyStateSelectedFacts(t testing.TB, session *Session, tc larg
 func assertLargeSteadyStateFact(t testing.TB, session *Session, template string, expected map[string]Value) {
 	t.Helper()
 
+	session.ensureFactTargetIndexes()
 	templateKey := TemplateKey(template)
 	for _, id := range session.factsByTemplate[templateKey] {
 		fact := mustWorkingFactByID(t, session, id)

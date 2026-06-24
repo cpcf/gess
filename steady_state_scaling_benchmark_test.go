@@ -574,6 +574,7 @@ type steadyStateFactExpectation struct {
 func assertSteadyStateFacts(t testing.TB, session *Session, templateKey TemplateKey, keyFields []string, expected []steadyStateFactExpectation) {
 	t.Helper()
 
+	session.ensureFactTargetIndexes()
 	actualIDs := session.factsByTemplate[templateKey]
 	if got, want := len(actualIDs), len(expected); got != want {
 		t.Fatalf("%s fact count = %d, want %d", templateKey, got, want)
