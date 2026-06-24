@@ -44,17 +44,18 @@ type reteRulePlan struct {
 }
 
 type reteConditionPlan struct {
-	conditionID   ConditionID
-	binding       string
-	bindingSlot   int
-	path          []int
-	target        conditionTarget
-	constraints   []compiledFieldConstraint
-	predicates    []compiledExpressionPredicate
-	alpha         reteAlphaPlan
-	beta          []reteBetaPlan
-	supported     bool
-	betaSupported bool
+	conditionID     ConditionID
+	binding         string
+	bindingSlot     int
+	path            []int
+	target          conditionTarget
+	constraints     []compiledFieldConstraint
+	predicates      []compiledExpressionPredicate
+	alphaPredicates []compiledExpressionPredicate
+	alpha           reteAlphaPlan
+	beta            []reteBetaPlan
+	supported       bool
+	betaSupported   bool
 }
 
 type reteAlphaPlan struct {
@@ -984,14 +985,16 @@ func sameTemplateKeys(templateKeys []TemplateKey) bool {
 }
 
 func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledConditionPlan) (reteConditionPlan, []reteUnsupportedReason) {
+	predicates := cloneCompiledExpressionPredicates(condition.predicates)
 	conditionPlan := reteConditionPlan{
-		conditionID: condition.id,
-		binding:     condition.binding,
-		bindingSlot: condition.bindingSlot,
-		path:        cloneIntPath(condition.path),
-		target:      condition.target,
-		constraints: condition.constraints,
-		predicates:  cloneCompiledExpressionPredicates(condition.predicates),
+		conditionID:     condition.id,
+		binding:         condition.binding,
+		bindingSlot:     condition.bindingSlot,
+		path:            cloneIntPath(condition.path),
+		target:          condition.target,
+		constraints:     condition.constraints,
+		predicates:      predicates,
+		alphaPredicates: alphaExpressionPredicates(predicates),
 		alpha: reteAlphaPlan{
 			id:             reteAlphaNodeID(rule.revisionID, condition.id),
 			ruleRevisionID: rule.revisionID,
@@ -1552,7 +1555,7 @@ func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Contex
 			return false, nil
 		}
 	}
-	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, alphaExpressionPredicates(p.predicates), ref, nil, span)
+	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1586,7 +1589,7 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 		}
 	}
 	ref := newConditionFactRefFromWorkingFact(fact)
-	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, alphaExpressionPredicates(p.predicates), ref, nil, span)
+	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
 	if err != nil || !ok {
 		return ok, err
 	}
