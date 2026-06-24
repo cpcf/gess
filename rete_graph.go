@@ -36,6 +36,7 @@ type reteGraphStageKind uint8
 
 const (
 	reteGraphStageUnknown reteGraphStageKind = iota
+	reteGraphStageRoot
 	reteGraphStageAlpha
 	reteGraphStageBeta
 	reteGraphStageAggregate
@@ -526,7 +527,7 @@ func (g *reteGraph) compileHigherOrderBranch(rule compiledRule, branch compiledC
 		}
 		higherOrderIndex = i
 	}
-	if higherOrderIndex <= 0 {
+	if higherOrderIndex < 0 {
 		return false
 	}
 	condition := branch.plans[higherOrderIndex]
@@ -534,9 +535,14 @@ func (g *reteGraph) compileHigherOrderBranch(rule compiledRule, branch compiledC
 		return false
 	}
 
-	outer, outerEntry, ok := g.compilePlanSequence(rule.revisionID, branch.plans[:higherOrderIndex], reteGraphStageRef{}, bindingTupleEntry{}, false, 0, alphaIndex, betaIndex, templatesByKey, true)
-	if !ok || outer.kind == reteGraphStageUnknown {
-		return false
+	outer := reteGraphStageRef{kind: reteGraphStageRoot}
+	outerEntry := bindingTupleEntry{}
+	if higherOrderIndex > 0 {
+		var ok bool
+		outer, outerEntry, ok = g.compilePlanSequence(rule.revisionID, branch.plans[:higherOrderIndex], reteGraphStageRef{}, bindingTupleEntry{}, false, 0, alphaIndex, betaIndex, templatesByKey, true)
+		if !ok || outer.kind == reteGraphStageUnknown {
+			return false
+		}
 	}
 
 	var current reteGraphStageRef
@@ -775,6 +781,9 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 		return false
 	}
 	condition := branch.plans[aggregateIndex]
+	if condition.aggregate.higherOrder != conditionHigherOrderUnknown {
+		return false
+	}
 	if !reteGraphSupportsAggregateCondition(condition, aggregateIndex > 0) {
 		return false
 	}
@@ -1020,7 +1029,11 @@ func reteGraphSupportsAggregateCondition(condition compiledConditionPlan, allowI
 	}
 	for _, spec := range condition.aggregate.specs {
 		switch spec.kind {
-		case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateCollect, aggregateExists, aggregateForall:
+		case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateCollect:
+		case aggregateExists, aggregateForall:
+			if condition.aggregate.higherOrder == conditionHigherOrderUnknown {
+				return false
+			}
 		default:
 			return false
 		}
@@ -1122,6 +1135,8 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		return 0
 	}
 	switch stage.kind {
+	case reteGraphStageRoot:
+		return 0
 	case reteGraphStageAlpha:
 		return 1
 	case reteGraphStageBeta:
@@ -1141,9 +1156,6 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		node := g.aggregateNode(reteGraphAggregateNodeID(stage.id))
 		if node == nil {
 			return 0
-		}
-		if node.aggregateHigherOrder() && node.outer.kind != reteGraphStageUnknown {
-			return g.stageTokenWidth(node.outer)
 		}
 		if node.outer.kind != reteGraphStageUnknown {
 			return g.stageTokenWidth(node.outer) + len(node.specs)

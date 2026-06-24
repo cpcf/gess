@@ -168,6 +168,31 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	return tokenRef{handle: handle}
 }
 
+func (a *tokenArena) addSeed(generation Generation) tokenRef {
+	if a == nil {
+		return tokenRef{}
+	}
+	chunkIndex := a.count / reteBetaMatchTokenChunkSize
+	for len(a.chunks) <= chunkIndex {
+		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
+	}
+	chunk := a.chunks[chunkIndex]
+	if len(chunk) < cap(chunk) {
+		chunk = chunk[:len(chunk)+1]
+	} else {
+		chunk = append(chunk, tokenRow{})
+	}
+	a.chunks[chunkIndex] = chunk
+	row := &a.chunks[chunkIndex][len(chunk)-1]
+	row.slotGeneration = a.nextGeneration
+	row.factSpanStart = -1
+	row.generation = generation
+	row.identityState = candidateIdentityHashStart(generation)
+	a.nextGeneration++
+	a.count++
+	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: row.slotGeneration}}
+}
+
 func (a *tokenArena) resolve(handle tokenHandle) (*tokenRow, bool) {
 	if a == nil || handle.isZero() {
 		return nil, false
@@ -416,7 +441,7 @@ func tokenRefPrefix(token tokenRef, size int) tokenRef {
 	if token.isZero() {
 		return tokenRef{}
 	}
-	if size <= 0 || size > token.size() {
+	if size < 0 || size > token.size() {
 		return tokenRef{}
 	}
 	for current := token; !current.isZero(); current = current.parent() {

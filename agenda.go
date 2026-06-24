@@ -699,6 +699,9 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		}
 		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, candidateIdentityForTerminalTokenDelta(revision, delta))
 		if !ok || existing.status != activationStatusPending {
+			if ok && existing.status == activationStatusConsumed {
+				existing.status = activationStatusDeactivated
+			}
 			continue
 		}
 		if !collectChanges {

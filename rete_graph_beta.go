@@ -31,7 +31,7 @@ type reteGraphBetaMemory struct {
 	alphaRouteScratch      []reteGraphAlphaNodeID
 	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
 	alphaRouteEpoch        uint64
-	aggregateOutputEpoch   uint64
+	rootToken              tokenRef
 	deferNegativeOutputs   bool
 	suppressTerminalDeltas bool
 	rightPredicateScratch  []conditionMatch
@@ -1204,6 +1204,11 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 	m.deferNegativeOutputs = true
 	m.suppressTerminalDeltas = true
 	m.initializeAggregateOutputs()
+	if err := m.initializeRootStage(nil); err != nil {
+		m.deferNegativeOutputs = false
+		m.suppressTerminalDeltas = false
+		return err
+	}
 	for _, fact := range facts {
 		if _, err := m.insertFactInternal(ctx, fact, nil, false); err != nil {
 			m.deferNegativeOutputs = false
@@ -1219,6 +1224,23 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 	m.deferNegativeOutputs = false
 	m.suppressTerminalDeltas = false
 	return nil
+}
+
+func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) error {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	root := reteGraphStageRef{kind: reteGraphStageRoot}
+	if len(m.graph.successorsByStage[root]) == 0 && len(m.graph.terminalsByStage[root]) == 0 && len(m.graph.aggregatesByStage[root]) == 0 && len(m.graph.aggregateOuters[root]) == 0 {
+		m.rootToken = tokenRef{}
+		return nil
+	}
+	m.rootToken = m.newRootTokenRef(m.aggregateGeneration(), span)
+	if m.rootToken.isZero() {
+		return nil
+	}
+	delta := &reteAgendaDelta{supported: true}
+	return m.propagateFromStage(root, m.rootToken, span, delta)
 }
 
 func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
@@ -1295,7 +1317,7 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
-	m.aggregateOutputEpoch = 0
+	m.rootToken = tokenRef{}
 }
 
 func (m *reteGraphBetaMemory) initializeAggregateOutputs() {
@@ -2266,7 +2288,7 @@ func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, toke
 		return reteGraphAggregateMember{}, false
 	}
 	for i, spec := range node.specs {
-		if spec.kind == AggregateCount || spec.kind == aggregateExists || spec.kind == aggregateForall {
+		if spec.kind == AggregateCount {
 			continue
 		}
 		value, ok, err := spec.expression.evaluate(match.fact, bindings)
@@ -2281,7 +2303,7 @@ func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, toke
 func aggregateSpecsNeedInputValues(specs []compiledAggregateSpec) bool {
 	for _, spec := range specs {
 		switch spec.kind {
-		case AggregateCount, aggregateExists, aggregateForall:
+		case AggregateCount:
 			continue
 		default:
 			return true
@@ -2342,10 +2364,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		delta.supported = false
 		return
 	}
-	if node.aggregateHigherOrder() {
-		m.refreshHigherOrderAggregateOutputInternal(id, node, bucket, span, counters, delta)
-		return
-	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
 	values, ok := bucket.results(node)
 	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateValuesEqual(bucket.values, values) {
@@ -2386,119 +2404,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 }
 
-func (m *reteGraphBetaMemory) refreshHigherOrderAggregateOutputInternal(id reteGraphAggregateNodeID, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || node == nil || bucket == nil || delta == nil || len(node.specs) != 1 || len(node.entries) != 1 {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	if node.outer.kind != reteGraphStageUnknown {
-		m.refreshScopedHigherOrderAggregateOutputInternal(id, node, bucket, span, counters, delta)
-		return
-	}
-	value, ok := higherOrderAggregateOutputValue(node.specs[0].kind, bucket.count)
-	if ok && bucket.hasValue && len(bucket.values) == 1 && bucket.values[0].Equal(value) {
-		return
-	}
-	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-	if !bucket.token.isZero() {
-		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-		bucket.token = tokenRef{}
-		bucket.hasValue = false
-	}
-	if !ok {
-		bucket.values = bucket.values[:0]
-		return
-	}
-	entry := node.entries[0]
-	entry.value = value
-	entry.hasValue = true
-	match := conditionMatch{
-		conditionID: node.conditionID,
-		bindingSlot: node.bindingSlot,
-		value:       value,
-		hasValue:    true,
-	}
-	token := m.newTokenRef(bucket.parent, entry, match, 0, m.nextAggregateGeneration(), span)
-	if token.isZero() {
-		delta.supported = false
-		return
-	}
-	bucket.token = token
-	bucket.values = append(bucket.values[:0], value)
-	bucket.hasValue = true
-	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
-		delta.supported = false
-	}
-}
-
-func (m *reteGraphBetaMemory) refreshScopedHigherOrderAggregateOutputInternal(id reteGraphAggregateNodeID, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	ok := higherOrderAggregateSatisfied(node.specs[0].kind, bucket.count)
-	if ok == bucket.hasValue {
-		return
-	}
-	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-	if bucket.hasValue {
-		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-		bucket.token = tokenRef{}
-		bucket.hasValue = false
-	}
-	if !ok {
-		bucket.values = bucket.values[:0]
-		return
-	}
-	if bucket.parent.isZero() {
-		delta.supported = false
-		return
-	}
-	bucket.token = bucket.parent
-	bucket.values = bucket.values[:0]
-	bucket.hasValue = true
-	if err := m.propagateFromStage(stage, bucket.parent, span, delta); err != nil {
-		delta.supported = false
-	}
-}
-
-func higherOrderAggregateOutputValue(kind AggregateKind, count int64) (Value, bool) {
-	switch kind {
-	case aggregateExists:
-		if count == 0 {
-			return Value{}, false
-		}
-		return newBoolValue(true), true
-	case aggregateForall:
-		if count != 0 {
-			return Value{}, false
-		}
-		return newBoolValue(true), true
-	default:
-		return Value{}, false
-	}
-}
-
-func higherOrderAggregateSatisfied(kind AggregateKind, count int64) bool {
-	switch kind {
-	case aggregateExists:
-		return count != 0
-	case aggregateForall:
-		return count == 0
-	default:
-		return false
-	}
-}
-
-func (m *reteGraphBetaMemory) nextAggregateGeneration() Generation {
-	if m == nil {
-		return 1
-	}
-	m.aggregateOutputEpoch++
-	if m.aggregateOutputEpoch == 0 {
-		m.aggregateOutputEpoch = 1
-	}
-	return Generation(m.aggregateOutputEpoch)
-}
-
 func (m *reteGraphBetaMemory) aggregateGeneration() Generation {
 	if m == nil {
 		return 1
@@ -2509,18 +2414,6 @@ func (m *reteGraphBetaMemory) aggregateGeneration() Generation {
 		}
 	}
 	return 1
-}
-
-func (n *reteGraphAggregateNode) aggregateHigherOrder() bool {
-	if n == nil {
-		return false
-	}
-	for _, spec := range n.specs {
-		if spec.kind == aggregateExists || spec.kind == aggregateForall {
-			return true
-		}
-	}
-	return false
 }
 
 func aggregateValuesEqual(left, right []Value) bool {
@@ -2594,7 +2487,7 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 	m.ensureSpecState(len(node.specs))
 	for i, spec := range node.specs {
 		switch spec.kind {
-		case AggregateCount, aggregateExists, aggregateForall:
+		case AggregateCount:
 			continue
 		case AggregateSum:
 			if err := m.addSum(i, member.values[i]); err != nil {
@@ -2964,16 +2857,6 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode) ([]Valu
 		switch spec.kind {
 		case AggregateCount:
 			values[i] = newIntValue(m.count)
-		case aggregateExists:
-			if m.count == 0 {
-				return nil, false
-			}
-			values[i] = newBoolValue(true)
-		case aggregateForall:
-			if m.count != 0 {
-				return nil, false
-			}
-			values[i] = newBoolValue(true)
 		case AggregateSum:
 			if m.floaty[i] {
 				value, err := canonicalFloat(m.floatSums[i])
@@ -4321,6 +4204,19 @@ func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEnt
 		m.arena = newTokenArena()
 	}
 	return m.arena.add(parent, entry, match, recency, generation)
+}
+
+func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propagationCounterSpan) tokenRef {
+	if m == nil {
+		return tokenRef{}
+	}
+	if span != nil {
+		span.recordTokenCreated()
+	}
+	if m.arena == nil {
+		m.arena = newTokenArena()
+	}
+	return m.arena.addSeed(generation)
 }
 
 func (m *reteGraphBetaMemory) nodeMemory(id reteGraphBetaNodeID) *reteGraphBetaNodeMemory {

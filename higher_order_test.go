@@ -376,7 +376,7 @@ func TestHigherOrderGraphKeepsGeneralAggregatesOnAggregateNodes(t *testing.T) {
 	}
 }
 
-func TestHigherOrderGraphKeepsRootConditionsOnAggregateFallback(t *testing.T) {
+func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "item",
@@ -405,10 +405,75 @@ func TestHigherOrderGraphKeepsRootConditionsOnAggregateFallback(t *testing.T) {
 		),
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
-	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.Plan.AggregateNodes), 2; got != want {
-		t.Fatalf("aggregate node count = %d, want %d for root higher-order fallback", got, want)
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "root-higher-order-session")
+	summary := session.rete.graph.debugSummary()
+	if got := len(summary.Plan.AggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want root higher-order lowered without aggregate nodes", got)
+	}
+	notNodes := 0
+	for _, node := range summary.BetaNodes {
+		if node.kind == reteGraphBetaNodeNot {
+			notNodes++
+		}
+	}
+	if notNodes < 3 {
+		t.Fatalf("negative beta node count = %d, want at least 3 for root exists/forall lowering", notNodes)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("empty Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("empty Run fired = %d, want vacuous forall activation", result.Fired)
+	}
+
+	bad := mustAssertTemplate(t, session, item.Key(), Fields{"amount": mustValue(t, 3)})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("counterexample Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("counterexample Run fired = %d, want exists activation only", result.Fired)
+	}
+	if _, err := session.Retract(context.Background(), bad.Fact.ID()); err != nil {
+		t.Fatalf("Retract failing item: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("restored vacuous Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("restored vacuous Run fired = %d, want forall activation", result.Fired)
+	}
+
+	good := mustAssertTemplate(t, session, item.Key(), Fields{"amount": mustValue(t, 12)})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("passing item Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("passing item Run fired = %d, want exists activation", result.Fired)
+	}
+	if _, err := session.Modify(context.Background(), good.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 2)}}); err != nil {
+		t.Fatalf("Modify passing item into counterexample: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("modified counterexample Run: %v", err)
+	}
+	if result.Fired != 0 {
+		t.Fatalf("modified counterexample Run fired = %d, want no activation", result.Fired)
+	}
+	if _, err := session.Retract(context.Background(), good.Fact.ID()); err != nil {
+		t.Fatalf("Retract modified counterexample: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("empty-again Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("empty-again Run fired = %d, want forall activation", result.Fired)
 	}
 }
 

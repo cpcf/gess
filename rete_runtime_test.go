@@ -2464,8 +2464,8 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 	if _, err := session.Retract(ctx, blockAgain.Fact.ID()); err != nil {
 		t.Fatalf("Retract(block after run): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
-		t.Fatalf("pending activations after consumed negative activation unblocked = %d, want 0", got)
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after consumed negative activation unblocked = %d, want %d", got, want)
 	}
 	if _, err := session.Retract(ctx, customer.Fact.ID()); err != nil {
 		t.Fatalf("Retract(customer): %v", err)
