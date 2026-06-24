@@ -45,18 +45,20 @@ type reteGraphAggregateNodeMemory struct {
 }
 
 type reteGraphAggregateBucket struct {
-	parent           tokenRef
-	members          map[graphTokenIdentityKey]reteGraphAggregateMember
-	countOnlyMembers map[graphTokenIdentityKey]tokenRef
-	count            int64
-	intSums          []int64
-	floatSums        []float64
-	floaty           []bool
-	extrema          []reteGraphAggregateExtremum
-	collects         [][]reteGraphAggregateCollectEntry
-	token            tokenRef
-	values           []Value
-	hasValue         bool
+	parent          tokenRef
+	members         map[graphTokenIdentityKey]reteGraphAggregateMember
+	countOnlyFirst  tokenRef
+	countOnlySecond tokenRef
+	countOnlyRest   []tokenRef
+	count           int64
+	intSums         []int64
+	floatSums       []float64
+	floaty          []bool
+	extrema         []reteGraphAggregateExtremum
+	collects        [][]reteGraphAggregateCollectEntry
+	token           tokenRef
+	values          []Value
+	hasValue        bool
 }
 
 type reteGraphAggregateExtremum struct {
@@ -1319,9 +1321,10 @@ func (m *reteGraphAggregateBucket) clear() {
 	if m.members != nil {
 		clear(m.members)
 	}
-	if m.countOnlyMembers != nil {
-		clear(m.countOnlyMembers)
-	}
+	m.countOnlyFirst = tokenRef{}
+	m.countOnlySecond = tokenRef{}
+	clear(m.countOnlyRest)
+	m.countOnlyRest = m.countOnlyRest[:0]
 	m.parent = tokenRef{}
 	m.count = 0
 	clear(m.intSums)
@@ -2201,16 +2204,18 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 		}
 		changed := false
 		if !aggregateSpecsNeedInputValues(node.specs) {
-			for key, token := range bucket.countOnlyMembers {
+			kept := 0
+			count := bucket.countOnlyMemberCount()
+			for i := range count {
+				token := bucket.countOnlyMemberAt(i)
 				if !token.containsFact(factID) {
+					bucket.setCountOnlyMemberAt(kept, token)
+					kept++
 					continue
-				}
-				delete(bucket.countOnlyMembers, key)
-				if bucket.count > 0 {
-					bucket.count--
 				}
 				changed = true
 			}
+			bucket.truncateCountOnlyMembers(kept)
 		} else if len(bucket.members) > 0 {
 			for key, member := range bucket.members {
 				if !member.token.containsFact(factID) {
@@ -2370,6 +2375,10 @@ func (m *reteGraphBetaMemory) refreshHigherOrderAggregateOutputInternal(id reteG
 		}
 		return
 	}
+	if node.outer.kind != reteGraphStageUnknown {
+		m.refreshScopedHigherOrderAggregateOutputInternal(id, node, bucket, span, counters, delta)
+		return
+	}
 	value, ok := higherOrderAggregateOutputValue(node.specs[0].kind, bucket.count)
 	if ok && bucket.hasValue && len(bucket.values) == 1 && bucket.values[0].Equal(value) {
 		return
@@ -2406,6 +2415,33 @@ func (m *reteGraphBetaMemory) refreshHigherOrderAggregateOutputInternal(id reteG
 	}
 }
 
+func (m *reteGraphBetaMemory) refreshScopedHigherOrderAggregateOutputInternal(id reteGraphAggregateNodeID, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	ok := higherOrderAggregateSatisfied(node.specs[0].kind, bucket.count)
+	if ok == bucket.hasValue {
+		return
+	}
+	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
+	if bucket.hasValue {
+		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
+		bucket.token = tokenRef{}
+		bucket.hasValue = false
+	}
+	if !ok {
+		bucket.values = bucket.values[:0]
+		return
+	}
+	if bucket.parent.isZero() {
+		delta.supported = false
+		return
+	}
+	bucket.token = bucket.parent
+	bucket.values = bucket.values[:0]
+	bucket.hasValue = true
+	if err := m.propagateFromStage(stage, bucket.parent, span, delta); err != nil {
+		delta.supported = false
+	}
+}
+
 func higherOrderAggregateOutputValue(kind AggregateKind, count int64) (Value, bool) {
 	switch kind {
 	case aggregateExists:
@@ -2420,6 +2456,17 @@ func higherOrderAggregateOutputValue(kind AggregateKind, count int64) (Value, bo
 		return newBoolValue(true), true
 	default:
 		return Value{}, false
+	}
+}
+
+func higherOrderAggregateSatisfied(kind AggregateKind, count int64) bool {
+	switch kind {
+	case aggregateExists:
+		return count != 0
+	case aggregateForall:
+		return count == 0
+	default:
+		return false
 	}
 }
 
@@ -2556,31 +2603,100 @@ func (m *reteGraphAggregateBucket) addCountOnlyMember(token tokenRef) bool {
 	if m == nil || token.isZero() {
 		return false
 	}
-	key := tokenRefKey(token)
-	if m.countOnlyMembers == nil {
-		m.countOnlyMembers = make(map[graphTokenIdentityKey]tokenRef)
-	} else if _, ok := m.countOnlyMembers[key]; ok {
-		m.countOnlyMembers[key] = token
-		return false
+	count := m.countOnlyMemberCount()
+	for i := range count {
+		current := m.countOnlyMemberAt(i)
+		if tokenRefsSameIdentity(current, token) {
+			m.setCountOnlyMemberAt(i, token)
+			return false
+		}
 	}
-	m.countOnlyMembers[key] = token
-	m.count++
+	m.setCountOnlyMemberAt(count, token)
+	m.count = int64(count + 1)
 	return true
 }
 
 func (m *reteGraphAggregateBucket) removeCountOnlyMember(token tokenRef) bool {
-	if m == nil || token.isZero() || m.countOnlyMembers == nil {
+	if m == nil || token.isZero() {
 		return false
 	}
-	key := tokenRefKey(token)
-	if _, ok := m.countOnlyMembers[key]; !ok {
-		return false
+	count := m.countOnlyMemberCount()
+	for i := range count {
+		current := m.countOnlyMemberAt(i)
+		if !tokenRefsSameIdentity(current, token) {
+			continue
+		}
+		last := count - 1
+		m.setCountOnlyMemberAt(i, m.countOnlyMemberAt(last))
+		m.truncateCountOnlyMembers(last)
+		return true
 	}
-	delete(m.countOnlyMembers, key)
-	if m.count > 0 {
-		m.count--
+	return false
+}
+
+func (m *reteGraphAggregateBucket) countOnlyMemberCount() int {
+	if m == nil || m.count <= 0 {
+		return 0
 	}
-	return true
+	return int(m.count)
+}
+
+func (m *reteGraphAggregateBucket) countOnlyMemberAt(index int) tokenRef {
+	if m == nil || index < 0 || index >= m.countOnlyMemberCount() {
+		return tokenRef{}
+	}
+	switch index {
+	case 0:
+		return m.countOnlyFirst
+	case 1:
+		return m.countOnlySecond
+	default:
+		restIndex := index - 2
+		if restIndex < 0 || restIndex >= len(m.countOnlyRest) {
+			return tokenRef{}
+		}
+		return m.countOnlyRest[restIndex]
+	}
+}
+
+func (m *reteGraphAggregateBucket) setCountOnlyMemberAt(index int, token tokenRef) {
+	if m == nil || index < 0 {
+		return
+	}
+	switch index {
+	case 0:
+		m.countOnlyFirst = token
+	case 1:
+		m.countOnlySecond = token
+	default:
+		restIndex := index - 2
+		if restIndex >= len(m.countOnlyRest) {
+			m.countOnlyRest = append(m.countOnlyRest, make([]tokenRef, restIndex-len(m.countOnlyRest)+1)...)
+		}
+		m.countOnlyRest[restIndex] = token
+	}
+}
+
+func (m *reteGraphAggregateBucket) truncateCountOnlyMembers(length int) {
+	if m == nil {
+		return
+	}
+	if length < 0 {
+		length = 0
+	}
+	old := m.countOnlyMemberCount()
+	for i := length; i < old; i++ {
+		m.setCountOnlyMemberAt(i, tokenRef{})
+	}
+	if length < 2 {
+		clear(m.countOnlyRest)
+		m.countOnlyRest = m.countOnlyRest[:0]
+	} else {
+		restLength := length - 2
+		clear(m.countOnlyRest[restLength:])
+		m.countOnlyRest = m.countOnlyRest[:restLength]
+	}
+	m.count = int64(length)
 }
 
 func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) {
@@ -4247,6 +4363,10 @@ func tokenRefKey(token tokenRef) graphTokenIdentityKey {
 		generation:    token.generation(),
 		identityState: token.identityState(),
 	}
+}
+
+func tokenRefsSameIdentity(left, right tokenRef) bool {
+	return tokenRefKey(left) == tokenRefKey(right)
 }
 
 func tokenLastMatch(token tokenRef) (conditionMatch, bool) {

@@ -887,6 +887,9 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 		if node == nil {
 			return 0
 		}
+		if node.aggregateHigherOrder() && node.outer.kind != reteGraphStageUnknown {
+			return g.stageTokenWidth(node.outer)
+		}
 		if node.outer.kind != reteGraphStageUnknown {
 			return g.stageTokenWidth(node.outer) + len(node.specs)
 		}

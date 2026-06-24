@@ -262,6 +262,12 @@ func (a *agenda) publicActivation(act *activation) activation {
 		out.path = nil
 		return out
 	}
+	if !act.token.isZero() {
+		if factIDs, factVersions, ok := terminalTokenFactTuple(rule, act.token); ok {
+			out.factIDs = factIDs
+			out.factVersions = factVersions
+		}
+	}
 	out.bindings = activationBindingTupleEntries(rule, out.factIDs, out.factVersions, true)
 	out.path = activationPathForRule(rule)
 	return out
@@ -1866,10 +1872,6 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.generation = tokenRefGeneration(token)
 	dst.identity = identity
 	dst.token = token
-	if factIDs, factVersions, ok := terminalTokenFactTuple(rule, token); ok {
-		dst.factIDs = factIDs
-		dst.factVersions = factVersions
-	}
 	dst.salience = rule.salience
 	dst.maxRecency = token.maxRecency()
 	dst.aggregateRecency = token.aggregateRecency()
