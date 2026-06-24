@@ -59,15 +59,19 @@ const (
 )
 
 type compiledJoinConstraint struct {
-	path           []int
-	bindingSlot    int
-	access         compiledPathAccess
-	operator       FieldConstraintOperator
-	refBinding     string
-	refBindingSlot int
-	refAccess      compiledPathAccess
-	indexable      bool
-	indexKind      joinIndexKind
+	path                  []int
+	bindingSlot           int
+	access                compiledPathAccess
+	leftKeyExpression     compiledExpression
+	hasLeftKeyExpression  bool
+	operator              FieldConstraintOperator
+	refBinding            string
+	refBindingSlot        int
+	refAccess             compiledPathAccess
+	rightKeyExpression    compiledExpression
+	hasRightKeyExpression bool
+	indexable             bool
+	indexKind             joinIndexKind
 }
 
 func (c compiledJoinConstraint) isHashJoin() bool {

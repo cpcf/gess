@@ -389,17 +389,19 @@ func activationPathForRule(rule compiledRule) []int {
 		return nil
 	}
 	pathLen := 0
-	plans := make([]compiledConditionPlan, 0, len(rule.conditions))
 	for i := range rule.conditions {
 		plan, ok := rule.conditionPlanForBindingSlot(i)
 		if !ok {
 			return nil
 		}
-		plans = append(plans, plan)
 		pathLen += len(plan.path)
 	}
 	path := make([]int, 0, pathLen)
-	for _, plan := range plans {
+	for i := range rule.conditions {
+		plan, ok := rule.conditionPlanForBindingSlot(i)
+		if !ok {
+			return nil
+		}
 		path = append(path, plan.path...)
 	}
 	return path
@@ -1853,7 +1855,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	if token.isZero() {
 		return fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
-	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
+	if len(rule.conditionPlans) == 0 {
 		return fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
 	if identity.isZero() {
@@ -1864,10 +1866,9 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.generation = tokenRefGeneration(token)
 	dst.identity = identity
 	dst.token = token
-	if _, factIDs, factVersions, path, ok := terminalTokenBindingTuple(rule, token); ok {
+	if factIDs, factVersions, ok := terminalTokenFactTuple(rule, token); ok {
 		dst.factIDs = factIDs
 		dst.factVersions = factVersions
-		dst.path = path
 	}
 	dst.salience = rule.salience
 	dst.maxRecency = token.maxRecency()
@@ -1878,6 +1879,9 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 }
 
 func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candidateIdentity {
+	if identity, ok := candidateIdentityForTerminalTokenFast(rule, token); ok {
+		return identity
+	}
 	entries, _, _, _, ok := terminalTokenBindingTuple(rule, token)
 	if ok {
 		return candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, tokenRefGeneration(token), entries)
@@ -1894,6 +1898,59 @@ func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candid
 		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
 	}
 	return identity
+}
+
+func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (candidateIdentity, bool) {
+	if token.isZero() || len(rule.conditions) == 0 || len(rule.conditions) > 8 {
+		return candidateIdentity{}, false
+	}
+	var matches [8]conditionMatch
+	var seen uint8
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return candidateIdentity{}, false
+		}
+		slot := row.match.bindingSlot
+		if slot < 0 {
+			continue
+		}
+		if slot >= len(rule.conditions) {
+			return candidateIdentity{}, false
+		}
+		mask := uint8(1 << uint(slot))
+		if seen&mask != 0 {
+			return candidateIdentity{}, false
+		}
+		matches[slot] = row.match
+		seen |= mask
+	}
+	if seen != uint8(1<<uint(len(rule.conditions)))-1 {
+		return candidateIdentity{}, false
+	}
+	generation := tokenRefGeneration(token)
+	state := candidateIdentityHashStart(generation)
+	count := 0
+	for i := 0; i < len(rule.conditions); i++ {
+		entry, err := bindingTupleEntryForMatch(rule, matches[i])
+		if err != nil {
+			return candidateIdentity{}, false
+		}
+		state = candidateIdentityHashStep(state, entry)
+		count++
+	}
+	scopeHash := rule.identityScopeHash
+	if scopeHash == 0 {
+		scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+	}
+	return candidateIdentity{
+		generation: generation,
+		count:      count,
+		key: candidateIdentityKey{
+			scopeHash: scopeHash,
+			hash:      candidateIdentityHashFinish(state, count),
+		},
+	}, true
 }
 
 func terminalTokenBindingTuple(rule compiledRule, token tokenRef) ([]bindingTupleEntry, []FactID, []FactVersion, []int, bool) {
@@ -1923,6 +1980,70 @@ func terminalTokenBindingTuple(rule compiledRule, token tokenRef) ([]bindingTupl
 		path = append(path, entry.conditionPath...)
 	}
 	return entries, factIDs, factVersions, path, true
+}
+
+func terminalTokenFactTuple(rule compiledRule, token tokenRef) ([]FactID, []FactVersion, bool) {
+	if token.isZero() || len(rule.conditions) == 0 {
+		return nil, nil, false
+	}
+	n := len(rule.conditions)
+	factIDs := make([]FactID, n)
+	factVersions := make([]FactVersion, n)
+	if n <= 64 {
+		var seen uint64
+		for current := token; !current.isZero(); current = current.parent() {
+			row, ok := current.resolve()
+			if !ok {
+				return nil, nil, false
+			}
+			slot := row.match.bindingSlot
+			if slot < 0 {
+				continue
+			}
+			if slot >= n {
+				return nil, nil, false
+			}
+			mask := uint64(1) << uint(slot)
+			if seen&mask != 0 {
+				return nil, nil, false
+			}
+			seen |= mask
+			factIDs[slot] = row.match.fact.ID()
+			factVersions[slot] = row.match.fact.Version()
+		}
+		wantSeen := ^uint64(0)
+		if n < 64 {
+			wantSeen = uint64(1)<<uint(n) - 1
+		}
+		if seen != wantSeen {
+			return nil, nil, false
+		}
+		return factIDs, factVersions, true
+	}
+
+	seen := make([]bool, n)
+	seenCount := 0
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return nil, nil, false
+		}
+		slot := row.match.bindingSlot
+		if slot < 0 {
+			continue
+		}
+		if slot >= n || seen[slot] {
+			return nil, nil, false
+		}
+		seen[slot] = true
+		seenCount++
+		factIDs[slot] = row.match.fact.ID()
+		factVersions[slot] = row.match.fact.Version()
+	}
+	if seenCount != n {
+		return nil, nil, false
+	}
+	return factIDs, factVersions, true
 }
 
 func tokenPublicMatchesForRule(rule compiledRule, token tokenRef) ([]conditionMatch, bool) {

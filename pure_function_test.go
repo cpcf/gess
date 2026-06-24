@@ -211,6 +211,50 @@ func TestPureFunctionCompileValidation(t *testing.T) {
 	}
 }
 
+func TestPureFunctionIndexKeyExtractorValidationAndInspection(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:              "fold-key",
+		Args:              []ValueKind{ValueString},
+		Return:            ValueString,
+		IndexKeyExtractor: true,
+		Func1: func(_ context.Context, value Value) (Value, error) {
+			return value, nil
+		},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	definition, ok := revision.Function("fold-key")
+	if !ok {
+		t.Fatal("compiled revision missing fold-key")
+	}
+	if !definition.IndexKeyExtractor() {
+		t.Fatal("fold-key was not inspected as an index key extractor")
+	}
+
+	if err := NewWorkspace().AddFunction(PureFunctionSpec{
+		Name:              "bad-key",
+		Args:              []ValueKind{ValueString, ValueString},
+		Return:            ValueString,
+		IndexKeyExtractor: true,
+		Func2: func(_ context.Context, left, right Value) (Value, error) {
+			return left, nil
+		},
+	}); !errors.Is(err, ErrFunctionValidation) {
+		t.Fatalf("AddFunction bad-key error = %v, want ErrFunctionValidation", err)
+	}
+	if err := NewWorkspace().AddFunction(PureFunctionSpec{
+		Name:              "list-key",
+		Args:              []ValueKind{ValueString},
+		Return:            ValueList,
+		IndexKeyExtractor: true,
+		Func1: func(_ context.Context, value Value) (Value, error) {
+			return NewValue([]any{value.String()})
+		},
+	}); !errors.Is(err, ErrFunctionValidation) {
+		t.Fatalf("AddFunction list-key error = %v, want ErrFunctionValidation", err)
+	}
+}
+
 func TestPureFunctionEvaluationErrorsAreStructured(t *testing.T) {
 	for _, tc := range []struct {
 		name string

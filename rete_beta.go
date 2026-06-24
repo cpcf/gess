@@ -160,7 +160,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		identityEntry.factID = match.fact.ID()
 		identityEntry.factVersion = match.fact.Version()
 	}
-	row.entry = cloneBindingTupleEntry(identityEntry)
+	row.entry = identityEntry
 	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
 
 	a.count++
@@ -420,55 +420,63 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 }
 
 func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compiledJoinConstraint) (Value, bool)) (betaJoinKey, bool) {
+	key, ok, _ := betaJoinKeyForPlanWithError(plan, func(join compiledJoinConstraint) (Value, bool, error) {
+		value, ok := valueForJoin(join)
+		return value, ok, nil
+	})
+	return key, ok
+}
+
+func betaJoinKeyForPlanWithError(plan compiledConditionPlan, valueForJoin func(join compiledJoinConstraint) (Value, bool, error)) (betaJoinKey, bool, error) {
 	if len(plan.joins) == 0 {
-		return betaJoinKey{}, true
+		return betaJoinKey{}, true, nil
 	}
 
 	if len(plan.joins) == 1 {
 		join := plan.joins[0]
 		if join.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false
+			return betaJoinKey{}, false, nil
 		}
-		value, ok := valueForJoin(join)
-		if !ok {
-			return betaJoinKey{}, false
+		value, ok, err := valueForJoin(join)
+		if err != nil || !ok {
+			return betaJoinKey{}, false, err
 		}
 		if key, ok := betaJoinKeyForValue(value); ok {
-			return key, true
+			return key, true, nil
 		}
 		return betaJoinKey{
 			kind:        betaJoinKeyCanonical,
 			stringValue: value.canonicalKey(),
-		}, true
+		}, true, nil
 	}
 
 	if len(plan.joins) == 2 {
 		firstJoin := plan.joins[0]
 		secondJoin := plan.joins[1]
 		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false
+			return betaJoinKey{}, false, nil
 		}
-		firstValue, ok := valueForJoin(firstJoin)
-		if !ok {
-			return betaJoinKey{}, false
+		firstValue, ok, err := valueForJoin(firstJoin)
+		if err != nil || !ok {
+			return betaJoinKey{}, false, err
 		}
-		secondValue, ok := valueForJoin(secondJoin)
-		if !ok {
-			return betaJoinKey{}, false
+		secondValue, ok, err := valueForJoin(secondJoin)
+		if err != nil || !ok {
+			return betaJoinKey{}, false, err
 		}
 		if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
-			return key, true
+			return key, true, nil
 		}
 	}
 
 	var b strings.Builder
 	for _, join := range plan.joins {
 		if join.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false
+			return betaJoinKey{}, false, nil
 		}
-		value, ok := valueForJoin(join)
-		if !ok {
-			return betaJoinKey{}, false
+		value, ok, err := valueForJoin(join)
+		if err != nil || !ok {
+			return betaJoinKey{}, false, err
 		}
 		b.WriteByte('|')
 		b.WriteString(value.canonicalKey())
@@ -476,7 +484,7 @@ func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compi
 	return betaJoinKey{
 		kind:        betaJoinKeyCanonical,
 		stringValue: b.String(),
-	}, true
+	}, true, nil
 }
 
 func betaJoinKeyForTwoValues(first, second Value) (betaJoinKey, bool) {

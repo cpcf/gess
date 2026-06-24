@@ -93,7 +93,7 @@ func newBranchPlanningNode(condition normalizedRuleCondition, order int) branchP
 		movable:   branchPlanningConditionMovable(condition),
 	}
 	switch {
-	case condition.isAggregate:
+	case condition.isAggregate || condition.higherOrder.kind != conditionHigherOrderUnknown:
 		out.barrier = branchPlanningBarrierAggregate
 	case condition.negated:
 		out.barrier = branchPlanningBarrierNegation
@@ -272,13 +272,14 @@ func cloneNormalizedRuleCondition(condition normalizedRuleCondition) normalizedR
 	out := condition
 	out.spec = condition.spec.clone()
 	out.aggregate = condition.aggregate.clone()
+	out.higherOrder = condition.higherOrder.clone()
 	out.test = cloneExpressionSpec(condition.test)
 	out.path = cloneIntPath(condition.path)
 	return out
 }
 
 func extractBranchPlanningJoins(node *branchPlanningNode) []branchPlanningJoin {
-	if node == nil || node.condition.isAggregate || node.condition.isTest {
+	if node == nil || node.condition.isAggregate || node.condition.higherOrder.kind != conditionHigherOrderUnknown || node.condition.isTest {
 		return nil
 	}
 	condition := &node.condition.spec
@@ -454,7 +455,7 @@ func branchPlanningSelectivityScore(node branchPlanningNode) int {
 }
 
 func branchPlanningConditionMovable(condition normalizedRuleCondition) bool {
-	if condition.negated || condition.isAggregate || condition.isTest {
+	if condition.negated || condition.isAggregate || condition.higherOrder.kind != conditionHigherOrderUnknown || condition.isTest {
 		return false
 	}
 	if strings.TrimSpace(condition.spec.Binding) == internalQueryTriggerBinding {
@@ -492,6 +493,9 @@ func cloneBranchPlanningNode(node branchPlanningNode) branchPlanningNode {
 
 func branchPlanningDefinedBindings(condition normalizedRuleCondition) []string {
 	bindings := make(map[string]struct{})
+	if condition.higherOrder.kind != conditionHigherOrderUnknown {
+		return nil
+	}
 	if condition.isAggregate {
 		for _, spec := range condition.aggregate.Specs {
 			addBranchPlanningBinding(bindings, spec.Binding())
@@ -516,6 +520,10 @@ func branchPlanningDefinedBindings(condition normalizedRuleCondition) []string {
 
 func branchPlanningDependencyBindings(condition normalizedRuleCondition) []string {
 	bindings := make(map[string]struct{})
+	if condition.higherOrder.kind != conditionHigherOrderUnknown {
+		addHigherOrderBranchPlanningDependencies(bindings, condition.higherOrder)
+		return sortedBranchPlanningBindings(bindings)
+	}
 	if condition.isAggregate {
 		addConditionSpecBranchPlanningDependencies(bindings, condition.aggregate.Input)
 		for _, spec := range condition.aggregate.Specs {
@@ -533,6 +541,10 @@ func branchPlanningDependencyBindings(condition normalizedRuleCondition) []strin
 
 func branchPlanningHardDependencyBindings(condition normalizedRuleCondition) []string {
 	bindings := make(map[string]struct{})
+	if condition.higherOrder.kind != conditionHigherOrderUnknown {
+		addHigherOrderBranchPlanningDependencies(bindings, condition.higherOrder)
+		return sortedBranchPlanningBindings(bindings)
+	}
 	if condition.isAggregate {
 		addConditionSpecBranchPlanningDependencies(bindings, condition.aggregate.Input)
 		for _, spec := range condition.aggregate.Specs {
@@ -592,6 +604,49 @@ func addConditionSpecBranchPlanningDependencies(bindings map[string]struct{}, sp
 			addConditionSpecBranchPlanningDependencies(bindings, condition.Input)
 			for _, spec := range condition.Specs {
 				addExpressionSpecBranchPlanningDependencies(bindings, spec.Expression())
+			}
+		}
+	}
+}
+
+func addHigherOrderBranchPlanningDependencies(bindings map[string]struct{}, spec compiledHigherOrderConditionSpec) {
+	local := make(map[string]struct{})
+	addConditionSpecDefinedBindings(local, spec.input)
+	addConditionSpecBranchPlanningDependencies(bindings, spec.input)
+	if spec.kind == conditionHigherOrderForall {
+		addConditionSpecBranchPlanningDependencies(bindings, spec.requirement)
+	}
+	for binding := range local {
+		delete(bindings, binding)
+	}
+}
+
+func addConditionSpecDefinedBindings(bindings map[string]struct{}, spec ConditionSpec) {
+	switch condition := spec.(type) {
+	case nil:
+	case Match:
+		addRuleConditionSpecDefinedBindings(bindings, RuleConditionSpec(condition))
+	case *Match:
+		if condition != nil {
+			addRuleConditionSpecDefinedBindings(bindings, RuleConditionSpec(*condition))
+		}
+	case And:
+		for _, child := range condition.Conditions {
+			addConditionSpecDefinedBindings(bindings, child)
+		}
+	case *And:
+		if condition != nil {
+			addConditionSpecDefinedBindings(bindings, And{Conditions: condition.Conditions})
+		}
+	}
+}
+
+func addRuleConditionSpecDefinedBindings(bindings map[string]struct{}, condition RuleConditionSpec) {
+	addBranchPlanningBinding(bindings, condition.Binding)
+	for _, pattern := range condition.ListPatterns {
+		for _, element := range pattern.Elements {
+			if element.Kind == ListPatternElementSegment {
+				addBranchPlanningBinding(bindings, element.Binding)
 			}
 		}
 	}

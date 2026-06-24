@@ -184,6 +184,36 @@ func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
 	}
 }
 
+func TestResetCanSkipBeforeSnapshot(t *testing.T) {
+	session, err := NewSession(
+		mustCompile(t),
+		WithResetBeforeSnapshot(false),
+		WithInitialFacts(SessionInitialFact{
+			Name: "settings",
+			Fields: mustFields(t, map[string]any{
+				"name": "Ada",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	result, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if result.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
+	}
+	if got := result.Before.Len(); got != 0 {
+		t.Fatalf("before snapshot length = %d, want empty snapshot", got)
+	}
+	if result.Before.Generation() != 0 {
+		t.Fatalf("before snapshot generation = %d, want zero snapshot", result.Before.Generation())
+	}
+}
+
 func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:   "person",

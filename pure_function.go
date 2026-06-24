@@ -24,6 +24,7 @@ type PureFunctionSpec struct {
 	Func2              PureFunction2
 	Func3              PureFunction3
 	EqualityComparator bool
+	IndexKeyExtractor  bool
 }
 
 func (s PureFunctionSpec) clone() PureFunctionSpec {
@@ -47,6 +48,7 @@ type PureFunctionDefinition struct {
 	ret                ValueKind
 	order              int
 	equalityComparator bool
+	indexKeyExtractor  bool
 }
 
 func (f PureFunctionDefinition) Name() string {
@@ -69,6 +71,10 @@ func (f PureFunctionDefinition) EqualityComparator() bool {
 	return f.equalityComparator
 }
 
+func (f PureFunctionDefinition) IndexKeyExtractor() bool {
+	return f.indexKeyExtractor
+}
+
 type compiledPureFunction struct {
 	name               string
 	args               []ValueKind
@@ -80,6 +86,7 @@ type compiledPureFunction struct {
 	fn3                PureFunction3
 	order              int
 	equalityComparator bool
+	indexKeyExtractor  bool
 }
 
 func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunction, error) {
@@ -176,6 +183,20 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 			}
 		}
 	}
+	if normalized.IndexKeyExtractor {
+		if len(normalized.Args) != 1 {
+			return compiledPureFunction{}, &ValidationError{
+				Reason: "index key extractor function must accept one argument",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		if !validPureFunctionIndexKeyKind(normalized.Return) {
+			return compiledPureFunction{}, &ValidationError{
+				Reason: "index key extractor function must return a scalar key kind",
+				Err:    ErrFunctionValidation,
+			}
+		}
+	}
 	return compiledPureFunction{
 		name:               normalized.Name,
 		args:               append([]ValueKind(nil), normalized.Args...),
@@ -187,6 +208,7 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 		fn3:                normalized.Func3,
 		order:              order,
 		equalityComparator: normalized.EqualityComparator,
+		indexKeyExtractor:  normalized.IndexKeyExtractor,
 	}, nil
 }
 
@@ -215,6 +237,15 @@ func validPureFunctionValueKind(kind ValueKind) bool {
 	}
 }
 
+func validPureFunctionIndexKeyKind(kind ValueKind) bool {
+	switch kind {
+	case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+		return true
+	default:
+		return false
+	}
+}
+
 func (f compiledPureFunction) inspect() PureFunctionDefinition {
 	return PureFunctionDefinition{
 		name:               f.name,
@@ -222,6 +253,7 @@ func (f compiledPureFunction) inspect() PureFunctionDefinition {
 		ret:                f.ret,
 		order:              f.order,
 		equalityComparator: f.equalityComparator,
+		indexKeyExtractor:  f.indexKeyExtractor,
 	}
 }
 

@@ -2,6 +2,8 @@ package gess
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -737,6 +739,162 @@ func TestReteGraphLeavesUncertifiedFunctionPredicatesResidual(t *testing.T) {
 				Predicates: []ExpressionSpec{
 					Call("same-group", CurrentFieldExpr{Field: "group"}, BindingFieldExpr{Binding: "left", Field: "group"}),
 				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got := len(node.hashJoins); got != 0 {
+		t.Fatalf("hash joins = %d, want 0", got)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+}
+
+func TestReteGraphIndexesCertifiedKeyExtractorFunctionPredicates(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:              "fold-key",
+		Args:              []ValueKind{ValueString},
+		Return:            ValueString,
+		IndexKeyExtractor: true,
+		Func1: func(_ context.Context, value Value) (Value, error) {
+			text, _ := value.AsString()
+			return NewValue(strings.ToLower(text))
+		},
+	})
+	var fired []string
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn: func(ctx ActionContext) error {
+			fact, ok := ctx.Binding("right")
+			if !ok {
+				t.Fatal("missing right binding")
+			}
+			id, _ := fact.Field("id")
+			text, _ := id.AsString()
+			fired = append(fired, text)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "folded-function-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{CompareExpr{
+					Operator: ExpressionCompareEqual,
+					Left:     Call("fold-key", CurrentFieldExpr{Field: "group"}),
+					Right:    Call("fold-key", BindingFieldExpr{Binding: "left", Field: "group"}),
+				}},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want %d", got, want)
+	}
+	hashJoin := node.hashJoins[0]
+	if !hashJoin.hasLeftKeyExpression || !hashJoin.hasRightKeyExpression {
+		t.Fatalf("hash join key expressions = (%v, %v), want both present", hashJoin.hasLeftKeyExpression, hashJoin.hasRightKeyExpression)
+	}
+	if hashJoin.access.root != "group" || hashJoin.refBinding != "left" || hashJoin.refAccess.root != "group" {
+		t.Fatalf("hash join = %#v, want right.group extractor == left.group extractor", hashJoin)
+	}
+
+	session := mustSession(t, revision, "key-extractor-function-join")
+	ctx := context.Background()
+	if _, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": "left", "group": "Prod"})); err != nil {
+		t.Fatalf("AssertTemplate(left): %v", err)
+	}
+	for _, row := range []map[string]any{
+		{"id": "case-match", "group": "prod"},
+		{"id": "miss", "group": "dev"},
+	} {
+		if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("AssertTemplate(right): %v", err)
+		}
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	if !slices.Equal(fired, []string{"case-match"}) {
+		t.Fatalf("fired = %#v, want case-match", fired)
+	}
+}
+
+func TestReteGraphLeavesUncertifiedKeyExtractorCallsResidual(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "fold-key",
+		Args:   []ValueKind{ValueString},
+		Return: ValueString,
+		Func1: func(_ context.Context, value Value) (Value, error) {
+			text, _ := value.AsString()
+			return NewValue(strings.ToLower(text))
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "residual-function-join",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				Predicates: []ExpressionSpec{CompareExpr{
+					Operator: ExpressionCompareEqual,
+					Left:     Call("fold-key", CurrentFieldExpr{Field: "group"}),
+					Right:    Call("fold-key", BindingFieldExpr{Binding: "left", Field: "group"}),
+				}},
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

@@ -566,21 +566,49 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 		current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
 	}
 
-	input := condition.aggregate.inputPlans[0]
-	inputAlphaID := g.compileConditionAlpha(rule, input, aggregateIndex, alphaIndex, templatesByKey, false)
-	inputAlphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(inputAlphaID)}
-	if inputAlphaID == 0 {
-		return false
-	}
-	aggregateInput := inputAlphaRef
+	outerStage := reteGraphStageRef{}
 	if haveStage {
+		outerStage = current
+	}
+	aggregateInput := reteGraphStageRef{}
+	inputEntry := bindingTupleEntry{}
+	for inputIndex, input := range condition.aggregate.inputPlans {
+		if input.isTest {
+			if !haveStage {
+				return false
+			}
+			betaID, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeFilter, current, reteGraphStageRef{}, nil, input.testPredicates)
+			g.appendStageSuccessor(current, reteGraphStageSuccessor{
+				betaNodeID: betaID,
+				side:       reteGraphBetaInputLeft,
+			})
+			current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+			aggregateInput = current
+			continue
+		}
+		inputAlphaID := g.compileConditionAlpha(rule, input, aggregateIndex+inputIndex, alphaIndex, templatesByKey, false)
+		inputAlphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(inputAlphaID)}
+		if inputAlphaID == 0 {
+			return false
+		}
+		inputEntry = graphTokenEntryForCondition(input)
+		if !haveStage {
+			current = inputAlphaRef
+			aggregateInput = inputAlphaRef
+			haveStage = true
+			continue
+		}
 		betaID, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeJoin, current, inputAlphaRef, input.joins, betaResidualExpressionPredicates(input.predicates))
 		if betaNode := g.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" {
 			betaNode.entry = graphTokenEntryForCondition(input)
 		}
 		leftEntry := bindingTupleEntry{}
-		if current.kind == reteGraphStageAlpha && aggregateIndex > 0 {
-			leftEntry = graphTokenEntryForCondition(branch.plans[aggregateIndex-1])
+		if current.kind == reteGraphStageAlpha {
+			if inputIndex == 0 && aggregateIndex > 0 {
+				leftEntry = graphTokenEntryForCondition(branch.plans[aggregateIndex-1])
+			} else if inputIndex > 0 {
+				leftEntry = graphTokenEntryForCondition(condition.aggregate.inputPlans[inputIndex-1])
+			}
 		}
 		g.appendStageSuccessor(current, reteGraphStageSuccessor{
 			betaNodeID: betaID,
@@ -592,14 +620,18 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 			side:       reteGraphBetaInputRight,
 			entry:      graphTokenEntryForCondition(input),
 		})
-		aggregateInput = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+		current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+		aggregateInput = current
+	}
+	if aggregateInput.kind == reteGraphStageUnknown || inputEntry.conditionID == "" {
+		return false
 	}
 
 	outer := reteGraphStageRef{}
-	if haveStage {
-		outer = current
+	if aggregateIndex > 0 {
+		outer = outerStage
 	}
-	aggregateID := g.appendAggregate(aggregateInput, outer, graphTokenEntryForCondition(input), condition.id, condition.bindingSlot, condition.aggregate.specs, graphTokenEntriesForAggregateBindings(rule, condition))
+	aggregateID := g.appendAggregate(aggregateInput, outer, inputEntry, condition.id, condition.bindingSlot, condition.aggregate.specs, graphTokenEntriesForAggregateBindings(rule, condition))
 	aggregateRef := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}
 	current = aggregateRef
 	haveStage = true
@@ -711,19 +743,29 @@ func branchContainsAggregate(branch compiledConditionBranch) bool {
 }
 
 func reteGraphSupportsAggregateCondition(condition compiledConditionPlan, allowInputJoins bool) bool {
-	if condition.aggregate == nil || len(condition.aggregate.inputPlans) != 1 || len(condition.aggregate.specs) == 0 {
+	if condition.aggregate == nil || len(condition.aggregate.inputPlans) == 0 || len(condition.aggregate.specs) == 0 {
 		return false
 	}
-	input := condition.aggregate.inputPlans[0]
-	if input.aggregate != nil || input.negated || len(betaResidualExpressionPredicates(input.predicates)) != 0 {
-		return false
-	}
-	if !allowInputJoins && len(input.joins) != 0 {
-		return false
+	for inputIndex, input := range condition.aggregate.inputPlans {
+		if input.aggregate != nil || input.negated {
+			return false
+		}
+		if input.isTest {
+			if inputIndex == 0 || len(input.testPredicates) == 0 {
+				return false
+			}
+			continue
+		}
+		if len(betaResidualExpressionPredicates(input.predicates)) != 0 {
+			return false
+		}
+		if !allowInputJoins && inputIndex == 0 && len(input.joins) != 0 {
+			return false
+		}
 	}
 	for _, spec := range condition.aggregate.specs {
 		switch spec.kind {
-		case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateCollect:
+		case AggregateCount, AggregateSum, AggregateMin, AggregateMax, AggregateCollect, aggregateExists, aggregateForall:
 		default:
 			return false
 		}
@@ -1546,6 +1588,12 @@ func cloneCompiledJoinConstraints(in []compiledJoinConstraint) []compiledJoinCon
 		out[i].path = append([]int(nil), constraint.path...)
 		out[i].access = constraint.access.clone()
 		out[i].refAccess = constraint.refAccess.clone()
+		if constraint.hasLeftKeyExpression {
+			out[i].leftKeyExpression = constraint.leftKeyExpression.clone()
+		}
+		if constraint.hasRightKeyExpression {
+			out[i].rightKeyExpression = constraint.rightKeyExpression.clone()
+		}
 	}
 	return out
 }
@@ -1584,6 +1632,9 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	if predicate.placement != ExpressionPredicatePlacementBetaResidual {
 		return compiledJoinConstraint{}, false
 	}
+	if join, ok := expressionPredicateKeyExtractorHashJoin(predicate); ok {
+		return join, true
+	}
 	if join, ok := expressionPredicateFunctionHashJoin(predicate); ok {
 		return join, true
 	}
@@ -1605,6 +1656,24 @@ func expressionPredicateHashJoin(predicate compiledExpressionPredicate) (compile
 	return newExpressionPredicateHashJoin(predicate, current, binding), true
 }
 
+func expressionPredicateKeyExtractorHashJoin(predicate compiledExpressionPredicate) (compiledJoinConstraint, bool) {
+	expression := predicate.expression
+	if expression.kind != expressionNodeCompare || expression.compareOp != ExpressionCompareEqual || len(expression.operands) != 2 {
+		return compiledJoinConstraint{}, false
+	}
+	current, binding, ok := expressionPredicateHashKeyExpressions(expression.operands[0], expression.operands[1])
+	if !ok {
+		return compiledJoinConstraint{}, false
+	}
+	if !expressionHashKeyOperandsTopLevel(current) || !expressionHashKeyOperandsTopLevel(binding) {
+		return compiledJoinConstraint{}, false
+	}
+	if current.kind != expressionNodeCall && binding.kind != expressionNodeCall {
+		return compiledJoinConstraint{}, false
+	}
+	return newExpressionPredicateKeyExtractorHashJoin(predicate, current, binding), true
+}
+
 func expressionPredicateFunctionHashJoin(predicate compiledExpressionPredicate) (compiledJoinConstraint, bool) {
 	call, ok := expressionPredicateEqualityFunctionCall(predicate.expression)
 	if !ok {
@@ -1618,6 +1687,15 @@ func expressionPredicateFunctionHashJoin(predicate compiledExpressionPredicate) 
 		return compiledJoinConstraint{}, false
 	}
 	return newExpressionPredicateHashJoin(predicate, current, binding), true
+}
+
+func newExpressionPredicateKeyExtractorHashJoin(predicate compiledExpressionPredicate, current, binding compiledExpression) compiledJoinConstraint {
+	join := newExpressionPredicateHashJoin(predicate, expressionHashKeyAccessOperand(current), expressionHashKeyAccessOperand(binding))
+	join.leftKeyExpression = current.clone()
+	join.hasLeftKeyExpression = true
+	join.rightKeyExpression = binding.clone()
+	join.hasRightKeyExpression = true
+	return join
 }
 
 func expressionPredicateEqualityFunctionCall(expression compiledExpression) (compiledExpression, bool) {
@@ -1677,6 +1755,49 @@ func expressionPredicateHashJoinOperands(left, right compiledExpression) (compil
 		return right, left, true
 	}
 	return compiledExpression{}, compiledExpression{}, false
+}
+
+func expressionPredicateHashKeyExpressions(left, right compiledExpression) (compiledExpression, compiledExpression, bool) {
+	if expressionHashKeyCurrent(left) && expressionHashKeyBinding(right) {
+		return left, right, true
+	}
+	if expressionHashKeyCurrent(right) && expressionHashKeyBinding(left) {
+		return right, left, true
+	}
+	return compiledExpression{}, compiledExpression{}, false
+}
+
+func expressionHashKeyCurrent(expression compiledExpression) bool {
+	access := expressionHashKeyAccessOperand(expression)
+	return access.kind == expressionNodeCurrentField && expressionCertifiedHashKeyExpression(expression)
+}
+
+func expressionHashKeyBinding(expression compiledExpression) bool {
+	access := expressionHashKeyAccessOperand(expression)
+	return access.kind == expressionNodeBindingField && access.binding != "" && access.bindingSlot >= 0 && expressionCertifiedHashKeyExpression(expression)
+}
+
+func expressionCertifiedHashKeyExpression(expression compiledExpression) bool {
+	switch expression.kind {
+	case expressionNodeCurrentField, expressionNodeBindingField:
+		return true
+	case expressionNodeCall:
+		return expression.function.indexKeyExtractor && len(expression.operands) == 1 && validPureFunctionIndexKeyKind(expression.resultKind)
+	default:
+		return false
+	}
+}
+
+func expressionHashKeyAccessOperand(expression compiledExpression) compiledExpression {
+	if expression.kind == expressionNodeCall && expression.function.indexKeyExtractor && len(expression.operands) == 1 {
+		return expression.operands[0]
+	}
+	return expression
+}
+
+func expressionHashKeyOperandsTopLevel(expression compiledExpression) bool {
+	access := expressionHashKeyAccessOperand(expression)
+	return access.access.root != "" && access.access.topLevel()
 }
 
 func graphAlphaConstraintsAndPredicates(constraints []compiledFieldConstraint, predicates []compiledExpressionPredicate) ([]compiledFieldConstraint, []compiledExpressionPredicate) {
@@ -1897,15 +2018,28 @@ func serializeCompiledJoinConstraints(joins []compiledJoinConstraint) string {
 
 func serializeCompiledJoinConstraint(join compiledJoinConstraint) string {
 	return fmt.Sprintf(
-		"field:%d:%s\npath:%d:%s\noperator:%d:%s\nref-field:%d:%s\nref-path:%d:%s\nbinding-slot:%d\nref-binding-slot:%d\nfield-slot:%d\nref-field-slot:%d\n",
+		"field:%d:%s\npath:%d:%s\nleft-key:%t:%d:%s\noperator:%d:%s\nref-field:%d:%s\nref-path:%d:%s\nright-key:%t:%d:%s\nbinding-slot:%d\nref-binding-slot:%d\nfield-slot:%d\nref-field-slot:%d\n",
 		len(join.access.root), join.access.root,
 		len(join.access.display()), join.access.display(),
+		join.hasLeftKeyExpression,
+		len(serializeOptionalJoinKeyExpression(join.hasLeftKeyExpression, join.leftKeyExpression)),
+		serializeOptionalJoinKeyExpression(join.hasLeftKeyExpression, join.leftKeyExpression),
 		len(join.operator), join.operator,
 		len(join.refAccess.root), join.refAccess.root,
 		len(join.refAccess.display()), join.refAccess.display(),
+		join.hasRightKeyExpression,
+		len(serializeOptionalJoinKeyExpression(join.hasRightKeyExpression, join.rightKeyExpression)),
+		serializeOptionalJoinKeyExpression(join.hasRightKeyExpression, join.rightKeyExpression),
 		join.bindingSlot,
 		join.refBindingSlot,
 		join.access.rootSlot,
 		join.refAccess.rootSlot,
 	)
+}
+
+func serializeOptionalJoinKeyExpression(ok bool, expression compiledExpression) string {
+	if !ok {
+		return ""
+	}
+	return serializeCompiledExpression(expression)
 }

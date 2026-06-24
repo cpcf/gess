@@ -16,10 +16,11 @@ import (
 type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
-	id         SessionID
-	listeners  []EventListener
-	initials   []SessionInitialFact
-	eventClock func() time.Time
+	id                  SessionID
+	listeners           []EventListener
+	initials            []SessionInitialFact
+	eventClock          func() time.Time
+	resetBeforeSnapshot bool
 }
 
 type SessionInitialFact struct {
@@ -57,6 +58,14 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 	}
 }
 
+// WithResetBeforeSnapshot controls whether successful Reset calls populate
+// ResetResult.Before. The default is true.
+func WithResetBeforeSnapshot(enabled bool) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.resetBeforeSnapshot = enabled
+	}
+}
+
 type Session struct {
 	id                   SessionID
 	revision             *Ruleset
@@ -67,6 +76,7 @@ type Session struct {
 	initials             []SessionInitialFact
 	initialCount         int
 	compiledInitials     []compiledSessionInitialFact
+	resetBeforeSnapshot  bool
 	listeners            []EventListener
 	eventClock           func() time.Time
 	closed               bool
@@ -128,7 +138,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		return nil, ErrInvalidRuleset
 	}
 
-	cfg := sessionConfig{}
+	cfg := sessionConfig{resetBeforeSnapshot: true}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)
@@ -161,17 +171,18 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 
 	session := &Session{
-		id:               cfg.id,
-		revision:         revision,
-		agenda:           newAgenda(),
-		rete:             rete,
-		generation:       1,
-		initials:         initials,
-		initialCount:     len(initials),
-		compiledInitials: compiledInitials,
-		listeners:        listeners,
-		eventClock:       cfg.eventClock,
-		runGuard:         make(chan struct{}, 1),
+		id:                  cfg.id,
+		revision:            revision,
+		agenda:              newAgenda(),
+		rete:                rete,
+		generation:          1,
+		initials:            initials,
+		initialCount:        len(initials),
+		compiledInitials:    compiledInitials,
+		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
+		listeners:           listeners,
+		eventClock:          cfg.eventClock,
+		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
@@ -1474,7 +1485,10 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		return ResetResult{Status: ResetValidationFailure, Before: s.snapshotLocked()}, err
 	}
 
-	before := s.detachedSnapshotLocked()
+	var before Snapshot
+	if s.resetBeforeSnapshot {
+		before = s.detachedSnapshotLocked()
+	}
 	next := &s.resetWorkspace
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.reserveTemplateIndexes(s.revision)
@@ -1492,7 +1506,11 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	if err := rete.resetAlpha(ctx, facts); err != nil {
 		if s.rete != nil {
-			_ = s.rete.resetAlpha(context.Background(), before.facts)
+			rollbackFacts := before.facts
+			if !s.resetBeforeSnapshot {
+				rollbackFacts = s.detachedFactsByInsertionOrder()
+			}
+			_ = s.rete.resetAlpha(context.Background(), rollbackFacts)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
@@ -1853,16 +1871,16 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 	if s.rete == nil {
 		return reteAgendaDelta{}, s.rebuildReteRuntime(ctx, s.revision, s.detachedFactsByInsertionOrder())
 	}
-	if s.rete.alpha == nil {
-		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
+	if s.rete.usesGraphBeta() {
+		return s.rete.insertBetaFactWithOrigin(ctx, fact, origin, span)
 	}
-	if delta, ok, err := s.rete.insertGraphAlphaFact(ctx, fact, span); ok || err != nil {
-		return delta, err
+	if s.rete.usesLegacyAlpha() && s.rete.alpha == nil {
+		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
 	}
 	if err := s.rete.insertAlphaFact(ctx, fact, span); err != nil {
 		return reteAgendaDelta{}, err
 	}
-	return s.rete.insertBetaFactWithOrigin(ctx, fact, origin, span)
+	return reteAgendaDelta{}, nil
 }
 
 func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
@@ -1875,41 +1893,43 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	if s.rete == nil {
 		return reteAgendaDelta{}, s.rebuildReteRuntime(ctx, s.revision, s.detachedFactsByInsertionOrder())
 	}
-	if s.rete.alpha == nil {
-		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
+	if s.rete.usesGraphBeta() {
+		return s.rete.insertBetaFactGenerated(ctx, fact, origin, span)
 	}
-	if delta, ok, err := s.rete.insertGraphAlphaFactGenerated(ctx, fact, span); ok || err != nil {
-		return delta, err
+	if s.rete.usesLegacyAlpha() && s.rete.alpha == nil {
+		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
 	}
 	snapshot := fact.detachedSnapshotForRevision(s.revision)
 	if err := s.rete.insertAlphaFactGenerated(ctx, fact, snapshot, span); err != nil {
 		return reteAgendaDelta{}, err
 	}
-	return s.rete.insertBetaFactGenerated(ctx, fact, origin, span)
+	return reteAgendaDelta{}, nil
 }
 
 func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnapshot) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
+	if s.rete.usesGraphBeta() {
+		return s.rete.removeBetaFact(ctx, fact, s.propagationCounters)
+	}
 	if err := s.rete.removeAlphaFact(ctx, fact); err != nil {
 		return reteAgendaDelta{}, err
 	}
-	return s.rete.removeBetaFact(ctx, fact, s.propagationCounters)
+	return reteAgendaDelta{}, nil
 }
 
 func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
-	delta, err := s.rete.updateBetaFact(ctx, before, after, s.propagationCounters)
-	if err != nil {
-		return delta, err
+	if s.rete.usesGraphBeta() {
+		return s.rete.updateBetaFact(ctx, before, after, s.propagationCounters)
 	}
 	if err := s.rete.updateAlphaFact(ctx, before, after); err != nil {
-		return delta, err
+		return reteAgendaDelta{}, err
 	}
-	return delta, nil
+	return reteAgendaDelta{}, nil
 }
 
 func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
@@ -2520,32 +2540,19 @@ type duplicateIndexes struct {
 }
 
 func (i *duplicateIndexes) reset(initialCapacity int) {
-	if initialCapacity < 0 {
-		initialCapacity = 0
-	}
-	if i.strings == nil {
-		i.strings = make(map[DuplicateKey]FactID, initialCapacity)
-	} else {
+	if i.strings != nil {
 		clear(i.strings)
 	}
-	if i.singleInt == nil {
-		i.singleInt = make(map[duplicateSingleIntIndexKey]FactID, initialCapacity)
-	} else {
+	if i.singleInt != nil {
 		clear(i.singleInt)
 	}
-	if i.doubleInt == nil {
-		i.doubleInt = make(map[duplicateDoubleIntIndexKey]FactID, initialCapacity)
-	} else {
+	if i.doubleInt != nil {
 		clear(i.doubleInt)
 	}
-	if i.scalars == nil {
-		i.scalars = make(map[duplicateIndexKey]FactID, initialCapacity)
-	} else {
+	if i.scalars != nil {
 		clear(i.scalars)
 	}
-	if i.structural == nil {
-		i.structural = make(map[duplicateStructuralIndexKey]FactID, initialCapacity)
-	} else {
+	if i.structural != nil {
 		clear(i.structural)
 	}
 	if i.structuralRest != nil {

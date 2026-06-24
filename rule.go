@@ -94,6 +94,47 @@ func (s Not) clone() Not {
 	return out
 }
 
+// Exists tests whether at least one tuple matching Condition exists. Bindings
+// introduced inside Exists are local to the condition.
+type ExistsCondition struct {
+	Condition ConditionSpec
+}
+
+func (ExistsCondition) conditionSpecNode() {}
+
+func Exists(condition ConditionSpec) ExistsCondition {
+	return ExistsCondition{Condition: cloneConditionSpec(condition)}
+}
+
+func (s ExistsCondition) clone() ExistsCondition {
+	out := s
+	out.Condition = cloneConditionSpec(s.Condition)
+	return out
+}
+
+// Forall tests whether every tuple matching Domain also satisfies Requirement.
+// Bindings introduced inside Forall are local to the condition.
+type ForallCondition struct {
+	Domain      ConditionSpec
+	Requirement ConditionSpec
+}
+
+func (ForallCondition) conditionSpecNode() {}
+
+func Forall(domain ConditionSpec, requirement ConditionSpec) ForallCondition {
+	return ForallCondition{
+		Domain:      cloneConditionSpec(domain),
+		Requirement: cloneConditionSpec(requirement),
+	}
+}
+
+func (s ForallCondition) clone() ForallCondition {
+	out := s
+	out.Domain = cloneConditionSpec(s.Domain)
+	out.Requirement = cloneConditionSpec(s.Requirement)
+	return out
+}
+
 // Test evaluates a standalone boolean condition over earlier local bindings.
 type Test struct {
 	Expression ExpressionSpec
@@ -138,6 +179,22 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case Not:
 		return condition.clone()
 	case *Not:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case ExistsCondition:
+		return condition.clone()
+	case *ExistsCondition:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case ForallCondition:
+		return condition.clone()
+	case *ForallCondition:
 		if condition == nil {
 			return nil
 		}
@@ -364,6 +421,8 @@ const (
 	ConditionTreeKindTest       ConditionTreeKind = "test"
 	ConditionTreeKindNot        ConditionTreeKind = "not"
 	ConditionTreeKindOr         ConditionTreeKind = "or"
+	ConditionTreeKindExists     ConditionTreeKind = "exists"
+	ConditionTreeKindForall     ConditionTreeKind = "forall"
 	ConditionTreeKindAccumulate ConditionTreeKind = "accumulate"
 )
 
@@ -638,12 +697,35 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 type normalizedRuleCondition struct {
 	spec        RuleConditionSpec
 	aggregate   AccumulateCondition
+	higherOrder compiledHigherOrderConditionSpec
 	test        ExpressionSpec
 	isAggregate bool
 	isTest      bool
 	path        []int
 	visible     bool
 	negated     bool
+}
+
+type conditionHigherOrderKind string
+
+const (
+	conditionHigherOrderUnknown conditionHigherOrderKind = ""
+	conditionHigherOrderExists  conditionHigherOrderKind = "exists"
+	conditionHigherOrderForall  conditionHigherOrderKind = "forall"
+)
+
+type compiledHigherOrderConditionSpec struct {
+	kind        conditionHigherOrderKind
+	input       ConditionSpec
+	requirement ConditionSpec
+}
+
+func (s compiledHigherOrderConditionSpec) clone() compiledHigherOrderConditionSpec {
+	return compiledHigherOrderConditionSpec{
+		kind:        s.kind,
+		input:       cloneConditionSpec(s.input),
+		requirement: cloneConditionSpec(s.requirement),
+	}
 }
 
 type normalizedRuleConditionBranch struct {
@@ -1040,6 +1122,57 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 			}
 		}
 		return expandNotConditionTreeBranches(ruleName, condition.Condition, path)
+	case ExistsCondition:
+		if negated {
+			return nil, higherOrderValidationError(ruleName, -1, "exists condition is not supported under not")
+		}
+		if err := validateExistsConditionShape(ruleName, -1, condition.Condition); err != nil {
+			return nil, err
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				higherOrder: compiledHigherOrderConditionSpec{
+					kind:  conditionHigherOrderExists,
+					input: cloneConditionSpec(condition.Condition),
+				},
+				path:    cloneIntPath(path),
+				visible: false,
+			}},
+		}}, nil
+	case *ExistsCondition:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, path, visible, negated)
+	case ForallCondition:
+		if negated {
+			return nil, higherOrderValidationError(ruleName, -1, "forall condition is not supported under not")
+		}
+		if err := validateForallConditionShape(ruleName, -1, condition.Domain, condition.Requirement); err != nil {
+			return nil, err
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				higherOrder: compiledHigherOrderConditionSpec{
+					kind:        conditionHigherOrderForall,
+					input:       cloneConditionSpec(condition.Domain),
+					requirement: cloneConditionSpec(condition.Requirement),
+				},
+				path:    cloneIntPath(path),
+				visible: false,
+			}},
+		}}, nil
+	case *ForallCondition:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, path, visible, negated)
 	case Test:
 		if negated {
 			return nil, &ValidationError{
@@ -1162,6 +1295,9 @@ func expandOrConditionTreeBranches(ruleName string, specs []ConditionSpec, path 
 	}
 	branches := make([]normalizedRuleConditionBranch, 0, len(specs))
 	for i, spec := range specs {
+		if conditionTreeContainsHigherOrder(spec) {
+			return nil, higherOrderValidationError(ruleName, -1, "higher-order condition is not supported inside or")
+		}
 		if conditionTreeContainsAggregate(spec) {
 			return nil, &ValidationError{
 				RuleName: ruleName,
@@ -1195,6 +1331,10 @@ func expandNotConditionTreeBranches(ruleName string, spec ConditionSpec, path []
 			RuleName: ruleName,
 			Reason:   "or condition is not supported under not",
 		}
+	case ExistsCondition, *ExistsCondition:
+		return nil, higherOrderValidationError(ruleName, -1, "exists condition is not supported under not")
+	case ForallCondition, *ForallCondition:
+		return nil, higherOrderValidationError(ruleName, -1, "forall condition is not supported under not")
 	case Test, *Test:
 		return nil, &ValidationError{
 			RuleName: ruleName,
@@ -1261,6 +1401,56 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			}
 		}
 		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions, path)
+	case ExistsCondition:
+		if negated {
+			return compiledConditionTreeShape{}, higherOrderValidationError(ruleName, -1, "exists condition is not supported under not")
+		}
+		if err := validateExistsConditionShape(ruleName, -1, condition.Condition); err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		child, err := flattenConditionTreeNode(ruleName, condition.Condition, conditions, appendConditionTreePath(path, 0), true, false)
+		if err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		return compiledConditionTreeShape{
+			kind:     ConditionTreeKindExists,
+			children: []compiledConditionTreeShape{child},
+		}, nil
+	case *ExistsCondition:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenConditionTreeNode(ruleName, *condition, conditions, path, visible, negated)
+	case ForallCondition:
+		if negated {
+			return compiledConditionTreeShape{}, higherOrderValidationError(ruleName, -1, "forall condition is not supported under not")
+		}
+		if err := validateForallConditionShape(ruleName, -1, condition.Domain, condition.Requirement); err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		domain, err := flattenConditionTreeNode(ruleName, condition.Domain, conditions, appendConditionTreePath(path, 0), true, false)
+		if err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		requirement, err := flattenConditionTreeNode(ruleName, condition.Requirement, conditions, appendConditionTreePath(path, 1), true, false)
+		if err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		return compiledConditionTreeShape{
+			kind:     ConditionTreeKindForall,
+			children: []compiledConditionTreeShape{domain, requirement},
+		}, nil
+	case *ForallCondition:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenConditionTreeNode(ruleName, *condition, conditions, path, visible, negated)
 	case Test:
 		if negated {
 			return compiledConditionTreeShape{}, &ValidationError{
@@ -1400,8 +1590,45 @@ func conditionTreeContainsAggregate(spec ConditionSpec) bool {
 		if condition != nil {
 			return conditionTreeContainsAggregate(condition.Condition)
 		}
+	case ExistsCondition:
+		return conditionTreeContainsAggregate(condition.Condition)
+	case *ExistsCondition:
+		if condition != nil {
+			return conditionTreeContainsAggregate(condition.Condition)
+		}
+	case ForallCondition:
+		return conditionTreeContainsAggregate(condition.Domain) || conditionTreeContainsAggregate(condition.Requirement)
+	case *ForallCondition:
+		if condition != nil {
+			return conditionTreeContainsAggregate(condition.Domain) || conditionTreeContainsAggregate(condition.Requirement)
+		}
 	}
 	return false
+}
+
+func conditionTreeContainsHigherOrder(spec ConditionSpec) bool {
+	switch condition := spec.(type) {
+	case ExistsCondition, *ExistsCondition, ForallCondition, *ForallCondition:
+		return true
+	case And:
+		return slices.ContainsFunc(condition.Conditions, conditionTreeContainsHigherOrder)
+	case *And:
+		return condition != nil && conditionTreeContainsHigherOrder(And{Conditions: condition.Conditions})
+	case Or:
+		return slices.ContainsFunc(condition.Conditions, conditionTreeContainsHigherOrder)
+	case *Or:
+		return condition != nil && conditionTreeContainsHigherOrder(Or{Conditions: condition.Conditions})
+	case Not:
+		return conditionTreeContainsHigherOrder(condition.Condition)
+	case *Not:
+		return condition != nil && conditionTreeContainsHigherOrder(condition.Condition)
+	case AccumulateCondition:
+		return conditionTreeContainsHigherOrder(condition.Input)
+	case *AccumulateCondition:
+		return condition != nil && conditionTreeContainsHigherOrder(condition.Input)
+	default:
+		return false
+	}
 }
 
 func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditions *[]normalizedRuleCondition, path []int, visible bool, negated bool) (compiledConditionTreeShape, error) {
@@ -1422,6 +1649,9 @@ func flattenOrConditionTreeNode(ruleName string, specs []ConditionSpec, conditio
 		children: make([]compiledConditionTreeShape, 0, len(specs)),
 	}
 	for i, spec := range specs {
+		if conditionTreeContainsHigherOrder(spec) {
+			return compiledConditionTreeShape{}, higherOrderValidationError(ruleName, -1, "higher-order condition is not supported inside or")
+		}
 		child, err := flattenConditionTreeNode(ruleName, spec, conditions, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return compiledConditionTreeShape{}, err
@@ -1627,6 +1857,63 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 	branchConditions := make([]RuleConditionBranchCondition, 0, len(normalizedConditions))
 	conditionPlans := make([]compiledConditionPlan, 0, len(normalizedConditions))
 	for i, node := range normalizedConditions {
+		if node.higherOrder.kind != conditionHigherOrderUnknown {
+			if node.negated {
+				return compiledRuleConditionSet{}, higherOrderValidationError(ruleName, i, string(node.higherOrder.kind)+" condition is not supported under not")
+			}
+			inputSpec, err := higherOrderCounterInputSpec(ruleName, i, node.higherOrder)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			inputNormalized, _, err := flattenConditionTreeSpec(ruleName, inputSpec)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			for _, inputNode := range inputNormalized {
+				if inputNode.spec.Binding == "" {
+					continue
+				}
+				if _, exists := bindingSlots[inputNode.spec.Binding]; exists {
+					return compiledRuleConditionSet{}, higherOrderValidationError(ruleName, i, "higher-order input binding collides with an outer binding")
+				}
+			}
+			inputSet, err := compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, inputNormalized, templatesByKey, false, conditions, bindingSlots, params, functions)
+			if err != nil {
+				return compiledRuleConditionSet{}, err
+			}
+			inputOnlyConditions := inputSet.conditions[len(conditions):]
+			for _, inputCondition := range inputOnlyConditions {
+				if _, exists := bindingSlots[inputCondition.binding]; exists {
+					return compiledRuleConditionSet{}, higherOrderValidationError(ruleName, i, "higher-order input binding collides with an outer binding")
+				}
+			}
+
+			specKind := aggregateExists
+			if node.higherOrder.kind == conditionHigherOrderForall {
+				specKind = aggregateForall
+			}
+			compiledSpecs := []compiledAggregateSpec{{kind: specKind}}
+			conditionID := aggregateConditionIDFor(ruleID, i, compiledSpecs, inputSet.conditionPlans)
+			treeCondition := RuleCondition{id: conditionID, binding: string(node.higherOrder.kind), order: i}
+			treeConditions = append(treeConditions, treeCondition)
+			branchConditions = append(branchConditions, RuleConditionBranchCondition{
+				condition: treeCondition,
+				path:      cloneIntPath(node.path),
+				visible:   false,
+			})
+			conditionPlans = append(conditionPlans, compiledConditionPlan{
+				id:          conditionID,
+				binding:     string(node.higherOrder.kind),
+				bindingSlot: -1,
+				path:        cloneIntPath(node.path),
+				aggregate: &compiledAggregatePlan{
+					inputPlans:  inputSet.conditionPlans,
+					specs:       compiledSpecs,
+					higherOrder: node.higherOrder.kind,
+				},
+			})
+			continue
+		}
 		if node.isAggregate {
 			if node.negated {
 				return compiledRuleConditionSet{}, &ValidationError{
@@ -1969,6 +2256,136 @@ func validateAggregateInputShape(ruleName string, conditionIndex int, spec Condi
 	}
 }
 
+func validateExistsConditionShape(ruleName string, conditionIndex int, spec ConditionSpec) error {
+	if err := validateHigherOrderPositiveInputShape(ruleName, conditionIndex, spec, "exists input"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateForallConditionShape(ruleName string, conditionIndex int, domain ConditionSpec, requirement ConditionSpec) error {
+	if err := validateHigherOrderPositiveInputShape(ruleName, conditionIndex, domain, "forall domain"); err != nil {
+		return err
+	}
+	return validateForallRequirementShape(ruleName, conditionIndex, requirement)
+}
+
+func validateHigherOrderPositiveInputShape(ruleName string, conditionIndex int, spec ConditionSpec, label string) error {
+	switch condition := spec.(type) {
+	case nil:
+		return higherOrderValidationError(ruleName, conditionIndex, label+" is required")
+	case Match, *Match:
+		return nil
+	case And:
+		if len(condition.Conditions) == 0 {
+			return higherOrderValidationError(ruleName, conditionIndex, label+" requires at least one child")
+		}
+		for _, child := range condition.Conditions {
+			if err := validateHigherOrderPositiveInputShape(ruleName, conditionIndex, child, label); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *And:
+		if condition == nil {
+			return higherOrderValidationError(ruleName, conditionIndex, label+" is required")
+		}
+		return validateHigherOrderPositiveInputShape(ruleName, conditionIndex, And{Conditions: condition.Conditions}, label)
+	default:
+		return higherOrderValidationError(ruleName, conditionIndex, label+" supports only positive match conjunctions")
+	}
+}
+
+func validateForallRequirementShape(ruleName string, conditionIndex int, spec ConditionSpec) error {
+	switch condition := spec.(type) {
+	case nil:
+		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
+	case Test, *Test:
+		return nil
+	case And:
+		if len(condition.Conditions) == 0 {
+			return higherOrderValidationError(ruleName, conditionIndex, "forall requirement requires at least one child")
+		}
+		for _, child := range condition.Conditions {
+			if err := validateForallRequirementShape(ruleName, conditionIndex, child); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *And:
+		if condition == nil {
+			return higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
+		}
+		return validateForallRequirementShape(ruleName, conditionIndex, And{Conditions: condition.Conditions})
+	default:
+		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement supports only test predicates")
+	}
+}
+
+func higherOrderCounterInputSpec(ruleName string, conditionIndex int, spec compiledHigherOrderConditionSpec) (ConditionSpec, error) {
+	switch spec.kind {
+	case conditionHigherOrderExists:
+		if err := validateExistsConditionShape(ruleName, conditionIndex, spec.input); err != nil {
+			return nil, err
+		}
+		return cloneConditionSpec(spec.input), nil
+	case conditionHigherOrderForall:
+		if err := validateForallConditionShape(ruleName, conditionIndex, spec.input, spec.requirement); err != nil {
+			return nil, err
+		}
+		expressions := make([]ExpressionSpec, 0)
+		collectForallRequirementExpressions(spec.requirement, &expressions)
+		if len(expressions) == 0 {
+			return nil, higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
+		}
+		requirement := expressions[0]
+		if len(expressions) > 1 {
+			requirement = BooleanExpr{Operator: ExpressionBoolAnd, Operands: expressions}
+		}
+		counterexample := Test{
+			Expression: BooleanExpr{
+				Operator: ExpressionBoolNot,
+				Operands: []ExpressionSpec{cloneExpressionSpec(requirement)},
+			},
+		}
+		return And{Conditions: []ConditionSpec{cloneConditionSpec(spec.input), counterexample}}, nil
+	default:
+		return nil, higherOrderValidationError(ruleName, conditionIndex, "unknown higher-order condition")
+	}
+}
+
+func collectForallRequirementExpressions(spec ConditionSpec, out *[]ExpressionSpec) {
+	switch condition := spec.(type) {
+	case Test:
+		*out = append(*out, cloneExpressionSpec(condition.Expression))
+	case *Test:
+		if condition != nil {
+			*out = append(*out, cloneExpressionSpec(condition.Expression))
+		}
+	case And:
+		for _, child := range condition.Conditions {
+			collectForallRequirementExpressions(child, out)
+		}
+	case *And:
+		if condition != nil {
+			collectForallRequirementExpressions(And{Conditions: condition.Conditions}, out)
+		}
+	}
+}
+
+func higherOrderValidationError(ruleName string, conditionIndex int, reason string) error {
+	validation := &ValidationError{
+		RuleName: ruleName,
+		Reason:   reason,
+		Err:      ErrInvalidHigherOrderCondition,
+	}
+	if conditionIndex >= 0 {
+		validation.ConditionIndex = conditionIndex
+		validation.HasConditionIndex = true
+	}
+	return validation
+}
+
 func validateBranchBindingContract(ruleName string, expected, actual []RuleCondition) error {
 	if len(expected) != len(actual) {
 		return &ValidationError{
@@ -2027,6 +2444,24 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 	case ConditionTreeKindOr:
 		tree := RuleConditionTree{
 			kind:     ConditionTreeKindOr,
+			children: make([]RuleConditionTree, 0, len(shape.children)),
+		}
+		for _, child := range shape.children {
+			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+		}
+		return tree
+	case ConditionTreeKindExists:
+		tree := RuleConditionTree{
+			kind:     ConditionTreeKindExists,
+			children: make([]RuleConditionTree, 0, len(shape.children)),
+		}
+		for _, child := range shape.children {
+			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+		}
+		return tree
+	case ConditionTreeKindForall:
+		tree := RuleConditionTree{
+			kind:     ConditionTreeKindForall,
 			children: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
@@ -2109,6 +2544,21 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 				sum.Write([]byte(";"))
 				continue
 			}
+			if plan.aggregate != nil && plan.aggregate.higherOrder != conditionHigherOrderUnknown {
+				sum.Write([]byte("higher-order:"))
+				sum.Write([]byte(plan.binding))
+				sum.Write([]byte(":"))
+				sum.Write([]byte(string(plan.aggregate.higherOrder)))
+				sum.Write([]byte(":"))
+				sum.Write([]byte(serializeCompiledAggregateSpecs(plan.aggregate.specs)))
+				sum.Write([]byte(":"))
+				for _, input := range plan.aggregate.inputPlans {
+					sum.Write([]byte(input.id.String()))
+					sum.Write([]byte(","))
+				}
+				sum.Write([]byte(";"))
+				continue
+			}
 			condition, ok := ruleTreeConditionByOrder(rule.treeConditions, plan.path)
 			if !ok {
 				continue
@@ -2168,6 +2618,16 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 					if plan.isTest {
 						sum.Write([]byte("test:"))
 						sum.Write([]byte(serializeCompiledExpressionPredicates(plan.testPredicates)))
+						sum.Write([]byte(";"))
+						continue
+					}
+					if plan.aggregate != nil && plan.aggregate.higherOrder != conditionHigherOrderUnknown {
+						sum.Write([]byte("higher-order:"))
+						sum.Write([]byte(plan.binding))
+						sum.Write([]byte(":"))
+						sum.Write([]byte(string(plan.aggregate.higherOrder)))
+						sum.Write([]byte(":"))
+						sum.Write([]byte(serializeCompiledAggregateSpecs(plan.aggregate.specs)))
 						sum.Write([]byte(";"))
 						continue
 					}

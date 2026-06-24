@@ -14,12 +14,21 @@ type reteRuntime struct {
 	revision               *Ruleset
 	graph                  *reteGraph
 	plan                   reteNetworkPlan
+	mode                   reteRuntimeMode
 	graphAlpha             *reteGraphAlphaMemory
 	graphBeta              *reteGraphBetaMemory
 	alpha                  *reteAlphaMemory
 	terminalRemovedScratch candidateScratch
 	terminalAddedScratch   candidateScratch
 }
+
+type reteRuntimeMode uint8
+
+const (
+	runtimeModeUnsupported reteRuntimeMode = iota
+	runtimeModeGraphBeta
+	runtimeModeLegacyAlpha
+)
 
 type reteNetworkPlan struct {
 	rules                      []reteRulePlan
@@ -153,6 +162,7 @@ func newReteRuntime(revision *Ruleset) (*reteRuntime, error) {
 		graph:    revision.graph,
 		plan:     planReteNetwork(revision),
 	}
+	runtime.mode = runtime.determineMode()
 	return runtime, nil
 }
 
@@ -160,7 +170,7 @@ func (r *reteRuntime) validateExecutableGraphBetaRuntime() error {
 	if r == nil || r.revision == nil {
 		return ErrInvalidRuleset
 	}
-	if len(r.plan.rules) == 0 || r.supportsGraphBeta() {
+	if len(r.plan.rules) == 0 || r.usesGraphBeta() {
 		return nil
 	}
 	return r.unsupportedRuntimeError()
@@ -207,8 +217,8 @@ func (r *reteRuntime) match(ctx context.Context, source factSource) ([]ruleMatch
 	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
 		return nil, err
 	}
-	if r.graphBeta != nil {
-		return r.graphBeta.match(ctx, source, r.alpha)
+	if r.usesGraphBeta() && r.graphBeta != nil {
+		return r.graphBeta.match(ctx, source)
 	}
 	return nil, r.unsupportedRuntimeError()
 }
@@ -223,7 +233,7 @@ func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Gener
 	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
 		return nil, true, err
 	}
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		return r.graphBeta.matchWithoutSnapshot(ctx, generation)
 	}
 	return nil, false, r.unsupportedRuntimeError()
@@ -233,14 +243,14 @@ func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTer
 	if r == nil || r.revision == nil || !r.supportsIncrementalAgenda() {
 		return nil, false, nil
 	}
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		return r.graphBeta.currentTerminalTokenDeltas(ctx)
 	}
 	return nil, false, nil
 }
 
 func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, source Snapshot) ([]QueryRow, bool, error) {
-	if r == nil || r.revision == nil || r.graphBeta == nil {
+	if r == nil || r.revision == nil || !r.usesGraphBeta() || r.graphBeta == nil {
 		return nil, false, nil
 	}
 	return r.graphBeta.queryRows(ctx, query, args, trigger, source)
@@ -285,6 +295,22 @@ func (r *reteRuntime) resetAlpha(ctx context.Context, facts []FactSnapshot) erro
 	if r == nil {
 		return nil
 	}
+	r.mode = r.determineMode()
+	if r.usesGraphBeta() {
+		r.graphAlpha = nil
+		r.alpha = nil
+		if r.graphBeta == nil {
+			memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
+			if err != nil {
+				return err
+			}
+			r.graphBeta = memory
+			return nil
+		}
+		return r.graphBeta.resetFacts(ctx, facts)
+	}
+
+	r.graphBeta = nil
 	if r.graph != nil {
 		if r.graphAlpha == nil {
 			r.graphAlpha = newReteGraphAlphaMemory(r.graph)
@@ -299,25 +325,6 @@ func (r *reteRuntime) resetAlpha(ctx context.Context, facts []FactSnapshot) erro
 	if err := r.alpha.reset(ctx, r.plan, facts); err != nil {
 		return err
 	}
-	if !r.plan.betaSupported {
-		r.graphBeta = nil
-		return nil
-	}
-	if r.supportsGraphBeta() {
-		if r.graphBeta == nil {
-			memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
-			if err != nil {
-				return err
-			}
-			r.graphBeta = memory
-		} else {
-			if err := r.graphBeta.resetFacts(ctx, facts); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	r.graphBeta = nil
 	return nil
 }
 
@@ -334,19 +341,16 @@ func (r *reteRuntime) rebuildBeta(ctx context.Context, facts []FactSnapshot) err
 	if r == nil {
 		return nil
 	}
-	if !r.plan.betaSupported {
+	r.mode = r.determineMode()
+	if !r.usesGraphBeta() {
 		r.graphBeta = nil
 		return nil
 	}
-	if r.supportsGraphBeta() {
-		memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
-		if err != nil {
-			return err
-		}
-		r.graphBeta = memory
-		return nil
+	memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
+	if err != nil {
+		return err
 	}
-	r.graphBeta = nil
+	r.graphBeta = memory
 	return nil
 }
 
@@ -359,7 +363,7 @@ func (r *reteRuntime) insertBetaFactGenerated(ctx context.Context, fact *working
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		delta, err := r.graphBeta.insertFactGenerated(ctx, fact, span)
 		if err != nil {
 			return delta, err
@@ -375,7 +379,7 @@ func (r *reteRuntime) insertBetaFactWithOrigin(ctx context.Context, fact FactSna
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		delta, err := r.graphBeta.insertFact(ctx, fact, span)
 		if err != nil {
 			return delta, err
@@ -391,7 +395,7 @@ func (r *reteRuntime) removeBetaFact(ctx context.Context, fact FactSnapshot, cou
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		delta, err := r.graphBeta.removeFact(ctx, fact, counters)
 		if err != nil {
 			return delta, err
@@ -407,7 +411,7 @@ func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnap
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.graphBeta != nil {
+	if r.usesGraphBeta() && r.graphBeta != nil {
 		delta, err := r.graphBeta.updateFact(ctx, before, after, counters)
 		if err != nil {
 			return delta, err
@@ -419,7 +423,7 @@ func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnap
 }
 
 func (r *reteRuntime) supportsIncrementalAgenda() bool {
-	return r != nil && r.plan.incrementalAgendaSupported && r.graphBeta != nil
+	return r != nil && r.usesGraphBeta() && r.plan.incrementalAgendaSupported && r.graphBeta != nil
 }
 
 func (r *reteRuntime) supportsGraphBeta() bool {
@@ -429,17 +433,38 @@ func (r *reteRuntime) supportsGraphBeta() bool {
 	return true
 }
 
+func (r *reteRuntime) determineMode() reteRuntimeMode {
+	if r == nil || r.revision == nil {
+		return runtimeModeUnsupported
+	}
+	if r.supportsGraphBeta() {
+		return runtimeModeGraphBeta
+	}
+	if r.graph == nil || len(r.plan.unsupported) != 0 {
+		return runtimeModeUnsupported
+	}
+	return runtimeModeLegacyAlpha
+}
+
+func (r *reteRuntime) usesGraphBeta() bool {
+	return r != nil && r.mode == runtimeModeGraphBeta && r.supportsGraphBeta()
+}
+
+func (r *reteRuntime) usesLegacyAlpha() bool {
+	return r != nil && (r.mode == runtimeModeLegacyAlpha || r.mode == runtimeModeUnsupported)
+}
+
 func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[string]int) {
 	if r == nil {
 		return propagationRuntimeUnknown, nil
 	}
 	path := propagationRuntimeUnknown
 	switch {
-	case r.graphBeta != nil:
+	case r.usesGraphBeta() && r.graphBeta != nil:
 		path = propagationRuntimeGraphBeta
-	case len(r.plan.unsupported) > 0 || r.alpha == nil:
+	case r.mode == runtimeModeUnsupported:
 		path = propagationRuntimeUnsupported
-	case r.graphAlpha != nil || r.alpha != nil:
+	case r.usesLegacyAlpha() && (r.graphAlpha != nil || r.alpha != nil):
 		path = propagationRuntimeGraphAlpha
 	}
 

@@ -15,6 +15,9 @@ const (
 	AggregateMin     AggregateKind = "min"
 	AggregateMax     AggregateKind = "max"
 	AggregateCollect AggregateKind = "collect"
+
+	aggregateExists AggregateKind = "exists"
+	aggregateForall AggregateKind = "forall"
 )
 
 type AggregateSpec struct {
@@ -107,8 +110,9 @@ type compiledAggregateSpec struct {
 }
 
 type compiledAggregatePlan struct {
-	inputPlans []compiledConditionPlan
-	specs      []compiledAggregateSpec
+	inputPlans  []compiledConditionPlan
+	specs       []compiledAggregateSpec
+	higherOrder conditionHigherOrderKind
 }
 
 func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) ([]compiledAggregateSpec, []RuleCondition, error) {
@@ -162,6 +166,24 @@ func validAggregateKind(kind AggregateKind) bool {
 	default:
 		return false
 	}
+}
+
+func serializeCompiledAggregateSpecs(specs []compiledAggregateSpec) string {
+	if len(specs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, spec := range specs {
+		b.WriteString(spec.binding)
+		b.WriteByte(':')
+		b.WriteString(string(spec.kind))
+		if spec.hasExpr {
+			b.WriteByte(':')
+			b.WriteString(serializeCompiledExpression(spec.expression))
+		}
+		b.WriteByte(';')
+	}
+	return b.String()
 }
 
 func aggregateValidationError(ruleName string, conditionIndex, specIndex int, reason string, err error) error {
@@ -263,7 +285,7 @@ type aggregateState struct {
 
 func (s *aggregateState) add(ctx context.Context, current conditionFactRef, bindings []conditionMatch) error {
 	s.count++
-	if s.spec.kind == AggregateCount {
+	if s.spec.kind == AggregateCount || s.spec.kind == aggregateExists || s.spec.kind == aggregateForall {
 		return nil
 	}
 	value, ok, err := s.spec.expression.evaluateWithContextParamsAndCounters(ctx, current, bindings, nil, &FunctionEvaluationError{
@@ -343,6 +365,16 @@ func (s aggregateState) result() (Value, bool, error) {
 	switch s.spec.kind {
 	case AggregateCount:
 		return newIntValue(s.count), true, nil
+	case aggregateExists:
+		if s.count == 0 {
+			return Value{}, false, nil
+		}
+		return newBoolValue(true), true, nil
+	case aggregateForall:
+		if s.count != 0 {
+			return Value{}, false, nil
+		}
+		return newBoolValue(true), true, nil
 	case AggregateSum:
 		if s.floaty {
 			value, err := canonicalFloat(s.floatSum)

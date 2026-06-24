@@ -691,8 +691,8 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
 		}
 	}
-	if session.rete == nil || session.rete.alpha == nil || session.rete.graphBeta == nil {
-		t.Fatalf("session Rete runtime = %#v, want populated alpha and graph beta memories", session.rete)
+	if session.rete == nil || !session.rete.usesGraphBeta() || session.rete.graphBeta == nil || session.rete.alpha != nil || session.rete.graphAlpha != nil {
+		t.Fatalf("session Rete runtime = %#v, want graph beta mode without legacy alpha memories", session.rete)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
 	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
@@ -758,7 +758,6 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 	})
-	conditionID := revision.rules["adult-active"].conditionPlans[0].id
 	initials := []SessionInitialFact{
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 18, "status": "active"})},
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 22, "status": "active"})},
@@ -777,28 +776,21 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		t.Fatalf("AssertTemplate extra: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 3)
-	alphaMemory := session.rete.alpha
-	alphaConditionMemory := alphaMemory.conditions[conditionID]
-	alphaFactsPtr := reflect.ValueOf(alphaConditionMemory.facts).Pointer()
-	alphaIndexesPtr := reflect.ValueOf(alphaConditionMemory.indexes).Pointer()
+	graphBetaMemory := session.rete.graphBeta
+	if graphBetaMemory == nil || session.rete.alpha != nil || session.rete.graphAlpha != nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta mode without legacy alpha memories", session.rete)
+	}
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.rete.alpha != alphaMemory {
-		t.Fatalf("alpha memory pointer changed across reset: got %p want %p", session.rete.alpha, alphaMemory)
+	if session.rete.graphBeta != graphBetaMemory {
+		t.Fatalf("graph beta memory pointer changed across reset: got %p want %p", session.rete.graphBeta, graphBetaMemory)
 	}
-	if session.rete.alpha.conditions[conditionID] != alphaConditionMemory {
-		t.Fatalf("alpha condition memory pointer changed across reset: got %p want %p", session.rete.alpha.conditions[conditionID], alphaConditionMemory)
-	}
-	if got := reflect.ValueOf(session.rete.alpha.conditions[conditionID].facts).Pointer(); got != alphaFactsPtr {
-		t.Fatalf("alpha facts backing array pointer changed across reset: got %#x want %#x", got, alphaFactsPtr)
-	}
-	if got := reflect.ValueOf(session.rete.alpha.conditions[conditionID].indexes).Pointer(); got != alphaIndexesPtr {
-		t.Fatalf("alpha index map pointer changed across reset: got %#x want %#x", got, alphaIndexesPtr)
+	if session.rete.alpha != nil || session.rete.graphAlpha != nil {
+		t.Fatalf("legacy alpha memories after graph beta reset: alpha=%p graphAlpha=%p", session.rete.alpha, session.rete.graphAlpha)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
-	assertAlphaMemoryGeneration(t, session, "adult-active", session.Generation())
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
 }
 
