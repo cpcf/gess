@@ -843,7 +843,7 @@ func (e compiledExpression) graphExecutable() bool {
 	case expressionNodeParam:
 		return e.paramName != "" && e.resultKind != ""
 	case expressionNodeCall:
-		if e.function.name == "" || e.function.fn == nil || e.resultKind == "" || len(e.operands) != len(e.function.args) {
+		if e.function.name == "" || !e.function.hasImplementation() || e.resultKind == "" || len(e.operands) != len(e.function.args) {
 			return false
 		}
 		for i, operand := range e.operands {
@@ -1198,7 +1198,7 @@ func (e compiledExpression) bindingValueFromFactWithCounters(fact conditionFactR
 }
 
 func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEvaluationError, span *propagationCounterSpan, eval func(compiledExpression) (Value, bool, error)) (value Value, ok bool, err error) {
-	if e.function.name == "" || e.function.fn == nil {
+	if e.function.name == "" || !e.function.hasImplementation() {
 		return Value{}, false, fmt.Errorf("%w: malformed function call", ErrFunctionEvaluation)
 	}
 	if span != nil {
@@ -1210,26 +1210,105 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 	if err := ctx.Err(); err != nil {
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
 	}
-	args := make([]Value, len(e.operands))
-	for i, operand := range e.operands {
-		arg, argOK, err := eval(operand)
+	if e.function.fn0 != nil {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				value = Value{}
+				ok = false
+				err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		value, err = e.function.fn0(ctx)
+	} else if e.function.fn1 != nil {
+		arg0, argOK, err := eval(e.operands[0])
 		if err != nil || !argOK {
 			return Value{}, false, err
 		}
-		if !expressionKindAssignable(e.function.args[i], arg.Kind()) {
-			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", i, arg.Kind(), e.function.args[i]))
+		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
 		}
-		args[i] = cloneValue(arg)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				value = Value{}
+				ok = false
+				err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		value, err = e.function.fn1(ctx, cloneValue(arg0))
+	} else if e.function.fn2 != nil {
+		arg0, argOK, err := eval(e.operands[0])
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
+		}
+		arg1, argOK, err := eval(e.operands[1])
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[1], arg1.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 1, arg1.Kind(), e.function.args[1]))
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				value = Value{}
+				ok = false
+				err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		value, err = e.function.fn2(ctx, cloneValue(arg0), cloneValue(arg1))
+	} else if e.function.fn3 != nil {
+		arg0, argOK, err := eval(e.operands[0])
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
+		}
+		arg1, argOK, err := eval(e.operands[1])
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[1], arg1.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 1, arg1.Kind(), e.function.args[1]))
+		}
+		arg2, argOK, err := eval(e.operands[2])
+		if err != nil || !argOK {
+			return Value{}, false, err
+		}
+		if !expressionKindAssignable(e.function.args[2], arg2.Kind()) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 2, arg2.Kind(), e.function.args[2]))
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				value = Value{}
+				ok = false
+				err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		value, err = e.function.fn3(ctx, cloneValue(arg0), cloneValue(arg1), cloneValue(arg2))
+	} else {
+		args := make([]Value, len(e.operands))
+		for i, operand := range e.operands {
+			arg, argOK, err := eval(operand)
+			if err != nil || !argOK {
+				return Value{}, false, err
+			}
+			if !expressionKindAssignable(e.function.args[i], arg.Kind()) {
+				return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", i, arg.Kind(), e.function.args[i]))
+			}
+			args[i] = cloneValue(arg)
+		}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				value = Value{}
+				ok = false
+				err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
+			}
+		}()
+		value, err = e.function.fn(ctx, args)
 	}
-
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			value = Value{}
-			ok = false
-			err = recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("panic: %v", recovered))
-		}
-	}()
-	value, err = e.function.fn(ctx, args)
 	if err != nil {
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
 	}
@@ -1243,11 +1322,7 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 	if !expressionKindAssignable(e.function.ret, value.Kind()) {
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("return has kind %s, want %s", value.Kind(), e.function.ret))
 	}
-	canonical, err := canonicalValue(value)
-	if err != nil {
-		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
-	}
-	return canonical, true, nil
+	return value, true, nil
 }
 
 func recordFunctionEvaluationError(span *propagationCounterSpan, meta *FunctionEvaluationError, functionName string, err error) error {

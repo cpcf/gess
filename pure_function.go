@@ -9,12 +9,20 @@ import (
 // PureFunction is a deterministic, side-effect-free function implementation
 // available to condition and query expressions.
 type PureFunction func(context.Context, []Value) (Value, error)
+type PureFunction0 func(context.Context) (Value, error)
+type PureFunction1 func(context.Context, Value) (Value, error)
+type PureFunction2 func(context.Context, Value, Value) (Value, error)
+type PureFunction3 func(context.Context, Value, Value, Value) (Value, error)
 
 type PureFunctionSpec struct {
 	Name               string
 	Args               []ValueKind
 	Return             ValueKind
 	Func               PureFunction
+	Func0              PureFunction0
+	Func1              PureFunction1
+	Func2              PureFunction2
+	Func3              PureFunction3
 	EqualityComparator bool
 }
 
@@ -66,6 +74,10 @@ type compiledPureFunction struct {
 	args               []ValueKind
 	ret                ValueKind
 	fn                 PureFunction
+	fn0                PureFunction0
+	fn1                PureFunction1
+	fn2                PureFunction2
+	fn3                PureFunction3
 	order              int
 	equalityComparator bool
 }
@@ -84,9 +96,31 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 			Err:    ErrFunctionValidation,
 		}
 	}
-	if normalized.Func == nil {
+	implementationCount := 0
+	if normalized.Func != nil {
+		implementationCount++
+	}
+	if normalized.Func0 != nil {
+		implementationCount++
+	}
+	if normalized.Func1 != nil {
+		implementationCount++
+	}
+	if normalized.Func2 != nil {
+		implementationCount++
+	}
+	if normalized.Func3 != nil {
+		implementationCount++
+	}
+	if implementationCount == 0 {
 		return compiledPureFunction{}, &ValidationError{
 			Reason: "function implementation is required",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if implementationCount > 1 {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "function must declare exactly one implementation",
 			Err:    ErrFunctionValidation,
 		}
 	}
@@ -102,6 +136,30 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 				Reason: "invalid function argument kind",
 				Err:    ErrFunctionValidation,
 			}
+		}
+	}
+	if normalized.Func0 != nil && len(normalized.Args) != 0 {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "fixed-arity function implementation does not match argument count",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if normalized.Func1 != nil && len(normalized.Args) != 1 {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "fixed-arity function implementation does not match argument count",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if normalized.Func2 != nil && len(normalized.Args) != 2 {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "fixed-arity function implementation does not match argument count",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if normalized.Func3 != nil && len(normalized.Args) != 3 {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "fixed-arity function implementation does not match argument count",
+			Err:    ErrFunctionValidation,
 		}
 	}
 	if normalized.EqualityComparator {
@@ -123,9 +181,17 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 		args:               append([]ValueKind(nil), normalized.Args...),
 		ret:                normalized.Return,
 		fn:                 normalized.Func,
+		fn0:                normalized.Func0,
+		fn1:                normalized.Func1,
+		fn2:                normalized.Func2,
+		fn3:                normalized.Func3,
 		order:              order,
 		equalityComparator: normalized.EqualityComparator,
 	}, nil
+}
+
+func (f compiledPureFunction) hasImplementation() bool {
+	return f.fn != nil || f.fn0 != nil || f.fn1 != nil || f.fn2 != nil || f.fn3 != nil
 }
 
 func validPureFunctionName(name string) bool {

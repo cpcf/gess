@@ -131,8 +131,8 @@ func mustCompilePureFunctionPredicateRuleset(t testing.TB) *Ruleset {
 		Name:   "pf-high-score",
 		Args:   []ValueKind{ValueInt},
 		Return: ValueBool,
-		Func: func(_ context.Context, args []Value) (Value, error) {
-			score, _ := args[0].AsInt64()
+		Func1: func(_ context.Context, arg Value) (Value, error) {
+			score, _ := arg.AsInt64()
 			return NewValue(score >= 90)
 		},
 	})
@@ -141,9 +141,9 @@ func mustCompilePureFunctionPredicateRuleset(t testing.TB) *Ruleset {
 		Args:               []ValueKind{ValueString, ValueString},
 		Return:             ValueBool,
 		EqualityComparator: true,
-		Func: func(_ context.Context, args []Value) (Value, error) {
-			left, _ := args[0].AsString()
-			right, _ := args[1].AsString()
+		Func2: func(_ context.Context, arg0, arg1 Value) (Value, error) {
+			left, _ := arg0.AsString()
+			right, _ := arg1.AsString()
 			return NewValue(left == right)
 		},
 	})

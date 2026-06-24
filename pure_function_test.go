@@ -84,6 +84,78 @@ func TestPureFunctionPredicatesExecuteAlphaAndBeta(t *testing.T) {
 	}
 }
 
+func TestPureFunctionPredicatesExecuteFixedArityCalls(t *testing.T) {
+	workspace := NewWorkspace()
+	for _, spec := range []PureFunctionSpec{
+		{
+			Name:   "zero",
+			Return: ValueBool,
+			Func0: func(context.Context) (Value, error) {
+				return NewValue(true)
+			},
+		},
+		{
+			Name:   "one",
+			Args:   []ValueKind{ValueInt},
+			Return: ValueBool,
+			Func1: func(_ context.Context, arg Value) (Value, error) {
+				value, _ := arg.AsInt64()
+				return NewValue(value == 1)
+			},
+		},
+		{
+			Name:   "two",
+			Args:   []ValueKind{ValueInt, ValueInt},
+			Return: ValueBool,
+			Func2: func(_ context.Context, arg0, arg1 Value) (Value, error) {
+				left, _ := arg0.AsInt64()
+				right, _ := arg1.AsInt64()
+				return NewValue(left+right == 3)
+			},
+		},
+		{
+			Name:   "three",
+			Args:   []ValueKind{ValueInt, ValueInt, ValueInt},
+			Return: ValueBool,
+			Func3: func(_ context.Context, arg0, arg1, arg2 Value) (Value, error) {
+				first, _ := arg0.AsInt64()
+				second, _ := arg1.AsInt64()
+				third, _ := arg2.AsInt64()
+				return NewValue(first+second+third == 6)
+			},
+		},
+	} {
+		mustAddPureFunction(t, workspace, spec)
+	}
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "fixed-arity-calls",
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Name:    "event",
+			Predicates: []ExpressionSpec{
+				Call("zero"),
+				Call("one", CurrentFieldExpr{Field: "a"}),
+				Call("two", CurrentFieldExpr{Field: "a"}, CurrentFieldExpr{Field: "b"}),
+				Call("three", CurrentFieldExpr{Field: "a"}, CurrentFieldExpr{Field: "b"}, CurrentFieldExpr{Field: "c"}),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "pure-function-fixed-arity-session")
+
+	if _, err := session.Assert(context.Background(), "event", mustFields(t, map[string]any{"a": 1, "b": 2, "c": 3})); err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+}
+
 func TestPureFunctionCompileValidation(t *testing.T) {
 	workspace := NewWorkspace()
 	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
@@ -118,6 +190,24 @@ func TestPureFunctionCompileValidation(t *testing.T) {
 	})
 	if _, err := workspace.Compile(context.Background()); !errors.Is(err, ErrFunctionValidation) {
 		t.Fatalf("Compile arity error = %v, want ErrFunctionValidation", err)
+	}
+
+	workspace = NewWorkspace()
+	if err := workspace.AddFunction(PureFunctionSpec{
+		Name:  "fixed-mismatch",
+		Args:  []ValueKind{ValueInt, ValueInt},
+		Func1: func(context.Context, Value) (Value, error) { return NewValue(true) },
+	}); !errors.Is(err, ErrFunctionValidation) {
+		t.Fatalf("AddFunction fixed arity mismatch error = %v, want ErrFunctionValidation", err)
+	}
+
+	workspace = NewWorkspace()
+	if err := workspace.AddFunction(PureFunctionSpec{
+		Name:  "duplicate-impl",
+		Func:  func(context.Context, []Value) (Value, error) { return NewValue(true) },
+		Func0: func(context.Context) (Value, error) { return NewValue(true) },
+	}); !errors.Is(err, ErrFunctionValidation) {
+		t.Fatalf("AddFunction duplicate implementation error = %v, want ErrFunctionValidation", err)
 	}
 }
 
