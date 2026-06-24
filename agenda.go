@@ -819,6 +819,15 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 }
 
 func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) ([]agendaChange, error) {
+	return a.reconcileTerminalTokensInternal(ctx, revision, deltas, true)
+}
+
+func (a *agenda) reconcileTerminalTokensWithoutChanges(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) error {
+	_, err := a.reconcileTerminalTokensInternal(ctx, revision, deltas, false)
+	return err
+}
+
+func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {
 	if a == nil || revision == nil {
 		return nil, ErrInvalidRuleset
 	}
@@ -837,8 +846,12 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 		clear(seen)
 	}
 	nextPending := a.reconcileNextPending[:0]
-	changes := a.reconcileChanges[:0]
-	activated := a.reconcileActivated[:0]
+	var changes []agendaChange
+	var activated []agendaChange
+	if collectChanges {
+		changes = a.reconcileChanges[:0]
+		activated = a.reconcileActivated[:0]
+	}
 
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
@@ -878,10 +891,12 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 					seen[key] = struct{}{}
 					nextPending = append(nextPending, key)
 				}
-				activated = append(activated, agendaChange{
-					kind:       agendaChangeActivated,
-					activation: a.compactChangeActivation(existing),
-				})
+				if collectChanges {
+					activated = append(activated, agendaChange{
+						kind:       agendaChangeActivated,
+						activation: a.compactChangeActivation(existing),
+					})
+				}
 			}
 			continue
 		}
@@ -897,10 +912,12 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 			seen[key] = struct{}{}
 			nextPending = append(nextPending, key)
 		}
-		activated = append(activated, agendaChange{
-			kind:       agendaChangeActivated,
-			activation: a.compactChangeActivation(created),
-		})
+		if collectChanges {
+			activated = append(activated, agendaChange{
+				kind:       agendaChangeActivated,
+				activation: a.compactChangeActivation(created),
+			})
+		}
 	}
 
 	for _, key := range a.pending {
@@ -912,13 +929,17 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 			continue
 		}
 		existing.status = activationStatusDeactivated
-		changes = append(changes, agendaChange{
-			kind:       agendaChangeDeactivated,
-			activation: a.compactChangeActivation(existing),
-		})
+		if collectChanges {
+			changes = append(changes, agendaChange{
+				kind:       agendaChangeDeactivated,
+				activation: a.compactChangeActivation(existing),
+			})
+		}
 	}
 
-	changes = append(changes, activated...)
+	if collectChanges {
+		changes = append(changes, activated...)
+	}
 
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordAgendaSort()
@@ -927,9 +948,14 @@ func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset,
 
 	a.reconcileSeen = seen
 	a.reconcileNextPending = a.pending[:0]
+	a.pending = nextPending
+	if !collectChanges {
+		a.reconcileChanges = a.reconcileChanges[:0]
+		a.reconcileActivated = a.reconcileActivated[:0]
+		return nil, nil
+	}
 	a.reconcileChanges = changes[:0]
 	a.reconcileActivated = activated[:0]
-	a.pending = nextPending
 	return append([]agendaChange(nil), changes...), nil
 }
 

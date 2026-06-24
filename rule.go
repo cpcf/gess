@@ -2297,29 +2297,17 @@ func validateHigherOrderPositiveInputShape(ruleName string, conditionIndex int, 
 }
 
 func validateForallRequirementShape(ruleName string, conditionIndex int, spec ConditionSpec) error {
-	switch condition := spec.(type) {
-	case nil:
-		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
-	case Test, *Test:
-		return nil
-	case And:
-		if len(condition.Conditions) == 0 {
-			return higherOrderValidationError(ruleName, conditionIndex, "forall requirement requires at least one child")
-		}
-		for _, child := range condition.Conditions {
-			if err := validateForallRequirementShape(ruleName, conditionIndex, child); err != nil {
-				return err
-			}
-		}
-		return nil
-	case *And:
-		if condition == nil {
-			return higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
-		}
-		return validateForallRequirementShape(ruleName, conditionIndex, And{Conditions: condition.Conditions})
-	default:
-		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement supports only test predicates")
+	parts, err := forallRequirementPartsForSpec(spec)
+	if err != nil {
+		return higherOrderValidationError(ruleName, conditionIndex, err.Error())
 	}
+	if len(parts.matches) > 1 {
+		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement currently supports at most one positive match")
+	}
+	if len(parts.matches) == 0 && len(parts.tests) == 0 {
+		return higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
+	}
+	return nil
 }
 
 func higherOrderCounterInputSpec(ruleName string, conditionIndex int, spec compiledHigherOrderConditionSpec) (ConditionSpec, error) {
@@ -2333,43 +2321,147 @@ func higherOrderCounterInputSpec(ruleName string, conditionIndex int, spec compi
 		if err := validateForallConditionShape(ruleName, conditionIndex, spec.input, spec.requirement); err != nil {
 			return nil, err
 		}
-		expressions := make([]ExpressionSpec, 0)
-		collectForallRequirementExpressions(spec.requirement, &expressions)
-		if len(expressions) == 0 {
+		parts, err := forallRequirementPartsForSpec(spec.requirement)
+		if err != nil {
+			return nil, higherOrderValidationError(ruleName, conditionIndex, err.Error())
+		}
+		if len(parts.matches) == 0 && len(parts.tests) == 0 {
 			return nil, higherOrderValidationError(ruleName, conditionIndex, "forall requirement is required")
 		}
-		requirement := expressions[0]
-		if len(expressions) > 1 {
-			requirement = BooleanExpr{Operator: ExpressionBoolAnd, Operands: expressions}
+		if len(parts.matches) > 1 {
+			return nil, higherOrderValidationError(ruleName, conditionIndex, "forall requirement currently supports at most one positive match")
 		}
-		counterexample := Test{
-			Expression: BooleanExpr{
-				Operator: ExpressionBoolNot,
-				Operands: []ExpressionSpec{cloneExpressionSpec(requirement)},
-			},
+		if len(parts.matches) == 1 {
+			requirement := parts.matches[0].clone()
+			for _, test := range parts.tests {
+				requirement.Predicates = append(requirement.Predicates, rewriteBindingFieldExpressionsToCurrent(test, requirement.Binding))
+			}
+			return And{Conditions: []ConditionSpec{cloneConditionSpec(spec.input), Not{Condition: Match(requirement)}}}, nil
 		}
+		requirement := parts.tests[0]
+		if len(parts.tests) > 1 {
+			operands := make([]ExpressionSpec, len(parts.tests))
+			for i, test := range parts.tests {
+				operands[i] = cloneExpressionSpec(test)
+			}
+			requirement = BooleanExpr{Operator: ExpressionBoolAnd, Operands: operands}
+		}
+		counterexample := Test{Expression: BooleanExpr{Operator: ExpressionBoolNot, Operands: []ExpressionSpec{cloneExpressionSpec(requirement)}}}
 		return And{Conditions: []ConditionSpec{cloneConditionSpec(spec.input), counterexample}}, nil
 	default:
 		return nil, higherOrderValidationError(ruleName, conditionIndex, "unknown higher-order condition")
 	}
 }
 
-func collectForallRequirementExpressions(spec ConditionSpec, out *[]ExpressionSpec) {
+type forallRequirementParts struct {
+	matches []RuleConditionSpec
+	tests   []ExpressionSpec
+}
+
+func forallRequirementPartsForSpec(spec ConditionSpec) (forallRequirementParts, error) {
+	var out forallRequirementParts
+	if err := collectForallRequirementParts(spec, &out); err != nil {
+		return forallRequirementParts{}, err
+	}
+	return out, nil
+}
+
+func collectForallRequirementParts(spec ConditionSpec, out *forallRequirementParts) error {
 	switch condition := spec.(type) {
+	case nil:
+		return fmt.Errorf("forall requirement is required")
 	case Test:
-		*out = append(*out, cloneExpressionSpec(condition.Expression))
+		out.tests = append(out.tests, cloneExpressionSpec(condition.Expression))
 	case *Test:
 		if condition != nil {
-			*out = append(*out, cloneExpressionSpec(condition.Expression))
+			out.tests = append(out.tests, cloneExpressionSpec(condition.Expression))
 		}
+	case Match:
+		out.matches = append(out.matches, RuleConditionSpec(condition).clone())
+	case *Match:
+		if condition == nil {
+			return fmt.Errorf("forall requirement is required")
+		}
+		out.matches = append(out.matches, RuleConditionSpec(*condition).clone())
 	case And:
+		if len(condition.Conditions) == 0 {
+			return fmt.Errorf("forall requirement requires at least one child")
+		}
 		for _, child := range condition.Conditions {
-			collectForallRequirementExpressions(child, out)
+			if err := collectForallRequirementParts(child, out); err != nil {
+				return err
+			}
 		}
 	case *And:
 		if condition != nil {
-			collectForallRequirementExpressions(And{Conditions: condition.Conditions}, out)
+			return collectForallRequirementParts(And{Conditions: condition.Conditions}, out)
 		}
+		return fmt.Errorf("forall requirement is required")
+	default:
+		return fmt.Errorf("forall requirement supports positive match/test conjunctions")
+	}
+	return nil
+}
+
+func rewriteBindingFieldExpressionsToCurrent(spec ExpressionSpec, binding string) ExpressionSpec {
+	switch expression := spec.(type) {
+	case nil:
+		return nil
+	case BindingFieldExpr:
+		if expression.Binding == binding {
+			return CurrentFieldExpr{Field: expression.Field, Path: expression.Path.clone()}
+		}
+		return expression.clone()
+	case *BindingFieldExpr:
+		if expression == nil {
+			return nil
+		}
+		return rewriteBindingFieldExpressionsToCurrent(*expression, binding)
+	case CallExpr:
+		out := expression.clone()
+		for i, arg := range out.Args {
+			out.Args[i] = rewriteBindingFieldExpressionsToCurrent(arg, binding)
+		}
+		return out
+	case *CallExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		for i, arg := range out.Args {
+			out.Args[i] = rewriteBindingFieldExpressionsToCurrent(arg, binding)
+		}
+		return &out
+	case CompareExpr:
+		out := expression.clone()
+		out.Left = rewriteBindingFieldExpressionsToCurrent(out.Left, binding)
+		out.Right = rewriteBindingFieldExpressionsToCurrent(out.Right, binding)
+		return out
+	case *CompareExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		out.Left = rewriteBindingFieldExpressionsToCurrent(out.Left, binding)
+		out.Right = rewriteBindingFieldExpressionsToCurrent(out.Right, binding)
+		return &out
+	case BooleanExpr:
+		out := expression.clone()
+		for i, operand := range out.Operands {
+			out.Operands[i] = rewriteBindingFieldExpressionsToCurrent(operand, binding)
+		}
+		return out
+	case *BooleanExpr:
+		if expression == nil {
+			return nil
+		}
+		out := expression.clone()
+		for i, operand := range out.Operands {
+			out.Operands[i] = rewriteBindingFieldExpressionsToCurrent(operand, binding)
+		}
+		return &out
+	default:
+		return cloneExpressionSpec(spec)
 	}
 }
 

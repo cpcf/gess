@@ -251,6 +251,24 @@ func (p compiledAggregatePlan) evaluate(ctx context.Context, source factSource, 
 			return nil
 		}
 		plan := p.inputPlans[index]
+		if plan.negated {
+			matched := false
+			positive := plan
+			positive.negated = false
+			if err := positive.forEachMatchWithBindings(ctx, source, selected, func(conditionMatch) error {
+				matched = true
+				return nil
+			}); err != nil {
+				return err
+			}
+			if matched {
+				return nil
+			}
+			return walk(index+1, append(selected, conditionMatch{
+				conditionID: plan.id,
+				bindingSlot: plan.bindingSlot,
+			}))
+		}
 		return plan.forEachMatchWithBindings(ctx, source, selected, func(match conditionMatch) error {
 			return walk(index+1, append(selected, match))
 		})

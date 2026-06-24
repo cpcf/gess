@@ -1011,7 +1011,10 @@ func reteGraphSupportsAggregateCondition(condition compiledConditionPlan, allowI
 		return false
 	}
 	for inputIndex, input := range condition.aggregate.inputPlans {
-		if input.aggregate != nil || input.negated {
+		if input.aggregate != nil {
+			return false
+		}
+		if input.negated && condition.aggregate.higherOrder == conditionHigherOrderUnknown {
 			return false
 		}
 		if input.isTest {

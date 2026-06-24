@@ -1436,6 +1436,11 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if len(s.listeners) == 0 {
+		if ok, err := s.reconcileAgendaWithoutSnapshotAndChanges(ctx); ok || err != nil {
+			return result, err
+		}
+	}
 	if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 		return result, err
 	}
@@ -1507,7 +1512,6 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
-	next.reserveSlotStorage(s.revision.estimatedRunSlotCapacity(cap(next.facts)))
 	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 
@@ -1747,6 +1751,15 @@ func (s *Session) reconcileAgendaInternal(ctx context.Context) ([]agendaChange, 
 }
 
 func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaChange, bool, error) {
+	return s.reconcileAgendaWithoutSnapshotInternal(ctx, true)
+}
+
+func (s *Session) reconcileAgendaWithoutSnapshotAndChanges(ctx context.Context) (bool, error) {
+	_, ok, err := s.reconcileAgendaWithoutSnapshotInternal(ctx, false)
+	return ok, err
+}
+
+func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, collectChanges bool) ([]agendaChange, bool, error) {
 	if s == nil || s.closed {
 		return nil, true, ErrClosedSession
 	}
@@ -1772,13 +1785,21 @@ func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaC
 		return nil, true, err
 	}
 	if ok {
-		changes, err := s.agenda.reconcileTerminalTokens(ctx, s.revision, tokens)
-		if err != nil {
+		var changes []agendaChange
+		if collectChanges {
+			var err error
+			changes, err = s.agenda.reconcileTerminalTokens(ctx, s.revision, tokens)
+			if err != nil {
+				return nil, true, err
+			}
+		} else if err := s.agenda.reconcileTerminalTokensWithoutChanges(ctx, s.revision, tokens); err != nil {
 			return nil, true, err
 		}
 		s.agendaReady = true
 		s.agendaDirty = false
-		s.emitAgendaEvents(ctx, changes)
+		if collectChanges {
+			s.emitAgendaEvents(ctx, changes)
+		}
 		return changes, true, nil
 	}
 

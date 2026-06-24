@@ -129,6 +129,174 @@ func TestForallUsesCounterexamplesAndVacuousTruth(t *testing.T) {
 	}
 }
 
+func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	order := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "order",
+		Fields: []FieldSpec{
+			{Name: "customer-id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "hit",
+		Fn: func(ActionContext) error {
+			fired++
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "all-customers-have-ready-order",
+		ConditionTree: Forall(
+			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{
+				Binding:     "order",
+				TemplateKey: order.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "ready"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			}),
+		),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-requirement-match-session")
+	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want requirement match lowered to negatives", got)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("empty Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("empty Run fired/action count = %d/%d, want vacuous 1/1", result.Fired, fired)
+	}
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("missing requirement Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 1 {
+		t.Fatalf("missing requirement Run fired/action count = %d/%d, want 0/1", result.Fired, fired)
+	}
+	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "other"), "status": mustValue(t, "ready")})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unrelated requirement Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 1 {
+		t.Fatalf("unrelated requirement Run fired/action count = %d/%d, want 0/1", result.Fired, fired)
+	}
+	ready := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "ready")})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("satisfied requirement Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 2 {
+		t.Fatalf("satisfied requirement Run fired/action count = %d/%d, want 1/2", result.Fired, fired)
+	}
+	if _, err := session.Retract(context.Background(), ready.Fact.ID()); err != nil {
+		t.Fatalf("Retract ready order: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("missing again Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 2 {
+		t.Fatalf("missing again Run fired/action count = %d/%d, want 0/2", result.Fired, fired)
+	}
+}
+
+func TestForallRequirementMatchAndTestUsesQualifiedAbsence(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	order := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "order",
+		Fields: []FieldSpec{
+			{Name: "customer-id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "hit",
+		Fn: func(ActionContext) error {
+			fired++
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "all-customers-have-large-order",
+		ConditionTree: Forall(
+			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			And{Conditions: []ConditionSpec{
+				Match(RuleConditionSpec{
+					Binding:     "order",
+					TemplateKey: order.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+					},
+				}),
+				Test{Expression: CompareExpr{
+					Operator: ExpressionCompareGreaterOrEqual,
+					Left:     BindingPath("order", Path("amount")),
+					Right:    ConstExpr{Value: 10},
+				}},
+			}},
+		),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-requirement-match-test-session")
+	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want qualified requirement lowered to negatives", got)
+	}
+
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	low := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("low order Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 0 {
+		t.Fatalf("low order Run fired/action count = %d/%d, want 0/0", result.Fired, fired)
+	}
+	if _, err := session.Modify(context.Background(), low.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 12)}}); err != nil {
+		t.Fatalf("Modify low order to high: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("high order Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("high order Run fired/action count = %d/%d, want 1/1", result.Fired, fired)
+	}
+	if _, err := session.Modify(context.Background(), low.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 5)}}); err != nil {
+		t.Fatalf("Modify high order to low: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("low again Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 1 {
+		t.Fatalf("low again Run fired/action count = %d/%d, want 0/1", result.Fired, fired)
+	}
+}
+
 func TestExistsContributorReplacementDoesNotChurnWhenTruthUnchanged(t *testing.T) {
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
