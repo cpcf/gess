@@ -2517,6 +2517,7 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 		t.Fatalf("pending activations after inactive modify = %d, want %d", got, want)
 	}
 
+	session.attachPropagationCounters()
 	first, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
 	if err != nil {
 		t.Fatalf("AssertTemplate(first active block): %v", err)
@@ -2541,6 +2542,58 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 		t.Fatalf("pending activations after last block retract = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if len(snapshot.UnsupportedReasons) != 0 {
+		t.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
+	}
+}
+
+func TestReteRuntimeGraphBetaNegationRetractBlockedLeftWithMultipleBlockers(t *testing.T) {
+	ctx := context.Background()
+	revision, customerKey, blockKey := mustNegationRuleset(t, func(ActionContext) error { return nil })
+	session := mustSession(t, revision, "graph-beta-negation-retract-blocked-left-session")
+	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(customer): %v", err)
+	}
+	first, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(first active block): %v", err)
+	}
+	second, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(second active block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
+	}
+
+	session.attachPropagationCounters()
+	if _, err := session.Retract(ctx, customer.Fact.ID()); err != nil {
+		t.Fatalf("Retract(customer): %v", err)
+	}
+	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
+		t.Fatalf("Retract(first block): %v", err)
+	}
+	if _, err := session.Retract(ctx, second.Fact.ID()); err != nil {
+		t.Fatalf("Retract(second block): %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after blocked customer and blockers retract = %d, want 0", got)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if len(snapshot.UnsupportedReasons) != 0 {
+		t.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
+	}
 }
 
 func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T) {
