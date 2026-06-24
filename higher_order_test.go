@@ -172,6 +172,246 @@ func TestExistsContributorReplacementDoesNotChurnWhenTruthUnchanged(t *testing.T
 	}
 }
 
+func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	order := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "order",
+		Fields: []FieldSpec{
+			{Name: "customer-id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error {
+		fired++
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-with-open-order",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Exists(Match(RuleConditionSpec{
+				Binding:     "order",
+				TemplateKey: order.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "open"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			})),
+		}},
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "scoped-exists-prefix-session")
+	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want scoped exists lowered to negatives", got)
+	}
+
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
+	first := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after first c1 order = %d, want %d", got, want)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("first Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("first Run fired/action count = %d/%d, want 1/1", result.Fired, fired)
+	}
+
+	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
+	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
+		t.Fatalf("Retract first c1 order: %v", err)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("replacement Run: %v", err)
+	}
+	if result.Fired != 0 || fired != 1 {
+		t.Fatalf("replacement Run fired/action count = %d/%d, want unchanged 0/1", result.Fired, fired)
+	}
+
+	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c2"), "status": mustValue(t, "open")})
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("c2 Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 2 {
+		t.Fatalf("c2 Run fired/action count = %d/%d, want 1/2", result.Fired, fired)
+	}
+}
+
+func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "customer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	order := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "order",
+		Fields: []FieldSpec{
+			{Name: "customer-id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-all-orders-large",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Forall(
+				Match(RuleConditionSpec{
+					Binding:     "order",
+					TemplateKey: order.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+					},
+				}),
+				Test{Expression: CompareExpr{
+					Operator: ExpressionCompareGreaterOrEqual,
+					Left:     BindingPath("order", Path("amount")),
+					Right:    ConstExpr{Value: 10},
+				}},
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "scoped-forall-prefix-session")
+	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want scoped forall lowered to negatives", got)
+	}
+
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations with vacuous truth = %d, want %d", got, want)
+	}
+	bad := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 3)})
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after c1 counterexample = %d, want %d", got, want)
+	}
+	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 12)}}); err != nil {
+		t.Fatalf("Modify counterexample passing: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after c1 counterexample repaired = %d, want %d", got, want)
+	}
+	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 5)}}); err != nil {
+		t.Fatalf("Modify counterexample failing: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after c1 counterexample returns = %d, want %d", got, want)
+	}
+	secondBad := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after second c1 counterexample = %d, want %d", got, want)
+	}
+	if _, err := session.Retract(context.Background(), bad.Fact.ID()); err != nil {
+		t.Fatalf("Retract first counterexample: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after first counterexample retract = %d, want %d", got, want)
+	}
+	if _, err := session.Retract(context.Background(), secondBad.Fact.ID()); err != nil {
+		t.Fatalf("Retract second counterexample: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after last counterexample retract = %d, want %d", got, want)
+	}
+}
+
+func TestHigherOrderGraphLowersScopedConditionsToNegativeNodes(t *testing.T) {
+	revision := mustCompileHigherOrderRuleset(t)
+	summary := revision.reteGraphDebugSummary()
+	if got := len(summary.Plan.AggregateNodes); got != 0 {
+		t.Fatalf("aggregate node count = %d, want higher-order graph lowering without aggregate nodes", got)
+	}
+	notNodes := 0
+	rightPredicateNotNodes := 0
+	for _, node := range summary.BetaNodes {
+		if node.kind == reteGraphBetaNodeNot {
+			notNodes++
+			if len(node.rightPredicates) != 0 {
+				rightPredicateNotNodes++
+			}
+		}
+	}
+	if notNodes < 3 {
+		t.Fatalf("negative beta node count = %d, want at least 3 for scoped exists/forall lowering", notNodes)
+	}
+	if rightPredicateNotNodes != 1 {
+		t.Fatalf("right-predicate negative beta node count = %d, want 1 for direct scoped forall counterexample lowering", rightPredicateNotNodes)
+	}
+}
+
+func TestHigherOrderGraphKeepsGeneralAggregatesOnAggregateNodes(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:          "count-items",
+		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()}), Count().As("count")),
+		Actions:       []RuleActionSpec{{Name: "hit"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.Plan.AggregateNodes), 1; got != want {
+		t.Fatalf("aggregate node count = %d, want %d for general count aggregate", got, want)
+	}
+}
+
+func TestHigherOrderGraphKeepsRootConditionsOnAggregateFallback(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "root-exists",
+		ConditionTree: Exists(Match(RuleConditionSpec{
+			Binding:     "item",
+			TemplateKey: item.Key(),
+		})),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "root-forall",
+		ConditionTree: Forall(
+			Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()}),
+			Test{Expression: CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     BindingPath("item", Path("amount")),
+				Right:    ConstExpr{Value: 10},
+			}},
+		),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.Plan.AggregateNodes), 2; got != want {
+		t.Fatalf("aggregate node count = %d, want %d for root higher-order fallback", got, want)
+	}
+}
+
 func TestHigherOrderRejectsUnsupportedShapes(t *testing.T) {
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{Name: "item"})

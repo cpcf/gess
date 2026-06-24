@@ -344,6 +344,7 @@ const (
 	betaJoinKeyFloat
 	betaJoinKeyString
 	betaJoinKeyCanonical
+	betaJoinKeyTokenIdentity
 )
 
 type betaJoinKey struct {
@@ -401,6 +402,29 @@ func tokenRefEqual(left, right tokenRef) bool {
 		}
 	}
 	return true
+}
+
+func tokenRefHasPrefix(token, prefix tokenRef) bool {
+	if token.isZero() || prefix.isZero() {
+		return false
+	}
+	tokenPrefix := tokenRefPrefix(token, prefix.size())
+	return !tokenPrefix.isZero() && tokenRefEqual(tokenPrefix, prefix)
+}
+
+func tokenRefPrefix(token tokenRef, size int) tokenRef {
+	if token.isZero() {
+		return tokenRef{}
+	}
+	if size <= 0 || size > token.size() {
+		return tokenRef{}
+	}
+	for current := token; !current.isZero(); current = current.parent() {
+		if current.size() == size {
+			return current
+		}
+	}
+	return tokenRef{}
 }
 
 func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
@@ -502,6 +526,18 @@ func betaJoinKeyForTwoValues(first, second Value) (betaJoinKey, bool) {
 	firstKey.secondFloatBits = secondKey.floatBits
 	firstKey.secondStringValue = secondKey.stringValue
 	return firstKey, true
+}
+
+func betaJoinKeyForTokenIdentity(token tokenRef) (betaJoinKey, bool) {
+	if token.isZero() {
+		return betaJoinKey{}, false
+	}
+	return betaJoinKey{
+		kind:            betaJoinKeyTokenIdentity,
+		intValue:        int64(token.size()),
+		floatBits:       uint64(token.generation()),
+		secondFloatBits: token.identityState(),
+	}, true
 }
 
 func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {

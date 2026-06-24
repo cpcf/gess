@@ -32,6 +32,9 @@ type reteGraphBetaMemory struct {
 	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
 	alphaRouteEpoch        uint64
 	aggregateOutputEpoch   uint64
+	deferNegativeOutputs   bool
+	suppressTerminalDeltas bool
+	rightPredicateScratch  []conditionMatch
 }
 
 type reteGraphBetaNodeMemory struct {
@@ -512,8 +515,12 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 	}
 	for _, graphNode := range m.graph.betaNodes {
 		node := m.nodeMemory(graphNode.id)
-		node.left.reserveBeta(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(graphNode.left)))
-		node.right.reserveBeta(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(graphNode.right)))
+		nodeRowCapacity := rowCapacity
+		if graphNode.rightHasLeftPrefix {
+			nodeRowCapacity = max(8, rowCapacity/4)
+		}
+		node.left.reserveBeta(nodeRowCapacity, graphBetaFactIndexReserve(nodeRowCapacity, m.graph.stageTokenWidth(graphNode.left)))
+		node.right.reserveBeta(nodeRowCapacity, graphBetaFactIndexReserve(nodeRowCapacity, m.graph.stageTokenWidth(graphNode.right)))
 	}
 	for _, terminalNode := range m.graph.terminalNodes {
 		terminal := m.terminal(terminalNode.id)
@@ -1194,12 +1201,23 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 	}
 	m.clearMemories()
 	m.setFacts(facts)
+	m.deferNegativeOutputs = true
+	m.suppressTerminalDeltas = true
 	m.initializeAggregateOutputs()
 	for _, fact := range facts {
 		if _, err := m.insertFactInternal(ctx, fact, nil, false); err != nil {
+			m.deferNegativeOutputs = false
+			m.suppressTerminalDeltas = false
 			return err
 		}
 	}
+	if err := m.finalizeDeferredNegativeOutputs(nil); err != nil {
+		m.deferNegativeOutputs = false
+		m.suppressTerminalDeltas = false
+		return err
+	}
+	m.deferNegativeOutputs = false
+	m.suppressTerminalDeltas = false
 	return nil
 }
 
@@ -3061,6 +3079,36 @@ func (m *reteGraphBetaMemory) propagateRemoveFactFromStage(source reteGraphStage
 	}
 }
 
+func (m *reteGraphBetaMemory) finalizeDeferredNegativeOutputs(span *propagationCounterSpan) error {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	delta := &reteAgendaDelta{supported: true}
+	for _, node := range m.graph.betaNodes {
+		if node.kind != reteGraphBetaNodeNot {
+			continue
+		}
+		nodeMemory := m.nodeMemory(node.id)
+		if nodeMemory == nil {
+			continue
+		}
+		source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)}
+		for i := range nodeMemory.left.rows {
+			row := nodeMemory.left.rows[i]
+			if row.token.isZero() || row.negativeRightMatchCount() != 0 {
+				continue
+			}
+			if span != nil {
+				span.recordBetaJoinedTokenProduced()
+			}
+			if err := m.propagateFromStage(source, row.token, span, delta); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, entry bindingTupleEntry, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
 	if m == nil || delta == nil || token.isZero() {
 		return false, nil
@@ -3228,7 +3276,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if span != nil {
 			span.recordBetaInputInsert(side)
 		}
-		if count == 0 {
+		if count == 0 && !m.deferNegativeOutputs {
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
@@ -3248,9 +3296,12 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if span != nil {
 			span.recordBetaInputInsert(side)
 		}
-		currentMatch, ok := tokenLastMatch(token)
-		if !ok {
-			return false, nil
+		var currentMatch conditionMatch
+		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
+			currentMatch, ok = tokenLastMatch(token)
+			if !ok {
+				return false, nil
+			}
 		}
 		bucket := nodeMemory.left.bucketForKey(joinKey)
 		if span != nil {
@@ -3265,12 +3316,22 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 			if leftRow == nil || leftRow.token.isZero() {
 				continue
 			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
+			if node.rightHasLeftPrefix && !tokenRefHasPrefix(token, leftRow.token) {
+				continue
+			}
+			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
+				if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
+					return false, err
+				} else if !ok {
+					continue
+				}
+			}
+			if ok, err := m.rightPredicatesMatch(node, currentMatch, leftRow.token, span); err != nil {
 				return false, err
 			} else if !ok {
 				continue
 			}
-			if leftRow.incrementNegativeRightMatchCount() == 1 {
+			if leftRow.incrementNegativeRightMatchCount() == 1 && !m.deferNegativeOutputs {
 				m.propagateRemoveFromStage(source, leftRow.token, nil, delta)
 			}
 		}
@@ -3377,9 +3438,12 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 		if counters != nil {
 			counters.recordNegativeRowRemoved()
 		}
-		currentMatch, ok := tokenLastMatch(removedRow.token)
-		if !ok {
-			return false
+		var currentMatch conditionMatch
+		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
+			currentMatch, ok = tokenLastMatch(removedRow.token)
+			if !ok {
+				return false
+			}
 		}
 		bucket := nodeMemory.left.bucketForKey(joinKey)
 		for i := 0; i < bucket.len(); i++ {
@@ -3388,7 +3452,17 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 			if leftRow == nil || leftRow.token.isZero() {
 				continue
 			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
+			if node.rightHasLeftPrefix && !tokenRefHasPrefix(removedRow.token, leftRow.token) {
+				continue
+			}
+			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
+				if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
+					delta.supported = false
+				} else if !ok {
+					continue
+				}
+			}
+			if ok, err := m.rightPredicatesMatch(node, currentMatch, leftRow.token, nil); err != nil {
 				delta.supported = false
 			} else if !ok {
 				continue
@@ -3763,11 +3837,14 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			span.recordTerminalRowInsertedForBranch(branchKey)
 		}
 	}
-	if span != nil {
+	if span != nil && !m.suppressTerminalDeltas {
 		span.recordTerminalDeltaEmitted()
 		if haveBranchKey {
 			span.recordTerminalDeltaEmittedForBranch(branchKey)
 		}
+	}
+	if m.suppressTerminalDeltas {
+		return
 	}
 	delta.added = append(delta.added, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
@@ -3868,7 +3945,6 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-
 	deltas := m.terminalTokenDeltas[:0]
 	for _, terminalNode := range m.graph.terminalNodes {
 		if terminalNode.kind != reteGraphTerminalRule {
@@ -4475,6 +4551,10 @@ func graphBetaJoinKeyForLeftTokenWithContext(ctx context.Context, node *reteGrap
 	if node == nil {
 		return betaJoinKey{}, false, nil
 	}
+	if node.rightHasLeftPrefix {
+		key, ok := betaJoinKeyForTokenIdentity(token)
+		return key, ok, nil
+	}
 	if len(node.hashJoins) == 0 {
 		return betaJoinKey{}, true, nil
 	}
@@ -4501,6 +4581,11 @@ func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (bet
 func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan) (betaJoinKey, bool, error) {
 	if node == nil {
 		return betaJoinKey{}, false, nil
+	}
+	if node.rightHasLeftPrefix {
+		prefix := tokenRefPrefix(token, node.rightPrefixWidth)
+		key, ok := betaJoinKeyForTokenIdentity(prefix)
+		return key, ok, nil
 	}
 	match, ok := tokenLastMatch(token)
 	if !ok {
@@ -4574,6 +4659,57 @@ func (m *reteGraphBetaMemory) filterTokenMatches(node *reteGraphBetaNode, token 
 	return ok, nil
 }
 
+func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, right conditionMatch, left tokenRef, span *propagationCounterSpan) (bool, error) {
+	if m == nil || node == nil || len(node.rightPredicates) == 0 {
+		return true, nil
+	}
+	size := max(left.size(), right.bindingSlot+1)
+	if size <= 0 {
+		return false, nil
+	}
+	if cap(m.rightPredicateScratch) < size {
+		m.rightPredicateScratch = make([]conditionMatch, size)
+	}
+	bindings := m.rightPredicateScratch[:size]
+	for i := range bindings {
+		bindings[i] = conditionMatch{}
+	}
+	for current := left; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return false, nil
+		}
+		slot := row.match.bindingSlot
+		if slot >= 0 && slot < len(bindings) {
+			bindings[slot] = row.match
+		}
+	}
+	if right.bindingSlot < 0 || right.bindingSlot >= len(bindings) {
+		return false, nil
+	}
+	bindings[right.bindingSlot] = right
+	for _, predicate := range node.rightPredicates {
+		if span != nil {
+			span.recordExpressionPredicateTest()
+		}
+		value, ok, err := predicate.expression.evaluateWithContextParamsAndCounters(m.context(), right.fact, bindings, nil, predicate.functionEvaluationMeta(), span)
+		if err != nil {
+			if span != nil {
+				span.recordExpressionPredicateError()
+			}
+			return false, err
+		}
+		matched, ok := value.AsBool()
+		if !ok || !matched {
+			if span != nil {
+				span.recordExpressionPredicateFailure()
+			}
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (m *reteGraphBetaMemory) negativeRightMatchCountForLeft(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
 		return 0, false
@@ -4592,17 +4728,32 @@ func (m *reteGraphBetaMemory) negativeRightMatchCountForLeft(node *reteGraphBeta
 		if rightRow == nil || rightRow.token.isZero() {
 			continue
 		}
-		rightMatch, ok := tokenLastMatch(rightRow.token)
-		if !ok {
-			return count, false
+		if node.rightHasLeftPrefix && !tokenRefHasPrefix(rightRow.token, left) {
+			continue
 		}
-		ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, span)
-		if err != nil {
-			return count, false
+		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
+			rightMatch, ok := tokenLastMatch(rightRow.token)
+			if !ok {
+				return count, false
+			}
+			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
+				ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, span)
+				if err != nil {
+					return count, false
+				}
+				if !ok {
+					continue
+				}
+			}
+			ok, err := m.rightPredicatesMatch(node, rightMatch, left, span)
+			if err != nil {
+				return count, false
+			}
+			if !ok {
+				continue
+			}
 		}
-		if ok {
-			count++
-		}
+		count++
 	}
 	return count, true
 }
