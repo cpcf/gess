@@ -61,6 +61,130 @@ func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
 	}
 }
 
+func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
+	tests := []struct {
+		name       string
+		invalidate func(context.Context, *Session, FactID) error
+	}{
+		{
+			name: "retract",
+			invalidate: func(ctx context.Context, session *Session, id FactID) error {
+				result, err := session.Retract(ctx, id)
+				if err != nil {
+					return err
+				}
+				if result.Status != RetractRemoved {
+					return errors.New("fact was not retracted")
+				}
+				return nil
+			},
+		},
+		{
+			name: "modify",
+			invalidate: func(ctx context.Context, session *Session, id FactID) error {
+				result, err := session.Modify(ctx, id, FactPatch{
+					Set: mustFields(t, map[string]any{"status": "done"}),
+				})
+				if err != nil {
+					return err
+				}
+				if result.Status != ModifyChanged {
+					return errors.New("fact was not modified")
+				}
+				return nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			workspace := NewWorkspace()
+			task := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "task",
+				Fields: []FieldSpec{
+					{Name: "id", Kind: ValueString, Required: true},
+					{Name: "status", Kind: ValueString, Required: true},
+				},
+			})
+
+			actionsFired := 0
+			mustAddAction(t, workspace, ActionSpec{
+				Name: "record",
+				Fn: func(ActionContext) error {
+					actionsFired++
+					return nil
+				},
+			})
+			mustAddRule(t, workspace, RuleSpec{
+				Name: "open-task",
+				Conditions: []RuleConditionSpec{{
+					Binding:     "task",
+					TemplateKey: task.Key(),
+					FieldConstraints: []FieldConstraintSpec{{
+						Field:    "status",
+						Operator: FieldConstraintEqual,
+						Value:    mustValue(t, "open"),
+					}},
+				}},
+				Actions: []RuleActionSpec{{Name: "record"}},
+			})
+
+			revision, err := workspace.Compile(ctx)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			session, err := NewSession(revision)
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+			if session.rete == nil || session.rete.graphBeta == nil {
+				t.Fatal("session has no graph beta runtime")
+			}
+
+			asserted, err := session.AssertTemplate(ctx, task.Key(), mustFields(t, map[string]any{
+				"id":     "t-1",
+				"status": "open",
+			}))
+			if err != nil {
+				t.Fatalf("AssertTemplate: %v", err)
+			}
+			if got := len(session.agenda.pendingActivations()); got != 1 {
+				t.Fatalf("pending activations after assert = %d, want 1", got)
+			}
+			rule := revision.rules["open-task"]
+			terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
+			if terminal == nil || terminal.rows.len() != 1 {
+				t.Fatalf("terminal rows after assert = %#v, want one retained row", terminal)
+			}
+
+			if err := tt.invalidate(ctx, session, asserted.Fact.ID()); err != nil {
+				t.Fatalf("invalidate: %v", err)
+			}
+			if got := len(session.agenda.pendingActivations()); got != 0 {
+				t.Fatalf("pending activations after %s = %d, want 0", tt.name, got)
+			}
+			if terminal.rows.len() != 0 {
+				t.Fatalf("terminal rows after %s = %d, want 0", tt.name, terminal.rows.len())
+			}
+
+			result, err := session.Run(ctx)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if result.Status != RunCompleted {
+				t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+			}
+			if result.Fired != 0 {
+				t.Fatalf("run fired = %d, want 0", result.Fired)
+			}
+			if actionsFired != 0 {
+				t.Fatalf("actions fired = %d, want 0", actionsFired)
+			}
+		})
+	}
+}
+
 func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{

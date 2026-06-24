@@ -14,6 +14,7 @@ type reteGraphBetaMemory struct {
 	nodes                  []*reteGraphBetaNodeMemory
 	aggregates             []*reteGraphAggregateNodeMemory
 	terminals              []*reteGraphTerminalMemory
+	terminalsByRule        map[RuleRevisionID][]*reteGraphTerminalMemory
 	alphaFacts             []reteGraphAlphaFactSet
 	alphaConditions        [][]ConditionID
 	alphaFactCounts        map[ConditionID]int
@@ -381,6 +382,7 @@ func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteG
 	}
 	memory.arena.reserve(arenaCapacity)
 	memory.reserveMemories(rowCapacity)
+	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
 	if err := memory.resetFacts(ctx, facts); err != nil {
 		return nil, err
@@ -447,6 +449,25 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 	for _, terminalNode := range m.graph.terminalNodes {
 		terminal := m.terminal(terminalNode.id)
 		terminal.rows.reserveTerminal(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(terminalNode.input)))
+	}
+}
+
+func (m *reteGraphBetaMemory) indexRuleTerminals() {
+	if m == nil || m.graph == nil {
+		return
+	}
+	for _, terminalNode := range m.graph.terminalNodes {
+		if terminalNode.kind != reteGraphTerminalRule {
+			continue
+		}
+		terminal := m.terminal(terminalNode.id)
+		if terminal == nil {
+			continue
+		}
+		if m.terminalsByRule == nil {
+			m.terminalsByRule = make(map[RuleRevisionID][]*reteGraphTerminalMemory)
+		}
+		m.terminalsByRule[terminalNode.ruleRevisionID] = append(m.terminalsByRule[terminalNode.ruleRevisionID], terminal)
 	}
 }
 
@@ -736,6 +757,30 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 	m.identityRows[identity] = identityBucket
 	m.markFactRowsDirty()
 	return true
+}
+
+func (m *tokenHashMemory) containsExactToken(token tokenRef) bool {
+	if m == nil || token.isZero() || len(m.identityRows) == 0 {
+		return false
+	}
+	if _, ok := token.resolve(); !ok {
+		return false
+	}
+	bucket, ok := m.identityRows[tokenRefKey(token)]
+	if !ok || bucket.len() == 0 {
+		return false
+	}
+	for i := 0; i < bucket.len(); i++ {
+		rowID, ok := bucket.at(i)
+		if !ok {
+			continue
+		}
+		row := m.row(rowID)
+		if row != nil && row.token.handle == token.handle {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
@@ -3324,6 +3369,30 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 			counters.recordTerminalRowRemovedForBranch(key)
 		}
 	}
+}
+
+func (m *reteGraphBetaMemory) retainsTerminalToken(ruleRevisionID RuleRevisionID, token tokenRef) bool {
+	if m == nil || m.graph == nil || token.isZero() {
+		return false
+	}
+	if len(m.terminalsByRule) > 0 {
+		for _, terminal := range m.terminalsByRule[ruleRevisionID] {
+			if terminal != nil && terminal.rows.containsExactToken(token) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, terminalNode := range m.graph.terminalNodes {
+		if terminalNode.ruleRevisionID != ruleRevisionID {
+			continue
+		}
+		terminal := m.terminalAt(terminalNode.id)
+		if terminal != nil && terminal.rows.containsExactToken(token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {

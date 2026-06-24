@@ -1248,6 +1248,9 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 }
 
 func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation) error {
+	if s.activationTerminalTokenRetained(activation) {
+		return nil
+	}
 	for i := range rule.conditions {
 		match, ok := tokenRefAtSlot(activation.token, i)
 		if !ok {
@@ -1269,4 +1272,11 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 		}
 	}
 	return nil
+}
+
+func (s *Session) activationTerminalTokenRetained(activation activation) bool {
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil || activation.token.isZero() {
+		return false
+	}
+	return s.rete.graphBeta.retainsTerminalToken(activation.ruleRevisionID, activation.token)
 }
