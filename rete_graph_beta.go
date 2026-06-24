@@ -1207,7 +1207,7 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 	if m == nil {
 		return
 	}
-	m.facts = append(m.facts[:0], facts...)
+	m.facts = facts
 	if m.factIndexes == nil {
 		m.factIndexes = make(map[FactID]int, len(facts))
 	} else {
