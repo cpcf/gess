@@ -626,8 +626,27 @@ type compiledRuleAction struct {
 }
 
 type compiledAssertTemplateValuesAction struct {
-	template Template
-	values   []compiledExpression
+	template    Template
+	values      []compiledExpression
+	tokenValues []compiledTokenActionValue
+}
+
+type compiledTokenActionValueKind uint8
+
+const (
+	compiledTokenActionValueGeneric compiledTokenActionValueKind = iota
+	compiledTokenActionValueConst
+	compiledTokenActionValueBindingField
+	compiledTokenActionValueStringCall2ConstBindingField
+)
+
+type compiledTokenActionValue struct {
+	kind        compiledTokenActionValueKind
+	value       Value
+	bindingSlot int
+	access      compiledPathAccess
+	function    compiledPureFunction
+	expression  compiledExpression
 }
 
 func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
@@ -736,11 +755,62 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 	}
 
 	out.kind = compiledRuleActionAssertTemplateValues
+	tokenValues := make([]compiledTokenActionValue, len(values))
+	for i, value := range values {
+		tokenValues[i] = compileTokenActionValue(value)
+	}
 	out.assertTemplateValues = compiledAssertTemplateValuesAction{
-		template: template,
-		values:   values,
+		template:    template,
+		values:      values,
+		tokenValues: tokenValues,
 	}
 	return out, nil
+}
+
+func compileTokenActionValue(expression compiledExpression) compiledTokenActionValue {
+	out := compiledTokenActionValue{kind: compiledTokenActionValueGeneric, expression: expression}
+	switch expression.kind {
+	case expressionNodeConst:
+		out.kind = compiledTokenActionValueConst
+		out.value = expression.value
+	case expressionNodeBindingField:
+		if tokenActionBindingFieldFastPath(expression) {
+			out.kind = compiledTokenActionValueBindingField
+			out.bindingSlot = expression.bindingSlot
+			out.access = expression.access
+		}
+	case expressionNodeCall:
+		if value, ok := compileStringCall2ConstBindingFieldTokenActionValue(expression); ok {
+			return value
+		}
+	}
+	return out
+}
+
+func compileStringCall2ConstBindingFieldTokenActionValue(expression compiledExpression) (compiledTokenActionValue, bool) {
+	if expression.function.fn2 == nil || expression.function.ret != ValueString || len(expression.operands) != 2 {
+		return compiledTokenActionValue{}, false
+	}
+	if len(expression.function.args) != 2 || expression.function.args[0] != ValueString || expression.function.args[1] != ValueString {
+		return compiledTokenActionValue{}, false
+	}
+	prefix := expression.operands[0]
+	field := expression.operands[1]
+	if prefix.kind != expressionNodeConst || prefix.value.Kind() != ValueString || !tokenActionBindingFieldFastPath(field) {
+		return compiledTokenActionValue{}, false
+	}
+	return compiledTokenActionValue{
+		kind:        compiledTokenActionValueStringCall2ConstBindingField,
+		value:       prefix.value,
+		bindingSlot: field.bindingSlot,
+		access:      field.access,
+		function:    expression.function,
+		expression:  expression,
+	}, true
+}
+
+func tokenActionBindingFieldFastPath(expression compiledExpression) bool {
+	return expression.bindingSlot >= 0 && expression.access.rootSlot >= 0 && expression.access.topLevel()
 }
 
 func nativeActionExpressionUsesCurrent(spec ExpressionSpec) bool {
@@ -1049,8 +1119,8 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 	inserter := preparedTemplateValueInserter{template: action.template}
 
 	if !activation.token.isZero() {
-		for i, expression := range action.values {
-			value, err := evaluateNativeActionExpressionWithToken(ctx, expression, activation.token)
+		for i, valueSpec := range action.tokenValues {
+			value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token)
 			if err != nil {
 				state.rollbackGeneratedFactSlots(slotMark)
 				return err
@@ -1109,8 +1179,8 @@ func (s *Session) evaluateAssertTemplateValuesAction(ctx context.Context, activa
 	}
 	var err error
 	if !activation.token.isZero() {
-		for i, expression := range action.values {
-			values[i], err = evaluateNativeActionExpressionWithToken(ctx, expression, activation.token)
+		for i, valueSpec := range action.tokenValues {
+			values[i], err = evaluateTokenActionValue(ctx, valueSpec, activation.token)
 			if err != nil {
 				s.actionValueScratch = values
 				return nil, err
@@ -1150,6 +1220,71 @@ func evaluateNativeActionExpressionWithToken(ctx context.Context, expression com
 		return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
 	}
 	return value, nil
+}
+
+func evaluateTokenActionValue(ctx context.Context, value compiledTokenActionValue, token tokenRef) (Value, error) {
+	switch value.kind {
+	case compiledTokenActionValueConst:
+		return value.value, nil
+	case compiledTokenActionValueBindingField:
+		resolved, ok := tokenActionBindingFieldValue(token, value.bindingSlot, value.access)
+		if !ok {
+			return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
+		}
+		return resolved, nil
+	case compiledTokenActionValueStringCall2ConstBindingField:
+		resolved, ok := tokenActionBindingFieldValue(token, value.bindingSlot, value.access)
+		if !ok {
+			return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
+		}
+		return evaluateTokenActionStringCall2(ctx, value, resolved)
+	default:
+		return evaluateNativeActionExpressionWithToken(ctx, value.expression, token)
+	}
+}
+
+func tokenActionBindingFieldValue(token tokenRef, bindingSlot int, access compiledPathAccess) (Value, bool) {
+	match, ok := tokenRefAtSlot(token, bindingSlot)
+	if !ok || match.hasValue {
+		return Value{}, false
+	}
+	if access.rootSlot < 0 {
+		return Value{}, false
+	}
+	value, ok := match.fact.compiledFieldValue(access.root, access.rootSlot)
+	return value, ok
+}
+
+func evaluateTokenActionStringCall2(ctx context.Context, value compiledTokenActionValue, arg Value) (out Value, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Value{}, functionEvaluationError(nil, value.function.name, err)
+	}
+	if !expressionKindAssignable(ValueString, arg.Kind()) {
+		return Value{}, functionEvaluationError(nil, value.function.name, fmt.Errorf("argument %d has kind %s, want %s", 1, arg.Kind(), ValueString))
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			out = Value{}
+			err = functionEvaluationError(nil, value.function.name, fmt.Errorf("panic: %v", recovered))
+		}
+	}()
+	out, err = value.function.fn2(ctx, value.value, arg)
+	if err != nil {
+		return Value{}, functionEvaluationError(nil, value.function.name, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Value{}, functionEvaluationError(nil, value.function.name, err)
+	}
+	if out.Kind() == "" {
+		out = NullValue()
+	}
+	if !expressionKindAssignable(value.function.ret, out.Kind()) {
+		return Value{}, functionEvaluationError(nil, value.function.name, fmt.Errorf("return has kind %s, want %s", out.Kind(), value.function.ret))
+	}
+	return out, nil
 }
 
 func (s *Session) actionMatchesForActivation(activation activation, rule compiledRule) ([]conditionMatch, error) {

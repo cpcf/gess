@@ -88,8 +88,8 @@ func TestLargeSteadyStateScalingSmokeValidatesFacts(t *testing.T) {
 	if len(snapshot.UnsupportedReasons) != 0 {
 		t.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
 	}
-	if snapshot.Totals.RHSAsserts != largeSteadyStateRHSAsserts(tc) {
-		t.Fatalf("rhs asserts = %d, want %d", snapshot.Totals.RHSAsserts, largeSteadyStateRHSAsserts(tc))
+	if snapshot.Totals.RHSAsserts != largeSteadyStateReteRHSAsserts(tc) {
+		t.Fatalf("rhs asserts = %d, want %d", snapshot.Totals.RHSAsserts, largeSteadyStateReteRHSAsserts(tc))
 	}
 	if snapshot.Totals.TerminalRowsInserted == 0 || snapshot.Totals.ActivationsStored == 0 {
 		t.Fatalf("terminal/activation counters were not populated: %#v", snapshot.Totals)
@@ -834,6 +834,10 @@ func largeSteadyStateFiredCount(tc largeSteadyStateScalingCase) int {
 
 func largeSteadyStateRHSAsserts(tc largeSteadyStateScalingCase) int {
 	return largeSteadyStateFinalFacts(tc) - largeSteadyStateInitialFacts(tc)
+}
+
+func largeSteadyStateReteRHSAsserts(tc largeSteadyStateScalingCase) int {
+	return largeSteadyStateRHSAsserts(tc) - tc.streams*(tc.limit+2)
 }
 
 func largeSteadyStateScoreValue(n int) int {

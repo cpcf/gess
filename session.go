@@ -838,6 +838,10 @@ func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateVa
 		return nil
 	}
 
+	if !session.revision.factMayAffectReteByTarget(p.template.Name(), p.template.Key()) {
+		return nil
+	}
+
 	var span *propagationCounterSpan
 	if session.propagationCounters != nil {
 		counterSpan := session.propagationCounters.beginAssert(p.template.Key(), mutationOrigin{})
@@ -1152,6 +1156,12 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		return fact, false, reteAgendaDelta{}, nil
 	}
 
+	if !s.revision.factMayAffectReteByTarget(template.Name(), template.Key()) {
+		s.commitFactWorkspace(state)
+		s.emitGeneratedAssertEvent(ctx, fact, origin)
+		return fact, true, reteAgendaDelta{}, nil
+	}
+
 	var span *propagationCounterSpan
 	if s.propagationCounters != nil {
 		counterSpan := s.propagationCounters.beginAssert(template.Key(), origin)
@@ -1170,41 +1180,45 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		span.finish()
 	}
 	s.commitFactWorkspace(state)
-
-	if len(s.listeners) > 0 {
-		publicSnapshot := fact.snapshotForRevision(s.revision)
-		duplicateKey := fact.publicDuplicateKey(s.revision)
-		delta := MutationDelta{
-			Kind:           MutationAssert,
-			Generation:     s.generation,
-			ActivationID:   origin.activationID(),
-			RuleID:         origin.RuleID,
-			RuleRevisionID: origin.RuleRevisionID,
-			SupportAfter:   publicSnapshot.Support(),
-			Recency:        fact.recency,
-			FactID:         fact.id,
-			NewVersion:     fact.version,
-			NewDuplicate:   duplicateKey,
-			After:          &publicSnapshot,
-		}
-		s.emitEvent(ctx, Event{
-			SessionID:      s.id,
-			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence + 1,
-			Timestamp:      s.eventClock(),
-			Type:           EventFactAsserted,
-			Generation:     s.generation,
-			Recency:        fact.recency,
-			RuleID:         origin.RuleID,
-			RuleRevisionID: origin.RuleRevisionID,
-			ActivationID:   origin.activationID(),
-			FactIDs:        []FactID{fact.id},
-			Delta:          &delta,
-		})
-		s.nextEventSequence++
-	}
+	s.emitGeneratedAssertEvent(ctx, fact, origin)
 
 	return fact, true, agendaDelta, nil
+}
+
+func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
+	if s == nil || len(s.listeners) == 0 || fact == nil {
+		return
+	}
+	publicSnapshot := fact.snapshotForRevision(s.revision)
+	duplicateKey := fact.publicDuplicateKey(s.revision)
+	delta := MutationDelta{
+		Kind:           MutationAssert,
+		Generation:     s.generation,
+		ActivationID:   origin.activationID(),
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		SupportAfter:   publicSnapshot.Support(),
+		Recency:        fact.recency,
+		FactID:         fact.id,
+		NewVersion:     fact.version,
+		NewDuplicate:   duplicateKey,
+		After:          &publicSnapshot,
+	}
+	s.emitEvent(ctx, Event{
+		SessionID:      s.id,
+		RulesetID:      s.revision.ID(),
+		Sequence:       s.nextEventSequence + 1,
+		Timestamp:      s.eventClock(),
+		Type:           EventFactAsserted,
+		Generation:     s.generation,
+		Recency:        fact.recency,
+		RuleID:         origin.RuleID,
+		RuleRevisionID: origin.RuleRevisionID,
+		ActivationID:   origin.activationID(),
+		FactIDs:        []FactID{fact.id},
+		Delta:          &delta,
+	})
+	s.nextEventSequence++
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {

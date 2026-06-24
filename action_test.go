@@ -1555,6 +1555,78 @@ func TestNativeAssertTemplateValuesAction(t *testing.T) {
 	}
 }
 
+func TestNativeAssertTemplateValuesActionUsesUntargetedTokenFastPath(t *testing.T) {
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "generated",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "prefix-fast",
+		Args:   []ValueKind{ValueString, ValueString},
+		Return: ValueString,
+		Func2: func(_ context.Context, prefix Value, id Value) (Value, error) {
+			return newStringValue(prefix.stringValue + id.stringValue), nil
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				Call("prefix-fast", ConstExpr{Value: "hit-"}, BindingFieldExpr{Binding: "source", Field: "id"}),
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate-native",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "source",
+			TemplateKey: source.Key(),
+		}},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	compiled := revision.rules["generate-native"].actionExecutions[0].assertTemplateValues
+	if got, want := compiled.tokenValues[0].kind, compiledTokenActionValueStringCall2ConstBindingField; got != want {
+		t.Fatalf("token action value kind = %v, want %v", got, want)
+	}
+
+	session := mustSession(t, revision, "native-assert-action-token-fast-path-session")
+	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	session.attachPropagationCounters()
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	fact := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", "hit-s-1")
+	if fact.ID().IsZero() {
+		t.Fatal("generated fact was not inserted")
+	}
+	counters := session.propagationCounterSnapshot()
+	if got := counters.Totals.RHSAsserts; got != 0 {
+		t.Fatalf("RHS assert counter = %d, want 0 for untargeted generated fact", got)
+	}
+	if got := counters.ByTemplate[generated.Key()].Asserts; got != 0 {
+		t.Fatalf("generated template assert counter = %d, want 0", got)
+	}
+}
+
 func TestNativeAssertTemplateValuesActionRetainsStoredSlotBackingsAcrossFullFields(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
