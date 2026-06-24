@@ -999,6 +999,10 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 }
 
 func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
+	if len(action.values) == len(action.template.fields) {
+		return s.executePreparedAssertTemplateValuesAction(ctx, activation, rule, action)
+	}
+
 	values, err := s.evaluateAssertTemplateValuesAction(ctx, activation, rule, action)
 	if err != nil {
 		return err
@@ -1017,6 +1021,73 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 		return err
 	}
 	if inserted && s.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
+		if origin.isZero() || !s.runGuardHeld() {
+			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
+			return err
+		}
+		s.recordRunAgendaDelta(agendaDelta)
+	}
+	return nil
+}
+
+func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
+	origin := activation.mutationOrigin()
+	locked, ok := s.beginMutationForOrigin(origin)
+	if !ok {
+		return ErrConcurrencyMisuse
+	}
+	if locked {
+		defer s.endMutation()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	state := s.activeFactWorkspace()
+	mark := state.markGeneratedFactInsert()
+	slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(action.template.fields))
+	inserter := preparedTemplateValueInserter{template: action.template}
+
+	if !activation.token.isZero() {
+		for i, expression := range action.values {
+			value, err := evaluateNativeActionExpressionWithToken(ctx, expression, activation.token)
+			if err != nil {
+				state.rollbackGeneratedFactSlots(slotMark)
+				return err
+			}
+			if err := inserter.setPreparedSlot(slots, i, value); err != nil {
+				state.rollbackGeneratedFactSlots(slotMark)
+				return err
+			}
+		}
+	} else {
+		matches, err := s.actionMatchesForActivation(activation, rule)
+		if err != nil {
+			state.rollbackGeneratedFactSlots(slotMark)
+			return err
+		}
+		for i, expression := range action.values {
+			value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+			if evalErr != nil {
+				state.rollbackGeneratedFactSlots(slotMark)
+				return evalErr
+			}
+			if !ok {
+				state.rollbackGeneratedFactSlots(slotMark)
+				return fmt.Errorf("%w: native assert value %d is unavailable", ErrMatcher, i)
+			}
+			if err := inserter.setPreparedSlot(slots, i, value); err != nil {
+				state.rollbackGeneratedFactSlots(slotMark)
+				return err
+			}
+		}
+	}
+
+	_, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, action.template, slots, mark, slotMark, origin)
+	if err != nil {
+		return err
+	}
+	if inserted && s.revision.factMayAffectRuleMatchesByTarget(action.template.Name(), action.template.Key()) {
 		if origin.isZero() || !s.runGuardHeld() {
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err

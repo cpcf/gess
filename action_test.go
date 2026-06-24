@@ -1555,6 +1555,193 @@ func TestNativeAssertTemplateValuesAction(t *testing.T) {
 	}
 }
 
+func TestNativeAssertTemplateValuesActionRetainsStoredSlotBackingsAcrossFullFields(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "generated",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "source", Field: "id"},
+				ConstExpr{Value: "native"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-fast-slot-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
+		t.Fatalf("AssertTemplate(source 7): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 8)}); err != nil {
+		t.Fatalf("AssertTemplate(source 8): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+
+	first := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
+	second := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 8)
+	if got, want := first.fieldSlots[0].value, mustValue(t, 7); !got.Equal(want) {
+		t.Fatalf("first generated id = %v, want %v", got, want)
+	}
+	if got, want := second.fieldSlots[0].value, mustValue(t, 8); !got.Equal(want) {
+		t.Fatalf("second generated id = %v, want %v", got, want)
+	}
+	if got, want := first.fieldSlots[1].value, mustValue(t, "native"); !got.Equal(want) {
+		t.Fatalf("first generated kind = %v, want %v", got, want)
+	}
+	if got, want := second.fieldSlots[1].value, mustValue(t, "native"); !got.Equal(want) {
+		t.Fatalf("second generated kind = %v, want %v", got, want)
+	}
+}
+
+func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "generated",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Default: "effect", HasDefault: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "source", Field: "id"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-partial-default-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	generatedFact := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
+	if got, want := generatedFact.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
+		t.Fatalf("generated default kind = %v, want %v", got, want)
+	}
+	if got, want := generatedFact.fieldSlots[1].presence.fieldPresence(), FieldPresenceDefault; got != want {
+		t.Fatalf("generated kind presence = %v, want %v", got, want)
+	}
+}
+
+func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "generated",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id", "kind"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				ConstExpr{Value: 7},
+				ConstExpr{Value: "native"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", TemplateKey: source.Key()},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-duplicate-slot-rollback-session")
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("AssertTemplate(source 1): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
+		t.Fatalf("AssertTemplate(source 2): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+
+	generatedIDs := session.factsByTemplate[generated.Key()]
+	if got := len(generatedIDs); got != 1 {
+		t.Fatalf("generated fact count = %d, want 1", got)
+	}
+	if got, want := len(session.slotStorage), len(generated.fields); got != want {
+		t.Fatalf("generated slot storage length = %d, want %d", got, want)
+	}
+	if got, want := session.nextFactSequence, uint64(3); got != want {
+		t.Fatalf("next fact sequence = %d, want %d", got, want)
+	}
+	if got, want := session.nextRecency, Recency(3); got != want {
+		t.Fatalf("next recency = %d, want %d", got, want)
+	}
+}
+
 func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratchReuse(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

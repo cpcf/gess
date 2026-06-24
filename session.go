@@ -1124,13 +1124,21 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 
+	fact, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, template, fieldSlots, mark, slotMark, origin)
+	if err != nil {
+		return nil, Template{}, false, agendaDelta, err
+	}
+	return fact, template, inserted, agendaDelta, nil
+}
+
+func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template Template, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
 	fact, _, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil)
-		return nil, Template{}, false, reteAgendaDelta{}, err
+		return nil, false, reteAgendaDelta{}, err
 	}
 	if !inserted {
-		return fact, template, false, reteAgendaDelta{}, nil
+		return fact, false, reteAgendaDelta{}, nil
 	}
 
 	var span *propagationCounterSpan
@@ -1145,7 +1153,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		}
 		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
-		return nil, Template{}, false, agendaDelta, err
+		return nil, false, agendaDelta, err
 	}
 	if span != nil {
 		span.finish()
@@ -1185,7 +1193,7 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		s.nextEventSequence++
 	}
 
-	return fact, template, true, agendaDelta, nil
+	return fact, true, agendaDelta, nil
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
