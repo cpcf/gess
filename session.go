@@ -3232,8 +3232,9 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
 	name := template.Name()
 	templateKey := template.Key()
-	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
+	var duplicateIndex duplicateIndexKey
 	if template.duplicatePolicy != DuplicateAllow {
+		duplicateIndex = makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
 		if duplicateIndex.kind == duplicateIndexStructural {
 			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
 				w.rollbackGeneratedFactSlots(slotMark)
