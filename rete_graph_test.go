@@ -596,6 +596,55 @@ func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	}
 }
 
+func TestReteGraphRoutesAlphaExpressionPredicateConstraints(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "expression-alpha",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "item",
+			TemplateKey: item.Key(),
+			Predicates: []ExpressionSpec{
+				CompareExpr{
+					Operator: ExpressionCompareEqual,
+					Left:     CurrentFieldExpr{Field: "status"},
+					Right:    ConstExpr{Value: "open"},
+				},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.Plan.AlphaNodes), 1; got != want {
+		t.Fatalf("alpha nodes = %d, want %d", got, want)
+	}
+	route := summary.Plan.AlphaNodes[0].Route
+	if !route.enabled {
+		t.Fatal("alpha route is disabled, want expression predicate equality route")
+	}
+	statusSlot, ok := item.fieldSlot("status")
+	if !ok {
+		t.Fatal("missing status field slot")
+	}
+	if route.fieldSlot != statusSlot {
+		t.Fatalf("route field slot = %d, want %d", route.fieldSlot, statusSlot)
+	}
+	if route.value.kind != ValueString || route.value.text != "open" {
+		t.Fatalf("route value = %#v, want string open", route.value)
+	}
+}
+
 func TestReteGraphIndexesEqualityComparatorFunctionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{

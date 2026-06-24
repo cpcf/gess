@@ -348,7 +348,7 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 					route := reteGraphAlphaRouteSelector{}
 					if alphaNode := graph.alphaNode(alphaID); alphaNode != nil {
 						template := templatesByKey[condition.target.templateKey]
-						route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
+						route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 						alphaNode.route = route
 					}
 					switch condition.target.kind {
@@ -687,7 +687,7 @@ func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, conditio
 		route := reteGraphAlphaRouteSelector{}
 		if alphaNode := g.alphaNode(alphaID); alphaNode != nil {
 			template := templatesByKey[condition.target.templateKey]
-			route = reteGraphAlphaRouteSelectorForConstraints(template, condition.constraints)
+			route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 			alphaNode.route = route
 		}
 		switch condition.target.kind {
