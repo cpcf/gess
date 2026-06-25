@@ -164,3 +164,70 @@ func (m reteGraphAggregateMemory) removeBucket(parent tokenRef, counters *propag
 	delete(m.memory.buckets, tokenRefKey(parent))
 	m.memory.recycleBucket(bucket)
 }
+
+func (m reteGraphAggregateMemory) removeBucketsContainingFact(factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m.owner == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	if m.memory == nil || len(m.memory.buckets) == 0 {
+		return
+	}
+	for key, bucket := range m.memory.buckets {
+		if bucket == nil || !bucket.parent.containsFact(factID) {
+			continue
+		}
+		if !bucket.token.isZero() {
+			stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
+			m.owner.propagateRemoveFromStage(stage, bucket.token, counters, delta)
+		}
+		delete(m.memory.buckets, key)
+		m.memory.recycleBucket(bucket)
+	}
+}
+
+func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m.owner == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	if m.node == nil || m.memory == nil || len(m.memory.buckets) == 0 {
+		return
+	}
+	for _, bucket := range m.memory.buckets {
+		if bucket == nil {
+			continue
+		}
+		changed := false
+		if !aggregateSpecsNeedInputValues(m.node.specs) {
+			kept := 0
+			count := bucket.countOnlyMemberCount()
+			for i := range count {
+				token := bucket.countOnlyMemberAt(i)
+				if !token.containsFact(factID) {
+					bucket.setCountOnlyMemberAt(kept, token)
+					kept++
+					continue
+				}
+				changed = true
+			}
+			bucket.truncateCountOnlyMembers(kept)
+		} else if len(bucket.members) > 0 {
+			for key, member := range bucket.members {
+				if !member.token.containsFact(factID) {
+					continue
+				}
+				delete(bucket.members, key)
+				bucket.removeMember(m.node, member)
+				changed = true
+			}
+		}
+		if changed {
+			m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, counters, delta)
+		}
+	}
+}

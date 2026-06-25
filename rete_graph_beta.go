@@ -2567,73 +2567,11 @@ func (m *reteGraphBetaMemory) removeAggregateBucket(id reteGraphAggregateNodeID,
 }
 
 func (m *reteGraphBetaMemory) removeAggregateBucketsContainingFact(id reteGraphAggregateNodeID, factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || factID.IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	memory := m.aggregateMemory(id)
-	if memory == nil || len(memory.buckets) == 0 {
-		return
-	}
-	for key, bucket := range memory.buckets {
-		if bucket == nil || !bucket.parent.containsFact(factID) {
-			continue
-		}
-		if !bucket.token.isZero() {
-			stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-			m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-		}
-		delete(memory.buckets, key)
-		memory.recycleBucket(bucket)
-	}
+	m.graphAggregateMemory(id).removeBucketsContainingFact(factID, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphAggregateNodeID, factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || factID.IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	node := m.graph.aggregateNode(id)
-	memory := m.aggregateMemory(id)
-	if node == nil || memory == nil || len(memory.buckets) == 0 {
-		return
-	}
-	for _, bucket := range memory.buckets {
-		if bucket == nil {
-			continue
-		}
-		changed := false
-		if !aggregateSpecsNeedInputValues(node.specs) {
-			kept := 0
-			count := bucket.countOnlyMemberCount()
-			for i := range count {
-				token := bucket.countOnlyMemberAt(i)
-				if !token.containsFact(factID) {
-					bucket.setCountOnlyMemberAt(kept, token)
-					kept++
-					continue
-				}
-				changed = true
-			}
-			bucket.truncateCountOnlyMembers(kept)
-		} else if len(bucket.members) > 0 {
-			for key, member := range bucket.members {
-				if !member.token.containsFact(factID) {
-					continue
-				}
-				delete(bucket.members, key)
-				bucket.removeMember(node, member)
-				changed = true
-			}
-		}
-		if changed {
-			m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
-		}
-	}
+	m.graphAggregateMemory(id).removeMembersContainingFact(factID, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
