@@ -227,10 +227,10 @@ func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Gener
 	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
 		return nil, true, err
 	}
-	if r.usesGraphBeta() && r.graphBeta != nil {
+	if r.supportsIncrementalAgenda() {
 		return r.graphBeta.matchWithoutSnapshot(ctx, generation)
 	}
-	return nil, false, r.unsupportedRuntimeError()
+	return nil, false, nil
 }
 
 func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {

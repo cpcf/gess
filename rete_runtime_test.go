@@ -676,6 +676,38 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 	}
 }
 
+func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTerminalDeltasUnavailable(t *testing.T) {
+	ctx := context.Background()
+	revision := mustCompileLoanUnderwritingRuleset(t, nil)
+	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatal("session runtime is not graph beta-backed")
+	}
+	session.rete.plan.incrementalAgendaSupported = false
+
+	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)
+	}
+	if ok {
+		t.Fatalf("reconcileAgendaWithoutSnapshot = (%#v, true), want unavailable", changes)
+	}
+
+	changes, err = session.reconcileAgendaInternal(ctx)
+	if err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if len(changes) == 0 {
+		t.Fatal("snapshot fallback produced no agenda changes")
+	}
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state = ready %t dirty %t, want ready and clean", session.agendaReady, session.agendaDirty)
+	}
+}
+
 func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
