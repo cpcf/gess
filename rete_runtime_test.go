@@ -2408,6 +2408,9 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
 		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
 	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
 	}
@@ -3179,6 +3182,11 @@ func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
 }
 
 func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
@@ -3234,6 +3242,9 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
 	snapshot := session.propagationCounterSnapshot()
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
 	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
 	}
@@ -3467,6 +3478,7 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	}
 	targetEmployeeID := activationFactIDForTemplate(t, session, pending[0], employeeKey)
 
+	session.attachPropagationCounters()
 	if _, err := session.Modify(ctx, targetEmployeeID, FactPatch{
 		Set: mustFields(t, map[string]any{"dept": "Missing"}),
 	}); err != nil {
@@ -3484,6 +3496,10 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	}
 	if !reflect.DeepEqual(stored.factIDs, consumedFactIDs) {
 		t.Fatalf("consumed activation facts = %#v, want %#v", stored.factIDs, consumedFactIDs)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 

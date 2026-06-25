@@ -332,6 +332,7 @@ func TestPureFunctionPredicateModifyFailureRollsBackFact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert good: %v", err)
 	}
+	session.attachPropagationCounters()
 	result, err := session.Modify(ctx, inserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "bad"})})
 	if !errors.Is(err, ErrFunctionEvaluation) {
 		t.Fatalf("Modify error = %v, want ErrFunctionEvaluation", err)
@@ -347,6 +348,10 @@ func TestPureFunctionPredicateModifyFailureRollsBackFact(t *testing.T) {
 	status, ok := fact.Field("status")
 	if !ok || !status.Equal(mustValue(t, "good")) {
 		t.Fatalf("status after failed modify = %v/%v, want good/true", status, ok)
+	}
+	counters := session.propagationCounterSnapshot()
+	if got := counters.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 
@@ -391,6 +396,7 @@ func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T)
 	if err != nil {
 		t.Fatalf("Assert good: %v", err)
 	}
+	session.attachPropagationCounters()
 	result, err := session.Modify(ctx, inserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"id": "b", "status": "bad"})})
 	if !errors.Is(err, ErrFunctionEvaluation) {
 		t.Fatalf("Modify error = %v, want ErrFunctionEvaluation", err)
@@ -409,6 +415,10 @@ func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T)
 	}
 	if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": "b", "status": "good"})); err != nil {
 		t.Fatalf("Assert after failed modify should not see stale duplicate index: %v", err)
+	}
+	counters := session.propagationCounterSnapshot()
+	if got := counters.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 

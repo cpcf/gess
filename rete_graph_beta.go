@@ -3861,7 +3861,7 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		return reteAgendaDelta{}, false, nil
 	}
 	before, after := event.before, event.after
-	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged || event.duplicateChanged {
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged {
 		return reteAgendaDelta{}, false, nil
 	}
 	nodeIDs := slices.Clone(m.matchedAlphaRouteIDsForFact(before.ID()))
