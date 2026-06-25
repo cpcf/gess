@@ -5224,7 +5224,7 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 		return nil, true, err
 	}
 	if m.queryArena == nil {
-		m.queryArena = newTokenArena()
+		m.queryArena = newTokenArenaWithoutFactSpans()
 	} else {
 		m.queryArena.reset()
 	}

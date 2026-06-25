@@ -368,6 +368,9 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if got := session.rete.graphBeta.queryArena.rowCount(); got >= len(rows) {
 		t.Fatalf("query arena rows = %d, result rows = %d; want terminal projection without per-result query token copies", got, len(rows))
 	}
+	if session.rete.graphBeta.queryArena.keepFactSpans || cap(session.rete.graphBeta.queryArena.factIDs) != 0 || cap(session.rete.graphBeta.queryArena.factVersions) != 0 {
+		t.Fatal("query arena should use compact parent-linked rows without fact span caches")
+	}
 	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
 		t.Fatalf("row storage = items %d valueItems %d, want value-only projected storage", len(rows[0].items), len(rows[0].valueItems))
 	}
