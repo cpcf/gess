@@ -212,7 +212,7 @@ func (p compiledConditionPlan) forEachMatchWithBindingsAndParams(ctx context.Con
 		return nil
 	}
 
-	facts, ok := source.factsForTarget(p.target)
+	facts, ok := p.factsForTarget(source)
 	if !ok {
 		return nil
 	}
@@ -258,6 +258,33 @@ func (p compiledConditionPlan) forEachMatchWithBindingsAndParams(ctx context.Con
 		}
 	}
 	return nil
+}
+
+func (p compiledConditionPlan) factsForTarget(source factSource) ([]FactSnapshot, bool) {
+	if indexed, ok := source.(indexedFactSource); ok {
+		fieldSlot, value, ok := p.literalEqualityFieldIndex()
+		if ok {
+			facts, ok := indexed.factsForTargetFieldEqual(p.target, fieldSlot, value)
+			if ok {
+				return facts, true
+			}
+		}
+	}
+	return source.factsForTarget(p.target)
+}
+
+func (p compiledConditionPlan) literalEqualityFieldIndex() (int, reteGraphAlphaRouteValue, bool) {
+	for _, constraint := range p.constraints {
+		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
+			continue
+		}
+		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
+		if !ok {
+			continue
+		}
+		return constraint.access.rootSlot, value, true
+	}
+	return 0, reteGraphAlphaRouteValue{}, false
 }
 
 func (p compiledConditionPlan) forEachAlphaMatchWithBindings(ctx context.Context, facts []FactSnapshot, bindings []conditionMatch, yield func(conditionMatch) error) error {

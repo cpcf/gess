@@ -845,6 +845,10 @@ type factSource interface {
 	factsForTarget(conditionTarget) ([]FactSnapshot, bool)
 }
 
+type indexedFactSource interface {
+	factsForTargetFieldEqual(conditionTarget, int, reteGraphAlphaRouteValue) ([]FactSnapshot, bool)
+}
+
 type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
 }

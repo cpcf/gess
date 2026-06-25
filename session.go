@@ -111,6 +111,7 @@ type Session struct {
 	factsByDuplicate       duplicateIndexes
 	factsByTemplate        map[TemplateKey][]FactID
 	factsByName            map[string][]FactID
+	factFieldEqualIndexes  map[factFieldEqualKey][]FactID
 	factTargetIndexesDirty bool
 	insertionOrder         []FactID
 	slotStorage            []factSlot
@@ -380,6 +381,56 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 	}
 }
 
+func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int, value reteGraphAlphaRouteValue) ([]FactSnapshot, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.ensureFactTargetIndexes()
+	key := newFactFieldEqualKey(target, fieldSlot, value)
+	ids, cached := s.factFieldEqualIndexes[key]
+	if !cached {
+		targetIDs, ok := s.factIDsForTarget(target)
+		if !ok {
+			return nil, false
+		}
+		ids = make([]FactID, 0)
+		for _, id := range targetIDs {
+			fact, ok := s.workingFactByID(id)
+			if !ok || !workingFactMatchesFieldEqualIndex(fact, fieldSlot, value) {
+				continue
+			}
+			ids = append(ids, id)
+		}
+		if s.factFieldEqualIndexes == nil {
+			s.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactID)
+		}
+		s.factFieldEqualIndexes[key] = ids
+	}
+	if len(ids) == 0 {
+		return nil, true
+	}
+	out := make([]FactSnapshot, 0, len(ids))
+	for _, id := range ids {
+		fact, ok := s.workingFactByID(id)
+		if !ok {
+			continue
+		}
+		out = append(out, fact.detachedSnapshotForRevision(s.revision))
+	}
+	return out, true
+}
+
+func (s *Session) factIDsForTarget(target conditionTarget) ([]FactID, bool) {
+	switch target.kind {
+	case conditionTargetName:
+		return s.factsByName[target.name], true
+	case conditionTargetTemplateKey:
+		return s.factsByTemplate[target.templateKey], true
+	default:
+		return nil, false
+	}
+}
+
 func (s *Session) ensureFactTargetIndexes() {
 	if s == nil || !s.factTargetIndexesDirty {
 		return
@@ -409,7 +460,15 @@ func (s *Session) rebuildFactTargetIndexes() {
 		s.factsByTemplate[fact.templateKey] = append(s.factsByTemplate[fact.templateKey], fact.id)
 		s.factsByName[fact.name] = append(s.factsByName[fact.name], fact.id)
 	}
+	s.clearFactFieldEqualIndexes()
 	s.factTargetIndexesDirty = false
+}
+
+func (s *Session) clearFactFieldEqualIndexes() {
+	if s == nil || len(s.factFieldEqualIndexes) == 0 {
+		return
+	}
+	clear(s.factFieldEqualIndexes)
 }
 
 func (s *Session) removeFactTargetIndexes(templateKey TemplateKey, name string, id FactID) {
@@ -4403,6 +4462,7 @@ func (s *Session) commitFactWorkspace(state factWorkspace) {
 	s.factsByTemplate = state.factsByTemplate
 	s.factsByName = state.factsByName
 	s.factTargetIndexesDirty = state.factTargetIndexesDirty
+	s.clearFactFieldEqualIndexes()
 	s.insertionOrder = state.insertionOrder
 	s.slotStorage = state.slotStorage
 }
@@ -4419,6 +4479,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
 	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
 	s.factTargetIndexesDirty, workspace.factTargetIndexesDirty = workspace.factTargetIndexesDirty, s.factTargetIndexesDirty
+	s.clearFactFieldEqualIndexes()
 	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
 	s.slotStorage, workspace.slotStorage = workspace.slotStorage, s.slotStorage
 }
