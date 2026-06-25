@@ -146,14 +146,34 @@ func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
 	if queryBranch.TerminalID == 0 {
 		t.Fatalf("query terminal ID is zero")
 	}
+	if got, want := len(queryBranch.Projections), 1; got != want {
+		t.Fatalf("query projections = %d, want %d", got, want)
+	}
+	if got, want := queryBranch.Projections[0].Kind, reteGraphTerminalProjectionQueryField; got != want {
+		t.Fatalf("query projection kind = %q, want %q", got, want)
+	}
+	if got, want := queryBranch.Projections[0].Alias, "id"; got != want {
+		t.Fatalf("query projection alias = %q, want %q", got, want)
+	}
+	if got, want := queryBranch.Projections[0].BindingSlot, 0; got != want {
+		t.Fatalf("query projection binding slot = %d, want %d", got, want)
+	}
+	if got, want := queryBranch.Projections[0].Field, "id"; got != want {
+		t.Fatalf("query projection field = %q, want %q", got, want)
+	}
 
 	if len(summary.Plan.Branches[0].AuthoredOrder[0].Path) == 0 {
 		t.Fatalf("expected authored condition path for immutability check")
 	}
 	summary.Plan.Branches[0].AuthoredOrder[0].Path[0] = 99
+	queryBranch.Projections[0].Path.Segments[0].Key = "mutated"
 	again := revision.reteGraphDebugSummary()
 	if got := again.Plan.Branches[0].AuthoredOrder[0].Path[0]; got == 99 {
 		t.Fatalf("plan inspection leaked mutable condition path")
+	}
+	againQueryBranch := findPlanInspectionBranch(t, again.Plan.Branches, reteGraphBranchOwnerQuery, "", "people-by-region")
+	if got := againQueryBranch.Projections[0].Path.Segments[0].Key; got == "mutated" {
+		t.Fatalf("plan inspection leaked mutable projection path")
 	}
 }
 

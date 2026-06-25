@@ -184,9 +184,26 @@ type compiledQueryReturn struct {
 	binding     string
 	bindingSlot int
 	expression  compiledExpression
+	projection  compiledQueryReturnProjection
 	rawExpr     ExpressionSpec
 	fact        bool
 	order       int
+}
+
+type compiledQueryReturnProjectionKind uint8
+
+const (
+	compiledQueryReturnProjectionGeneric compiledQueryReturnProjectionKind = iota
+	compiledQueryReturnProjectionBindingField
+	compiledQueryReturnProjectionBindingValue
+	compiledQueryReturnProjectionConst
+)
+
+type compiledQueryReturnProjection struct {
+	kind        compiledQueryReturnProjectionKind
+	bindingSlot int
+	access      compiledPathAccess
+	value       Value
 }
 
 func (q compiledQuery) inspect() Query {
@@ -390,12 +407,39 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 		returns = append(returns, compiledQueryReturn{
 			alias:       spec.Alias,
 			expression:  expression,
+			projection:  compileQueryReturnProjection(expression),
 			rawExpr:     cloneExpressionSpec(spec.Expression),
 			bindingSlot: -1,
 			order:       i,
 		})
 	}
 	return returns, nil
+}
+
+func compileQueryReturnProjection(expression compiledExpression) compiledQueryReturnProjection {
+	switch expression.kind {
+	case expressionNodeConst:
+		return compiledQueryReturnProjection{
+			kind:  compiledQueryReturnProjectionConst,
+			value: expression.value,
+		}
+	case expressionNodeBindingField:
+		if expression.bindingSlot >= 0 {
+			return compiledQueryReturnProjection{
+				kind:        compiledQueryReturnProjectionBindingField,
+				bindingSlot: expression.bindingSlot,
+				access:      expression.access,
+			}
+		}
+	case expressionNodeBindingValue:
+		if expression.bindingSlot >= 0 {
+			return compiledQueryReturnProjection{
+				kind:        compiledQueryReturnProjectionBindingValue,
+				bindingSlot: expression.bindingSlot,
+			}
+		}
+	}
+	return compiledQueryReturnProjection{kind: compiledQueryReturnProjectionGeneric}
 }
 
 func compileQueryReturnIndexes(returns []compiledQueryReturn) ([]string, map[string]int) {
@@ -1046,6 +1090,12 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snaps
 			row.items[i] = queryRowValue{fact: fact, hasFact: true}
 			continue
 		}
+		if value, ok, err := ret.projectTokenValue(token, bindingSlotOffset); err != nil {
+			return QueryRow{}, err
+		} else if ok {
+			row.items[i] = queryRowValue{value: value}
+			continue
+		}
 		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
@@ -1060,6 +1110,36 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snaps
 		row.items[i] = queryRowValue{value: value}
 	}
 	return row, nil
+}
+
+func (r compiledQueryReturn) projectTokenValue(token tokenRef, bindingSlotOffset int) (Value, bool, error) {
+	switch r.projection.kind {
+	case compiledQueryReturnProjectionConst:
+		return r.projection.value, true, nil
+	case compiledQueryReturnProjectionBindingField:
+		match, ok := tokenRefAtSlot(token, r.projection.bindingSlot+bindingSlotOffset)
+		if !ok {
+			return NullValue(), true, nil
+		}
+		if match.hasValue {
+			return NullValue(), true, nil
+		}
+		value, ok := r.projection.access.valueFromFact(match.fact)
+		if !ok {
+			return NullValue(), true, nil
+		}
+		return value, true, nil
+	case compiledQueryReturnProjectionBindingValue:
+		match, ok := tokenRefAtSlot(token, r.projection.bindingSlot+bindingSlotOffset)
+		if !ok || !match.hasValue {
+			return NullValue(), true, nil
+		}
+		return match.value, true, nil
+	case compiledQueryReturnProjectionGeneric:
+		return Value{}, false, nil
+	default:
+		return Value{}, false, fmt.Errorf("%w: malformed query return projection", ErrMatcher)
+	}
 }
 
 func (q compiledQuery) newQueryRow() QueryRow {

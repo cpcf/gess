@@ -204,7 +204,29 @@ type reteGraphBranchInspection struct {
 	BranchID       int
 	AuthoredOrder  []reteGraphConditionOrderInspection
 	PlannedOrder   []reteGraphConditionOrderInspection
+	Projections    []reteGraphTerminalProjectionInspection
 	TerminalID     reteGraphTerminalNodeID
+}
+
+type reteGraphTerminalProjectionKind string
+
+const (
+	reteGraphTerminalProjectionActionBinding reteGraphTerminalProjectionKind = "action-binding"
+	reteGraphTerminalProjectionActionField   reteGraphTerminalProjectionKind = "action-field"
+	reteGraphTerminalProjectionQueryFact     reteGraphTerminalProjectionKind = "query-fact"
+	reteGraphTerminalProjectionQueryField    reteGraphTerminalProjectionKind = "query-field"
+	reteGraphTerminalProjectionQueryValue    reteGraphTerminalProjectionKind = "query-value"
+	reteGraphTerminalProjectionQueryConst    reteGraphTerminalProjectionKind = "query-const"
+	reteGraphTerminalProjectionGeneric       reteGraphTerminalProjectionKind = "generic"
+)
+
+type reteGraphTerminalProjectionInspection struct {
+	Kind        reteGraphTerminalProjectionKind
+	Alias       string
+	ActionName  string
+	BindingSlot int
+	Field       string
+	Path        PathSpec
 }
 
 type reteGraphConditionOrderInspection struct {
@@ -1727,6 +1749,7 @@ func inspectReteGraphRuleBranch(rule compiledRule, branch compiledConditionBranc
 		BranchID:       branch.id,
 		AuthoredOrder:  inspectReteGraphAuthoredOrder(branch.conditions),
 		PlannedOrder:   inspectReteGraphPlannedOrder(branch.plans),
+		Projections:    inspectReteGraphRuleProjections(rule),
 		TerminalID:     terminalID,
 	}
 }
@@ -1738,8 +1761,71 @@ func inspectReteGraphQueryBranch(query compiledQuery, branch compiledConditionBr
 		BranchID:      branch.id,
 		AuthoredOrder: inspectReteGraphQueryAuthoredOrder(query, branch.id),
 		PlannedOrder:  inspectReteGraphPlannedOrder(branch.plans),
+		Projections:   inspectReteGraphQueryProjections(query),
 		TerminalID:    terminalID,
 	}
+}
+
+func inspectReteGraphRuleProjections(rule compiledRule) []reteGraphTerminalProjectionInspection {
+	if len(rule.actionExecutions) == 0 {
+		return nil
+	}
+	out := make([]reteGraphTerminalProjectionInspection, 0)
+	for _, action := range rule.actionExecutions {
+		if !action.bindingReads.known {
+			out = append(out, reteGraphTerminalProjectionInspection{
+				Kind:       reteGraphTerminalProjectionGeneric,
+				ActionName: action.name,
+			})
+			continue
+		}
+		for _, read := range action.bindingReads.reads {
+			projection := reteGraphTerminalProjectionInspection{
+				ActionName:  action.name,
+				BindingSlot: read.bindingSlot,
+			}
+			if read.whole {
+				projection.Kind = reteGraphTerminalProjectionActionBinding
+			} else {
+				projection.Kind = reteGraphTerminalProjectionActionField
+				projection.Field = read.access.root
+				projection.Path = read.access.path.clone()
+			}
+			out = append(out, projection)
+		}
+	}
+	return out
+}
+
+func inspectReteGraphQueryProjections(query compiledQuery) []reteGraphTerminalProjectionInspection {
+	if len(query.returns) == 0 {
+		return nil
+	}
+	out := make([]reteGraphTerminalProjectionInspection, len(query.returns))
+	for i, ret := range query.returns {
+		out[i] = reteGraphTerminalProjectionInspection{
+			Alias:       ret.alias,
+			BindingSlot: ret.bindingSlot,
+		}
+		if ret.fact {
+			out[i].Kind = reteGraphTerminalProjectionQueryFact
+			continue
+		}
+		out[i].BindingSlot = ret.projection.bindingSlot
+		switch ret.projection.kind {
+		case compiledQueryReturnProjectionBindingField:
+			out[i].Kind = reteGraphTerminalProjectionQueryField
+			out[i].Field = ret.projection.access.root
+			out[i].Path = ret.projection.access.path.clone()
+		case compiledQueryReturnProjectionBindingValue:
+			out[i].Kind = reteGraphTerminalProjectionQueryValue
+		case compiledQueryReturnProjectionConst:
+			out[i].Kind = reteGraphTerminalProjectionQueryConst
+		default:
+			out[i].Kind = reteGraphTerminalProjectionGeneric
+		}
+	}
+	return out
 }
 
 func inspectReteGraphQueryAuthoredOrder(query compiledQuery, branchID int) []reteGraphConditionOrderInspection {
@@ -1871,6 +1957,19 @@ func cloneReteGraphBranchInspections(in []reteGraphBranchInspection) []reteGraph
 		out[i] = branch
 		out[i].AuthoredOrder = cloneReteGraphConditionOrderInspections(branch.AuthoredOrder)
 		out[i].PlannedOrder = cloneReteGraphConditionOrderInspections(branch.PlannedOrder)
+		out[i].Projections = cloneReteGraphTerminalProjectionInspections(branch.Projections)
+	}
+	return out
+}
+
+func cloneReteGraphTerminalProjectionInspections(in []reteGraphTerminalProjectionInspection) []reteGraphTerminalProjectionInspection {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphTerminalProjectionInspection, len(in))
+	for i, projection := range in {
+		out[i] = projection
+		out[i].Path = projection.Path.clone()
 	}
 	return out
 }

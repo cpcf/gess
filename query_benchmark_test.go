@@ -49,6 +49,61 @@ func BenchmarkGraphTerminalQueryScaling(b *testing.B) {
 	}
 }
 
+func BenchmarkRuntimeMaterializationQueryProjection(b *testing.B) {
+	ctx := context.Background()
+	workspace, personKey, departmentKey, blockKey := benchmarkQueryWorkspace(b)
+	returns := []QueryReturnSpec{
+		ReturnValue("id_0", BindingFieldExpr{Binding: "p", Field: "id"}),
+		ReturnValue("dept_0", BindingFieldExpr{Binding: "p", Field: "dept"}),
+		ReturnValue("age_0", BindingFieldExpr{Binding: "p", Field: "age"}),
+		ReturnValue("id_1", BindingFieldExpr{Binding: "p", Field: "id"}),
+		ReturnValue("dept_1", BindingFieldExpr{Binding: "p", Field: "dept"}),
+		ReturnValue("age_1", BindingFieldExpr{Binding: "p", Field: "age"}),
+	}
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "wide",
+		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
+		ConditionTree: benchmarkAdultPersonMatch(personKey, ParamExpr{
+			Name: "dept",
+		}),
+		Returns: returns,
+	}); err != nil {
+		b.Fatalf("AddQuery wide: %v", err)
+	}
+	revision := mustCompileWorkspace(b, workspace)
+	compiled := queryBenchmarkRevision{
+		revision:      revision,
+		personKey:     personKey,
+		departmentKey: departmentKey,
+		blockKey:      blockKey,
+	}
+	initials := benchmarkQueryFacts(b, compiled, 10_000)
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		b.Fatalf("NewSession: %v", err)
+	}
+	args := QueryArgs{"dept": "dept-00"}
+	rows, err := session.QueryAll(ctx, "wide", args)
+	if err != nil {
+		b.Fatalf("warmup QueryAll: %v", err)
+	}
+	expectedRows := benchmarkQueryExpectedRows(queryBenchmarkSimple, 10_000)
+	if len(rows) != expectedRows {
+		b.Fatalf("warmup rows = %d, want %d", len(rows), expectedRows)
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(rows)), "rows/query")
+	b.ReportMetric(float64(len(returns)), "returns/row")
+	b.ResetTimer()
+	for b.Loop() {
+		rows, err := session.QueryAll(ctx, "wide", args)
+		if err != nil {
+			b.Fatalf("QueryAll: %v", err)
+		}
+		benchmarkQueryRows = rows
+	}
+}
+
 func benchmarkGraphTerminalQuery(b *testing.B, tc queryBenchmarkCase) {
 	b.Helper()
 	ctx := context.Background()
