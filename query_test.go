@@ -362,6 +362,12 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if got, want := len(rows), len(initials); got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
+	if session.rete == nil || session.rete.graphBeta == nil || session.rete.graphBeta.queryArena == nil {
+		t.Fatal("query did not use graph beta terminal memory")
+	}
+	if got := session.rete.graphBeta.queryArena.rowCount(); got >= len(rows) {
+		t.Fatalf("query arena rows = %d, result rows = %d; want terminal projection without per-result query token copies", got, len(rows))
+	}
 	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
 		t.Fatalf("row storage = items %d valueItems %d, want value-only projected storage", len(rows[0].items), len(rows[0].valueItems))
 	}

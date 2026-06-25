@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 )
 
 type reteGraphBetaMemory struct {
@@ -5279,11 +5280,18 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 			} else if !ok {
 				continue
 			}
+			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
+			if queryTokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
+				if err := m.queryCollectTerminalsFromStage(stage, rightRow.token, collector); err != nil {
+					return err
+				}
+				continue
+			}
 			output := queryAppendTokenRows(collector.tokenArena, token, rightRow.token)
 			if output.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
-			if err := m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, collector); err != nil {
+			if err := m.queryPropagateFromStage(stage, output, collector); err != nil {
 				return err
 			}
 		}
@@ -5311,16 +5319,58 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 			} else if !ok {
 				continue
 			}
+			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
+			if queryTokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
+				if err := m.queryCollectTerminalsFromStage(stage, leftRow.token, collector); err != nil {
+					return err
+				}
+				continue
+			}
 			output := queryAppendTokenRows(collector.tokenArena, leftRow.token, token)
 			if output.isZero() {
 				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
 			}
-			if err := m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, collector); err != nil {
+			if err := m.queryPropagateFromStage(stage, output, collector); err != nil {
 				return err
 			}
 		}
 	default:
 		return fmt.Errorf("%w: malformed query beta side", ErrQueryExecution)
+	}
+	return nil
+}
+
+func queryTokenOnlyTrigger(token tokenRef) bool {
+	if token.size() != 1 {
+		return false
+	}
+	match, ok := token.matchAt(0)
+	return ok && match.bindingSlot == 0 && match.fact.Name() != "" && strings.HasPrefix(match.fact.Name(), "__gess_query_trigger:")
+}
+
+func (m *reteGraphBetaMemory) queryStageTerminalOnly(stage reteGraphStageRef, collector *reteGraphQueryCollector) bool {
+	if m == nil || collector == nil || len(m.graph.successorsByStage[stage]) != 0 {
+		return false
+	}
+	for _, terminal := range m.graph.terminalsByStage[stage] {
+		if _, ok := collector.terminal[terminal.terminalID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *reteGraphBetaMemory) queryCollectTerminalsFromStage(stage reteGraphStageRef, token tokenRef, collector *reteGraphQueryCollector) error {
+	if m == nil || collector == nil {
+		return nil
+	}
+	for _, terminal := range m.graph.terminalsByStage[stage] {
+		if _, ok := collector.terminal[terminal.terminalID]; !ok {
+			continue
+		}
+		if err := m.queryCollectTerminalToken(token, collector); err != nil {
+			return err
+		}
 	}
 	return nil
 }
