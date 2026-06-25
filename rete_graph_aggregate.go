@@ -119,3 +119,48 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 	bucket.removeMember(m.node, member)
 	m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, counters, delta)
 }
+
+func (m reteGraphAggregateMemory) openBucket(parent tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
+	if m.owner == nil || delta == nil || parent.isZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	if m.memory == nil {
+		delta.supported = false
+		return
+	}
+	bucket := m.memory.bucketForParent(parent)
+	if bucket == nil {
+		delta.supported = false
+		return
+	}
+	if bucket.hasValue {
+		return
+	}
+	m.owner.refreshAggregateOutputInternal(m.id, bucket, span, nil, delta)
+}
+
+func (m reteGraphAggregateMemory) removeBucket(parent tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m.owner == nil || delta == nil || parent.isZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return
+	}
+	if m.memory == nil {
+		delta.supported = false
+		return
+	}
+	bucket, ok := m.memory.bucketForParentIfExists(parent)
+	if !ok {
+		return
+	}
+	if !bucket.token.isZero() {
+		stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
+		m.owner.propagateRemoveFromStage(stage, bucket.token, counters, delta)
+	}
+	delete(m.memory.buckets, tokenRefKey(parent))
+	m.memory.recycleBucket(bucket)
+}

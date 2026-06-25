@@ -2559,50 +2559,11 @@ func (m *reteGraphBetaMemory) removeAggregateToken(id reteGraphAggregateNodeID, 
 }
 
 func (m *reteGraphBetaMemory) openAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || parent.isZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	memory := m.aggregateMemory(id)
-	if memory == nil {
-		delta.supported = false
-		return
-	}
-	bucket := memory.bucketForParent(parent)
-	if bucket == nil {
-		delta.supported = false
-		return
-	}
-	if bucket.hasValue {
-		return
-	}
-	m.refreshAggregateOutputInternal(id, bucket, span, nil, delta)
+	m.graphAggregateMemory(id).openBucket(parent, span, delta)
 }
 
 func (m *reteGraphBetaMemory) removeAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || parent.isZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	memory := m.aggregateMemory(id)
-	if memory == nil {
-		delta.supported = false
-		return
-	}
-	bucket, ok := memory.bucketForParentIfExists(parent)
-	if !ok {
-		return
-	}
-	if !bucket.token.isZero() {
-		stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-	}
-	delete(memory.buckets, tokenRefKey(parent))
-	memory.recycleBucket(bucket)
+	m.graphAggregateMemory(id).removeBucket(parent, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) removeAggregateBucketsContainingFact(id reteGraphAggregateNodeID, factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
