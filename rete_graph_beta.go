@@ -215,9 +215,9 @@ type graphTokenRow struct {
 	branchCount      int
 }
 
-// Negative beta rows reuse supportCount for their right-match count; terminal rows
+// Negative beta rows reuse supportCount for their blocker count; terminal rows
 // are distinguished by terminalIdentity and use supportCount for duplicate support.
-func (r graphTokenRow) negativeRightMatchCount() int {
+func (r graphTokenRow) negativeBlockerCount() int {
 	return r.supportCount
 }
 
@@ -225,7 +225,7 @@ func (r graphTokenRow) isTerminal() bool {
 	return r.terminalIdentity.count > 0
 }
 
-func (r *graphTokenRow) incrementNegativeRightMatchCount() int {
+func (r *graphTokenRow) incrementNegativeBlockerCount() int {
 	if r == nil {
 		return 0
 	}
@@ -233,7 +233,7 @@ func (r *graphTokenRow) incrementNegativeRightMatchCount() int {
 	return r.supportCount
 }
 
-func (r *graphTokenRow) decrementNegativeRightMatchCount() int {
+func (r *graphTokenRow) decrementNegativeBlockerCount() int {
 	if r == nil || r.supportCount <= 0 {
 		return 0
 	}
@@ -883,10 +883,10 @@ func (m *tokenHashMemory) row(rowID graphTokenRowID) *graphTokenRow {
 }
 
 func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
-	return m.insertWithNegativeRightMatchCount(token, joinKey, 0)
+	return m.insertWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *tokenHashMemory) insertWithNegativeRightMatchCount(token tokenRef, joinKey betaJoinKey, negativeRightMatchCount int) bool {
+func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
 	if m == nil || token.isZero() {
 		return false
 	}
@@ -914,7 +914,7 @@ func (m *tokenHashMemory) insertWithNegativeRightMatchCount(token tokenRef, join
 		token:        token,
 		joinKey:      joinKey,
 		identity:     identity,
-		supportCount: negativeRightMatchCount,
+		supportCount: negativeBlockerCount,
 	}
 	joinBucket := m.indexes[joinKey]
 	m.appendBucketRow(&joinBucket, rowID)
@@ -3611,7 +3611,7 @@ func (m *reteGraphBetaMemory) finalizeDeferredNegativeOutputs(span *propagationC
 		source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)}
 		for i := range nodeMemory.left.rows {
 			row := nodeMemory.left.rows[i]
-			if row.token.isZero() || row.negativeRightMatchCount() != 0 {
+			if row.token.isZero() || row.negativeBlockerCount() != 0 {
 				continue
 			}
 			if span != nil {
@@ -3781,11 +3781,11 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if err != nil || !ok {
 			return false, err
 		}
-		count, ok := m.negativeRightMatchCountForLeft(node, nodeMemory, joinKey, token, span)
+		count, ok := m.negativeBlockerCountForLeft(node, nodeMemory, joinKey, token, span)
 		if !ok {
 			return false, nil
 		}
-		inserted := nodeMemory.left.insertWithNegativeRightMatchCount(token, joinKey, count)
+		inserted := nodeMemory.left.insertWithNegativeBlockerCount(token, joinKey, count)
 		if !inserted {
 			return true, nil
 		}
@@ -3847,7 +3847,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 			} else if !ok {
 				continue
 			}
-			if leftRow.incrementNegativeRightMatchCount() == 1 && !m.deferNegativeOutputs {
+			if leftRow.incrementNegativeBlockerCount() == 1 && !m.deferNegativeOutputs {
 				m.propagateRemoveFromStage(source, leftRow.token, nil, delta)
 			}
 		}
@@ -3939,7 +3939,7 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 		if counters != nil {
 			counters.recordNegativeRowRemoved()
 		}
-		if removedRow.negativeRightMatchCount() == 0 {
+		if removedRow.negativeBlockerCount() == 0 {
 			m.propagateRemoveFromStage(source, removedRow.token, counters, delta)
 		}
 	case reteGraphBetaInputRight:
@@ -3983,11 +3983,11 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 			} else if !ok {
 				continue
 			}
-			if leftRow.negativeRightMatchCount() <= 0 {
+			if leftRow.negativeBlockerCount() <= 0 {
 				delta.supported = false
 				continue
 			}
-			if leftRow.decrementNegativeRightMatchCount() == 0 {
+			if leftRow.decrementNegativeBlockerCount() == 0 {
 				if err := m.propagateFromStage(source, leftRow.token, nil, delta); err != nil {
 					delta.supported = false
 				}
@@ -4113,7 +4113,7 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputContainingFact(nodeID reteG
 	switch side {
 	case reteGraphBetaInputLeft:
 		nodeMemory.left.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
-			if row.negativeRightMatchCount() == 0 {
+			if row.negativeBlockerCount() == 0 {
 				m.propagateRemoveFromStage(source, row.token, counters, delta)
 			}
 		})
@@ -5785,7 +5785,7 @@ func (m *reteGraphBetaMemory) queryProbeNegativeBetaInput(nodeID reteGraphBetaNo
 	if !ok {
 		return fmt.Errorf("%w: malformed query negative join key", ErrQueryExecution)
 	}
-	count, ok := m.negativeRightMatchCountForLeft(node, nodeMemory, joinKey, token, nil)
+	count, ok := m.negativeBlockerCountForLeft(node, nodeMemory, joinKey, token, nil)
 	if !ok {
 		return fmt.Errorf("%w: malformed query negative input", ErrQueryExecution)
 	}
@@ -6298,7 +6298,7 @@ func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, righ
 	return true, nil
 }
 
-func (m *reteGraphBetaMemory) negativeRightMatchCountForLeft(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
+func (m *reteGraphBetaMemory) negativeBlockerCountForLeft(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
 		return 0, false
 	}
