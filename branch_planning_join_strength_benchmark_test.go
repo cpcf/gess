@@ -126,6 +126,61 @@ func TestGraphBetaArenaSkipsCopiedFactSpans(t *testing.T) {
 	}
 }
 
+func TestTerminalTokenFastIdentityMatchesBindingTupleIdentity(t *testing.T) {
+	const (
+		roots         = 3
+		eventsPerRoot = 4
+	)
+	revision, templates := mustCompileJoinStrengthBenchmark(t)
+	facts := joinStrengthFactSnapshots(t, revision, templates, roots, eventsPerRoot)
+	memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemory: %v", err)
+	}
+	if memory == nil {
+		t.Fatal("newReteGraphBetaMemory returned nil")
+	}
+	if err := memory.resetFacts(context.Background(), nil); err != nil {
+		t.Fatalf("resetFacts: %v", err)
+	}
+	for _, fact := range facts {
+		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+			t.Fatalf("insertFact: %v", err)
+		}
+	}
+	deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unavailable")
+	}
+	if got, want := len(deltas), roots*eventsPerRoot; got != want {
+		t.Fatalf("terminal deltas = %d, want %d", got, want)
+	}
+	for _, delta := range deltas {
+		rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+		if !ok {
+			t.Fatalf("missing rule revision %q", delta.ruleRevisionID)
+		}
+		fast, ok := candidateIdentityForTerminalTokenFast(rule, delta.token)
+		if !ok {
+			t.Fatalf("fast terminal identity unavailable for token %#v", delta.token)
+		}
+		entries, _, _, _, ok := terminalTokenBindingTuple(rule, delta.token)
+		if !ok {
+			t.Fatalf("binding tuple unavailable for token %#v", delta.token)
+		}
+		want := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, tokenRefGeneration(delta.token), entries)
+		if fast != want {
+			t.Fatalf("fast identity = %#v, want %#v", fast, want)
+		}
+		if fast != delta.identity {
+			t.Fatalf("stored terminal identity = %#v, want %#v", delta.identity, fast)
+		}
+	}
+}
+
 func mustCompileJoinStrengthBenchmark(t testing.TB) (*Ruleset, joinStrengthBenchmarkTemplates) {
 	t.Helper()
 	workspace := NewWorkspace()

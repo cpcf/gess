@@ -2142,14 +2142,14 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 	if token.isZero() || len(rule.conditions) == 0 || len(rule.conditions) > 8 {
 		return candidateIdentity{}, false
 	}
-	var matches [8]conditionMatch
+	var entries [8]bindingTupleEntry
 	var seen uint8
 	for current := token; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
 			return candidateIdentity{}, false
 		}
-		slot := row.match.bindingSlot
+		slot := row.entry.bindingSlot
 		if slot < 0 {
 			continue
 		}
@@ -2160,7 +2160,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 		if seen&mask != 0 {
 			return candidateIdentity{}, false
 		}
-		matches[slot] = row.match
+		entries[slot] = row.entry
 		seen |= mask
 	}
 	if seen != uint8(1<<uint(len(rule.conditions)))-1 {
@@ -2170,11 +2170,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 	state := candidateIdentityHashStart(generation)
 	count := 0
 	for i := 0; i < len(rule.conditions); i++ {
-		entry, err := bindingTupleEntryForMatch(rule, matches[i])
-		if err != nil {
-			return candidateIdentity{}, false
-		}
-		state = candidateIdentityHashStep(state, entry)
+		state = candidateIdentityHashStep(state, entries[i])
 		count++
 	}
 	scopeHash := rule.identityScopeHash
