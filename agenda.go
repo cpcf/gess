@@ -19,6 +19,7 @@ type activationFingerprint uint64
 
 type activationBucket struct {
 	first    *activation
+	second   *activation
 	overflow []*activation
 }
 
@@ -420,6 +421,7 @@ type agenda struct {
 	activations         map[activationFingerprint]activationBucket
 	activationRows      activationRows
 	pending             []activationKey
+	pendingHead         int
 	lazyDeactivated     int
 	byFactID            map[FactID]activationKeyBucket
 	byRevision          map[RuleRevisionID]activationKeyBucket
@@ -451,6 +453,35 @@ func newAgenda() *agenda {
 	}
 }
 
+func (a *agenda) normalizePendingKeys() []activationKey {
+	if a == nil {
+		return nil
+	}
+	if a.pendingHead <= 0 {
+		return a.pending
+	}
+	if a.pendingHead >= len(a.pending) {
+		clear(a.pending)
+		a.pending = a.pending[:0]
+		a.pendingHead = 0
+		return a.pending
+	}
+	copy(a.pending, a.pending[a.pendingHead:])
+	clear(a.pending[len(a.pending)-a.pendingHead:])
+	a.pending = a.pending[:len(a.pending)-a.pendingHead]
+	a.pendingHead = 0
+	return a.pending
+}
+
+func (a *agenda) resetPendingKeys() {
+	if a == nil {
+		return
+	}
+	clear(a.pending)
+	a.pending = a.pending[:0]
+	a.pendingHead = 0
+}
+
 func (a *agenda) reset() {
 	if a == nil {
 		return
@@ -460,7 +491,7 @@ func (a *agenda) reset() {
 	} else {
 		clear(a.activations)
 	}
-	a.pending = a.pending[:0]
+	a.resetPendingKeys()
 	a.lazyDeactivated = 0
 	a.activationRows.reset()
 	if a.byFactID == nil {
@@ -489,6 +520,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		return nil, err
 	}
 	a.revision = revision
+	a.normalizePendingKeys()
 
 	seen := a.reconcileSeen
 	if seen == nil {
@@ -585,6 +617,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		return nil, err
 	}
 	a.revision = revision
+	a.normalizePendingKeys()
 
 	removedKeys := a.deltaRemovedKeys
 	if removedKeys == nil {
@@ -683,6 +716,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		return nil, err
 	}
 	a.revision = revision
+	a.normalizePendingKeys()
 
 	removedKeys := a.deltaRemovedKeys
 	if removedKeys == nil {
@@ -834,6 +868,7 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		return err
 	}
 	a.revision = revision
+	a.normalizePendingKeys()
 	refreshPendingOrder := false
 	for _, update := range updates {
 		if err := ctx.Err(); err != nil {
@@ -889,6 +924,7 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		return nil, err
 	}
 	a.revision = revision
+	a.normalizePendingKeys()
 
 	seen := a.reconcileSeen
 	if seen == nil {
@@ -1119,6 +1155,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	if a == nil || len(revisionIDs) == 0 {
 		return nil
 	}
+	a.normalizePendingKeys()
 
 	changes := a.purgeChanges[:0]
 	for _, key := range a.pending {
@@ -1158,6 +1195,16 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 				a.indexActivation(current)
 			}
 		}
+		if current := bucket.second; current != nil {
+			if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
+				if nextBucket.first == nil {
+					nextBucket.first = current
+				} else {
+					nextBucket.second = current
+				}
+				a.indexActivation(current)
+			}
+		}
 		for _, current := range bucket.overflow {
 			if current == nil {
 				continue
@@ -1167,6 +1214,8 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 			}
 			if nextBucket.first == nil {
 				nextBucket.first = current
+			} else if nextBucket.second == nil {
+				nextBucket.second = current
 			} else {
 				overflow = append(overflow, current)
 			}
@@ -1235,9 +1284,10 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 	if a == nil {
 		return nil, activation{}, false
 	}
-	for len(a.pending) > 0 {
-		key := a.pending[0]
-		a.pending = a.pending[1:]
+	for a.pendingHead < len(a.pending) {
+		key := a.pending[a.pendingHead]
+		a.pending[a.pendingHead] = activationKey{}
+		a.pendingHead++
 
 		current, ok := a.activationByKeyPtr(key)
 		if !ok || current.status != activationStatusPending {
@@ -1259,6 +1309,8 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 		}
 		return current, out, true
 	}
+	a.pending = a.pending[:0]
+	a.pendingHead = 0
 	a.lazyDeactivated = 0
 	return nil, activation{}, false
 }
@@ -1267,6 +1319,7 @@ func (a *agenda) clear() []agendaChange {
 	if a == nil {
 		return nil
 	}
+	a.normalizePendingKeys()
 	changes := make([]agendaChange, 0, len(a.pending))
 	for _, key := range a.pending {
 		current, ok := a.activationByKeyPtr(key)
@@ -1296,6 +1349,10 @@ func (a *agenda) activationByKey(key activationKey) (activation, bool) {
 
 func (a *agenda) pendingActivations() []activation {
 	if a == nil || len(a.pending) == 0 {
+		return nil
+	}
+	a.normalizePendingKeys()
+	if len(a.pending) == 0 {
 		return nil
 	}
 	a.compactLazyPending(false)
@@ -1354,6 +1411,9 @@ func (a *agenda) rebuildIndexes() {
 		if current := bucket.first; current != nil {
 			a.indexActivation(current)
 		}
+		if current := bucket.second; current != nil {
+			a.indexActivation(current)
+		}
 		for _, current := range bucket.overflow {
 			if current != nil {
 				a.indexActivation(current)
@@ -1374,6 +1434,9 @@ func (a *agenda) ensureFactIndex() {
 	}
 	for _, bucket := range a.activations {
 		if current := bucket.first; current != nil {
+			a.indexActivationFacts(current, true)
+		}
+		if current := bucket.second; current != nil {
 			a.indexActivationFacts(current, true)
 		}
 		for _, current := range bucket.overflow {
@@ -1531,6 +1594,7 @@ func (a *agenda) reservePendingActivationKeys(additional int) {
 	if a == nil || additional <= 0 {
 		return
 	}
+	a.normalizePendingKeys()
 	a.pending = slices.Grow(a.pending, additional)
 }
 
@@ -1617,6 +1681,9 @@ func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, 
 	if current := bucket.first; current != nil && activationMatchesCandidate(current, candidate) {
 		return current, current.key, true
 	}
+	if current := bucket.second; current != nil && activationMatchesCandidate(current, candidate) {
+		return current, current.key, true
+	}
 	for _, current := range bucket.overflow {
 		if current != nil && activationMatchesCandidate(current, candidate) {
 			return current, current.key, true
@@ -1639,6 +1706,9 @@ func (a *agenda) activationForTerminalTokenIdentity(rule compiledRule, token tok
 	fingerprint := activationFingerprintForIdentityKey(identity.key)
 	bucket := a.activations[fingerprint]
 	if current := bucket.first; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
+		return current, current.key, true
+	}
+	if current := bucket.second; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
 		return current, current.key, true
 	}
 	for _, current := range bucket.overflow {
@@ -1710,7 +1780,12 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 	act.key = key
 	if bucket.first == nil {
 		bucket.first = act
+	} else if bucket.second == nil {
+		bucket.second = act
 	} else {
+		if bucket.overflow == nil {
+			bucket.overflow = make([]*activation, 0, 8)
+		}
 		bucket.overflow = append(bucket.overflow, act)
 	}
 	a.activations[fingerprint] = bucket
@@ -1733,6 +1808,9 @@ func activationFromBuckets(buckets map[activationFingerprint]activationBucket, k
 	if bucket.first != nil && bucket.first.key == key {
 		return bucket.first, true
 	}
+	if bucket.second != nil && bucket.second.key == key {
+		return bucket.second, true
+	}
 	for _, current := range bucket.overflow {
 		if current != nil && current.key == key {
 			return current, true
@@ -1748,6 +1826,9 @@ func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFin
 func activationIdentityIndex(bucket activationBucket, identity candidateIdentityKey) uint64 {
 	index := uint64(0)
 	if bucket.first != nil && bucket.first.identity.key == identity {
+		index++
+	}
+	if bucket.second != nil && bucket.second.identity.key == identity {
 		index++
 	}
 	for _, current := range bucket.overflow {
@@ -1781,6 +1862,7 @@ func (a *agenda) compactLazyPending(force bool) {
 	if a == nil || a.lazyDeactivated == 0 {
 		return
 	}
+	a.normalizePendingKeys()
 	if !force && a.lazyDeactivated < 1024 && a.lazyDeactivated*2 < len(a.pending) {
 		return
 	}
