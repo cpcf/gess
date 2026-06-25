@@ -1269,8 +1269,8 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 	if alphaConstraints != 1 {
 		t.Fatalf("alpha constraints = %d, want 1", alphaConstraints)
 	}
-	if hashJoins != 2 {
-		t.Fatalf("hash joins = %d, want 2", hashJoins)
+	if hashJoins != 1 {
+		t.Fatalf("hash joins = %d, want shared graph hash join", hashJoins)
 	}
 	if betaPredicates != 2 {
 		t.Fatalf("beta predicates = %d, want 2", betaPredicates)

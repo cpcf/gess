@@ -778,11 +778,14 @@ func TestReteGraphDedupesEquivalentHashJoinExtractors(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	node := singleGraphBetaNode(t, revision)
-	if got, want := len(node.hashJoins), 1; got != want {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want duplicate equality extractor deduped to %d", got, want)
 	}
-	if got, want := len(node.predicates), 1; got != want {
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
+	}
+	if got, want := len(residualNode.predicates), 1; got != want {
 		t.Fatalf("predicates = %d, want original expression predicate retained for residual validation", got)
 	}
 }
@@ -877,29 +880,28 @@ func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.joins), 1; got != want {
+		t.Fatalf("join keys = %d, want %d", got, want)
 	}
-	node := summary.BetaNodes[0]
-	if got := len(node.joins); got != 0 {
-		t.Fatalf("declared joins = %d, want 0", got)
-	}
-	if got, want := len(node.hashJoins), 1; got != want {
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.predicates), 1; got != want {
-		t.Fatalf("predicates = %d, want %d", got, want)
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
 	}
-	hashJoin := node.hashJoins[0]
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
+	}
+	hashJoin := joinNode.hashJoins[0]
 	if hashJoin.access.root != "group" || hashJoin.refBinding != "left" || hashJoin.refAccess.root != "group" {
 		t.Fatalf("hash join = %#v, want right.group == left.group", hashJoin)
 	}
 	if hashJoin.operator != FieldConstraintEqual {
 		t.Fatalf("hash join operator = %v, want %v", hashJoin.operator, FieldConstraintEqual)
 	}
-	if node.predicates[0].placement != ExpressionPredicatePlacementBetaResidual {
-		t.Fatalf("predicate placement = %v, want beta residual", node.predicates[0].placement)
+	if residualNode.predicates[0].placement != ExpressionPredicatePlacementBetaResidual {
+		t.Fatalf("predicate placement = %v, want beta residual", residualNode.predicates[0].placement)
 	}
 }
 
@@ -993,18 +995,17 @@ func TestReteGraphIndexesEqualityComparatorFunctionPredicates(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.hashJoins), 1; got != want {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.predicates), 1; got != want {
-		t.Fatalf("predicates = %d, want %d", got, want)
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
 	}
-	hashJoin := node.hashJoins[0]
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
+	}
+	hashJoin := joinNode.hashJoins[0]
 	if hashJoin.access.root != "group" || hashJoin.refBinding != "left" || hashJoin.refAccess.root != "group" {
 		t.Fatalf("hash join = %#v, want right.group == left.group", hashJoin)
 	}
@@ -1050,16 +1051,15 @@ func TestReteGraphLeavesUncertifiedFunctionPredicatesResidual(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got := len(node.hashJoins); got != 0 {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got := len(joinNode.hashJoins); got != 0 {
 		t.Fatalf("hash joins = %d, want 0", got)
 	}
-	if got, want := len(node.predicates), 1; got != want {
-		t.Fatalf("predicates = %d, want %d", got, want)
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
+	}
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
 	}
 }
 
@@ -1121,18 +1121,17 @@ func TestReteGraphIndexesCertifiedKeyExtractorFunctionPredicates(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.hashJoins), 1; got != want {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.predicates), 1; got != want {
-		t.Fatalf("predicates = %d, want %d", got, want)
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
 	}
-	hashJoin := node.hashJoins[0]
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
+	}
+	hashJoin := joinNode.hashJoins[0]
 	if !hashJoin.hasLeftKeyExpression || !hashJoin.hasRightKeyExpression {
 		t.Fatalf("hash join key expressions = (%v, %v), want both present", hashJoin.hasLeftKeyExpression, hashJoin.hasRightKeyExpression)
 	}
@@ -1206,16 +1205,15 @@ func TestReteGraphLeavesUncertifiedKeyExtractorCallsResidual(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got := len(node.hashJoins); got != 0 {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got := len(joinNode.hashJoins); got != 0 {
 		t.Fatalf("hash joins = %d, want 0", got)
 	}
-	if got, want := len(node.predicates), 1; got != want {
-		t.Fatalf("predicates = %d, want %d", got, want)
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
+	}
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
 	}
 }
 
@@ -1287,14 +1285,14 @@ func TestReteGraphIndexesConjunctivePredicateTerms(t *testing.T) {
 	if alphaConstraints != 1 {
 		t.Fatalf("alpha constraints = %d, want 1", alphaConstraints)
 	}
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.hashJoins), 1; got != want {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.predicates), 2; got != want {
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
+	}
+	if got, want := len(residualNode.predicates), 2; got != want {
 		t.Fatalf("beta residual predicates = %d, want %d", got, want)
 	}
 }
@@ -1378,15 +1376,14 @@ func TestReteGraphIndexesNegatedNotEqualJoinPredicates(t *testing.T) {
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
-		t.Fatalf("beta nodes = %d, want %d", got, want)
-	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.hashJoins), 1; got != want {
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got := len(node.predicates); got != 1 {
+	if got := len(joinNode.predicates); got != 0 {
+		t.Fatalf("join predicates = %d, want 0", got)
+	}
+	if got := len(residualNode.predicates); got != 1 {
 		t.Fatalf("beta residual predicates = %d, want 1 semantic predicate", got)
 	}
 }
@@ -1591,6 +1588,27 @@ func graphBetaNodeWithHashJoinCount(tb testing.TB, revision *Ruleset, count int)
 	}
 	tb.Fatalf("missing beta node with %d hash joins: %#v", count, summary.BetaNodes)
 	return reteGraphBetaNode{}
+}
+
+func graphSplitJoinAndResidualFilterNodes(tb testing.TB, revision *Ruleset) (reteGraphBetaNode, reteGraphBetaNode) {
+	tb.Helper()
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 2; got != want {
+		tb.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	joinNode := summary.BetaNodes[0]
+	residualNode := summary.BetaNodes[1]
+	if joinNode.kind != reteGraphBetaNodeJoin {
+		tb.Fatalf("first beta node kind = %v, want join", joinNode.kind)
+	}
+	if residualNode.kind != reteGraphBetaNodeResidualFilter {
+		tb.Fatalf("second beta node kind = %v, want residual filter", residualNode.kind)
+	}
+	if residualNode.left != (reteGraphStageRef{kind: reteGraphStageBeta, id: int(joinNode.id)}) {
+		tb.Fatalf("residual filter input = %#v, want join node %d", residualNode.left, joinNode.id)
+	}
+	return joinNode, residualNode
 }
 
 func findPlanInspectionBetaNode(tb testing.TB, nodes []reteGraphBetaNodeInspection, id reteGraphBetaNodeID) reteGraphBetaNodeInspection {

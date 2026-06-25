@@ -1734,6 +1734,84 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeResidualFilterEvaluatesExpressionPredicateOnce(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "threshold",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "minimum", Kind: ValueInt, Required: true},
+		},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "candidate",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	predicateCalls := 0
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "above-threshold",
+		Args:   []ValueKind{ValueInt, ValueInt},
+		Return: ValueBool,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			predicateCalls++
+			score, _ := args[0].AsInt64()
+			minimum, _ := args[1].AsInt64()
+			return NewValue(score > minimum)
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "candidate-above-threshold",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{{
+					Field:    "group",
+					Operator: FieldConstraintEqual,
+					Ref:      FieldRef{Binding: "threshold", Field: "group"},
+				}},
+				Predicates: []ExpressionSpec{
+					Call("above-threshold", CurrentFieldExpr{Field: "score"}, BindingFieldExpr{Binding: "threshold", Field: "minimum"}),
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	joinNode, residualNode := graphSplitJoinAndResidualFilterNodes(t, revision)
+	if got, want := len(joinNode.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(residualNode.predicates), 1; got != want {
+		t.Fatalf("residual predicates = %d, want %d", got, want)
+	}
+	session := mustSession(t, revision, "residual-filter-expression-once")
+	session.attachPropagationCounters()
+
+	if _, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "minimum": 10})); err != nil {
+		t.Fatalf("AssertTemplate threshold: %v", err)
+	}
+	if got := predicateCalls; got != 0 {
+		t.Fatalf("predicate calls after left input = %d, want 0", got)
+	}
+	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
+		t.Fatalf("AssertTemplate candidate: %v", err)
+	}
+	if got, want := predicateCalls, 1; got != want {
+		t.Fatalf("predicate calls = %d, want %d", got, want)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ExpressionPredicateTests, 1; got != want {
+		t.Fatalf("expression predicate tests = %d, want %d", got, want)
+	}
+}
+
 func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

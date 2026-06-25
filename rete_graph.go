@@ -1603,7 +1603,7 @@ func (g *reteGraph) internBetaNodeWithRightPredicates(index map[reteGraphBetaKey
 
 func (g *reteGraph) internJoinWithResidualFilter(index map[reteGraphBetaKey]reteGraphBetaNodeID, left, right reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate, entry bindingTupleEntry) (reteGraphBetaNodeID, reteGraphStageRef) {
 	hashJoins, residualJoins := planCompiledJoinConstraints(joins, predicates)
-	if len(residualJoins) == 0 {
+	if len(residualJoins) == 0 && len(predicates) == 0 {
 		betaID, _ := g.internBetaNode(index, reteGraphBetaNodeJoin, left, right, joins, predicates)
 		if betaNode := g.betaNode(betaID); betaNode != nil && betaNode.entry.conditionID == "" {
 			betaNode.entry = entry
