@@ -206,7 +206,9 @@ type graphTokenRow struct {
 	identity         graphTokenIdentityKey
 	terminalIdentity candidateIdentity
 	supportCount     int
-	branchSupports   []terminalBranchSupport
+	branchSupport    terminalBranchSupport
+	branchOverflow   []terminalBranchSupport
+	branchCount      int
 }
 
 // Negative beta rows reuse supportCount for their right-match count; terminal rows
@@ -244,20 +246,34 @@ func (r *graphTokenRow) addTerminalBranchSupport(branchID int) {
 	if r == nil || branchID < 0 {
 		return
 	}
-	for i := range r.branchSupports {
-		if r.branchSupports[i].branchID == branchID {
-			r.branchSupports[i].count++
+	if r.branchCount == 0 {
+		r.branchSupport = terminalBranchSupport{branchID: branchID, count: 1}
+		r.branchCount = 1
+		return
+	}
+	if r.branchSupport.branchID == branchID {
+		r.branchSupport.count++
+		return
+	}
+	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
+		if r.branchOverflow[i].branchID == branchID {
+			r.branchOverflow[i].count++
 			return
 		}
 	}
-	r.branchSupports = append(r.branchSupports, terminalBranchSupport{branchID: branchID, count: 1})
+	r.branchOverflow = append(r.branchOverflow, terminalBranchSupport{branchID: branchID, count: 1})
+	r.branchCount++
 }
 
 func (r graphTokenRow) hasTerminalBranchSupport(branchID int) bool {
-	if branchID < 0 {
+	if branchID < 0 || r.branchCount == 0 {
 		return false
 	}
-	for _, support := range r.branchSupports {
+	if r.branchSupport.branchID == branchID && r.branchSupport.count > 0 {
+		return true
+	}
+	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
+		support := r.branchOverflow[i]
 		if support.branchID == branchID && support.count > 0 {
 			return true
 		}
@@ -266,36 +282,78 @@ func (r graphTokenRow) hasTerminalBranchSupport(branchID int) bool {
 }
 
 func (r *graphTokenRow) removeTerminalBranchSupport(branchID int) {
-	if r == nil || branchID < 0 {
+	if r == nil || branchID < 0 || r.branchCount == 0 {
 		return
 	}
-	for i := range r.branchSupports {
-		if r.branchSupports[i].branchID != branchID {
-			continue
-		}
-		r.branchSupports[i].count--
-		if r.branchSupports[i].count > 0 {
+	if r.branchSupport.branchID == branchID {
+		r.branchSupport.count--
+		if r.branchSupport.count > 0 {
 			return
 		}
-		copy(r.branchSupports[i:], r.branchSupports[i+1:])
-		r.branchSupports[len(r.branchSupports)-1] = terminalBranchSupport{}
-		r.branchSupports = r.branchSupports[:len(r.branchSupports)-1]
+		r.removeTerminalBranchSupportAt(0)
+		return
+	}
+	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
+		if r.branchOverflow[i].branchID != branchID {
+			continue
+		}
+		r.branchOverflow[i].count--
+		if r.branchOverflow[i].count > 0 {
+			return
+		}
+		r.removeTerminalBranchSupportAt(i + 1)
 		return
 	}
 }
 
+func (r *graphTokenRow) removeTerminalBranchSupportAt(index int) {
+	if r == nil || index < 0 || index >= r.branchCount {
+		return
+	}
+	overflowCount := min(r.branchCount-1, len(r.branchOverflow))
+	if r.branchCount == 1 || overflowCount == 0 {
+		r.branchSupport = terminalBranchSupport{}
+		r.branchCount = 0
+		r.branchOverflow = r.branchOverflow[:0]
+		return
+	}
+	if index > overflowCount {
+		return
+	}
+	lastOverflow := overflowCount - 1
+	last := r.branchOverflow[lastOverflow]
+	r.branchOverflow[lastOverflow] = terminalBranchSupport{}
+	r.branchOverflow = r.branchOverflow[:lastOverflow]
+	if index == 0 {
+		r.branchSupport = last
+	} else if index-1 < len(r.branchOverflow) {
+		r.branchOverflow[index-1] = last
+	}
+	r.branchCount = overflowCount
+}
+
 func (r graphTokenRow) terminalBranchIDs() []int {
-	if len(r.branchSupports) == 0 {
+	if r.branchCount == 0 {
 		return nil
 	}
-	out := make([]int, 0, len(r.branchSupports))
-	for _, support := range r.branchSupports {
+	out := make([]int, 0, r.branchCount)
+	r.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
 		if support.count <= 0 {
-			continue
+			return
 		}
 		out = append(out, support.branchID)
-	}
+	})
 	return out
+}
+
+func (r graphTokenRow) forEachTerminalBranchSupport(fn func(terminalBranchSupport)) {
+	if r.branchCount == 0 || fn == nil {
+		return
+	}
+	fn(r.branchSupport)
+	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
+		fn(r.branchOverflow[i])
+	}
 }
 
 type graphTokenIdentityKey struct {
@@ -342,6 +400,9 @@ func (b *graphTokenRowIDBucket) append(id graphTokenRowID) {
 		b.second = id
 		b.count = 2
 		return
+	}
+	if b.rest == nil {
+		b.rest = make([]graphTokenRowID, 0, 8)
 	}
 	b.rest = append(b.rest, id)
 	b.count++
@@ -829,21 +890,18 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 		}
 	}
 
-	branchSupports := []terminalBranchSupport(nil)
-	if branchID >= 0 {
-		branchSupports = []terminalBranchSupport{{branchID: branchID, count: 1}}
-	}
 	rowID := graphTokenRowID(len(m.rows))
 	m.ensureRowCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
-	m.rows[rowID] = graphTokenRow{
+	row := graphTokenRow{
 		id:               rowID,
 		token:            token,
 		identity:         identity,
 		terminalIdentity: terminalIdentity,
 		supportCount:     1,
-		branchSupports:   branchSupports,
 	}
+	row.addTerminalBranchSupport(branchID)
+	m.rows[rowID] = row
 	identityBucket := m.identityRows[identity]
 	identityBucket.append(rowID)
 	m.identityRows[identity] = identityBucket
@@ -5721,16 +5779,16 @@ func (m *reteGraphBetaMemory) terminalRowsRetainedByBranch() map[propagationBran
 			if row.token.isZero() {
 				continue
 			}
-			for _, support := range row.branchSupports {
+			row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
 				if support.count <= 0 {
-					continue
+					return
 				}
 				key, ok := m.terminalBranchKey(terminalNode.id, support.branchID)
 				if !ok {
-					continue
+					return
 				}
 				retained[key]++
-			}
+			})
 		}
 	}
 	if len(retained) == 0 {
@@ -5826,12 +5884,12 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 				if row.token.isZero() {
 					continue
 				}
-				for _, support := range row.branchSupports {
+				row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
 					if support.count <= 0 {
-						continue
+						return
 					}
 					diag.BranchRows[support.branchID]++
-				}
+				})
 			}
 		}
 		if len(diag.BranchRows) == 0 {

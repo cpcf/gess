@@ -102,6 +102,9 @@ func (b *activationKeyBucket) append(key activationKey) {
 	case 1:
 		b.second = key
 	default:
+		if b.overflow == nil {
+			b.overflow = make([]activationKey, 0, 8)
+		}
 		b.overflow = append(b.overflow, key)
 	}
 	b.count++
@@ -627,6 +630,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		a.propagationCounters.recordAgendaSort()
 	}
 	sortMatchCandidates(revision, added)
+	a.reservePendingActivationKeys(len(added))
 	for _, candidate := range added {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -745,6 +749,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		}
 		sortTerminalTokenDeltas(revision, added)
 	}
+	a.reservePendingActivationKeys(len(added))
 
 	var previous reteTerminalTokenDelta
 	havePrevious := false
@@ -1520,6 +1525,13 @@ func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationK
 	copy(keys[index+1:], keys[index:])
 	keys[index] = key
 	return keys
+}
+
+func (a *agenda) reservePendingActivationKeys(additional int) {
+	if a == nil || additional <= 0 {
+		return
+	}
+	a.pending = slices.Grow(a.pending, additional)
 }
 
 func sortActivations(activations []activation) {
