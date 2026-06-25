@@ -3782,25 +3782,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if err != nil || !ok {
 			return false, err
 		}
-		count, ok := negativeMemory.blockerCountForLeft(joinKey, token, span)
-		if !ok {
-			return false, nil
-		}
-		inserted := nodeMemory.left.insertWithNegativeBlockerCount(token, joinKey, count)
-		if !inserted {
-			return true, nil
-		}
-		if span != nil {
-			span.recordBetaInputInsert(side)
-		}
-		if count == 0 && !m.deferNegativeOutputs {
-			if span != nil {
-				span.recordBetaJoinedTokenProduced()
-			}
-			if err := m.propagateFromStage(source, token, span, delta); err != nil {
-				return false, err
-			}
-		}
+		return negativeMemory.insertLeft(joinKey, token, m.deferNegativeOutputs, span, delta)
 	case reteGraphBetaInputRight:
 		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, span)
 		if err != nil || !ok {

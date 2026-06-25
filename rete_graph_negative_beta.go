@@ -2,6 +2,7 @@ package gess
 
 type reteGraphNegativeBetaMemory struct {
 	owner  *reteGraphBetaMemory
+	id     reteGraphBetaNodeID
 	node   *reteGraphBetaNode
 	memory *reteGraphBetaNodeMemory
 }
@@ -12,9 +13,38 @@ func (m *reteGraphBetaMemory) negativeBetaMemory(nodeID reteGraphBetaNodeID, nod
 	}
 	return reteGraphNegativeBetaMemory{
 		owner:  m,
+		id:     nodeID,
 		node:   node,
 		memory: m.nodeMemory(nodeID),
 	}
+}
+
+func (m reteGraphNegativeBetaMemory) insertLeft(joinKey betaJoinKey, token tokenRef, deferOutputs bool, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
+	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
+		return false, nil
+	}
+	count, ok := m.blockerCountForLeft(joinKey, token, span)
+	if !ok {
+		return false, nil
+	}
+	inserted := m.memory.left.insertWithNegativeBlockerCount(token, joinKey, count)
+	if !inserted {
+		return true, nil
+	}
+	if span != nil {
+		span.recordBetaInputInsert(reteGraphBetaInputLeft)
+	}
+	if count != 0 || deferOutputs {
+		return true, nil
+	}
+	if span != nil {
+		span.recordBetaJoinedTokenProduced()
+	}
+	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
+	if err := m.owner.propagateFromStage(source, token, span, delta); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
