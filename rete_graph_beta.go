@@ -198,6 +198,7 @@ type tokenHashMemory struct {
 	identityIndexReserve int
 	factIndexReserve     int
 	factRowsDirty        bool
+	bucketRestFree       [][]graphTokenRowID
 }
 
 type graphTokenRowID int
@@ -391,24 +392,6 @@ func (b graphTokenRowIDBucket) at(index int) (graphTokenRowID, bool) {
 		return 0, false
 	}
 	return b.rest[index], true
-}
-
-func (b *graphTokenRowIDBucket) append(id graphTokenRowID) {
-	if b.count == 0 {
-		b.first = id
-		b.count = 1
-		return
-	}
-	if b.count == 1 {
-		b.second = id
-		b.count = 2
-		return
-	}
-	if b.rest == nil {
-		b.rest = make([]graphTokenRowID, 0, 8)
-	}
-	b.rest = append(b.rest, id)
-	b.count++
 }
 
 func (b *graphTokenRowIDBucket) remove(id graphTokenRowID) bool {
@@ -747,10 +730,80 @@ func (m *tokenHashMemory) clear() {
 		m.rows[i] = graphTokenRow{}
 	}
 	m.rows = m.rows[:0]
+	m.recycleBucketRests(m.indexes)
+	m.recycleIdentityBucketRests(m.identityRows)
+	m.recycleFactBucketRests(m.factRows)
 	clear(m.indexes)
 	clear(m.identityRows)
 	clear(m.factRows)
 	m.factRowsDirty = false
+}
+
+func (m *tokenHashMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id graphTokenRowID) {
+	if m == nil || bucket == nil {
+		return
+	}
+	if bucket.count == 0 {
+		bucket.first = id
+		bucket.count = 1
+		return
+	}
+	if bucket.count == 1 {
+		bucket.second = id
+		bucket.count = 2
+		return
+	}
+	if bucket.rest == nil {
+		bucket.rest = m.takeBucketRest()
+	}
+	bucket.rest = append(bucket.rest, id)
+	bucket.count++
+}
+
+func (m *tokenHashMemory) takeBucketRest() []graphTokenRowID {
+	if m == nil || len(m.bucketRestFree) == 0 {
+		return make([]graphTokenRowID, 0, 8)
+	}
+	last := len(m.bucketRestFree) - 1
+	rest := m.bucketRestFree[last]
+	m.bucketRestFree[last] = nil
+	m.bucketRestFree = m.bucketRestFree[:last]
+	return rest[:0]
+}
+
+func (m *tokenHashMemory) recycleBucketRests(buckets map[betaJoinKey]graphTokenRowIDBucket) {
+	if m == nil || len(buckets) == 0 {
+		return
+	}
+	for _, bucket := range buckets {
+		m.recycleBucketRest(bucket.rest)
+	}
+}
+
+func (m *tokenHashMemory) recycleIdentityBucketRests(buckets map[graphTokenIdentityKey]graphTokenRowIDBucket) {
+	if m == nil || len(buckets) == 0 {
+		return
+	}
+	for _, bucket := range buckets {
+		m.recycleBucketRest(bucket.rest)
+	}
+}
+
+func (m *tokenHashMemory) recycleFactBucketRests(buckets map[FactID]graphTokenRowIDBucket) {
+	if m == nil || len(buckets) == 0 {
+		return
+	}
+	for _, bucket := range buckets {
+		m.recycleBucketRest(bucket.rest)
+	}
+}
+
+func (m *tokenHashMemory) recycleBucketRest(rest []graphTokenRowID) {
+	if m == nil || cap(rest) == 0 {
+		return
+	}
+	clear(rest)
+	m.bucketRestFree = append(m.bucketRestFree, rest[:0])
 }
 
 func (m *tokenHashMemory) len() int {
@@ -860,10 +913,10 @@ func (m *tokenHashMemory) insertWithNegativeRightMatchCount(token tokenRef, join
 		supportCount: negativeRightMatchCount,
 	}
 	joinBucket := m.indexes[joinKey]
-	joinBucket.append(rowID)
+	m.appendBucketRow(&joinBucket, rowID)
 	m.indexes[joinKey] = joinBucket
 	identityBucket := m.identityRows[identity]
-	identityBucket.append(rowID)
+	m.appendBucketRow(&identityBucket, rowID)
 	m.identityRows[identity] = identityBucket
 	m.markFactRowsDirty()
 	return true
@@ -907,7 +960,7 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 	row.addTerminalBranchSupport(branchID)
 	m.rows[rowID] = row
 	identityBucket := m.identityRows[identity]
-	identityBucket.append(rowID)
+	m.appendBucketRow(&identityBucket, rowID)
 	m.identityRows[identity] = identityBucket
 	m.markFactRowsDirty()
 	return true
@@ -1025,6 +1078,7 @@ func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 		if bucket, ok := m.identityRows[row.identity]; ok {
 			if bucket.remove(rowID) {
 				if bucket.len() == 0 {
+					m.recycleBucketRest(bucket.rest)
 					delete(m.identityRows, row.identity)
 				} else {
 					m.identityRows[row.identity] = bucket
@@ -1035,7 +1089,7 @@ func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 			m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
 		}
 		bucket := m.identityRows[nextIdentity]
-		bucket.append(rowID)
+		m.appendBucketRow(&bucket, rowID)
 		m.identityRows[nextIdentity] = bucket
 		row.identity = nextIdentity
 	}
@@ -1183,6 +1237,7 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	if bucket, ok := m.indexes[removed.joinKey]; ok {
 		if bucket.remove(rowID) {
 			if bucket.len() == 0 {
+				m.recycleBucketRest(bucket.rest)
 				delete(m.indexes, removed.joinKey)
 			} else {
 				m.indexes[removed.joinKey] = bucket
@@ -1192,6 +1247,7 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	if bucket, ok := m.identityRows[removed.identity]; ok {
 		if bucket.remove(rowID) {
 			if bucket.len() == 0 {
+				m.recycleBucketRest(bucket.rest)
 				delete(m.identityRows, removed.identity)
 			} else {
 				m.identityRows[removed.identity] = bucket
@@ -1272,7 +1328,7 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 				continue
 			}
 			bucket := m.factRows[id]
-			bucket.append(rowID)
+			m.appendBucketRow(&bucket, rowID)
 			m.factRows[id] = bucket
 		}
 		return
@@ -1287,7 +1343,7 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 			continue
 		}
 		bucket := m.factRows[id]
-		bucket.append(rowID)
+		m.appendBucketRow(&bucket, rowID)
 		m.factRows[id] = bucket
 	}
 }
@@ -1306,6 +1362,7 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 				continue
 			}
 			if bucket.len() == 0 {
+				m.recycleBucketRest(bucket.rest)
 				delete(m.factRows, id)
 			} else {
 				m.factRows[id] = bucket
@@ -1327,6 +1384,7 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 			continue
 		}
 		if bucket.len() == 0 {
+			m.recycleBucketRest(bucket.rest)
 			delete(m.factRows, id)
 		} else {
 			m.factRows[id] = bucket
