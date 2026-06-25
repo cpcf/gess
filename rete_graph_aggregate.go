@@ -231,3 +231,54 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		}
 	}
 }
+
+func (m reteGraphAggregateMemory) refreshParentsContainingFact(factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	if m.owner == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return false
+	}
+	if m.memory == nil || len(m.memory.buckets) == 0 {
+		return true
+	}
+	type aggregateParentRefresh struct {
+		oldKey graphTokenIdentityKey
+		bucket *reteGraphAggregateBucket
+	}
+	updates := make([]aggregateParentRefresh, 0, 1)
+	for key, bucket := range m.memory.buckets {
+		if bucket == nil || !bucket.parent.containsFact(factID) {
+			continue
+		}
+		updates = append(updates, aggregateParentRefresh{oldKey: key, bucket: bucket})
+	}
+	for _, update := range updates {
+		bucket := update.bucket
+		nextParent, ok := m.owner.refreshTokenFactRefInPlaceCached(bucket.parent, factID, after, cache)
+		if !ok || nextParent.isZero() {
+			delta.supported = false
+			return false
+		}
+		nextKey := tokenRefKey(nextParent)
+		if update.oldKey != nextKey {
+			if existing := m.memory.buckets[nextKey]; existing != nil && existing != bucket {
+				delta.supported = false
+				return false
+			}
+			delete(m.memory.buckets, update.oldKey)
+			m.memory.buckets[nextKey] = bucket
+		}
+		bucket.parent = nextParent
+		if bucket.token.isZero() {
+			continue
+		}
+		nextToken, ok := m.owner.refreshTokenFactRefInPlaceCached(bucket.token, factID, after, cache)
+		if !ok || nextToken.isZero() {
+			delta.supported = false
+			return false
+		}
+		bucket.token = nextToken
+	}
+	return delta.supported
+}

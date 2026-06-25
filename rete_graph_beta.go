@@ -2649,55 +2649,7 @@ func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraph
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
-	if m == nil || delta == nil || factID.IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return false
-	}
-	memory := m.aggregateMemory(id)
-	if memory == nil || len(memory.buckets) == 0 {
-		return true
-	}
-	type aggregateParentRefresh struct {
-		oldKey graphTokenIdentityKey
-		bucket *reteGraphAggregateBucket
-	}
-	updates := make([]aggregateParentRefresh, 0, 1)
-	for key, bucket := range memory.buckets {
-		if bucket == nil || !bucket.parent.containsFact(factID) {
-			continue
-		}
-		updates = append(updates, aggregateParentRefresh{oldKey: key, bucket: bucket})
-	}
-	for _, update := range updates {
-		bucket := update.bucket
-		nextParent, ok := m.refreshTokenFactRefInPlaceCached(bucket.parent, factID, after, cache)
-		if !ok || nextParent.isZero() {
-			delta.supported = false
-			return false
-		}
-		nextKey := tokenRefKey(nextParent)
-		if update.oldKey != nextKey {
-			if existing := memory.buckets[nextKey]; existing != nil && existing != bucket {
-				delta.supported = false
-				return false
-			}
-			delete(memory.buckets, update.oldKey)
-			memory.buckets[nextKey] = bucket
-		}
-		bucket.parent = nextParent
-		if bucket.token.isZero() {
-			continue
-		}
-		nextToken, ok := m.refreshTokenFactRefInPlaceCached(bucket.token, factID, after, cache)
-		if !ok || nextToken.isZero() {
-			delta.supported = false
-			return false
-		}
-		bucket.token = nextToken
-	}
-	return delta.supported
+	return m.graphAggregateMemory(id).refreshParentsContainingFact(factID, after, cache, delta)
 }
 
 func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, token tokenRef, match conditionMatch) (reteGraphAggregateMember, bool) {
