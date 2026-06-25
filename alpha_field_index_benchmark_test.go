@@ -7,24 +7,13 @@ import (
 )
 
 var benchmarkAlphaFieldIndexCandidates []matchCandidate
+var benchmarkAlphaFieldIndexRuntime *reteRuntime
 
 func BenchmarkAlphaLiteralEqualityCandidateScan(b *testing.B) {
 	ctx := context.Background()
 	const factCount = 4096
 	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(b)
-	session := mustSession(b, revision, "alpha-literal-equality-candidate-scan-session")
-	for i := range factCount {
-		category := "cold"
-		if i == factCount/2 {
-			category = "hot"
-		}
-		if _, err := session.AssertTemplate(ctx, templateKey, Fields{
-			"category": newStringValue(category),
-			"score":    newIntValue(int64(i)),
-		}); err != nil {
-			b.Fatalf("AssertTemplate(%d): %v", i, err)
-		}
-	}
+	session := mustAlphaLiteralEqualitySession(b, ctx, revision, templateKey, factCount)
 	rule := revision.rules[ruleName]
 
 	b.ReportAllocs()
@@ -40,6 +29,51 @@ func BenchmarkAlphaLiteralEqualityCandidateScan(b *testing.B) {
 		}
 		benchmarkAlphaFieldIndexCandidates = candidates
 	}
+}
+
+func BenchmarkAlphaLiteralEqualityGraphReset(b *testing.B) {
+	ctx := context.Background()
+	const factCount = 4096
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(b)
+	session := mustAlphaLiteralEqualitySession(b, ctx, revision, templateKey, factCount)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		b.Fatalf("Snapshot: %v", err)
+	}
+	facts := snapshot.Facts()
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		b.Fatalf("newReteRuntime: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(factCount), "facts")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := runtime.resetGraphBeta(ctx, facts); err != nil {
+			b.Fatalf("resetGraphBeta: %v", err)
+		}
+		benchmarkAlphaFieldIndexRuntime = runtime
+	}
+}
+
+func mustAlphaLiteralEqualitySession(t testing.TB, ctx context.Context, revision *Ruleset, templateKey TemplateKey, factCount int) *Session {
+	t.Helper()
+
+	session := mustSession(t, revision, SessionID(fmt.Sprintf("alpha-literal-equality-session-%d", factCount)))
+	for i := range factCount {
+		category := "cold"
+		if i == factCount/2 {
+			category = "hot"
+		}
+		if _, err := session.AssertTemplate(ctx, templateKey, Fields{
+			"category": newStringValue(category),
+			"score":    newIntValue(int64(i)),
+		}); err != nil {
+			t.Fatalf("AssertTemplate(%d): %v", i, err)
+		}
+	}
+	return session
 }
 
 func mustCompileAlphaLiteralEqualityRuleset(t testing.TB) (*Ruleset, TemplateKey, string) {

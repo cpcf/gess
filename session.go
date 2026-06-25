@@ -111,7 +111,7 @@ type Session struct {
 	factsByDuplicate       duplicateIndexes
 	factsByTemplate        map[TemplateKey][]FactID
 	factsByName            map[string][]FactID
-	factFieldEqualIndexes  map[factFieldEqualKey][]FactID
+	factFieldEqualIndexes  map[factFieldEqualKey][]FactSnapshot
 	factTargetIndexesDirty bool
 	insertionOrder         []FactID
 	slotStorage            []factSlot
@@ -387,37 +387,27 @@ func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int
 	}
 	s.ensureFactTargetIndexes()
 	key := newFactFieldEqualKey(target, fieldSlot, value)
-	ids, cached := s.factFieldEqualIndexes[key]
-	if !cached {
-		targetIDs, ok := s.factIDsForTarget(target)
-		if !ok {
-			return nil, false
-		}
-		ids = make([]FactID, 0)
-		for _, id := range targetIDs {
-			fact, ok := s.workingFactByID(id)
-			if !ok || !workingFactMatchesFieldEqualIndex(fact, fieldSlot, value) {
-				continue
-			}
-			ids = append(ids, id)
-		}
-		if s.factFieldEqualIndexes == nil {
-			s.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactID)
-		}
-		s.factFieldEqualIndexes[key] = ids
+	facts, cached := s.factFieldEqualIndexes[key]
+	if cached {
+		return facts, true
 	}
-	if len(ids) == 0 {
-		return nil, true
+	targetIDs, ok := s.factIDsForTarget(target)
+	if !ok {
+		return nil, false
 	}
-	out := make([]FactSnapshot, 0, len(ids))
-	for _, id := range ids {
+	facts = make([]FactSnapshot, 0)
+	for _, id := range targetIDs {
 		fact, ok := s.workingFactByID(id)
-		if !ok {
+		if !ok || !workingFactMatchesFieldEqualIndex(fact, fieldSlot, value) {
 			continue
 		}
-		out = append(out, fact.detachedSnapshotForRevision(s.revision))
+		facts = append(facts, fact.detachedSnapshotForRevision(s.revision))
 	}
-	return out, true
+	if s.factFieldEqualIndexes == nil {
+		s.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	}
+	s.factFieldEqualIndexes[key] = facts
+	return facts, true
 }
 
 func (s *Session) factIDsForTarget(target conditionTarget) ([]FactID, bool) {
