@@ -30,6 +30,16 @@ type activationRows struct {
 	count  int
 }
 
+func (r *activationRows) reserve(capacity int) {
+	if r == nil || capacity <= 0 {
+		return
+	}
+	chunkCount := (capacity + activationRowChunkSize - 1) / activationRowChunkSize
+	for len(r.chunks) < chunkCount {
+		r.chunks = append(r.chunks, make([]activation, 0, activationRowChunkSize))
+	}
+}
+
 func (r *activationRows) reset() {
 	if r == nil {
 		return
@@ -452,6 +462,13 @@ func newAgenda() *agenda {
 		byFactID:    make(map[FactID]activationKeyBucket),
 		byRevision:  make(map[RuleRevisionID]activationKeyBucket),
 	}
+}
+
+func (a *agenda) reserveActivationRows(capacity int) {
+	if a == nil {
+		return
+	}
+	a.activationRows.reserve(capacity)
 }
 
 func (a *agenda) normalizePendingKeys() []activationKey {

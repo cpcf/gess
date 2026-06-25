@@ -567,7 +567,7 @@ func graphBetaTokenArenaCapacity(revision *Ruleset, initialFacts int) int {
 	if revision == nil {
 		return max(0, initialFacts)
 	}
-	return revision.estimatedRunFactCapacity(initialFacts) * 2
+	return revision.estimatedRunFactCapacity(initialFacts) * 8
 }
 
 func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFacts int) int {

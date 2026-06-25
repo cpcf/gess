@@ -172,10 +172,12 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		return nil, err
 	}
 
+	agenda := newAgenda()
+	agenda.reserveActivationRows(revision.estimatedRunFactCapacity(len(compiledInitials)))
 	session := &Session{
 		id:                  cfg.id,
 		revision:            revision,
-		agenda:              newAgenda(),
+		agenda:              agenda,
 		rete:                rete,
 		generation:          1,
 		initials:            initials,
@@ -1593,6 +1595,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.rete = rete
 	s.syncPropagationCounters()
 	s.emitAgendaEvents(ctx, s.agenda.clear())
+	s.agenda.reserveActivationRows(s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 
 	delta := MutationDelta{
 		Kind:          MutationReset,

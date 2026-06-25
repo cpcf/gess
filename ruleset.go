@@ -442,6 +442,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		conditionNames:             conditionNames,
 		queryConditionTemplateKeys: queryConditionTemplateKeys,
 		queryConditionNames:        queryConditionNames,
+		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
 		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
@@ -465,10 +466,14 @@ type Ruleset struct {
 	conditionNames             map[string]struct{}
 	queryConditionTemplateKeys map[TemplateKey]struct{}
 	queryConditionNames        map[string]struct{}
+	assertTemplateActionCount  int
 	graph                      *reteGraph
 }
 
-const runFactReservePerRule = 64
+const (
+	runFactReservePerRule              = 128
+	runFactReservePerAssertTemplateRHS = 256
+)
 
 func (r *Ruleset) estimatedRunFactCapacity(initialFacts int) int {
 	if initialFacts < 0 {
@@ -477,8 +482,20 @@ func (r *Ruleset) estimatedRunFactCapacity(initialFacts int) int {
 	if r == nil || len(r.ruleOrder) == 0 {
 		return initialFacts
 	}
-	reserve := max(len(r.ruleOrder)*runFactReservePerRule, initialFacts)
+	reserve := max(len(r.ruleOrder)*runFactReservePerRule, r.assertTemplateActionCount*runFactReservePerAssertTemplateRHS, initialFacts)
 	return initialFacts + reserve
+}
+
+func countAssertTemplateActions(rules []compiledRule) int {
+	count := 0
+	for _, rule := range rules {
+		for _, action := range rule.actionExecutions {
+			if action.kind == compiledRuleActionAssertTemplateValues {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func (r *Ruleset) estimatedRunSlotCapacity(factCapacity int) int {
