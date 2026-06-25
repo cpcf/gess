@@ -73,6 +73,14 @@ type logicalSupportState struct {
 	counters LogicalSupportCounters
 }
 
+type logicalSupportMemory struct {
+	session *Session
+}
+
+func (s *Session) logicalSupportMemory() logicalSupportMemory {
+	return logicalSupportMemory{session: s}
+}
+
 func logicalSupportID(source logicalSupportSourceKey, factID FactID) SupportID {
 	if source.activationID.IsZero() || factID.IsZero() {
 		return ""
@@ -101,6 +109,14 @@ func logicalSupportSourceFromActivation(activation activation) logicalSupportSou
 }
 
 func (s *Session) ensureLogicalSupportMaps() {
+	s.logicalSupportMemory().ensure()
+}
+
+func (m logicalSupportMemory) ensure() {
+	s := m.session
+	if s == nil {
+		return
+	}
 	if s.logicalSupportEdges == nil {
 		s.logicalSupportEdges = make(map[SupportID]logicalSupportEdgeRecord)
 	}
@@ -110,6 +126,40 @@ func (s *Session) ensureLogicalSupportMaps() {
 	if s.logicalSupportByFact == nil {
 		s.logicalSupportByFact = make(map[FactID]map[SupportID]struct{})
 	}
+}
+
+func (m logicalSupportMemory) addEdge(source logicalSupportSourceKey, edge LogicalSupportEdge) bool {
+	s := m.session
+	if s == nil || edge.SupportID.IsZero() || edge.FactID.IsZero() {
+		return false
+	}
+	m.ensure()
+	if _, exists := s.logicalSupportEdges[edge.SupportID]; exists {
+		return false
+	}
+	s.logicalSupportEdges[edge.SupportID] = logicalSupportEdgeRecord{edge: edge, source: source}
+	sourceEdges := s.logicalSupportBySource[source]
+	if sourceEdges == nil {
+		sourceEdges = make(map[SupportID]struct{})
+		s.logicalSupportBySource[source] = sourceEdges
+	}
+	sourceEdges[edge.SupportID] = struct{}{}
+	factEdges := s.logicalSupportByFact[edge.FactID]
+	if factEdges == nil {
+		factEdges = make(map[SupportID]struct{})
+		s.logicalSupportByFact[edge.FactID] = factEdges
+	}
+	factEdges[edge.SupportID] = struct{}{}
+	s.logicalSupportCounters.SupportEdgesAdded++
+	return true
+}
+
+func (m logicalSupportMemory) countForFact(factID FactID) int {
+	s := m.session
+	if s == nil || s.logicalSupportByFact == nil {
+		return 0
+	}
+	return len(s.logicalSupportByFact[factID])
 }
 
 func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, origin mutationOrigin, supportingFacts []FactID) (bool, error) {
@@ -125,9 +175,6 @@ func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, orig
 	if supportID.IsZero() {
 		return false, ErrLogicalSupportUnavailable
 	}
-	if _, exists := s.logicalSupportEdges[supportID]; exists {
-		return false, nil
-	}
 
 	edge := LogicalSupportEdge{
 		SupportID:       supportID,
@@ -138,30 +185,16 @@ func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, orig
 		Generation:      s.generation,
 		SupportingFacts: cloneFactIDs(supportingFacts),
 	}
-	s.logicalSupportEdges[supportID] = logicalSupportEdgeRecord{edge: edge, source: source}
-	sourceEdges := s.logicalSupportBySource[source]
-	if sourceEdges == nil {
-		sourceEdges = make(map[SupportID]struct{})
-		s.logicalSupportBySource[source] = sourceEdges
+	if !s.logicalSupportMemory().addEdge(source, edge) {
+		return false, nil
 	}
-	sourceEdges[supportID] = struct{}{}
-	factEdges := s.logicalSupportByFact[fact.id]
-	if factEdges == nil {
-		factEdges = make(map[SupportID]struct{})
-		s.logicalSupportByFact[fact.id] = factEdges
-	}
-	factEdges[supportID] = struct{}{}
-	s.logicalSupportCounters.SupportEdgesAdded++
 	s.updateFactSupportState(fact)
 	s.emitLogicalSupportEvent(ctx, EventLogicalSupportAdded, edge)
 	return true, nil
 }
 
 func (s *Session) logicalSupportCount(factID FactID) int {
-	if s == nil || s.logicalSupportByFact == nil {
-		return 0
-	}
-	return len(s.logicalSupportByFact[factID])
+	return s.logicalSupportMemory().countForFact(factID)
 }
 
 func (s *Session) updateFactSupportState(fact *workingFact) {
