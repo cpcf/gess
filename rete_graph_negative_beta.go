@@ -121,6 +121,61 @@ func (m reteGraphNegativeBetaMemory) removeLeft(token tokenRef, counters *propag
 	return true
 }
 
+func (m reteGraphNegativeBetaMemory) removeRight(joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
+		return false
+	}
+	removedRow, removedOK := m.memory.right.removeToken(token, counters)
+	if !removedOK {
+		return true
+	}
+	if counters != nil {
+		counters.recordNegativeRowRemoved()
+	}
+	var currentMatch conditionMatch
+	var ok bool
+	if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 || len(m.node.rightPredicates) != 0 {
+		currentMatch, ok = tokenLastMatch(removedRow.token)
+		if !ok {
+			return false
+		}
+	}
+	bucket := m.memory.left.bucketForKey(joinKey)
+	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
+		leftRow := m.memory.left.row(rowID)
+		if leftRow == nil || leftRow.token.isZero() {
+			continue
+		}
+		if m.node.rightHasLeftPrefix && !tokenRefHasPrefix(removedRow.token, leftRow.token) {
+			continue
+		}
+		if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 {
+			if ok, err := m.owner.residualJoinsMatch(m.node, currentMatch.fact, leftRow.token, nil); err != nil {
+				delta.supported = false
+			} else if !ok {
+				continue
+			}
+		}
+		if ok, err := m.owner.rightPredicatesMatch(m.node, currentMatch, leftRow.token, nil); err != nil {
+			delta.supported = false
+		} else if !ok {
+			continue
+		}
+		if leftRow.negativeBlockerCount() <= 0 {
+			delta.supported = false
+			continue
+		}
+		if leftRow.decrementNegativeBlockerCount() == 0 {
+			if err := m.owner.propagateFromStage(source, leftRow.token, nil, delta); err != nil {
+				delta.supported = false
+			}
+		}
+	}
+	return true
+}
+
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false

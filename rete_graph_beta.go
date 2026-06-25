@@ -3864,9 +3864,7 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 	if m == nil || delta == nil || node == nil || token.isZero() {
 		return false
 	}
-	nodeMemory := m.nodeMemory(nodeID)
 	negativeMemory := m.negativeBetaMemory(nodeID, node)
-	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	switch side {
 	case reteGraphBetaInputLeft:
 		return negativeMemory.removeLeft(token, counters, delta)
@@ -3875,52 +3873,7 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 		if err != nil || !ok {
 			return false
 		}
-		removedRow, removedOK := nodeMemory.right.removeToken(token, counters)
-		if !removedOK {
-			return true
-		}
-		if counters != nil {
-			counters.recordNegativeRowRemoved()
-		}
-		var currentMatch conditionMatch
-		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
-			currentMatch, ok = tokenLastMatch(removedRow.token)
-			if !ok {
-				return false
-			}
-		}
-		bucket := nodeMemory.left.bucketForKey(joinKey)
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			leftRow := nodeMemory.left.row(rowID)
-			if leftRow == nil || leftRow.token.isZero() {
-				continue
-			}
-			if node.rightHasLeftPrefix && !tokenRefHasPrefix(removedRow.token, leftRow.token) {
-				continue
-			}
-			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
-				if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
-					delta.supported = false
-				} else if !ok {
-					continue
-				}
-			}
-			if ok, err := m.rightPredicatesMatch(node, currentMatch, leftRow.token, nil); err != nil {
-				delta.supported = false
-			} else if !ok {
-				continue
-			}
-			if leftRow.negativeBlockerCount() <= 0 {
-				delta.supported = false
-				continue
-			}
-			if leftRow.decrementNegativeBlockerCount() == 0 {
-				if err := m.propagateFromStage(source, leftRow.token, nil, delta); err != nil {
-					delta.supported = false
-				}
-			}
-		}
+		return negativeMemory.removeRight(joinKey, token, counters, delta)
 	default:
 		return false
 	}
