@@ -94,6 +94,18 @@ func newReteGraphModifyEvent(revision *Ruleset, before, after FactSnapshot, chan
 	}
 }
 
+func newReteGraphModifyRemoveEvent(event reteGraphPropagationEvent) reteGraphPropagationEvent {
+	event.tag = reteGraphPropagationModifyRemove
+	event.fact = event.before
+	return event
+}
+
+func newReteGraphModifyAddEvent(event reteGraphPropagationEvent) reteGraphPropagationEvent {
+	event.tag = reteGraphPropagationModifyAdd
+	event.fact = event.after
+	return event
+}
+
 func newReteGraphClearEvent(generation Generation, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {
 	return reteGraphPropagationEvent{
 		tag:              reteGraphPropagationClear,

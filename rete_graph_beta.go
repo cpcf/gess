@@ -1687,8 +1687,10 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	case reteGraphPropagationClear:
 		m.clearMemories()
 		return reteAgendaDelta{supported: true}, nil
-	case reteGraphPropagationModifyAdd, reteGraphPropagationModifyRemove:
-		return reteAgendaDelta{}, ErrUnsupportedRuntime
+	case reteGraphPropagationModifyAdd:
+		return m.insertFactInternal(ctx, event.fact, event.span, false)
+	case reteGraphPropagationModifyRemove:
+		return m.removeFactInternal(ctx, event.fact, event.counters, false)
 	default:
 		return reteAgendaDelta{}, ErrUnsupportedRuntime
 	}
@@ -3986,13 +3988,19 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputContainingFact(nodeID reteGra
 }
 
 func (m *reteGraphBetaMemory) removeFact(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+	return m.removeFactInternal(ctx, fact, counters, true)
+}
+
+func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger, updateSource bool) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}, nil
 	}
 	defer m.pushEvalContext(ctx)()
 	delta := reteAgendaDelta{supported: true}
 	id := fact.ID()
-	defer m.removeFactSource(id)
+	if updateSource {
+		defer m.removeFactSource(id)
+	}
 	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
 	if len(nodeIDs) == 0 {
 		nodeIDs = m.snapshotAlphaRouteIDsForFact(fact)

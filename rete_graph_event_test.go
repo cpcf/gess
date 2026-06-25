@@ -93,6 +93,64 @@ func TestReteGraphModifySummaryConsumesEventChangedSlots(t *testing.T) {
 	}
 }
 
+func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "graph-modify-add-remove-event-session")
+	asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"age":    32,
+		"note":   "old",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	before, ok := mustSnapshot(t, ctx, session).Fact(asserted.Fact.ID())
+	if !ok {
+		t.Fatalf("before fact %q not found", asserted.Fact.ID())
+	}
+	if _, err := session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"note": "new"})}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	after, ok := mustSnapshot(t, ctx, session).Fact(asserted.Fact.ID())
+	if !ok {
+		t.Fatalf("after fact %q not found", asserted.Fact.ID())
+	}
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, []FactSnapshot{before}, session.Generation())
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
+	}
+	event := newReteGraphModifyEvent(revision, before, after, []FieldChange{
+		{Field: "note", Old: mustValue(t, "old"), New: mustValue(t, "new")},
+	}, false, mutationOrigin{}, nil)
+
+	removed, err := memory.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))
+	if err != nil {
+		t.Fatalf("propagate modify-remove: %v", err)
+	}
+	if got, want := len(removed.removed), 1; got != want {
+		t.Fatalf("modify-remove terminal removals = %d, want %d", got, want)
+	}
+	if got, want := len(memory.facts), 1; got != want {
+		t.Fatalf("source facts after modify-remove = %d, want %d", got, want)
+	}
+
+	added, err := memory.propagateEvent(ctx, newReteGraphModifyAddEvent(event))
+	if err != nil {
+		t.Fatalf("propagate modify-add: %v", err)
+	}
+	if got, want := len(added.added), 1; got != want {
+		t.Fatalf("modify-add terminal additions = %d, want %d", got, want)
+	}
+	if got, want := len(memory.facts), 1; got != want {
+		t.Fatalf("source facts after modify-add = %d, want %d", got, want)
+	}
+	note, ok := memory.facts[0].Field("note")
+	if !ok || !note.Equal(mustValue(t, "old")) {
+		t.Fatalf("source fact note after modify events = %v, ok=%t, want old", note, ok)
+	}
+}
+
 func TestReteGraphPropagationEventCarriesClearMetadata(t *testing.T) {
 	origin := mutationOrigin{RuleID: "reset-rule", RuleRevisionID: "reset-revision"}
 
