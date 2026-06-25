@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -300,6 +301,85 @@ func TestQueryRetainsDuplicateReturnValuesFromDistinctBranchTokens(t *testing.T)
 	}
 	assertQueryRowStringValue(t, rows[0], "id", "p1")
 	assertQueryRowStringValue(t, rows[1], "id", "p1")
+}
+
+func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "people-values",
+		ConditionTree: Match{
+			Binding:     "p",
+			TemplateKey: person.Key(),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
+			ReturnValue("dept", BindingFieldExpr{Binding: "p", Field: "dept"}),
+			ReturnValue("age", BindingFieldExpr{Binding: "p", Field: "age"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	query, ok := revision.query("people-values")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	for _, ret := range query.returns {
+		if ret.fact || ret.projection.kind != compiledQueryReturnProjectionBindingField {
+			t.Fatalf("return %q projection = (%v, fact %v), want binding-field value projection", ret.alias, ret.projection.kind, ret.fact)
+		}
+	}
+
+	initials := make([]SessionInitialFact, 150)
+	for i := range initials {
+		initials[i] = SessionInitialFact{
+			TemplateKey: person.Key(),
+			Fields: mustFields(t, map[string]any{
+				"id":   fmt.Sprintf("p-%03d", i),
+				"dept": "engineering",
+				"age":  20 + i,
+			}),
+		}
+	}
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "people-values", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if got, want := len(rows), len(initials); got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
+		t.Fatalf("row storage = items %d valueItems %d, want value-only projected storage", len(rows[0].items), len(rows[0].valueItems))
+	}
+	if _, ok := rows[0].Fact("id"); ok {
+		t.Fatal("value return resolved as fact")
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p-000")
+	assertQueryRowStringValue(t, rows[149], "id", "p-149")
+
+	again, err := session.QueryAll(ctx, "people-values", nil)
+	if err != nil {
+		t.Fatalf("second QueryAll: %v", err)
+	}
+	if got, want := len(again), len(initials); got != want {
+		t.Fatalf("second rows = %d, want %d", got, want)
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p-000")
+	assertQueryRowStringValue(t, again[0], "id", "p-000")
 }
 
 func TestQueryValidationAndArgumentsFailPrecisely(t *testing.T) {

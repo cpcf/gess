@@ -722,10 +722,11 @@ func markQueryValidation(err error) error {
 }
 
 type QueryRow struct {
-	values map[string]queryRowValue
-	order  []string
-	index  map[string]int
-	items  []queryRowValue
+	values     map[string]queryRowValue
+	order      []string
+	index      map[string]int
+	items      []queryRowValue
+	valueItems []Value
 }
 
 type queryRowValue struct {
@@ -741,6 +742,9 @@ func (r QueryRow) Aliases() []string {
 }
 
 func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
+	if len(r.valueItems) != 0 {
+		return FactSnapshot{}, false
+	}
 	if len(r.items) != 0 {
 		idx, ok := r.itemIndex(alias)
 		if !ok {
@@ -760,6 +764,13 @@ func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
 }
 
 func (r QueryRow) Value(alias string) (Value, bool) {
+	if len(r.valueItems) != 0 {
+		idx, ok := r.itemIndex(alias)
+		if !ok {
+			return Value{}, false
+		}
+		return cloneValue(r.valueItems[idx]), true
+	}
 	if len(r.items) != 0 {
 		idx, ok := r.itemIndex(alias)
 		if !ok {
@@ -781,14 +792,22 @@ func (r QueryRow) Value(alias string) (Value, bool) {
 func (r QueryRow) itemIndex(alias string) (int, bool) {
 	if r.index != nil {
 		idx, ok := r.index[alias]
-		if ok && idx >= 0 && idx < len(r.items) {
+		itemCount := len(r.items)
+		if len(r.valueItems) != 0 {
+			itemCount = len(r.valueItems)
+		}
+		if ok && idx >= 0 && idx < itemCount {
 			return idx, true
 		}
 		return -1, false
 	}
+	itemCount := len(r.items)
+	if len(r.valueItems) != 0 {
+		itemCount = len(r.valueItems)
+	}
 	for i, candidate := range r.order {
 		if candidate == alias {
-			return i, i < len(r.items)
+			return i, i < itemCount
 		}
 	}
 	return -1, false
@@ -832,6 +851,17 @@ func (it *QueryIterator) All(ctx context.Context) ([]QueryRow, error) {
 }
 
 func (r QueryRow) clone() QueryRow {
+	if len(r.valueItems) != 0 {
+		out := QueryRow{
+			order:      append([]string(nil), r.order...),
+			index:      r.index,
+			valueItems: make([]Value, len(r.valueItems)),
+		}
+		for i, value := range r.valueItems {
+			out.valueItems[i] = cloneValue(value)
+		}
+		return out
+	}
 	if len(r.items) != 0 {
 		out := QueryRow{
 			order: append([]string(nil), r.order...),
@@ -1068,7 +1098,22 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 }
 
 func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int) (QueryRow, error) {
+	if q.valueReturnsOnly() {
+		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, make([]Value, len(q.returns)))
+	}
 	return q.materializeTokenRowInto(ctx, source, token, args, bindingSlotOffset, make([]queryRowValue, len(q.returns)))
+}
+
+func (q compiledQuery) valueReturnsOnly() bool {
+	if len(q.returns) == 0 {
+		return false
+	}
+	for _, ret := range q.returns {
+		if ret.fact {
+			return false
+		}
+	}
+	return true
 }
 
 func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int, items []queryRowValue) (QueryRow, error) {
@@ -1112,6 +1157,37 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snaps
 	return row, nil
 }
 
+func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, values []Value) (QueryRow, error) {
+	if len(values) != len(q.returns) {
+		return QueryRow{}, fmt.Errorf("%w: malformed query row value count %d", ErrQueryExecution, len(values))
+	}
+	row := q.newQueryValueRowWithItems(values)
+	for i, ret := range q.returns {
+		if ret.fact {
+			return QueryRow{}, fmt.Errorf("%w: malformed value-only query return binding %q", ErrQueryExecution, ret.binding)
+		}
+		if value, ok, err := ret.projectTokenValue(token, bindingSlotOffset); err != nil {
+			return QueryRow{}, err
+		} else if ok {
+			row.valueItems[i] = value
+			continue
+		}
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+			QueryName:      q.name,
+			ConditionIndex: -1,
+			PredicateIndex: ret.order,
+		}, nil)
+		if err != nil {
+			return QueryRow{}, err
+		}
+		if !ok {
+			value = NullValue()
+		}
+		row.valueItems[i] = value
+	}
+	return row, nil
+}
+
 func (r compiledQueryReturn) projectTokenValue(token tokenRef, bindingSlotOffset int) (Value, bool, error) {
 	switch r.projection.kind {
 	case compiledQueryReturnProjectionConst:
@@ -1151,5 +1227,13 @@ func (q compiledQuery) newQueryRowWithItems(items []queryRowValue) QueryRow {
 		order: q.returnAliases,
 		index: q.returnAliasIndex,
 		items: items,
+	}
+}
+
+func (q compiledQuery) newQueryValueRowWithItems(values []Value) QueryRow {
+	return QueryRow{
+		order:      q.returnAliases,
+		index:      q.returnAliasIndex,
+		valueItems: values,
 	}
 }
