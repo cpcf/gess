@@ -2543,118 +2543,19 @@ func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry binding
 }
 
 func (m *reteGraphBetaMemory) insertAggregateInput(id reteGraphAggregateNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || match.fact.ID().IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	node := m.graph.aggregateNode(id)
-	if node == nil {
-		delta.supported = false
-		return
-	}
-	token := m.newTokenRef(tokenRef{}, node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), span)
-	m.insertAggregateToken(id, token, span, delta)
+	m.graphAggregateMemory(id).insertInput(match, span, delta)
 }
 
 func (m *reteGraphBetaMemory) removeAggregateInput(id reteGraphAggregateNodeID, match conditionMatch, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || match.fact.ID().IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	node := m.graph.aggregateNode(id)
-	if node == nil {
-		delta.supported = false
-		return
-	}
-	token := m.newTokenRef(tokenRef{}, node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), nil)
-	m.removeAggregateToken(id, token, counters, delta)
+	m.graphAggregateMemory(id).removeInput(match, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) insertAggregateToken(id reteGraphAggregateNodeID, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || token.isZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	node := m.graph.aggregateNode(id)
-	memory := m.aggregateMemory(id)
-	if node == nil || memory == nil {
-		delta.supported = false
-		return
-	}
-	if !aggregateSpecsNeedInputValues(node.specs) {
-		bucket := memory.bucketForParent(m.aggregateParentToken(node, token))
-		if bucket == nil {
-			delta.supported = false
-			return
-		}
-		if bucket.addCountOnlyMember(token) {
-			m.refreshAggregateOutputInternal(id, bucket, span, nil, delta)
-		}
-		return
-	}
-	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
-	if !ok {
-		delta.supported = false
-		return
-	}
-	bucket := memory.bucketForParent(m.aggregateParentToken(node, token))
-	memberKey := tokenRefKey(token)
-	if existing, ok := bucket.members[memberKey]; ok {
-		bucket.removeMember(node, existing)
-	}
-	member, ok := m.aggregateMember(node, token, match)
-	if !ok {
-		delta.supported = false
-		return
-	}
-	if bucket.members == nil {
-		bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
-	}
-	bucket.members[memberKey] = member
-	if err := bucket.addMember(node, member); err != nil {
-		delta.supported = false
-		return
-	}
-	m.refreshAggregateOutputInternal(id, bucket, span, nil, delta)
+	m.graphAggregateMemory(id).insertToken(token, span, delta)
 }
 
 func (m *reteGraphBetaMemory) removeAggregateToken(id reteGraphAggregateNodeID, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || token.isZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return
-	}
-	node := m.graph.aggregateNode(id)
-	memory := m.aggregateMemory(id)
-	if node == nil || memory == nil {
-		delta.supported = false
-		return
-	}
-	bucket, ok := memory.bucketForParentIfExists(m.aggregateParentToken(node, token))
-	if !ok {
-		return
-	}
-	if !aggregateSpecsNeedInputValues(node.specs) {
-		if bucket.removeCountOnlyMember(token) {
-			m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
-		}
-		return
-	}
-	memberKey := tokenRefKey(token)
-	member, ok := bucket.members[memberKey]
-	if !ok {
-		return
-	}
-	delete(bucket.members, memberKey)
-	bucket.removeMember(node, member)
-	m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
+	m.graphAggregateMemory(id).removeToken(token, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) openAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
