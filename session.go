@@ -595,7 +595,9 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 				return result, err
 			}
 		} else {
-			s.recordRunAgendaDelta(agendaDelta)
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -660,7 +662,9 @@ func (s *Session) insertLogicalFactWithContextAndOrigin(ctx context.Context, nam
 				return result, err
 			}
 		} else {
-			s.recordRunAgendaDelta(agendaDelta)
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -694,7 +698,9 @@ func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, 
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
 		}
-		s.recordRunAgendaDelta(agendaDelta)
+		if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1358,7 +1364,9 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 				return result, err
 			}
 		} else {
-			s.recordRunAgendaDelta(agendaDelta)
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -2383,7 +2391,9 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 				return result, err
 			}
 		} else {
-			s.recordRunAgendaDelta(agendaDelta)
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil
@@ -4225,16 +4235,18 @@ func (s *Session) consumeAgendaDirty() bool {
 	return true
 }
 
-func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
+func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 	if s == nil {
-		return
+		return nil
 	}
-	if !delta.supported || s.agendaDirty {
-		if s.propagationCounters != nil && !delta.supported {
+	if !delta.supported {
+		if s.propagationCounters != nil {
 			s.propagationCounters.recordUnsupportedAgendaDelta()
 		}
-		s.markAgendaDirty()
-		return
+		return fmt.Errorf("%w: unsupported agenda delta during run", ErrUnsupportedRuntime)
+	}
+	if s.agendaDirty {
+		return fmt.Errorf("%w: cannot record run agenda delta while agenda is dirty", ErrUnsupportedRuntime)
 	}
 	total := len(delta.added) + len(delta.removed) + len(delta.updated)
 	if !s.runAgendaPending {
@@ -4254,7 +4266,9 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 	}
 	if err := s.recordRunAgendaDeltaTokens(delta); err != nil {
 		s.markAgendaDirty()
+		return err
 	}
+	return nil
 }
 
 func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {
@@ -4345,8 +4359,7 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 		return err
 	} else if !ok {
 		s.clearRunAgendaDelta()
-		s.markAgendaDirty()
-		return nil
+		return fmt.Errorf("%w: unsupported coalesced agenda delta during run", ErrUnsupportedRuntime)
 	}
 	s.clearRunAgendaDelta()
 	return nil

@@ -1344,7 +1344,9 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
 		}
-		s.recordRunAgendaDelta(agendaDelta)
+		if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1411,7 +1413,9 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
 		}
-		s.recordRunAgendaDelta(agendaDelta)
+		if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+			return err
+		}
 	}
 	return nil
 }

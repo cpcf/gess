@@ -895,6 +895,44 @@ func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testin
 	}
 }
 
+func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: templateKey,
+		Fields: mustFields(t, map[string]any{
+			"age":    32,
+			"note":   "old",
+			"status": "active",
+		}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	} else if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	before := session.propagationCounterSnapshot().Totals
+
+	if err := session.recordRunAgendaDelta(reteAgendaDelta{}); !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("recordRunAgendaDelta error = %v, want ErrUnsupportedRuntime", err)
+	}
+	after := session.propagationCounterSnapshot().Totals
+	if got, want := after.UnsupportedAgendaDeltas-before.UnsupportedAgendaDeltas, 1; got != want {
+		t.Fatalf("unsupported agenda deltas = +%d, want +%d", got, want)
+	}
+	if session.runAgendaPending {
+		t.Fatal("unsupported run delta left pending run agenda state")
+	}
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state after unsupported run delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	}
+}
+
 func TestPropagationPurityDiagnosticsRecordUnsupportedDeltaAndResetRebuild(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
