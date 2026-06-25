@@ -30,6 +30,51 @@ func TestSessionAlphaLiteralEqualityIndexInvalidatesAcrossModify(t *testing.T) {
 	assertAlphaLiteralEqualityCandidates(t, revision, session, ruleName, cold.Fact.ID())
 }
 
+func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustAlphaLiteralEqualitySession(t, ctx, revision, templateKey, 8)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
+	}
+	if runtime.graphBeta == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+
+	rule := revision.rules[ruleName]
+	fieldSlot, value, ok := rule.conditionPlans[0].literalEqualityFieldIndex()
+	if !ok {
+		t.Fatal("literal equality field index was not planned")
+	}
+	indexedFacts, ok := runtime.graphBeta.factsForTargetFieldEqual(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}, fieldSlot, value)
+	if !ok {
+		t.Fatal("factsForTargetFieldEqual returned !ok")
+	}
+	if got, want := len(indexedFacts), 1; got != want {
+		t.Fatalf("factsForTargetFieldEqual facts = %d, want %d", got, want)
+	}
+	key := newFactFieldEqualKey(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}, fieldSlot, value)
+	facts, ok := runtime.graphBeta.factFieldEqualIndexes[key]
+	if !ok {
+		t.Fatalf("graph field equality index missing key %#v", key)
+	}
+	if got, want := len(facts), 1; got != want {
+		t.Fatalf("indexed facts = %d, want %d", got, want)
+	}
+	category, ok := facts[0].Field("category")
+	if !ok || category.Kind() != ValueString || category.stringValue != "hot" {
+		t.Fatalf("indexed fact category = %#v, want hot", category)
+	}
+}
+
 func assertAlphaLiteralEqualityCandidates(t testing.TB, revision *Ruleset, session *Session, ruleName string, wantIDs ...FactID) {
 	t.Helper()
 

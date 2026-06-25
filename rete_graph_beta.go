@@ -26,6 +26,7 @@ type reteGraphBetaMemory struct {
 	factTemplateIndexes    map[FactID]int
 	factFieldEqualIndexes  map[factFieldEqualKey][]FactSnapshot
 	factTargetIndexesDirty bool
+	factFieldIndexesDirty  bool
 	arena                  *tokenArena
 	queryArena             *tokenArena
 	terminalTokenDeltas    []reteTerminalTokenDelta
@@ -1459,10 +1460,35 @@ func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
 	} else {
 		clear(m.factTemplateIndexes)
 	}
+	if m.factFieldEqualIndexes == nil {
+		m.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	} else {
+		clear(m.factFieldEqualIndexes)
+	}
+	m.initializeFactFieldEqualIndexKeys()
 	for _, fact := range m.facts {
 		m.addFactTargetIndexes(fact)
 	}
 	m.factTargetIndexesDirty = false
+	m.factFieldIndexesDirty = false
+}
+
+func (m *reteGraphBetaMemory) initializeFactFieldEqualIndexKeys() {
+	if m == nil || m.graph == nil || m.factFieldEqualIndexes == nil {
+		return
+	}
+	for templateKey, table := range m.graph.alphaRouteTables {
+		if table == nil || len(table.indexed) == 0 {
+			continue
+		}
+		target := conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}
+		for routeKey := range table.indexed {
+			key := newFactFieldEqualKey(target, routeKey.fieldSlot, routeKey.value)
+			if _, ok := m.factFieldEqualIndexes[key]; !ok {
+				m.factFieldEqualIndexes[key] = nil
+			}
+		}
+	}
 }
 
 func (m *reteGraphBetaMemory) clearMemories() {
@@ -1661,6 +1687,7 @@ func (m *reteGraphBetaMemory) markFactTargetIndexesDirty() {
 		return
 	}
 	m.factTargetIndexesDirty = true
+	m.factFieldIndexesDirty = true
 	m.clearFactFieldEqualIndexes()
 }
 
@@ -1694,6 +1721,25 @@ func (m *reteGraphBetaMemory) addFactTargetIndexes(fact FactSnapshot) {
 		}
 		m.factTemplateIndexes[fact.ID()] = len(m.factsByTemplate[fact.TemplateKey()])
 		m.factsByTemplate[fact.TemplateKey()] = append(m.factsByTemplate[fact.TemplateKey()], fact)
+	}
+	m.addFactFieldEqualIndexes(fact)
+}
+
+func (m *reteGraphBetaMemory) addFactFieldEqualIndexes(fact FactSnapshot) {
+	if m == nil || m.graph == nil || fact.ID().IsZero() || fact.TemplateKey() == "" || m.factFieldEqualIndexes == nil {
+		return
+	}
+	table := m.graph.alphaRouteTables[fact.TemplateKey()]
+	if table == nil || len(table.indexed) == 0 {
+		return
+	}
+	target := conditionTarget{kind: conditionTargetTemplateKey, templateKey: fact.TemplateKey()}
+	for routeKey := range table.indexed {
+		if !factSnapshotMatchesFieldEqualIndex(fact, routeKey.fieldSlot, routeKey.value) {
+			continue
+		}
+		key := newFactFieldEqualKey(target, routeKey.fieldSlot, routeKey.value)
+		m.factFieldEqualIndexes[key] = append(m.factFieldEqualIndexes[key], fact)
 	}
 }
 
@@ -6088,11 +6134,17 @@ func (m *reteGraphBetaMemory) factsForTargetFieldEqual(target conditionTarget, f
 	if m == nil {
 		return nil, false
 	}
+	key := newFactFieldEqualKey(target, fieldSlot, value)
+	if target.kind == conditionTargetTemplateKey {
+		m.ensureFactFieldEqualIndexes()
+		if indexed, ok := m.factFieldEqualIndexes[key]; ok {
+			return indexed, true
+		}
+	}
 	facts, ok := m.factsForTarget(target)
 	if !ok {
 		return nil, false
 	}
-	key := newFactFieldEqualKey(target, fieldSlot, value)
 	if indexed, ok := m.factFieldEqualIndexes[key]; ok {
 		return indexed, true
 	}
@@ -6107,6 +6159,22 @@ func (m *reteGraphBetaMemory) factsForTargetFieldEqual(target conditionTarget, f
 	}
 	m.factFieldEqualIndexes[key] = indexed
 	return indexed, true
+}
+
+func (m *reteGraphBetaMemory) ensureFactFieldEqualIndexes() {
+	if m == nil || (!m.factFieldIndexesDirty && m.factFieldEqualIndexes != nil) {
+		return
+	}
+	if m.factFieldEqualIndexes == nil {
+		m.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	} else {
+		clear(m.factFieldEqualIndexes)
+	}
+	m.initializeFactFieldEqualIndexKeys()
+	for _, fact := range m.facts {
+		m.addFactFieldEqualIndexes(fact)
+	}
+	m.factFieldIndexesDirty = false
 }
 
 func (m *reteGraphBetaMemory) ensureFactTargetIndexes() {

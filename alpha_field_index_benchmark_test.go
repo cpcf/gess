@@ -57,6 +57,41 @@ func BenchmarkAlphaLiteralEqualityGraphReset(b *testing.B) {
 	}
 }
 
+func BenchmarkAlphaLiteralEqualityGraphResetAndCandidateScan(b *testing.B) {
+	ctx := context.Background()
+	const factCount = 4096
+	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(b)
+	session := mustAlphaLiteralEqualitySession(b, ctx, revision, templateKey, factCount)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		b.Fatalf("Snapshot: %v", err)
+	}
+	facts := snapshot.Facts()
+	rule := revision.rules[ruleName]
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		b.Fatalf("newReteRuntime: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(factCount), "facts")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := runtime.resetGraphBeta(ctx, facts); err != nil {
+			b.Fatalf("resetGraphBeta: %v", err)
+		}
+		candidates, err := rule.matchCandidates(ctx, runtime.graphBeta)
+		if err != nil {
+			b.Fatalf("matchCandidates: %v", err)
+		}
+		if len(candidates) != 1 {
+			b.Fatalf("candidate count = %d, want 1", len(candidates))
+		}
+		benchmarkAlphaFieldIndexCandidates = candidates
+		benchmarkAlphaFieldIndexRuntime = runtime
+	}
+}
+
 func mustAlphaLiteralEqualitySession(t testing.TB, ctx context.Context, revision *Ruleset, templateKey TemplateKey, factCount int) *Session {
 	t.Helper()
 
