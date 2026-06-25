@@ -2783,6 +2783,37 @@ func newFactModifySummary(template Template, changes []FieldChange, duplicateCha
 	return summary
 }
 
+func newFactModifySummaryFromPropagationEvent(event reteGraphPropagationEvent) factModifySummary {
+	if len(event.changes) == 0 {
+		return factModifySummary{}
+	}
+	summary := factModifySummary{
+		changes:          event.changes,
+		duplicateChanged: event.duplicateChanged,
+	}
+	if len(event.changedSlots) == 0 {
+		summary.unknown = true
+		return summary
+	}
+	for _, slot := range event.changedSlots {
+		if slot < 0 {
+			summary.unknown = true
+			continue
+		}
+		if summary.hasChangedSlot(slot) {
+			continue
+		}
+		if summary.changedSlotCount >= len(summary.changedSlots) {
+			summary.unknown = true
+			continue
+		}
+		summary.changedSlots[summary.changedSlotCount] = slot
+		summary.changedSlotCount++
+	}
+	sort.Ints(summary.changedSlots[:summary.changedSlotCount])
+	return summary
+}
+
 func (s factModifySummary) knownSlotChange() bool {
 	return !s.unknown && s.changedSlotCount > 0
 }

@@ -65,6 +65,34 @@ func TestReteGraphPropagationEventCarriesModifyMetadata(t *testing.T) {
 	}
 }
 
+func TestReteGraphModifySummaryConsumesEventChangedSlots(t *testing.T) {
+	event := reteGraphPropagationEvent{
+		changes: []FieldChange{
+			{Field: "note", Old: mustValue(t, "old"), New: mustValue(t, "new")},
+		},
+	}
+
+	summary := newFactModifySummaryFromPropagationEvent(event)
+	if summary.knownSlotChange() {
+		t.Fatal("summary with missing changed slots reported known slot change")
+	}
+
+	event.changedSlots = []int{3, 1, 3}
+	summary = newFactModifySummaryFromPropagationEvent(event)
+	if !summary.knownSlotChange() {
+		t.Fatal("summary with event changed slots did not report known slot change")
+	}
+	if got, want := summary.changedSlotCount, 2; got != want {
+		t.Fatalf("changed slot count = %d, want %d", got, want)
+	}
+	if got, want := summary.changedSlots[0], 1; got != want {
+		t.Fatalf("first changed slot = %d, want %d", got, want)
+	}
+	if got, want := summary.changedSlots[1], 3; got != want {
+		t.Fatalf("second changed slot = %d, want %d", got, want)
+	}
+}
+
 func TestReteGraphPropagationEventCarriesClearMetadata(t *testing.T) {
 	origin := mutationOrigin{RuleID: "reset-rule", RuleRevisionID: "reset-revision"}
 

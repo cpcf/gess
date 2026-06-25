@@ -1684,7 +1684,7 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	case reteGraphPropagationRemove:
 		return m.removeFact(ctx, event.fact, event.counters)
 	case reteGraphPropagationUpdate:
-		return m.updateFact(ctx, event.before, event.after, event.changes, event.duplicateChanged, event.counters)
+		return m.updateFact(ctx, event)
 	case reteGraphPropagationClear:
 		m.clearMemories()
 		return reteAgendaDelta{supported: true}, nil
@@ -4264,47 +4264,47 @@ func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
 	return m.alphaFactCounts[conditionID]
 }
 
-func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {
 	if m == nil {
 		return reteAgendaDelta{}, nil
 	}
 	defer m.pushEvalContext(ctx)()
-	if m.canSkipUnmatchedModifyPropagation(before, after, changes, duplicateChanged) {
-		m.upsertFactSource(after)
-		if counters != nil {
-			counters.recordModifyFastPathSkip()
+	if m.canSkipUnmatchedModifyPropagation(event) {
+		m.upsertFactSource(event.after)
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
 		}
 		return reteAgendaDelta{supported: true}, nil
 	}
-	if delta, ok := m.refreshDirectTerminalModify(ctx, before, after, changes, duplicateChanged); ok {
-		m.upsertFactSource(after)
-		if counters != nil {
-			counters.recordModifyFastPathSkip()
+	if delta, ok := m.refreshDirectTerminalModify(ctx, event); ok {
+		m.upsertFactSource(event.after)
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
 		}
 		return delta, nil
 	}
-	if delta, ok := m.refreshPositiveBetaModify(ctx, before, after, changes, duplicateChanged); ok {
-		m.upsertFactSource(after)
-		if counters != nil {
-			counters.recordModifyFastPathSkip()
+	if delta, ok := m.refreshPositiveBetaModify(ctx, event); ok {
+		m.upsertFactSource(event.after)
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
 		}
 		return delta, nil
 	}
-	if delta, ok := m.refreshAggregateModify(ctx, before, after, changes, duplicateChanged); ok {
-		m.upsertFactSource(after)
-		if counters != nil {
-			counters.recordModifyFastPathSkip()
+	if delta, ok := m.refreshAggregateModify(ctx, event); ok {
+		m.upsertFactSource(event.after)
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
 		}
 		return delta, nil
 	}
-	if counters != nil {
-		counters.recordModifyFastPathFallback()
+	if event.counters != nil {
+		event.counters.recordModifyFastPathFallback()
 	}
-	removed, err := m.removeFact(ctx, before, counters)
+	removed, err := m.removeFact(ctx, event.before, event.counters)
 	if err != nil {
 		return removed, err
 	}
-	added, err := m.insertFact(ctx, after, nil)
+	added, err := m.insertFact(ctx, event.after, nil)
 	if err != nil {
 		return added, err
 	}
@@ -4316,42 +4316,36 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after Fact
 	}, nil
 }
 
-func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) bool {
-	if m == nil || m.graph == nil || len(changes) == 0 {
+func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(event reteGraphPropagationEvent) bool {
+	if m == nil || m.graph == nil || len(event.changes) == 0 {
 		return false
 	}
-	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() {
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged {
 		return false
 	}
-	if duplicateChanged {
+	if event.duplicateChanged {
 		return false
 	}
 	if len(m.matchedAlphaRouteIDsForFact(before.ID())) != 0 {
 		return false
 	}
-	template, ok := m.revision.templateByKey(after.TemplateKey())
-	if !ok {
-		return false
-	}
-	summary := newFactModifySummary(template, changes, duplicateChanged)
+	summary := newFactModifySummaryFromPropagationEvent(event)
 	if !summary.knownSlotChange() {
 		return false
 	}
 	return !m.graph.alphaRoutesMayObserveModify(before, after, summary)
 }
 
-func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
-	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(event.changes) == 0 {
 		return reteAgendaDelta{}, false
 	}
-	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged || event.duplicateChanged {
 		return reteAgendaDelta{}, false
 	}
-	template, ok := m.revision.templateByKey(after.TemplateKey())
-	if !ok {
-		return reteAgendaDelta{}, false
-	}
-	summary := newFactModifySummary(template, changes, duplicateChanged)
+	summary := newFactModifySummaryFromPropagationEvent(event)
 	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
 		return reteAgendaDelta{}, false
 	}
@@ -4523,21 +4517,18 @@ func (s *reteModifyRouteScope) appendTerminal(id reteGraphTerminalNodeID) {
 	s.terminalNodes = append(s.terminalNodes, id)
 }
 
-func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
-	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(event.changes) == 0 {
 		return reteAgendaDelta{}, false
 	}
 	if len(m.graph.betaNodes) == 0 {
 		return reteAgendaDelta{}, false
 	}
-	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged || event.duplicateChanged {
 		return reteAgendaDelta{}, false
 	}
-	template, ok := m.revision.templateByKey(after.TemplateKey())
-	if !ok {
-		return reteAgendaDelta{}, false
-	}
-	summary := newFactModifySummary(template, changes, duplicateChanged)
+	summary := newFactModifySummaryFromPropagationEvent(event)
 	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
 		return reteAgendaDelta{}, false
 	}
@@ -4639,21 +4630,18 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, bef
 	return delta, true
 }
 
-func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
-	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(event.changes) == 0 {
 		return reteAgendaDelta{}, false
 	}
 	if len(m.graph.aggregateNodes) == 0 {
 		return reteAgendaDelta{}, false
 	}
-	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged || event.duplicateChanged {
 		return reteAgendaDelta{}, false
 	}
-	template, ok := m.revision.templateByKey(after.TemplateKey())
-	if !ok {
-		return reteAgendaDelta{}, false
-	}
-	summary := newFactModifySummary(template, changes, duplicateChanged)
+	summary := newFactModifySummaryFromPropagationEvent(event)
 	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
 		return reteAgendaDelta{}, false
 	}
