@@ -35,6 +35,7 @@ type reteGraphBetaMemory struct {
 	alphaRouteScratch      []reteGraphAlphaNodeID
 	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
 	alphaRouteEpoch        uint64
+	removalTokenScratch    []tokenRef
 	rootToken              tokenRef
 	deferNegativeOutputs   bool
 	suppressTerminalDeltas bool
@@ -1675,9 +1676,9 @@ func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactS
 	if updateSource {
 		m.upsertFactSource(fact)
 	}
-	routeIDs := m.snapshotAlphaRouteIDsForFact(fact)
+	routeIDs := m.snapshotAlphaRouteIDsForFactInsert(fact)
 	if len(routeIDs) == 0 {
-		return reteAgendaDelta{}, nil
+		return reteAgendaDelta{supported: true}, nil
 	}
 
 	delta := m.beginTerminalTokenDelta()
@@ -1705,6 +1706,7 @@ func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactS
 			bindingSlot: node.entry.bindingSlot,
 			fact:        newConditionFactRefFromSnapshot(fact),
 		}
+		m.recordAlphaFact(nodeID, match.fact)
 		ok, err = m.insertAlphaMatch(nodeID, match, span, &delta)
 		if err != nil {
 			return delta, err
@@ -1865,7 +1867,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 	defer m.pushEvalContext(ctx)()
 	routeIDs := m.workingAlphaRouteIDsForFact(fact)
 	if len(routeIDs) == 0 {
-		return reteAgendaDelta{}, nil
+		return reteAgendaDelta{supported: true}, nil
 	}
 
 	delta := m.beginTerminalTokenDelta()
@@ -1927,6 +1929,29 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFact(fact FactSnapshot) []
 	return m.alphaRouteScratch
 }
 
+func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFactInsert(fact FactSnapshot) []reteGraphAlphaNodeID {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	templateKey := fact.TemplateKey()
+	templateIDs := m.graph.routesByTemplateKey[templateKey]
+	if len(templateIDs) > 3 || (len(templateIDs) == 1 && m.canUseSingleIndexedAlphaRoute(templateKey)) {
+		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact)
+	}
+	nameIDs := m.graph.routesByName[fact.Name()]
+	if len(templateIDs) == 0 {
+		return nameIDs
+	}
+	if len(nameIDs) == 0 {
+		return templateIDs
+	}
+	m.resetAlphaRouteScratch()
+	m.appendAlphaRouteBucket(templateIDs)
+	m.appendAlphaRouteBucket(nameIDs)
+	m.sortAlphaRouteScratch()
+	return m.alphaRouteScratch
+}
+
 func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact) []reteGraphAlphaNodeID {
 	if m == nil || m.graph == nil || fact == nil {
 		return nil
@@ -1947,6 +1972,21 @@ func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact) []r
 	m.appendAlphaRouteBucket(nameIDs)
 	m.sortAlphaRouteScratch()
 	return m.alphaRouteScratch
+}
+
+func (m *reteGraphBetaMemory) canUseSingleIndexedAlphaRoute(templateKey TemplateKey) bool {
+	if m == nil || m.graph == nil {
+		return false
+	}
+	if len(m.graph.queryTerminalIDs) != 0 {
+		return false
+	}
+	table := m.graph.alphaRouteTables[templateKey]
+	if table == nil || len(table.indexed) != 1 {
+		return false
+	}
+	_, ok := table.singleIndexedField()
+	return ok
 }
 
 func (m *reteGraphBetaMemory) snapshotAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact FactSnapshot) []reteGraphAlphaNodeID {
@@ -2075,6 +2115,14 @@ func (m *reteGraphBetaMemory) sortAlphaRouteScratch() {
 		return
 	}
 	slices.Sort(m.alphaRouteScratch)
+}
+
+func (m *reteGraphBetaMemory) resetRemovalTokens() []tokenRef {
+	if m == nil {
+		return nil
+	}
+	m.removalTokenScratch = m.removalTokenScratch[:0]
+	return m.removalTokenScratch
 }
 
 func (m *reteGraphBetaMemory) matchedAlphaRouteIDsForFact(id FactID) []reteGraphAlphaNodeID {
@@ -2242,12 +2290,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newAlphaTokenRef(entry, match, captures, nil)
-		if token.isZero() {
-			delta.supported = false
-			continue
-		}
-		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
+		m.removeTerminalTokenContainingFact(terminal.terminalID, terminal.branchID, match.fact.ID(), counters, delta)
 	}
 	for _, successor := range m.graph.successorsByStage[source] {
 		node := m.graph.betaNode(successor.betaNodeID)
@@ -4981,6 +5024,27 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 			}
 		}
 	})
+}
+
+func (m *reteGraphBetaMemory) removeTerminalTokenContainingFact(terminalID reteGraphTerminalNodeID, branchID int, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || delta == nil || id.IsZero() {
+		return
+	}
+	terminal := m.terminalAt(terminalID)
+	if terminal == nil {
+		return
+	}
+	tokens := m.resetRemovalTokens()
+	terminal.rows.forEachTokenContainingFact(id, nil, func(row graphTokenRow) {
+		if row.token.isZero() || !row.hasTerminalBranchSupport(branchID) {
+			return
+		}
+		tokens = append(tokens, row.token)
+	})
+	m.removalTokenScratch = tokens
+	for _, token := range tokens {
+		m.removeTerminalToken(terminalID, branchID, token, counters, delta)
+	}
 }
 
 func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNodeID, branchID int, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {

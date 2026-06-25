@@ -48,6 +48,20 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 	if runtime.graphBeta == nil {
 		t.Fatal("graph beta memory is nil")
 	}
+	for _, fact := range snapshot.Facts() {
+		category, _ := fact.Field("category")
+		routeIDs := runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact)
+		switch {
+		case category.Kind() == ValueString && category.stringValue == "hot":
+			if got, want := len(routeIDs), 1; got != want {
+				t.Fatalf("hot fact route IDs = %d, want %d", got, want)
+			}
+		case category.Kind() == ValueString && category.stringValue == "cold":
+			if got := len(routeIDs); got != 0 {
+				t.Fatalf("cold fact route IDs = %d, want 0", got)
+			}
+		}
+	}
 
 	rule := revision.rules[ruleName]
 	fieldSlot, value, ok := rule.conditionPlans[0].literalEqualityFieldIndex()
