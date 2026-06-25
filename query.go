@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 )
 
 type QueryArgs map[string]any
@@ -730,9 +731,27 @@ type QueryRow struct {
 }
 
 type queryRowValue struct {
-	fact    FactSnapshot
+	fact    *queryRowFact
 	value   Value
 	hasFact bool
+}
+
+type queryRowFact struct {
+	ref   conditionFactRef
+	owner *queryRowOwner
+}
+
+type queryRowFactKey struct {
+	id      FactID
+	version FactVersion
+}
+
+type queryRowOwner struct {
+	source     Snapshot
+	factChunk  []queryRowFact
+	factChunks [][]queryRowFact
+	mu         sync.Mutex
+	facts      map[queryRowFactKey]FactSnapshot
 }
 
 func (r QueryRow) Aliases() []string {
@@ -754,13 +773,13 @@ func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
 		if !item.hasFact {
 			return FactSnapshot{}, false
 		}
-		return item.fact.clone(), true
+		return r.factSnapshot(item.fact)
 	}
 	item, ok := r.values[alias]
 	if !ok || !item.hasFact {
 		return FactSnapshot{}, false
 	}
-	return item.fact.clone(), true
+	return r.factSnapshot(item.fact)
 }
 
 func (r QueryRow) Value(alias string) (Value, bool) {
@@ -787,6 +806,55 @@ func (r QueryRow) Value(alias string) (Value, bool) {
 		return Value{}, false
 	}
 	return cloneValue(item.value), true
+}
+
+func (r QueryRow) factSnapshot(fact *queryRowFact) (FactSnapshot, bool) {
+	if fact == nil || fact.ref.ID().IsZero() {
+		return FactSnapshot{}, false
+	}
+	if fact.owner != nil {
+		return fact.owner.factSnapshot(fact.ref), true
+	}
+	return fact.ref.snapshot(), true
+}
+
+func newQueryRowOwner(source Snapshot) *queryRowOwner {
+	return &queryRowOwner{source: source}
+}
+
+func (o *queryRowOwner) newFact(ref conditionFactRef) *queryRowFact {
+	if o == nil || ref.ID().IsZero() {
+		return nil
+	}
+	if len(o.factChunk) >= cap(o.factChunk) {
+		o.factChunk = make([]queryRowFact, 0, queryFactProjectionChunkRows)
+		o.factChunks = append(o.factChunks, o.factChunk)
+	}
+	o.factChunk = append(o.factChunk, queryRowFact{ref: ref, owner: o})
+	o.factChunks[len(o.factChunks)-1] = o.factChunk
+	return &o.factChunk[len(o.factChunk)-1]
+}
+
+func (o *queryRowOwner) factSnapshot(ref conditionFactRef) FactSnapshot {
+	if o == nil {
+		return ref.snapshot()
+	}
+	key := queryRowFactKey{id: ref.ID(), version: ref.Version()}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.facts != nil {
+		if fact, ok := o.facts[key]; ok {
+			return fact.clone()
+		}
+	} else {
+		o.facts = make(map[queryRowFactKey]FactSnapshot, 1)
+	}
+	fact, ok := o.source.Fact(ref.ID())
+	if !ok || fact.Version() != ref.Version() {
+		fact = ref.snapshot()
+	}
+	o.facts[key] = fact
+	return fact.clone()
 }
 
 func (r QueryRow) itemIndex(alias string) (int, bool) {
@@ -869,7 +937,6 @@ func (r QueryRow) clone() QueryRow {
 			items: make([]queryRowValue, len(r.items)),
 		}
 		for i, value := range r.items {
-			value.fact = value.fact.clone()
 			value.value = cloneValue(value.value)
 			out.items[i] = value
 		}
@@ -880,7 +947,6 @@ func (r QueryRow) clone() QueryRow {
 		order:  append([]string(nil), r.order...),
 	}
 	for key, value := range r.values {
-		value.fact = value.fact.clone()
 		value.value = cloneValue(value.value)
 		out.values[key] = value
 	}
@@ -1068,17 +1134,14 @@ func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
 
 func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
 	row := q.newQueryRow()
+	owner := newQueryRowOwner(source)
 	for i, ret := range q.returns {
 		if ret.fact {
 			if ret.bindingSlot < 0 || ret.bindingSlot >= len(matches) {
 				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
 			}
 			match := matches[ret.bindingSlot]
-			fact, ok := source.Fact(match.fact.ID())
-			if !ok {
-				fact = match.fact.snapshot()
-			}
-			row.items[i] = queryRowValue{fact: fact, hasFact: true}
+			row.items[i] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
 			continue
 		}
 		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args, &FunctionEvaluationError{
@@ -1101,7 +1164,7 @@ func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot,
 	if q.valueReturnsOnly() {
 		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, make([]Value, len(q.returns)))
 	}
-	return q.materializeTokenRowInto(ctx, source, token, args, bindingSlotOffset, make([]queryRowValue, len(q.returns)))
+	return q.materializeTokenRowInto(ctx, token, args, bindingSlotOffset, newQueryRowOwner(source), make([]queryRowValue, len(q.returns)))
 }
 
 func (q compiledQuery) valueReturnsOnly() bool {
@@ -1116,7 +1179,7 @@ func (q compiledQuery) valueReturnsOnly() bool {
 	return true
 }
 
-func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int, items []queryRowValue) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
 	if len(items) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row item count %d", ErrQueryExecution, len(items))
 	}
@@ -1128,11 +1191,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, source Snaps
 			if !ok || match.hasValue {
 				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
 			}
-			fact, ok := source.Fact(match.fact.ID())
-			if !ok {
-				fact = match.fact.snapshot()
-			}
-			row.items[i] = queryRowValue{fact: fact, hasFact: true}
+			row.items[i] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
 			continue
 		}
 		if value, ok, err := ret.projectTokenValue(token, bindingSlotOffset); err != nil {

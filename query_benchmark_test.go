@@ -104,6 +104,57 @@ func BenchmarkRuntimeMaterializationQueryProjection(b *testing.B) {
 	}
 }
 
+func BenchmarkRuntimeMaterializationQueryFactProjection(b *testing.B) {
+	ctx := context.Background()
+	workspace, personKey, departmentKey, blockKey := benchmarkQueryWorkspace(b)
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "fact-wide",
+		ConditionTree: Match{
+			Binding:     "p",
+			TemplateKey: personKey,
+		},
+		Returns: []QueryReturnSpec{
+			ReturnFact("person", "p"),
+			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
+			ReturnValue("dept", BindingFieldExpr{Binding: "p", Field: "dept"}),
+			ReturnValue("age", BindingFieldExpr{Binding: "p", Field: "age"}),
+		},
+	}); err != nil {
+		b.Fatalf("AddQuery fact-wide: %v", err)
+	}
+	revision := mustCompileWorkspace(b, workspace)
+	compiled := queryBenchmarkRevision{
+		revision:      revision,
+		personKey:     personKey,
+		departmentKey: departmentKey,
+		blockKey:      blockKey,
+	}
+	initials := benchmarkQueryFacts(b, compiled, 10_000)
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		b.Fatalf("NewSession: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "fact-wide", nil)
+	if err != nil {
+		b.Fatalf("warmup QueryAll: %v", err)
+	}
+	expectedRows := 10_000
+	if len(rows) != expectedRows {
+		b.Fatalf("warmup rows = %d, want %d", len(rows), expectedRows)
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(rows)), "rows/query")
+	b.ReportMetric(4, "returns/row")
+	b.ResetTimer()
+	for b.Loop() {
+		rows, err := session.QueryAll(ctx, "fact-wide", nil)
+		if err != nil {
+			b.Fatalf("QueryAll: %v", err)
+		}
+		benchmarkQueryRows = rows
+	}
+}
+
 func benchmarkGraphTerminalQuery(b *testing.B, tc queryBenchmarkCase) {
 	b.Helper()
 	ctx := context.Background()

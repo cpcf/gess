@@ -382,6 +382,79 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	assertQueryRowStringValue(t, again[0], "id", "p-000")
 }
 
+func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "people-facts",
+		ConditionTree: Match{
+			Binding:     "p",
+			TemplateKey: person.Key(),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnFact("person", "p"),
+			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: person.Key(),
+		Fields:      mustFields(t, map[string]any{"id": "p-001", "dept": "engineering"}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "people-facts", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	if len(rows[0].items) != 2 || rows[0].items[0].fact == nil || rows[0].items[0].fact.ref.ID().IsZero() {
+		t.Fatalf("row fact storage = %#v, want lazy fact ref item", rows[0].items)
+	}
+	owner := rows[0].items[0].fact.owner
+	if owner == nil || owner.facts != nil {
+		t.Fatalf("row owner cache before Fact = %#v, want empty lazy owner", owner)
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p-001")
+	if owner.facts != nil {
+		t.Fatalf("row owner cache after value read = %#v, want no fact materialization", owner.facts)
+	}
+	fact, ok := rows[0].Fact("person")
+	if !ok {
+		t.Fatal("Fact(person) did not resolve")
+	}
+	if got, ok := fact.Field("dept"); !ok || got.Kind() != ValueString || got.stringValue != "engineering" {
+		t.Fatalf("Fact(person).dept = %#v, %v; want engineering", got, ok)
+	}
+	if owner.facts == nil {
+		t.Fatal("row owner cache was not populated by Fact access")
+	}
+
+	if _, err := session.Modify(ctx, fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"dept": "sales"})}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	stable, ok := rows[0].Fact("person")
+	if !ok {
+		t.Fatal("Fact(person) after modify did not resolve")
+	}
+	if got, ok := stable.Field("dept"); !ok || got.Kind() != ValueString || got.stringValue != "engineering" {
+		t.Fatalf("cached Fact(person).dept after modify = %#v, %v; want engineering", got, ok)
+	}
+}
+
 func TestQueryValidationAndArgumentsFailPrecisely(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

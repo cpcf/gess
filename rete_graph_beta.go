@@ -5049,6 +5049,9 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 		tokenArena: m.queryArena,
 		valueRows:  valueRows,
 	}
+	if !valueRows {
+		collector.rowOwner = newQueryRowOwner(source)
+	}
 	if rowCapacity > 0 {
 		collector.rows = make([]QueryRow, 0, min(rowCapacity, 256))
 	}
@@ -5076,7 +5079,11 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 	return collector.rows, true, nil
 }
 
-const queryProjectionChunkRows = 128
+const (
+	queryProjectionChunkRows      = 128
+	queryMixedProjectionChunkRows = 512
+	queryFactProjectionChunkRows  = 512
+)
 
 func (m *reteGraphBetaMemory) queryTerminalRowCapacity(terminalIDs []reteGraphTerminalNodeID) int {
 	if m == nil {
@@ -5103,6 +5110,7 @@ type reteGraphQueryCollector struct {
 	rows       []QueryRow
 	rowItems   []queryRowValue
 	rowValues  []Value
+	rowOwner   *queryRowOwner
 	valueRows  bool
 }
 
@@ -5367,7 +5375,7 @@ func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collecto
 	if collector.valueRows {
 		row, err = collector.query.materializeTokenValueRowInto(collector.ctx, token, collector.args, 1, collector.nextRowValues())
 	} else {
-		row, err = collector.query.materializeTokenRowInto(collector.ctx, collector.source, token, collector.args, 1, collector.nextRowItems())
+		row, err = collector.query.materializeTokenRowInto(collector.ctx, token, collector.args, 1, collector.rowOwner, collector.nextRowItems())
 	}
 	if err != nil {
 		return err
@@ -5394,7 +5402,7 @@ func (c *reteGraphQueryCollector) nextRowItems() []queryRowValue {
 		return nil
 	}
 	if len(c.rowItems)+len(c.query.returns) > cap(c.rowItems) {
-		c.rowItems = make([]queryRowValue, 0, len(c.query.returns)*queryProjectionChunkRows)
+		c.rowItems = make([]queryRowValue, 0, len(c.query.returns)*queryMixedProjectionChunkRows)
 	}
 	start := len(c.rowItems)
 	end := start + len(c.query.returns)
