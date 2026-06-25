@@ -2468,7 +2468,7 @@ func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraph
 				if token.isZero() || !token.containsFact(factID) {
 					continue
 				}
-				next, ok := m.refreshTokenFactRefCached(token, factID, after, cache)
+				next, ok := m.refreshTokenFactRefInPlaceCached(token, factID, after, cache)
 				if !ok || next.isZero() {
 					delta.supported = false
 					return false
@@ -2485,7 +2485,8 @@ func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraph
 				updates = append(updates, member)
 			}
 			for _, member := range updates {
-				next, ok := m.refreshTokenFactRefCached(member.token, factID, after, cache)
+				oldKey := tokenRefKey(member.token)
+				next, ok := m.refreshTokenFactRefInPlaceCached(member.token, factID, after, cache)
 				if !ok || next.isZero() {
 					delta.supported = false
 					return false
@@ -2495,8 +2496,8 @@ func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraph
 					delta.supported = false
 					return false
 				}
-				delete(bucket.members, tokenRefKey(member.token))
-				bucket.removeMember(node, member)
+				delete(bucket.members, oldKey)
+				bucket.removeMemberWithCollectKey(node, member, oldKey)
 				member.token = next
 				member.match = nextMatch
 				if bucket.members == nil {
@@ -2541,7 +2542,7 @@ func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraph
 	}
 	for _, update := range updates {
 		bucket := update.bucket
-		nextParent, ok := m.refreshTokenFactRefCached(bucket.parent, factID, after, cache)
+		nextParent, ok := m.refreshTokenFactRefInPlaceCached(bucket.parent, factID, after, cache)
 		if !ok || nextParent.isZero() {
 			delta.supported = false
 			return false
@@ -2559,7 +2560,7 @@ func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraph
 		if bucket.token.isZero() {
 			continue
 		}
-		nextToken, ok := m.refreshTokenFactRefCached(bucket.token, factID, after, cache)
+		nextToken, ok := m.refreshTokenFactRefInPlaceCached(bucket.token, factID, after, cache)
 		if !ok || nextToken.isZero() {
 			delta.supported = false
 			return false
@@ -2908,6 +2909,10 @@ func (m *reteGraphAggregateBucket) truncateCountOnlyMembers(length int) {
 }
 
 func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) {
+	m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token))
+}
+
+func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey) {
 	if m == nil || node == nil {
 		return
 	}
@@ -2937,7 +2942,7 @@ func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, me
 		case AggregateMax:
 			m.removeExtremum(i, member.values[i], false)
 		case AggregateCollect:
-			m.removeCollect(i, member)
+			m.removeCollectByKey(i, collectKey)
 		}
 	}
 }
@@ -3099,10 +3104,13 @@ func (m *reteGraphAggregateBucket) addCollect(index int, member reteGraphAggrega
 }
 
 func (m *reteGraphAggregateBucket) removeCollect(index int, member reteGraphAggregateMember) {
+	m.removeCollectByKey(index, tokenRefKey(member.token))
+}
+
+func (m *reteGraphAggregateBucket) removeCollectByKey(index int, key graphTokenIdentityKey) {
 	if m == nil || index < 0 || index >= len(m.collects) {
 		return
 	}
-	key := tokenRefKey(member.token)
 	entries := m.collects[index]
 	for i, entry := range entries {
 		if entry.key != key {
@@ -4043,6 +4051,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, b
 		}
 	}
 
+	cache := m.resetTokenRefreshCache()
 	delta := reteAgendaDelta{supported: true}
 	for _, nodeID := range nodeIDs {
 		source := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}
@@ -4071,8 +4080,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, b
 			collectUpdates := terminalNode != nil && terminalNode.kind == reteGraphTerminalRule
 			start := len(delta.updated)
 			delta.updated = terminalMemory.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, func(row graphTokenRow) (tokenRef, bool) {
-				token := m.newAlphaTokenRefWithRetainedCaptures(entry, match, row.token, nil)
-				return token, !token.isZero()
+				return m.refreshTokenFactRefInPlaceCached(row.token, before.ID(), match.fact, cache)
 			})
 			if !collectUpdates {
 				continue
@@ -4265,7 +4273,7 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, bef
 	afterRef := newConditionFactRefFromSnapshot(after)
 	cache := m.resetTokenRefreshCache()
 	refresh := func(row graphTokenRow) (tokenRef, bool) {
-		return m.refreshTokenFactRefCached(row.token, before.ID(), afterRef, cache)
+		return m.refreshTokenFactRefInPlaceCached(row.token, before.ID(), afterRef, cache)
 	}
 	for _, nodeID := range scope.betaNodes {
 		nodeMemory := m.nodeMemory(nodeID)
@@ -4387,7 +4395,7 @@ func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, before
 	afterRef := newConditionFactRefFromSnapshot(after)
 	cache := m.resetTokenRefreshCache()
 	refresh := func(row graphTokenRow) (tokenRef, bool) {
-		return m.refreshTokenFactRefCached(row.token, before.ID(), afterRef, cache)
+		return m.refreshTokenFactRefInPlaceCached(row.token, before.ID(), afterRef, cache)
 	}
 	for _, nodeID := range scope.betaNodes {
 		nodeMemory := m.nodeMemory(nodeID)
@@ -4434,6 +4442,90 @@ func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, before
 
 func (m *reteGraphBetaMemory) refreshTokenFactRef(token tokenRef, id FactID, after conditionFactRef) (tokenRef, bool) {
 	return m.refreshTokenFactRefCached(token, id, after, nil)
+}
+
+func (m *reteGraphBetaMemory) refreshTokenFactRefInPlace(token tokenRef, id FactID, after conditionFactRef) (tokenRef, bool) {
+	return m.refreshTokenFactRefInPlaceCached(token, id, after, nil)
+}
+
+func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceCached(token tokenRef, id FactID, after conditionFactRef, cache map[tokenHandle]tokenRef) (tokenRef, bool) {
+	if token.isZero() {
+		return tokenRef{}, true
+	}
+	if !token.containsFact(id) {
+		return token, true
+	}
+	if cache != nil {
+		if cached, ok := cache[token.handle]; ok {
+			return cached, true
+		}
+	}
+	if !m.refreshTokenFactRefInPlaceRow(token, id, after, cache) {
+		return tokenRef{}, false
+	}
+	if cache != nil {
+		cache[token.handle] = token
+	}
+	return token, true
+}
+
+func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id FactID, after conditionFactRef, cache map[tokenHandle]tokenRef) bool {
+	if token.isZero() {
+		return true
+	}
+	if cache != nil {
+		if _, ok := cache[token.handle]; ok {
+			return true
+		}
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return false
+	}
+	parent := token.parent()
+	if !m.refreshTokenFactRefInPlaceRow(parent, id, after, cache) {
+		return false
+	}
+	parentRow, haveParent := parent.resolve()
+	match := row.match
+	recency := match.fact.Recency()
+	if !match.hasValue && match.fact.ID() == id {
+		match.fact = after
+		recency = after.Recency()
+		row.generation = after.Generation()
+		if row.factSpanStart >= 0 && row.factSpanStart < len(token.handle.arena.factIDs) {
+			token.handle.arena.factIDs[row.factSpanStart] = after.ID()
+		}
+		if row.factSpanStart >= 0 && row.factSpanStart < len(token.handle.arena.factVersions) {
+			token.handle.arena.factVersions[row.factSpanStart] = after.Version()
+		}
+	}
+	row.match = match
+	if haveParent {
+		row.maxRecency = max(recency, parentRow.maxRecency)
+		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
+		row.identityState = parentRow.identityState
+		if row.generation == 0 {
+			row.generation = parentRow.generation
+		}
+	} else {
+		row.maxRecency = recency
+		row.aggregateRecency = recency
+		row.identityState = candidateIdentityHashStart(row.generation)
+	}
+	identityEntry := row.entry
+	identityEntry.value = match.value
+	identityEntry.hasValue = match.hasValue
+	if !match.hasValue {
+		identityEntry.factID = match.fact.ID()
+		identityEntry.factVersion = match.fact.Version()
+	}
+	row.entry = identityEntry
+	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
+	if cache != nil {
+		cache[token.handle] = token
+	}
+	return true
 }
 
 func (m *reteGraphBetaMemory) resetTokenRefreshCache() map[tokenHandle]tokenRef {

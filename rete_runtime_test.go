@@ -2438,8 +2438,15 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivat
 	if delta.updated[0].before.isZero() {
 		t.Fatal("terminal update before token is zero")
 	}
-	if delta.updated[0].after.isZero() || delta.updated[0].after == delta.updated[0].before {
+	if delta.updated[0].after.isZero() {
 		t.Fatal("terminal update after token was not refreshed")
+	}
+	match, ok := tokenFactMatchForBindingSlot(delta.updated[0].after, 0)
+	if !ok {
+		t.Fatal("terminal update after token missing refreshed fact match")
+	}
+	if got, want := match.fact.Version(), result.Fact.Version(); got != want {
+		t.Fatalf("terminal update after token version = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
 		t.Fatalf("applyReteAgendaDelta: %v", err)
