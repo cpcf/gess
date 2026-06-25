@@ -1664,6 +1664,27 @@ func (m *reteGraphAggregateBucket) clear() {
 	m.hasValue = false
 }
 
+func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {
+	switch event.tag {
+	case reteGraphPropagationAdd:
+		if event.workingFact != nil {
+			return m.insertFactGenerated(ctx, event.workingFact, event.span)
+		}
+		return m.insertFact(ctx, event.fact, event.span)
+	case reteGraphPropagationRemove:
+		return m.removeFact(ctx, event.fact, event.counters)
+	case reteGraphPropagationUpdate:
+		return m.updateFact(ctx, event.before, event.after, event.changes, event.duplicateChanged, event.counters)
+	case reteGraphPropagationClear:
+		m.clearMemories()
+		return reteAgendaDelta{supported: true}, nil
+	case reteGraphPropagationModifyAdd, reteGraphPropagationModifyRemove:
+		return reteAgendaDelta{}, ErrUnsupportedRuntime
+	default:
+		return reteAgendaDelta{}, ErrUnsupportedRuntime
+	}
+}
+
 func (m *reteGraphBetaMemory) insertFact(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	return m.insertFactInternal(ctx, fact, span, true)
 }

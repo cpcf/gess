@@ -340,57 +340,37 @@ func (r *reteRuntime) insertBetaFactGenerated(ctx context.Context, fact *working
 	if r == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
-	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.insertFactGenerated(ctx, fact, span)
-		if err != nil {
-			return delta, err
-		}
-		delta.supported = delta.supported && incrementalAgendaSupported
-		return delta, nil
-	}
-	return reteAgendaDelta{}, nil
+	return r.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, r.revision, origin, span))
 }
 
 func (r *reteRuntime) insertBetaFactWithOrigin(ctx context.Context, fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{}, nil
 	}
-	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.insertFact(ctx, fact, span)
-		if err != nil {
-			return delta, err
-		}
-		delta.supported = delta.supported && incrementalAgendaSupported
-		return delta, nil
-	}
-	return reteAgendaDelta{}, nil
+	return r.propagateBetaEvent(ctx, newReteGraphAssertEvent(fact, origin, span))
 }
 
-func (r *reteRuntime) removeBetaFact(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+func (r *reteRuntime) removeBetaFact(ctx context.Context, fact FactSnapshot, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+	if r == nil {
+		return reteAgendaDelta{}, nil
+	}
+	return r.propagateBetaEvent(ctx, newReteGraphRetractEvent(fact, origin, counters))
+}
+
+func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+	if r == nil {
+		return reteAgendaDelta{}, nil
+	}
+	return r.propagateBetaEvent(ctx, newReteGraphModifyEvent(r.revision, before, after, changes, duplicateChanged, origin, counters))
+}
+
+func (r *reteRuntime) propagateBetaEvent(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.removeFact(ctx, fact, counters)
-		if err != nil {
-			return delta, err
-		}
-		delta.supported = delta.supported && incrementalAgendaSupported
-		return delta, nil
-	}
-	return reteAgendaDelta{}, nil
-}
-
-func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, counters *propagationCounterLedger) (reteAgendaDelta, error) {
-	if r == nil {
-		return reteAgendaDelta{}, nil
-	}
-	incrementalAgendaSupported := r.supportsIncrementalAgenda()
-	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.updateFact(ctx, before, after, changes, duplicateChanged, counters)
+		delta, err := r.graphBeta.propagateEvent(ctx, event)
 		if err != nil {
 			return delta, err
 		}

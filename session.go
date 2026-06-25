@@ -1437,7 +1437,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
 	delete(state.factsByID, id)
-	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before)
+	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
 	if err != nil {
 		s.restoreReteAfterPropagationFailure()
 		return RetractResult{Status: RetractValidationFailure, Fact: before}, agendaDelta, err
@@ -2049,22 +2049,22 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
-func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnapshot) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnapshot, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete.usesGraphBeta() {
-		return s.rete.removeBetaFact(ctx, fact, s.propagationCounters)
+		return s.rete.removeBetaFact(ctx, fact, origin, s.propagationCounters)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
-func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete.usesGraphBeta() {
-		return s.rete.updateBetaFact(ctx, before, after, changes, duplicateChanged, s.propagationCounters)
+		return s.rete.updateBetaFact(ctx, before, after, changes, duplicateChanged, origin, s.propagationCounters)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
@@ -2422,7 +2422,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 
 	after := fact.snapshotForRevision(s.revision)
 	duplicateChanged := oldDuplicate != newDuplicate
-	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged)
+	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged, origin)
 	if err != nil {
 		state.rollbackFactModify(modifyMark)
 		s.commitFactWorkspace(state)
