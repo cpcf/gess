@@ -4154,7 +4154,7 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 		}
 		return delta, nil
 	}
-	if delta, ok, err := m.refreshNegativeBetaModifyByEvents(ctx, event); ok {
+	if delta, ok, err := m.refreshRouteScopedModifyByEvents(ctx, event); ok {
 		if err != nil {
 			return delta, err
 		}
@@ -4182,7 +4182,7 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 	}, nil
 }
 
-func (m *reteGraphBetaMemory) refreshNegativeBetaModifyByEvents(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool, error) {
+func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool, error) {
 	if m == nil || m.graph == nil || len(event.changes) == 0 {
 		return reteAgendaDelta{}, false, nil
 	}
@@ -4203,9 +4203,6 @@ func (m *reteGraphBetaMemory) refreshNegativeBetaModifyByEvents(ctx context.Cont
 		return reteAgendaDelta{}, false, nil
 	}
 	scope := m.modifyRouteScopeForAlphaRoutes(nodeIDs)
-	if len(scope.aggregateNodes) != 0 {
-		return reteAgendaDelta{}, false, nil
-	}
 	hasNegativeBeta := false
 	for _, betaNodeID := range scope.betaNodes {
 		betaNode := m.graph.betaNode(betaNodeID)
@@ -4216,7 +4213,7 @@ func (m *reteGraphBetaMemory) refreshNegativeBetaModifyByEvents(ctx context.Cont
 			hasNegativeBeta = true
 		}
 	}
-	if !hasNegativeBeta {
+	if !hasNegativeBeta && len(scope.aggregateNodes) == 0 {
 		return reteAgendaDelta{}, false, nil
 	}
 	removed, err := m.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))

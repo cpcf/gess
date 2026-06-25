@@ -345,8 +345,8 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 	}
 
 	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want 0", got)
 	}
 }
 
@@ -822,8 +822,8 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 3}, "b": {1, 1}})
 
 	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want 0", got)
 	}
 }
 
@@ -982,8 +982,8 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 3}, "c": {0, 0}})
 
 	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks after id modify = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after id modify = %d, want 0", got)
 	}
 }
 
