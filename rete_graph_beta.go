@@ -4154,6 +4154,15 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 		}
 		return delta, nil
 	}
+	if delta, ok, err := m.refreshNegativeBetaModifyByEvents(ctx, event); ok {
+		if err != nil {
+			return delta, err
+		}
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
+		}
+		return delta, nil
+	}
 	if event.counters != nil {
 		event.counters.recordModifyFastPathFallback()
 	}
@@ -4171,6 +4180,60 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 		added:     addedTokens,
 		removed:   removedTokens,
 	}, nil
+}
+
+func (m *reteGraphBetaMemory) refreshNegativeBetaModifyByEvents(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool, error) {
+	if m == nil || m.graph == nil || len(event.changes) == 0 {
+		return reteAgendaDelta{}, false, nil
+	}
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged || event.duplicateChanged {
+		return reteAgendaDelta{}, false, nil
+	}
+	nodeIDs := slices.Clone(m.matchedAlphaRouteIDsForFact(before.ID()))
+	if len(nodeIDs) == 0 {
+		nodeIDs = slices.Clone(m.snapshotAlphaRouteIDsForFact(before))
+	}
+	for _, nodeID := range m.snapshotAlphaRouteIDsForFact(after) {
+		if !slices.Contains(nodeIDs, nodeID) {
+			nodeIDs = append(nodeIDs, nodeID)
+		}
+	}
+	if len(nodeIDs) == 0 {
+		return reteAgendaDelta{}, false, nil
+	}
+	scope := m.modifyRouteScopeForAlphaRoutes(nodeIDs)
+	if len(scope.aggregateNodes) != 0 {
+		return reteAgendaDelta{}, false, nil
+	}
+	hasNegativeBeta := false
+	for _, betaNodeID := range scope.betaNodes {
+		betaNode := m.graph.betaNode(betaNodeID)
+		if betaNode == nil {
+			return reteAgendaDelta{}, false, nil
+		}
+		if betaNode.kind == reteGraphBetaNodeNot {
+			hasNegativeBeta = true
+		}
+	}
+	if !hasNegativeBeta {
+		return reteAgendaDelta{}, false, nil
+	}
+	removed, err := m.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))
+	if err != nil {
+		return removed, true, err
+	}
+	added, err := m.propagateEvent(ctx, newReteGraphModifyAddEvent(event))
+	if err != nil {
+		return added, true, err
+	}
+	m.upsertFactSource(after)
+	addedTokens, removedTokens := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
+	return reteAgendaDelta{
+		supported: removed.supported && added.supported,
+		added:     addedTokens,
+		removed:   removedTokens,
+	}, true, nil
 }
 
 func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(event reteGraphPropagationEvent) bool {

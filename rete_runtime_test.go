@@ -3118,8 +3118,8 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
 	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks after active modify = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after active modify = %d, want 0", got)
 	}
 }
 
