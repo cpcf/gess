@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strings"
 )
 
 type reteGraphBetaMemory struct {
@@ -5257,13 +5256,14 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 	rowCapacity := m.queryTerminalRowCapacity(terminalIDs)
 	valueRows := query.valueReturnsOnly()
 	collector := reteGraphQueryCollector{
-		ctx:        ctx,
-		query:      query,
-		args:       args,
-		source:     source,
-		terminal:   make(map[reteGraphTerminalNodeID]struct{}, len(terminalIDs)),
-		tokenArena: m.queryArena,
-		valueRows:  valueRows,
+		ctx:          ctx,
+		query:        query,
+		args:         args,
+		triggerEvent: event,
+		source:       source,
+		terminal:     make(map[reteGraphTerminalNodeID]struct{}, len(terminalIDs)),
+		tokenArena:   m.queryArena,
+		valueRows:    valueRows,
 	}
 	if !valueRows {
 		collector.rowOwner = newQueryRowOwner(source)
@@ -5320,18 +5320,19 @@ func (m *reteGraphBetaMemory) queryTerminalRowCapacity(terminalIDs []reteGraphTe
 }
 
 type reteGraphQueryCollector struct {
-	ctx        context.Context
-	query      compiledQuery
-	args       map[string]Value
-	source     Snapshot
-	terminal   map[reteGraphTerminalNodeID]struct{}
-	tokenArena *tokenArena
-	rows       []QueryRow
-	rowItems   []queryRowValue
-	rowValues  []Value
-	rowOwner   *queryRowOwner
-	valueRows  bool
-	aggregates map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket
+	ctx          context.Context
+	query        compiledQuery
+	args         map[string]Value
+	triggerEvent reteGraphPropagationEvent
+	source       Snapshot
+	terminal     map[reteGraphTerminalNodeID]struct{}
+	tokenArena   *tokenArena
+	rows         []QueryRow
+	rowItems     []queryRowValue
+	rowValues    []Value
+	rowOwner     *queryRowOwner
+	valueRows    bool
+	aggregates   map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket
 }
 
 func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, collector *reteGraphQueryCollector) error {
@@ -5661,7 +5662,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 				continue
 			}
 			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-			if queryTokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
+			if collector.tokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
 				if err := m.queryCollectTerminalsFromStage(stage, rightRow.token, collector); err != nil {
 					return err
 				}
@@ -5700,7 +5701,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 				continue
 			}
 			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-			if queryTokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
+			if collector.tokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
 				if err := m.queryCollectTerminalsFromStage(stage, leftRow.token, collector); err != nil {
 					return err
 				}
@@ -5720,12 +5721,15 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 	return nil
 }
 
-func queryTokenOnlyTrigger(token tokenRef) bool {
+func (c *reteGraphQueryCollector) tokenOnlyTrigger(token tokenRef) bool {
+	if c == nil || c.triggerEvent.tag != reteGraphPropagationAdd || c.triggerEvent.fact.ID().IsZero() {
+		return false
+	}
 	if token.size() != 1 {
 		return false
 	}
 	match, ok := token.matchAt(0)
-	return ok && match.bindingSlot == 0 && match.fact.Name() != "" && strings.HasPrefix(match.fact.Name(), "__gess_query_trigger:")
+	return ok && match.bindingSlot == 0 && match.fact.ID() == c.triggerEvent.fact.ID()
 }
 
 func (m *reteGraphBetaMemory) queryStageTerminalOnly(stage reteGraphStageRef, collector *reteGraphQueryCollector) bool {
