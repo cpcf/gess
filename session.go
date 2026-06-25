@@ -160,6 +160,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 	state := newFactWorkspace(1, revision.estimatedRunFactCapacity(len(compiledInitials)))
 	state.reserveTemplateIndexes(revision)
+	state.factsByDuplicate.reserve(revision, cap(state.facts))
 	state.reserveSlotStorage(revision.estimatedRunSlotCapacity(cap(state.facts)))
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
@@ -1564,6 +1565,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
+	next.factsByDuplicate.reserve(s.revision, cap(next.facts))
 	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 
@@ -2883,6 +2885,86 @@ func (i *duplicateIndexes) reset(initialCapacity int) {
 	if i.structuralRest != nil {
 		clear(i.structuralRest)
 	}
+}
+
+func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
+	if i == nil || revision == nil || factCapacity <= 0 {
+		return
+	}
+	templateCount := 0
+	for _, name := range revision.templateOrder {
+		template := revision.templates[name]
+		if template.duplicatePolicy != DuplicateAllow {
+			templateCount++
+		}
+	}
+	if templateCount == 0 {
+		return
+	}
+	perTemplate := max(1, (factCapacity+templateCount-1)/templateCount)
+	var stringsCapacity, singleIntCapacity, doubleIntCapacity, scalarCapacity, structuralCapacity int
+	for _, name := range revision.templateOrder {
+		template := revision.templates[name]
+		if template.duplicatePolicy == DuplicateAllow {
+			continue
+		}
+		switch duplicateReserveKind(template) {
+		case duplicateIndexSingleInt:
+			singleIntCapacity += perTemplate
+		case duplicateIndexDoubleInt:
+			doubleIntCapacity += perTemplate
+		case duplicateIndexSingleScalar, duplicateIndexDoubleScalar:
+			scalarCapacity += perTemplate
+		case duplicateIndexStructural:
+			structuralCapacity += perTemplate
+		default:
+			stringsCapacity += perTemplate
+		}
+	}
+	if stringsCapacity > 0 && i.strings == nil {
+		i.strings = make(map[DuplicateKey]FactID, stringsCapacity)
+	}
+	if singleIntCapacity > 0 && i.singleInt == nil {
+		i.singleInt = make(map[duplicateSingleIntIndexKey]FactID, singleIntCapacity)
+	}
+	if doubleIntCapacity > 0 && i.doubleInt == nil {
+		i.doubleInt = make(map[duplicateDoubleIntIndexKey]FactID, doubleIntCapacity)
+	}
+	if scalarCapacity > 0 && i.scalars == nil {
+		i.scalars = make(map[duplicateIndexKey]FactID, scalarCapacity)
+	}
+	if structuralCapacity > 0 && i.structural == nil {
+		i.structural = make(map[duplicateStructuralIndexKey]FactID, structuralCapacity)
+	}
+}
+
+func duplicateReserveKind(template Template) duplicateIndexKind {
+	if template.duplicatePolicy == DuplicateStructural {
+		return duplicateIndexStructural
+	}
+	if template.duplicatePolicy != DuplicateUniqueKey {
+		return duplicateIndexString
+	}
+	switch template.duplicateIndexMode {
+	case duplicateIndexSingleScalar:
+		if len(template.duplicateKeySlots) == 1 && duplicateTemplateSlotKind(template, template.duplicateKeySlots[0]) == ValueInt {
+			return duplicateIndexSingleInt
+		}
+	case duplicateIndexDoubleScalar:
+		if len(template.duplicateKeySlots) == 2 &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[0]) == ValueInt &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueInt {
+			return duplicateIndexDoubleInt
+		}
+	}
+	return template.duplicateIndexMode
+}
+
+func duplicateTemplateSlotKind(template Template, slot int) ValueKind {
+	if slot < 0 || slot >= len(template.fields) {
+		return ValueAny
+	}
+	return template.fields[slot].Kind
 }
 
 func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
