@@ -282,3 +282,75 @@ func (m reteGraphAggregateMemory) refreshParentsContainingFact(factID FactID, af
 	}
 	return delta.supported
 }
+
+func (m reteGraphAggregateMemory) refreshMembersContainingFact(factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	if m.owner == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return false
+	}
+	if m.node == nil || m.memory == nil || len(m.memory.buckets) == 0 {
+		return true
+	}
+	for _, bucket := range m.memory.buckets {
+		if bucket == nil {
+			continue
+		}
+		changed := false
+		if !aggregateSpecsNeedInputValues(m.node.specs) {
+			count := bucket.countOnlyMemberCount()
+			for i := range count {
+				token := bucket.countOnlyMemberAt(i)
+				if token.isZero() || !token.containsFact(factID) {
+					continue
+				}
+				next, ok := m.owner.refreshTokenFactRefInPlaceCached(token, factID, after, cache)
+				if !ok || next.isZero() {
+					delta.supported = false
+					return false
+				}
+				bucket.setCountOnlyMemberAt(i, next)
+				changed = true
+			}
+		} else if len(bucket.members) > 0 {
+			updates := make([]reteGraphAggregateMember, 0, 1)
+			for _, member := range bucket.members {
+				if !member.token.containsFact(factID) {
+					continue
+				}
+				updates = append(updates, member)
+			}
+			for _, member := range updates {
+				oldKey := tokenRefKey(member.token)
+				next, ok := m.owner.refreshTokenFactRefInPlaceCached(member.token, factID, after, cache)
+				if !ok || next.isZero() {
+					delta.supported = false
+					return false
+				}
+				nextMatch, ok := tokenFactMatchForBindingSlot(next, m.node.inputEntry.bindingSlot)
+				if !ok {
+					delta.supported = false
+					return false
+				}
+				delete(bucket.members, oldKey)
+				bucket.removeMemberWithCollectKey(m.node, member, oldKey)
+				member.token = next
+				member.match = nextMatch
+				if bucket.members == nil {
+					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
+				}
+				bucket.members[tokenRefKey(next)] = member
+				if err := bucket.addMember(m.node, member); err != nil {
+					delta.supported = false
+					return false
+				}
+				changed = true
+			}
+		}
+		if changed {
+			m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, nil, delta)
+		}
+	}
+	return delta.supported
+}

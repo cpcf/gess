@@ -2575,77 +2575,7 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
-	if m == nil || delta == nil || factID.IsZero() {
-		if delta != nil {
-			delta.supported = false
-		}
-		return false
-	}
-	node := m.graph.aggregateNode(id)
-	memory := m.aggregateMemory(id)
-	if node == nil || memory == nil || len(memory.buckets) == 0 {
-		return true
-	}
-	for _, bucket := range memory.buckets {
-		if bucket == nil {
-			continue
-		}
-		changed := false
-		if !aggregateSpecsNeedInputValues(node.specs) {
-			count := bucket.countOnlyMemberCount()
-			for i := range count {
-				token := bucket.countOnlyMemberAt(i)
-				if token.isZero() || !token.containsFact(factID) {
-					continue
-				}
-				next, ok := m.refreshTokenFactRefInPlaceCached(token, factID, after, cache)
-				if !ok || next.isZero() {
-					delta.supported = false
-					return false
-				}
-				bucket.setCountOnlyMemberAt(i, next)
-				changed = true
-			}
-		} else if len(bucket.members) > 0 {
-			updates := make([]reteGraphAggregateMember, 0, 1)
-			for _, member := range bucket.members {
-				if !member.token.containsFact(factID) {
-					continue
-				}
-				updates = append(updates, member)
-			}
-			for _, member := range updates {
-				oldKey := tokenRefKey(member.token)
-				next, ok := m.refreshTokenFactRefInPlaceCached(member.token, factID, after, cache)
-				if !ok || next.isZero() {
-					delta.supported = false
-					return false
-				}
-				nextMatch, ok := tokenFactMatchForBindingSlot(next, node.inputEntry.bindingSlot)
-				if !ok {
-					delta.supported = false
-					return false
-				}
-				delete(bucket.members, oldKey)
-				bucket.removeMemberWithCollectKey(node, member, oldKey)
-				member.token = next
-				member.match = nextMatch
-				if bucket.members == nil {
-					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
-				}
-				bucket.members[tokenRefKey(next)] = member
-				if err := bucket.addMember(node, member); err != nil {
-					delta.supported = false
-					return false
-				}
-				changed = true
-			}
-		}
-		if changed {
-			m.refreshAggregateOutputInternal(id, bucket, nil, nil, delta)
-		}
-	}
-	return delta.supported
+	return m.graphAggregateMemory(id).refreshMembersContainingFact(factID, after, cache, delta)
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
