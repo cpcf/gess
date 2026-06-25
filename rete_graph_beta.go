@@ -3774,6 +3774,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		return false, nil
 	}
 	nodeMemory := m.nodeMemory(nodeID)
+	negativeMemory := m.negativeBetaMemory(nodeID, node)
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	switch side {
 	case reteGraphBetaInputLeft:
@@ -3781,7 +3782,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if err != nil || !ok {
 			return false, err
 		}
-		count, ok := m.negativeBlockerCountForLeft(node, nodeMemory, joinKey, token, span)
+		count, ok := negativeMemory.blockerCountForLeft(joinKey, token, span)
 		if !ok {
 			return false, nil
 		}
@@ -5777,7 +5778,7 @@ func (m *reteGraphBetaMemory) queryProbeNegativeBetaInput(nodeID reteGraphBetaNo
 	if side != reteGraphBetaInputLeft {
 		return nil
 	}
-	nodeMemory := m.nodeMemory(nodeID)
+	negativeMemory := m.negativeBetaMemory(nodeID, node)
 	joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(collector.ctx, node, token, nil)
 	if err != nil {
 		return err
@@ -5785,7 +5786,7 @@ func (m *reteGraphBetaMemory) queryProbeNegativeBetaInput(nodeID reteGraphBetaNo
 	if !ok {
 		return fmt.Errorf("%w: malformed query negative join key", ErrQueryExecution)
 	}
-	count, ok := m.negativeBlockerCountForLeft(node, nodeMemory, joinKey, token, nil)
+	count, ok := negativeMemory.blockerCountForLeft(joinKey, token, nil)
 	if !ok {
 		return fmt.Errorf("%w: malformed query negative input", ErrQueryExecution)
 	}
@@ -6296,54 +6297,6 @@ func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, righ
 		}
 	}
 	return true, nil
-}
-
-func (m *reteGraphBetaMemory) negativeBlockerCountForLeft(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
-	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
-		return 0, false
-	}
-	bucket := nodeMemory.right.bucketForKey(joinKey)
-	if span != nil {
-		span.recordBetaBucketProbe(bucket.len())
-	}
-	count := 0
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
-		if span != nil {
-			span.recordBetaCandidateRowScanned()
-		}
-		rightRow := nodeMemory.right.row(rowID)
-		if rightRow == nil || rightRow.token.isZero() {
-			continue
-		}
-		if node.rightHasLeftPrefix && !tokenRefHasPrefix(rightRow.token, left) {
-			continue
-		}
-		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
-			rightMatch, ok := tokenLastMatch(rightRow.token)
-			if !ok {
-				return count, false
-			}
-			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
-				ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, span)
-				if err != nil {
-					return count, false
-				}
-				if !ok {
-					continue
-				}
-			}
-			ok, err := m.rightPredicatesMatch(node, rightMatch, left, span)
-			if err != nil {
-				return count, false
-			}
-			if !ok {
-				continue
-			}
-		}
-		count++
-	}
-	return count, true
 }
 
 func (m *reteGraphBetaMemory) rowCount() int {
