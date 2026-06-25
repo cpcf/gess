@@ -162,6 +162,42 @@ func (m logicalSupportMemory) countForFact(factID FactID) int {
 	return len(s.logicalSupportByFact[factID])
 }
 
+func (m logicalSupportMemory) removeSource(ctx context.Context, source logicalSupportSourceKey) []FactID {
+	s := m.session
+	if s == nil || len(s.logicalSupportBySource) == 0 {
+		return nil
+	}
+	ids := s.logicalSupportBySource[source]
+	if len(ids) == 0 {
+		return nil
+	}
+	supportIDs := make([]SupportID, 0, len(ids))
+	for supportID := range ids {
+		supportIDs = append(supportIDs, supportID)
+	}
+	slices.Sort(supportIDs)
+
+	affected := make([]FactID, 0, len(supportIDs))
+	for _, supportID := range supportIDs {
+		record, ok := s.logicalSupportEdges[supportID]
+		if !ok {
+			continue
+		}
+		delete(s.logicalSupportEdges, supportID)
+		if byFact := s.logicalSupportByFact[record.edge.FactID]; byFact != nil {
+			delete(byFact, supportID)
+			if len(byFact) == 0 {
+				delete(s.logicalSupportByFact, record.edge.FactID)
+			}
+		}
+		s.logicalSupportCounters.SupportEdgesRemoved++
+		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
+		affected = append(affected, record.edge.FactID)
+	}
+	delete(s.logicalSupportBySource, source)
+	return affected
+}
+
 func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, origin mutationOrigin, supportingFacts []FactID) (bool, error) {
 	if s == nil || fact == nil {
 		return false, ErrFactNotFound
@@ -366,38 +402,7 @@ func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources [
 }
 
 func (s *Session) removeLogicalSupportSource(ctx context.Context, source logicalSupportSourceKey) []FactID {
-	if s == nil || len(s.logicalSupportBySource) == 0 {
-		return nil
-	}
-	ids := s.logicalSupportBySource[source]
-	if len(ids) == 0 {
-		return nil
-	}
-	supportIDs := make([]SupportID, 0, len(ids))
-	for supportID := range ids {
-		supportIDs = append(supportIDs, supportID)
-	}
-	slices.Sort(supportIDs)
-
-	affected := make([]FactID, 0, len(supportIDs))
-	for _, supportID := range supportIDs {
-		record, ok := s.logicalSupportEdges[supportID]
-		if !ok {
-			continue
-		}
-		delete(s.logicalSupportEdges, supportID)
-		if byFact := s.logicalSupportByFact[record.edge.FactID]; byFact != nil {
-			delete(byFact, supportID)
-			if len(byFact) == 0 {
-				delete(s.logicalSupportByFact, record.edge.FactID)
-			}
-		}
-		s.logicalSupportCounters.SupportEdgesRemoved++
-		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
-		affected = append(affected, record.edge.FactID)
-	}
-	delete(s.logicalSupportBySource, source)
-	return affected
+	return s.logicalSupportMemory().removeSource(ctx, source)
 }
 
 func (s *Session) clearLogicalSupports() {
