@@ -66,6 +66,48 @@ func BenchmarkGessAggregateScalingSeedRun(b *testing.B) {
 	}
 }
 
+func BenchmarkRuntimeMaterializationAggregateValueProjection(b *testing.B) {
+	ctx := context.Background()
+	const itemCount = 32
+	revision, itemKey, summaryKey := mustCompileAggregateValueProjectionRuleset(b)
+	wantTotal := newIntValue((itemCount * (itemCount + 1)) / 2)
+
+	b.ReportAllocs()
+	b.ReportMetric(float64(itemCount), "items")
+	b.ReportMetric(float64(aggregateValueProjectionCount), "values/action")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustSession(b, revision, SessionID(fmt.Sprintf("aggregate-value-projection-benchmark-session-%d", i)))
+		for itemIndex := range itemCount {
+			if _, err := session.AssertTemplate(ctx, itemKey, Fields{"amount": newIntValue(int64(itemIndex + 1))}); err != nil {
+				b.Fatalf("AssertTemplate(item): %v", err)
+			}
+		}
+		result, err := session.Run(ctx)
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 1 {
+			b.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+		}
+		snapshot, err := session.Snapshot(ctx)
+		if err != nil {
+			b.Fatalf("Snapshot: %v", err)
+		}
+		summaries := snapshot.FactsByTemplateKey(summaryKey)
+		if len(summaries) != 1 {
+			b.Fatalf("summary facts = %d, want 1", len(summaries))
+		}
+		for valueIndex := range aggregateValueProjectionCount {
+			field := aggregateValueProjectionField(valueIndex)
+			if got, ok := summaries[0].Field(field); !ok || !got.Equal(wantTotal) {
+				b.Fatalf("summary %s = (%v, %t), want %v", field, got, ok, wantTotal)
+			}
+		}
+		benchmarkAggregateScalingRunResult = result
+	}
+}
+
 func BenchmarkGessAggregateScalingSteadyStateMutations(b *testing.B) {
 	cases := []aggregateScalingCase{
 		{streams: 1, itemsPerStream: 128},
@@ -327,6 +369,66 @@ func mustCompileAggregateScalingRuleset(t testing.TB, tc aggregateScalingCase) (
 	}
 
 	return mustCompileWorkspace(t, workspace), item.Key()
+}
+
+func mustCompileAggregateValueProjectionRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "aggregate-value-item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	summary := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "aggregate-value-summary",
+		DuplicatePolicy: DuplicateAllow,
+		Fields:          aggregateValueProjectionFields(),
+	})
+	values := make([]ExpressionSpec, aggregateValueProjectionCount)
+	specs := make([]AggregateSpec, aggregateValueProjectionCount)
+	for i := range aggregateValueProjectionCount {
+		binding := aggregateValueProjectionBinding(i)
+		values[i] = BindingValueExpr{Binding: binding}
+		specs[i] = Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As(binding)
+	}
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "record-aggregate-value",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: summary.Key(),
+			Values:      values,
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "aggregate-value-projection",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			specs...,
+		),
+		Actions: []RuleActionSpec{{Name: "record-aggregate-value"}},
+	})
+
+	return mustCompileWorkspace(t, workspace), item.Key(), summary.Key()
+}
+
+const aggregateValueProjectionCount = 6
+
+func aggregateValueProjectionFields() []FieldSpec {
+	fields := make([]FieldSpec, aggregateValueProjectionCount)
+	for i := range aggregateValueProjectionCount {
+		fields[i] = FieldSpec{Name: aggregateValueProjectionField(i), Kind: ValueInt, Required: true}
+	}
+	return fields
+}
+
+func aggregateValueProjectionBinding(index int) string {
+	return fmt.Sprintf("total_%d", index)
+}
+
+func aggregateValueProjectionField(index int) string {
+	return aggregateValueProjectionBinding(index)
 }
 
 func runAggregateScalingSeedRun(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase) RunResult {

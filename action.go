@@ -679,6 +679,7 @@ const (
 	compiledTokenActionValueGeneric compiledTokenActionValueKind = iota
 	compiledTokenActionValueConst
 	compiledTokenActionValueBindingField
+	compiledTokenActionValueBindingValue
 	compiledTokenActionValueStringCall2ConstBindingField
 )
 
@@ -700,6 +701,7 @@ type actionBindingRead struct {
 	bindingSlot int
 	access      compiledPathAccess
 	whole       bool
+	value       bool
 }
 
 func compileDeclaredActionBindingReads(ruleName string, actionIndex int, spec *ActionBindingReadSetSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template) (actionBindingReadSet, error) {
@@ -797,7 +799,7 @@ func collectExpressionBindingReads(expression compiledExpression, out *actionBin
 	case expressionNodeBindingField:
 		out.add(actionBindingRead{bindingSlot: expression.bindingSlot, access: expression.access})
 	case expressionNodeBindingValue:
-		out.add(actionBindingRead{bindingSlot: expression.bindingSlot, whole: true})
+		out.add(actionBindingRead{bindingSlot: expression.bindingSlot, whole: true, value: true})
 	case expressionNodeCall, expressionNodeCompare, expressionNodeBoolean:
 		for _, operand := range expression.operands {
 			collectExpressionBindingReads(operand, out)
@@ -975,6 +977,11 @@ func compileTokenActionValue(expression compiledExpression) compiledTokenActionV
 			out.kind = compiledTokenActionValueBindingField
 			out.bindingSlot = expression.bindingSlot
 			out.access = expression.access
+		}
+	case expressionNodeBindingValue:
+		if expression.bindingSlot >= 0 {
+			out.kind = compiledTokenActionValueBindingValue
+			out.bindingSlot = expression.bindingSlot
 		}
 	case expressionNodeCall:
 		if value, ok := compileStringCall2ConstBindingFieldTokenActionValue(expression); ok {
@@ -1474,6 +1481,12 @@ func evaluateTokenActionValue(ctx context.Context, value compiledTokenActionValu
 			return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
 		}
 		return resolved, nil
+	case compiledTokenActionValueBindingValue:
+		resolved, ok := tokenActionBindingValue(token, value.bindingSlot)
+		if !ok {
+			return Value{}, fmt.Errorf("%w: native assert value is unavailable", ErrMatcher)
+		}
+		return resolved, nil
 	case compiledTokenActionValueStringCall2ConstBindingField:
 		resolved, ok := tokenActionBindingFieldValue(token, value.bindingSlot, value.access)
 		if !ok {
@@ -1495,6 +1508,14 @@ func tokenActionBindingFieldValue(token tokenRef, bindingSlot int, access compil
 	}
 	value, ok := match.fact.compiledFieldValue(access.root, access.rootSlot)
 	return value, ok
+}
+
+func tokenActionBindingValue(token tokenRef, bindingSlot int) (Value, bool) {
+	match, ok := tokenRefAtSlot(token, bindingSlot)
+	if !ok || !match.hasValue {
+		return Value{}, false
+	}
+	return match.value, true
 }
 
 func evaluateTokenActionStringCall2(ctx context.Context, value compiledTokenActionValue, arg Value) (out Value, err error) {

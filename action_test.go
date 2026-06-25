@@ -1627,6 +1627,78 @@ func TestNativeAssertTemplateValuesActionUsesUntargetedTokenFastPath(t *testing.
 	}
 }
 
+func TestNativeAssertTemplateValuesActionUsesAggregateValueTokenFastPath(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	summary := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "summary",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "total", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "summarize",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: summary.Key(),
+			Values: []ExpressionSpec{
+				BindingValueExpr{Binding: "total"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "summarize-items",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+		),
+		Actions: []RuleActionSpec{{Name: "summarize"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	compiled := revision.rules["summarize-items"].actionExecutions[0].assertTemplateValues
+	if got, want := compiled.tokenValues[0].kind, compiledTokenActionValueBindingValue; got != want {
+		t.Fatalf("token action value kind = %v, want %v", got, want)
+	}
+	summaryPlan := revision.reteGraphDebugSummary()
+	branch := findPlanInspectionBranch(t, summaryPlan.Plan.Branches, reteGraphBranchOwnerRule, "summarize-items", "")
+	if got, want := len(branch.Projections), 1; got != want {
+		t.Fatalf("rule projections = %d, want %d", got, want)
+	}
+	if got, want := branch.Projections[0].Kind, reteGraphTerminalProjectionActionValue; got != want {
+		t.Fatalf("rule projection kind = %q, want %q", got, want)
+	}
+
+	session := mustSession(t, revision, "native-assert-action-aggregate-token-fast-path-session")
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 3})); err != nil {
+		t.Fatalf("AssertTemplate(item 3): %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 4})); err != nil {
+		t.Fatalf("AssertTemplate(item 4): %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	summaries := snapshot.FactsByTemplateKey(summary.Key())
+	if len(summaries) != 1 {
+		t.Fatalf("summary facts = %d, want 1", len(summaries))
+	}
+	if got, ok := summaries[0].Field("total"); !ok || !got.Equal(mustValue(t, 7)) {
+		t.Fatalf("summary total = (%v, %t), want 7", got, ok)
+	}
+}
+
 func TestNativeAssertTemplateValuesActionRetainsStoredSlotBackingsAcrossFullFields(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

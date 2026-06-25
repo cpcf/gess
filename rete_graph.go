@@ -213,6 +213,7 @@ type reteGraphTerminalProjectionKind string
 const (
 	reteGraphTerminalProjectionActionBinding reteGraphTerminalProjectionKind = "action-binding"
 	reteGraphTerminalProjectionActionField   reteGraphTerminalProjectionKind = "action-field"
+	reteGraphTerminalProjectionActionValue   reteGraphTerminalProjectionKind = "action-value"
 	reteGraphTerminalProjectionQueryFact     reteGraphTerminalProjectionKind = "query-fact"
 	reteGraphTerminalProjectionQueryField    reteGraphTerminalProjectionKind = "query-field"
 	reteGraphTerminalProjectionQueryValue    reteGraphTerminalProjectionKind = "query-value"
@@ -1784,7 +1785,9 @@ func inspectReteGraphRuleProjections(rule compiledRule) []reteGraphTerminalProje
 				ActionName:  action.name,
 				BindingSlot: read.bindingSlot,
 			}
-			if read.whole {
+			if read.value {
+				projection.Kind = reteGraphTerminalProjectionActionValue
+			} else if read.whole {
 				projection.Kind = reteGraphTerminalProjectionActionBinding
 			} else {
 				projection.Kind = reteGraphTerminalProjectionActionField
