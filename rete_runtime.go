@@ -502,16 +502,6 @@ func countTerminalDeltaCandidateSpace(deltas []reteTerminalTokenDelta) (candidat
 	return candidateCount, entryCount, pathCount
 }
 
-func matchTokenGeneration(token *matchToken) Generation {
-	for token != nil {
-		if id := token.match.fact.ID(); !id.IsZero() {
-			return id.Generation()
-		}
-		token = token.parent
-	}
-	return 0
-}
-
 func (r *reteRuntime) insertGraphAlphaFact(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (reteAgendaDelta, bool, error) {
 	if r == nil || r.revision == nil || r.graph == nil || !r.supportsIncrementalAgenda() {
 		return reteAgendaDelta{}, false, nil

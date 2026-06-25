@@ -1,7 +1,6 @@
 package gess
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -95,11 +94,6 @@ func (s AccumulateCondition) clone() AccumulateCondition {
 		out.Specs[i] = spec.clone()
 	}
 	return out
-}
-
-type aggregateValueBinding struct {
-	name  string
-	value Value
 }
 
 type compiledAggregateSpec struct {
@@ -204,155 +198,6 @@ func aggregateValidationError(ruleName string, conditionIndex, specIndex int, re
 	return validation
 }
 
-func (p compiledConditionPlan) forEachAggregateMatch(ctx context.Context, source factSource, outer []conditionMatch, yield func(conditionMatch) error) error {
-	if p.aggregate == nil {
-		return fmt.Errorf("%w: missing aggregate plan", ErrAggregateEvaluation)
-	}
-	bindings, ok, err := p.aggregate.evaluate(ctx, source, outer)
-	if err != nil || !ok {
-		return err
-	}
-	for i, binding := range bindings {
-		if err := yield(conditionMatch{
-			conditionID: p.id,
-			bindingSlot: p.bindingSlot + i,
-			value:       binding.value,
-			hasValue:    true,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (p compiledAggregatePlan) evaluate(ctx context.Context, source factSource, outer []conditionMatch) ([]aggregateValueBinding, bool, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	states := make([]aggregateState, len(p.specs))
-	for i, spec := range p.specs {
-		states[i] = aggregateState{spec: spec}
-	}
-	var walk func(int, []conditionMatch) error
-	walk = func(index int, selected []conditionMatch) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if index == len(p.inputPlans) {
-			var current conditionFactRef
-			if len(selected) > len(outer) {
-				current = selected[len(selected)-1].fact
-			}
-			for i := range states {
-				if err := states[i].add(ctx, current, selected); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		plan := p.inputPlans[index]
-		if plan.negated {
-			matched := false
-			positive := plan
-			positive.negated = false
-			if err := positive.forEachMatchWithBindings(ctx, source, selected, func(conditionMatch) error {
-				matched = true
-				return nil
-			}); err != nil {
-				return err
-			}
-			if matched {
-				return nil
-			}
-			return walk(index+1, append(selected, conditionMatch{
-				conditionID: plan.id,
-				bindingSlot: plan.bindingSlot,
-			}))
-		}
-		return plan.forEachMatchWithBindings(ctx, source, selected, func(match conditionMatch) error {
-			return walk(index+1, append(selected, match))
-		})
-	}
-	selected := make([]conditionMatch, len(outer), len(outer)+len(p.inputPlans))
-	copy(selected, outer)
-	if err := walk(0, selected); err != nil {
-		return nil, false, err
-	}
-
-	out := make([]aggregateValueBinding, 0, len(states))
-	for i := range states {
-		value, ok, err := states[i].result()
-		if err != nil || !ok {
-			return nil, false, err
-		}
-		out = append(out, aggregateValueBinding{name: states[i].spec.binding, value: value})
-	}
-	return out, true, nil
-}
-
-type aggregateState struct {
-	spec       compiledAggregateSpec
-	count      int64
-	intSum     int64
-	floatSum   float64
-	floaty     bool
-	minMax     Value
-	haveMinMax bool
-	values     []Value
-}
-
-func (s *aggregateState) add(ctx context.Context, current conditionFactRef, bindings []conditionMatch) error {
-	s.count++
-	if s.spec.kind == AggregateCount || s.spec.kind == aggregateExists || s.spec.kind == aggregateForall {
-		return nil
-	}
-	value, ok, err := s.spec.expression.evaluateWithContextParamsAndCounters(ctx, current, bindings, nil, &FunctionEvaluationError{
-		ConditionIndex: -1,
-		PredicateIndex: -1,
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrAggregateEvaluation, err)
-	}
-	if !ok {
-		return fmt.Errorf("%w: missing aggregate input value", ErrAggregateEvaluation)
-	}
-	switch s.spec.kind {
-	case AggregateSum:
-		return s.addSum(value)
-	case AggregateMin:
-		return s.addMinMax(value, true)
-	case AggregateMax:
-		return s.addMinMax(value, false)
-	case AggregateCollect:
-		s.values = append(s.values, cloneValue(value))
-		return nil
-	default:
-		return fmt.Errorf("%w: unsupported aggregate kind %q", ErrAggregateEvaluation, s.spec.kind)
-	}
-}
-
-func (s *aggregateState) addSum(value Value) error {
-	switch value.Kind() {
-	case ValueInt:
-		if s.floaty {
-			s.floatSum += float64(value.intValue)
-			return nil
-		}
-		next, overflow := safeAddInt64(s.intSum, value.intValue)
-		if overflow {
-			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
-		}
-		s.intSum = next
-	case ValueFloat:
-		s.floaty = true
-		s.floatSum += float64(s.intSum) + value.floatValue
-		s.intSum = 0
-	default:
-		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
-	}
-	return nil
-}
-
 func safeAddInt64(left, right int64) (int64, bool) {
 	if right > 0 && left > math.MaxInt64-right {
 		return 0, true
@@ -361,53 +206,4 @@ func safeAddInt64(left, right int64) (int64, bool) {
 		return 0, true
 	}
 	return left + right, false
-}
-
-func (s *aggregateState) addMinMax(value Value, min bool) error {
-	if !s.haveMinMax {
-		s.minMax = cloneValue(value)
-		s.haveMinMax = true
-		return nil
-	}
-	comparison, ok := compareValues(value, s.minMax)
-	if !ok {
-		return fmt.Errorf("%w: min/max input is not comparable", ErrAggregateEvaluation)
-	}
-	if (min && comparison < 0) || (!min && comparison > 0) {
-		s.minMax = cloneValue(value)
-	}
-	return nil
-}
-
-func (s aggregateState) result() (Value, bool, error) {
-	switch s.spec.kind {
-	case AggregateCount:
-		return newIntValue(s.count), true, nil
-	case aggregateExists:
-		if s.count == 0 {
-			return Value{}, false, nil
-		}
-		return newBoolValue(true), true, nil
-	case aggregateForall:
-		if s.count != 0 {
-			return Value{}, false, nil
-		}
-		return newBoolValue(true), true, nil
-	case AggregateSum:
-		if s.floaty {
-			value, err := canonicalFloat(s.floatSum)
-			return value, err == nil, err
-		}
-		return newIntValue(s.intSum), true, nil
-	case AggregateMin, AggregateMax:
-		if !s.haveMinMax {
-			return Value{}, false, nil
-		}
-		return cloneValue(s.minMax), true, nil
-	case AggregateCollect:
-		value, err := canonicalValue(s.values)
-		return value, err == nil, err
-	default:
-		return Value{}, false, fmt.Errorf("%w: unsupported aggregate kind %q", ErrAggregateEvaluation, s.spec.kind)
-	}
 }

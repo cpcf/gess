@@ -1,7 +1,6 @@
 package gess
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -27,16 +26,6 @@ type matchCandidate struct {
 	maxRecency       Recency
 	aggregateRecency Recency
 	path             []int
-}
-
-type matchToken struct {
-	parent           *matchToken
-	match            conditionMatch
-	size             int
-	pathLen          int
-	maxRecency       Recency
-	aggregateRecency Recency
-	identityState    uint64
 }
 
 type bindingTupleEntry struct {
@@ -130,185 +119,6 @@ func (s *candidateSeenSet) reset(candidateCount int) {
 	clear(s.overflow)
 }
 
-func collectMatchCandidates(ctx context.Context, rule compiledRule, source factSource, bindingSets []bindingSet) ([]matchCandidate, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if source == nil {
-		return nil, ErrInvalidRuleset
-	}
-	if len(bindingSets) == 0 {
-		return nil, nil
-	}
-
-	candidates := make([]matchCandidate, 0, len(bindingSets))
-	seen := newCandidateSeenSet(len(bindingSets))
-	for _, set := range bindingSets {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		candidate, err := buildMatchCandidate(rule, source.sourceGeneration(), set)
-		if err != nil {
-			return nil, err
-		}
-		if seen.seen(candidates, candidate) {
-			continue
-		}
-		candidates = append(candidates, candidate)
-	}
-
-	return candidates, nil
-}
-
-func buildMatchCandidate(rule compiledRule, generation Generation, set bindingSet) (matchCandidate, error) {
-	if set.token != nil {
-		return buildMatchCandidateFromTokenGeneration(rule, generation, set.token)
-	}
-	return buildMatchCandidateFromMatches(rule, generation, set.matches)
-}
-
-func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, matches []conditionMatch) (matchCandidate, error) {
-	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
-		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
-	}
-	if len(matches) == 0 {
-		return matchCandidate{}, fmt.Errorf("%w: empty binding set for rule %q", ErrMatcher, rule.name)
-	}
-
-	entries := make([]bindingTupleEntry, len(matches))
-	maxRecency := Recency(0)
-	aggregateRecency := Recency(0)
-	for i, match := range matches {
-		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
-			return matchCandidate{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
-		}
-		condition := rule.conditions[match.bindingSlot]
-		plan, ok := rule.conditionPlanForBindingSlot(match.bindingSlot)
-		if !ok {
-			return matchCandidate{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
-		}
-		entries[i] = bindingTupleEntry{
-			binding:        condition.binding,
-			bindingSlot:    match.bindingSlot,
-			conditionOrder: condition.order,
-			conditionID:    condition.id,
-			conditionPath:  plan.path,
-			factID:         match.fact.ID(),
-			factVersion:    match.fact.Version(),
-			value:          cloneValue(match.value),
-			hasValue:       match.hasValue,
-		}
-
-		if !match.hasValue {
-			recency := match.fact.Recency()
-			if recency > maxRecency {
-				maxRecency = recency
-			}
-			aggregateRecency = addRecency(aggregateRecency, recency)
-		}
-	}
-
-	sort.SliceStable(entries, func(i, j int) bool {
-		if entries[i].conditionOrder != entries[j].conditionOrder {
-			return entries[i].conditionOrder < entries[j].conditionOrder
-		}
-		if entries[i].bindingSlot != entries[j].bindingSlot {
-			return entries[i].bindingSlot < entries[j].bindingSlot
-		}
-		if entries[i].binding != entries[j].binding {
-			return entries[i].binding < entries[j].binding
-		}
-		if entries[i].conditionID != entries[j].conditionID {
-			return entries[i].conditionID < entries[j].conditionID
-		}
-		if entries[i].factID != entries[j].factID {
-			return entries[i].factID.String() < entries[j].factID.String()
-		}
-		return entries[i].factVersion < entries[j].factVersion
-	})
-
-	factIDs := make([]FactID, len(entries))
-	factVersions := make([]FactVersion, len(entries))
-	for i, entry := range entries {
-		factIDs[i] = entry.factID
-		factVersions[i] = entry.factVersion
-	}
-
-	path := candidatePathFor(entries)
-	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
-
-	return matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		identity:         identity,
-		bindingTuple:     entries,
-		factIDs:          factIDs,
-		factVersions:     factVersions,
-		generation:       generation,
-		maxRecency:       maxRecency,
-		aggregateRecency: aggregateRecency,
-		path:             path,
-	}, nil
-}
-
-func buildMatchCandidateFromToken(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {
-	return buildMatchCandidateFromTokenGeneration(rule, generation, token)
-}
-
-func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Generation, token *matchToken) (matchCandidate, error) {
-	return buildMatchCandidateFromTokenGenerationWithScratch(rule, generation, token, nil)
-}
-
-func buildMatchCandidateFromTokenGenerationWithScratch(rule compiledRule, generation Generation, token *matchToken, scratch *candidateScratch) (matchCandidate, error) {
-	if token == nil {
-		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
-	}
-	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
-		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
-	}
-
-	var entries []bindingTupleEntry
-	var factIDs []FactID
-	var factVersions []FactVersion
-	var path []int
-	if scratch != nil {
-		entries, factIDs, factVersions, path = scratch.tokenBuffers(token.size, token.pathLen)
-	} else {
-		entries = make([]bindingTupleEntry, token.size)
-		factIDs = make([]FactID, token.size)
-		factVersions = make([]FactVersion, token.size)
-		path = make([]int, token.pathLen)
-	}
-	if _, _, err := fillMatchToken(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
-		return matchCandidate{}, err
-	}
-
-	identity := candidateIdentity{
-		generation: generation,
-		count:      token.size,
-		key: candidateIdentityKey{
-			scopeHash: rule.identityScopeHash,
-			hash:      candidateIdentityHashFinish(token.identityState, token.size),
-		},
-	}
-	if identity.key.scopeHash == 0 {
-		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
-	}
-
-	return matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		identity:         identity,
-		bindingTuple:     entries,
-		factIDs:          factIDs,
-		factVersions:     factVersions,
-		generation:       generation,
-		maxRecency:       token.maxRecency,
-		aggregateRecency: token.aggregateRecency,
-		path:             path,
-	}, nil
-}
-
 func buildMatchCandidateFromTokenRef(rule compiledRule, token tokenRef) (matchCandidate, error) {
 	return buildMatchCandidateFromTokenRefWithScratch(rule, token.generation(), token, nil)
 }
@@ -362,25 +172,6 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		aggregateRecency: token.aggregateRecency(),
 		path:             path,
 	}, nil
-}
-
-func fillMatchToken(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token *matchToken) (int, int, error) {
-	if token == nil {
-		return entryIndex, pathIndex, nil
-	}
-	entryIndex, pathIndex, err := fillMatchToken(rule, entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent)
-	if err != nil {
-		return entryIndex, pathIndex, err
-	}
-	entry, err := bindingTupleEntryForMatch(rule, token.match)
-	if err != nil {
-		return entryIndex, pathIndex, err
-	}
-	entries[entryIndex] = entry
-	factIDs[entryIndex] = entry.factID
-	factVersions[entryIndex] = entry.factVersion
-	copy(path[pathIndex:], entry.conditionPath)
-	return entryIndex + 1, pathIndex + len(entry.conditionPath), nil
 }
 
 func fillTokenRef(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token tokenRef) (int, int, error) {
@@ -640,20 +431,6 @@ func addRecency(total Recency, next Recency) Recency {
 	return Recency(sum)
 }
 
-func (p compiledConditionPlan) bindingTupleEntry(match conditionMatch) bindingTupleEntry {
-	return bindingTupleEntry{
-		binding:        p.binding,
-		bindingSlot:    match.bindingSlot,
-		conditionOrder: p.bindingSlot,
-		conditionID:    p.id,
-		conditionPath:  p.path,
-		factID:         match.fact.ID(),
-		factVersion:    match.fact.Version(),
-		value:          cloneValue(match.value),
-		hasValue:       match.hasValue,
-	}
-}
-
 func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (bindingTupleEntry, error) {
 	if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
 		return bindingTupleEntry{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
@@ -674,76 +451,4 @@ func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (binding
 		value:          cloneValue(match.value),
 		hasValue:       match.hasValue,
 	}, nil
-}
-
-func bindingTupleEntryForMatchUnchecked(rule compiledRule, plan compiledConditionPlan, match conditionMatch) bindingTupleEntry {
-	condition := RuleCondition{}
-	if match.bindingSlot >= 0 && match.bindingSlot < len(rule.conditions) {
-		condition = rule.conditions[match.bindingSlot]
-	}
-	return bindingTupleEntry{
-		binding:        condition.binding,
-		bindingSlot:    match.bindingSlot,
-		conditionOrder: condition.order,
-		conditionID:    plan.id,
-		conditionPath:  plan.path,
-		factID:         match.fact.ID(),
-		factVersion:    match.fact.Version(),
-		value:          cloneValue(match.value),
-		hasValue:       match.hasValue,
-	}
-}
-
-func newMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) *matchToken {
-	token := makeMatchToken(parent, entry, match, recency, generation)
-	return &token
-}
-
-func makeMatchToken(parent *matchToken, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) matchToken {
-	token := matchToken{
-		parent: parent,
-		match:  match,
-	}
-	if parent == nil {
-		token.size = 1
-		token.pathLen = len(entry.conditionPath)
-		token.maxRecency = recency
-		token.aggregateRecency = recency
-		token.identityState = candidateIdentityHashStart(generation)
-	} else {
-		token.size = parent.size + 1
-		token.pathLen = parent.pathLen + len(entry.conditionPath)
-		token.maxRecency = max(recency, parent.maxRecency)
-		token.aggregateRecency = addRecency(parent.aggregateRecency, recency)
-		token.identityState = parent.identityState
-	}
-	token.identityState = candidateIdentityHashStep(token.identityState, entry)
-	return token
-}
-
-func matchTokenEqual(left, right *matchToken) bool {
-	if left == right {
-		return true
-	}
-	if left == nil || right == nil {
-		return false
-	}
-	if left.size != right.size || left.identityState != right.identityState {
-		return false
-	}
-	for left != nil && right != nil {
-		if left.match.hasValue != right.match.hasValue {
-			return false
-		}
-		if left.match.hasValue {
-			if !left.match.value.Equal(right.match.value) {
-				return false
-			}
-		} else if left.match.fact.ID() != right.match.fact.ID() || left.match.fact.Version() != right.match.fact.Version() {
-			return false
-		}
-		left = left.parent
-		right = right.parent
-	}
-	return left == nil && right == nil
 }
