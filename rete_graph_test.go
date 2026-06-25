@@ -554,6 +554,88 @@ func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	}
 }
 
+func TestReteGraphPlansCompoundEqualityKeysAndResidualJoins(t *testing.T) {
+	revision, thresholdKey, candidateKey := mustCompoundEqualityResidualJoinBenchmarkRuleset(t)
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 2; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.residualJoins), 2; got != want {
+		t.Fatalf("residual joins = %d, want %d", got, want)
+	}
+	if got, want := node.hashJoins[0].access.root, "group"; got != want {
+		t.Fatalf("first hash join root = %q, want %q", got, want)
+	}
+	if got, want := node.hashJoins[1].access.root, "region"; got != want {
+		t.Fatalf("second hash join root = %q, want %q", got, want)
+	}
+	if got, want := node.residualJoins[0].access.display(), `meta."id"`; got != want {
+		t.Fatalf("first residual join path = %q, want %q", got, want)
+	}
+	if got, want := node.residualJoins[1].operator, FieldConstraintGreaterThan; got != want {
+		t.Fatalf("second residual join operator = %v, want %v", got, want)
+	}
+
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if !runtime.supportsGraphBeta() {
+		t.Fatalf("runtime does not support graph beta for compound residual joins: %#v", runtime.plan.unsupported)
+	}
+
+	const thresholds = 8
+	session := mustCompoundEqualityResidualJoinBenchmarkSession(t, revision, thresholdKey, thresholds)
+	session.attachPropagationCounters()
+	ctx := context.Background()
+	_, err = session.AssertTemplate(ctx, candidateKey, mustFields(t, map[string]any{
+		"group":  "A",
+		"region": "R007",
+		"meta":   map[string]any{"id": "T007"},
+		"score":  10,
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate candidate: %v", err)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.BetaCandidateRowsScanned, 1; got != want {
+		t.Fatalf("beta candidate rows scanned = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.BetaResidualTests, 2; got != want {
+		t.Fatalf("beta residual tests = %d, want %d", got, want)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("fired = %d, want 1", result.Fired)
+	}
+}
+
+func TestReteGraphCompoundEqualityJoinOrderProducesEquivalentHashPlan(t *testing.T) {
+	forward := mustCompoundEqualityOrderRuleset(t, []JoinConstraintSpec{
+		{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+		{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "region"}},
+	})
+	reversed := mustCompoundEqualityOrderRuleset(t, []JoinConstraintSpec{
+		{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "region"}},
+		{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+	})
+	forwardKeys := compoundHashJoinSortKeys(t, forward)
+	reversedKeys := compoundHashJoinSortKeys(t, reversed)
+	if !slices.Equal(forwardKeys, reversedKeys) {
+		t.Fatalf("hash join keys differ:\nforward=%#v\nreversed=%#v", forwardKeys, reversedKeys)
+	}
+}
+
 func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1228,4 +1310,59 @@ func TestReteGraphAlphaRouteSelectorRequiresTypedScalarField(t *testing.T) {
 	if summary.AlphaNodes[0].route.enabled {
 		t.Fatalf("alpha route selector enabled for any field: %#v", summary.AlphaNodes[0].route)
 	}
+}
+
+func mustCompoundEqualityOrderRuleset(tb testing.TB, joins []JoinConstraintSpec) *Ruleset {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	left := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "compound-order",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:         "right",
+				TemplateKey:     right.Key(),
+				JoinConstraints: joins,
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(tb, workspace)
+}
+
+func compoundHashJoinSortKeys(tb testing.TB, revision *Ruleset) []string {
+	tb.Helper()
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		tb.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	node := summary.BetaNodes[0]
+	if got, want := len(node.hashJoins), 2; got != want {
+		tb.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	out := make([]string, len(node.hashJoins))
+	for i, join := range node.hashJoins {
+		out[i] = compiledJoinHashKeySortKey(join)
+	}
+	return out
 }

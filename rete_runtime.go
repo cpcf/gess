@@ -821,11 +821,8 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 			refBindingSlot: join.refBindingSlot,
 			indexKind:      join.indexKind,
 		})
-		if join.indexKind == joinIndexEquality {
+		if join.isHashJoin() {
 			hashJoinCount++
-		}
-		if !join.indexable {
-			addUnsupported(reteUnsupportedUnindexedJoin, "join is not indexable by the current planner")
 		}
 	}
 	for _, predicate := range condition.predicates {

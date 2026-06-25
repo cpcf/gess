@@ -760,6 +760,36 @@ func BenchmarkReteGraphResidualJoinSparseKey(b *testing.B) {
 	}
 }
 
+func BenchmarkReteGraphCompoundEqualityResidualJoin(b *testing.B) {
+	revision, thresholdKey, candidateKey := mustCompoundEqualityResidualJoinBenchmarkRuleset(b)
+	const thresholds = 256
+	candidateFields := mustFields(b, map[string]any{
+		"group":  "A",
+		"region": fmt.Sprintf("R%03d", thresholds-1),
+		"meta":   map[string]any{"id": fmt.Sprintf("T%03d", thresholds-1)},
+		"score":  thresholds + 1,
+	})
+	reportCompoundEqualityResidualJoinBenchmarkCounters(b, revision, thresholdKey, candidateKey, thresholds, candidateFields)
+
+	b.ReportAllocs()
+	b.ReportMetric(thresholds, "thresholds/op")
+	b.ReportMetric(1, "expected-joined-tokens/op")
+	b.StopTimer()
+	for i := 0; i < b.N; i++ {
+		session := mustCompoundEqualityResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds)
+		b.StartTimer()
+		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("AssertTemplate candidate: %v", err)
+		}
+		if result.Status != AssertInserted {
+			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
+		}
+		benchmarkAssertResult = result
+	}
+}
+
 func BenchmarkReteGraphPureResidualJoin(b *testing.B) {
 	revision, thresholdKey, candidateKey := mustPureResidualJoinBenchmarkRuleset(b)
 	const thresholds = 256
@@ -1547,6 +1577,106 @@ func reportGraphResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, 
 		tb.Fatalf("diagnostic runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
 	probes := max(1, snapshot.Totals.BetaBucketProbes)
+	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketProbes), "diagnostic-beta-bucket-probes")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketDepthTotal), "diagnostic-beta-bucket-depth-total")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketDepthMax), "diagnostic-beta-bucket-depth-max")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketDepthTotal)/float64(probes), "diagnostic-beta-bucket-depth-mean")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaCandidateRowsScanned), "diagnostic-beta-candidate-rows-scanned")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaResidualTests), "diagnostic-beta-residual-tests")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaResidualFailures), "diagnostic-beta-residual-failures")
+	reporter.ReportMetric(float64(snapshot.Totals.BetaJoinedTokensProduced), "diagnostic-beta-joined-tokens-produced")
+	reporter.ReportMetric(float64(snapshot.TerminalRowsRetained), "diagnostic-terminal-rows-retained")
+}
+
+func mustCompoundEqualityResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: "threshold",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+			{Name: "payload", Kind: ValueMap, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	candidate := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: "candidate",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+			{Name: "meta", Kind: ValueMap, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "candidate-above-threshold",
+		Conditions: []RuleConditionSpec{
+			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
+					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "region"}},
+					{Path: Path("meta", MapKey("id")), Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Path: Path("payload", MapKey("id"))}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(tb, workspace), threshold.Key(), candidate.Key()
+}
+
+func mustCompoundEqualityResidualJoinBenchmarkSession(tb testing.TB, revision *Ruleset, thresholdKey TemplateKey, thresholds int) *Session {
+	tb.Helper()
+
+	initials := make([]SessionInitialFact, 0, thresholds)
+	for i := range thresholds {
+		initials = append(initials, SessionInitialFact{
+			TemplateKey: thresholdKey,
+			Fields: mustFields(tb, map[string]any{
+				"group":   "A",
+				"region":  fmt.Sprintf("R%03d", i),
+				"payload": map[string]any{"id": fmt.Sprintf("T%03d", i)},
+				"score":   i,
+			}),
+		})
+	}
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		tb.Fatalf("NewSession: %v", err)
+	}
+	return session
+}
+
+func reportCompoundEqualityResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, thresholdKey, candidateKey TemplateKey, thresholds int, candidateFields Fields) {
+	tb.Helper()
+
+	reporter, ok := tb.(interface {
+		ReportMetric(float64, string)
+	})
+	if !ok {
+		return
+	}
+	session := mustCompoundEqualityResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds)
+	session.attachPropagationCounters()
+	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+	if err != nil {
+		tb.Fatalf("diagnostic AssertTemplate candidate: %v", err)
+	}
+	if result.Status != AssertInserted {
+		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	probes := max(1, snapshot.Totals.BetaBucketProbes)
+	reporter.ReportMetric(propagationRuntimePathMetric(snapshot.RuntimePath, propagationRuntimeGraphBeta), "diagnostic-runtime-graph-beta")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketProbes), "diagnostic-beta-bucket-probes")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketDepthTotal), "diagnostic-beta-bucket-depth-total")
 	reporter.ReportMetric(float64(snapshot.Totals.BetaBucketDepthMax), "diagnostic-beta-bucket-depth-max")

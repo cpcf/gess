@@ -1544,8 +1544,7 @@ func (g *reteGraph) internBetaNodeInternal(index map[reteGraphBetaKey]reteGraphB
 	if kind == 0 {
 		kind = reteGraphBetaNodeJoin
 	}
-	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
-	hashJoins = append(hashJoins, expressionPredicateHashJoins(predicates)...)
+	hashJoins, residualJoins := planCompiledJoinConstraints(joins, predicates)
 	key := reteGraphBetaKey{
 		kind:               kind,
 		left:               left,
@@ -2062,6 +2061,15 @@ func cloneCompiledJoinConstraints(in []compiledJoinConstraint) []compiledJoinCon
 	return out
 }
 
+func planCompiledJoinConstraints(joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) ([]compiledJoinConstraint, []compiledJoinConstraint) {
+	hashJoins, residualJoins := splitCompiledJoinConstraints(joins)
+	hashJoins = append(hashJoins, expressionPredicateHashJoins(predicates)...)
+	sort.SliceStable(hashJoins, func(i, j int) bool {
+		return compiledJoinHashKeySortKey(hashJoins[i]) < compiledJoinHashKeySortKey(hashJoins[j])
+	})
+	return hashJoins, residualJoins
+}
+
 func splitCompiledJoinConstraints(in []compiledJoinConstraint) ([]compiledJoinConstraint, []compiledJoinConstraint) {
 	if len(in) == 0 {
 		return nil, nil
@@ -2076,6 +2084,26 @@ func splitCompiledJoinConstraints(in []compiledJoinConstraint) ([]compiledJoinCo
 		residualJoins = append(residualJoins, join)
 	}
 	return hashJoins, residualJoins
+}
+
+func compiledJoinHashKeySortKey(join compiledJoinConstraint) string {
+	var b strings.Builder
+	b.WriteString(join.access.display())
+	b.WriteByte('|')
+	b.WriteString(join.refBinding)
+	b.WriteByte('|')
+	b.WriteString(join.refAccess.display())
+	b.WriteByte('|')
+	b.WriteString(string(join.operator))
+	if join.hasLeftKeyExpression {
+		b.WriteString("|left-expr:")
+		b.WriteString(serializeCompiledExpression(join.leftKeyExpression))
+	}
+	if join.hasRightKeyExpression {
+		b.WriteString("|right-expr:")
+		b.WriteString(serializeCompiledExpression(join.rightKeyExpression))
+	}
+	return b.String()
 }
 
 func expressionPredicateHashJoins(predicates []compiledExpressionPredicate) []compiledJoinConstraint {

@@ -75,7 +75,7 @@ type compiledJoinConstraint struct {
 }
 
 func (c compiledJoinConstraint) isHashJoin() bool {
-	return c.indexKind == joinIndexEquality
+	return c.indexable && c.indexKind == joinIndexEquality
 }
 
 func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
