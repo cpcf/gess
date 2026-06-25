@@ -3865,19 +3865,11 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 		return false
 	}
 	nodeMemory := m.nodeMemory(nodeID)
+	negativeMemory := m.negativeBetaMemory(nodeID, node)
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	switch side {
 	case reteGraphBetaInputLeft:
-		removedRow, removedOK := nodeMemory.left.removeToken(token, counters)
-		if !removedOK {
-			return true
-		}
-		if counters != nil {
-			counters.recordNegativeRowRemoved()
-		}
-		if removedRow.negativeBlockerCount() == 0 {
-			m.propagateRemoveFromStage(source, removedRow.token, counters, delta)
-		}
+		return negativeMemory.removeLeft(token, counters, delta)
 	case reteGraphBetaInputRight:
 		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, nil)
 		if err != nil || !ok {

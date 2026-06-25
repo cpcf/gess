@@ -102,6 +102,25 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 	return true, nil
 }
 
+func (m reteGraphNegativeBetaMemory) removeLeft(token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m.owner == nil || m.memory == nil || delta == nil || token.isZero() {
+		return false
+	}
+	removedRow, removedOK := m.memory.left.removeToken(token, counters)
+	if !removedOK {
+		return true
+	}
+	if counters != nil {
+		counters.recordNegativeRowRemoved()
+	}
+	if removedRow.negativeBlockerCount() != 0 {
+		return true
+	}
+	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
+	m.owner.propagateRemoveFromStage(source, removedRow.token, counters, delta)
+	return true
+}
+
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false
