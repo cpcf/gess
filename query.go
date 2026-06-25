@@ -511,6 +511,111 @@ func lowerQueryConditionParams(condition RuleConditionSpec, params map[string]Va
 	return out
 }
 
+func lowerQueryAggregateConditionParams(condition AccumulateCondition, params map[string]ValueKind) AccumulateCondition {
+	out := condition.clone()
+	if len(params) == 0 {
+		return out
+	}
+	out.Input = lowerQueryConditionTreeParams(out.Input, params)
+	for i := range out.Specs {
+		out.Specs[i].expression = lowerQueryParamExpression(out.Specs[i].expression, params)
+	}
+	return out
+}
+
+func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKind) ConditionSpec {
+	if len(params) == 0 {
+		return cloneConditionSpec(spec)
+	}
+	switch condition := spec.(type) {
+	case nil:
+		return nil
+	case And:
+		out := condition.clone()
+		for i := range out.Conditions {
+			out.Conditions[i] = lowerQueryConditionTreeParams(out.Conditions[i], params)
+		}
+		return out
+	case *And:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(And)
+		return &out
+	case Or:
+		out := condition.clone()
+		for i := range out.Conditions {
+			out.Conditions[i] = lowerQueryConditionTreeParams(out.Conditions[i], params)
+		}
+		return out
+	case *Or:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(Or)
+		return &out
+	case Not:
+		out := condition.clone()
+		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
+		return out
+	case *Not:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(Not)
+		return &out
+	case ExistsCondition:
+		out := condition.clone()
+		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
+		return out
+	case *ExistsCondition:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(ExistsCondition)
+		return &out
+	case ForallCondition:
+		out := condition.clone()
+		out.Domain = lowerQueryConditionTreeParams(out.Domain, params)
+		out.Requirement = lowerQueryConditionTreeParams(out.Requirement, params)
+		return out
+	case *ForallCondition:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(ForallCondition)
+		return &out
+	case Test:
+		out := condition.clone()
+		out.Expression = lowerQueryParamExpression(out.Expression, params)
+		return out
+	case *Test:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(Test)
+		return &out
+	case Match:
+		return Match(lowerQueryConditionParams(RuleConditionSpec(condition), params))
+	case *Match:
+		if condition == nil {
+			return nil
+		}
+		out := Match(lowerQueryConditionParams(RuleConditionSpec(*condition), params))
+		return &out
+	case AccumulateCondition:
+		return lowerQueryAggregateConditionParams(condition, params)
+	case *AccumulateCondition:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryAggregateConditionParams(*condition, params)
+		return &out
+	default:
+		return cloneConditionSpec(spec)
+	}
+}
+
 func queryParamJoinFromPredicate(spec ExpressionSpec, params map[string]ValueKind) (JoinConstraintSpec, bool) {
 	compare, ok := queryCompareExpr(spec)
 	if !ok {

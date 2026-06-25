@@ -73,11 +73,11 @@ func newQueryGraphBranchPlanningIR(queryName string, branchID int, conditions []
 		visible: true,
 	})
 	for _, condition := range conditions {
-		if condition.isAggregate {
-			return branchPlanningIR{}, false
-		}
 		next := cloneNormalizedRuleCondition(condition)
 		next.spec = lowerQueryConditionParams(next.spec, params)
+		if next.isAggregate {
+			next.aggregate = lowerQueryAggregateConditionParams(next.aggregate, params)
+		}
 		lowered = append(lowered, next)
 	}
 	return newReorderedBranchPlanningIR(branchID, lowered), true

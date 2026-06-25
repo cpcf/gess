@@ -636,6 +636,165 @@ func TestReteGraphCompoundEqualityJoinOrderProducesEquivalentHashPlan(t *testing
 	}
 }
 
+func TestReteGraphPlansMixedDeclaredAndExpressionEqualityHashKeys(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "mixed-equality-keys",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "left", Field: "score"}},
+				},
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "region"},
+						Right:    BindingFieldExpr{Binding: "left", Field: "region"},
+					},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	node := singleGraphBetaNode(t, revision)
+	if got, want := len(node.hashJoins), 2; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := len(node.residualJoins), 1; got != want {
+		t.Fatalf("residual joins = %d, want %d", got, want)
+	}
+	if got, want := node.residualJoins[0].operator, FieldConstraintGreaterThan; got != want {
+		t.Fatalf("residual join operator = %v, want %v", got, want)
+	}
+	if got, want := []string{node.hashJoins[0].access.root, node.hashJoins[1].access.root}, []string{"group", "region"}; !slices.Equal(got, want) {
+		t.Fatalf("hash join roots = %#v, want %#v", got, want)
+	}
+}
+
+func TestReteGraphDedupesEquivalentHashJoinExtractors(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "left",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "right",
+		Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "duplicate-equality-keys",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+				},
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "group"},
+						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
+					},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	node := singleGraphBetaNode(t, revision)
+	if got, want := len(node.hashJoins), 1; got != want {
+		t.Fatalf("hash joins = %d, want duplicate equality extractor deduped to %d", got, want)
+	}
+	if got, want := len(node.predicates), 1; got != want {
+		t.Fatalf("predicates = %d, want original expression predicate retained for residual validation", got)
+	}
+}
+
+func TestReteGraphQueryPlansCompoundEqualityHashKeys(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "compound-query",
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", TemplateKey: left.Key()},
+			{
+				Binding:     "right",
+				TemplateKey: right.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
+				},
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "region"},
+						Right:    BindingFieldExpr{Binding: "left", Field: "region"},
+					},
+				},
+			},
+		},
+		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "right", Field: "id"})},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	node := graphBetaNodeWithHashJoinCount(t, revision, 2)
+	if got, want := len(node.hashJoins), 2; got != want {
+		t.Fatalf("hash joins = %d, want %d", got, want)
+	}
+	if got, want := []string{node.hashJoins[0].access.root, node.hashJoins[1].access.root}, []string{"group", "region"}; !slices.Equal(got, want) {
+		t.Fatalf("hash join roots = %#v, want %#v", got, want)
+	}
+}
+
 func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	workspace := NewWorkspace()
 	left := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1365,4 +1524,27 @@ func compoundHashJoinSortKeys(tb testing.TB, revision *Ruleset) []string {
 		out[i] = compiledJoinHashKeySortKey(join)
 	}
 	return out
+}
+
+func singleGraphBetaNode(tb testing.TB, revision *Ruleset) reteGraphBetaNode {
+	tb.Helper()
+
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 1; got != want {
+		tb.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	return summary.BetaNodes[0]
+}
+
+func graphBetaNodeWithHashJoinCount(tb testing.TB, revision *Ruleset, count int) reteGraphBetaNode {
+	tb.Helper()
+
+	summary := revision.reteGraphDebugSummary()
+	for _, node := range summary.BetaNodes {
+		if len(node.hashJoins) == count {
+			return node
+		}
+	}
+	tb.Fatalf("missing beta node with %d hash joins: %#v", count, summary.BetaNodes)
+	return reteGraphBetaNode{}
 }

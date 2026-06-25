@@ -388,6 +388,339 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	assertQueryRowStringValue(t, again[0], "id", "p-000")
 }
 
+func TestQueryAggregateReturnsParameterizedValuesAndTracksUpdates(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "item-total-by-dept",
+		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
+		ConditionTree: Accumulate(
+			Match{
+				Binding:     "item",
+				TemplateKey: item.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentPath(Path("dept")),
+						Right:    ParamExpr{Name: "dept"},
+					},
+				},
+			},
+			Count().As("count"),
+			Sum(BindingPath("item", Path("amount"))).As("total"),
+		),
+		Returns: []QueryReturnSpec{
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+			ReturnValue("total", BindingValueExpr{Binding: "total"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "i1", "dept": "engineering", "amount": 2})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "i2", "dept": "engineering", "amount": 3})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "i3", "dept": "sales", "amount": 7})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "item-total-by-dept", QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll engineering: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("engineering rows = %d, want 1", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "count", 2)
+	assertQueryRowIntValue(t, rows[0], "total", 5)
+
+	snapshot := mustSnapshot(t, ctx, session)
+	snapshotRows, err := snapshot.QueryAll(ctx, "item-total-by-dept", QueryArgs{"dept": "sales"})
+	if err != nil {
+		t.Fatalf("snapshot QueryAll sales: %v", err)
+	}
+	if len(snapshotRows) != 1 {
+		t.Fatalf("sales snapshot rows = %d, want 1", len(snapshotRows))
+	}
+	assertQueryRowIntValue(t, snapshotRows[0], "count", 1)
+	assertQueryRowIntValue(t, snapshotRows[0], "total", 7)
+
+	var target FactID
+	for _, fact := range snapshot.FactsByName("item") {
+		if id, _ := fact.Field("id"); id.Equal(mustValue(t, "i2")) {
+			target = fact.ID()
+			break
+		}
+	}
+	if target.IsZero() {
+		t.Fatal("missing target item")
+	}
+	if _, err := session.Modify(ctx, target, FactPatch{Set: mustFields(t, map[string]any{"amount": 6})}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	rows, err = session.QueryAll(ctx, "item-total-by-dept", QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll engineering after modify: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("engineering rows after modify = %d, want 1", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "count", 2)
+	assertQueryRowIntValue(t, rows[0], "total", 8)
+}
+
+func TestQueryAggregateCountReturnsEmptyParameterizedBucket(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "item",
+		Fields: []FieldSpec{{Name: "dept", Kind: ValueString, Required: true}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "item-count-by-dept",
+		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
+		ConditionTree: Accumulate(
+			Match{
+				Binding:     "item",
+				TemplateKey: item.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentPath(Path("dept")),
+						Right:    ParamExpr{Name: "dept"},
+					},
+				},
+			},
+			Count().As("count"),
+		),
+		Returns: []QueryReturnSpec{
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "empty-query-aggregate-session")
+	rows, err := session.QueryAll(ctx, "item-count-by-dept", QueryArgs{"dept": "support"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 empty aggregate bucket", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "count", 0)
+}
+
+func TestQueryAggregateGroupsByOuterBinding(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	group := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "group",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	})
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "group-id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "totals-by-kind",
+		Parameters: []QueryParameterSpec{{Name: "kind", Kind: ValueString}},
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{
+				Binding:     "group",
+				TemplateKey: group.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentPath(Path("kind")),
+						Right:    ParamExpr{Name: "kind"},
+					},
+				},
+			},
+			Accumulate(
+				Match{
+					Binding:     "item",
+					TemplateKey: item.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "group-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					},
+				},
+				Count().As("count"),
+				Sum(BindingPath("item", Path("amount"))).As("total"),
+			),
+		}},
+		Returns: []QueryReturnSpec{
+			ReturnValue("group_id", BindingPath("group", Path("id"))),
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+			ReturnValue("total", BindingValueExpr{Binding: "total"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: group.Key(), Fields: mustFields(t, map[string]any{"id": "g1", "kind": "active"})},
+		SessionInitialFact{TemplateKey: group.Key(), Fields: mustFields(t, map[string]any{"id": "g2", "kind": "active"})},
+		SessionInitialFact{TemplateKey: group.Key(), Fields: mustFields(t, map[string]any{"id": "g3", "kind": "archived"})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"group-id": "g1", "amount": 2})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"group-id": "g1", "amount": 3})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"group-id": "g2", "amount": 7})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"group-id": "g3", "amount": 11})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "totals-by-kind", QueryArgs{"kind": "active"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2 grouped aggregate rows", len(rows))
+	}
+	assertQueryAggregateGroupRow(t, rows, "g1", 2, 5)
+	assertQueryAggregateGroupRow(t, rows, "g2", 1, 7)
+}
+
+func TestQueryAggregateResultFeedsDownstreamCondition(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "item",
+		Fields: []FieldSpec{{Name: "amount", Kind: ValueInt, Required: true}},
+	})
+	gate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "gate",
+		Fields: []FieldSpec{{Name: "count", Kind: ValueInt, Required: true}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "count-gates",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Accumulate(
+				Match{Binding: "item", TemplateKey: item.Key()},
+				Count().As("count"),
+			),
+			Match{
+				Binding:     "gate",
+				TemplateKey: gate.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentPath(Path("count")),
+						Right:    BindingValueExpr{Binding: "count"},
+					},
+				},
+			},
+		}},
+		Returns: []QueryReturnSpec{
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	session, err := NewSession(mustCompileWorkspace(t, workspace), WithInitialFacts(
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"amount": 1})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"amount": 2})},
+		SessionInitialFact{TemplateKey: gate.Key(), Fields: mustFields(t, map[string]any{"count": 1})},
+		SessionInitialFact{TemplateKey: gate.Key(), Fields: mustFields(t, map[string]any{"count": 2})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "count-gates", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 downstream aggregate row", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "count", 2)
+}
+
+func TestQueryAggregateMinMaxCollectReturnsValues(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "item-extrema",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Min(BindingPath("item", Path("amount"))).As("min"),
+			Max(BindingPath("item", Path("amount"))).As("max"),
+			Collect(BindingPath("item", Path("amount"))).As("collected"),
+		),
+		Returns: []QueryReturnSpec{
+			ReturnValue("min", BindingValueExpr{Binding: "min"}),
+			ReturnValue("max", BindingValueExpr{Binding: "max"}),
+			ReturnValue("collected", BindingValueExpr{Binding: "collected"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	session, err := NewSession(mustCompileWorkspace(t, workspace), WithInitialFacts(
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "a", "amount": 3})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "b", "amount": 1})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "c", "amount": 5})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "item-extrema", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 extrema aggregate row", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "min", 1)
+	assertQueryRowIntValue(t, rows[0], "max", 5)
+	assertQueryRowListValue(t, rows[0], "collected", []Value{mustValue(t, 3), mustValue(t, 1), mustValue(t, 5)})
+}
+
+func TestQueryAggregateValidationRejectsUnsupportedShapes(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddTemplate(t, workspace, TemplateSpec{Name: "item", Fields: []FieldSpec{{Name: "amount", Kind: ValueInt}}})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "unsupported-aggregate-query",
+		ConditionTree: Accumulate(Or{Conditions: []ConditionSpec{
+			Match{Binding: "a", TemplateKey: TemplateKey("item")},
+			Match{Binding: "b", TemplateKey: TemplateKey("item")},
+		}}, Count().As("count")),
+		Returns: []QueryReturnSpec{
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	if _, err := workspace.Compile(context.Background()); !errors.Is(err, ErrAggregateValidation) {
+		t.Fatalf("Compile error = %v, want ErrAggregateValidation", err)
+	}
+}
+
 func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -668,5 +1001,58 @@ func assertQueryRowStringValue(t testing.TB, row QueryRow, alias, want string) {
 	got, ok := value.AsString()
 	if !ok || got != want {
 		t.Fatalf("row value %q = (%q, %v), want %q", alias, got, ok, want)
+	}
+}
+
+func assertQueryRowIntValue(t testing.TB, row QueryRow, alias string, want int64) {
+	t.Helper()
+	value, ok := row.Value(alias)
+	if !ok {
+		t.Fatalf("row value %q missing", alias)
+	}
+	got, ok := value.AsInt64()
+	if !ok || got != want {
+		t.Fatalf("row value %q = (%d, %v), want %d", alias, got, ok, want)
+	}
+}
+
+func assertQueryAggregateGroupRow(t testing.TB, rows []QueryRow, groupID string, count, total int64) {
+	t.Helper()
+	for _, row := range rows {
+		value, ok := row.Value("group_id")
+		if !ok {
+			t.Fatalf("row value group_id missing")
+		}
+		gotGroup, ok := value.AsString()
+		if !ok {
+			t.Fatalf("row group_id kind = %q, want string", value.Kind())
+		}
+		if gotGroup != groupID {
+			continue
+		}
+		assertQueryRowIntValue(t, row, "count", count)
+		assertQueryRowIntValue(t, row, "total", total)
+		return
+	}
+	t.Fatalf("missing aggregate group row %q in %#v", groupID, rows)
+}
+
+func assertQueryRowListValue(t testing.TB, row QueryRow, alias string, want []Value) {
+	t.Helper()
+	value, ok := row.Value(alias)
+	if !ok {
+		t.Fatalf("row value %q missing", alias)
+	}
+	if value.Kind() != ValueList {
+		t.Fatalf("row value %q kind = %q, want list", alias, value.Kind())
+	}
+	got := value.data.([]Value)
+	if len(got) != len(want) {
+		t.Fatalf("row value %q length = %d, want %d: %#v", alias, len(got), len(want), got)
+	}
+	for i := range want {
+		if !got[i].Equal(want[i]) {
+			t.Fatalf("row value %q[%d] = %v, want %v", alias, i, got[i], want[i])
+		}
 	}
 }

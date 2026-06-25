@@ -359,8 +359,8 @@ func TestQueryGraphBranchPlanningIRLowersTriggerAndParameters(t *testing.T) {
 	}
 }
 
-func TestQueryGraphBranchPlanningIRRejectsAggregates(t *testing.T) {
-	_, ok := newQueryGraphBranchPlanningIR("aggregate-query", 0, []normalizedRuleCondition{{
+func TestQueryGraphBranchPlanningIRAcceptsAggregatesAsBarriers(t *testing.T) {
+	ir, ok := newQueryGraphBranchPlanningIR("aggregate-query", 0, []normalizedRuleCondition{{
 		isAggregate: true,
 		aggregate: Accumulate(Match{
 			Binding: "person",
@@ -368,8 +368,16 @@ func TestQueryGraphBranchPlanningIRRejectsAggregates(t *testing.T) {
 		}, Count().As("count")),
 		visible: true,
 	}}, nil)
-	if ok {
-		t.Fatal("query graph branch planning IR accepted aggregate branch")
+	if !ok {
+		t.Fatal("query graph branch planning IR rejected aggregate branch")
+	}
+	if got, want := len(ir.nodes), 2; got != want {
+		t.Fatalf("node count = %d, want %d", got, want)
+	}
+	assertBranchPlanningNode(t, ir.nodes[1], []string{"count"}, nil, false, branchPlanningBarrierAggregate)
+	conditions := ir.normalizedConditions()
+	if !conditions[1].isAggregate {
+		t.Fatal("normalized query branch lost aggregate condition")
 	}
 }
 

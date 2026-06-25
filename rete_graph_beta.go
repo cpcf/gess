@@ -5269,6 +5269,9 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 			return nil, true, err
 		}
 	}
+	if err := m.queryFlushAggregateBuckets(&collector); err != nil {
+		return nil, true, err
+	}
 	return collector.rows, true, nil
 }
 
@@ -5305,6 +5308,7 @@ type reteGraphQueryCollector struct {
 	rowValues  []Value
 	rowOwner   *queryRowOwner
 	valueRows  bool
+	aggregates map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket
 }
 
 func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, collector *reteGraphQueryCollector) error {
@@ -5375,6 +5379,30 @@ func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef,
 			return fmt.Errorf("%w: malformed query beta side", ErrQueryExecution)
 		}
 	}
+	for _, aggregateID := range m.graph.aggregateOuters[source] {
+		entry := sourceEntry
+		if entry.conditionID == "" {
+			return fmt.Errorf("%w: malformed query aggregate outer", ErrQueryExecution)
+		}
+		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
+		if token.isZero() {
+			return fmt.Errorf("%w: failed to create query aggregate outer token", ErrQueryExecution)
+		}
+		m.queryOpenAggregateBucket(aggregateID, token, collector)
+	}
+	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+		entry := sourceEntry
+		if entry.conditionID == "" {
+			return fmt.Errorf("%w: malformed query aggregate input", ErrQueryExecution)
+		}
+		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
+		if token.isZero() {
+			return fmt.Errorf("%w: failed to create query aggregate input token", ErrQueryExecution)
+		}
+		if err := m.queryInsertAggregateToken(aggregateID, token, collector); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -5399,6 +5427,14 @@ func (m *reteGraphBetaMemory) queryPropagateFromStage(source reteGraphStageRef, 
 			return fmt.Errorf("%w: malformed query beta successor", ErrQueryExecution)
 		}
 		if err := m.queryProbeBetaInput(successor.betaNodeID, successor.side, token, node.entry, collector); err != nil {
+			return err
+		}
+	}
+	for _, aggregateID := range m.graph.aggregateOuters[source] {
+		m.queryOpenAggregateBucket(aggregateID, token, collector)
+	}
+	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+		if err := m.queryInsertAggregateToken(aggregateID, token, collector); err != nil {
 			return err
 		}
 	}
@@ -5433,6 +5469,135 @@ func queryAlphaTokenRef(arena *tokenArena, entry bindingTupleEntry, match condit
 		}
 	}
 	return token
+}
+
+func (m *reteGraphBetaMemory) queryOpenAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef, collector *reteGraphQueryCollector) {
+	if m == nil || collector == nil || parent.isZero() {
+		return
+	}
+	collector.queryAggregateBucket(id, parent)
+}
+
+func (m *reteGraphBetaMemory) queryInsertAggregateToken(id reteGraphAggregateNodeID, token tokenRef, collector *reteGraphQueryCollector) error {
+	if m == nil || collector == nil || token.isZero() {
+		return nil
+	}
+	node := m.graph.aggregateNode(id)
+	if node == nil {
+		return fmt.Errorf("%w: malformed query aggregate node", ErrQueryExecution)
+	}
+	bucket := collector.queryAggregateBucket(id, m.aggregateParentToken(node, token))
+	if bucket == nil {
+		return fmt.Errorf("%w: malformed query aggregate bucket", ErrQueryExecution)
+	}
+	if !aggregateSpecsNeedInputValues(node.specs) {
+		bucket.addCountOnlyMember(token)
+		return nil
+	}
+	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
+	if !ok {
+		return fmt.Errorf("%w: malformed query aggregate input token", ErrQueryExecution)
+	}
+	member, ok := m.aggregateMember(node, token, match)
+	if !ok {
+		return fmt.Errorf("%w: failed to evaluate query aggregate input", ErrQueryExecution)
+	}
+	memberKey := tokenRefKey(token)
+	if existing, ok := bucket.members[memberKey]; ok {
+		bucket.removeMember(node, existing)
+	}
+	if bucket.members == nil {
+		bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
+	}
+	bucket.members[memberKey] = member
+	if err := bucket.addMember(node, member); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *reteGraphQueryCollector) queryAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef) *reteGraphAggregateBucket {
+	if c == nil {
+		return nil
+	}
+	if c.aggregates == nil {
+		c.aggregates = make(map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket)
+	}
+	buckets := c.aggregates[id]
+	if buckets == nil {
+		buckets = make(map[graphTokenIdentityKey]*reteGraphAggregateBucket)
+		c.aggregates[id] = buckets
+	}
+	key := tokenRefKey(parent)
+	bucket := buckets[key]
+	if bucket != nil {
+		return bucket
+	}
+	bucket = &reteGraphAggregateBucket{parent: parent}
+	buckets[key] = bucket
+	return bucket
+}
+
+func (m *reteGraphBetaMemory) queryFlushAggregateBuckets(collector *reteGraphQueryCollector) error {
+	if m == nil || collector == nil || len(collector.aggregates) == 0 {
+		return nil
+	}
+	aggregateIDs := make([]reteGraphAggregateNodeID, 0, len(collector.aggregates))
+	for id := range collector.aggregates {
+		aggregateIDs = append(aggregateIDs, id)
+	}
+	slices.Sort(aggregateIDs)
+	for _, aggregateID := range aggregateIDs {
+		node := m.graph.aggregateNode(aggregateID)
+		if node == nil {
+			return fmt.Errorf("%w: malformed query aggregate node", ErrQueryExecution)
+		}
+		buckets := collector.aggregates[aggregateID]
+		keys := make([]graphTokenIdentityKey, 0, len(buckets))
+		for key := range buckets {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].generation != keys[j].generation {
+				return keys[i].generation < keys[j].generation
+			}
+			if keys[i].size != keys[j].size {
+				return keys[i].size < keys[j].size
+			}
+			return keys[i].identityState < keys[j].identityState
+		})
+		for _, key := range keys {
+			bucket := buckets[key]
+			values, ok := bucket.results(node)
+			if !ok || len(values) != len(node.entries) {
+				continue
+			}
+			token := bucket.parent
+			generation := m.aggregateGeneration()
+			if !token.isZero() {
+				generation = token.generation()
+			}
+			for i, value := range values {
+				entry := node.entries[i]
+				entry.value = value
+				entry.hasValue = true
+				match := conditionMatch{
+					conditionID: node.conditionID,
+					bindingSlot: node.bindingSlot + i,
+					value:       value,
+					hasValue:    true,
+				}
+				token = collector.tokenArena.add(token, entry, match, 0, generation)
+				if token.isZero() {
+					return fmt.Errorf("%w: failed to create query aggregate output token", ErrQueryExecution)
+				}
+			}
+			if err := m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}, token, collector); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, entry bindingTupleEntry, collector *reteGraphQueryCollector) error {
