@@ -3800,6 +3800,13 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 		return reteAgendaDelta{}, nil
 	}
 	defer m.pushEvalContext(ctx)()
+	if m.canSkipUnroutedModifyPropagation(event) {
+		m.upsertFactSource(event.after)
+		if event.counters != nil {
+			event.counters.recordModifyFastPathSkip()
+		}
+		return reteAgendaDelta{supported: true}, nil
+	}
 	if m.canSkipUnmatchedModifyPropagation(event) {
 		m.upsertFactSource(event.after)
 		if event.counters != nil {
@@ -3840,20 +3847,7 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, event reteGraphPro
 	if event.counters != nil {
 		event.counters.recordModifyFastPathFallback()
 	}
-	removed, err := m.removeFact(ctx, event.before, event.counters)
-	if err != nil {
-		return removed, err
-	}
-	added, err := m.insertFact(ctx, event.after, nil)
-	if err != nil {
-		return added, err
-	}
-	addedTokens, removedTokens := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
-	return reteAgendaDelta{
-		supported: removed.supported && added.supported,
-		added:     addedTokens,
-		removed:   removedTokens,
-	}, nil
+	return reteAgendaDelta{}, fmt.Errorf("%w: modify event is not supported by graph-native propagation", ErrUnsupportedRuntime)
 }
 
 func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool, error) {
@@ -3901,6 +3895,23 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		added:     addedTokens,
 		removed:   removedTokens,
 	}, true, nil
+}
+
+func (m *reteGraphBetaMemory) canSkipUnroutedModifyPropagation(event reteGraphPropagationEvent) bool {
+	if m == nil || m.graph == nil {
+		return false
+	}
+	before, after := event.before, event.after
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || event.templateChanged || event.nameChanged {
+		return false
+	}
+	if len(m.matchedAlphaRouteIDsForFact(before.ID())) != 0 {
+		return false
+	}
+	if len(m.snapshotAlphaRouteIDsForFact(before)) != 0 {
+		return false
+	}
+	return len(m.snapshotAlphaRouteIDsForFact(after)) == 0
 }
 
 func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(event reteGraphPropagationEvent) bool {

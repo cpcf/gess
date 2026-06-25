@@ -239,6 +239,7 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 		t.Fatalf("Assert baseline: %v", err)
 	}
 
+	session.attachPropagationCounters()
 	result, err := session.Modify(context.Background(), baseline.Fact.ID(), FactPatch{
 		Set: mustFields(t, map[string]any{"count": 2}),
 	})
@@ -295,6 +296,14 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 	}
 	if events[1].Delta == nil || events[1].Delta.Recency != result.Fact.Recency() {
 		t.Fatalf("event delta recency missing or mismatch")
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 
@@ -748,6 +757,7 @@ func TestSessionModifyDuplicateIndexUpdatesOnRealKeyChange(t *testing.T) {
 		t.Fatal("second duplicate key missing before modify")
 	}
 
+	session.attachPropagationCounters()
 	result, err := session.Modify(context.Background(), second.Fact.ID(), FactPatch{
 		Set: mustFields(t, map[string]any{"id": "evt-3"}),
 	})
@@ -767,6 +777,14 @@ func TestSessionModifyDuplicateIndexUpdatesOnRealKeyChange(t *testing.T) {
 			t.Fatal("updated duplicate key missing after key change")
 		}
 		t.Fatalf("updated duplicate key maps %q, want %q", mapped, second.Fact.ID())
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 
