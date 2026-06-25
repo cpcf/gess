@@ -83,6 +83,49 @@ func TestGraphRuleJoinStrengthPlanningReducesIntermediateTokens(t *testing.T) {
 	}
 }
 
+func TestGraphBetaArenaSkipsCopiedFactSpans(t *testing.T) {
+	const (
+		roots         = 4
+		eventsPerRoot = 8
+	)
+	revision, templates := mustCompileJoinStrengthBenchmark(t)
+	facts := joinStrengthFactSnapshots(t, revision, templates, roots, eventsPerRoot)
+	memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemory: %v", err)
+	}
+	if memory == nil {
+		t.Fatal("newReteGraphBetaMemory returned nil")
+	}
+	if err := memory.resetFacts(context.Background(), nil); err != nil {
+		t.Fatalf("resetFacts: %v", err)
+	}
+	for _, fact := range facts {
+		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+			t.Fatalf("insertFact: %v", err)
+		}
+	}
+	deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unavailable")
+	}
+	if got, want := len(deltas), roots*eventsPerRoot; got != want {
+		t.Fatalf("terminal deltas = %d, want %d", got, want)
+	}
+	if memory.arena == nil || memory.arena.rowCount() == 0 {
+		t.Fatalf("graph beta arena row count = %d, want retained token rows", memory.arena.rowCount())
+	}
+	if got := len(memory.arena.factIDs); got != 0 {
+		t.Fatalf("graph beta arena fact id spans = %d, want 0", got)
+	}
+	if got := len(memory.arena.factVersions); got != 0 {
+		t.Fatalf("graph beta arena fact version spans = %d, want 0", got)
+	}
+}
+
 func mustCompileJoinStrengthBenchmark(t testing.TB) (*Ruleset, joinStrengthBenchmarkTemplates) {
 	t.Helper()
 	workspace := NewWorkspace()

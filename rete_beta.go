@@ -44,9 +44,14 @@ type tokenArena struct {
 	factVersions   []FactVersion
 	count          int
 	nextGeneration uint64
+	keepFactSpans  bool
 }
 
 func newTokenArena() *tokenArena {
+	return &tokenArena{nextGeneration: 1, keepFactSpans: true}
+}
+
+func newTokenArenaWithoutFactSpans() *tokenArena {
 	return &tokenArena{nextGeneration: 1}
 }
 
@@ -57,6 +62,9 @@ func (a *tokenArena) reserve(rowCapacity int) {
 	chunkCount := (rowCapacity + reteBetaMatchTokenChunkSize - 1) / reteBetaMatchTokenChunkSize
 	for len(a.chunks) < chunkCount {
 		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
+	}
+	if !a.keepFactSpans {
+		return
 	}
 	spanCapacity := rowCapacity
 	if spanCapacity > cap(a.factIDs) {
@@ -165,7 +173,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 }
 
 func (a *tokenArena) appendFactSpan(parent *tokenRow, match conditionMatch) int {
-	if a == nil {
+	if a == nil || !a.keepFactSpans {
 		return -1
 	}
 	start := len(a.factIDs)

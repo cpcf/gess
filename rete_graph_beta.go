@@ -524,7 +524,7 @@ func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteG
 		nodes:               make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
 		aggregates:          make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
 		terminals:           make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
-		arena:               newTokenArena(),
+		arena:               newTokenArenaWithoutFactSpans(),
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
 	}
 	memory.arena.reserve(arenaCapacity)
@@ -1374,7 +1374,7 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, len(facts)))
 	}
 	if m.arena == nil {
-		m.arena = newTokenArena()
+		m.arena = newTokenArenaWithoutFactSpans()
 	} else {
 		m.arena.reset()
 	}
@@ -5509,7 +5509,7 @@ func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEnt
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArena()
+		m.arena = newTokenArenaWithoutFactSpans()
 	}
 	return m.arena.add(parent, entry, match, recency, generation)
 }
@@ -5522,7 +5522,7 @@ func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propa
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArena()
+		m.arena = newTokenArenaWithoutFactSpans()
 	}
 	return m.arena.addSeed(generation)
 }
