@@ -649,6 +649,7 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 	if err != nil {
 		t.Fatalf("NewSession(terminal): %v", err)
 	}
+	terminalSession.attachPropagationCounters()
 	snapshotSession, err := NewSession(revision, WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession(snapshot): %v", err)
@@ -674,6 +675,20 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 	if !reflect.DeepEqual(terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations()) {
 		t.Fatalf("terminal-token pending activations differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations())
 	}
+
+	counters := terminalSession.propagationCounterSnapshot().Totals
+	if got, want := counters.WholeTerminalScans, 1; got != want {
+		t.Fatalf("whole terminal scans = %d, want %d", got, want)
+	}
+	if got, want := counters.InitialWholeTerminalScans, 1; got != want {
+		t.Fatalf("initial whole terminal scans = %d, want %d", got, want)
+	}
+	if got := counters.SteadyStateWholeTerminalScans; got != 0 {
+		t.Fatalf("steady-state whole terminal scans = %d, want 0", got)
+	}
+	if got := counters.FullAgendaReconciles; got != 0 {
+		t.Fatalf("full agenda reconciles = %d, want 0 for terminal token reconcile", got)
+	}
 }
 
 func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTerminalDeltasUnavailable(t *testing.T) {
@@ -686,6 +701,7 @@ func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTe
 	if session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatal("session runtime is not graph beta-backed")
 	}
+	session.attachPropagationCounters()
 	session.rete.plan.incrementalAgendaSupported = false
 
 	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
@@ -705,6 +721,60 @@ func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTe
 	}
 	if !session.agendaReady || session.agendaDirty {
 		t.Fatalf("agenda state = ready %t dirty %t, want ready and clean", session.agendaReady, session.agendaDirty)
+	}
+
+	counters := session.propagationCounterSnapshot().Totals
+	if got, want := counters.FullAgendaReconciles, 1; got != want {
+		t.Fatalf("full agenda reconciles = %d, want %d", got, want)
+	}
+	if got, want := counters.InitialAgendaReconciles, 1; got != want {
+		t.Fatalf("initial agenda reconciles = %d, want %d", got, want)
+	}
+	if got := counters.SteadyStateAgendaReconciles; got != 0 {
+		t.Fatalf("steady-state agenda reconciles = %d, want 0", got)
+	}
+	if got, want := counters.OracleStyleMatchRequests, 1; got != want {
+		t.Fatalf("oracle-style match requests = %d, want %d", got, want)
+	}
+	if got, want := counters.InitialOracleStyleMatchRequests, 1; got != want {
+		t.Fatalf("initial oracle-style match requests = %d, want %d", got, want)
+	}
+	if got, want := counters.WholeTerminalScans, 1; got != want {
+		t.Fatalf("whole terminal scans = %d, want %d", got, want)
+	}
+}
+
+func TestPropagationPurityDiagnosticsRecordUnsupportedDeltaAndResetRebuild(t *testing.T) {
+	ctx := context.Background()
+	revision := mustCompileLoanUnderwritingRuleset(t, nil)
+	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	if _, ok, err := session.applyReteAgendaDelta(ctx, reteAgendaDelta{}); err != nil {
+		t.Fatalf("applyReteAgendaDelta unsupported: %v", err)
+	} else if ok {
+		t.Fatal("applyReteAgendaDelta unsupported returned ok, want unavailable")
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if got, want := counters.UnsupportedAgendaDeltas, 1; got != want {
+		t.Fatalf("unsupported agenda deltas = %d, want %d", got, want)
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	counters = session.propagationCounterSnapshot().Totals
+	if got, want := counters.GraphRebuilds, 1; got != want {
+		t.Fatalf("graph rebuilds = %d, want %d", got, want)
+	}
+	if got, want := counters.InitialGraphRebuilds, 1; got != want {
+		t.Fatalf("initial graph rebuilds = %d, want %d", got, want)
+	}
+	if got := counters.SteadyStateGraphRebuilds; got != 0 {
+		t.Fatalf("steady-state graph rebuilds = %d, want 0", got)
 	}
 }
 

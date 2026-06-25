@@ -298,6 +298,13 @@ func (s *Session) syncPropagationCounters() {
 	s.propagationCounters.setRuntimeDiagnostics(path, unsupportedReasons)
 }
 
+func (s *Session) propagationCounterPhase() propagationCounterPhase {
+	if s != nil && s.agendaReady && !s.agendaDirty {
+		return propagationCounterPhaseSteadyState
+	}
+	return propagationCounterPhaseInitial
+}
+
 func (s *Session) removeStoredFact(id FactID) {
 	if s == nil || len(s.facts) == 0 || s.factsByID == nil {
 		return
@@ -1601,6 +1608,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordGraphRebuild(propagationCounterPhaseInitial)
+	}
 
 	oldGeneration := s.generation
 	s.agendaReady = false
@@ -1710,9 +1720,13 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
+	phase := s.propagationCounterPhase()
 	if err := rete.resetGraphBeta(ctx, snapshot.facts); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordGraphRebuild(phase)
 	}
 
 	tokens, ok, err := rete.currentTerminalTokenDeltas(ctx)
@@ -1721,7 +1735,13 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	var results []ruleMatchResult
+	if s.propagationCounters != nil && ok {
+		s.propagationCounters.recordWholeTerminalScan(phase)
+	}
 	if !ok {
+		if s.propagationCounters != nil {
+			s.propagationCounters.recordOracleStyleMatchRequest(phase)
+		}
 		results, err = rete.match(ctx, snapshot)
 		if err != nil {
 			restoreApplyRulesetState()
@@ -1758,6 +1778,9 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	changes, err := s.agenda.reconcile(context.Background(), next, results)
 	if err != nil {
 		return ApplyRulesetResult{}, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordFullAgendaReconcile(phase)
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
@@ -1798,9 +1821,17 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	if s.rete == nil {
 		return nil, ErrUnsupportedRuntime
 	}
+	phase := s.propagationCounterPhase()
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordOracleStyleMatchRequest(phase)
+	}
 	results, err := s.rete.match(ctx, source)
 	if err != nil {
 		return nil, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordWholeTerminalScan(phase)
+		s.propagationCounters.recordFullAgendaReconcile(phase)
 	}
 	changes, err := s.agenda.reconcile(ctx, s.revision, results)
 	if err != nil {
@@ -1853,7 +1884,11 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if err != nil {
 		return nil, true, err
 	}
+	phase := s.propagationCounterPhase()
 	if ok {
+		if s.propagationCounters != nil {
+			s.propagationCounters.recordWholeTerminalScan(phase)
+		}
 		var changes []agendaChange
 		if collectChanges {
 			var err error
@@ -1875,6 +1910,11 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	results, ok, err := s.rete.matchWithoutSnapshot(ctx, s.generation)
 	if err != nil || !ok {
 		return nil, ok, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordOracleStyleMatchRequest(phase)
+		s.propagationCounters.recordWholeTerminalScan(phase)
+		s.propagationCounters.recordFullAgendaReconcile(phase)
 	}
 	changes, err := s.agenda.reconcile(ctx, s.revision, results)
 	if err != nil {
@@ -1919,6 +1959,9 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 		return nil, true, err
 	}
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
+		if s.propagationCounters != nil && !delta.supported {
+			s.propagationCounters.recordUnsupportedAgendaDelta()
+		}
 		return nil, false, nil
 	}
 	if len(delta.updated) != 0 {
@@ -1960,6 +2003,9 @@ func (s *Session) rebuildReteRuntime(ctx context.Context, revision *Ruleset, fac
 		return err
 	}
 	s.rete = rete
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordGraphRebuild(s.propagationCounterPhase())
+	}
 	s.syncPropagationCounters()
 	return nil
 }
@@ -4055,6 +4101,9 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 		return
 	}
 	if !delta.supported || s.agendaDirty {
+		if s.propagationCounters != nil && !delta.supported {
+			s.propagationCounters.recordUnsupportedAgendaDelta()
+		}
 		s.markAgendaDirty()
 		return
 	}

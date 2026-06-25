@@ -34,55 +34,68 @@ func propagationOriginFromMutation(origin mutationOrigin) propagationOrigin {
 }
 
 type propagationCounterTotals struct {
-	Asserts                     int
-	RHSAsserts                  int
-	RuleMemoriesVisited         int
-	ConditionsTested            int
-	AlphaMatchesAdded           int
-	AlphaIndexProbes            int
-	AlphaIndexHits              int
-	AlphaIndexMisses            int
-	AlphaIndexFallbackScans     int
-	ConditionPlansTested        int
-	ConditionMatchesAdded       int
-	PrefixesAdded               int
-	BetaSuccessorsReached       int
-	TokensCreated               int
-	TerminalDeltasEmitted       int
-	AgendaDeltaApplications     int
-	AgendaSorts                 int
-	ActivationsStored           int
-	RemovalIndexLookups         int
-	RemovalRowsTouched          int
-	RemovalRowsRemoved          int
-	TerminalDeltasRemoved       int
-	NegativePropagationEvents   int
-	NegativeRowsRemoved         int
-	NegativeTerminalRowsRemoved int
-	TerminalRowsInserted        int
-	TerminalRowsDeduped         int
-	TerminalRowsRemoved         int
-	BetaLeftInputInserts        int
-	BetaRightInputInserts       int
-	BetaBucketProbes            int
-	BetaJoinIndexHits           int
-	BetaJoinIndexMisses         int
-	BetaBucketDepthTotal        int
-	BetaBucketDepthMax          int
-	BetaCandidateRowsScanned    int
-	BetaResidualTests           int
-	BetaResidualFailures        int
-	BetaJoinedTokensProduced    int
-	ExpressionPredicateTests    int
-	ExpressionPredicateFailures int
-	ExpressionPredicateErrors   int
-	FunctionCalls               int
-	FunctionErrors              int
-	FunctionCancellations       int
-	NestedPathEvaluations       int
-	NestedPathMisses            int
-	ModifyFastPathSkips         int
-	ModifyFastPathFallbacks     int
+	Asserts                             int
+	RHSAsserts                          int
+	RuleMemoriesVisited                 int
+	ConditionsTested                    int
+	AlphaMatchesAdded                   int
+	AlphaIndexProbes                    int
+	AlphaIndexHits                      int
+	AlphaIndexMisses                    int
+	AlphaIndexFallbackScans             int
+	ConditionPlansTested                int
+	ConditionMatchesAdded               int
+	PrefixesAdded                       int
+	BetaSuccessorsReached               int
+	TokensCreated                       int
+	TerminalDeltasEmitted               int
+	AgendaDeltaApplications             int
+	AgendaSorts                         int
+	ActivationsStored                   int
+	RemovalIndexLookups                 int
+	RemovalRowsTouched                  int
+	RemovalRowsRemoved                  int
+	TerminalDeltasRemoved               int
+	NegativePropagationEvents           int
+	NegativeRowsRemoved                 int
+	NegativeTerminalRowsRemoved         int
+	TerminalRowsInserted                int
+	TerminalRowsDeduped                 int
+	TerminalRowsRemoved                 int
+	BetaLeftInputInserts                int
+	BetaRightInputInserts               int
+	BetaBucketProbes                    int
+	BetaJoinIndexHits                   int
+	BetaJoinIndexMisses                 int
+	BetaBucketDepthTotal                int
+	BetaBucketDepthMax                  int
+	BetaCandidateRowsScanned            int
+	BetaResidualTests                   int
+	BetaResidualFailures                int
+	BetaJoinedTokensProduced            int
+	ExpressionPredicateTests            int
+	ExpressionPredicateFailures         int
+	ExpressionPredicateErrors           int
+	FunctionCalls                       int
+	FunctionErrors                      int
+	FunctionCancellations               int
+	NestedPathEvaluations               int
+	NestedPathMisses                    int
+	ModifyFastPathSkips                 int
+	ModifyFastPathFallbacks             int
+	FullAgendaReconciles                int
+	InitialAgendaReconciles             int
+	SteadyStateAgendaReconciles         int
+	WholeTerminalScans                  int
+	InitialWholeTerminalScans           int
+	SteadyStateWholeTerminalScans       int
+	GraphRebuilds                       int
+	InitialGraphRebuilds                int
+	SteadyStateGraphRebuilds            int
+	UnsupportedAgendaDeltas             int
+	OracleStyleMatchRequests            int
+	InitialOracleStyleMatchRequests     int
+	SteadyStateOracleStyleMatchRequests int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -138,7 +151,27 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.NestedPathMisses += other.NestedPathMisses
 	t.ModifyFastPathSkips += other.ModifyFastPathSkips
 	t.ModifyFastPathFallbacks += other.ModifyFastPathFallbacks
+	t.FullAgendaReconciles += other.FullAgendaReconciles
+	t.InitialAgendaReconciles += other.InitialAgendaReconciles
+	t.SteadyStateAgendaReconciles += other.SteadyStateAgendaReconciles
+	t.WholeTerminalScans += other.WholeTerminalScans
+	t.InitialWholeTerminalScans += other.InitialWholeTerminalScans
+	t.SteadyStateWholeTerminalScans += other.SteadyStateWholeTerminalScans
+	t.GraphRebuilds += other.GraphRebuilds
+	t.InitialGraphRebuilds += other.InitialGraphRebuilds
+	t.SteadyStateGraphRebuilds += other.SteadyStateGraphRebuilds
+	t.UnsupportedAgendaDeltas += other.UnsupportedAgendaDeltas
+	t.OracleStyleMatchRequests += other.OracleStyleMatchRequests
+	t.InitialOracleStyleMatchRequests += other.InitialOracleStyleMatchRequests
+	t.SteadyStateOracleStyleMatchRequests += other.SteadyStateOracleStyleMatchRequests
 }
+
+type propagationCounterPhase uint8
+
+const (
+	propagationCounterPhaseInitial propagationCounterPhase = iota
+	propagationCounterPhaseSteadyState
+)
 
 type propagationCounterKey struct {
 	templateKey TemplateKey
@@ -588,6 +621,65 @@ func (l *propagationCounterLedger) recordModifyFastPathFallback() {
 	l.totals.ModifyFastPathFallbacks++
 }
 
+func (l *propagationCounterLedger) recordFullAgendaReconcile(phase propagationCounterPhase) {
+	if l == nil {
+		return
+	}
+	l.totals.FullAgendaReconciles++
+	switch phase {
+	case propagationCounterPhaseSteadyState:
+		l.totals.SteadyStateAgendaReconciles++
+	default:
+		l.totals.InitialAgendaReconciles++
+	}
+}
+
+func (l *propagationCounterLedger) recordWholeTerminalScan(phase propagationCounterPhase) {
+	if l == nil {
+		return
+	}
+	l.totals.WholeTerminalScans++
+	switch phase {
+	case propagationCounterPhaseSteadyState:
+		l.totals.SteadyStateWholeTerminalScans++
+	default:
+		l.totals.InitialWholeTerminalScans++
+	}
+}
+
+func (l *propagationCounterLedger) recordGraphRebuild(phase propagationCounterPhase) {
+	if l == nil {
+		return
+	}
+	l.totals.GraphRebuilds++
+	switch phase {
+	case propagationCounterPhaseSteadyState:
+		l.totals.SteadyStateGraphRebuilds++
+	default:
+		l.totals.InitialGraphRebuilds++
+	}
+}
+
+func (l *propagationCounterLedger) recordUnsupportedAgendaDelta() {
+	if l == nil {
+		return
+	}
+	l.totals.UnsupportedAgendaDeltas++
+}
+
+func (l *propagationCounterLedger) recordOracleStyleMatchRequest(phase propagationCounterPhase) {
+	if l == nil {
+		return
+	}
+	l.totals.OracleStyleMatchRequests++
+	switch phase {
+	case propagationCounterPhaseSteadyState:
+		l.totals.SteadyStateOracleStyleMatchRequests++
+	default:
+		l.totals.InitialOracleStyleMatchRequests++
+	}
+}
+
 func (l *propagationCounterLedger) recordAlphaIndexProbe(hit bool) {
 	if l == nil {
 		return
@@ -875,6 +967,19 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-nested-path-misses", float64(s.Totals.NestedPathMisses))
 	report("propagation-modify-fast-path-skips", float64(s.Totals.ModifyFastPathSkips))
 	report("propagation-modify-fast-path-fallbacks", float64(s.Totals.ModifyFastPathFallbacks))
+	report("propagation-full-agenda-reconciles", float64(s.Totals.FullAgendaReconciles))
+	report("propagation-initial-agenda-reconciles", float64(s.Totals.InitialAgendaReconciles))
+	report("propagation-steady-state-agenda-reconciles", float64(s.Totals.SteadyStateAgendaReconciles))
+	report("propagation-whole-terminal-scans", float64(s.Totals.WholeTerminalScans))
+	report("propagation-initial-whole-terminal-scans", float64(s.Totals.InitialWholeTerminalScans))
+	report("propagation-steady-state-whole-terminal-scans", float64(s.Totals.SteadyStateWholeTerminalScans))
+	report("propagation-graph-rebuilds", float64(s.Totals.GraphRebuilds))
+	report("propagation-initial-graph-rebuilds", float64(s.Totals.InitialGraphRebuilds))
+	report("propagation-steady-state-graph-rebuilds", float64(s.Totals.SteadyStateGraphRebuilds))
+	report("propagation-unsupported-agenda-deltas", float64(s.Totals.UnsupportedAgendaDeltas))
+	report("propagation-oracle-style-match-requests", float64(s.Totals.OracleStyleMatchRequests))
+	report("propagation-initial-oracle-style-match-requests", float64(s.Totals.InitialOracleStyleMatchRequests))
+	report("propagation-steady-state-oracle-style-match-requests", float64(s.Totals.SteadyStateOracleStyleMatchRequests))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -922,7 +1027,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 }
 
 func (s propagationCounterSnapshot) runnerFields() []string {
-	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && s.Totals.AlphaIndexProbes == 0 && s.Totals.AlphaIndexFallbackScans == 0 && s.TerminalRowsRetained == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
+	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && s.Totals.AlphaIndexProbes == 0 && s.Totals.AlphaIndexFallbackScans == 0 && s.Totals.FullAgendaReconciles == 0 && s.Totals.WholeTerminalScans == 0 && s.Totals.GraphRebuilds == 0 && s.Totals.UnsupportedAgendaDeltas == 0 && s.Totals.OracleStyleMatchRequests == 0 && s.TerminalRowsRetained == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
 		return nil
 	}
 	fields := []string{
@@ -972,6 +1077,19 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
 		"propagation-modify-fast-path-skips=" + strconv.Itoa(s.Totals.ModifyFastPathSkips),
 		"propagation-modify-fast-path-fallbacks=" + strconv.Itoa(s.Totals.ModifyFastPathFallbacks),
+		"propagation-full-agenda-reconciles=" + strconv.Itoa(s.Totals.FullAgendaReconciles),
+		"propagation-initial-agenda-reconciles=" + strconv.Itoa(s.Totals.InitialAgendaReconciles),
+		"propagation-steady-state-agenda-reconciles=" + strconv.Itoa(s.Totals.SteadyStateAgendaReconciles),
+		"propagation-whole-terminal-scans=" + strconv.Itoa(s.Totals.WholeTerminalScans),
+		"propagation-initial-whole-terminal-scans=" + strconv.Itoa(s.Totals.InitialWholeTerminalScans),
+		"propagation-steady-state-whole-terminal-scans=" + strconv.Itoa(s.Totals.SteadyStateWholeTerminalScans),
+		"propagation-graph-rebuilds=" + strconv.Itoa(s.Totals.GraphRebuilds),
+		"propagation-initial-graph-rebuilds=" + strconv.Itoa(s.Totals.InitialGraphRebuilds),
+		"propagation-steady-state-graph-rebuilds=" + strconv.Itoa(s.Totals.SteadyStateGraphRebuilds),
+		"propagation-unsupported-agenda-deltas=" + strconv.Itoa(s.Totals.UnsupportedAgendaDeltas),
+		"propagation-oracle-style-match-requests=" + strconv.Itoa(s.Totals.OracleStyleMatchRequests),
+		"propagation-initial-oracle-style-match-requests=" + strconv.Itoa(s.Totals.InitialOracleStyleMatchRequests),
+		"propagation-steady-state-oracle-style-match-requests=" + strconv.Itoa(s.Totals.SteadyStateOracleStyleMatchRequests),
 		"propagation-removal-index-lookups=" + strconv.Itoa(s.Totals.RemovalIndexLookups),
 		"propagation-removal-rows-touched=" + strconv.Itoa(s.Totals.RemovalRowsTouched),
 		"propagation-removal-rows-removed=" + strconv.Itoa(s.Totals.RemovalRowsRemoved),
