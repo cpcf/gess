@@ -97,20 +97,30 @@ func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
 		}
 	}
 
-	var mixedJoin reteGraphBetaNodeInspection
+	var residualFilter reteGraphBetaNodeInspection
 	for _, beta := range plan.BetaNodes {
 		if beta.MemoryKind != reteGraphMemoryBetaTokenHash {
 			t.Fatalf("beta %d memory kind = %q, want %q", beta.ID, beta.MemoryKind, reteGraphMemoryBetaTokenHash)
 		}
-		if len(beta.HashJoins) == 1 && len(beta.ResidualJoins) == 1 {
-			mixedJoin = beta
+		if beta.Kind == reteGraphBetaNodeResidualFilter && len(beta.ResidualJoins) == 1 {
+			residualFilter = beta
 		}
 	}
-	if mixedJoin.ID == 0 {
-		t.Fatalf("missing beta node with one hash join and one residual join: %#v", plan.BetaNodes)
+	if residualFilter.ID == 0 {
+		t.Fatalf("missing residual filter node with one residual join: %#v", plan.BetaNodes)
+	}
+	mixedJoin := findPlanInspectionBetaNode(t, plan.BetaNodes, reteGraphBetaNodeID(residualFilter.Left.id))
+	if got, want := len(mixedJoin.HashJoins), 1; got != want {
+		t.Fatalf("mixed join hash joins = %d, want %d", got, want)
+	}
+	if got := len(mixedJoin.ResidualJoins); got != 0 {
+		t.Fatalf("mixed join residual joins = %d, want 0", got)
 	}
 	if got, want := mixedJoin.TokenWidth, 2; got != want {
 		t.Fatalf("mixed join token width = %d, want %d", got, want)
+	}
+	if got, want := residualFilter.TokenWidth, 2; got != want {
+		t.Fatalf("residual filter token width = %d, want %d", got, want)
 	}
 
 	ruleBranch := findPlanInspectionBranch(t, plan.Branches, reteGraphBranchOwnerRule, "eligible-person", "")
@@ -533,50 +543,73 @@ func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 
 	revision := mustCompileWorkspace(t, workspace)
 	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
+	if got, want := len(summary.BetaNodes), 2; got != want {
 		t.Fatalf("beta nodes = %d, want %d", got, want)
 	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.joins), 2; got != want {
+	joinNode := summary.BetaNodes[0]
+	residualNode := summary.BetaNodes[1]
+	if joinNode.kind != reteGraphBetaNodeJoin {
+		t.Fatalf("first beta node kind = %v, want join", joinNode.kind)
+	}
+	if residualNode.kind != reteGraphBetaNodeResidualFilter {
+		t.Fatalf("second beta node kind = %v, want residual filter", residualNode.kind)
+	}
+	if residualNode.left != (reteGraphStageRef{kind: reteGraphStageBeta, id: int(joinNode.id)}) {
+		t.Fatalf("residual filter input = %#v, want join node %d", residualNode.left, joinNode.id)
+	}
+	if got, want := len(joinNode.joins), 1; got != want {
 		t.Fatalf("joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.hashJoins), 1; got != want {
+	if got, want := len(joinNode.hashJoins), 1; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.residualJoins), 1; got != want {
+	if got := len(joinNode.residualJoins); got != 0 {
+		t.Fatalf("join residual joins = %d, want 0", got)
+	}
+	if got, want := len(residualNode.residualJoins), 1; got != want {
 		t.Fatalf("residual joins = %d, want %d", got, want)
 	}
-	if node.hashJoins[0].operator != FieldConstraintEqual {
-		t.Fatalf("hash join operator = %v, want %v", node.hashJoins[0].operator, FieldConstraintEqual)
+	if joinNode.hashJoins[0].operator != FieldConstraintEqual {
+		t.Fatalf("hash join operator = %v, want %v", joinNode.hashJoins[0].operator, FieldConstraintEqual)
 	}
-	if node.residualJoins[0].operator != FieldConstraintGreaterThan {
-		t.Fatalf("residual join operator = %v, want %v", node.residualJoins[0].operator, FieldConstraintGreaterThan)
+	if residualNode.residualJoins[0].operator != FieldConstraintGreaterThan {
+		t.Fatalf("residual join operator = %v, want %v", residualNode.residualJoins[0].operator, FieldConstraintGreaterThan)
 	}
 }
 
 func TestReteGraphPlansCompoundEqualityKeysAndResidualJoins(t *testing.T) {
 	revision, thresholdKey, candidateKey := mustCompoundEqualityResidualJoinBenchmarkRuleset(t)
 	summary := revision.reteGraphDebugSummary()
-	if got, want := len(summary.BetaNodes), 1; got != want {
+	if got, want := len(summary.BetaNodes), 2; got != want {
 		t.Fatalf("beta nodes = %d, want %d", got, want)
 	}
-	node := summary.BetaNodes[0]
-	if got, want := len(node.hashJoins), 2; got != want {
+	joinNode := summary.BetaNodes[0]
+	residualNode := summary.BetaNodes[1]
+	if joinNode.kind != reteGraphBetaNodeJoin {
+		t.Fatalf("first beta node kind = %v, want join", joinNode.kind)
+	}
+	if residualNode.kind != reteGraphBetaNodeResidualFilter {
+		t.Fatalf("second beta node kind = %v, want residual filter", residualNode.kind)
+	}
+	if got, want := len(joinNode.hashJoins), 2; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.residualJoins), 2; got != want {
+	if got := len(joinNode.residualJoins); got != 0 {
+		t.Fatalf("join residual joins = %d, want 0", got)
+	}
+	if got, want := len(residualNode.residualJoins), 2; got != want {
 		t.Fatalf("residual joins = %d, want %d", got, want)
 	}
-	if got, want := node.hashJoins[0].access.root, "group"; got != want {
+	if got, want := joinNode.hashJoins[0].access.root, "group"; got != want {
 		t.Fatalf("first hash join root = %q, want %q", got, want)
 	}
-	if got, want := node.hashJoins[1].access.root, "region"; got != want {
+	if got, want := joinNode.hashJoins[1].access.root, "region"; got != want {
 		t.Fatalf("second hash join root = %q, want %q", got, want)
 	}
-	if got, want := node.residualJoins[0].access.display(), `meta."id"`; got != want {
+	if got, want := residualNode.residualJoins[0].access.display(), `meta."id"`; got != want {
 		t.Fatalf("first residual join path = %q, want %q", got, want)
 	}
-	if got, want := node.residualJoins[1].operator, FieldConstraintGreaterThan; got != want {
+	if got, want := residualNode.residualJoins[1].operator, FieldConstraintGreaterThan; got != want {
 		t.Fatalf("second residual join operator = %v, want %v", got, want)
 	}
 
@@ -682,17 +715,28 @@ func TestReteGraphPlansMixedDeclaredAndExpressionEqualityHashKeys(t *testing.T) 
 	})
 
 	revision := mustCompileWorkspace(t, workspace)
-	node := singleGraphBetaNode(t, revision)
-	if got, want := len(node.hashJoins), 2; got != want {
+	summary := revision.reteGraphDebugSummary()
+	if got, want := len(summary.BetaNodes), 2; got != want {
+		t.Fatalf("beta nodes = %d, want %d", got, want)
+	}
+	joinNode := summary.BetaNodes[0]
+	residualNode := summary.BetaNodes[1]
+	if joinNode.kind != reteGraphBetaNodeJoin {
+		t.Fatalf("first beta node kind = %v, want join", joinNode.kind)
+	}
+	if residualNode.kind != reteGraphBetaNodeResidualFilter {
+		t.Fatalf("second beta node kind = %v, want residual filter", residualNode.kind)
+	}
+	if got, want := len(joinNode.hashJoins), 2; got != want {
 		t.Fatalf("hash joins = %d, want %d", got, want)
 	}
-	if got, want := len(node.residualJoins), 1; got != want {
+	if got, want := len(residualNode.residualJoins), 1; got != want {
 		t.Fatalf("residual joins = %d, want %d", got, want)
 	}
-	if got, want := node.residualJoins[0].operator, FieldConstraintGreaterThan; got != want {
+	if got, want := residualNode.residualJoins[0].operator, FieldConstraintGreaterThan; got != want {
 		t.Fatalf("residual join operator = %v, want %v", got, want)
 	}
-	if got, want := []string{node.hashJoins[0].access.root, node.hashJoins[1].access.root}, []string{"group", "region"}; !slices.Equal(got, want) {
+	if got, want := []string{joinNode.hashJoins[0].access.root, joinNode.hashJoins[1].access.root}, []string{"group", "region"}; !slices.Equal(got, want) {
 		t.Fatalf("hash join roots = %#v, want %#v", got, want)
 	}
 }
@@ -1547,4 +1591,16 @@ func graphBetaNodeWithHashJoinCount(tb testing.TB, revision *Ruleset, count int)
 	}
 	tb.Fatalf("missing beta node with %d hash joins: %#v", count, summary.BetaNodes)
 	return reteGraphBetaNode{}
+}
+
+func findPlanInspectionBetaNode(tb testing.TB, nodes []reteGraphBetaNodeInspection, id reteGraphBetaNodeID) reteGraphBetaNodeInspection {
+	tb.Helper()
+
+	for _, node := range nodes {
+		if node.ID == id {
+			return node
+		}
+	}
+	tb.Fatalf("missing beta inspection node %d: %#v", id, nodes)
+	return reteGraphBetaNodeInspection{}
 }

@@ -225,6 +225,83 @@ func TestSessionJoinedQueryModifyJoinKeyUsesRouteScopedEventsAndRetractsRow(t *t
 	}
 }
 
+func TestSessionJoinedQueryProbesResidualFilterStage(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	threshold := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "threshold",
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	candidate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "candidate",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "passing-candidates",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{
+				Binding:     "threshold",
+				TemplateKey: threshold.Key(),
+			},
+			Match{
+				Binding:     "candidate",
+				TemplateKey: candidate.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
+					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
+				},
+			},
+		}},
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "candidate", Field: "id"}),
+			ReturnValue("score", BindingFieldExpr{Binding: "candidate", Field: "score"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	summary := revision.reteGraphDebugSummary()
+	residualFilters := 0
+	for _, node := range summary.BetaNodes {
+		if node.kind == reteGraphBetaNodeResidualFilter {
+			residualFilters++
+			if got, want := len(node.residualJoins), 1; got != want {
+				t.Fatalf("residual filter joins = %d, want %d", got, want)
+			}
+		}
+	}
+	if got, want := residualFilters, 1; got != want {
+		t.Fatalf("residual filter nodes = %d, want %d", got, want)
+	}
+
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: threshold.Key(), Fields: mustFields(t, map[string]any{"group": "A", "score": 10})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"id": "low", "group": "A", "score": 8})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"id": "high", "group": "A", "score": 12})},
+		SessionInitialFact{TemplateKey: candidate.Key(), Fields: mustFields(t, map[string]any{"id": "wrong-group", "group": "B", "score": 99})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "passing-candidates", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows = %d, want %d", got, want)
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "high")
+	assertQueryRowIntValue(t, rows[0], "score", 12)
+}
+
 func TestQueryIteratorCancellationReturnsNoPartialAllResults(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustQueryRevision(t)

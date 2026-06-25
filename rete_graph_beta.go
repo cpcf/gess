@@ -3318,7 +3318,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	if node == nil {
 		return false, nil
 	}
-	if node.kind == reteGraphBetaNodeFilter {
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 		return m.insertFilterBetaInput(nodeID, side, node, token, span, delta)
 	}
 	if node.kind == reteGraphBetaNodeNot {
@@ -3486,7 +3486,7 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 	if node == nil {
 		return false
 	}
-	if node.kind == reteGraphBetaNodeFilter {
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 		return m.removeFilterBetaInputToken(nodeID, side, node, token, counters, delta)
 	}
 	if node.kind == reteGraphBetaNodeNot {
@@ -3633,7 +3633,7 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 	if node == nil {
 		return false
 	}
-	if node.kind == reteGraphBetaNodeFilter {
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 		return m.removeFilterBetaInputContainingFact(nodeID, side, node, id, counters, delta)
 	}
 	if node.kind == reteGraphBetaNodeNot {
@@ -4560,6 +4560,10 @@ func betaNodeMayObserveModify(node reteGraphBetaNode, bindingSlots []int, summar
 		}
 	case reteGraphBetaNodeFilter:
 		return predicatesMayObserveModify(node.predicates, bindingSlots, summary)
+	case reteGraphBetaNodeResidualFilter:
+		if predicatesMayObserveModify(node.predicates, bindingSlots, summary) {
+			return true
+		}
 	default:
 		return true
 	}
@@ -5251,7 +5255,7 @@ func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, si
 	if node == nil {
 		return fmt.Errorf("%w: malformed query beta node", ErrQueryExecution)
 	}
-	if node.kind == reteGraphBetaNodeFilter {
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 		return m.queryProbeFilterBetaInput(nodeID, side, node, token, collector)
 	}
 	if node.kind == reteGraphBetaNodeNot {
@@ -5861,6 +5865,13 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 func (m *reteGraphBetaMemory) filterTokenMatches(node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan) (bool, error) {
 	if m == nil || node == nil {
 		return true, nil
+	}
+	if node.kind == reteGraphBetaNodeResidualFilter {
+		currentMatch, ok := tokenLastMatch(token)
+		if !ok {
+			return false, nil
+		}
+		return m.residualJoinsMatch(node, currentMatch.fact, token.parent(), span)
 	}
 	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, conditionFactRef{}, token, span)
 	if err != nil {
