@@ -39,6 +39,10 @@ type propagationCounterTotals struct {
 	RuleMemoriesVisited         int
 	ConditionsTested            int
 	AlphaMatchesAdded           int
+	AlphaIndexProbes            int
+	AlphaIndexHits              int
+	AlphaIndexMisses            int
+	AlphaIndexFallbackScans     int
 	ConditionPlansTested        int
 	ConditionMatchesAdded       int
 	PrefixesAdded               int
@@ -90,6 +94,10 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.RuleMemoriesVisited += other.RuleMemoriesVisited
 	t.ConditionsTested += other.ConditionsTested
 	t.AlphaMatchesAdded += other.AlphaMatchesAdded
+	t.AlphaIndexProbes += other.AlphaIndexProbes
+	t.AlphaIndexHits += other.AlphaIndexHits
+	t.AlphaIndexMisses += other.AlphaIndexMisses
+	t.AlphaIndexFallbackScans += other.AlphaIndexFallbackScans
 	t.ConditionPlansTested += other.ConditionPlansTested
 	t.ConditionMatchesAdded += other.ConditionMatchesAdded
 	t.PrefixesAdded += other.PrefixesAdded
@@ -299,6 +307,25 @@ func (s *propagationCounterSpan) recordAlphaMatchAdded() {
 		return
 	}
 	s.totals.AlphaMatchesAdded++
+}
+
+func (s *propagationCounterSpan) recordAlphaIndexProbe(hit bool) {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.AlphaIndexProbes++
+	if hit {
+		s.totals.AlphaIndexHits++
+	} else {
+		s.totals.AlphaIndexMisses++
+	}
+}
+
+func (s *propagationCounterSpan) recordAlphaIndexFallbackScan() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.AlphaIndexFallbackScans++
 }
 
 func (s *propagationCounterSpan) recordConditionPlanTested() {
@@ -561,6 +588,25 @@ func (l *propagationCounterLedger) recordModifyFastPathFallback() {
 	l.totals.ModifyFastPathFallbacks++
 }
 
+func (l *propagationCounterLedger) recordAlphaIndexProbe(hit bool) {
+	if l == nil {
+		return
+	}
+	l.totals.AlphaIndexProbes++
+	if hit {
+		l.totals.AlphaIndexHits++
+	} else {
+		l.totals.AlphaIndexMisses++
+	}
+}
+
+func (l *propagationCounterLedger) recordAlphaIndexFallbackScan() {
+	if l == nil {
+		return
+	}
+	l.totals.AlphaIndexFallbackScans++
+}
+
 func (l *propagationCounterLedger) recordRemovalIndexLookup() {
 	if l == nil {
 		return
@@ -763,6 +809,10 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-rule-memories-visited", float64(s.Totals.RuleMemoriesVisited))
 	report("propagation-conditions-tested", float64(s.Totals.ConditionsTested))
 	report("propagation-alpha-matches-added", float64(s.Totals.AlphaMatchesAdded))
+	report("propagation-alpha-index-probes", float64(s.Totals.AlphaIndexProbes))
+	report("propagation-alpha-index-hits", float64(s.Totals.AlphaIndexHits))
+	report("propagation-alpha-index-misses", float64(s.Totals.AlphaIndexMisses))
+	report("propagation-alpha-index-fallback-scans", float64(s.Totals.AlphaIndexFallbackScans))
 	report("propagation-condition-plans-tested", float64(s.Totals.ConditionPlansTested))
 	report("propagation-condition-matches-added", float64(s.Totals.ConditionMatchesAdded))
 	report("propagation-prefixes-added", float64(s.Totals.PrefixesAdded))
@@ -830,6 +880,10 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
 	report("propagation-conditions-tested/rhs-assert", float64(s.Totals.ConditionsTested)/rhsAsserts)
 	report("propagation-alpha-matches-added/rhs-assert", float64(s.Totals.AlphaMatchesAdded)/rhsAsserts)
+	report("propagation-alpha-index-probes/rhs-assert", float64(s.Totals.AlphaIndexProbes)/rhsAsserts)
+	report("propagation-alpha-index-hits/rhs-assert", float64(s.Totals.AlphaIndexHits)/rhsAsserts)
+	report("propagation-alpha-index-misses/rhs-assert", float64(s.Totals.AlphaIndexMisses)/rhsAsserts)
+	report("propagation-alpha-index-fallback-scans/rhs-assert", float64(s.Totals.AlphaIndexFallbackScans)/rhsAsserts)
 	report("propagation-condition-plans-tested/rhs-assert", float64(s.Totals.ConditionPlansTested)/rhsAsserts)
 	report("propagation-condition-matches-added/rhs-assert", float64(s.Totals.ConditionMatchesAdded)/rhsAsserts)
 	report("propagation-prefixes-added/rhs-assert", float64(s.Totals.PrefixesAdded)/rhsAsserts)
@@ -868,7 +922,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 }
 
 func (s propagationCounterSnapshot) runnerFields() []string {
-	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && s.TerminalRowsRetained == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
+	if s.Totals.Asserts == 0 && s.Totals.RHSAsserts == 0 && s.Totals.AlphaIndexProbes == 0 && s.Totals.AlphaIndexFallbackScans == 0 && s.TerminalRowsRetained == 0 && len(s.ByTemplate) == 0 && len(s.ByOrigin) == 0 && s.RuntimePath == "" {
 		return nil
 	}
 	fields := []string{
@@ -879,6 +933,10 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-rule-memories-visited=" + strconv.Itoa(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested=" + strconv.Itoa(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added=" + strconv.Itoa(s.Totals.AlphaMatchesAdded),
+		"propagation-alpha-index-probes=" + strconv.Itoa(s.Totals.AlphaIndexProbes),
+		"propagation-alpha-index-hits=" + strconv.Itoa(s.Totals.AlphaIndexHits),
+		"propagation-alpha-index-misses=" + strconv.Itoa(s.Totals.AlphaIndexMisses),
+		"propagation-alpha-index-fallback-scans=" + strconv.Itoa(s.Totals.AlphaIndexFallbackScans),
 		"propagation-condition-plans-tested=" + strconv.Itoa(s.Totals.ConditionPlansTested),
 		"propagation-condition-matches-added=" + strconv.Itoa(s.Totals.ConditionMatchesAdded),
 		"propagation-prefixes-added=" + strconv.Itoa(s.Totals.PrefixesAdded),
@@ -944,6 +1002,10 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-rule-memories-visited/rhs-assert=" + s.perRHSAssertField(s.Totals.RuleMemoriesVisited),
 		"propagation-conditions-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionsTested),
 		"propagation-alpha-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaMatchesAdded),
+		"propagation-alpha-index-probes/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaIndexProbes),
+		"propagation-alpha-index-hits/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaIndexHits),
+		"propagation-alpha-index-misses/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaIndexMisses),
+		"propagation-alpha-index-fallback-scans/rhs-assert=" + s.perRHSAssertField(s.Totals.AlphaIndexFallbackScans),
 		"propagation-condition-plans-tested/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionPlansTested),
 		"propagation-condition-matches-added/rhs-assert=" + s.perRHSAssertField(s.Totals.ConditionMatchesAdded),
 		"propagation-prefixes-added/rhs-assert=" + s.perRHSAssertField(s.Totals.PrefixesAdded),
@@ -1113,6 +1175,10 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"rules-visited=" + strconv.Itoa(totals.RuleMemoriesVisited) + "," +
 		"conditions-tested=" + strconv.Itoa(totals.ConditionsTested) + "," +
 		"alpha-matches-added=" + strconv.Itoa(totals.AlphaMatchesAdded) + "," +
+		"alpha-index-probes=" + strconv.Itoa(totals.AlphaIndexProbes) + "," +
+		"alpha-index-hits=" + strconv.Itoa(totals.AlphaIndexHits) + "," +
+		"alpha-index-misses=" + strconv.Itoa(totals.AlphaIndexMisses) + "," +
+		"alpha-index-fallback-scans=" + strconv.Itoa(totals.AlphaIndexFallbackScans) + "," +
 		"condition-plans-tested=" + strconv.Itoa(totals.ConditionPlansTested) + "," +
 		"condition-matches-added=" + strconv.Itoa(totals.ConditionMatchesAdded) + "," +
 		"prefixes-added=" + strconv.Itoa(totals.PrefixesAdded) + "," +

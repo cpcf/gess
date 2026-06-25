@@ -413,6 +413,20 @@ func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int
 	return facts, true
 }
 
+func (s *Session) recordAlphaIndexProbe(hit bool) {
+	if s == nil || s.propagationCounters == nil {
+		return
+	}
+	s.propagationCounters.recordAlphaIndexProbe(hit)
+}
+
+func (s *Session) recordAlphaIndexFallbackScan() {
+	if s == nil || s.propagationCounters == nil {
+		return
+	}
+	s.propagationCounters.recordAlphaIndexFallbackScan()
+}
+
 func (s *Session) factIDsForTarget(target conditionTarget) ([]FactID, bool) {
 	switch target.kind {
 	case conditionTargetName:

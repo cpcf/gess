@@ -1676,7 +1676,7 @@ func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactS
 	if updateSource {
 		m.upsertFactSource(fact)
 	}
-	routeIDs := m.snapshotAlphaRouteIDsForFactInsert(fact)
+	routeIDs := m.snapshotAlphaRouteIDsForFactInsert(fact, span)
 	if len(routeIDs) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
@@ -1865,7 +1865,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 		return reteAgendaDelta{}, nil
 	}
 	defer m.pushEvalContext(ctx)()
-	routeIDs := m.workingAlphaRouteIDsForFact(fact)
+	routeIDs := m.workingAlphaRouteIDsForFact(fact, span)
 	if len(routeIDs) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
@@ -1913,7 +1913,7 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFact(fact FactSnapshot) []
 	templateKey := fact.TemplateKey()
 	templateIDs := m.graph.routesByTemplateKey[templateKey]
 	if len(templateIDs) > 3 {
-		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact)
+		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact, nil)
 	}
 	nameIDs := m.graph.routesByName[fact.Name()]
 	if len(templateIDs) == 0 {
@@ -1929,14 +1929,14 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFact(fact FactSnapshot) []
 	return m.alphaRouteScratch
 }
 
-func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFactInsert(fact FactSnapshot) []reteGraphAlphaNodeID {
+func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFactInsert(fact FactSnapshot, span *propagationCounterSpan) []reteGraphAlphaNodeID {
 	if m == nil || m.graph == nil {
 		return nil
 	}
 	templateKey := fact.TemplateKey()
 	templateIDs := m.graph.routesByTemplateKey[templateKey]
 	if len(templateIDs) > 3 || (len(templateIDs) == 1 && m.canUseSingleIndexedAlphaRoute(templateKey)) {
-		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact)
+		templateIDs = m.snapshotAlphaRouteIDs(templateKey, templateIDs, fact, span)
 	}
 	nameIDs := m.graph.routesByName[fact.Name()]
 	if len(templateIDs) == 0 {
@@ -1952,13 +1952,13 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteIDsForFactInsert(fact FactSnapsh
 	return m.alphaRouteScratch
 }
 
-func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact) []reteGraphAlphaNodeID {
+func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact, span *propagationCounterSpan) []reteGraphAlphaNodeID {
 	if m == nil || m.graph == nil || fact == nil {
 		return nil
 	}
 	templateIDs := m.graph.routesByTemplateKey[fact.templateKey]
 	if len(templateIDs) > 3 {
-		templateIDs = m.workingAlphaRouteIDs(fact.templateKey, templateIDs, fact)
+		templateIDs = m.workingAlphaRouteIDs(fact.templateKey, templateIDs, fact, span)
 	}
 	nameIDs := m.graph.routesByName[fact.name]
 	if len(templateIDs) == 0 {
@@ -1978,9 +1978,6 @@ func (m *reteGraphBetaMemory) canUseSingleIndexedAlphaRoute(templateKey Template
 	if m == nil || m.graph == nil {
 		return false
 	}
-	if len(m.graph.queryTerminalIDs) != 0 {
-		return false
-	}
 	table := m.graph.alphaRouteTables[templateKey]
 	if table == nil || len(table.indexed) != 1 {
 		return false
@@ -1989,92 +1986,165 @@ func (m *reteGraphBetaMemory) canUseSingleIndexedAlphaRoute(templateKey Template
 	return ok
 }
 
-func (m *reteGraphBetaMemory) snapshotAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact FactSnapshot) []reteGraphAlphaNodeID {
+func (m *reteGraphBetaMemory) snapshotAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact FactSnapshot, span *propagationCounterSpan) []reteGraphAlphaNodeID {
 	if m == nil || m.graph == nil {
 		return nil
 	}
 	table := m.graph.alphaRouteTables[templateKey]
 	if table == nil || len(table.indexed) == 0 {
+		if span != nil {
+			span.recordAlphaIndexFallbackScan()
+		}
 		return nodeIDs
 	}
 	if fieldSlot, ok := table.singleIndexedField(); ok {
-		value, valueOK := fact.compiledFieldValue("", fieldSlot)
+		value, valueOK := m.snapshotAlphaRouteFieldValue(templateKey, fact, fieldSlot)
 		if !valueOK {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			return nil
 		}
 		routeValue, routeOK := reteGraphAlphaRouteValueFromValue(value)
 		if !routeOK {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			return nil
 		}
-		return table.indexed[reteGraphAlphaRouteKey{
+		bucket := table.indexed[reteGraphAlphaRouteKey{
 			fieldSlot: fieldSlot,
 			value:     routeValue,
 		}]
+		if span != nil {
+			span.recordAlphaIndexProbe(len(bucket) > 0)
+		}
+		return bucket
 	}
 	m.resetAlphaRouteScratch()
 	for _, id := range table.unindexed {
 		m.appendAlphaRouteCandidate(id)
 	}
+	if span != nil && len(table.unindexed) > 0 {
+		span.recordAlphaIndexFallbackScan()
+	}
 	for _, fieldSlot := range table.indexedFields {
-		value, ok := fact.compiledFieldValue("", fieldSlot)
+		value, ok := m.snapshotAlphaRouteFieldValue(templateKey, fact, fieldSlot)
 		if !ok {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			continue
 		}
 		routeValue, ok := reteGraphAlphaRouteValueFromValue(value)
 		if !ok {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			continue
 		}
-		m.appendAlphaRouteBucket(table.indexed[reteGraphAlphaRouteKey{
+		bucket := table.indexed[reteGraphAlphaRouteKey{
 			fieldSlot: fieldSlot,
 			value:     routeValue,
-		}])
+		}]
+		if span != nil {
+			span.recordAlphaIndexProbe(len(bucket) > 0)
+		}
+		m.appendAlphaRouteBucket(bucket)
 	}
 	m.sortAlphaRouteScratch()
 	return m.alphaRouteScratch
 }
 
-func (m *reteGraphBetaMemory) workingAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact *workingFact) []reteGraphAlphaNodeID {
+func (m *reteGraphBetaMemory) workingAlphaRouteIDs(templateKey TemplateKey, nodeIDs []reteGraphAlphaNodeID, fact *workingFact, span *propagationCounterSpan) []reteGraphAlphaNodeID {
 	if m == nil || m.graph == nil || fact == nil {
 		return nil
 	}
 	table := m.graph.alphaRouteTables[templateKey]
 	if table == nil || len(table.indexed) == 0 {
+		if span != nil {
+			span.recordAlphaIndexFallbackScan()
+		}
 		return nodeIDs
 	}
 	if fieldSlot, ok := table.singleIndexedField(); ok {
-		value, valueOK := fact.compiledFieldValue("", fieldSlot)
+		value, valueOK := m.workingAlphaRouteFieldValue(templateKey, fact, fieldSlot)
 		if !valueOK {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			return nil
 		}
 		routeValue, routeOK := reteGraphAlphaRouteValueFromValue(value)
 		if !routeOK {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			return nil
 		}
-		return table.indexed[reteGraphAlphaRouteKey{
+		bucket := table.indexed[reteGraphAlphaRouteKey{
 			fieldSlot: fieldSlot,
 			value:     routeValue,
 		}]
+		if span != nil {
+			span.recordAlphaIndexProbe(len(bucket) > 0)
+		}
+		return bucket
 	}
 	m.resetAlphaRouteScratch()
 	for _, id := range table.unindexed {
 		m.appendAlphaRouteCandidate(id)
 	}
+	if span != nil && len(table.unindexed) > 0 {
+		span.recordAlphaIndexFallbackScan()
+	}
 	for _, fieldSlot := range table.indexedFields {
-		value, ok := fact.compiledFieldValue("", fieldSlot)
+		value, ok := m.workingAlphaRouteFieldValue(templateKey, fact, fieldSlot)
 		if !ok {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			continue
 		}
 		routeValue, ok := reteGraphAlphaRouteValueFromValue(value)
 		if !ok {
+			if span != nil {
+				span.recordAlphaIndexProbe(false)
+			}
 			continue
 		}
-		m.appendAlphaRouteBucket(table.indexed[reteGraphAlphaRouteKey{
+		bucket := table.indexed[reteGraphAlphaRouteKey{
 			fieldSlot: fieldSlot,
 			value:     routeValue,
-		}])
+		}]
+		if span != nil {
+			span.recordAlphaIndexProbe(len(bucket) > 0)
+		}
+		m.appendAlphaRouteBucket(bucket)
 	}
 	m.sortAlphaRouteScratch()
 	return m.alphaRouteScratch
+}
+
+func (m *reteGraphBetaMemory) snapshotAlphaRouteFieldValue(templateKey TemplateKey, fact FactSnapshot, fieldSlot int) (Value, bool) {
+	field := m.alphaRouteFieldName(templateKey, fieldSlot)
+	return fact.compiledFieldValue(field, fieldSlot)
+}
+
+func (m *reteGraphBetaMemory) workingAlphaRouteFieldValue(templateKey TemplateKey, fact *workingFact, fieldSlot int) (Value, bool) {
+	field := m.alphaRouteFieldName(templateKey, fieldSlot)
+	return fact.compiledFieldValue(field, fieldSlot)
+}
+
+func (m *reteGraphBetaMemory) alphaRouteFieldName(templateKey TemplateKey, fieldSlot int) string {
+	if m == nil || m.revision == nil || fieldSlot < 0 {
+		return ""
+	}
+	template, ok := m.revision.templateByKey(templateKey)
+	if !ok || fieldSlot >= len(template.fields) {
+		return ""
+	}
+	return template.fields[fieldSlot].Name
 }
 
 func (m *reteGraphBetaMemory) resetAlphaRouteScratch() {

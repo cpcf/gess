@@ -19,6 +19,7 @@ func TestSessionAlphaLiteralEqualityIndexInvalidatesAcrossModify(t *testing.T) {
 		t.Fatalf("AssertTemplate(hot): %v", err)
 	}
 
+	session.attachPropagationCounters()
 	assertAlphaLiteralEqualityCandidates(t, revision, session, ruleName, hot.Fact.ID())
 	if _, err := session.Modify(ctx, hot.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"category": "cold"})}); err != nil {
 		t.Fatalf("Modify(hot -> cold): %v", err)
@@ -28,6 +29,87 @@ func TestSessionAlphaLiteralEqualityIndexInvalidatesAcrossModify(t *testing.T) {
 		t.Fatalf("Modify(cold -> hot): %v", err)
 	}
 	assertAlphaLiteralEqualityCandidates(t, revision, session, ruleName, cold.Fact.ID())
+
+	counters := session.propagationCounterSnapshot().Totals
+	if got, want := counters.AlphaIndexProbes, 3; got != want {
+		t.Fatalf("alpha index probes = %d, want %d", got, want)
+	}
+	if got, want := counters.AlphaIndexHits, 2; got != want {
+		t.Fatalf("alpha index hits = %d, want %d", got, want)
+	}
+	if got, want := counters.AlphaIndexMisses, 1; got != want {
+		t.Fatalf("alpha index misses = %d, want %d", got, want)
+	}
+	if got := counters.AlphaIndexFallbackScans; got != 0 {
+		t.Fatalf("alpha index fallback scans = %d, want 0", got)
+	}
+}
+
+func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-literal-equality-route-counters-session")
+	session.attachPropagationCounters()
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("AssertTemplate(cold): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+
+	counters := session.propagationCounterSnapshot().Totals
+	if got, want := counters.AlphaIndexProbes, 2; got != want {
+		t.Fatalf("alpha index probes = %d, want %d", got, want)
+	}
+	if got, want := counters.AlphaIndexHits, 1; got != want {
+		t.Fatalf("alpha index hits = %d, want %d", got, want)
+	}
+	if got, want := counters.AlphaIndexMisses, 1; got != want {
+		t.Fatalf("alpha index misses = %d, want %d", got, want)
+	}
+	if got := counters.AlphaIndexFallbackScans; got != 0 {
+		t.Fatalf("alpha index fallback scans = %d, want 0", got)
+	}
+}
+
+func TestGraphBetaAlphaLiteralEqualityIndexRoutesSingleQueryTerminalNode(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityQueryRuleset(t)
+	session := mustAlphaLiteralEqualitySession(t, ctx, revision, templateKey, 8)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
+	}
+	if runtime.graphBeta == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+
+	query, ok := revision.query("hot-alpha-literal-events")
+	if !ok {
+		t.Fatal("query missing")
+	}
+	args, err := query.compileArgs(QueryArgs{"min_score": 0})
+	if err != nil {
+		t.Fatalf("compileArgs: %v", err)
+	}
+	rows, handled, err := runtime.queryRows(ctx, query, args, snapshotQueryTriggerFact(snapshot.Generation(), query, args), snapshot)
+	if err != nil {
+		t.Fatalf("queryRows: %v", err)
+	}
+	if !handled {
+		t.Fatal("queryRows handled = false")
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("query rows = %d, want %d", got, want)
+	}
 }
 
 func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
@@ -50,7 +132,7 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 	}
 	for _, fact := range snapshot.Facts() {
 		category, _ := fact.Field("category")
-		routeIDs := runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact)
+		routeIDs := runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact, nil)
 		switch {
 		case category.Kind() == ValueString && category.stringValue == "hot":
 			if got, want := len(routeIDs), 1; got != want {

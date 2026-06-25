@@ -261,14 +261,21 @@ func (p compiledConditionPlan) forEachMatchWithBindingsAndParams(ctx context.Con
 }
 
 func (p compiledConditionPlan) factsForTarget(source factSource) ([]FactSnapshot, bool) {
+	recorder, _ := source.(alphaIndexCounterRecorder)
 	if indexed, ok := source.(indexedFactSource); ok {
 		fieldSlot, value, ok := p.literalEqualityFieldIndex()
 		if ok {
 			facts, ok := indexed.factsForTargetFieldEqual(p.target, fieldSlot, value)
 			if ok {
+				if recorder != nil {
+					recorder.recordAlphaIndexProbe(len(facts) > 0)
+				}
 				return facts, true
 			}
 		}
+	}
+	if recorder != nil {
+		recorder.recordAlphaIndexFallbackScan()
 	}
 	return source.factsForTarget(p.target)
 }

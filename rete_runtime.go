@@ -846,6 +846,11 @@ type indexedFactSource interface {
 	factsForTargetFieldEqual(conditionTarget, int, reteGraphAlphaRouteValue) ([]FactSnapshot, bool)
 }
 
+type alphaIndexCounterRecorder interface {
+	recordAlphaIndexProbe(bool)
+	recordAlphaIndexFallbackScan()
+}
+
 type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
 }
