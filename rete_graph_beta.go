@@ -3773,9 +3773,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 	if m == nil || delta == nil || node == nil || token.isZero() {
 		return false, nil
 	}
-	nodeMemory := m.nodeMemory(nodeID)
 	negativeMemory := m.negativeBetaMemory(nodeID, node)
-	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	switch side {
 	case reteGraphBetaInputLeft:
 		joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(m.context(), node, token, span)
@@ -3788,52 +3786,7 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 		if err != nil || !ok {
 			return false, err
 		}
-		inserted := nodeMemory.right.insert(token, joinKey)
-		if !inserted {
-			return true, nil
-		}
-		if span != nil {
-			span.recordBetaInputInsert(side)
-		}
-		var currentMatch conditionMatch
-		if len(node.residualJoins) != 0 || len(node.predicates) != 0 || len(node.rightPredicates) != 0 {
-			currentMatch, ok = tokenLastMatch(token)
-			if !ok {
-				return false, nil
-			}
-		}
-		bucket := nodeMemory.left.bucketForKey(joinKey)
-		if span != nil {
-			span.recordBetaBucketProbe(bucket.len())
-		}
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			if span != nil {
-				span.recordBetaCandidateRowScanned()
-			}
-			leftRow := nodeMemory.left.row(rowID)
-			if leftRow == nil || leftRow.token.isZero() {
-				continue
-			}
-			if node.rightHasLeftPrefix && !tokenRefHasPrefix(token, leftRow.token) {
-				continue
-			}
-			if len(node.residualJoins) != 0 || len(node.predicates) != 0 {
-				if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
-					return false, err
-				} else if !ok {
-					continue
-				}
-			}
-			if ok, err := m.rightPredicatesMatch(node, currentMatch, leftRow.token, span); err != nil {
-				return false, err
-			} else if !ok {
-				continue
-			}
-			if leftRow.incrementNegativeBlockerCount() == 1 && !m.deferNegativeOutputs {
-				m.propagateRemoveFromStage(source, leftRow.token, nil, delta)
-			}
-		}
+		return negativeMemory.insertRight(joinKey, token, m.deferNegativeOutputs, span, delta)
 	default:
 		return false, nil
 	}
