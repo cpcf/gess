@@ -5424,6 +5424,8 @@ func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collecto
 	)
 	if collector.valueRows {
 		row, err = collector.query.materializeTokenValueRowInto(collector.ctx, token, collector.args, 1, collector.nextRowValues())
+	} else if collector.query.compactMixedReturns() {
+		row, err = collector.query.materializeTokenCompactMixedRowInto(collector.ctx, token, collector.args, 1, collector.rowOwner, collector.nextRowItemsCount(collector.query.factReturnCount), collector.nextMixedRowValuesCount(collector.query.valueReturnCount))
 	} else {
 		row, err = collector.query.materializeTokenRowInto(collector.ctx, token, collector.args, 1, collector.rowOwner, collector.nextRowItems())
 	}
@@ -5435,27 +5437,55 @@ func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collecto
 }
 
 func (c *reteGraphQueryCollector) nextRowValues() []Value {
+	if c == nil {
+		return nil
+	}
+	return c.nextRowValuesCount(len(c.query.returns))
+}
+
+func (c *reteGraphQueryCollector) nextRowValuesCount(count int) []Value {
+	return c.nextRowValuesCountWithChunkRows(count, queryProjectionChunkRows)
+}
+
+func (c *reteGraphQueryCollector) nextMixedRowValuesCount(count int) []Value {
+	return c.nextRowValuesCountWithChunkRows(count, queryMixedProjectionChunkRows)
+}
+
+func (c *reteGraphQueryCollector) nextRowValuesCountWithChunkRows(count int, chunkRows int) []Value {
 	if c == nil || len(c.query.returns) == 0 {
 		return nil
 	}
-	if len(c.rowValues)+len(c.query.returns) > cap(c.rowValues) {
-		c.rowValues = make([]Value, 0, len(c.query.returns)*queryProjectionChunkRows)
+	if count <= 0 {
+		return nil
+	}
+	if len(c.rowValues)+count > cap(c.rowValues) {
+		c.rowValues = make([]Value, 0, count*chunkRows)
 	}
 	start := len(c.rowValues)
-	end := start + len(c.query.returns)
+	end := start + count
 	c.rowValues = c.rowValues[:end]
 	return c.rowValues[start:end]
 }
 
 func (c *reteGraphQueryCollector) nextRowItems() []queryRowValue {
+	if c == nil {
+		return nil
+	}
+	return c.nextRowItemsCount(len(c.query.returns))
+}
+
+func (c *reteGraphQueryCollector) nextRowItemsCount(count int) []queryRowValue {
 	if c == nil || len(c.query.returns) == 0 {
 		return nil
 	}
-	if len(c.rowItems)+len(c.query.returns) > cap(c.rowItems) {
-		c.rowItems = make([]queryRowValue, 0, len(c.query.returns)*queryMixedProjectionChunkRows)
+	if count <= 0 {
+		return nil
+	}
+	if len(c.rowItems)+count > cap(c.rowItems) {
+		c.rowItems = make([]queryRowValue, 0, count*queryMixedProjectionChunkRows)
 	}
 	start := len(c.rowItems)
-	end := start + len(c.query.returns)
+	end := start + count
 	c.rowItems = c.rowItems[:end]
 	return c.rowItems[start:end]
 }

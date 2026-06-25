@@ -165,19 +165,22 @@ func (q Query) Returns() []QueryReturn {
 }
 
 type compiledQuery struct {
-	name                   string
-	description            string
-	parameters             []QueryParameter
-	parameterTypes         map[string]ValueKind
-	conditions             []RuleCondition
-	treeConditions         []RuleCondition
-	conditionTree          RuleConditionTree
-	conditionBranches      []compiledConditionBranch
-	graphConditionBranches []compiledConditionBranch
-	conditionBranchPlans   []RuleConditionBranch
-	returns                []compiledQueryReturn
-	returnAliases          []string
-	returnAliasIndex       map[string]int
+	name                    string
+	description             string
+	parameters              []QueryParameter
+	parameterTypes          map[string]ValueKind
+	conditions              []RuleCondition
+	treeConditions          []RuleCondition
+	conditionTree           RuleConditionTree
+	conditionBranches       []compiledConditionBranch
+	graphConditionBranches  []compiledConditionBranch
+	conditionBranchPlans    []RuleConditionBranch
+	returns                 []compiledQueryReturn
+	returnAliases           []string
+	returnAliasIndex        map[string]int
+	compactReturnAliasIndex map[string]int
+	factReturnCount         int
+	valueReturnCount        int
 }
 
 type compiledQueryReturn struct {
@@ -314,21 +317,25 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 	}
 
 	returnAliases, returnAliasIndex := compileQueryReturnIndexes(returns)
+	compactReturnAliasIndex, factReturnCount, valueReturnCount := compileQueryReturnCompactIndexes(returns)
 
 	return compiledQuery{
-		name:                   normalized.Name,
-		description:            normalized.Description,
-		parameters:             params,
-		parameterTypes:         paramTypes,
-		conditions:             representative.conditions,
-		treeConditions:         inspectionSet.treeConditions,
-		conditionTree:          buildRuleConditionTree(conditionTreeShape, inspectionSet.treeConditions),
-		conditionBranches:      compiledBranches,
-		graphConditionBranches: graphBranches,
-		conditionBranchPlans:   conditionBranches,
-		returns:                returns,
-		returnAliases:          returnAliases,
-		returnAliasIndex:       returnAliasIndex,
+		name:                    normalized.Name,
+		description:             normalized.Description,
+		parameters:              params,
+		parameterTypes:          paramTypes,
+		conditions:              representative.conditions,
+		treeConditions:          inspectionSet.treeConditions,
+		conditionTree:           buildRuleConditionTree(conditionTreeShape, inspectionSet.treeConditions),
+		conditionBranches:       compiledBranches,
+		graphConditionBranches:  graphBranches,
+		conditionBranchPlans:    conditionBranches,
+		returns:                 returns,
+		returnAliases:           returnAliases,
+		returnAliasIndex:        returnAliasIndex,
+		compactReturnAliasIndex: compactReturnAliasIndex,
+		factReturnCount:         factReturnCount,
+		valueReturnCount:        valueReturnCount,
 	}, nil
 }
 
@@ -451,6 +458,22 @@ func compileQueryReturnIndexes(returns []compiledQueryReturn) ([]string, map[str
 		index[ret.alias] = i
 	}
 	return aliases, index
+}
+
+func compileQueryReturnCompactIndexes(returns []compiledQueryReturn) (map[string]int, int, int) {
+	index := make(map[string]int, len(returns))
+	factCount := 0
+	valueCount := 0
+	for _, ret := range returns {
+		if ret.fact {
+			index[ret.alias] = -factCount - 1
+			factCount++
+			continue
+		}
+		index[ret.alias] = valueCount
+		valueCount++
+	}
+	return index, factCount, valueCount
 }
 
 const internalQueryTriggerBinding = "__gess_query_trigger"
@@ -761,6 +784,21 @@ func (r QueryRow) Aliases() []string {
 }
 
 func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
+	if r.compactMixedItems() {
+		idx, ok := r.index[alias]
+		if !ok || idx >= 0 {
+			return FactSnapshot{}, false
+		}
+		factIdx := -idx - 1
+		if factIdx < 0 || factIdx >= len(r.items) {
+			return FactSnapshot{}, false
+		}
+		item := r.items[factIdx]
+		if !item.hasFact {
+			return FactSnapshot{}, false
+		}
+		return r.factSnapshot(item.fact)
+	}
 	if len(r.valueItems) != 0 {
 		return FactSnapshot{}, false
 	}
@@ -783,6 +821,13 @@ func (r QueryRow) Fact(alias string) (FactSnapshot, bool) {
 }
 
 func (r QueryRow) Value(alias string) (Value, bool) {
+	if r.compactMixedItems() {
+		idx, ok := r.index[alias]
+		if !ok || idx < 0 || idx >= len(r.valueItems) {
+			return Value{}, false
+		}
+		return cloneValue(r.valueItems[idx]), true
+	}
 	if len(r.valueItems) != 0 {
 		idx, ok := r.itemIndex(alias)
 		if !ok {
@@ -816,6 +861,10 @@ func (r QueryRow) factSnapshot(fact *queryRowFact) (FactSnapshot, bool) {
 		return fact.owner.factSnapshot(fact.ref), true
 	}
 	return fact.ref.snapshot(), true
+}
+
+func (r QueryRow) compactMixedItems() bool {
+	return len(r.valueItems) != 0 && len(r.items) != 0
 }
 
 func newQueryRowOwner(source Snapshot) *queryRowOwner {
@@ -919,6 +968,19 @@ func (it *QueryIterator) All(ctx context.Context) ([]QueryRow, error) {
 }
 
 func (r QueryRow) clone() QueryRow {
+	if r.compactMixedItems() {
+		out := QueryRow{
+			order:      append([]string(nil), r.order...),
+			index:      r.index,
+			items:      make([]queryRowValue, len(r.items)),
+			valueItems: make([]Value, len(r.valueItems)),
+		}
+		copy(out.items, r.items)
+		for i, value := range r.valueItems {
+			out.valueItems[i] = cloneValue(value)
+		}
+		return out
+	}
 	if len(r.valueItems) != 0 {
 		out := QueryRow{
 			order:      append([]string(nil), r.order...),
@@ -1133,6 +1195,9 @@ func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
 }
 
 func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
+	if q.compactMixedReturns() {
+		return q.materializeCompactRow(ctx, source, matches, args)
+	}
 	row := q.newQueryRow()
 	owner := newQueryRowOwner(source)
 	for i, ret := range q.returns {
@@ -1164,6 +1229,9 @@ func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot,
 	if q.valueReturnsOnly() {
 		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, make([]Value, len(q.returns)))
 	}
+	if q.compactMixedReturns() {
+		return q.materializeTokenCompactMixedRowInto(ctx, token, args, bindingSlotOffset, newQueryRowOwner(source), make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
+	}
 	return q.materializeTokenRowInto(ctx, token, args, bindingSlotOffset, newQueryRowOwner(source), make([]queryRowValue, len(q.returns)))
 }
 
@@ -1177,6 +1245,42 @@ func (q compiledQuery) valueReturnsOnly() bool {
 		}
 	}
 	return true
+}
+
+func (q compiledQuery) compactMixedReturns() bool {
+	return q.factReturnCount != 0 && q.valueReturnCount != 0
+}
+
+func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
+	row := q.newQueryCompactMixedRowWithItems(make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
+	owner := newQueryRowOwner(source)
+	factIdx := 0
+	valueIdx := 0
+	for _, ret := range q.returns {
+		if ret.fact {
+			if ret.bindingSlot < 0 || ret.bindingSlot >= len(matches) {
+				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
+			}
+			match := matches[ret.bindingSlot]
+			row.items[factIdx] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
+			factIdx++
+			continue
+		}
+		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args, &FunctionEvaluationError{
+			QueryName:      q.name,
+			ConditionIndex: -1,
+			PredicateIndex: ret.order,
+		}, nil)
+		if err != nil {
+			return QueryRow{}, err
+		}
+		if !ok {
+			value = NullValue()
+		}
+		row.valueItems[valueIdx] = value
+		valueIdx++
+	}
+	return row, nil
 }
 
 func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
@@ -1212,6 +1316,51 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 			value = NullValue()
 		}
 		row.items[i] = queryRowValue{value: value}
+	}
+	return row, nil
+}
+
+func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue, values []Value) (QueryRow, error) {
+	if len(items) != q.factReturnCount {
+		return QueryRow{}, fmt.Errorf("%w: malformed query row fact count %d", ErrQueryExecution, len(items))
+	}
+	if len(values) != q.valueReturnCount {
+		return QueryRow{}, fmt.Errorf("%w: malformed query row value count %d", ErrQueryExecution, len(values))
+	}
+	row := q.newQueryCompactMixedRowWithItems(items, values)
+	factIdx := 0
+	valueIdx := 0
+	for _, ret := range q.returns {
+		if ret.fact {
+			tokenSlot := ret.bindingSlot + bindingSlotOffset
+			match, ok := tokenRefAtSlot(token, tokenSlot)
+			if !ok || match.hasValue {
+				return QueryRow{}, fmt.Errorf("%w: malformed query return binding %q", ErrQueryExecution, ret.binding)
+			}
+			row.items[factIdx] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
+			factIdx++
+			continue
+		}
+		if value, ok, err := ret.projectTokenValue(token, bindingSlotOffset); err != nil {
+			return QueryRow{}, err
+		} else if ok {
+			row.valueItems[valueIdx] = value
+			valueIdx++
+			continue
+		}
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+			QueryName:      q.name,
+			ConditionIndex: -1,
+			PredicateIndex: ret.order,
+		}, nil)
+		if err != nil {
+			return QueryRow{}, err
+		}
+		if !ok {
+			value = NullValue()
+		}
+		row.valueItems[valueIdx] = value
+		valueIdx++
 	}
 	return row, nil
 }
@@ -1286,6 +1435,15 @@ func (q compiledQuery) newQueryRowWithItems(items []queryRowValue) QueryRow {
 		order: q.returnAliases,
 		index: q.returnAliasIndex,
 		items: items,
+	}
+}
+
+func (q compiledQuery) newQueryCompactMixedRowWithItems(items []queryRowValue, values []Value) QueryRow {
+	return QueryRow{
+		order:      q.returnAliases,
+		index:      q.compactReturnAliasIndex,
+		items:      items,
+		valueItems: values,
 	}
 }
 

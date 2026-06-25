@@ -427,8 +427,8 @@ func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T
 	if got, want := len(rows), 1; got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
-	if len(rows[0].items) != 2 || rows[0].items[0].fact == nil || rows[0].items[0].fact.ref.ID().IsZero() {
-		t.Fatalf("row fact storage = %#v, want lazy fact ref item", rows[0].items)
+	if len(rows[0].items) != 1 || len(rows[0].valueItems) != 1 || rows[0].items[0].fact == nil || rows[0].items[0].fact.ref.ID().IsZero() {
+		t.Fatalf("row storage = %#v/%#v, want compact lazy fact and value items", rows[0].items, rows[0].valueItems)
 	}
 	owner := rows[0].items[0].fact.owner
 	if owner == nil || owner.facts != nil {
