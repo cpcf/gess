@@ -230,6 +230,52 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	}
 }
 
+func TestAccumulateGraphMatchUsesRetainedTerminalRows(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "total",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Count().As("count"),
+			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+		),
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-terminal-match-session")
+	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.rete)
+	}
+
+	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3})); err != nil {
+		t.Fatalf("assert first: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5})); err != nil {
+		t.Fatalf("assert second: %v", err)
+	}
+
+	results, err := session.rete.graphBeta.match(ctx, aggregatePanicFactSource{generation: session.Generation()})
+	if err != nil {
+		t.Fatalf("graph beta match: %v", err)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("match results = %d, want %d", got, want)
+	}
+	if got, want := len(results[0].candidates), 1; got != want {
+		t.Fatalf("aggregate terminal candidates = %d, want %d", got, want)
+	}
+}
+
 func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing.T) {
 	var observed []Fields
 	workspace := NewWorkspace()
@@ -1343,4 +1389,16 @@ func assertBucketedAggregateRows(t *testing.T, rows []bucketedAggregateRow, want
 			t.Fatalf("missing aggregate row for group %q", group)
 		}
 	}
+}
+
+type aggregatePanicFactSource struct {
+	generation Generation
+}
+
+func (s aggregatePanicFactSource) sourceGeneration() Generation {
+	return s.generation
+}
+
+func (aggregatePanicFactSource) factsForTarget(conditionTarget) ([]FactSnapshot, bool) {
+	panic("aggregate graph match should use retained terminal rows")
 }

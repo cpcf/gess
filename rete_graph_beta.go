@@ -6195,17 +6195,7 @@ func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource) ([]r
 			return nil, ErrMatcher
 		}
 		var candidates []matchCandidate
-		if rule.hasAggregateConditions() {
-			matchSource := source
-			if matchSource == nil {
-				matchSource = m
-			}
-			var err error
-			candidates, err = rule.matchCandidates(ctx, matchSource)
-			if err != nil {
-				return nil, err
-			}
-		} else if terminal := m.terminalForRule(rule.revisionID); terminal != nil {
+		if terminal := m.terminalForRule(rule.revisionID); terminal != nil {
 			var err error
 			candidates, err = m.collectTerminalCandidates(ctx, rule, terminal)
 			if err != nil {

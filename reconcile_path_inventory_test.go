@@ -92,12 +92,6 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		removalPlan: "Prepared batch inserts should accumulate graph deltas and apply them incrementally.",
 	},
 	{
-		path:        "reteGraphBetaMemory.match: aggregate rule.matchCandidates materialization",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P2 Finish Aggregate Graph Coverage",
-		removalPlan: "Aggregate terminals should be retained graph rows; aggregate rules should not rematch from a fact source.",
-	},
-	{
 		path:          "matcher_oracle_test.go: naive matcher parity helper",
 		class:         reconcilePathTestOracle,
 		owner:         "test-only parity harness",
