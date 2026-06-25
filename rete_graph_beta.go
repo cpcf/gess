@@ -3952,7 +3952,7 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 		return m.removeFilterBetaInputContainingFact(nodeID, side, node, id, counters, delta)
 	}
 	if node.kind == reteGraphBetaNodeNot {
-		return m.removeNegativeBetaInputContainingFact(nodeID, side, node, id, counters, delta)
+		return m.negativeBetaMemory(nodeID, node).removeContainingFact(side, id, counters, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
 	var removed int
@@ -3981,37 +3981,6 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputContainingFact(nodeID reteGra
 	removed := nodeMemory.left.removeContainingFact(id, counters)
 	if removed > 0 {
 		m.propagateRemoveFactFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, id, counters, delta)
-	}
-	return true
-}
-
-func (m *reteGraphBetaMemory) removeNegativeBetaInputContainingFact(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
-	if m == nil || delta == nil || node == nil || id.IsZero() {
-		return false
-	}
-	nodeMemory := m.nodeMemory(nodeID)
-	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-	switch side {
-	case reteGraphBetaInputLeft:
-		nodeMemory.left.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
-			if row.negativeBlockerCount() == 0 {
-				m.propagateRemoveFromStage(source, row.token, counters, delta)
-			}
-		})
-	case reteGraphBetaInputRight:
-		var tokens []tokenRef
-		nodeMemory.right.forEachTokenContainingFact(id, counters, func(row graphTokenRow) {
-			if !row.token.isZero() {
-				tokens = append(tokens, row.token)
-			}
-		})
-		for _, token := range tokens {
-			if !m.removeNegativeBetaInputToken(nodeID, side, node, token, counters, delta) {
-				return false
-			}
-		}
-	default:
-		return false
 	}
 	return true
 }

@@ -176,6 +176,55 @@ func (m reteGraphNegativeBetaMemory) removeRight(joinKey betaJoinKey, token toke
 	return true
 }
 
+func (m reteGraphNegativeBetaMemory) removeContainingFact(side reteGraphBetaInputSide, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || id.IsZero() {
+		return false
+	}
+	switch side {
+	case reteGraphBetaInputLeft:
+		return m.removeLeftContainingFact(id, counters, delta)
+	case reteGraphBetaInputRight:
+		return m.removeRightContainingFact(id, counters, delta)
+	default:
+		return false
+	}
+}
+
+func (m reteGraphNegativeBetaMemory) removeLeftContainingFact(id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m.owner == nil || m.memory == nil || delta == nil || id.IsZero() {
+		return false
+	}
+	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
+	m.memory.left.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
+		if row.negativeBlockerCount() == 0 {
+			m.owner.propagateRemoveFromStage(source, row.token, counters, delta)
+		}
+	})
+	return true
+}
+
+func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || id.IsZero() {
+		return false
+	}
+	var tokens []tokenRef
+	m.memory.right.forEachTokenContainingFact(id, counters, func(row graphTokenRow) {
+		if !row.token.isZero() {
+			tokens = append(tokens, row.token)
+		}
+	})
+	for _, token := range tokens {
+		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.owner.context(), m.node, token, nil)
+		if err != nil || !ok {
+			return false
+		}
+		if !m.removeRight(joinKey, token, counters, delta) {
+			return false
+		}
+	}
+	return true
+}
+
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false
