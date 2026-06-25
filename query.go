@@ -1157,7 +1157,7 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	if err := runtime.resetGraphBeta(ctx, s.facts); err != nil {
+	if err := runtime.resetGraphBetaForGeneration(ctx, s.facts, s.generation); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
 	}
 	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)

@@ -94,6 +94,15 @@ func newReteGraphClearEvent(generation Generation, origin mutationOrigin, counte
 	}
 }
 
+func reteGraphFactsGeneration(facts []FactSnapshot) Generation {
+	for _, fact := range facts {
+		if !fact.ID().IsZero() {
+			return fact.Generation()
+		}
+	}
+	return 0
+}
+
 func cloneFieldChanges(in []FieldChange) []FieldChange {
 	if len(in) == 0 {
 		return nil

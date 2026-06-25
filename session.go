@@ -169,7 +169,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rete.resetGraphBeta(context.Background(), state.detachedFactsByInsertionOrder(revision)); err != nil {
+	if err := rete.resetGraphBetaForGeneration(context.Background(), state.detachedFactsByInsertionOrder(revision), state.generation); err != nil {
 		return nil, err
 	}
 
@@ -1598,13 +1598,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
-	if err := rete.resetGraphBeta(ctx, facts); err != nil {
+	if err := rete.resetGraphBetaForGeneration(ctx, facts, next.generation); err != nil {
 		if s.rete != nil {
 			rollbackFacts := before.facts
 			if !s.resetBeforeSnapshot {
 				rollbackFacts = s.detachedFactsByInsertionOrder()
 			}
-			_ = s.rete.resetGraphBeta(context.Background(), rollbackFacts)
+			_ = s.rete.resetGraphBetaForGeneration(context.Background(), rollbackFacts, s.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
@@ -1721,7 +1721,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	phase := s.propagationCounterPhase()
-	if err := rete.resetGraphBeta(ctx, snapshot.facts); err != nil {
+	if err := rete.resetGraphBetaForGeneration(ctx, snapshot.facts, s.generation); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}

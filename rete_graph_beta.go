@@ -497,6 +497,10 @@ func (b graphTokenRowIDBucket) reset() graphTokenRowIDBucket {
 }
 
 func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot) (*reteGraphBetaMemory, error) {
+	return newReteGraphBetaMemoryForGeneration(ctx, revision, graph, facts, reteGraphFactsGeneration(facts))
+}
+
+func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, error) {
 	if revision == nil || graph == nil {
 		return nil, nil
 	}
@@ -515,7 +519,7 @@ func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteG
 	memory.reserveMemories(rowCapacity)
 	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
-	if err := memory.resetFacts(ctx, facts); err != nil {
+	if err := memory.resetFactsForGeneration(ctx, facts, generation); err != nil {
 		return nil, err
 	}
 	return memory, nil
@@ -1426,6 +1430,10 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 }
 
 func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapshot) error {
+	return m.resetFactsForGeneration(ctx, facts, reteGraphFactsGeneration(facts))
+}
+
+func (m *reteGraphBetaMemory) resetFactsForGeneration(ctx context.Context, facts []FactSnapshot, generation Generation) error {
 	if m == nil || m.graph == nil {
 		return nil
 	}
@@ -1437,7 +1445,9 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 	} else {
 		m.arena.reset()
 	}
-	m.clearMemories()
+	if _, err := m.propagateEvent(ctx, newReteGraphClearEvent(generation, mutationOrigin{}, nil)); err != nil {
+		return err
+	}
 	m.setFacts(facts)
 	m.deferNegativeOutputs = true
 	m.suppressTerminalDeltas = true

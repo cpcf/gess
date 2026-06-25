@@ -65,6 +65,102 @@ func TestReteGraphPropagationEventCarriesModifyMetadata(t *testing.T) {
 	}
 }
 
+func TestReteGraphPropagationEventCarriesClearMetadata(t *testing.T) {
+	origin := mutationOrigin{RuleID: "reset-rule", RuleRevisionID: "reset-revision"}
+
+	event := newReteGraphClearEvent(Generation(9), origin, nil)
+
+	if event.tag != reteGraphPropagationClear {
+		t.Fatalf("event tag = %d, want clear", event.tag)
+	}
+	if event.sourceGeneration != 9 {
+		t.Fatalf("source generation = %d, want 9", event.sourceGeneration)
+	}
+	if event.origin != origin {
+		t.Fatalf("origin = %#v, want %#v", event.origin, origin)
+	}
+}
+
+func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "graph-clear-event-seed-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"age":    32,
+		"note":   "old",
+		"status": "active",
+	})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	facts := mustSnapshot(t, ctx, session).Facts()
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation())
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
+	}
+	if got := memory.memoryStats().TokenRows; got == 0 {
+		t.Fatal("token rows before clear = 0, want retained graph memory")
+	}
+
+	delta, err := memory.propagateEvent(ctx, newReteGraphClearEvent(Generation(9), mutationOrigin{}, nil))
+	if err != nil {
+		t.Fatalf("propagate clear event: %v", err)
+	}
+	if !delta.supported {
+		t.Fatal("clear event delta unsupported")
+	}
+	if got := memory.memoryStats().TokenRows; got != 0 {
+		t.Fatalf("token rows after clear = %d, want 0", got)
+	}
+	if got := len(memory.alphaFactCounts); got != 0 {
+		t.Fatalf("alpha fact counts after clear = %d, want 0", got)
+	}
+	if !memory.rootToken.isZero() {
+		t.Fatalf("root token after clear = %#v, want zero", memory.rootToken)
+	}
+}
+
+func TestReteGraphResetFactsClearsThroughEventAndReassertsFacts(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "graph-reset-event-seed-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		"age":    32,
+		"note":   "old",
+		"status": "active",
+	})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	facts := mustSnapshot(t, ctx, session).Facts()
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation())
+	if err != nil {
+		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
+	}
+
+	if err := memory.resetFactsForGeneration(ctx, nil, Generation(9)); err != nil {
+		t.Fatalf("resetFactsForGeneration(empty): %v", err)
+	}
+	if got := memory.memoryStats().TokenRows; got != 0 {
+		t.Fatalf("token rows after empty reset = %d, want 0", got)
+	}
+	if got := len(memory.facts); got != 0 {
+		t.Fatalf("source facts after empty reset = %d, want 0", got)
+	}
+
+	if err := memory.resetFactsForGeneration(ctx, facts, Generation(10)); err != nil {
+		t.Fatalf("resetFactsForGeneration(facts): %v", err)
+	}
+	deltas, ok, err := memory.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unavailable")
+	}
+	if got, want := len(deltas), 1; got != want {
+		t.Fatalf("terminal deltas after reassert reset = %d, want %d", got, want)
+	}
+}
+
 func TestReteRuntimePropagatesAddRemoveAndUpdateEvents(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)

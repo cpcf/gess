@@ -286,6 +286,10 @@ func (r *reteRuntime) metrics() reteRuntimeMetrics {
 }
 
 func (r *reteRuntime) resetGraphBeta(ctx context.Context, facts []FactSnapshot) error {
+	return r.resetGraphBetaForGeneration(ctx, facts, reteGraphFactsGeneration(facts))
+}
+
+func (r *reteRuntime) resetGraphBetaForGeneration(ctx context.Context, facts []FactSnapshot, generation Generation) error {
 	if r == nil {
 		return nil
 	}
@@ -298,14 +302,14 @@ func (r *reteRuntime) resetGraphBeta(ctx context.Context, facts []FactSnapshot) 
 		return r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
+		memory, err := newReteGraphBetaMemoryForGeneration(ctx, r.revision, r.graph, facts, generation)
 		if err != nil {
 			return err
 		}
 		r.graphBeta = memory
 		return nil
 	}
-	return r.graphBeta.resetFacts(ctx, facts)
+	return r.graphBeta.resetFactsForGeneration(ctx, facts, generation)
 }
 
 func (r *reteRuntime) clearMemories() {
