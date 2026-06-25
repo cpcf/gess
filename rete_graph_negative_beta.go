@@ -225,6 +225,19 @@ func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counte
 	return true
 }
 
+func (m reteGraphNegativeBetaMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
+	if m.owner == nil || m.node == nil || m.memory == nil || id.IsZero() || refresh == nil {
+		return false
+	}
+	if !m.memory.left.refreshTokensContainingFact(id, refresh) {
+		return false
+	}
+	if !m.memory.right.refreshTokensContainingFact(id, refresh) {
+		return false
+	}
+	return true
+}
+
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false

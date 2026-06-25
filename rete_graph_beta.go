@@ -4445,6 +4445,16 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, eve
 		return m.refreshTokenFactRefInPlaceCached(row.token, before.ID(), afterRef, cache)
 	}
 	for _, nodeID := range scope.betaNodes {
+		betaNode := m.graph.betaNode(nodeID)
+		if betaNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if betaNode.kind == reteGraphBetaNodeNot {
+			if !m.negativeBetaMemory(nodeID, betaNode).refreshTokensContainingFact(before.ID(), refresh) {
+				return reteAgendaDelta{}, false
+			}
+			continue
+		}
 		nodeMemory := m.nodeMemory(nodeID)
 		if nodeMemory == nil {
 			continue
