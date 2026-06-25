@@ -426,6 +426,7 @@ type agenda struct {
 	byFactID            map[FactID]activationKeyBucket
 	byRevision          map[RuleRevisionID]activationKeyBucket
 	tokenFactIndexDirty bool
+	revisionIndexDirty  bool
 	nextOrdinal         uint64
 	revision            *Ruleset
 	propagationCounters *propagationCounterLedger
@@ -506,6 +507,7 @@ func (a *agenda) reset() {
 	}
 	a.purgeActivations = nil
 	a.tokenFactIndexDirty = false
+	a.revisionIndexDirty = false
 	a.nextOrdinal = 0
 }
 
@@ -1388,6 +1390,7 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 	if a == nil {
 		return nil
 	}
+	a.ensureRevisionIndex()
 	bucket := a.byRevision[id]
 	if bucket.len() == 0 {
 		return nil
@@ -1409,14 +1412,17 @@ func (a *agenda) rebuildIndexes() {
 	a.resetIndexesForRebuild()
 	for _, bucket := range a.activations {
 		if current := bucket.first; current != nil {
-			a.indexActivation(current)
+			a.indexActivationFacts(current, false)
+			a.indexActivationRevision(current)
 		}
 		if current := bucket.second; current != nil {
-			a.indexActivation(current)
+			a.indexActivationFacts(current, false)
+			a.indexActivationRevision(current)
 		}
 		for _, current := range bucket.overflow {
 			if current != nil {
-				a.indexActivation(current)
+				a.indexActivationFacts(current, false)
+				a.indexActivationRevision(current)
 			}
 		}
 	}
@@ -1449,8 +1455,35 @@ func (a *agenda) ensureFactIndex() {
 	a.tokenFactIndexDirty = false
 }
 
+func (a *agenda) ensureRevisionIndex() {
+	if a == nil || !a.revisionIndexDirty {
+		return
+	}
+	if a.byRevision == nil {
+		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
+	} else {
+		resetActivationIndex(a.byRevision)
+	}
+	for _, bucket := range a.activations {
+		if current := bucket.first; current != nil {
+			a.indexActivationRevision(current)
+		}
+		if current := bucket.second; current != nil {
+			a.indexActivationRevision(current)
+		}
+		for _, current := range bucket.overflow {
+			if current != nil {
+				a.indexActivationRevision(current)
+			}
+		}
+	}
+	pruneEmptyActivationIndex(a.byRevision)
+	a.revisionIndexDirty = false
+}
+
 func (a *agenda) resetIndexesForRebuild() {
 	a.tokenFactIndexDirty = false
+	a.revisionIndexDirty = false
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
@@ -1478,12 +1511,18 @@ func (a *agenda) indexActivation(act *activation) {
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
 	}
+
+	a.indexActivationFacts(act, false)
+	a.revisionIndexDirty = true
+}
+
+func (a *agenda) indexActivationRevision(act *activation) {
+	if a == nil || act == nil {
+		return
+	}
 	if a.byRevision == nil {
 		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
 	}
-
-	a.indexActivationFacts(act, false)
-
 	revisionBucket := a.byRevision[act.ruleRevisionID]
 	revisionBucket.append(act.key)
 	a.byRevision[act.ruleRevisionID] = revisionBucket
@@ -1761,7 +1800,9 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 	} else {
 		*stored = *act
 	}
-	return a.storePreparedActivation(stored)
+	key := a.storePreparedActivation(stored)
+	a.ensureRevisionIndex()
+	return key
 }
 
 func (a *agenda) storePreparedActivation(act *activation) activationKey {

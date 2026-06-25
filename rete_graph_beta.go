@@ -578,7 +578,8 @@ func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFact
 	if revision != nil {
 		capacity = max(capacity, revision.estimatedRunFactCapacity(initialFacts))
 	}
-	return max(1, (capacity+len(graph.alphaNodes)-1)/len(graph.alphaNodes))
+	perAlpha := (capacity + len(graph.alphaNodes) - 1) / len(graph.alphaNodes)
+	return max(max(1, perAlpha), runFactReservePerRule*2)
 }
 
 func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
