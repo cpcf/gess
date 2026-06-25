@@ -2574,14 +2574,6 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 	m.graphAggregateMemory(id).removeMembersContainingFact(factID, counters, delta)
 }
 
-func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
-	return m.graphAggregateMemory(id).refreshMembersContainingFact(factID, after, cache, delta)
-}
-
-func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
-	return m.graphAggregateMemory(id).refreshParentsContainingFact(factID, after, cache, delta)
-}
-
 func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, token tokenRef, match conditionMatch) (reteGraphAggregateMember, bool) {
 	if node == nil {
 		return reteGraphAggregateMember{}, false
@@ -4337,10 +4329,11 @@ func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, event 
 	}
 	delta := reteAgendaDelta{supported: true}
 	for _, aggregateNodeID := range scope.aggregateNodes {
-		if !m.refreshAggregateParentsContainingFact(aggregateNodeID, before.ID(), afterRef, cache, &delta) {
+		aggregateMemory := m.graphAggregateMemory(aggregateNodeID)
+		if !aggregateMemory.refreshParentsForModifyEvent(event, cache, &delta) {
 			return reteAgendaDelta{}, false
 		}
-		if !m.refreshAggregateMembersContainingFact(aggregateNodeID, before.ID(), afterRef, cache, &delta) {
+		if !aggregateMemory.refreshMembersForModifyEvent(event, cache, &delta) {
 			return reteAgendaDelta{}, false
 		}
 	}

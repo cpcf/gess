@@ -232,7 +232,9 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 	}
 }
 
-func (m reteGraphAggregateMemory) refreshParentsContainingFact(factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+func (m reteGraphAggregateMemory) refreshParentsForModifyEvent(event reteGraphPropagationEvent, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	factID := event.before.ID()
+	after := newConditionFactRefFromSnapshot(event.after)
 	if m.owner == nil || delta == nil || factID.IsZero() {
 		if delta != nil {
 			delta.supported = false
@@ -283,7 +285,9 @@ func (m reteGraphAggregateMemory) refreshParentsContainingFact(factID FactID, af
 	return delta.supported
 }
 
-func (m reteGraphAggregateMemory) refreshMembersContainingFact(factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPropagationEvent, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	factID := event.before.ID()
+	after := newConditionFactRefFromSnapshot(event.after)
 	if m.owner == nil || delta == nil || factID.IsZero() {
 		if delta != nil {
 			delta.supported = false
