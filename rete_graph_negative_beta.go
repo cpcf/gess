@@ -238,6 +238,17 @@ func (m reteGraphNegativeBetaMemory) refreshTokensContainingFact(id FactID, refr
 	return true
 }
 
+func (m reteGraphNegativeBetaMemory) refreshTokensForModifyEvent(event reteGraphPropagationEvent, cache map[tokenHandle]tokenRef) bool {
+	if m.owner == nil {
+		return false
+	}
+	factID := event.before.ID()
+	after := newConditionFactRefFromSnapshot(event.after)
+	return m.refreshTokensContainingFact(factID, func(row graphTokenRow) (tokenRef, bool) {
+		return m.owner.refreshTokenFactRefInPlaceCached(row.token, factID, after, cache)
+	})
+}
+
 func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false

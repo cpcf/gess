@@ -4192,7 +4192,7 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, eve
 			return reteAgendaDelta{}, false
 		}
 		if betaNode.kind == reteGraphBetaNodeNot {
-			if !m.negativeBetaMemory(nodeID, betaNode).refreshTokensContainingFact(before.ID(), refresh) {
+			if !m.negativeBetaMemory(nodeID, betaNode).refreshTokensForModifyEvent(event, cache) {
 				return reteAgendaDelta{}, false
 			}
 			continue
