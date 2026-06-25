@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -273,6 +274,50 @@ func TestAccumulateGraphMatchUsesRetainedTerminalRows(t *testing.T) {
 	}
 	if got, want := len(results[0].candidates), 1; got != want {
 		t.Fatalf("aggregate terminal candidates = %d, want %d", got, want)
+	}
+}
+
+func TestAccumulateUnsupportedGraphShapeReturnsRuntimeError(t *testing.T) {
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "two-aggregates",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Accumulate(
+				Match{Binding: "left", TemplateKey: item.Key()},
+				Count().As("left_count"),
+			),
+			Accumulate(
+				Match{Binding: "right", TemplateKey: item.Key()},
+				Sum(BindingFieldExpr{Binding: "right", Field: "amount"}).As("right_total"),
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if runtime.supportsGraphBeta() {
+		t.Fatal("runtime supports graph beta for unsupported aggregate shape")
+	}
+	err = runtime.validateExecutableGraphBetaRuntime()
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
+	}
+	for _, want := range []string{"aggregate", `rule="two-aggregates"`, "multiple aggregate conditions"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unsupported runtime error %q does not contain %q", err.Error(), want)
+		}
 	}
 }
 

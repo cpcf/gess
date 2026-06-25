@@ -111,6 +111,7 @@ const (
 	reteUnsupportedMissingTarget reteUnsupportedKind = "missing-target"
 	reteUnsupportedUnindexedJoin reteUnsupportedKind = "unindexed-join"
 	reteUnsupportedExpression    reteUnsupportedKind = "expression-predicate"
+	reteUnsupportedAggregate     reteUnsupportedKind = "aggregate"
 )
 
 type retePlanStats struct {
@@ -577,10 +578,12 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			supported:     true,
 			betaSupported: true,
 		}
-		if rule.hasAggregateConditions() && !ruleAggregatesIncrementalAgendaSupported(rule) {
-			rulePlan.supported = true
-			rulePlan.betaSupported = true
+		aggregateUnsupported := ruleAggregateUnsupportedReasons(rule)
+		if len(aggregateUnsupported) != 0 {
+			rulePlan.supported = false
+			rulePlan.betaSupported = false
 			plan.incrementalAgendaSupported = false
+			plan.unsupported = append(plan.unsupported, aggregateUnsupported...)
 		}
 		ruleRouteKeys := make(map[TemplateKey]struct{})
 
@@ -648,7 +651,15 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 }
 
 func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
+	if len(ruleAggregateUnsupportedReasons(rule)) != 0 {
+		return false
+	}
+	return rule.hasAggregateConditions()
+}
+
+func ruleAggregateUnsupportedReasons(rule compiledRule) []reteUnsupportedReason {
 	hasAggregate := false
+	var unsupported []reteUnsupportedReason
 	for _, branch := range rule.executionConditionBranches() {
 		aggregateIndex := -1
 		for i, plan := range branch.plans {
@@ -657,7 +668,15 @@ func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
 			}
 			hasAggregate = true
 			if aggregateIndex >= 0 {
-				return false
+				unsupported = append(unsupported, reteUnsupportedReason{
+					ruleID:         rule.id,
+					ruleRevisionID: rule.revisionID,
+					conditionID:    plan.id,
+					binding:        plan.binding,
+					kind:           reteUnsupportedAggregate,
+					detail:         "multiple aggregate conditions in one branch are not graph-supported",
+				})
+				continue
 			}
 			aggregateIndex = i
 		}
@@ -665,10 +684,21 @@ func ruleAggregatesIncrementalAgendaSupported(rule compiledRule) bool {
 			continue
 		}
 		if !reteGraphSupportsAggregateCondition(branch.plans[aggregateIndex], aggregateIndex > 0) {
-			return false
+			plan := branch.plans[aggregateIndex]
+			unsupported = append(unsupported, reteUnsupportedReason{
+				ruleID:         rule.id,
+				ruleRevisionID: rule.revisionID,
+				conditionID:    plan.id,
+				binding:        plan.binding,
+				kind:           reteUnsupportedAggregate,
+				detail:         "aggregate condition shape is not graph-supported",
+			})
 		}
 	}
-	return hasAggregate
+	if !hasAggregate {
+		return nil
+	}
+	return unsupported
 }
 
 func (p reteNetworkPlan) alphaRoutesForTemplateKey(templateKey TemplateKey) ([]reteConditionPlan, bool) {
