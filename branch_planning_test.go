@@ -170,6 +170,53 @@ func TestBranchPlanningIRKeepsStarJoinConnectedToCurrentToken(t *testing.T) {
 	}
 }
 
+func TestBranchPlanningIRPrefersStrongerJoinToCurrentToken(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		{
+			spec: RuleConditionSpec{
+				Binding: "root",
+				Name:    "root",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding: "event",
+				Name:    "event",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
+				},
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding: "grant",
+				Name:    "grant",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
+					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "region"}},
+				},
+			},
+			visible: true,
+		},
+	})
+
+	planned := ir.normalizedConditions()
+	if got, want := conditionBindings(planned), []string{"root", "grant", "event"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+	if got, want := len(planned[1].spec.JoinConstraints), 2; got != want {
+		t.Fatalf("grant joins = %d, want %d", got, want)
+	}
+	if got, want := len(planned[2].spec.JoinConstraints), 1; got != want {
+		t.Fatalf("event joins = %d, want %d", got, want)
+	}
+}
+
 func TestBranchPlanningIRPreservesJoinsWithoutReordering(t *testing.T) {
 	ir := newBranchPlanningIR(0, []normalizedRuleCondition{
 		{

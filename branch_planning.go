@@ -356,19 +356,27 @@ func (ir branchPlanningIR) planBranchPlanningSegment(segment []branchPlanningNod
 
 func (ir branchPlanningIR) selectNextBranchPlanningNode(nodes []branchPlanningNode, defined map[string]struct{}) int {
 	best := -1
+	bestJoinStrength := 0
 	for i, node := range nodes {
 		if !branchPlanningNodeReady(node, nodes, defined) {
 			continue
 		}
-		if best >= 0 && branchPlanningNodeConnectedToDefined(nodes[best], ir.joins, defined) && !branchPlanningNodeConnectedToDefined(node, ir.joins, defined) {
+		joinStrength := branchPlanningNodeJoinStrengthToDefined(node, ir.joins, defined)
+		if best < 0 {
+			best = i
+			bestJoinStrength = joinStrength
 			continue
 		}
-		if best >= 0 && !branchPlanningNodeConnectedToDefined(nodes[best], ir.joins, defined) && branchPlanningNodeConnectedToDefined(node, ir.joins, defined) {
-			best = i
+		if joinStrength != bestJoinStrength {
+			if joinStrength > bestJoinStrength {
+				best = i
+				bestJoinStrength = joinStrength
+			}
 			continue
 		}
-		if best < 0 || branchPlanningNodeLess(node, nodes[best]) {
+		if branchPlanningNodeLess(node, nodes[best]) {
 			best = i
+			bestJoinStrength = joinStrength
 		}
 	}
 	if best >= 0 {
@@ -395,35 +403,40 @@ func branchPlanningNodeReady(node branchPlanningNode, remaining []branchPlanning
 	return true
 }
 
-func branchPlanningNodeConnectedToDefined(node branchPlanningNode, joins []branchPlanningJoin, defined map[string]struct{}) bool {
+func branchPlanningNodeJoinStrengthToDefined(node branchPlanningNode, joins []branchPlanningJoin, defined map[string]struct{}) int {
 	if len(defined) == 0 {
-		return true
+		return 0
 	}
+	strength := 0
 	for _, binding := range node.defines {
-		if branchPlanningBindingConnectedToDefined(binding, joins, defined) {
-			return true
-		}
+		strength += branchPlanningBindingJoinStrengthToDefined(binding, joins, defined)
 	}
-	return false
+	return strength
 }
 
-func branchPlanningBindingConnectedToDefined(binding string, joins []branchPlanningJoin, defined map[string]struct{}) bool {
+func branchPlanningBindingJoinStrengthToDefined(binding string, joins []branchPlanningJoin, defined map[string]struct{}) int {
 	if binding == "" || len(defined) == 0 {
-		return false
+		return 0
 	}
+	strength := 0
 	for _, join := range joins {
+		connected := false
 		switch {
 		case join.leftBinding == binding:
-			if _, ok := defined[join.rightBinding]; ok {
-				return true
-			}
+			_, connected = defined[join.rightBinding]
 		case join.rightBinding == binding:
-			if _, ok := defined[join.leftBinding]; ok {
-				return true
-			}
+			_, connected = defined[join.leftBinding]
 		}
+		if !connected {
+			continue
+		}
+		if join.operator == FieldConstraintEqual {
+			strength += 2
+			continue
+		}
+		strength++
 	}
-	return false
+	return strength
 }
 
 func branchPlanningNodeLess(left, right branchPlanningNode) bool {
