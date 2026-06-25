@@ -1272,6 +1272,9 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		moved := m.rows[last]
 		moved.id = rowID
 		m.rows[index] = moved
+		if counters != nil {
+			counters.recordRemovalRowMoved()
+		}
 		if bucket, ok := m.indexes[moved.joinKey]; ok {
 			if bucket.replace(graphTokenRowID(last), rowID) {
 				m.indexes[moved.joinKey] = bucket

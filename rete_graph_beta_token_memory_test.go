@@ -27,6 +27,46 @@ func TestTokenHashMemoryStoresNegativeBlockerCount(t *testing.T) {
 	}
 }
 
+func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+
+	var memory tokenHashMemory
+	if !memory.insert(firstToken, betaJoinKey{}) {
+		t.Fatal("insert(first) returned false")
+	}
+	if !memory.insert(secondToken, betaJoinKey{}) {
+		t.Fatal("insert(second) returned false")
+	}
+	memory.ensureFactRows()
+
+	counters := newPropagationCounterLedger()
+	if removed := memory.removeContainingFact(firstFact.ID(), counters); removed != 1 {
+		t.Fatalf("removed rows = %d, want 1", removed)
+	}
+	snapshot := counters.snapshot()
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+		t.Fatalf("removal rows moved = %d, want %d", got, want)
+	}
+	if got := len(memory.rows); got != 1 {
+		t.Fatalf("rows after removal = %d, want 1", got)
+	}
+	if !memory.containsExactToken(secondToken) {
+		t.Fatal("moved token is missing from identity index")
+	}
+	if removed := memory.removeContainingFact(secondFact.ID(), counters); removed != 1 {
+		t.Fatalf("removed moved row = %d, want 1", removed)
+	}
+}
+
 func TestTokenHashMemoryReusesBucketRestStorage(t *testing.T) {
 	var memory tokenHashMemory
 	memory.indexes = make(map[betaJoinKey]graphTokenRowIDBucket)

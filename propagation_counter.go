@@ -55,6 +55,7 @@ type propagationCounterTotals struct {
 	RemovalIndexLookups                 int
 	RemovalRowsTouched                  int
 	RemovalRowsRemoved                  int
+	RemovalRowsMoved                    int
 	TerminalDeltasRemoved               int
 	NegativePropagationEvents           int
 	NegativeRowsRemoved                 int
@@ -123,6 +124,7 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.RemovalIndexLookups += other.RemovalIndexLookups
 	t.RemovalRowsTouched += other.RemovalRowsTouched
 	t.RemovalRowsRemoved += other.RemovalRowsRemoved
+	t.RemovalRowsMoved += other.RemovalRowsMoved
 	t.TerminalDeltasRemoved += other.TerminalDeltasRemoved
 	t.NegativePropagationEvents += other.NegativePropagationEvents
 	t.NegativeRowsRemoved += other.NegativeRowsRemoved
@@ -720,6 +722,13 @@ func (l *propagationCounterLedger) recordRemovalRowRemoved() {
 	l.totals.RemovalRowsRemoved++
 }
 
+func (l *propagationCounterLedger) recordRemovalRowMoved() {
+	if l == nil {
+		return
+	}
+	l.totals.RemovalRowsMoved++
+}
+
 func (l *propagationCounterLedger) recordTerminalDeltaRemoved() {
 	if l == nil {
 		return
@@ -941,6 +950,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-removal-index-lookups", float64(s.Totals.RemovalIndexLookups))
 	report("propagation-removal-rows-touched", float64(s.Totals.RemovalRowsTouched))
 	report("propagation-removal-rows-removed", float64(s.Totals.RemovalRowsRemoved))
+	report("propagation-removal-rows-moved", float64(s.Totals.RemovalRowsMoved))
 	report("propagation-terminal-deltas-removed", float64(s.Totals.TerminalDeltasRemoved))
 	report("propagation-negative-propagation-events", float64(s.Totals.NegativePropagationEvents))
 	report("propagation-negative-rows-removed", float64(s.Totals.NegativeRowsRemoved))
@@ -1093,6 +1103,7 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-removal-index-lookups=" + strconv.Itoa(s.Totals.RemovalIndexLookups),
 		"propagation-removal-rows-touched=" + strconv.Itoa(s.Totals.RemovalRowsTouched),
 		"propagation-removal-rows-removed=" + strconv.Itoa(s.Totals.RemovalRowsRemoved),
+		"propagation-removal-rows-moved=" + strconv.Itoa(s.Totals.RemovalRowsMoved),
 		"propagation-terminal-deltas-removed=" + strconv.Itoa(s.Totals.TerminalDeltasRemoved),
 		"propagation-negative-propagation-events=" + strconv.Itoa(s.Totals.NegativePropagationEvents),
 		"propagation-negative-rows-removed=" + strconv.Itoa(s.Totals.NegativeRowsRemoved),
