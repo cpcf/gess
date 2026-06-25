@@ -45,6 +45,54 @@ func TestSessionAlphaLiteralEqualityIndexInvalidatesAcrossModify(t *testing.T) {
 	}
 }
 
+func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-fact-route-index-session")
+
+	cold, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(cold): %v", err)
+	}
+	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+	memory := session.rete.graphBeta
+	if memory == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 1)
+	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 0)
+	if got, want := len(memory.alphaFactRoutes), 1; got != want {
+		t.Fatalf("alpha fact route index keys = %d, want %d", got, want)
+	}
+
+	if _, err := session.Modify(ctx, hot.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"category": "cold"})}); err != nil {
+		t.Fatalf("Modify(hot -> cold): %v", err)
+	}
+	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 0)
+	if got := len(memory.alphaFactRoutes); got != 0 {
+		t.Fatalf("alpha fact route index keys after modify out = %d, want 0", got)
+	}
+
+	if _, err := session.Modify(ctx, cold.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"category": "hot"})}); err != nil {
+		t.Fatalf("Modify(cold -> hot): %v", err)
+	}
+	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 1)
+	if got, want := len(memory.alphaFactRoutes), 1; got != want {
+		t.Fatalf("alpha fact route index keys after modify in = %d, want %d", got, want)
+	}
+
+	if _, err := session.Retract(ctx, cold.Fact.ID()); err != nil {
+		t.Fatalf("Retract(cold): %v", err)
+	}
+	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 0)
+	if got := len(memory.alphaFactRoutes); got != 0 {
+		t.Fatalf("alpha fact route index keys after retract = %d, want 0", got)
+	}
+}
+
 func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
@@ -186,5 +234,16 @@ func assertAlphaLiteralEqualityCandidates(t testing.TB, revision *Ruleset, sessi
 		if len(candidates[i].factIDs) != 1 || candidates[i].factIDs[0] != wantID {
 			t.Fatalf("candidate %d fact IDs = %#v, want [%s]", i, candidates[i].factIDs, wantID)
 		}
+	}
+}
+
+func assertAlphaFactRouteIndex(t testing.TB, memory *reteGraphBetaMemory, factID FactID, wantRoutes int) {
+	t.Helper()
+	routes := memory.alphaFactRoutes[factID]
+	if got := len(routes); got != wantRoutes {
+		t.Fatalf("alpha fact routes for %s = %d, want %d: %#v", factID, got, wantRoutes, routes)
+	}
+	if got := len(memory.matchedAlphaRouteIDsForFact(factID)); got != wantRoutes {
+		t.Fatalf("matched alpha routes for %s = %d, want %d", factID, got, wantRoutes)
 	}
 }

@@ -17,6 +17,7 @@ type reteGraphBetaMemory struct {
 	terminalsByRule        map[RuleRevisionID][]*reteGraphTerminalMemory
 	alphaFacts             []reteGraphAlphaFactSet
 	alphaConditions        [][]ConditionID
+	alphaFactRoutes        map[FactID][]reteGraphAlphaNodeID
 	alphaFactCounts        map[ConditionID]int
 	facts                  []FactSnapshot
 	factIndexes            map[FactID]int
@@ -656,6 +657,11 @@ func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
 		m.alphaFactCounts = make(map[ConditionID]int, conditionCount)
 	} else {
 		clear(m.alphaFactCounts)
+	}
+	if m.alphaFactRoutes == nil {
+		m.alphaFactRoutes = make(map[FactID][]reteGraphAlphaNodeID, factCapacity)
+	} else {
+		clear(m.alphaFactRoutes)
 	}
 }
 
@@ -1598,6 +1604,9 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	if m.alphaFactCounts != nil {
 		clear(m.alphaFactCounts)
 	}
+	if m.alphaFactRoutes != nil {
+		clear(m.alphaFactRoutes)
+	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 	m.rootToken = tokenRef{}
@@ -2232,11 +2241,8 @@ func (m *reteGraphBetaMemory) matchedAlphaRouteIDsForFact(id FactID) []reteGraph
 		return nil
 	}
 	m.resetAlphaRouteScratch()
-	for index := 1; index < len(m.alphaFacts); index++ {
-		if m.alphaFacts[index].contains(id) {
-			m.appendAlphaRouteCandidate(reteGraphAlphaNodeID(index))
-		}
-	}
+	m.appendAlphaRouteBucket(m.alphaFactRoutes[id])
+	m.sortAlphaRouteScratch()
 	return m.alphaRouteScratch
 }
 
@@ -3677,11 +3683,8 @@ func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactS
 	}
 	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
 	if len(nodeIDs) == 0 {
-		nodeIDs = m.snapshotAlphaRouteIDsForFact(fact)
-		if len(nodeIDs) == 0 {
-			m.removeAlphaFact(id)
-			return delta, nil
-		}
+		m.removeAlphaFact(id)
+		return delta, nil
 	}
 	for _, nodeID := range nodeIDs {
 		node := m.graph.alphaNode(nodeID)
@@ -3762,6 +3765,15 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 	if !m.alphaFacts[index].insert(fact.ID()) {
 		return
 	}
+	if m.alphaFactRoutes == nil {
+		m.alphaFactRoutes = make(map[FactID][]reteGraphAlphaNodeID)
+	}
+	routes := m.alphaFactRoutes[fact.ID()]
+	if !slices.Contains(routes, nodeID) {
+		routes = append(routes, nodeID)
+		slices.Sort(routes)
+		m.alphaFactRoutes[fact.ID()] = routes
+	}
 	if m.alphaFactCounts == nil {
 		m.alphaFactCounts = make(map[ConditionID]int)
 	}
@@ -3774,8 +3786,10 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
 	}
-	for index := range m.alphaFacts {
-		if !m.alphaFacts[index].remove(id) {
+	routes := slices.Clone(m.alphaFactRoutes[id])
+	for _, nodeID := range routes {
+		index := int(nodeID)
+		if index <= 0 || index >= len(m.alphaFacts) || !m.alphaFacts[index].remove(id) {
 			continue
 		}
 		for _, conditionID := range m.alphaConditions[index] {
@@ -3786,6 +3800,7 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 			m.alphaFactCounts[conditionID]--
 		}
 	}
+	delete(m.alphaFactRoutes, id)
 }
 
 func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
@@ -3859,9 +3874,6 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		return reteAgendaDelta{}, false, nil
 	}
 	nodeIDs := slices.Clone(m.matchedAlphaRouteIDsForFact(before.ID()))
-	if len(nodeIDs) == 0 {
-		nodeIDs = slices.Clone(m.snapshotAlphaRouteIDsForFact(before))
-	}
 	for _, nodeID := range m.snapshotAlphaRouteIDsForFact(after) {
 		if !slices.Contains(nodeIDs, nodeID) {
 			nodeIDs = append(nodeIDs, nodeID)
@@ -3906,9 +3918,6 @@ func (m *reteGraphBetaMemory) canSkipUnroutedModifyPropagation(event reteGraphPr
 		return false
 	}
 	if len(m.matchedAlphaRouteIDsForFact(before.ID())) != 0 {
-		return false
-	}
-	if len(m.snapshotAlphaRouteIDsForFact(before)) != 0 {
 		return false
 	}
 	return len(m.snapshotAlphaRouteIDsForFact(after)) == 0
