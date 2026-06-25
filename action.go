@@ -509,10 +509,21 @@ type ActionSpec struct {
 	Name                 string
 	Fn                   ActionFunc
 	AssertTemplateValues *AssertTemplateValuesActionSpec
+	BindingReads         *ActionBindingReadSetSpec
 	// NonEscaping allows the engine to skip freezing unread bindings after a
 	// rule fires. Set it only when Fn does not retain ActionContext or any
 	// binding-derived data that depends on post-return defensive snapshots.
 	NonEscaping bool
+}
+
+type ActionBindingReadSetSpec struct {
+	Reads []ActionBindingReadSpec
+}
+
+type ActionBindingReadSpec struct {
+	Binding string
+	Field   string
+	Path    PathSpec
 }
 
 type AssertTemplateValuesActionSpec struct {
@@ -526,6 +537,30 @@ func (s ActionSpec) clone() ActionSpec {
 	if s.AssertTemplateValues != nil {
 		out.AssertTemplateValues = s.AssertTemplateValues.clone()
 	}
+	if s.BindingReads != nil {
+		out.BindingReads = s.BindingReads.clone()
+	}
+	return out
+}
+
+func (s *ActionBindingReadSetSpec) clone() *ActionBindingReadSetSpec {
+	if s == nil {
+		return nil
+	}
+	out := &ActionBindingReadSetSpec{
+		Reads: make([]ActionBindingReadSpec, len(s.Reads)),
+	}
+	for i, read := range s.Reads {
+		out.Reads[i] = read.clone()
+	}
+	return out
+}
+
+func (s ActionBindingReadSpec) clone() ActionBindingReadSpec {
+	out := s
+	out.Binding = strings.TrimSpace(out.Binding)
+	out.Field = strings.TrimSpace(out.Field)
+	out.Path = out.Path.clone()
 	return out
 }
 
@@ -581,6 +616,11 @@ func normalizeActionSpec(spec ActionSpec) (ActionSpec, error) {
 			Reason: "action must declare exactly one action implementation",
 		}
 	}
+	if normalized.BindingReads != nil && normalized.Fn == nil {
+		return ActionSpec{}, &ValidationError{
+			Reason: "binding reads can only be declared for action functions",
+		}
+	}
 	return normalized, nil
 }
 
@@ -605,6 +645,7 @@ type compiledAction struct {
 	name                 string
 	fn                   ActionFunc
 	assertTemplateValues *AssertTemplateValuesActionSpec
+	bindingReads         *ActionBindingReadSetSpec
 	order                int
 	skipBindingFreeze    bool
 }
@@ -622,6 +663,7 @@ type compiledRuleAction struct {
 	order                int
 	fn                   ActionFunc
 	assertTemplateValues compiledAssertTemplateValuesAction
+	bindingReads         actionBindingReadSet
 	skipBindingFreeze    bool
 }
 
@@ -649,6 +691,154 @@ type compiledTokenActionValue struct {
 	expression  compiledExpression
 }
 
+type actionBindingReadSet struct {
+	known bool
+	reads []actionBindingRead
+}
+
+type actionBindingRead struct {
+	bindingSlot int
+	access      compiledPathAccess
+	whole       bool
+}
+
+func compileDeclaredActionBindingReads(ruleName string, actionIndex int, spec *ActionBindingReadSetSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template) (actionBindingReadSet, error) {
+	if spec == nil {
+		return actionBindingReadSet{}, nil
+	}
+	out := actionBindingReadSet{
+		known: true,
+		reads: make([]actionBindingRead, 0, len(spec.Reads)),
+	}
+	for _, declared := range spec.Reads {
+		read, err := compileDeclaredActionBindingRead(ruleName, actionIndex, declared, conditions, bindingSlots, templatesByKey)
+		if err != nil {
+			return actionBindingReadSet{}, err
+		}
+		out.add(read)
+	}
+	return out, nil
+}
+
+func compileDeclaredActionBindingRead(ruleName string, actionIndex int, spec ActionBindingReadSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template) (actionBindingRead, error) {
+	normalized := spec.clone()
+	if normalized.Binding == "" {
+		return actionBindingRead{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			Reason:         "action binding read requires a binding",
+		}
+	}
+	if hasAmbiguousFieldAndPath(normalized.Field, normalized.Path) {
+		return actionBindingRead{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			FieldName:      normalized.Field,
+			Reason:         "action binding read cannot set both field and path",
+			Err:            ErrInvalidPath,
+		}
+	}
+	bindingSlot, ok := bindingSlots[normalized.Binding]
+	if !ok {
+		return actionBindingRead{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			Reason:         "action binding read must refer to a rule binding",
+		}
+	}
+	if bindingSlot < 0 || bindingSlot >= len(conditions) {
+		return actionBindingRead{}, fmt.Errorf("%w: malformed action binding slot %d", ErrMatcher, bindingSlot)
+	}
+	path := pathOrField(normalized.Path, normalized.Field)
+	if path.isZero() {
+		return actionBindingRead{bindingSlot: bindingSlot, whole: true}, nil
+	}
+	condition := conditions[bindingSlot]
+	access := compiledPathAccess{path: path.clone(), root: path.root(), rootSlot: -1}
+	if condition.templateKey != "" {
+		template, ok := templatesByKey[condition.templateKey]
+		if !ok {
+			return actionBindingRead{}, fmt.Errorf("%w: missing template for action binding %q", ErrMatcher, normalized.Binding)
+		}
+		compiled, _, err := compileExpressionPathRef(ruleName, -1, actionIndex, &template, path)
+		if err != nil {
+			return actionBindingRead{}, err
+		}
+		access = compiled
+	} else if err := path.validate(); err != nil {
+		return actionBindingRead{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			FieldName:      path.root(),
+			Reason:         "invalid action binding read path",
+			Err:            err,
+		}
+	}
+	return actionBindingRead{bindingSlot: bindingSlot, access: access}, nil
+}
+
+func actionBindingReadsForExpressions(expressions []compiledExpression) actionBindingReadSet {
+	out := actionBindingReadSet{known: true}
+	for _, expression := range expressions {
+		collectExpressionBindingReads(expression, &out)
+	}
+	return out
+}
+
+func collectExpressionBindingReads(expression compiledExpression, out *actionBindingReadSet) {
+	if out == nil {
+		return
+	}
+	switch expression.kind {
+	case expressionNodeBindingField:
+		out.add(actionBindingRead{bindingSlot: expression.bindingSlot, access: expression.access})
+	case expressionNodeBindingValue:
+		out.add(actionBindingRead{bindingSlot: expression.bindingSlot, whole: true})
+	case expressionNodeCall, expressionNodeCompare, expressionNodeBoolean:
+		for _, operand := range expression.operands {
+			collectExpressionBindingReads(operand, out)
+		}
+	}
+}
+
+func (s *actionBindingReadSet) add(read actionBindingRead) {
+	if s == nil || read.bindingSlot < 0 {
+		return
+	}
+	for i, existing := range s.reads {
+		if existing.bindingSlot != read.bindingSlot {
+			continue
+		}
+		if existing.whole || read.whole {
+			s.reads[i] = actionBindingRead{bindingSlot: read.bindingSlot, whole: true}
+			return
+		}
+		if existing.access.root == read.access.root && existing.access.rootSlot == read.access.rootSlot && slices.Equal(existing.access.path.Segments, read.access.path.Segments) {
+			return
+		}
+	}
+	s.reads = append(s.reads, read)
+}
+
+func (s actionBindingReadSet) observesModify(bindingSlot int, summary factModifySummary) bool {
+	if !s.known {
+		return true
+	}
+	for _, read := range s.reads {
+		if read.bindingSlot != bindingSlot {
+			continue
+		}
+		if read.whole || summary.observesAccess(read.access) {
+			return true
+		}
+	}
+	return false
+}
+
 func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 	normalized, err := normalizeActionSpec(spec)
 	if err != nil {
@@ -659,8 +849,9 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 		name:                 normalized.Name,
 		fn:                   normalized.Fn,
 		assertTemplateValues: normalized.AssertTemplateValues,
+		bindingReads:         normalized.BindingReads,
 		order:                order,
-		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil,
+		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil || (normalized.BindingReads != nil && len(normalized.BindingReads.Reads) == 0),
 	}, nil
 }
 
@@ -684,6 +875,11 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 	}
 	if action.fn != nil {
 		out.kind = compiledRuleActionFunction
+		readSet, err := compileDeclaredActionBindingReads(ruleName, actionIndex, action.bindingReads, conditions, bindingSlots, templatesByKey)
+		if err != nil {
+			return compiledRuleAction{}, err
+		}
+		out.bindingReads = readSet
 		return out, nil
 	}
 	if action.assertTemplateValues == nil {
@@ -756,6 +952,7 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 
 	out.kind = compiledRuleActionAssertTemplateValues
 	tokenValues := make([]compiledTokenActionValue, len(values))
+	out.bindingReads = actionBindingReadsForExpressions(values)
 	for i, value := range values {
 		tokenValues[i] = compileTokenActionValue(value)
 	}
@@ -858,6 +1055,8 @@ func serializeCompiledRuleAction(action compiledRuleAction) string {
 	switch action.kind {
 	case compiledRuleActionFunction:
 		b.WriteString("function")
+		b.WriteString(":reads:")
+		b.WriteString(serializeActionBindingReadSet(action.bindingReads))
 	case compiledRuleActionAssertTemplateValues:
 		b.WriteString("assert-template-values:")
 		b.WriteString(action.assertTemplateValues.template.Key().String())
@@ -880,6 +1079,12 @@ func serializeCompiledActionDeclaration(action compiledAction) string {
 	b.WriteString(fmt.Sprint(action.skipBindingFreeze))
 	if action.assertTemplateValues == nil {
 		b.WriteString(":function")
+		b.WriteString(":reads:")
+		if action.bindingReads == nil {
+			b.WriteString("unknown")
+		} else {
+			b.WriteString(serializeActionBindingReadSetSpec(action.bindingReads))
+		}
 		return b.String()
 	}
 	b.WriteString(":assert-template-values:")
@@ -887,6 +1092,43 @@ func serializeCompiledActionDeclaration(action compiledAction) string {
 	for _, value := range action.assertTemplateValues.Values {
 		b.WriteByte(':')
 		b.WriteString(serializeExpressionSpec(value))
+	}
+	return b.String()
+}
+
+func serializeActionBindingReadSet(set actionBindingReadSet) string {
+	if !set.known {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, read := range set.reads {
+		b.WriteString(fmt.Sprint(read.bindingSlot))
+		if read.whole {
+			b.WriteString(":*;")
+			continue
+		}
+		b.WriteByte(':')
+		b.WriteString(read.access.path.String())
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
+func serializeActionBindingReadSetSpec(spec *ActionBindingReadSetSpec) string {
+	if spec == nil {
+		return "unknown"
+	}
+	var b strings.Builder
+	for _, read := range spec.Reads {
+		b.WriteString(strings.TrimSpace(read.Binding))
+		path := pathOrField(read.Path, read.Field)
+		if path.isZero() {
+			b.WriteString(":*;")
+			continue
+		}
+		b.WriteByte(':')
+		b.WriteString(path.String())
+		b.WriteByte(';')
 	}
 	return b.String()
 }

@@ -532,7 +532,7 @@ func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        cloneFields(f.fields),
-		fieldSlots:    cloneFactSlots(f.fieldSlots),
+		fieldSlots:    f.fieldSlots,
 		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},

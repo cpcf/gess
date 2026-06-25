@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+const reteMemoryMinimumFacts = 32
+
 func TestReteNetworkPlanDescribesDeclaredTemplateRules(t *testing.T) {
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
 	runtime, err := newReteRuntime(revision)
@@ -87,8 +89,8 @@ func TestReteRuntimeUnsupportedPlanFailsExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
-		t.Fatalf("resetAlpha: %v", err)
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
 	}
 	injectUnsupportedRuntimePlan(t, runtime, "adult-active")
 
@@ -691,12 +693,12 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
 		}
 	}
-	if session.rete == nil || !session.rete.usesGraphBeta() || session.rete.graphBeta == nil || session.rete.alpha != nil || session.rete.graphAlpha != nil {
-		t.Fatalf("session Rete runtime = %#v, want graph beta mode without legacy alpha memories", session.rete)
+	if session.rete == nil || !session.rete.usesGraphBeta() || session.rete.graphBeta == nil {
+		t.Fatalf("session Rete runtime = %#v, want graph beta mode", session.rete)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
-	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
-		t.Fatalf("resetAlpha: %v", err)
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
 	}
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
@@ -723,7 +725,7 @@ func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) 
 	if err != nil {
 		t.Fatalf("AssertTemplate active: %v", err)
 	}
-	assertAlphaMemoryFillerFacts(t, session, templateKey, reteAlphaMinimumFacts-3)
+	assertAlphaMemoryFillerFacts(t, session, templateKey, reteMemoryMinimumFacts-3)
 
 	assertAlphaMemoryCount(t, session, "adult-active", 1)
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
@@ -763,7 +765,7 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 22, "status": "active"})},
 		{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 16, "status": "active"})},
 	}
-	for i := len(initials); i < reteAlphaMinimumFacts; i++ {
+	for i := len(initials); i < reteMemoryMinimumFacts; i++ {
 		initials = append(initials, SessionInitialFact{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"age": 15, "status": "inactive"})})
 	}
 	session, err := NewSession(revision, WithSessionID("alpha-reset-session"), WithInitialFacts(initials...))
@@ -777,8 +779,8 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 3)
 	graphBetaMemory := session.rete.graphBeta
-	if graphBetaMemory == nil || session.rete.alpha != nil || session.rete.graphAlpha != nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta mode without legacy alpha memories", session.rete)
+	if graphBetaMemory == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.rete)
 	}
 
 	if _, err := session.Reset(ctx); err != nil {
@@ -786,9 +788,6 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 	}
 	if session.rete.graphBeta != graphBetaMemory {
 		t.Fatalf("graph beta memory pointer changed across reset: got %p want %p", session.rete.graphBeta, graphBetaMemory)
-	}
-	if session.rete.alpha != nil || session.rete.graphAlpha != nil {
-		t.Fatalf("legacy alpha memories after graph beta reset: alpha=%p graphAlpha=%p", session.rete.alpha, session.rete.graphAlpha)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
@@ -811,7 +810,7 @@ func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) 
 	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
 		t.Fatalf("AssertTemplate adult: %v", err)
 	}
-	assertAlphaMemoryFillerFacts(t, session, templateKey, reteAlphaMinimumFacts-2)
+	assertAlphaMemoryFillerFacts(t, session, templateKey, reteMemoryMinimumFacts-2)
 	assertAlphaMemoryCount(t, session, "adult-active", 1)
 
 	if _, err := session.ApplyRuleset(ctx, revision2); err != nil {
@@ -842,8 +841,8 @@ func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
-	if err := runtime.resetAlpha(ctx, mustSnapshot(t, ctx, session).Facts()); err != nil {
-		t.Fatalf("resetAlpha: %v", err)
+	if err := runtime.resetGraphBeta(ctx, mustSnapshot(t, ctx, session).Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
 	}
 	if len(runtime.plan.unsupported) != 0 {
 		t.Fatalf("unsupported plan reasons = %#v, want none", runtime.plan.unsupported)
@@ -885,8 +884,8 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
-	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+1)
-	for i := range reteAlphaMinimumFacts {
+	initials := make([]SessionInitialFact, 0, reteMemoryMinimumFacts+1)
+	for i := range reteMemoryMinimumFacts {
 		initials = append(initials, SessionInitialFact{
 			TemplateKey: noise.Key(),
 			Fields:      mustFields(t, map[string]any{"bucket": i}),
@@ -1102,8 +1101,8 @@ func TestReteRuntimeUsesGraphBetaForResidualOnlyNumericJoinPlans(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
-	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+3)
-	for i := range reteAlphaMinimumFacts {
+	initials := make([]SessionInitialFact, 0, reteMemoryMinimumFacts+3)
+	for i := range reteMemoryMinimumFacts {
 		initials = append(initials, SessionInitialFact{
 			TemplateKey: noise.Key(),
 			Fields:      mustFields(t, map[string]any{"bucket": i}),
@@ -2282,6 +2281,632 @@ func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
 	}
 }
 
+func TestReteRuntimeGraphBetaModifyUnmatchedIrrelevantSlotSkipsPropagation(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-unmatched-irrelevant-slot-session")
+	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+		"age":    20,
+		"note":   "old",
+		"status": "inactive",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations before modify = %d, want 0", got)
+	}
+	assertGraphBetaAlphaFactCount(t, session, "active-person", 0, 0)
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got, ok := result.Fact.Field("note"); !ok || !got.Equal(mustValue(t, "new")) {
+		t.Fatalf("modified note = %v, %t; want new, true", got, ok)
+	}
+	assertGraphBetaAlphaFactCount(t, session, "active-person", 0, 0)
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
+		t.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
+	}
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+	if got := snapshot.Totals.RemovalIndexLookups; got != 0 {
+		t.Fatalf("removal index lookups = %d, want 0", got)
+	}
+	if got := snapshot.Totals.TerminalDeltasRemoved; got != 0 {
+		t.Fatalf("terminal deltas removed = %d, want 0", got)
+	}
+}
+
+func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotFallsBack(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-matched-irrelevant-slot-session")
+	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+		"age":    20,
+		"note":   "old",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot := session.propagationCounterSnapshot()
+	if got := snapshot.Totals.ModifyFastPathSkips; got != 0 {
+		t.Fatalf("modify fast-path skips = %d, want 0", got)
+	}
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
+		t.Fatalf("removal index lookups = %d, want %d", got, want)
+	}
+}
+
+func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustModifyFastPathDeclaredNoReadRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-matched-declared-unobserved-slot-session")
+	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+		"age":    20,
+		"note":   "old",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal token updates = %d, want %d", got, want)
+	}
+	if delta.updated[0].before.isZero() {
+		t.Fatal("terminal update before token is zero")
+	}
+	if delta.updated[0].after.isZero() || delta.updated[0].after == delta.updated[0].before {
+		t.Fatal("terminal update after token was not refreshed")
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after unobserved modify = %q, want %q", got, beforeActivationID)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run after token refresh: %v", err)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "inactive"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate status: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("status modify = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after relevant modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply relevant delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply relevant delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "predicate-person",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "mark",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "adult-person",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "person",
+			TemplateKey: person.Key(),
+			Predicates: []ExpressionSpec{CompareExpr{
+				Operator: ExpressionCompareGreaterOrEqual,
+				Left:     CurrentFieldExpr{Field: "age"},
+				Right:    ConstExpr{Value: 18},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "graph-beta-modify-alpha-predicate-unobserved-slot-session")
+	inserted, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{
+		"age":  20,
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate person: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply note delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply note delta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after note modify = %q, want %q", got, beforeActivationID)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after note modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"age": 17}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate age: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("age modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after age modify = %d, want %d", got, want)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after age modify = %d, want 0", got)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply age delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply age delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey := mustBetaModifyFastPathDeclaredNoReadRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-joined-declared-unobserved-slot-session")
+	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+		"name": "Ada",
+		"dept": "Engineering",
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal token updates = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after joined unobserved modify = %q, want %q", got, beforeActivationID)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run after joined token refresh: %v", err)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"dept": "Research"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate dept: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("dept modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after join-key modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply join-key delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply join-key delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, eventKey := mustFilterModifyFastPathDeclaredNoReadRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-filter-declared-unobserved-slot-session")
+	event, err := session.AssertTemplate(ctx, eventKey, mustFields(t, map[string]any{
+		"id":     "event-1",
+		"note":   "old",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate event: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, event.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal token updates = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after filter unobserved modify = %q, want %q", got, beforeActivationID)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run after filter token refresh: %v", err)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, event.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "inactive"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate status: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("status modify = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after filter predicate modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply predicate delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply predicate delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+}
+
+func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, customerKey, _ := mustNegationModifyFastPathDeclaredNoReadRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-negation-left-declared-unobserved-slot-session")
+	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{
+		"id":   "c-1",
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate customer: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, customer.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal token updates = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("applyReteAgendaDelta: %v", err)
+	} else if !ok {
+		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after negative left unobserved modify = %q, want %q", got, beforeActivationID)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+}
+
+func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesBlocker(t *testing.T) {
+	ctx := context.Background()
+	revision, customerKey, blockKey := mustNegationModifyFastPathDeclaredNoReadRuleset(t)
+	session := mustSession(t, revision, "graph-beta-modify-negation-right-declared-unobserved-slot-session")
+	if _, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{
+		"id":   "c-1",
+		"note": "customer",
+	})); err != nil {
+		t.Fatalf("AssertTemplate customer: %v", err)
+	}
+	block, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{
+		"customer_id": "c-1",
+		"active":      true,
+		"code":        "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate block: %v", err)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations before modify = %d, want 0", got)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, block.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"code": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate code: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got := len(delta.updated); got != 0 {
+		t.Fatalf("terminal token updates = %d, want 0", got)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after blocker metadata modify = %d, want 0", got)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after code modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after code modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, block.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"active": false}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate active: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("active modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after blocker predicate modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply predicate delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply predicate delta unexpectedly skipped")
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after blocker predicate modify = %d, want %d", got, want)
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks after active modify = %d, want %d", got, want)
+	}
+}
+
 func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 	ctx := context.Background()
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
@@ -3210,6 +3835,78 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 	return mustCompileWorkspace(t, workspace), noise.Key(), employee.Key(), department.Key()
 }
 
+func mustBetaModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "employee",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "department",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "mark",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "employee-department",
+		Conditions: []RuleConditionSpec{
+			{Binding: "employee", TemplateKey: employee.Key()},
+			{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), employee.Key(), department.Key()
+}
+
+func mustFilterModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "event",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "mark",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "active-event",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "event", TemplateKey: event.Key()}),
+			Test{Expression: CompareExpr{
+				Operator: ExpressionCompareEqual,
+				Left:     BindingFieldExpr{Binding: "event", Field: "status"},
+				Right:    ConstExpr{Value: "active"},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), event.Key()
+}
+
 func mustNegationRuleset(t testing.TB, action func(ActionContext) error) (*Ruleset, TemplateKey, TemplateKey) {
 	t.Helper()
 
@@ -3234,6 +3931,52 @@ func mustNegationRuleset(t testing.TB, action func(ActionContext) error) (*Rules
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "mark",
 		Fn:   action,
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "customer-without-active-block",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Not{Condition: Match{
+				Binding:     "block",
+				TemplateKey: block.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "active", Operator: FieldConstraintEqual, Value: true},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
+				},
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), customer.Key(), block.Key()
+}
+
+func mustNegationModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	customer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "customer",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	block := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "block",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "customer_id", Kind: ValueString, Required: true},
+			{Name: "active", Kind: ValueBool, Required: true},
+			{Name: "code", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "mark",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-without-active-block",
@@ -3378,8 +4121,8 @@ func mustGraphTopologyRemovalInitialFacts(t testing.TB, employeeKey, departmentK
 func mustBetaMemoryInitialFacts(t testing.TB, noiseKey, employeeKey, departmentKey TemplateKey) []SessionInitialFact {
 	t.Helper()
 
-	initials := make([]SessionInitialFact, 0, reteAlphaMinimumFacts+3)
-	for i := range reteAlphaMinimumFacts {
+	initials := make([]SessionInitialFact, 0, reteMemoryMinimumFacts+3)
+	for i := range reteMemoryMinimumFacts {
 		initials = append(initials, SessionInitialFact{
 			TemplateKey: noiseKey,
 			Fields:      mustFields(t, map[string]any{"bucket": i}),
@@ -3537,6 +4280,73 @@ func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldCo
 	return mustCompileWorkspace(t, workspace), person.Key()
 }
 
+func mustModifyFastPathRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "person",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "active-person",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
+func mustModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "person",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "mark",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "active-person",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
 func injectUnsupportedRuntimePlan(t testing.TB, runtime *reteRuntime, ruleName string) {
 	t.Helper()
 	if runtime == nil {
@@ -3602,27 +4412,6 @@ func assertAlphaMemoryFillerFacts(t testing.TB, session *Session, templateKey Te
 	for i := range count {
 		if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{"age": 15, "status": "inactive"})); err != nil {
 			t.Fatalf("AssertTemplate filler %d: %v", i, err)
-		}
-	}
-}
-
-func assertAlphaMemoryGeneration(t testing.TB, session *Session, ruleName string, want Generation) {
-	t.Helper()
-	if session == nil || session.rete == nil || session.rete.alpha == nil {
-		t.Fatal("session has no alpha memory")
-	}
-	rule, ok := session.revision.rules[ruleName]
-	if !ok {
-		t.Fatalf("rule %q not found", ruleName)
-	}
-	conditionID := rule.conditionPlans[0].id
-	facts, ok := session.rete.alpha.factsForCondition(conditionID)
-	if !ok {
-		t.Fatalf("alpha facts for %s unavailable", ruleName)
-	}
-	for i, fact := range facts {
-		if fact.Generation() != want {
-			t.Fatalf("alpha fact %d generation = %d, want %d", i, fact.Generation(), want)
 		}
 	}
 }

@@ -230,6 +230,126 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	}
 }
 
+func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing.T) {
+	var observed []Fields
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "record",
+		BindingReads: &ActionBindingReadSetSpec{},
+		Fn: func(ctx ActionContext) error {
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
+			total, ok := ctx.BindingValue("total")
+			if !ok {
+				return errors.New("missing total binding")
+			}
+			observed = append(observed, Fields{"count": count, "total": total})
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "total",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", TemplateKey: item.Key()},
+			Count().As("count"),
+			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+		),
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-unobserved-member-modify-session")
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3, "note": "first"})); err != nil {
+		t.Fatalf("assert first: %v", err)
+	}
+	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5, "note": "old"}))
+	if err != nil {
+		t.Fatalf("assert second: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(context.Background(), second.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	}
+	if got := len(delta.updated); got != 0 {
+		t.Fatalf("terminal updates after note modify = %d, want 0", got)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply note delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply note delta unexpectedly skipped")
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after note modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(context.Background(), second.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"amount": 1}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate amount: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("amount modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after amount modify = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after amount modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply amount delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply amount delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	run, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Fired != 1 || !observed[len(observed)-1]["count"].Equal(mustValue(t, 2)) || !observed[len(observed)-1]["total"].Equal(mustValue(t, 4)) {
+		t.Fatalf("run fired/row = %d/%v, want 1/count=2 total=4", run.Fired, observed[len(observed)-1])
+	}
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want %d", got, want)
+	}
+}
+
 func TestAccumulateMinAndMaxUseIncrementalAgendaDeltas(t *testing.T) {
 	var observed []Fields
 	workspace := NewWorkspace()
@@ -548,6 +668,323 @@ func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) 
 		t.Fatalf("second Run fired = %d, want 2", result.Fired)
 	}
 	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 2}, "b": {0, 0}})
+}
+
+func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing.T) {
+	var observed []bucketedAggregateRow
+	workspace := NewWorkspace()
+	group := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "group",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		BindingReads: &ActionBindingReadSetSpec{Reads: []ActionBindingReadSpec{
+			{Binding: "group", Field: "id"},
+			{Binding: "count"},
+			{Binding: "total"},
+		}},
+		Fn: func(ctx ActionContext) error {
+			groupID, ok := ctx.BindingScalarValue("group", "id")
+			if !ok {
+				return errors.New("missing group id")
+			}
+			groupName, ok := groupID.AsString()
+			if !ok {
+				return errors.New("group id is not a string")
+			}
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
+			total, ok := ctx.BindingValue("total")
+			if !ok {
+				return errors.New("missing total binding")
+			}
+			observed = append(observed, bucketedAggregateRow{group: groupName, count: count, total: total})
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "group-totals",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "group", TemplateKey: group.Key()},
+			Accumulate(
+				Match{
+					Binding:     "item",
+					TemplateKey: item.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					},
+				},
+				Count().As("count"),
+				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "bucketed-aggregate-unobserved-member-modify-session")
+	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("assert group a: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("assert group b: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3, "note": "first"})); err != nil {
+		t.Fatalf("assert item i1: %v", err)
+	}
+	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5, "note": "old"}))
+	if err != nil {
+		t.Fatalf("assert item i2: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(context.Background(), second.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	}
+	if got := len(delta.updated); got != 0 {
+		t.Fatalf("terminal updates after note modify = %d, want 0", got)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply note delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply note delta unexpectedly skipped")
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after note modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(context.Background(), second.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"amount": 1}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate amount: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("amount modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after amount modify = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after amount modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply amount delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply amount delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	start := len(observed)
+	run, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if run.Fired != 2 {
+		t.Fatalf("second Run fired = %d, want 2", run.Fired)
+	}
+	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 3}, "b": {1, 1}})
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks after amount modify = %d, want %d", got, want)
+	}
+}
+
+func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *testing.T) {
+	var observed []bucketedAggregateRow
+	workspace := NewWorkspace()
+	group := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "group",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		BindingReads: &ActionBindingReadSetSpec{Reads: []ActionBindingReadSpec{
+			{Binding: "group", Field: "id"},
+			{Binding: "count"},
+			{Binding: "total"},
+		}},
+		Fn: func(ctx ActionContext) error {
+			groupID, ok := ctx.BindingScalarValue("group", "id")
+			if !ok {
+				return errors.New("missing group id")
+			}
+			groupName, ok := groupID.AsString()
+			if !ok {
+				return errors.New("group id is not a string")
+			}
+			count, ok := ctx.BindingValue("count")
+			if !ok {
+				return errors.New("missing count binding")
+			}
+			total, ok := ctx.BindingValue("total")
+			if !ok {
+				return errors.New("missing total binding")
+			}
+			observed = append(observed, bucketedAggregateRow{group: groupName, count: count, total: total})
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "group-totals",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "group", TemplateKey: group.Key()},
+			Accumulate(
+				Match{
+					Binding:     "item",
+					TemplateKey: item.Key(),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					},
+				},
+				Count().As("count"),
+				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "bucketed-aggregate-unobserved-outer-modify-session")
+	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a", "note": "first"})); err != nil {
+		t.Fatalf("assert group a: %v", err)
+	}
+	secondGroup, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b", "note": "old"}))
+	if err != nil {
+		t.Fatalf("assert group b: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3})); err != nil {
+		t.Fatalf("assert item i1: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5})); err != nil {
+		t.Fatalf("assert item i2: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(context.Background(), secondGroup.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply note delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply note delta unexpectedly skipped")
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after note modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(context.Background(), secondGroup.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"id": "c"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate id: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("id modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after id modify = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after id modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
+		t.Fatalf("apply id delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply id delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	start := len(observed)
+	run, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if run.Fired != 2 {
+		t.Fatalf("Run fired = %d, want 2", run.Fired)
+	}
+	assertBucketedAggregateRows(t, observed[start:], map[string][2]int64{"a": {1, 3}, "c": {0, 0}})
+
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks after id modify = %d, want %d", got, want)
+	}
 }
 
 func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {

@@ -77,6 +77,8 @@ type propagationCounterTotals struct {
 	FunctionCancellations       int
 	NestedPathEvaluations       int
 	NestedPathMisses            int
+	ModifyFastPathSkips         int
+	ModifyFastPathFallbacks     int
 }
 
 func (t *propagationCounterTotals) add(other propagationCounterTotals) {
@@ -126,6 +128,8 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.FunctionCancellations += other.FunctionCancellations
 	t.NestedPathEvaluations += other.NestedPathEvaluations
 	t.NestedPathMisses += other.NestedPathMisses
+	t.ModifyFastPathSkips += other.ModifyFastPathSkips
+	t.ModifyFastPathFallbacks += other.ModifyFastPathFallbacks
 }
 
 type propagationCounterKey struct {
@@ -165,7 +169,6 @@ type propagationRuntimePath string
 const (
 	propagationRuntimeUnknown     propagationRuntimePath = "unknown"
 	propagationRuntimeGraphBeta   propagationRuntimePath = "graph-beta"
-	propagationRuntimeGraphAlpha  propagationRuntimePath = "graph-alpha-only"
 	propagationRuntimeUnsupported propagationRuntimePath = "unsupported"
 )
 
@@ -544,6 +547,20 @@ func (l *propagationCounterLedger) recordActivationStored() {
 	l.totals.ActivationsStored++
 }
 
+func (l *propagationCounterLedger) recordModifyFastPathSkip() {
+	if l == nil {
+		return
+	}
+	l.totals.ModifyFastPathSkips++
+}
+
+func (l *propagationCounterLedger) recordModifyFastPathFallback() {
+	if l == nil {
+		return
+	}
+	l.totals.ModifyFastPathFallbacks++
+}
+
 func (l *propagationCounterLedger) recordRemovalIndexLookup() {
 	if l == nil {
 		return
@@ -806,6 +823,8 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-function-cancellations", float64(s.Totals.FunctionCancellations))
 	report("propagation-nested-path-evaluations", float64(s.Totals.NestedPathEvaluations))
 	report("propagation-nested-path-misses", float64(s.Totals.NestedPathMisses))
+	report("propagation-modify-fast-path-skips", float64(s.Totals.ModifyFastPathSkips))
+	report("propagation-modify-fast-path-fallbacks", float64(s.Totals.ModifyFastPathFallbacks))
 
 	rhsAsserts := float64(max(1, s.Totals.RHSAsserts))
 	report("propagation-rule-memories-visited/rhs-assert", float64(s.Totals.RuleMemoriesVisited)/rhsAsserts)
@@ -844,7 +863,6 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-branch-count", float64(len(s.ByBranch)))
 	report("propagation-branch-retained-count", float64(len(s.BranchRowsRetained)))
 	report("propagation-runtime-graph-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphBeta))
-	report("propagation-runtime-graph-alpha-only", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphAlpha))
 	report("propagation-runtime-unsupported", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeUnsupported))
 	report("propagation-unsupported-reason-count", float64(len(s.UnsupportedReasons)))
 }
@@ -894,6 +912,8 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
 		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
+		"propagation-modify-fast-path-skips=" + strconv.Itoa(s.Totals.ModifyFastPathSkips),
+		"propagation-modify-fast-path-fallbacks=" + strconv.Itoa(s.Totals.ModifyFastPathFallbacks),
 		"propagation-removal-index-lookups=" + strconv.Itoa(s.Totals.RemovalIndexLookups),
 		"propagation-removal-rows-touched=" + strconv.Itoa(s.Totals.RemovalRowsTouched),
 		"propagation-removal-rows-removed=" + strconv.Itoa(s.Totals.RemovalRowsRemoved),

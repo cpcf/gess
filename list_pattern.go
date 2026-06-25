@@ -297,7 +297,44 @@ func (p compiledListPattern) matchesFact(fact conditionFactRef, bindings tokenRe
 	return p.matchItems(items, fact, bindings)
 }
 
+func (p compiledListPattern) matchesFactOnly(fact conditionFactRef, bindings tokenRef) (bool, error) {
+	value, ok := p.path.valueFromFact(fact)
+	if !ok || value.Kind() != ValueList {
+		return false, nil
+	}
+	items := value.data.([]Value)
+	return p.matchItemsOnly(items, fact, bindings)
+}
+
 func (p compiledListPattern) matchItems(items []Value, fact conditionFactRef, bindings tokenRef) ([]listPatternCapture, bool, error) {
+	variableIndex, fixedCount := p.variableElementIndexAndFixedCount()
+	if ok, err := p.matchItemsAroundVariable(items, fact, bindings, variableIndex, fixedCount); err != nil || !ok {
+		return nil, ok, err
+	}
+	if variableIndex < 0 {
+		return nil, true, nil
+	}
+
+	suffixCount := len(p.elements) - variableIndex - 1
+	segmentStart := fixedCount - (len(p.elements) - variableIndex - 1)
+	segmentEnd := len(items) - suffixCount
+	variable := p.elements[variableIndex]
+	if variable.kind != ListPatternElementSegment {
+		return nil, true, nil
+	}
+	value, err := canonicalValue(cloneValueSlice(items[segmentStart:segmentEnd]))
+	if err != nil {
+		return nil, false, err
+	}
+	return []listPatternCapture{{binding: variable.binding, bindingSlot: variable.bindingSlot, value: value}}, true, nil
+}
+
+func (p compiledListPattern) matchItemsOnly(items []Value, fact conditionFactRef, bindings tokenRef) (bool, error) {
+	variableIndex, fixedCount := p.variableElementIndexAndFixedCount()
+	return p.matchItemsAroundVariable(items, fact, bindings, variableIndex, fixedCount)
+}
+
+func (p compiledListPattern) variableElementIndexAndFixedCount() (int, int) {
 	var variableIndex = -1
 	fixedCount := 0
 	for i, element := range p.elements {
@@ -308,11 +345,15 @@ func (p compiledListPattern) matchItems(items []Value, fact conditionFactRef, bi
 			fixedCount++
 		}
 	}
+	return variableIndex, fixedCount
+}
+
+func (p compiledListPattern) matchItemsAroundVariable(items []Value, fact conditionFactRef, bindings tokenRef, variableIndex int, fixedCount int) (bool, error) {
 	if variableIndex < 0 && len(items) != len(p.elements) {
-		return nil, false, nil
+		return false, nil
 	}
 	if variableIndex >= 0 && len(items) < fixedCount {
-		return nil, false, nil
+		return false, nil
 	}
 
 	itemIndex := 0
@@ -322,34 +363,24 @@ func (p compiledListPattern) matchItems(items []Value, fact conditionFactRef, bi
 		}
 		ok, err := element.matchesItem(items[itemIndex], fact, bindings)
 		if err != nil || !ok {
-			return nil, ok, err
+			return ok, err
 		}
 		itemIndex++
 	}
 	if variableIndex < 0 {
-		return nil, true, nil
+		return true, nil
 	}
 
 	suffixCount := len(p.elements) - variableIndex - 1
-	segmentStart := itemIndex
 	segmentEnd := len(items) - suffixCount
 	for elementIndex := len(p.elements) - 1; elementIndex > variableIndex; elementIndex-- {
 		item := items[segmentEnd+(elementIndex-variableIndex-1)]
 		ok, err := p.elements[elementIndex].matchesItem(item, fact, bindings)
 		if err != nil || !ok {
-			return nil, ok, err
+			return ok, err
 		}
 	}
-
-	variable := p.elements[variableIndex]
-	if variable.kind != ListPatternElementSegment {
-		return nil, true, nil
-	}
-	value, err := canonicalValue(cloneValueSlice(items[segmentStart:segmentEnd]))
-	if err != nil {
-		return nil, false, err
-	}
-	return []listPatternCapture{{binding: variable.binding, bindingSlot: variable.bindingSlot, value: value}}, true, nil
+	return true, nil
 }
 
 func (e compiledListPatternElement) matchesItem(item Value, fact conditionFactRef, bindings tokenRef) (bool, error) {

@@ -1249,6 +1249,115 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		}
 	})
 
+	t.Run("supported token update delta", func(t *testing.T) {
+		workspace := NewWorkspace()
+		trigger := mustAddTemplate(t, workspace, TemplateSpec{
+			Name: "trigger",
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		})
+		person := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:            "person",
+			DuplicatePolicy: DuplicateAllow,
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "status", Kind: ValueString, Required: true},
+				{Name: "note", Kind: ValueString, Required: true},
+			},
+		})
+
+		var (
+			session     *Session
+			personID    FactID
+			actionsSeen []string
+		)
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "refresh-person",
+			Fn: func(ctx ActionContext) error {
+				actionsSeen = append(actionsSeen, "refresh-person")
+				result, err := ctx.Modify(personID, FactPatch{
+					Set: mustFields(t, map[string]any{"note": "new"}),
+				})
+				if err != nil {
+					return err
+				}
+				if result.Status != ModifyChanged {
+					return errors.New("person was not modified")
+				}
+				if session.agendaDirty {
+					return errors.New("supported token update dirtied agenda")
+				}
+				if !session.agendaReady {
+					return errors.New("supported token update cleared agenda readiness")
+				}
+				if !session.runAgendaPending {
+					return errors.New("supported token update did not record run delta")
+				}
+				snapshot := session.propagationCounterSnapshot()
+				if snapshot.Totals.ModifyFastPathSkips != 1 {
+					return errors.New("person modify did not use fast-path token update")
+				}
+				return nil
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name:         "record-person",
+			Fn:           func(ActionContext) error { actionsSeen = append(actionsSeen, "record-person"); return nil },
+			BindingReads: &ActionBindingReadSetSpec{},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "refresh-person-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "trigger", TemplateKey: trigger.Key()},
+			},
+			Actions: []RuleActionSpec{{Name: "refresh-person"}},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "active-person-rule",
+			Conditions: []RuleConditionSpec{{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+				},
+			}},
+			Actions: []RuleActionSpec{{Name: "record-person"}},
+		})
+		revision := mustCompileWorkspace(t, workspace)
+		session = mustSession(t, revision, "run-supported-token-update-delta-session")
+		inserted, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+			"id":     "p-1",
+			"status": "active",
+			"note":   "old",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate person: %v", err)
+		}
+		personID = inserted.Fact.ID()
+		if _, err := session.AssertTemplate(context.Background(), trigger.Key(), mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+			t.Fatalf("AssertTemplate trigger: %v", err)
+		}
+		session.attachPropagationCounters()
+
+		result, err := session.Run(context.Background())
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 2 {
+			t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+		}
+		if got, want := actionsSeen, []string{"refresh-person", "record-person"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("action order = %#v, want %#v", got, want)
+		}
+		if session.runAgendaPending {
+			t.Fatal("run delta remained pending after token update run")
+		}
+		if session.agendaDirty || !session.agendaReady {
+			t.Fatalf("agenda state after token update run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		}
+	})
+
 	t.Run("supported multi mutation coalesces", func(t *testing.T) {
 		workspace := NewWorkspace()
 		if err := workspace.AddTemplate(TemplateSpec{

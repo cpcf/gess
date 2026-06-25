@@ -1630,6 +1630,11 @@ func TestExpressionPredicatesSplitConjunctiveCompiledPlan(t *testing.T) {
 	if got := plan.predicates[1].placement; got != ExpressionPredicatePlacementBetaResidual {
 		t.Fatalf("compiled second predicate placement = %q, want beta residual", got)
 	}
+	for i, predicate := range plan.predicates {
+		if got, want := predicate.currentBindingSlot, plan.bindingSlot; got != want {
+			t.Fatalf("compiled predicate %d current binding slot = %d, want %d", i, got, want)
+		}
+	}
 }
 
 func TestExpressionPredicatesInvertGuaranteedNegatedComparisons(t *testing.T) {

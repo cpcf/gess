@@ -74,8 +74,8 @@ func TestReteRuntimeParityHarnessMatchesClaimsTriageOracle(t *testing.T) {
 		}
 	}
 	snapshot := mustSnapshot(t, ctx, session)
-	if err := runtime.resetAlpha(ctx, snapshot.Facts()); err != nil {
-		t.Fatalf("resetAlpha: %v", err)
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
 	}
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)

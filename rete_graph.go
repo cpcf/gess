@@ -1255,6 +1255,75 @@ func (t *reteGraphAlphaRouteTable) singleIndexedField() (int, bool) {
 	return t.indexedFields[0], true
 }
 
+func (g *reteGraph) alphaRoutesMayObserveModify(before, after FactSnapshot, summary factModifySummary) bool {
+	if g == nil || summary.unknown || len(summary.changes) == 0 {
+		return true
+	}
+	if before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() {
+		return true
+	}
+	for _, id := range g.routesByTemplateKey[after.TemplateKey()] {
+		node := g.alphaNode(id)
+		if node == nil || node.mayObserveModify(summary) {
+			return true
+		}
+	}
+	for _, id := range g.routesByName[after.Name()] {
+		node := g.alphaNode(id)
+		if node == nil || node.mayObserveModify(summary) {
+			return true
+		}
+	}
+	return false
+}
+
+func (n reteGraphAlphaNode) mayObserveModify(summary factModifySummary) bool {
+	if summary.unknown || len(summary.changes) == 0 {
+		return true
+	}
+	if listPatternsMayObserveModify(n.listPatterns, summary) {
+		return true
+	}
+	for _, constraint := range n.constraints {
+		if summary.observesAccess(constraint.access) {
+			return true
+		}
+	}
+	for _, predicate := range n.predicates {
+		if expressionMayObserveCurrentFactModify(predicate.expression, summary) {
+			return true
+		}
+	}
+	return false
+}
+
+func listPatternsMayObserveModify(patterns []compiledListPattern, summary factModifySummary) bool {
+	for _, pattern := range patterns {
+		if summary.observesAccess(pattern.path) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s factModifySummary) observesAccess(access compiledPathAccess) bool {
+	if s.unknown {
+		return true
+	}
+	if access.rootSlot >= 0 {
+		return s.hasChangedSlot(access.rootSlot)
+	}
+	if access.root == "" {
+		return true
+	}
+	for _, change := range s.changes {
+		if change.Field == access.root {
+			return true
+		}
+	}
+	return false
+}
+
 func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
 	for _, constraint := range constraints {
 		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
@@ -1389,7 +1458,7 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 
 func (n reteGraphAlphaNode) listPatternsMatch(fact conditionFactRef, bindings tokenRef) bool {
 	for _, pattern := range n.listPatterns {
-		if _, ok, err := pattern.matchesFact(fact, bindings); err != nil || !ok {
+		if ok, err := pattern.matchesFactOnly(fact, bindings); err != nil || !ok {
 			return false
 		}
 	}

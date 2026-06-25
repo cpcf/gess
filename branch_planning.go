@@ -190,9 +190,11 @@ func remapCompiledConditionPlanToPublicBranch(plan compiledConditionPlan, public
 	for i := range plan.predicates {
 		plan.predicates[i].expression = remapCompiledExpressionToPublicBranch(plan.predicates[i].expression, publicByBinding)
 	}
+	setCompiledExpressionPredicatesCurrentBindingSlot(plan.predicates, plan.bindingSlot)
 	for i := range plan.testPredicates {
 		plan.testPredicates[i].expression = remapCompiledExpressionToPublicBranch(plan.testPredicates[i].expression, publicByBinding)
 	}
+	setCompiledExpressionPredicatesCurrentBindingSlot(plan.testPredicates, -1)
 	if plan.aggregate != nil {
 		aggregate := *plan.aggregate
 		aggregate.inputPlans = remapCompiledConditionPlansToPublicBranch(aggregate.inputPlans, compiledRuleConditionSet{conditions: publicConditionsFromBindingMap(publicByBinding)})

@@ -154,7 +154,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		}
 	}
 	identityEntry := entry
-	identityEntry.value = cloneValue(match.value)
+	identityEntry.value = match.value
 	identityEntry.hasValue = match.hasValue
 	if !match.hasValue {
 		identityEntry.factID = match.fact.ID()
@@ -351,11 +351,19 @@ type reteAgendaDelta struct {
 	supported bool
 	added     []reteTerminalTokenDelta
 	removed   []reteTerminalTokenDelta
+	updated   []reteTerminalTokenUpdate
 }
 
 type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
 	token          tokenRef
+	identity       candidateIdentity
+}
+
+type reteTerminalTokenUpdate struct {
+	ruleRevisionID RuleRevisionID
+	before         tokenRef
+	after          tokenRef
 	identity       candidateIdentity
 }
 

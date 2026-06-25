@@ -301,11 +301,12 @@ const (
 )
 
 type compiledExpressionPredicate struct {
-	path       []int
-	ruleName   string
-	expression compiledExpression
-	placement  ExpressionPredicatePlacement
-	order      int
+	path               []int
+	ruleName           string
+	expression         compiledExpression
+	placement          ExpressionPredicatePlacement
+	order              int
+	currentBindingSlot int
 }
 
 type compiledExpression struct {
@@ -365,11 +366,12 @@ func compileExpressionPredicateSpecWithParams(
 			placement:  placement,
 			order:      predicateIndex,
 		}, compiledExpressionPredicate{
-			path:       []int{conditionIndex, predicateIndex},
-			ruleName:   ruleName,
-			expression: expression,
-			placement:  placement,
-			order:      predicateIndex,
+			path:               []int{conditionIndex, predicateIndex},
+			ruleName:           ruleName,
+			expression:         expression,
+			placement:          placement,
+			order:              predicateIndex,
+			currentBindingSlot: -1,
 		}, nil
 }
 
@@ -1478,6 +1480,12 @@ func cloneCompiledExpressionPredicates(in []compiledExpressionPredicate) []compi
 		out[i].expression = predicate.expression.clone()
 	}
 	return out
+}
+
+func setCompiledExpressionPredicatesCurrentBindingSlot(predicates []compiledExpressionPredicate, bindingSlot int) {
+	for i := range predicates {
+		predicates[i].currentBindingSlot = bindingSlot
+	}
 }
 
 func splitCompiledExpressionPredicate(predicate compiledExpressionPredicate) []compiledExpressionPredicate {

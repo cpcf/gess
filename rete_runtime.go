@@ -3,21 +3,16 @@ package gess
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 )
-
-const reteAlphaMinimumFacts = 32
 
 type reteRuntime struct {
 	revision               *Ruleset
 	graph                  *reteGraph
 	plan                   reteNetworkPlan
 	mode                   reteRuntimeMode
-	graphAlpha             *reteGraphAlphaMemory
 	graphBeta              *reteGraphBetaMemory
-	alpha                  *reteAlphaMemory
 	terminalRemovedScratch candidateScratch
 	terminalAddedScratch   candidateScratch
 }
@@ -27,7 +22,6 @@ type reteRuntimeMode uint8
 const (
 	runtimeModeUnsupported reteRuntimeMode = iota
 	runtimeModeGraphBeta
-	runtimeModeLegacyAlpha
 )
 
 type reteNetworkPlan struct {
@@ -291,50 +285,34 @@ func (r *reteRuntime) metrics() reteRuntimeMetrics {
 	return metrics
 }
 
-func (r *reteRuntime) resetAlpha(ctx context.Context, facts []FactSnapshot) error {
+func (r *reteRuntime) resetGraphBeta(ctx context.Context, facts []FactSnapshot) error {
 	if r == nil {
 		return nil
 	}
 	r.mode = r.determineMode()
-	if r.usesGraphBeta() {
-		r.graphAlpha = nil
-		r.alpha = nil
-		if r.graphBeta == nil {
-			memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
-			if err != nil {
-				return err
-			}
-			r.graphBeta = memory
+	if !r.usesGraphBeta() {
+		r.graphBeta = nil
+		if len(r.plan.rules) == 0 {
 			return nil
 		}
-		return r.graphBeta.resetFacts(ctx, facts)
+		return r.unsupportedRuntimeError()
 	}
-
-	r.graphBeta = nil
-	if r.graph != nil {
-		if r.graphAlpha == nil {
-			r.graphAlpha = newReteGraphAlphaMemory(r.graph)
-		}
-		if err := r.rebuildGraphAlpha(ctx, facts); err != nil {
+	if r.graphBeta == nil {
+		memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
+		if err != nil {
 			return err
 		}
+		r.graphBeta = memory
+		return nil
 	}
-	if r.alpha == nil {
-		r.alpha = newReteAlphaMemory(r.plan)
-	}
-	if err := r.alpha.reset(ctx, r.plan, facts); err != nil {
-		return err
-	}
-	return nil
+	return r.graphBeta.resetFacts(ctx, facts)
 }
 
 func (r *reteRuntime) clearMemories() {
 	if r == nil {
 		return
 	}
-	r.graphAlpha = nil
 	r.graphBeta = nil
-	r.alpha = nil
 }
 
 func (r *reteRuntime) rebuildBeta(ctx context.Context, facts []FactSnapshot) error {
@@ -406,13 +384,13 @@ func (r *reteRuntime) removeBetaFact(ctx context.Context, fact FactSnapshot, cou
 	return reteAgendaDelta{}, nil
 }
 
-func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{}, nil
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.updateFact(ctx, before, after, counters)
+		delta, err := r.graphBeta.updateFact(ctx, before, after, changes, duplicateChanged, counters)
 		if err != nil {
 			return delta, err
 		}
@@ -440,18 +418,11 @@ func (r *reteRuntime) determineMode() reteRuntimeMode {
 	if r.supportsGraphBeta() {
 		return runtimeModeGraphBeta
 	}
-	if r.graph == nil || len(r.plan.unsupported) != 0 {
-		return runtimeModeUnsupported
-	}
-	return runtimeModeLegacyAlpha
+	return runtimeModeUnsupported
 }
 
 func (r *reteRuntime) usesGraphBeta() bool {
 	return r != nil && r.mode == runtimeModeGraphBeta && r.supportsGraphBeta()
-}
-
-func (r *reteRuntime) usesLegacyAlpha() bool {
-	return r != nil && (r.mode == runtimeModeLegacyAlpha || r.mode == runtimeModeUnsupported)
 }
 
 func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[string]int) {
@@ -464,8 +435,6 @@ func (r *reteRuntime) propagationDiagnostics() (propagationRuntimePath, map[stri
 		path = propagationRuntimeGraphBeta
 	case r.mode == runtimeModeUnsupported:
 		path = propagationRuntimeUnsupported
-	case r.usesLegacyAlpha() && (r.graphAlpha != nil || r.alpha != nil):
-		path = propagationRuntimeGraphAlpha
 	}
 
 	reasons := make(map[string]int)
@@ -582,231 +551,6 @@ func (r *reteRuntime) insertGraphAlphaFactGenerated(ctx context.Context, fact *w
 	return delta, true, nil
 }
 
-func (r *reteRuntime) removeGraphAlphaFact(ctx context.Context, fact FactSnapshot) error {
-	if r == nil || r.revision == nil || r.graph == nil || r.graphAlpha == nil {
-		return nil
-	}
-	nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
-	if len(nodeIDs) == 0 {
-		return nil
-	}
-	for _, nodeID := range nodeIDs {
-		node := r.graph.alphaNode(nodeID)
-		if node == nil {
-			continue
-		}
-		matched, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, nil)
-		if err != nil {
-			return err
-		}
-		if !matched {
-			continue
-		}
-		r.graphAlpha.remove(nodeID, fact.ID())
-	}
-	return nil
-}
-
-func (r *reteRuntime) updateGraphAlphaFact(ctx context.Context, before, after FactSnapshot) error {
-	if r == nil || r.revision == nil || r.graph == nil || r.graphAlpha == nil {
-		return nil
-	}
-	if before.TemplateKey() == after.TemplateKey() {
-		nodeIDs := r.graphAlphaRouteIDsForSnapshot(after)
-		for _, nodeID := range nodeIDs {
-			node := r.graph.alphaNode(nodeID)
-			if node == nil {
-				continue
-			}
-			matchedBefore, err := node.matchesSnapshotWithContextAndCounters(ctx, before, nil)
-			if err != nil {
-				return err
-			}
-			matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
-			if err != nil {
-				return err
-			}
-			switch {
-			case matchedBefore && matchesAfter:
-				r.graphAlpha.upsert(nodeID, after)
-			case matchedBefore:
-				r.graphAlpha.remove(nodeID, before.ID())
-			case matchesAfter:
-				r.graphAlpha.upsert(nodeID, after)
-			}
-		}
-		return nil
-	}
-	if err := r.removeGraphAlphaFact(ctx, before); err != nil {
-		return err
-	}
-	nodeIDs := r.graphAlphaRouteIDsForSnapshot(after)
-	if len(nodeIDs) == 0 {
-		return nil
-	}
-	for _, nodeID := range nodeIDs {
-		node := r.graph.alphaNode(nodeID)
-		if node == nil {
-			continue
-		}
-		matched, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
-		if err != nil {
-			return err
-		}
-		if !matched {
-			continue
-		}
-		r.graphAlpha.upsert(nodeID, after)
-	}
-	return nil
-}
-
-func (r *reteRuntime) projectGraphAlphaConsumerSnapshot(consumer reteBetaConditionRoute, fact FactSnapshot, span *propagationCounterSpan) {
-	if r == nil || r.alpha == nil {
-		return
-	}
-	conditionMemory := r.alpha.conditions[consumer.conditionID]
-	if conditionMemory == nil {
-		return
-	}
-	conditionMemory.upsert(fact)
-}
-
-func (r *reteRuntime) rebuildGraphAlpha(ctx context.Context, facts []FactSnapshot) error {
-	if r == nil || r.revision == nil || r.graph == nil {
-		return nil
-	}
-	if r.graphAlpha == nil {
-		r.graphAlpha = newReteGraphAlphaMemory(r.graph)
-	}
-	r.graphAlpha.reset()
-	for _, fact := range facts {
-		nodeIDs := r.graphAlphaRouteIDsForSnapshot(fact)
-		if len(nodeIDs) == 0 {
-			continue
-		}
-		for _, nodeID := range nodeIDs {
-			node := r.graph.alphaNode(nodeID)
-			if node == nil {
-				continue
-			}
-			matched, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, nil)
-			if err != nil {
-				return err
-			}
-			if !matched {
-				continue
-			}
-			r.graphAlpha.upsert(nodeID, fact)
-		}
-	}
-	return nil
-}
-
-func (r *reteRuntime) graphAlphaRouteIDsForSnapshot(fact FactSnapshot) []reteGraphAlphaNodeID {
-	if r == nil || r.graph == nil {
-		return nil
-	}
-	templateIDs := r.graph.routesByTemplateKey[fact.TemplateKey()]
-	nameIDs := r.graph.routesByName[fact.Name()]
-	if len(templateIDs) == 0 {
-		return nameIDs
-	}
-	if len(nameIDs) == 0 {
-		return templateIDs
-	}
-	routes := make([]reteGraphAlphaNodeID, 0, len(templateIDs)+len(nameIDs))
-	routes = append(routes, templateIDs...)
-	routes = append(routes, nameIDs...)
-	slices.Sort(routes)
-	return routes
-}
-
-func (r *reteRuntime) graphAlphaRouteIDsForWorkingFact(fact *workingFact) []reteGraphAlphaNodeID {
-	if r == nil || r.graph == nil || fact == nil {
-		return nil
-	}
-	templateIDs := r.graph.routesByTemplateKey[fact.templateKey]
-	nameIDs := r.graph.routesByName[fact.name]
-	if len(templateIDs) == 0 {
-		return nameIDs
-	}
-	if len(nameIDs) == 0 {
-		return templateIDs
-	}
-	routes := make([]reteGraphAlphaNodeID, 0, len(templateIDs)+len(nameIDs))
-	routes = append(routes, templateIDs...)
-	routes = append(routes, nameIDs...)
-	slices.Sort(routes)
-	return routes
-}
-
-func (r *reteRuntime) insertAlphaFact(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) error {
-	if r == nil || r.alpha == nil {
-		return nil
-	}
-	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.TemplateKey()); routed {
-		ok, err := r.alpha.insertSelected(ctx, conditions, fact, span)
-		if err != nil || ok {
-			return err
-		}
-	}
-	return r.alpha.insert(ctx, r.plan, fact, span)
-}
-
-func (r *reteRuntime) insertAlphaFactGenerated(ctx context.Context, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) error {
-	if r == nil || r.alpha == nil || fact == nil {
-		return nil
-	}
-	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.templateKey); routed {
-		ok, err := r.alpha.insertSelectedGenerated(ctx, conditions, fact, snapshot, span)
-		if err != nil || ok {
-			return err
-		}
-	}
-	return r.alpha.insertGenerated(ctx, r.plan, fact, snapshot, span)
-}
-
-func (r *reteRuntime) removeAlphaFact(ctx context.Context, fact FactSnapshot) error {
-	if r == nil {
-		return nil
-	}
-	if err := r.removeGraphAlphaFact(ctx, fact); err != nil {
-		return err
-	}
-	if r.alpha == nil {
-		return nil
-	}
-	if conditions, routed := r.plan.alphaRoutesForTemplateKey(fact.TemplateKey()); routed {
-		if r.alpha.removeSelected(conditions, fact.ID()) {
-			return nil
-		}
-	}
-	r.alpha.remove(fact.ID())
-	return nil
-}
-
-func (r *reteRuntime) updateAlphaFact(ctx context.Context, before, after FactSnapshot) error {
-	if r == nil {
-		return nil
-	}
-	if err := r.updateGraphAlphaFact(ctx, before, after); err != nil {
-		return err
-	}
-	if r.alpha == nil {
-		return nil
-	}
-	if before.TemplateKey() == after.TemplateKey() {
-		if conditions, routed := r.plan.alphaRoutesForTemplateKey(after.TemplateKey()); routed {
-			ok, err := r.alpha.updateSelected(ctx, conditions, before, after)
-			if err != nil || ok {
-				return err
-			}
-		}
-	}
-	return r.alpha.update(ctx, r.plan, before, after)
-}
-
 func (r *reteRuntime) alphaFactCount(conditionID ConditionID) int {
 	if r == nil {
 		return 0
@@ -814,10 +558,7 @@ func (r *reteRuntime) alphaFactCount(conditionID ConditionID) int {
 	if r.graphBeta != nil {
 		return r.graphBeta.alphaFactCount(conditionID)
 	}
-	if r.alpha == nil {
-		return 0
-	}
-	return r.alpha.factCount(conditionID)
+	return 0
 }
 
 func planReteNetwork(revision *Ruleset) reteNetworkPlan {
@@ -904,7 +645,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 		}
 		plan.rules = append(plan.rules, rulePlan)
 	}
-	plan.betaSupported = len(plan.rules) > 0 || (revision.graph != nil && len(revision.graph.betaNodes) > 0)
+	plan.betaSupported = revision.graph != nil
 	plan.incrementalAgendaSupported = len(plan.rules) > 0
 	for _, rulePlan := range plan.rules {
 		rule, ok := revision.rulesByRevisionID[rulePlan.ruleRevisionID]
@@ -1099,11 +840,6 @@ func planReteCondition(revision *Ruleset, rule compiledRule, condition compiledC
 	return conditionPlan, unsupported
 }
 
-type alphaMatcher struct {
-	revision *Ruleset
-	source   alphaFactSource
-}
-
 type factSource interface {
 	sourceGeneration() Generation
 	factsForTarget(conditionTarget) ([]FactSnapshot, bool)
@@ -1111,446 +847,6 @@ type factSource interface {
 
 type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
-}
-
-type reteGraphAlphaMemory struct {
-	nodes map[reteGraphAlphaNodeID]*reteAlphaConditionMemory
-}
-
-func newReteGraphAlphaMemory(graph *reteGraph) *reteGraphAlphaMemory {
-	if graph == nil {
-		return nil
-	}
-	memory := &reteGraphAlphaMemory{
-		nodes: make(map[reteGraphAlphaNodeID]*reteAlphaConditionMemory, len(graph.alphaNodes)),
-	}
-	for _, node := range graph.alphaNodes {
-		memory.nodes[node.id] = &reteAlphaConditionMemory{
-			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
-			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
-		}
-	}
-	return memory
-}
-
-func (m *reteGraphAlphaMemory) reset() {
-	if m == nil {
-		return
-	}
-	for _, nodeMemory := range m.nodes {
-		if nodeMemory != nil {
-			nodeMemory.clear()
-		}
-	}
-}
-
-func (m *reteGraphAlphaMemory) upsert(id reteGraphAlphaNodeID, fact FactSnapshot) bool {
-	if m == nil {
-		return false
-	}
-	nodeMemory := m.nodes[id]
-	if nodeMemory == nil {
-		nodeMemory = &reteAlphaConditionMemory{
-			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
-			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
-		}
-		if m.nodes == nil {
-			m.nodes = make(map[reteGraphAlphaNodeID]*reteAlphaConditionMemory)
-		}
-		m.nodes[id] = nodeMemory
-	}
-	return nodeMemory.upsert(fact)
-}
-
-func (m *reteGraphAlphaMemory) remove(id reteGraphAlphaNodeID, factID FactID) {
-	if m == nil {
-		return
-	}
-	nodeMemory := m.nodes[id]
-	if nodeMemory == nil {
-		return
-	}
-	nodeMemory.remove(factID)
-}
-
-func (m *reteGraphAlphaMemory) factCount(id reteGraphAlphaNodeID) int {
-	if m == nil {
-		return 0
-	}
-	nodeMemory := m.nodes[id]
-	if nodeMemory == nil {
-		return 0
-	}
-	return len(nodeMemory.facts)
-}
-
-func (m *alphaMatcher) match(ctx context.Context, source factSource) ([]ruleMatchResult, error) {
-	if m == nil || m.revision == nil || m.source == nil || source == nil {
-		return nil, ErrInvalidRuleset
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	results := make([]ruleMatchResult, 0, len(m.revision.ruleOrder))
-	for _, ruleName := range m.revision.ruleOrder {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-
-		rule, ok := m.revision.rules[ruleName]
-		if !ok {
-			return nil, ErrMatcher
-		}
-
-		candidates, err := rule.matchCandidatesWithAlpha(ctx, source, m.source)
-		if err != nil {
-			return nil, err
-		}
-
-		results = append(results, ruleMatchResult{
-			ruleID:           rule.id,
-			ruleRevisionID:   rule.revisionID,
-			salience:         rule.salience,
-			declarationOrder: rule.declarationOrder,
-			candidates:       candidates,
-		})
-	}
-
-	return results, nil
-}
-
-type reteAlphaMemory struct {
-	conditions map[ConditionID]*reteAlphaConditionMemory
-}
-
-type reteAlphaConditionMemory struct {
-	facts   []FactSnapshot
-	indexes map[FactID]int
-}
-
-const reteAlphaConditionFactReserve = 128
-const reteAlphaConditionIndexReserve = 16
-
-func newReteAlphaMemory(plan reteNetworkPlan) *reteAlphaMemory {
-	memory := &reteAlphaMemory{
-		conditions: make(map[ConditionID]*reteAlphaConditionMemory, plan.stats.conditions),
-	}
-	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		memory.conditions[condition.conditionID] = &reteAlphaConditionMemory{
-			facts:   make([]FactSnapshot, 0, reteAlphaConditionFactReserve),
-			indexes: make(map[FactID]int, reteAlphaConditionIndexReserve),
-		}
-	})
-	return memory
-}
-
-func (m *reteAlphaMemory) reset(ctx context.Context, plan reteNetworkPlan, facts []FactSnapshot) error {
-	if m == nil {
-		return nil
-	}
-	for _, conditionMemory := range m.conditions {
-		if conditionMemory != nil {
-			conditionMemory.clear()
-		}
-	}
-	for _, fact := range facts {
-		if err := m.insert(ctx, plan, fact, nil); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *reteAlphaMemory) insert(ctx context.Context, plan reteNetworkPlan, fact FactSnapshot, span *propagationCounterSpan) error {
-	if m == nil {
-		return nil
-	}
-	var err error
-	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		if err != nil {
-			return
-		}
-		_, err = m.insertCondition(ctx, condition, fact, span)
-	})
-	return err
-}
-
-func (m *reteAlphaMemory) insertGenerated(ctx context.Context, plan reteNetworkPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) error {
-	if m == nil {
-		return nil
-	}
-	var err error
-	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		if err != nil {
-			return
-		}
-		_, err = m.insertConditionGenerated(ctx, condition, fact, snapshot, span)
-	})
-	return err
-}
-
-func (m *reteAlphaMemory) insertSelected(ctx context.Context, conditions []reteConditionPlan, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
-	if m == nil {
-		return false, nil
-	}
-	for _, condition := range conditions {
-		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
-			return false, nil
-		}
-	}
-	for _, condition := range conditions {
-		if _, err := m.insertCondition(ctx, condition, fact, span); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
-}
-
-func (m *reteAlphaMemory) insertSelectedGenerated(ctx context.Context, conditions []reteConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) (bool, error) {
-	if m == nil {
-		return false, nil
-	}
-	for _, condition := range conditions {
-		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
-			return false, nil
-		}
-	}
-	for _, condition := range conditions {
-		if _, err := m.insertConditionGenerated(ctx, condition, fact, snapshot, span); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
-}
-
-func (m *reteAlphaMemory) insertCondition(ctx context.Context, condition reteConditionPlan, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
-	if m == nil {
-		return false, nil
-	}
-	if span != nil {
-		span.recordConditionsTested()
-	}
-	matched, err := condition.matchesAlphaWithContextAndCounters(ctx, fact, span)
-	if err != nil {
-		return true, err
-	}
-	if !matched {
-		return true, nil
-	}
-	conditionMemory := m.conditions[condition.conditionID]
-	if conditionMemory == nil {
-		return false, nil
-	}
-	if conditionMemory.upsert(fact) && span != nil {
-		span.recordAlphaMatchAdded()
-	}
-	return true, nil
-}
-
-func (m *reteAlphaMemory) insertConditionGenerated(ctx context.Context, condition reteConditionPlan, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) (bool, error) {
-	if m == nil {
-		return false, nil
-	}
-	if span != nil {
-		span.recordConditionsTested()
-	}
-	matched, err := condition.matchesAlphaWorkingWithContextAndCounters(ctx, fact, span)
-	if err != nil {
-		return true, err
-	}
-	if !matched {
-		return true, nil
-	}
-	conditionMemory := m.conditions[condition.conditionID]
-	if conditionMemory == nil {
-		return false, nil
-	}
-	if conditionMemory.upsert(snapshot) && span != nil {
-		span.recordAlphaMatchAdded()
-	}
-	return true, nil
-}
-
-func (m *reteAlphaMemory) update(ctx context.Context, plan reteNetworkPlan, before, after FactSnapshot) error {
-	if m == nil {
-		return nil
-	}
-	var err error
-	plan.forEachSupportedCondition(func(condition reteConditionPlan) {
-		if err != nil {
-			return
-		}
-		err = m.updateCondition(ctx, condition, before, after)
-	})
-	return err
-}
-
-func (m *reteAlphaMemory) updateCondition(ctx context.Context, condition reteConditionPlan, before, after FactSnapshot) error {
-	if m == nil {
-		return nil
-	}
-	conditionMemory := m.conditions[condition.conditionID]
-	if conditionMemory == nil {
-		return nil
-	}
-	matchedBefore := conditionMemory.contains(before.id)
-	matchesAfter, err := condition.matchesAlphaWithContextAndCounters(ctx, after, nil)
-	if err != nil {
-		return err
-	}
-	switch {
-	case matchedBefore && matchesAfter:
-		conditionMemory.upsert(after)
-	case matchedBefore:
-		conditionMemory.remove(before.id)
-	case matchesAfter:
-		conditionMemory.upsert(after)
-	}
-	return nil
-}
-
-func (m *reteAlphaMemory) remove(id FactID) {
-	if m == nil {
-		return
-	}
-	for _, conditionMemory := range m.conditions {
-		if conditionMemory != nil {
-			conditionMemory.remove(id)
-		}
-	}
-}
-
-func (m *reteAlphaMemory) removeSelected(conditions []reteConditionPlan, id FactID) bool {
-	if m == nil {
-		return false
-	}
-	for _, condition := range conditions {
-		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
-			return false
-		}
-	}
-	for _, condition := range conditions {
-		m.conditions[condition.conditionID].remove(id)
-	}
-	return true
-}
-
-func (m *reteAlphaMemory) updateSelected(ctx context.Context, conditions []reteConditionPlan, before, after FactSnapshot) (bool, error) {
-	if m == nil {
-		return false, nil
-	}
-	for _, condition := range conditions {
-		if m.conditions == nil || m.conditions[condition.conditionID] == nil {
-			return false, nil
-		}
-	}
-	for _, condition := range conditions {
-		if err := m.updateCondition(ctx, condition, before, after); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
-}
-
-func (m *reteAlphaMemory) factsForCondition(conditionID ConditionID) ([]FactSnapshot, bool) {
-	if m == nil {
-		return nil, false
-	}
-	conditionMemory, ok := m.conditions[conditionID]
-	if !ok {
-		return nil, false
-	}
-	return conditionMemory.facts, true
-}
-
-func (m *reteAlphaMemory) factCount(conditionID ConditionID) int {
-	if m == nil {
-		return 0
-	}
-	conditionMemory := m.conditions[conditionID]
-	if conditionMemory == nil {
-		return 0
-	}
-	return len(conditionMemory.facts)
-}
-
-func (m *reteAlphaConditionMemory) contains(id FactID) bool {
-	if m == nil || m.indexes == nil {
-		return false
-	}
-	_, ok := m.indexes[id]
-	return ok
-}
-
-func (m *reteAlphaConditionMemory) upsert(fact FactSnapshot) bool {
-	if m == nil {
-		return false
-	}
-	if m.indexes == nil {
-		m.indexes = make(map[FactID]int, reteAlphaConditionIndexReserve)
-	}
-	if idx, ok := m.indexes[fact.id]; ok {
-		m.facts[idx] = fact
-		return false
-	}
-	idx := len(m.facts)
-	for idx > 0 && factIDLess(fact.id, m.facts[idx-1].id) {
-		idx--
-	}
-	m.facts = append(m.facts, FactSnapshot{})
-	copy(m.facts[idx+1:], m.facts[idx:])
-	m.facts[idx] = fact
-	m.reindexFrom(idx)
-	return true
-}
-
-func (m *reteAlphaConditionMemory) clear() {
-	if m == nil {
-		return
-	}
-	for i := range m.facts {
-		m.facts[i] = FactSnapshot{}
-	}
-	clear(m.indexes)
-	m.facts = m.facts[:0]
-}
-
-func (m *reteAlphaConditionMemory) remove(id FactID) {
-	if m == nil || m.indexes == nil {
-		return
-	}
-	idx, ok := m.indexes[id]
-	if !ok {
-		return
-	}
-	copy(m.facts[idx:], m.facts[idx+1:])
-	m.facts[len(m.facts)-1] = FactSnapshot{}
-	m.facts = m.facts[:len(m.facts)-1]
-	delete(m.indexes, id)
-	m.reindexFrom(idx)
-}
-
-func (m *reteAlphaConditionMemory) reindexFrom(start int) {
-	if m == nil {
-		return
-	}
-	for i := start; i < len(m.facts); i++ {
-		m.indexes[m.facts[i].id] = i
-	}
-}
-
-func (p reteNetworkPlan) forEachSupportedCondition(yield func(reteConditionPlan)) {
-	for _, rule := range p.rules {
-		for _, condition := range rule.conditions {
-			if condition.supported {
-				yield(condition)
-			}
-		}
-	}
 }
 
 func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {

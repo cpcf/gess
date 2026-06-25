@@ -2185,6 +2185,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				conditions = append(conditions, compiledCondition)
 			}
 		}
+		setCompiledExpressionPredicatesCurrentBindingSlot(compiledPredicates, publicBindingSlot)
 		for j := range listPatternBindings {
 			listPatternBindings[j].id = conditionID
 			listPatternBindings[j].order = len(conditions)

@@ -113,6 +113,117 @@ func TestSessionQueryInitializesGraphTerminalMemoryForQueryOnlyRuleset(t *testin
 	}
 }
 
+func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
+	session := mustSession(t, revision, "joined-query-modify-fast-path-session")
+	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+		"name": "Ada",
+		"dept": "Engineering",
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll before modify: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows before modify = %d, want %d", got, want)
+	}
+	assertQueryRowStringValue(t, rows[0], "note", "old")
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal token removals = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal token additions = %d, want 0", got)
+	}
+	if got := len(delta.updated); got != 0 {
+		t.Fatalf("rule terminal token updates = %d, want 0 for query terminal", got)
+	}
+	rows, err = session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll after note modify: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows after note modify = %d, want %d", got, want)
+	}
+	assertQueryRowStringValue(t, rows[0], "note", "new")
+
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
+	}
+}
+
+func TestSessionJoinedQueryModifyJoinKeyFallsBackAndRetractsRow(t *testing.T) {
+	ctx := context.Background()
+	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
+	session := mustSession(t, revision, "joined-query-modify-join-key-session")
+	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+		"name": "Ada",
+		"dept": "Engineering",
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate employee: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("AssertTemplate department: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll before modify: %v", err)
+	}
+	if got, want := len(rows), 1; got != want {
+		t.Fatalf("rows before modify = %d, want %d", got, want)
+	}
+
+	session.attachPropagationCounters()
+	result, _, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"dept": "Research"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate dept: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	rows, err = session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll after dept modify: %v", err)
+	}
+	if got := len(rows); got != 0 {
+		t.Fatalf("rows after join-key modify = %d, want 0", got)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	if got := snapshot.Totals.ModifyFastPathSkips; got != 0 {
+		t.Fatalf("modify fast-path skips = %d, want 0", got)
+	}
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks = %d, want %d", got, want)
+	}
+}
+
 func TestQueryIteratorCancellationReturnsNoPartialAllResults(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustQueryRevision(t)
@@ -329,6 +440,64 @@ func mustAddAdultQuery(t testing.TB, workspace *Workspace, personKey TemplateKey
 	}); err != nil {
 		t.Fatalf("AddQuery: %v", err)
 	}
+}
+
+func mustJoinedQueryModifyRevision(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+	workspace := NewWorkspace()
+	employee := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "employee",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	department := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "department",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "employees-by-dept",
+		Parameters: []QueryParameterSpec{
+			{Name: "dept", Kind: ValueString},
+		},
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{
+				Binding:     "employee",
+				TemplateKey: employee.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "dept"},
+						Right:    ParamExpr{Name: "dept"},
+					},
+				},
+			},
+			Match{
+				Binding:     "department",
+				TemplateKey: department.Key(),
+				Predicates: []ExpressionSpec{
+					CompareExpr{
+						Operator: ExpressionCompareEqual,
+						Left:     CurrentFieldExpr{Field: "id"},
+						Right:    BindingFieldExpr{Binding: "employee", Field: "dept"},
+					},
+				},
+			},
+		}},
+		Returns: []QueryReturnSpec{
+			ReturnFact("employee", "employee"),
+			ReturnValue("name", BindingFieldExpr{Binding: "employee", Field: "name"}),
+			ReturnValue("note", BindingFieldExpr{Binding: "employee", Field: "note"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	return mustCompileWorkspace(t, workspace), employee.Key(), department.Key()
 }
 
 func assertQueryRowStringValue(t testing.TB, row QueryRow, alias, want string) {

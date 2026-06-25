@@ -818,6 +818,52 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 	return nil, nil
 }
 
+func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Ruleset, updates []reteTerminalTokenUpdate) error {
+	if a == nil || revision == nil {
+		return ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.revision = revision
+	refreshPendingOrder := false
+	for _, update := range updates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if update.before.isZero() || update.after.isZero() {
+			continue
+		}
+		rule, ok := revision.rulesByRevisionID[update.ruleRevisionID]
+		if !ok {
+			return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, update.ruleRevisionID)
+		}
+		identity := update.identity
+		if identity.isZero() {
+			identity = candidateIdentityForTerminalToken(rule, update.before)
+		}
+		existing, _, ok := a.activationForTerminalTokenIdentity(rule, update.before, identity)
+		if !ok {
+			continue
+		}
+		existing.token = update.after
+		existing.generation = tokenRefGeneration(update.after)
+		existing.maxRecency = update.after.maxRecency()
+		existing.aggregateRecency = update.after.aggregateRecency()
+		if existing.status == activationStatusPending {
+			refreshPendingOrder = true
+			continue
+		}
+	}
+	if refreshPendingOrder {
+		a.sortActivationKeys(a.pending)
+	}
+	return nil
+}
+
 func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) ([]agendaChange, error) {
 	return a.reconcileTerminalTokensInternal(ctx, revision, deltas, true)
 }

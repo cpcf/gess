@@ -350,6 +350,68 @@ func TestPureFunctionPredicateModifyFailureRollsBackFact(t *testing.T) {
 	}
 }
 
+func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	mustAddPureFunction(t, workspace, PureFunctionSpec{
+		Name:   "status-ok",
+		Args:   []ValueKind{ValueString},
+		Return: ValueBool,
+		Func: func(_ context.Context, args []Value) (Value, error) {
+			status, _ := args[0].AsString()
+			if status == "bad" {
+				return Value{}, fmt.Errorf("status failed")
+			}
+			return NewValue(true)
+		},
+	})
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "event",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "status-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "event",
+			TemplateKey: event.Key(),
+			Predicates:  []ExpressionSpec{Call("status-ok", CurrentFieldExpr{Field: "status"})},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "pure-function-modify-duplicate-index-rollback")
+
+	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": "a", "status": "good"}))
+	if err != nil {
+		t.Fatalf("Assert good: %v", err)
+	}
+	result, err := session.Modify(ctx, inserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"id": "b", "status": "bad"})})
+	if !errors.Is(err, ErrFunctionEvaluation) {
+		t.Fatalf("Modify error = %v, want ErrFunctionEvaluation", err)
+	}
+	if result.Status != ModifyValidationFailure {
+		t.Fatalf("Modify status = %v, want %v", result.Status, ModifyValidationFailure)
+	}
+	snapshot := mustSnapshot(t, ctx, session)
+	fact, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatal("fact missing after failed modify")
+	}
+	id, ok := fact.Field("id")
+	if !ok || !id.Equal(mustValue(t, "a")) {
+		t.Fatalf("id after failed modify = %v/%v, want a/true", id, ok)
+	}
+	if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": "b", "status": "good"})); err != nil {
+		t.Fatalf("Assert after failed modify should not see stale duplicate index: %v", err)
+	}
+}
+
 func TestPureFunctionPredicateRetractFailureRollsBackFact(t *testing.T) {
 	ctx := context.Background()
 	fail := false
@@ -385,7 +447,7 @@ func TestPureFunctionPredicateInitialFactErrorsAreReturned(t *testing.T) {
 	}
 }
 
-func TestPureFunctionPredicateClassicAlphaErrorsAreReturned(t *testing.T) {
+func TestPureFunctionPredicateMissingGraphReturnsUnsupportedRuntime(t *testing.T) {
 	ctx := context.Background()
 	baseWorkspace := NewWorkspace()
 	mustAddAction(t, baseWorkspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
@@ -401,12 +463,11 @@ func TestPureFunctionPredicateClassicAlphaErrorsAreReturned(t *testing.T) {
 		t.Fatalf("newReteRuntime: %v", err)
 	}
 	runtime.graph = nil
-	runtime.graphAlpha = nil
 	runtime.graphBeta = nil
 
-	err = runtime.resetAlpha(ctx, []FactSnapshot{inserted.Fact})
-	if !errors.Is(err, ErrFunctionEvaluation) {
-		t.Fatalf("resetAlpha error = %v, want ErrFunctionEvaluation", err)
+	err = runtime.resetGraphBeta(ctx, []FactSnapshot{inserted.Fact})
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("resetGraphBeta error = %v, want ErrUnsupportedRuntime", err)
 	}
 }
 

@@ -89,6 +89,7 @@ type Session struct {
 	runAgendaBuckets     map[candidateIdentity]int
 	runAgendaAdded       []reteTerminalTokenDelta
 	runAgendaRemoved     []reteTerminalTokenDelta
+	runAgendaUpdated     []reteTerminalTokenUpdate
 	runAgendaPending     bool
 	agendaReady          bool
 	agendaDirty          bool
@@ -166,7 +167,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rete.resetAlpha(context.Background(), state.detachedFactsByInsertionOrder(revision)); err != nil {
+	if err := rete.resetGraphBeta(context.Background(), state.detachedFactsByInsertionOrder(revision)); err != nil {
 		return nil, err
 	}
 
@@ -1523,13 +1524,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
-	if err := rete.resetAlpha(ctx, facts); err != nil {
+	if err := rete.resetGraphBeta(ctx, facts); err != nil {
 		if s.rete != nil {
 			rollbackFacts := before.facts
 			if !s.resetBeforeSnapshot {
 				rollbackFacts = s.detachedFactsByInsertionOrder()
 			}
-			_ = s.rete.resetAlpha(context.Background(), rollbackFacts)
+			_ = s.rete.resetGraphBeta(context.Background(), rollbackFacts)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
@@ -1641,7 +1642,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
-	if err := rete.resetAlpha(ctx, snapshot.facts); err != nil {
+	if err := rete.resetGraphBeta(ctx, snapshot.facts); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
@@ -1852,6 +1853,11 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
 		return nil, false, nil
 	}
+	if len(delta.updated) != 0 {
+		if err := s.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
+			return nil, true, err
+		}
+	}
 	var changes []agendaChange
 	if collectChanges {
 		var err error
@@ -1882,7 +1888,7 @@ func (s *Session) rebuildReteRuntime(ctx context.Context, revision *Ruleset, fac
 		s.rete = nil
 		return err
 	}
-	if err := rete.resetAlpha(ctx, facts); err != nil {
+	if err := rete.resetGraphBeta(ctx, facts); err != nil {
 		return err
 	}
 	s.rete = rete
@@ -1910,13 +1916,7 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 	if s.rete.usesGraphBeta() {
 		return s.rete.insertBetaFactWithOrigin(ctx, fact, origin, span)
 	}
-	if s.rete.usesLegacyAlpha() && s.rete.alpha == nil {
-		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
-	}
-	if err := s.rete.insertAlphaFact(ctx, fact, span); err != nil {
-		return reteAgendaDelta{}, err
-	}
-	return reteAgendaDelta{}, nil
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
@@ -1932,14 +1932,7 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	if s.rete.usesGraphBeta() {
 		return s.rete.insertBetaFactGenerated(ctx, fact, origin, span)
 	}
-	if s.rete.usesLegacyAlpha() && s.rete.alpha == nil {
-		return reteAgendaDelta{}, s.rete.resetAlpha(ctx, s.detachedFactsByInsertionOrder())
-	}
-	snapshot := fact.detachedSnapshotForRevision(s.revision)
-	if err := s.rete.insertAlphaFactGenerated(ctx, fact, snapshot, span); err != nil {
-		return reteAgendaDelta{}, err
-	}
-	return reteAgendaDelta{}, nil
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnapshot) (reteAgendaDelta, error) {
@@ -1949,23 +1942,17 @@ func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnap
 	if s.rete.usesGraphBeta() {
 		return s.rete.removeBetaFact(ctx, fact, s.propagationCounters)
 	}
-	if err := s.rete.removeAlphaFact(ctx, fact); err != nil {
-		return reteAgendaDelta{}, err
-	}
-	return reteAgendaDelta{}, nil
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
-func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete.usesGraphBeta() {
-		return s.rete.updateBetaFact(ctx, before, after, s.propagationCounters)
+		return s.rete.updateBetaFact(ctx, before, after, changes, duplicateChanged, s.propagationCounters)
 	}
-	if err := s.rete.updateAlphaFact(ctx, before, after); err != nil {
-		return reteAgendaDelta{}, err
-	}
-	return reteAgendaDelta{}, nil
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
 func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
@@ -2206,7 +2193,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	state := s.clonedFactWorkspace()
+	state := s.activeFactWorkspace()
 	fact, ok := state.workingFactByID(id)
 	if !ok {
 		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
@@ -2218,32 +2205,48 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	}
 	template, templateExists := s.revision.templateByKey(fact.templateKey)
 
-	beforeFields := before.Fields()
-	beforePresence := before.FieldPresenceMap()
-	proposedFields := cloneFields(beforeFields)
-	proposedPresence := cloneFieldPresence(beforePresence)
-	for _, field := range patch.Unset {
-		delete(proposedFields, field)
-		delete(proposedPresence, field)
-	}
-	for field, value := range patch.Set {
-		proposedFields = setField(proposedFields, field, value)
-		if proposedPresence == nil {
-			proposedPresence = make(map[string]FieldPresence)
-		}
-		proposedPresence[field] = FieldPresenceExplicit
-	}
-
+	var beforeFields Fields
+	var beforePresence map[string]FieldPresence
+	var proposedFields Fields
+	var proposedPresence map[string]FieldPresence
+	var proposedFieldSlots []factSlot
+	var fieldChanges []FieldChange
+	var noChange bool
 	var err error
-	if templateExists {
-		proposedFields, proposedPresence, err = template.applyDefaultsAndValidate(proposedFields)
+	if templateExists && s.revision.usesFieldSlots(template) && len(fact.fieldSlots) > 0 {
+		proposedFieldSlots, fieldChanges, noChange, err = template.applyPatchToFieldSlots(fact.fieldSlots, patch)
 		if err != nil {
 			return ModifyResult{Status: ModifyValidationFailure, Fact: before}, reteAgendaDelta{}, err
 		}
+	} else {
+		beforeFields = before.Fields()
+		beforePresence = before.FieldPresenceMap()
+		proposedFields = cloneFields(beforeFields)
+		proposedPresence = cloneFieldPresence(beforePresence)
+		for _, field := range patch.Unset {
+			delete(proposedFields, field)
+			delete(proposedPresence, field)
+		}
+		for field, value := range patch.Set {
+			proposedFields = setField(proposedFields, field, value)
+			if proposedPresence == nil {
+				proposedPresence = make(map[string]FieldPresence)
+			}
+			proposedPresence[field] = FieldPresenceExplicit
+		}
+
+		if templateExists {
+			proposedFields, proposedPresence, err = template.applyDefaultsAndValidate(proposedFields)
+			if err != nil {
+				return ModifyResult{Status: ModifyValidationFailure, Fact: before}, reteAgendaDelta{}, err
+			}
+		}
+		proposedFieldSlots = s.revision.buildFieldSlots(template, proposedFields, proposedPresence)
+		fieldChanges = changedFields(beforeFields, beforePresence, proposedFields, proposedPresence)
+		noChange = len(fieldChanges) == 0
 	}
 
 	duplicatePolicy := template.duplicatePolicy
-	proposedFieldSlots := s.revision.buildFieldSlots(template, proposedFields, proposedPresence)
 	newDupIndex := makeDuplicateIndexForValidatedFact(fact.name, template, proposedFields, proposedFieldSlots)
 	oldDuplicate := fact.publicDuplicateKey(s.revision)
 
@@ -2269,10 +2272,11 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		}
 	}
 
-	if fieldsAndPresenceEqual(beforeFields, beforePresence, proposedFields, proposedPresence) {
+	if noChange {
 		return ModifyResult{Status: ModifyNoOp, Fact: before}, reteAgendaDelta{}, nil
 	}
 
+	modifyMark := state.markFactModify(fact, duplicatePolicy != DuplicateAllow && fact.dupIndex != newDupIndex)
 	state.recency++
 
 	if duplicatePolicy != DuplicateAllow && fact.dupIndex != newDupIndex {
@@ -2293,7 +2297,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.recency = state.recency
 	if len(proposedFieldSlots) > 0 {
 		fact.fields = nil
-		fact.fieldSlots = cloneFactSlots(proposedFieldSlots)
+		fact.fieldSlots = proposedFieldSlots
 		fact.fieldPresence = nil
 	} else {
 		fact.fields = proposedFields
@@ -2303,8 +2307,11 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.dupIndex = newDupIndex
 
 	after := fact.snapshotForRevision(s.revision)
-	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after)
+	duplicateChanged := oldDuplicate != newDuplicate
+	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged)
 	if err != nil {
+		state.rollbackFactModify(modifyMark)
+		s.commitFactWorkspace(state)
 		s.restoreReteAfterPropagationFailure()
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	}
@@ -2330,7 +2337,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		After:          &after,
 		OldDuplicate:   oldDuplicate,
 		NewDuplicate:   newDuplicate,
-		ChangedFields:  changedFields(beforeFields, beforePresence, proposedFields, proposedPresence),
+		ChangedFields:  fieldChanges,
 	}
 	result := ModifyResult{
 		Status: ModifyChanged,
@@ -2401,28 +2408,200 @@ func fieldsAndPresenceEqual(leftFields Fields, leftPresence map[string]FieldPres
 	return true
 }
 
+func (t Template) applyPatchToFieldSlots(current []factSlot, patch FactPatch) ([]factSlot, []FieldChange, bool, error) {
+	if !t.closed || len(t.fields) == 0 || len(current) == 0 {
+		return nil, nil, false, ErrInvalidRuleset
+	}
+	proposed := copyFactSlots(current)
+	if len(proposed) < len(t.fields) {
+		next := make([]factSlot, len(t.fields))
+		copy(next, proposed)
+		proposed = next
+	}
+
+	for _, fieldName := range patch.Unset {
+		if _, set := patch.Set[fieldName]; set {
+			continue
+		}
+		slot, ok := t.fieldSlot(fieldName)
+		if !ok || slot < 0 || slot >= len(t.fields) {
+			continue
+		}
+		if err := t.clearFieldSlot(proposed, slot); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	for fieldName, value := range patch.Set {
+		slot, ok := t.fieldSlot(fieldName)
+		if !ok || slot < 0 || slot >= len(t.fields) {
+			return nil, nil, false, &ValidationError{TemplateName: t.name, FieldName: fieldName, Reason: "unknown field"}
+		}
+		if err := t.setFieldSlot(proposed, slot, value); err != nil {
+			return nil, nil, false, err
+		}
+	}
+
+	changes := changedFieldSlots(t, current, proposed)
+	return proposed, changes, len(changes) == 0, nil
+}
+
+func (t Template) clearFieldSlot(slots []factSlot, slot int) error {
+	validation, hasValidation := t.fieldValidationForSlot(slot)
+	field := t.fields[slot]
+	if hasValidation && validation.hasDefault {
+		slots[slot] = factSlot{
+			value:    cloneValue(validation.defaultValue),
+			presence: fieldPresenceDefault,
+			ok:       true,
+		}
+		return nil
+	}
+	if !hasValidation {
+		if defaultValue, hasDefault := t.fieldDefaults[field.Name]; hasDefault {
+			slots[slot] = factSlot{
+				value:    cloneValue(defaultValue),
+				presence: fieldPresenceDefault,
+				ok:       true,
+			}
+			return nil
+		}
+	}
+	if hasValidation && validation.required || !hasValidation && field.Required {
+		return &ValidationError{TemplateName: t.name, FieldName: field.Name, Reason: "required field is missing"}
+	}
+	slots[slot] = factSlot{presence: fieldPresenceOmitted}
+	return nil
+}
+
+func (t Template) setFieldSlot(slots []factSlot, slot int, value Value) error {
+	validation, hasValidation := t.fieldValidationForSlot(slot)
+	field := t.fields[slot]
+	kind := field.Kind
+	var allowed []Value
+	if hasValidation {
+		kind = validation.kind
+		allowed = validation.allowedValues
+	} else {
+		allowed = t.fieldAllowed[field.Name]
+	}
+	if kind != ValueAny && !isValueCompatibleWithKind(kind, value) {
+		return &ValidationError{TemplateName: t.name, FieldName: field.Name, Reason: "invalid type"}
+	}
+	if len(allowed) > 0 && !valueAllowed(allowed, value) {
+		return &ValidationError{TemplateName: t.name, FieldName: field.Name, Reason: "value not in allowed set"}
+	}
+	if slots[slot].ok && slots[slot].value.Equal(value) {
+		return nil
+	}
+	slots[slot] = factSlot{
+		value:    cloneValue(value),
+		presence: fieldPresenceExplicit,
+		ok:       true,
+	}
+	return nil
+}
+
+func (t Template) fieldValidationForSlot(slot int) (fieldValidationSpec, bool) {
+	if slot < 0 || len(t.fieldValidation) != len(t.fields) || slot >= len(t.fieldValidation) {
+		return fieldValidationSpec{}, false
+	}
+	return t.fieldValidation[slot], true
+}
+
+func changedFieldSlots(template Template, beforeSlots, afterSlots []factSlot) []FieldChange {
+	if len(template.fields) == 0 {
+		return nil
+	}
+	changes := make([]FieldChange, 0, 1)
+	for slot, field := range template.fields {
+		before := factSlot{presence: fieldPresenceOmitted}
+		if slot < len(beforeSlots) {
+			before = beforeSlots[slot]
+		}
+		after := factSlot{presence: fieldPresenceOmitted}
+		if slot < len(afterSlots) {
+			after = afterSlots[slot]
+		}
+		if before.presence == after.presence && before.ok == after.ok && (!before.ok || before.value.Equal(after.value)) {
+			continue
+		}
+		var beforeValue, afterValue Value
+		if before.ok {
+			beforeValue = before.value
+		}
+		if after.ok {
+			afterValue = after.value
+		}
+		changes = append(changes, FieldChange{
+			Field: field.Name,
+			Old:   cloneValue(beforeValue),
+			New:   cloneValue(afterValue),
+		})
+	}
+	if len(changes) > 1 {
+		sort.Slice(changes, func(i, j int) bool {
+			return changes[i].Field < changes[j].Field
+		})
+	}
+	return changes
+}
+
+func copyFactSlots(in []factSlot) []factSlot {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]factSlot, len(in))
+	copy(out, in)
+	return out
+}
+
 func changedFields(beforeFields Fields, beforePresence map[string]FieldPresence, afterFields Fields, afterPresence map[string]FieldPresence) []FieldChange {
-	keys := make(map[string]struct{}, len(beforeFields)+len(afterFields)+len(beforePresence)+len(afterPresence))
+	keyCount := len(beforeFields) + len(afterFields)
+	if keyCount == 0 {
+		keyCount = len(beforePresence) + len(afterPresence)
+	}
+	if keyCount == 0 {
+		return nil
+	}
+	keys := make([]string, 0, keyCount)
 	for key := range beforeFields {
-		keys[key] = struct{}{}
+		keys = append(keys, key)
 	}
 	for key := range afterFields {
-		keys[key] = struct{}{}
+		if _, ok := beforeFields[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
 	}
 	for key := range beforePresence {
-		keys[key] = struct{}{}
+		if _, ok := beforeFields[key]; ok {
+			continue
+		}
+		if _, ok := afterFields[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
 	}
 	for key := range afterPresence {
-		keys[key] = struct{}{}
+		if _, ok := beforeFields[key]; ok {
+			continue
+		}
+		if _, ok := afterFields[key]; ok {
+			continue
+		}
+		if _, ok := beforePresence[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
 	}
-	orderedKeys := make([]string, 0, len(keys))
-	for key := range keys {
-		orderedKeys = append(orderedKeys, key)
-	}
-	sort.Strings(orderedKeys)
+	sort.Strings(keys)
 
-	changes := make([]FieldChange, 0, len(orderedKeys))
-	for _, key := range orderedKeys {
+	changes := make([]FieldChange, 0, len(keys))
+	for index := 0; index < len(keys); index++ {
+		key := keys[index]
+		for index+1 < len(keys) && keys[index+1] == key {
+			index++
+		}
 		beforePresenceType, beforeHasPresence := beforePresence[key]
 		beforeValue, beforeHasValue := beforeFields[key]
 		afterPresenceType, afterHasPresence := afterPresence[key]
@@ -2452,6 +2631,55 @@ func changedFields(beforeFields Fields, beforePresence map[string]FieldPresence,
 	}
 
 	return changes
+}
+
+type factModifySummary struct {
+	unknown          bool
+	changes          []FieldChange
+	changedSlots     [4]int
+	changedSlotCount int
+	duplicateChanged bool
+}
+
+func newFactModifySummary(template Template, changes []FieldChange, duplicateChanged bool) factModifySummary {
+	if len(changes) == 0 {
+		return factModifySummary{}
+	}
+	summary := factModifySummary{
+		changes:          changes,
+		duplicateChanged: duplicateChanged,
+	}
+	for _, change := range changes {
+		slot, ok := template.fieldSlot(change.Field)
+		if !ok || slot < 0 {
+			summary.unknown = true
+			continue
+		}
+		if summary.hasChangedSlot(slot) {
+			continue
+		}
+		if summary.changedSlotCount >= len(summary.changedSlots) {
+			summary.unknown = true
+			continue
+		}
+		summary.changedSlots[summary.changedSlotCount] = slot
+		summary.changedSlotCount++
+	}
+	sort.Ints(summary.changedSlots[:summary.changedSlotCount])
+	return summary
+}
+
+func (s factModifySummary) knownSlotChange() bool {
+	return !s.unknown && s.changedSlotCount > 0
+}
+
+func (s factModifySummary) hasChangedSlot(slot int) bool {
+	for i := 0; i < s.changedSlotCount; i++ {
+		if s.changedSlots[i] == slot {
+			return true
+		}
+	}
+	return false
 }
 
 func removeFactIDFromSlice(ids []FactID, target FactID) []FactID {
@@ -2548,6 +2776,15 @@ type factWorkspaceInsertMark struct {
 	insertionOrderLen      int
 	slotStorageLen         int
 	factTargetIndexesDirty bool
+}
+
+type factWorkspaceModifyMark struct {
+	recency                Recency
+	factTargetIndexesDirty bool
+	factIndex              int
+	fact                   workingFact
+	factsByDuplicate       duplicateIndexes
+	restoreDuplicateIndex  bool
 }
 
 type duplicateSingleIntIndexKey struct {
@@ -3015,6 +3252,43 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 		w.facts = w.facts[:mark.factsLen]
 	}
 	w.rollbackGeneratedFactSlots(mark.slotStorageLen)
+}
+
+func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex bool) factWorkspaceModifyMark {
+	if w == nil || fact == nil {
+		return factWorkspaceModifyMark{factIndex: -1}
+	}
+	index := -1
+	if w.factsByID != nil {
+		if found, ok := w.factsByID[fact.id]; ok {
+			index = found
+		}
+	}
+	mark := factWorkspaceModifyMark{
+		recency:                w.recency,
+		factTargetIndexesDirty: w.factTargetIndexesDirty,
+		factIndex:              index,
+		fact:                   *fact,
+		restoreDuplicateIndex:  restoreDuplicateIndex,
+	}
+	if restoreDuplicateIndex {
+		mark.factsByDuplicate = cloneDuplicateIndexes(w.factsByDuplicate)
+	}
+	return mark
+}
+
+func (w *factWorkspace) rollbackFactModify(mark factWorkspaceModifyMark) {
+	if w == nil {
+		return
+	}
+	w.recency = mark.recency
+	w.factTargetIndexesDirty = mark.factTargetIndexesDirty
+	if mark.restoreDuplicateIndex {
+		w.factsByDuplicate = mark.factsByDuplicate
+	}
+	if mark.factIndex >= 0 && mark.factIndex < len(w.facts) {
+		w.facts[mark.factIndex] = mark.fact
+	}
 }
 
 func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
@@ -3636,7 +3910,7 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 		s.markAgendaDirty()
 		return
 	}
-	total := len(delta.added) + len(delta.removed)
+	total := len(delta.added) + len(delta.removed) + len(delta.updated)
 	if !s.runAgendaPending {
 		s.runAgendaDeltas = s.runAgendaDeltas[:0]
 		if s.runAgendaBuckets == nil {
@@ -3658,6 +3932,11 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) {
 }
 
 func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {
+	for _, update := range delta.updated {
+		if err := s.recordCoalescedRunAgendaTokenUpdate(update); err != nil {
+			return err
+		}
+	}
 	for _, token := range delta.removed {
 		if err := s.recordCoalescedRunAgendaToken(token, false); err != nil {
 			return err
@@ -3667,6 +3946,59 @@ func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {
 		if err := s.recordCoalescedRunAgendaToken(token, true); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUpdate) error {
+	if s == nil || update.before.isZero() || update.after.isZero() {
+		return nil
+	}
+	rule, ok := s.revision.rulesByRevisionID[update.ruleRevisionID]
+	if !ok {
+		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, update.ruleRevisionID)
+	}
+	identity := update.identity
+	if identity.isZero() {
+		identity = candidateIdentityForTerminalToken(rule, update.before)
+	}
+	for index := s.runAgendaBuckets[identity]; index != 0; {
+		state := &s.runAgendaStates[index-1]
+		if terminalTokenDeltasEqual(s.revision, state.token, reteTerminalTokenDelta{
+			ruleRevisionID: update.ruleRevisionID,
+			token:          update.before,
+			identity:       identity,
+		}) {
+			if state.present {
+				if state.initial && !state.updated {
+					state.updateBefore = state.token.token
+					state.updated = true
+				}
+				state.token = reteTerminalTokenDelta{
+					ruleRevisionID: update.ruleRevisionID,
+					token:          update.after,
+					identity:       identity,
+				}
+			}
+			return nil
+		}
+		index = state.next
+	}
+	if existing, _, ok := s.agenda.activationForTerminalTokenIdentity(rule, update.before, identity); ok && existing.status == activationStatusPending {
+		state := runAgendaDeltaState{
+			initial:      true,
+			present:      true,
+			updated:      true,
+			updateBefore: update.before,
+			token: reteTerminalTokenDelta{
+				ruleRevisionID: update.ruleRevisionID,
+				token:          update.after,
+				identity:       identity,
+			},
+			next: s.runAgendaBuckets[identity],
+		}
+		s.runAgendaStates = append(s.runAgendaStates, state)
+		s.runAgendaBuckets[identity] = len(s.runAgendaStates)
 	}
 	return nil
 }
@@ -3707,14 +4039,18 @@ func (s *Session) clearRunAgendaDelta() {
 	}
 	clear(s.runAgendaDelta.added)
 	clear(s.runAgendaDelta.removed)
+	clear(s.runAgendaDelta.updated)
 	s.runAgendaDelta.added = s.runAgendaDelta.added[:0]
 	s.runAgendaDelta.removed = s.runAgendaDelta.removed[:0]
+	s.runAgendaDelta.updated = s.runAgendaDelta.updated[:0]
 	s.runAgendaDelta.supported = false
 	for i := range s.runAgendaDeltas {
 		clear(s.runAgendaDeltas[i].added)
 		clear(s.runAgendaDeltas[i].removed)
+		clear(s.runAgendaDeltas[i].updated)
 		s.runAgendaDeltas[i].added = s.runAgendaDeltas[i].added[:0]
 		s.runAgendaDeltas[i].removed = s.runAgendaDeltas[i].removed[:0]
+		s.runAgendaDeltas[i].updated = s.runAgendaDeltas[i].updated[:0]
 		s.runAgendaDeltas[i].supported = false
 	}
 	s.runAgendaDeltas = s.runAgendaDeltas[:0]
@@ -3727,16 +4063,20 @@ func (s *Session) clearRunAgendaDelta() {
 	}
 	clear(s.runAgendaAdded)
 	clear(s.runAgendaRemoved)
+	clear(s.runAgendaUpdated)
 	s.runAgendaAdded = s.runAgendaAdded[:0]
 	s.runAgendaRemoved = s.runAgendaRemoved[:0]
+	s.runAgendaUpdated = s.runAgendaUpdated[:0]
 	s.runAgendaPending = false
 }
 
 type runAgendaDeltaState struct {
-	initial bool
-	present bool
-	token   reteTerminalTokenDelta
-	next    int
+	initial      bool
+	present      bool
+	updated      bool
+	token        reteTerminalTokenDelta
+	updateBefore tokenRef
+	next         int
 }
 
 func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
@@ -3750,9 +4090,18 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	total := len(s.runAgendaStates)
 	added := slices.Grow(s.runAgendaAdded[:0], total)
 	removed := slices.Grow(s.runAgendaRemoved[:0], total)
+	updated := slices.Grow(s.runAgendaUpdated[:0], total)
 	for i := range s.runAgendaStates {
 		state := &s.runAgendaStates[i]
 		if state.present == state.initial {
+			if state.present && state.updated && !state.updateBefore.isZero() && !state.token.token.isZero() && state.updateBefore != state.token.token {
+				updated = append(updated, reteTerminalTokenUpdate{
+					ruleRevisionID: state.token.ruleRevisionID,
+					before:         state.updateBefore,
+					after:          state.token.token,
+					identity:       state.token.identity,
+				})
+			}
 			continue
 		}
 		if state.present {
@@ -3763,10 +4112,12 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	}
 	s.runAgendaAdded = added
 	s.runAgendaRemoved = removed
+	s.runAgendaUpdated = updated
 	return reteAgendaDelta{
 		supported: true,
 		added:     added,
 		removed:   removed,
+		updated:   updated,
 	}, nil
 }
 

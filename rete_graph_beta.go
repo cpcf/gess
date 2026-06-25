@@ -35,6 +35,16 @@ type reteGraphBetaMemory struct {
 	deferNegativeOutputs   bool
 	suppressTerminalDeltas bool
 	rightPredicateScratch  []conditionMatch
+	tokenRefreshCache      map[tokenHandle]tokenRef
+	modifyRouteScope       reteModifyRouteScope
+}
+
+type reteModifyRouteScope struct {
+	stageQueue     []reteGraphStageRef
+	stages         []reteGraphStageRef
+	betaNodes      []reteGraphBetaNodeID
+	aggregateNodes []reteGraphAggregateNodeID
+	terminalNodes  []reteGraphTerminalNodeID
 }
 
 type reteGraphBetaNodeMemory struct {
@@ -862,6 +872,112 @@ func (m *tokenHashMemory) containsExactToken(token tokenRef) bool {
 		}
 	}
 	return false
+}
+
+func (m *tokenHashMemory) refreshTerminalTokensContainingFact(id FactID, updates []reteTerminalTokenUpdate, collectUpdates bool, refresh func(graphTokenRow) (tokenRef, bool)) []reteTerminalTokenUpdate {
+	if m == nil || id.IsZero() || refresh == nil {
+		return updates
+	}
+	m.ensureFactRows()
+	bucket, ok := m.factRows[id]
+	if !ok || bucket.len() == 0 {
+		return updates
+	}
+	var previous graphTokenRowID
+	havePrevious := false
+	for i := 0; i < bucket.len(); i++ {
+		rowID, ok := bucket.at(i)
+		if !ok || (havePrevious && rowID == previous) {
+			continue
+		}
+		havePrevious = true
+		previous = rowID
+		row := m.row(rowID)
+		if row == nil || row.token.isZero() || !row.isTerminal() || !row.token.containsFact(id) {
+			continue
+		}
+		next, ok := refresh(*row)
+		if !ok || next.isZero() {
+			continue
+		}
+		before := row.token
+		identity := row.terminalIdentity
+		m.replaceRowToken(rowID, next)
+		if collectUpdates {
+			updates = append(updates, reteTerminalTokenUpdate{
+				before:   before,
+				after:    next,
+				identity: identity,
+			})
+		}
+	}
+	return updates
+}
+
+func (m *tokenHashMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
+	if m == nil || id.IsZero() || refresh == nil {
+		return true
+	}
+	m.ensureFactRows()
+	bucket, ok := m.factRows[id]
+	if !ok || bucket.len() == 0 {
+		return true
+	}
+	rowIDs := make([]graphTokenRowID, 0, bucket.len())
+	var previous graphTokenRowID
+	havePrevious := false
+	for i := 0; i < bucket.len(); i++ {
+		rowID, ok := bucket.at(i)
+		if !ok || (havePrevious && rowID == previous) {
+			continue
+		}
+		havePrevious = true
+		previous = rowID
+		rowIDs = append(rowIDs, rowID)
+	}
+	for _, rowID := range rowIDs {
+		row := m.row(rowID)
+		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
+			continue
+		}
+		next, ok := refresh(*row)
+		if !ok || next.isZero() {
+			return false
+		}
+		m.replaceRowToken(rowID, next)
+	}
+	return true
+}
+
+func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
+	if m == nil || rowID < 0 || token.isZero() {
+		return
+	}
+	row := m.row(rowID)
+	if row == nil || row.token.isZero() {
+		return
+	}
+	nextIdentity := tokenRefKey(token)
+	if row.identity != nextIdentity {
+		if bucket, ok := m.identityRows[row.identity]; ok {
+			if bucket.remove(rowID) {
+				if bucket.len() == 0 {
+					delete(m.identityRows, row.identity)
+				} else {
+					m.identityRows[row.identity] = bucket
+				}
+			}
+		}
+		if m.identityRows == nil {
+			m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
+		}
+		bucket := m.identityRows[nextIdentity]
+		bucket.append(rowID)
+		m.identityRows[nextIdentity] = bucket
+		row.identity = nextIdentity
+	}
+	row.token = token
+	m.markFactRowsDirty()
 }
 
 func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
@@ -1914,6 +2030,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		m.openAggregateBucket(aggregateID, token, span, delta)
 	}
 	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+		m.recordAlphaFact(alphaNodeID, match.fact)
 		m.insertAggregateInput(aggregateID, match, span, delta)
 	}
 	return nil
@@ -2034,6 +2151,61 @@ func (m *reteGraphBetaMemory) newAlphaTokenRef(entry bindingTupleEntry, match co
 		}
 		token = m.newTokenRef(token, captureEntry, captureMatch, 0, match.fact.Generation(), span)
 		if token.isZero() {
+			return tokenRef{}
+		}
+	}
+	return token
+}
+
+func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry bindingTupleEntry, match conditionMatch, retained tokenRef, span *propagationCounterSpan) tokenRef {
+	if m == nil {
+		return tokenRef{}
+	}
+	token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
+	if token.isZero() {
+		return tokenRef{}
+	}
+	var retainedRefs [4]tokenRef
+	var retainedCount int
+	var overflow []tokenRef
+	for current := retained; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return tokenRef{}
+		}
+		if !row.match.hasValue || row.match.conditionID != entry.conditionID {
+			continue
+		}
+		if len(overflow) != 0 {
+			overflow = append(overflow, current)
+			continue
+		}
+		if retainedCount < len(retainedRefs) {
+			retainedRefs[retainedCount] = current
+			retainedCount++
+			continue
+		}
+		overflow = append(overflow, retainedRefs[:]...)
+		overflow = append(overflow, current)
+	}
+	appendRetained := func(ref tokenRef) bool {
+		row, ok := ref.resolve()
+		if !ok {
+			return false
+		}
+		token = m.newTokenRef(token, row.entry, row.match, 0, match.fact.Generation(), span)
+		return !token.isZero()
+	}
+	if len(overflow) != 0 {
+		for i := len(overflow) - 1; i >= 0; i-- {
+			if !appendRetained(overflow[i]) {
+				return tokenRef{}
+			}
+		}
+		return token
+	}
+	for i := retainedCount - 1; i >= 0; i-- {
+		if !appendRetained(retainedRefs[i]) {
 			return tokenRef{}
 		}
 	}
@@ -2270,6 +2442,131 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 			m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
 		}
 	}
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateMembersContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return false
+	}
+	node := m.graph.aggregateNode(id)
+	memory := m.aggregateMemory(id)
+	if node == nil || memory == nil || len(memory.buckets) == 0 {
+		return true
+	}
+	for _, bucket := range memory.buckets {
+		if bucket == nil {
+			continue
+		}
+		changed := false
+		if !aggregateSpecsNeedInputValues(node.specs) {
+			count := bucket.countOnlyMemberCount()
+			for i := range count {
+				token := bucket.countOnlyMemberAt(i)
+				if token.isZero() || !token.containsFact(factID) {
+					continue
+				}
+				next, ok := m.refreshTokenFactRefCached(token, factID, after, cache)
+				if !ok || next.isZero() {
+					delta.supported = false
+					return false
+				}
+				bucket.setCountOnlyMemberAt(i, next)
+				changed = true
+			}
+		} else if len(bucket.members) > 0 {
+			updates := make([]reteGraphAggregateMember, 0, 1)
+			for _, member := range bucket.members {
+				if !member.token.containsFact(factID) {
+					continue
+				}
+				updates = append(updates, member)
+			}
+			for _, member := range updates {
+				next, ok := m.refreshTokenFactRefCached(member.token, factID, after, cache)
+				if !ok || next.isZero() {
+					delta.supported = false
+					return false
+				}
+				nextMatch, ok := tokenFactMatchForBindingSlot(next, node.inputEntry.bindingSlot)
+				if !ok {
+					delta.supported = false
+					return false
+				}
+				delete(bucket.members, tokenRefKey(member.token))
+				bucket.removeMember(node, member)
+				member.token = next
+				member.match = nextMatch
+				if bucket.members == nil {
+					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
+				}
+				bucket.members[tokenRefKey(next)] = member
+				if err := bucket.addMember(node, member); err != nil {
+					delta.supported = false
+					return false
+				}
+				changed = true
+			}
+		}
+		if changed {
+			m.refreshAggregateOutputInternal(id, bucket, nil, nil, delta)
+		}
+	}
+	return delta.supported
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateParentsContainingFact(id reteGraphAggregateNodeID, factID FactID, after conditionFactRef, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || factID.IsZero() {
+		if delta != nil {
+			delta.supported = false
+		}
+		return false
+	}
+	memory := m.aggregateMemory(id)
+	if memory == nil || len(memory.buckets) == 0 {
+		return true
+	}
+	type aggregateParentRefresh struct {
+		oldKey graphTokenIdentityKey
+		bucket *reteGraphAggregateBucket
+	}
+	updates := make([]aggregateParentRefresh, 0, 1)
+	for key, bucket := range memory.buckets {
+		if bucket == nil || !bucket.parent.containsFact(factID) {
+			continue
+		}
+		updates = append(updates, aggregateParentRefresh{oldKey: key, bucket: bucket})
+	}
+	for _, update := range updates {
+		bucket := update.bucket
+		nextParent, ok := m.refreshTokenFactRefCached(bucket.parent, factID, after, cache)
+		if !ok || nextParent.isZero() {
+			delta.supported = false
+			return false
+		}
+		nextKey := tokenRefKey(nextParent)
+		if update.oldKey != nextKey {
+			if existing := memory.buckets[nextKey]; existing != nil && existing != bucket {
+				delta.supported = false
+				return false
+			}
+			delete(memory.buckets, update.oldKey)
+			memory.buckets[nextKey] = bucket
+		}
+		bucket.parent = nextParent
+		if bucket.token.isZero() {
+			continue
+		}
+		nextToken, ok := m.refreshTokenFactRefCached(bucket.token, factID, after, cache)
+		if !ok || nextToken.isZero() {
+			delta.supported = false
+			return false
+		}
+		bucket.token = nextToken
+	}
+	return delta.supported
 }
 
 func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, token tokenRef, match conditionMatch) (reteGraphAggregateMember, bool) {
@@ -3630,11 +3927,42 @@ func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
 	return m.alphaFactCounts[conditionID]
 }
 
-func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after FactSnapshot, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if m == nil {
 		return reteAgendaDelta{}, nil
 	}
 	defer m.pushEvalContext(ctx)()
+	if m.canSkipUnmatchedModifyPropagation(before, after, changes, duplicateChanged) {
+		m.upsertFactSource(after)
+		if counters != nil {
+			counters.recordModifyFastPathSkip()
+		}
+		return reteAgendaDelta{supported: true}, nil
+	}
+	if delta, ok := m.refreshDirectTerminalModify(ctx, before, after, changes, duplicateChanged); ok {
+		m.upsertFactSource(after)
+		if counters != nil {
+			counters.recordModifyFastPathSkip()
+		}
+		return delta, nil
+	}
+	if delta, ok := m.refreshPositiveBetaModify(ctx, before, after, changes, duplicateChanged); ok {
+		m.upsertFactSource(after)
+		if counters != nil {
+			counters.recordModifyFastPathSkip()
+		}
+		return delta, nil
+	}
+	if delta, ok := m.refreshAggregateModify(ctx, before, after, changes, duplicateChanged); ok {
+		m.upsertFactSource(after)
+		if counters != nil {
+			counters.recordModifyFastPathSkip()
+		}
+		return delta, nil
+	}
+	if counters != nil {
+		counters.recordModifyFastPathFallback()
+	}
 	removed, err := m.removeFact(ctx, before, counters)
 	if err != nil {
 		return removed, err
@@ -3649,6 +3977,598 @@ func (m *reteGraphBetaMemory) updateFact(ctx context.Context, before, after Fact
 		added:     addedTokens,
 		removed:   removedTokens,
 	}, nil
+}
+
+func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) bool {
+	if m == nil || m.graph == nil || len(changes) == 0 {
+		return false
+	}
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() {
+		return false
+	}
+	if duplicateChanged {
+		return false
+	}
+	if len(m.matchedAlphaRouteIDsForFact(before.ID())) != 0 {
+		return false
+	}
+	template, ok := m.revision.templateByKey(after.TemplateKey())
+	if !ok {
+		return false
+	}
+	summary := newFactModifySummary(template, changes, duplicateChanged)
+	if !summary.knownSlotChange() {
+		return false
+	}
+	return !m.graph.alphaRoutesMayObserveModify(before, after, summary)
+}
+
+func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+		return reteAgendaDelta{}, false
+	}
+	template, ok := m.revision.templateByKey(after.TemplateKey())
+	if !ok {
+		return reteAgendaDelta{}, false
+	}
+	summary := newFactModifySummary(template, changes, duplicateChanged)
+	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
+		return reteAgendaDelta{}, false
+	}
+	nodeIDs := m.matchedAlphaRouteIDsForFact(before.ID())
+	if len(nodeIDs) == 0 {
+		nodeIDs = m.snapshotAlphaRouteIDsForFact(before)
+		if len(nodeIDs) == 0 {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, nodeID := range nodeIDs {
+		source := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}
+		if len(m.graph.successorsByStage[source]) != 0 || len(m.graph.aggregateOuters[source]) != 0 || len(m.graph.aggregatesByStage[source]) != 0 {
+			return reteAgendaDelta{}, false
+		}
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		if err != nil || !matchesAfter {
+			return reteAgendaDelta{}, false
+		}
+		if !m.terminalRuleActionsIgnoreModify(source, node.entry.bindingSlot, summary) {
+			return reteAgendaDelta{}, false
+		}
+	}
+
+	delta := reteAgendaDelta{supported: true}
+	for _, nodeID := range nodeIDs {
+		source := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		match := conditionMatch{
+			conditionID: node.entry.conditionID,
+			bindingSlot: node.entry.bindingSlot,
+			fact:        newConditionFactRefFromSnapshot(after),
+		}
+		for _, terminal := range m.graph.terminalsByStage[source] {
+			entry := terminal.entry
+			if entry.conditionID == "" {
+				entry = node.entry
+			}
+			if entry.conditionID == "" {
+				return reteAgendaDelta{}, false
+			}
+			terminalMemory := m.terminalAt(terminal.terminalID)
+			if terminalMemory == nil {
+				continue
+			}
+			terminalNode := m.terminalNode(terminal.terminalID)
+			collectUpdates := terminalNode != nil && terminalNode.kind == reteGraphTerminalRule
+			start := len(delta.updated)
+			delta.updated = terminalMemory.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, func(row graphTokenRow) (tokenRef, bool) {
+				token := m.newAlphaTokenRefWithRetainedCaptures(entry, match, row.token, nil)
+				return token, !token.isZero()
+			})
+			if !collectUpdates {
+				continue
+			}
+			for i := start; i < len(delta.updated); i++ {
+				delta.updated[i].ruleRevisionID = terminalNode.ruleRevisionID
+			}
+		}
+	}
+	return delta, true
+}
+
+func (m *reteGraphBetaMemory) terminalRuleActionsIgnoreModify(source reteGraphStageRef, bindingSlot int, summary factModifySummary) bool {
+	if m == nil || m.graph == nil || m.revision == nil {
+		return false
+	}
+	for _, terminal := range m.graph.terminalsByStage[source] {
+		terminalNode := m.terminalNode(terminal.terminalID)
+		if terminalNode == nil {
+			return false
+		}
+		if terminalNode.kind == reteGraphTerminalQuery {
+			continue
+		}
+		if terminalNode.kind != reteGraphTerminalRule {
+			return false
+		}
+		rule, ok := m.revision.rulesByRevisionID[terminalNode.ruleRevisionID]
+		if !ok {
+			return false
+		}
+		for _, action := range rule.actionExecutions {
+			if action.bindingReads.observesModify(bindingSlot, summary) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (m *reteGraphBetaMemory) modifyRouteScopeForAlphaRoutes(nodeIDs []reteGraphAlphaNodeID) *reteModifyRouteScope {
+	if m == nil || m.graph == nil {
+		return &reteModifyRouteScope{}
+	}
+	scope := &m.modifyRouteScope
+	scope.reset()
+	for _, nodeID := range nodeIDs {
+		scope.appendStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)})
+	}
+	for head := 0; head < len(scope.stageQueue); head++ {
+		stage := scope.stageQueue[head]
+		for _, terminal := range m.graph.terminalsByStage[stage] {
+			scope.appendTerminal(terminal.terminalID)
+		}
+		for _, successor := range m.graph.successorsByStage[stage] {
+			scope.appendBeta(successor.betaNodeID)
+			scope.appendStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(successor.betaNodeID)})
+		}
+		for _, aggregateID := range m.graph.aggregateOuters[stage] {
+			scope.appendAggregate(aggregateID)
+			scope.appendStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)})
+		}
+		for _, aggregateID := range m.graph.aggregatesByStage[stage] {
+			scope.appendAggregate(aggregateID)
+			scope.appendStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)})
+		}
+	}
+	return scope
+}
+
+func (s *reteModifyRouteScope) reset() {
+	if s == nil {
+		return
+	}
+	s.stageQueue = s.stageQueue[:0]
+	s.stages = s.stages[:0]
+	s.betaNodes = s.betaNodes[:0]
+	s.aggregateNodes = s.aggregateNodes[:0]
+	s.terminalNodes = s.terminalNodes[:0]
+}
+
+func (s *reteModifyRouteScope) appendStage(stage reteGraphStageRef) {
+	if s == nil || stage.kind == reteGraphStageUnknown {
+		return
+	}
+	if slices.Contains(s.stages, stage) {
+		return
+	}
+	s.stages = append(s.stages, stage)
+	s.stageQueue = append(s.stageQueue, stage)
+}
+
+func (s *reteModifyRouteScope) appendBeta(id reteGraphBetaNodeID) {
+	if s == nil || id <= 0 || slices.Contains(s.betaNodes, id) {
+		return
+	}
+	s.betaNodes = append(s.betaNodes, id)
+}
+
+func (s *reteModifyRouteScope) appendAggregate(id reteGraphAggregateNodeID) {
+	if s == nil || id <= 0 || slices.Contains(s.aggregateNodes, id) {
+		return
+	}
+	s.aggregateNodes = append(s.aggregateNodes, id)
+}
+
+func (s *reteModifyRouteScope) appendTerminal(id reteGraphTerminalNodeID) {
+	if s == nil || id <= 0 || slices.Contains(s.terminalNodes, id) {
+		return
+	}
+	s.terminalNodes = append(s.terminalNodes, id)
+}
+
+func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if len(m.graph.betaNodes) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+		return reteAgendaDelta{}, false
+	}
+	template, ok := m.revision.templateByKey(after.TemplateKey())
+	if !ok {
+		return reteAgendaDelta{}, false
+	}
+	summary := newFactModifySummary(template, changes, duplicateChanged)
+	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
+		return reteAgendaDelta{}, false
+	}
+	nodeIDs := m.matchedAlphaRouteIDsForFact(before.ID())
+	if len(nodeIDs) == 0 {
+		nodeIDs = m.snapshotAlphaRouteIDsForFact(before)
+		if len(nodeIDs) == 0 {
+			return reteAgendaDelta{}, false
+		}
+	}
+	bindingSlots := make([]int, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		if err != nil || !matchesAfter {
+			return reteAgendaDelta{}, false
+		}
+		if !slices.Contains(bindingSlots, node.entry.bindingSlot) {
+			bindingSlots = append(bindingSlots, node.entry.bindingSlot)
+		}
+	}
+	scope := m.modifyRouteScopeForAlphaRoutes(nodeIDs)
+	if len(scope.aggregateNodes) != 0 {
+		return reteAgendaDelta{}, false
+	}
+	for _, betaNodeID := range scope.betaNodes {
+		betaNode := m.graph.betaNode(betaNodeID)
+		if betaNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if betaNodeMayObserveModify(*betaNode, bindingSlots, summary) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, terminalID := range scope.terminalNodes {
+		terminalNode := m.terminalNode(terminalID)
+		if terminalNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if terminalNode.kind == reteGraphTerminalQuery {
+			continue
+		}
+		if terminalNode.kind != reteGraphTerminalRule {
+			return reteAgendaDelta{}, false
+		}
+		rule, ok := m.revision.rulesByRevisionID[terminalNode.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		for _, bindingSlot := range bindingSlots {
+			for _, action := range rule.actionExecutions {
+				if action.bindingReads.observesModify(bindingSlot, summary) {
+					return reteAgendaDelta{}, false
+				}
+			}
+		}
+	}
+
+	afterRef := newConditionFactRefFromSnapshot(after)
+	cache := m.resetTokenRefreshCache()
+	refresh := func(row graphTokenRow) (tokenRef, bool) {
+		return m.refreshTokenFactRefCached(row.token, before.ID(), afterRef, cache)
+	}
+	for _, nodeID := range scope.betaNodes {
+		nodeMemory := m.nodeMemory(nodeID)
+		if nodeMemory == nil {
+			continue
+		}
+		if !nodeMemory.left.refreshTokensContainingFact(before.ID(), refresh) {
+			return reteAgendaDelta{}, false
+		}
+		if !nodeMemory.right.refreshTokensContainingFact(before.ID(), refresh) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, terminalID := range scope.terminalNodes {
+		terminalNode := m.terminalNode(terminalID)
+		if terminalNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		terminal := m.terminalAt(terminalNode.id)
+		if terminal == nil {
+			continue
+		}
+		collectUpdates := terminalNode.kind == reteGraphTerminalRule
+		start := len(delta.updated)
+		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, refresh)
+		if !collectUpdates {
+			continue
+		}
+		for i := start; i < len(delta.updated); i++ {
+			delta.updated[i].ruleRevisionID = terminalNode.ruleRevisionID
+		}
+	}
+	return delta, true
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool) (reteAgendaDelta, bool) {
+	if m == nil || m.graph == nil || m.revision == nil || len(changes) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if len(m.graph.aggregateNodes) == 0 {
+		return reteAgendaDelta{}, false
+	}
+	if before.ID() != after.ID() || before.TemplateKey() != after.TemplateKey() || before.Name() != after.Name() || duplicateChanged {
+		return reteAgendaDelta{}, false
+	}
+	template, ok := m.revision.templateByKey(after.TemplateKey())
+	if !ok {
+		return reteAgendaDelta{}, false
+	}
+	summary := newFactModifySummary(template, changes, duplicateChanged)
+	if !summary.knownSlotChange() || m.graph.alphaRoutesMayObserveModify(before, after, summary) {
+		return reteAgendaDelta{}, false
+	}
+	nodeIDs := m.matchedAlphaRouteIDsForFact(before.ID())
+	if len(nodeIDs) == 0 {
+		nodeIDs = m.snapshotAlphaRouteIDsForFact(before)
+		if len(nodeIDs) == 0 {
+			return reteAgendaDelta{}, false
+		}
+	}
+	bindingSlots := make([]int, 0, len(nodeIDs))
+	for _, nodeID := range nodeIDs {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			return reteAgendaDelta{}, false
+		}
+		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		if err != nil || !matchesAfter {
+			return reteAgendaDelta{}, false
+		}
+		if !slices.Contains(bindingSlots, node.entry.bindingSlot) {
+			bindingSlots = append(bindingSlots, node.entry.bindingSlot)
+		}
+	}
+	scope := m.modifyRouteScopeForAlphaRoutes(nodeIDs)
+	for _, betaNodeID := range scope.betaNodes {
+		betaNode := m.graph.betaNode(betaNodeID)
+		if betaNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if betaNodeMayObserveModify(*betaNode, bindingSlots, summary) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, aggregateNodeID := range scope.aggregateNodes {
+		aggregateNode := m.graph.aggregateNode(aggregateNodeID)
+		if aggregateNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if aggregateNodeMayObserveModify(*aggregateNode, bindingSlots, summary) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, terminalID := range scope.terminalNodes {
+		terminalNode := m.terminalNode(terminalID)
+		if terminalNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		if terminalNode.kind == reteGraphTerminalQuery {
+			continue
+		}
+		if terminalNode.kind != reteGraphTerminalRule {
+			return reteAgendaDelta{}, false
+		}
+		rule, ok := m.revision.rulesByRevisionID[terminalNode.ruleRevisionID]
+		if !ok {
+			return reteAgendaDelta{}, false
+		}
+		for _, bindingSlot := range bindingSlots {
+			for _, action := range rule.actionExecutions {
+				if action.bindingReads.observesModify(bindingSlot, summary) {
+					return reteAgendaDelta{}, false
+				}
+			}
+		}
+	}
+
+	afterRef := newConditionFactRefFromSnapshot(after)
+	cache := m.resetTokenRefreshCache()
+	refresh := func(row graphTokenRow) (tokenRef, bool) {
+		return m.refreshTokenFactRefCached(row.token, before.ID(), afterRef, cache)
+	}
+	for _, nodeID := range scope.betaNodes {
+		nodeMemory := m.nodeMemory(nodeID)
+		if nodeMemory == nil {
+			continue
+		}
+		if !nodeMemory.left.refreshTokensContainingFact(before.ID(), refresh) {
+			return reteAgendaDelta{}, false
+		}
+		if !nodeMemory.right.refreshTokensContainingFact(before.ID(), refresh) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	delta := reteAgendaDelta{supported: true}
+	for _, aggregateNodeID := range scope.aggregateNodes {
+		if !m.refreshAggregateParentsContainingFact(aggregateNodeID, before.ID(), afterRef, cache, &delta) {
+			return reteAgendaDelta{}, false
+		}
+		if !m.refreshAggregateMembersContainingFact(aggregateNodeID, before.ID(), afterRef, cache, &delta) {
+			return reteAgendaDelta{}, false
+		}
+	}
+	for _, terminalID := range scope.terminalNodes {
+		terminalNode := m.terminalNode(terminalID)
+		if terminalNode == nil {
+			return reteAgendaDelta{}, false
+		}
+		terminal := m.terminalAt(terminalNode.id)
+		if terminal == nil {
+			continue
+		}
+		collectUpdates := terminalNode.kind == reteGraphTerminalRule
+		start := len(delta.updated)
+		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, refresh)
+		if !collectUpdates {
+			continue
+		}
+		for i := start; i < len(delta.updated); i++ {
+			delta.updated[i].ruleRevisionID = terminalNode.ruleRevisionID
+		}
+	}
+	return delta, true
+}
+
+func (m *reteGraphBetaMemory) refreshTokenFactRef(token tokenRef, id FactID, after conditionFactRef) (tokenRef, bool) {
+	return m.refreshTokenFactRefCached(token, id, after, nil)
+}
+
+func (m *reteGraphBetaMemory) resetTokenRefreshCache() map[tokenHandle]tokenRef {
+	if m == nil {
+		return nil
+	}
+	if m.tokenRefreshCache == nil {
+		m.tokenRefreshCache = make(map[tokenHandle]tokenRef)
+		return m.tokenRefreshCache
+	}
+	clear(m.tokenRefreshCache)
+	return m.tokenRefreshCache
+}
+
+func (m *reteGraphBetaMemory) refreshTokenFactRefCached(token tokenRef, id FactID, after conditionFactRef, cache map[tokenHandle]tokenRef) (tokenRef, bool) {
+	if token.isZero() {
+		return tokenRef{}, true
+	}
+	if !token.containsFact(id) {
+		return token, true
+	}
+	if cache != nil {
+		if cached, ok := cache[token.handle]; ok {
+			return cached, true
+		}
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return tokenRef{}, false
+	}
+	parent, ok := m.refreshTokenFactRefCached(token.parent(), id, after, cache)
+	if !ok {
+		return tokenRef{}, false
+	}
+	match := row.match
+	recency := match.fact.Recency()
+	generation := row.generation
+	if !match.hasValue && match.fact.ID() == id {
+		match.fact = after
+		recency = after.Recency()
+		generation = after.Generation()
+	}
+	next := m.newTokenRef(parent, row.entry, match, recency, generation, nil)
+	if next.isZero() {
+		return tokenRef{}, false
+	}
+	if cache != nil {
+		cache[token.handle] = next
+	}
+	return next, true
+}
+
+func aggregateNodeMayObserveModify(node reteGraphAggregateNode, bindingSlots []int, summary factModifySummary) bool {
+	for _, spec := range node.specs {
+		if !spec.hasExpr {
+			continue
+		}
+		for _, bindingSlot := range bindingSlots {
+			if expressionMayObserveModify(node.inputEntry.bindingSlot, bindingSlot, spec.expression, summary) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func betaNodeMayObserveModify(node reteGraphBetaNode, bindingSlots []int, summary factModifySummary) bool {
+	switch node.kind {
+	case reteGraphBetaNodeJoin, reteGraphBetaNodeNot:
+		if predicatesMayObserveModify(node.predicates, bindingSlots, summary) || predicatesMayObserveModify(node.rightPredicates, bindingSlots, summary) {
+			return true
+		}
+	case reteGraphBetaNodeFilter:
+		return predicatesMayObserveModify(node.predicates, bindingSlots, summary)
+	default:
+		return true
+	}
+	for _, join := range node.joins {
+		for _, bindingSlot := range bindingSlots {
+			if join.bindingSlot == bindingSlot && summary.observesAccess(join.access) {
+				return true
+			}
+			if join.refBindingSlot == bindingSlot && summary.observesAccess(join.refAccess) {
+				return true
+			}
+			if join.hasLeftKeyExpression && expressionMayObserveModify(join.bindingSlot, bindingSlot, join.leftKeyExpression, summary) {
+				return true
+			}
+			if join.hasRightKeyExpression && expressionMayObserveModify(join.refBindingSlot, bindingSlot, join.rightKeyExpression, summary) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func predicatesMayObserveModify(predicates []compiledExpressionPredicate, bindingSlots []int, summary factModifySummary) bool {
+	for _, predicate := range predicates {
+		for _, bindingSlot := range bindingSlots {
+			if expressionMayObserveModify(predicate.currentBindingSlot, bindingSlot, predicate.expression, summary) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func expressionMayObserveCurrentFactModify(expression compiledExpression, summary factModifySummary) bool {
+	return expressionMayObserveModify(0, 0, expression, summary)
+}
+
+func expressionMayObserveModify(expressionBindingSlot, modifiedBindingSlot int, expression compiledExpression, summary factModifySummary) bool {
+	switch expression.kind {
+	case expressionNodeCurrentField, expressionNodeHasPath:
+		if expressionBindingSlot == modifiedBindingSlot {
+			return summary.observesAccess(expression.access)
+		}
+		return false
+	case expressionNodeBindingField:
+		if expression.bindingSlot == modifiedBindingSlot {
+			return summary.observesAccess(expression.access)
+		}
+		return false
+	case expressionNodeBindingValue:
+		return expression.bindingSlot == modifiedBindingSlot
+	case expressionNodeCall, expressionNodeCompare, expressionNodeBoolean:
+		for _, operand := range expression.operands {
+			if expressionMayObserveModify(expressionBindingSlot, modifiedBindingSlot, operand, summary) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta) {

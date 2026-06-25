@@ -97,6 +97,142 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	assertCapturedListValue(t, captured, []any{})
 }
 
+func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "event",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "tags", Kind: ValueList, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+		},
+	})
+	var captured []Value
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		BindingReads: &ActionBindingReadSetSpec{Reads: []ActionBindingReadSpec{
+			{Binding: "middle"},
+		}},
+		Fn: func(ctx ActionContext) error {
+			value, ok := ctx.BindingValue("middle")
+			if !ok {
+				return ErrMatcher
+			}
+			captured = append(captured, value)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "vip-active",
+		Conditions: []RuleConditionSpec{{
+			Binding:     "event",
+			TemplateKey: event.Key(),
+			ListPatterns: []ListPatternSpec{
+				ListPattern(Path("tags"),
+					ListElem(ConstExpr{Value: "vip"}),
+					ListSegment("middle"),
+					ListElem(ConstExpr{Value: "active"}),
+				),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "list-pattern-unobserved-modify-session")
+	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+		"id":   "e1",
+		"tags": []any{"vip", "blue", "gold", "active"},
+		"note": "old",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate event: %v", err)
+	}
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("reconcileAgendaInternal: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations before modify = %d, want %d", got, want)
+	}
+	beforeActivationID := pending[0].activationID()
+
+	session.attachPropagationCounters()
+	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"note": "new"}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate note: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got := len(delta.removed); got != 0 {
+		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	}
+	if got := len(delta.added); got != 0 {
+		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	}
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply note delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply note delta unexpectedly skipped")
+	}
+	pending = session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
+	}
+	if got := pending[0].activationID(); got != beforeActivationID {
+		t.Fatalf("activation ID after note modify = %q, want %q", got, beforeActivationID)
+	}
+	snapshot := session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
+	}
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks after note modify = %d, want 0", got)
+	}
+
+	result, delta, err = session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"tags": []any{"vip", "green", "active"}}),
+	}, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("modifyImmediate tags: %v", err)
+	}
+	if result.Status != ModifyChanged {
+		t.Fatalf("tags modify status = %v, want %v", result.Status, ModifyChanged)
+	}
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after tags modify = %d, want %d", got, want)
+	}
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after tags modify = %d, want %d", got, want)
+	}
+	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
+		t.Fatalf("apply tags delta: %v", err)
+	} else if !ok {
+		t.Fatal("apply tags delta unexpectedly skipped")
+	}
+	assertSessionAgendaMatchesFullReteReconcile(t, session)
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := len(captured), 1; got != want {
+		t.Fatalf("captured rows = %d, want %d", got, want)
+	}
+	if !captured[0].Equal(mustValue(t, []any{"green"})) {
+		t.Fatalf("capture = %v, want [green]", captured[0])
+	}
+	snapshot = session.propagationCounterSnapshot()
+	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
+		t.Fatalf("modify fast-path fallbacks after tags modify = %d, want %d", got, want)
+	}
+}
+
 func TestListPatternSupportsFixedAndRestWildcardMatches(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
