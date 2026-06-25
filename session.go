@@ -1998,6 +1998,9 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
 		return changes, err
 	}
+	if !delta.supported && s.agendaReady && !s.agendaDirty {
+		return nil, fmt.Errorf("%w: unsupported agenda delta after steady-state mutation", ErrUnsupportedRuntime)
+	}
 	if len(s.listeners) == 0 && s.rete != nil && !s.rete.supportsIncrementalAgenda() {
 		s.markAgendaDirty()
 		return nil, nil

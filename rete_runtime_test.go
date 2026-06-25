@@ -851,6 +851,50 @@ func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTe
 	}
 }
 
+func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: templateKey,
+		Fields: mustFields(t, map[string]any{
+			"age":    32,
+			"note":   "old",
+			"status": "active",
+		}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	} else if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	before := session.propagationCounterSnapshot().Totals
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state before unsupported delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	}
+
+	if _, err := session.reconcileAgendaAfterMutation(ctx, reteAgendaDelta{}); !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("reconcileAgendaAfterMutation error = %v, want ErrUnsupportedRuntime", err)
+	}
+	after := session.propagationCounterSnapshot().Totals
+	if got, want := after.UnsupportedAgendaDeltas-before.UnsupportedAgendaDeltas, 1; got != want {
+		t.Fatalf("unsupported agenda deltas = +%d, want +%d", got, want)
+	}
+	if got, want := after.FullAgendaReconciles, before.FullAgendaReconciles; got != want {
+		t.Fatalf("full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := after.WholeTerminalScans, before.WholeTerminalScans; got != want {
+		t.Fatalf("whole terminal scans = %d, want unchanged %d", got, want)
+	}
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state after unsupported delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	}
+}
+
 func TestPropagationPurityDiagnosticsRecordUnsupportedDeltaAndResetRebuild(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
