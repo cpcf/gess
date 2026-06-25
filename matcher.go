@@ -505,15 +505,23 @@ func candidateIdentityHashStart(generation Generation) uint64 {
 
 func candidateIdentityHashStep(hash uint64, entry bindingTupleEntry) uint64 {
 	if entry.hasValue {
-		hash = fnvMixUint64(hash, 1)
-		hash = fnvMixString(hash, entry.binding)
-		hash = fnvMixString(hash, entry.value.canonicalKey())
-		return hash
+		return candidateIdentityHashValueStep(hash, entry.binding, entry.value)
 	}
+	return candidateIdentityHashFactStep(hash, entry.factID, entry.factVersion)
+}
+
+func candidateIdentityHashFactStep(hash uint64, id FactID, version FactVersion) uint64 {
 	hash = fnvMixUint64(hash, 0)
-	hash = fnvMixUint64(hash, uint64(entry.factID.generation))
-	hash = fnvMixUint64(hash, entry.factID.sequence)
-	hash = fnvMixUint64(hash, uint64(entry.factVersion))
+	hash = fnvMixUint64(hash, uint64(id.generation))
+	hash = fnvMixUint64(hash, id.sequence)
+	hash = fnvMixUint64(hash, uint64(version))
+	return hash
+}
+
+func candidateIdentityHashValueStep(hash uint64, binding string, value Value) uint64 {
+	hash = fnvMixUint64(hash, 1)
+	hash = fnvMixString(hash, binding)
+	hash = fnvMixString(hash, value.canonicalKey())
 	return hash
 }
 
