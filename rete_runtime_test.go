@@ -127,6 +127,113 @@ func TestSessionRunFailsWhenGraphRuntimeUnsupported(t *testing.T) {
 	}
 }
 
+func TestProductionGraphFlowsDoNotRequestOracleStyleMatching(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustRuntimeGuardRuleset(t)
+	session, err := NewSession(revision, WithSessionID("production-purity-guards"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaInternal: %v", err)
+	}
+	before := session.propagationCounterSnapshot().Totals
+
+	asserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+		"age":    32,
+		"dept":   "engineering",
+		"id":     "p1",
+		"note":   "seed",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if asserted.Fact.ID().IsZero() {
+		t.Fatal("AssertTemplate returned zero fact ID")
+	}
+	if _, err := session.QueryAll(ctx, "adults-by-dept", QueryArgs{"dept": "engineering"}); err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if _, err := session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"note": "updated"})}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := session.Retract(ctx, asserted.Fact.ID()); err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+
+	after := session.propagationCounterSnapshot().Totals
+	assertNoOracleStyleMatchingSince(t, before, after)
+}
+
+func TestProductionLogicalSupportFlowDoesNotRequestOracleStyleMatching(t *testing.T) {
+	ctx := context.Background()
+	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
+	session, err := NewSession(revision, WithSessionID("production-logical-purity-guards"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaInternal: %v", err)
+	}
+	before := session.propagationCounterSnapshot().Totals
+
+	asserted, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := session.Retract(ctx, asserted.Fact.ID()); err != nil {
+		t.Fatalf("Retract(source): %v", err)
+	}
+
+	after := session.propagationCounterSnapshot().Totals
+	assertNoOracleStyleMatchingSince(t, before, after)
+}
+
+func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
+		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+	})
+
+	t.Run("assert", func(t *testing.T) {
+		session := mustSession(t, revision, "unsupported-runtime-assert-session")
+		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		_, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		assertUnsupportedRuntimeDetail(t, err)
+	})
+
+	t.Run("retract", func(t *testing.T) {
+		session := mustSession(t, revision, "unsupported-runtime-retract-session")
+		asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		if err != nil {
+			t.Fatalf("AssertTemplate setup: %v", err)
+		}
+		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		_, err = session.Retract(ctx, asserted.Fact.ID())
+		assertUnsupportedRuntimeDetail(t, err)
+	})
+
+	t.Run("modify", func(t *testing.T) {
+		session := mustSession(t, revision, "unsupported-runtime-modify-session")
+		asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		if err != nil {
+			t.Fatalf("AssertTemplate setup: %v", err)
+		}
+		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		_, err = session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "inactive"})})
+		assertUnsupportedRuntimeDetail(t, err)
+	})
+}
+
 func TestSessionReconcileAgendaRequiresReteRuntime(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
@@ -4387,6 +4494,68 @@ func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldCo
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
+func mustRuntimeGuardRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "person",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "age", Kind: ValueInt, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "note", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "active-adult",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding:     "person",
+				TemplateKey: person.Key(),
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddAdultQuery(t, workspace, person.Key())
+	return mustCompileWorkspace(t, workspace), person.Key()
+}
+
+func assertNoOracleStyleMatchingSince(t testing.TB, before, after propagationCounterTotals) {
+	t.Helper()
+	if got := after.OracleStyleMatchRequests - before.OracleStyleMatchRequests; got != 0 {
+		t.Fatalf("oracle-style match requests delta = %d, want 0", got)
+	}
+	if got := after.SteadyStateOracleStyleMatchRequests - before.SteadyStateOracleStyleMatchRequests; got != 0 {
+		t.Fatalf("steady-state oracle-style match requests delta = %d, want 0", got)
+	}
+	if got := after.SteadyStateAgendaReconciles - before.SteadyStateAgendaReconciles; got != 0 {
+		t.Fatalf("steady-state agenda reconciles delta = %d, want 0", got)
+	}
+}
+
+func assertUnsupportedRuntimeDetail(t testing.TB, err error) {
+	t.Helper()
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("error = %v, want ErrUnsupportedRuntime", err)
+	}
+	for _, want := range []string{"unsupported runtime", "test unsupported graph plan"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unsupported runtime error %q does not contain %q", err.Error(), want)
+		}
+	}
 }
 
 func mustModifyFastPathRuleset(t testing.TB) (*Ruleset, TemplateKey) {
