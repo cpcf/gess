@@ -979,9 +979,13 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
 	supportState := s.captureLogicalSupportState()
+	supportEvent := reteGraphPropagationEvent{
+		origin:           origin,
+		sourceGeneration: s.generation,
+	}
 	if !inserted {
 		before := fact.snapshotForRevision(s.revision)
-		_, err := s.addLogicalSupport(ctx, fact, origin, supportingFacts)
+		_, err := s.addLogicalSupportForPropagationEvent(ctx, fact, supportEvent, supportingFacts)
 		if err != nil {
 			s.restoreLogicalSupportState(supportState)
 			return AssertResult{Status: AssertValidationFailure, Fact: before}, reteAgendaDelta{}, err
@@ -1021,7 +1025,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 	}
 
 	s.makeFactLogicalOnly(fact)
-	if _, err := s.addLogicalSupport(ctx, fact, origin, supportingFacts); err != nil {
+	if _, err := s.addLogicalSupportForPropagationEvent(ctx, fact, supportEvent, supportingFacts); err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
 	s.logicalSupportCounters.LogicalFactsAsserted++
@@ -1408,7 +1412,11 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	if err != nil {
 		return result, agendaDelta, err
 	}
-	cascadeDelta, err := s.removeLogicalSupportsForDelta(ctx, agendaDelta, origin)
+	supportEvent := reteGraphPropagationEvent{
+		origin:           origin,
+		sourceGeneration: s.generation,
+	}
+	cascadeDelta, err := s.removeLogicalSupportsForPropagationEventDelta(ctx, supportEvent, agendaDelta)
 	if err != nil {
 		return result, agendaDelta, err
 	}
@@ -2430,7 +2438,11 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	}
 	s.commitFactWorkspace(state)
-	cascadeDelta, err := s.removeLogicalSupportsForDelta(ctx, agendaDelta, origin)
+	supportEvent := reteGraphPropagationEvent{
+		origin:           origin,
+		sourceGeneration: after.Generation(),
+	}
+	cascadeDelta, err := s.removeLogicalSupportsForPropagationEventDelta(ctx, supportEvent, agendaDelta)
 	if err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	}

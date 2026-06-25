@@ -100,6 +100,10 @@ func logicalSupportSourceFromOrigin(origin mutationOrigin, generation Generation
 	}, true
 }
 
+func logicalSupportSourceFromPropagationEvent(event reteGraphPropagationEvent) (logicalSupportSourceKey, bool) {
+	return logicalSupportSourceFromOrigin(event.origin, event.sourceGeneration)
+}
+
 func logicalSupportSourceFromActivation(activation activation) logicalSupportSourceKey {
 	return logicalSupportSourceKey{
 		generation:     activation.generation,
@@ -198,11 +202,11 @@ func (m logicalSupportMemory) removeSource(ctx context.Context, source logicalSu
 	return affected
 }
 
-func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, origin mutationOrigin, supportingFacts []FactID) (bool, error) {
+func (s *Session) addLogicalSupportForPropagationEvent(ctx context.Context, fact *workingFact, event reteGraphPropagationEvent, supportingFacts []FactID) (bool, error) {
 	if s == nil || fact == nil {
 		return false, ErrFactNotFound
 	}
-	source, ok := logicalSupportSourceFromOrigin(origin, s.generation)
+	source, ok := logicalSupportSourceFromPropagationEvent(event)
 	if !ok {
 		return false, ErrLogicalSupportUnavailable
 	}
@@ -215,10 +219,10 @@ func (s *Session) addLogicalSupport(ctx context.Context, fact *workingFact, orig
 	edge := LogicalSupportEdge{
 		SupportID:       supportID,
 		FactID:          fact.id,
-		RuleID:          origin.RuleID,
-		RuleRevisionID:  origin.RuleRevisionID,
+		RuleID:          event.origin.RuleID,
+		RuleRevisionID:  event.origin.RuleRevisionID,
 		ActivationID:    source.activationID,
-		Generation:      s.generation,
+		Generation:      event.sourceGeneration,
 		SupportingFacts: cloneFactIDs(supportingFacts),
 	}
 	if !s.logicalSupportMemory().addEdge(source, edge) {
@@ -286,7 +290,7 @@ func (s *Session) factHasLogicalSupport(factID FactID) bool {
 	return s.logicalSupportCount(factID) > 0
 }
 
-func (s *Session) removeLogicalSupportsForDelta(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) removeLogicalSupportsForPropagationEventDelta(ctx context.Context, event reteGraphPropagationEvent, delta reteAgendaDelta) (reteAgendaDelta, error) {
 	if s == nil || len(delta.removed) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
@@ -306,7 +310,7 @@ func (s *Session) removeLogicalSupportsForDelta(ctx context.Context, delta reteA
 		}
 		queue = append(queue, logicalSupportSourceFromActivation(activation))
 	}
-	return s.removeLogicalSupportsForSources(ctx, queue, origin)
+	return s.removeLogicalSupportsForSources(ctx, queue, event.origin)
 }
 
 func (s *Session) removeLogicalSupportsForRuleRevisions(ctx context.Context, revisions map[RuleRevisionID]struct{}, origin mutationOrigin) (reteAgendaDelta, error) {
