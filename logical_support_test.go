@@ -72,6 +72,63 @@ func TestActionContextAssertLogicalCreatesSupportAndCascadesOnSourceRetract(t *t
 	}
 }
 
+func TestLogicalSupportRetractCascadeUsesGraphDeltas(t *testing.T) {
+	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
+	session := mustSession(t, revision, "logical-retract-graph-delta-session")
+
+	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	session.attachPropagationCounters()
+	if _, err := session.Retract(context.Background(), source.Fact.ID()); err != nil {
+		t.Fatalf("Retract(source): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if got := snapshot.FactsByName("derived"); len(got) != 0 {
+		t.Fatalf("derived facts after source retract = %d, want 0", len(got))
+	}
+	if got := snapshot.FactsByName("child"); len(got) != 0 {
+		t.Fatalf("child facts after source retract = %d, want 0", len(got))
+	}
+	assertLogicalSupportGraphDeltaCounters(t, session)
+}
+
+func TestLogicalSupportModifyCascadeUsesGraphDeltas(t *testing.T) {
+	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
+	session := mustSession(t, revision, "logical-modify-graph-delta-session")
+
+	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	derived := mustSnapshot(t, context.Background(), session).FactsByName("derived")
+	if len(derived) != 1 {
+		t.Fatalf("derived facts before modify = %d, want 1", len(derived))
+	}
+
+	session.attachPropagationCounters()
+	if _, err := session.Modify(context.Background(), source.Fact.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"group": "changed"}),
+	}); err != nil {
+		t.Fatalf("Modify(source): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, context.Background(), session)
+	if got := snapshot.FactsByName("derived"); len(got) != 0 {
+		t.Fatalf("derived facts after source modify before run = %d, want 0", len(got))
+	}
+	assertLogicalSupportGraphDeltaCounters(t, session)
+}
+
 func TestLogicalSupportDuplicateAssertionsShareFactUntilLastSupportRemoved(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-duplicate-session")
@@ -329,4 +386,18 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 		t.Fatalf("Compile: %v", err)
 	}
 	return revision, source.Key(), derived.Key(), child.Key()
+}
+
+func assertLogicalSupportGraphDeltaCounters(t testing.TB, session *Session) {
+	t.Helper()
+	counters := session.propagationCounterSnapshot().Totals
+	if got := counters.FullAgendaReconciles; got != 0 {
+		t.Fatalf("full agenda reconciles = %d, want 0", got)
+	}
+	if got := counters.SteadyStateAgendaReconciles; got != 0 {
+		t.Fatalf("steady-state agenda reconciles = %d, want 0", got)
+	}
+	if got := counters.UnsupportedAgendaDeltas; got != 0 {
+		t.Fatalf("unsupported agenda deltas = %d, want 0", got)
+	}
 }
