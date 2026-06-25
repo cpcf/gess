@@ -3877,17 +3877,13 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		return reteAgendaDelta{}, false, nil
 	}
 	scope := m.modifyRouteScopeForAlphaRoutes(nodeIDs)
-	hasNegativeBeta := false
 	for _, betaNodeID := range scope.betaNodes {
 		betaNode := m.graph.betaNode(betaNodeID)
 		if betaNode == nil {
 			return reteAgendaDelta{}, false, nil
 		}
-		if betaNode.kind == reteGraphBetaNodeNot {
-			hasNegativeBeta = true
-		}
 	}
-	if !hasNegativeBeta && len(scope.aggregateNodes) == 0 {
+	if len(scope.betaNodes) == 0 && len(scope.aggregateNodes) == 0 {
 		return reteAgendaDelta{}, false, nil
 	}
 	removed, err := m.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))

@@ -175,7 +175,7 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	}
 }
 
-func TestSessionJoinedQueryModifyJoinKeyFallsBackAndRetractsRow(t *testing.T) {
+func TestSessionJoinedQueryModifyJoinKeyUsesRouteScopedEventsAndRetractsRow(t *testing.T) {
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
 	session := mustSession(t, revision, "joined-query-modify-join-key-session")
@@ -217,11 +217,11 @@ func TestSessionJoinedQueryModifyJoinKeyFallsBackAndRetractsRow(t *testing.T) {
 	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got := snapshot.Totals.ModifyFastPathSkips; got != 0 {
-		t.Fatalf("modify fast-path skips = %d, want 0", got)
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 }
 
