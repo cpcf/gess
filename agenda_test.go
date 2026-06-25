@@ -327,6 +327,18 @@ func TestTokenArenaCachesFactSpans(t *testing.T) {
 	if got, want := cloneActivationFactVersions(&activation{token: second}), []FactVersion{firstFact.Version(), secondFact.Version()}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cached token fact versions = %#v, want %#v", got, want)
 	}
+	if got, ok := second.factIDs(); !ok || !slices.Equal(got, []FactID{firstFact.ID(), secondFact.ID()}) {
+		t.Fatalf("token fact IDs = %#v, %v; want cached joined fact IDs", got, ok)
+	}
+	if got, ok := second.factVersions(); !ok || !slices.Equal(got, []FactVersion{firstFact.Version(), secondFact.Version()}) {
+		t.Fatalf("token fact versions = %#v, %v; want cached joined fact versions", got, ok)
+	}
+
+	valueEntry := bindingTupleEntry{bindingSlot: 2, value: newIntValue(42), hasValue: true, conditionPath: []int{2}}
+	valueToken := arena.add(second, valueEntry, conditionMatch{bindingSlot: 2, value: newIntValue(42), hasValue: true}, 0, secondFact.Generation())
+	if got, ok := valueToken.factIDs(); !ok || !slices.Equal(got, []FactID{firstFact.ID(), secondFact.ID(), FactID{}}) {
+		t.Fatalf("value token fact IDs = %#v, %v; want cached joined fact IDs with zero value row", got, ok)
+	}
 
 	otherArena := newTokenArena()
 	otherFirst := otherArena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())

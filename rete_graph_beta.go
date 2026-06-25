@@ -20,6 +20,7 @@ type reteGraphBetaMemory struct {
 	alphaFactCounts        map[ConditionID]int
 	facts                  []FactSnapshot
 	factIndexes            map[FactID]int
+	factIndexReserve       int
 	factsByName            map[string][]FactSnapshot
 	factsByTemplate        map[TemplateKey][]FactSnapshot
 	factNameIndexes        map[FactID]int
@@ -1424,9 +1425,20 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 	if m == nil {
 		return
 	}
-	m.facts = facts
-	if m.factIndexes == nil {
-		m.factIndexes = make(map[FactID]int, len(facts))
+	capacity := len(facts)
+	if m.revision != nil {
+		capacity = max(capacity, m.revision.estimatedRunFactCapacity(len(facts)))
+	}
+	if cap(m.facts) < capacity {
+		m.facts = make([]FactSnapshot, len(facts), capacity)
+	} else {
+		clear(m.facts)
+		m.facts = m.facts[:len(facts)]
+	}
+	copy(m.facts, facts)
+	if m.factIndexes == nil || capacity > m.factIndexReserve {
+		m.factIndexes = make(map[FactID]int, capacity)
+		m.factIndexReserve = capacity
 	} else {
 		clear(m.factIndexes)
 	}
@@ -4607,14 +4619,9 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		match.fact = after
 		recency = after.Recency()
 		row.generation = after.Generation()
-		if row.factSpanStart >= 0 && row.factSpanStart < len(token.handle.arena.factIDs) {
-			token.handle.arena.factIDs[row.factSpanStart] = after.ID()
-		}
-		if row.factSpanStart >= 0 && row.factSpanStart < len(token.handle.arena.factVersions) {
-			token.handle.arena.factVersions[row.factSpanStart] = after.Version()
-		}
 	}
 	row.match = match
+	row.refreshFactSpan(token.handle.arena, parentRow, match)
 	if haveParent {
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
@@ -4640,6 +4647,33 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		cache[token.handle] = token
 	}
 	return true
+}
+
+func (r *tokenRow) refreshFactSpan(arena *tokenArena, parent *tokenRow, match conditionMatch) {
+	if r == nil || arena == nil || r.size <= 0 || r.factSpanStart < 0 {
+		return
+	}
+	end := r.factSpanStart + r.size
+	if end > len(arena.factIDs) || end > len(arena.factVersions) {
+		return
+	}
+	if parent != nil {
+		parentEnd := parent.factSpanStart + parent.size
+		if parent.factSpanStart < 0 || parentEnd > len(arena.factIDs) || parentEnd > len(arena.factVersions) || parent.size > r.size-1 {
+			return
+		}
+		copy(arena.factIDs[r.factSpanStart:r.factSpanStart+parent.size], arena.factIDs[parent.factSpanStart:parentEnd])
+		copy(arena.factVersions[r.factSpanStart:r.factSpanStart+parent.size], arena.factVersions[parent.factSpanStart:parentEnd])
+	}
+	index := end - 1
+	var id FactID
+	var version FactVersion
+	if !match.hasValue {
+		id = match.fact.ID()
+		version = match.fact.Version()
+	}
+	arena.factIDs[index] = id
+	arena.factVersions[index] = version
 }
 
 func (m *reteGraphBetaMemory) resetTokenRefreshCache() map[tokenHandle]tokenRef {

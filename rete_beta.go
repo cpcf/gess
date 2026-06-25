@@ -147,12 +147,8 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		if row.generation == 0 {
 			row.generation = generation
 		}
-		if !match.hasValue {
-			row.factSpanStart = len(a.factIDs)
-			a.factIDs = append(a.factIDs, match.fact.ID())
-			a.factVersions = append(a.factVersions, match.fact.Version())
-		}
 	}
+	row.factSpanStart = a.appendFactSpan(parentRow, match)
 	identityEntry := entry
 	identityEntry.value = match.value
 	identityEntry.hasValue = match.hasValue
@@ -166,6 +162,30 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	a.count++
 	handle := tokenHandle{arena: a, row: row, generation: row.slotGeneration}
 	return tokenRef{handle: handle}
+}
+
+func (a *tokenArena) appendFactSpan(parent *tokenRow, match conditionMatch) int {
+	if a == nil {
+		return -1
+	}
+	start := len(a.factIDs)
+	if parent != nil {
+		parentEnd := parent.factSpanStart + parent.size
+		if parent.factSpanStart < 0 || parentEnd > len(a.factIDs) || parentEnd > len(a.factVersions) {
+			return -1
+		}
+		a.factIDs = append(a.factIDs, a.factIDs[parent.factSpanStart:parentEnd]...)
+		a.factVersions = append(a.factVersions, a.factVersions[parent.factSpanStart:parentEnd]...)
+	}
+	var id FactID
+	var version FactVersion
+	if !match.hasValue {
+		id = match.fact.ID()
+		version = match.fact.Version()
+	}
+	a.factIDs = append(a.factIDs, id)
+	a.factVersions = append(a.factVersions, version)
+	return start
 }
 
 func (a *tokenArena) addSeed(generation Generation) tokenRef {
