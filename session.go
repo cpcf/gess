@@ -1518,6 +1518,9 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if s.agendaReady && !s.agendaDirty {
+		return result, nil
+	}
 	if len(s.listeners) == 0 {
 		if ok, err := s.reconcileAgendaWithoutSnapshotAndChanges(ctx); ok || err != nil {
 			return result, err
@@ -1606,6 +1609,18 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
+	var oldTerminalDeltas []reteTerminalTokenDelta
+	resetAgendaWithDeltas := false
+	if s.agendaReady && !s.agendaDirty && s.rete != nil {
+		tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+		if ok {
+			oldTerminalDeltas = cloneStableTerminalTokenDeltas(s.revision, tokens)
+			resetAgendaWithDeltas = true
+		}
+	}
 	if err := rete.resetGraphBetaForGeneration(ctx, facts, next.generation); err != nil {
 		if s.rete != nil {
 			rollbackFacts := before.facts
@@ -1616,19 +1631,58 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
+	var newTerminalDeltas []reteTerminalTokenDelta
+	if resetAgendaWithDeltas {
+		tokens, ok, err := rete.currentTerminalTokenDeltas(ctx)
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+		if !ok {
+			resetAgendaWithDeltas = false
+		} else {
+			newTerminalDeltas = tokens
+		}
+	}
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordGraphRebuild(propagationCounterPhaseInitial)
 	}
 
 	oldGeneration := s.generation
-	s.agendaReady = false
+	s.agendaReady = resetAgendaWithDeltas
 	s.agendaDirty = false
 	s.clearLogicalSupports()
 	s.swapFactWorkspace(next)
 	s.generation = next.generation
 	s.rete = rete
 	s.syncPropagationCounters()
-	s.emitAgendaEvents(ctx, s.agenda.clear())
+	var resetDeactivations []agendaChange
+	var resetActivations []agendaChange
+	if resetAgendaWithDeltas {
+		resetCtx := context.Background()
+		var err error
+		resetDeactivations, err = s.agenda.applyTerminalTokenDeltas(resetCtx, s.revision, oldTerminalDeltas, nil)
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+		if s.propagationCounters != nil {
+			s.propagationCounters.recordAgendaDeltaApplication()
+		}
+	}
+	if resetAgendaWithDeltas {
+		s.agenda.reset()
+		s.agendaReady = true
+		s.agendaDirty = false
+		var err error
+		resetActivations, err = s.agenda.applyTerminalTokenDeltas(context.Background(), s.revision, nil, newTerminalDeltas)
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+		if s.propagationCounters != nil {
+			s.propagationCounters.recordAgendaDeltaApplication()
+		}
+	} else {
+		s.emitAgendaEvents(ctx, s.agenda.clear())
+	}
 	s.agenda.reserveActivationRows(s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 
 	delta := MutationDelta{
@@ -1642,6 +1696,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		Before:     before,
 		Delta:      delta,
 	}
+	if resetAgendaWithDeltas {
+		s.emitAgendaEvents(ctx, resetDeactivations)
+	}
 	if len(s.listeners) > 0 {
 		s.emitEvent(ctx, Event{
 			SessionID:  s.id,
@@ -1654,6 +1711,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			Delta:      &delta,
 		})
 		s.nextEventSequence++
+	}
+	if resetAgendaWithDeltas {
+		s.emitAgendaEvents(ctx, resetActivations)
 	}
 
 	return result, nil
@@ -1943,6 +2003,29 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 		return nil, nil
 	}
 	return s.reconcileAgendaInternal(ctx)
+}
+
+func cloneStableTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) []reteTerminalTokenDelta {
+	if len(deltas) == 0 {
+		return nil
+	}
+	out := make([]reteTerminalTokenDelta, 0, len(deltas))
+	for _, delta := range deltas {
+		cloned := delta
+		if revision != nil {
+			if rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]; ok {
+				if cloned.identity.isZero() {
+					cloned.identity = candidateIdentityForTerminalToken(rule, delta.token)
+				}
+				if factIDs, factVersions, ok := terminalTokenFactTuple(rule, delta.token); ok {
+					cloned.factIDs = cloneFactIDs(factIDs)
+					cloned.factVersions = cloneFactVersions(factVersions)
+				}
+			}
+		}
+		out = append(out, cloned)
+	}
+	return out
 }
 
 func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {

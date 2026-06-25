@@ -763,7 +763,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !ok {
 			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 		}
-		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, candidateIdentityForTerminalTokenDelta(revision, delta))
+		existing, key, ok := a.activationForTerminalTokenDelta(rule, delta)
 		if !ok || existing.status != activationStatusPending {
 			if ok && existing.status == activationStatusConsumed {
 				existing.status = activationStatusDeactivated
@@ -1116,7 +1116,7 @@ func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTok
 			return leftRule.declarationOrder < rightRule.declarationOrder
 		}
 	}
-	compare := compareTerminalTokenFacts(left.token, right.token)
+	compare := compareTerminalTokenDeltaFacts(left, right)
 	if compare != 0 {
 		return compare < 0
 	}
@@ -1128,6 +1128,13 @@ func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTok
 		}
 	}
 	return left.ruleRevisionID < right.ruleRevisionID
+}
+
+func compareTerminalTokenDeltaFacts(left, right reteTerminalTokenDelta) int {
+	if len(left.factIDs) > 0 || len(right.factIDs) > 0 || len(left.factVersions) > 0 || len(right.factVersions) > 0 {
+		return compareFactVersionSlices(left.factIDs, left.factVersions, right.factIDs, right.factVersions)
+	}
+	return compareTerminalTokenFacts(left.token, right.token)
 }
 
 func sortTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) {
@@ -1164,6 +1171,9 @@ func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDe
 	rightIdentity := candidateIdentityForTerminalTokenDelta(revision, right)
 	if leftIdentity != rightIdentity {
 		return false
+	}
+	if len(left.factIDs) > 0 || len(right.factIDs) > 0 || len(left.factVersions) > 0 || len(right.factVersions) > 0 {
+		return factVersionSlicesEqual(left.factIDs, left.factVersions, right.factIDs, right.factVersions)
 	}
 	return terminalTokenFactVersionsEqual(left.token, right.token)
 }
@@ -1784,6 +1794,30 @@ func (a *agenda) activationForTerminalTokenIdentity(rule compiledRule, token tok
 	return nil, activationKey{}, false
 }
 
+func (a *agenda) activationForTerminalTokenDelta(rule compiledRule, delta reteTerminalTokenDelta) (*activation, activationKey, bool) {
+	if a == nil {
+		return nil, activationKey{}, false
+	}
+	identity := candidateIdentityForTerminalTokenDelta(a.revision, delta)
+	if identity.isZero() {
+		identity = candidateIdentityForTerminalToken(rule, delta.token)
+	}
+	fingerprint := activationFingerprintForIdentityKey(identity.key)
+	bucket := a.activations[fingerprint]
+	if current := bucket.first; current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
+		return current, current.key, true
+	}
+	if current := bucket.second; current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
+		return current, current.key, true
+	}
+	for _, current := range bucket.overflow {
+		if current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
+			return current, current.key, true
+		}
+	}
+	return nil, activationKey{}, false
+}
+
 func activationMatchesCandidate(current *activation, candidate matchCandidate) bool {
 	if current == nil {
 		return false
@@ -1814,6 +1848,76 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 		return terminalTokenFactVersionsEqual(current.token, token)
 	}
 	return matchTokenFactsEqualSlices(token, current.factIDs, current.factVersions)
+}
+
+func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule, identity candidateIdentity, delta reteTerminalTokenDelta) bool {
+	if current == nil {
+		return false
+	}
+	if current.ruleID != rule.id || current.ruleRevisionID != rule.revisionID {
+		return false
+	}
+	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
+		return false
+	}
+	if len(delta.factIDs) > 0 || len(delta.factVersions) > 0 {
+		return factVersionSlicesEqual(current.factIDs, current.factVersions, delta.factIDs, delta.factVersions)
+	}
+	if !current.token.isZero() {
+		return terminalTokenFactVersionsEqual(current.token, delta.token)
+	}
+	return matchTokenFactsEqualSlices(delta.token, current.factIDs, current.factVersions)
+}
+
+func factVersionSlicesEqual(leftIDs []FactID, leftVersions []FactVersion, rightIDs []FactID, rightVersions []FactVersion) bool {
+	if len(leftIDs) != len(rightIDs) || len(leftVersions) != len(rightVersions) || len(leftIDs) != len(leftVersions) {
+		return false
+	}
+	for i := range leftIDs {
+		if leftIDs[i] != rightIDs[i] || leftVersions[i] != rightVersions[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func compareFactVersionSlices(leftIDs []FactID, leftVersions []FactVersion, rightIDs []FactID, rightVersions []FactVersion) int {
+	n := min(len(leftIDs), len(rightIDs))
+	for i := range n {
+		if leftIDs[i] != rightIDs[i] {
+			if factIDLess(leftIDs[i], rightIDs[i]) {
+				return -1
+			}
+			return 1
+		}
+		leftVersion := FactVersion(0)
+		if i < len(leftVersions) {
+			leftVersion = leftVersions[i]
+		}
+		rightVersion := FactVersion(0)
+		if i < len(rightVersions) {
+			rightVersion = rightVersions[i]
+		}
+		if leftVersion != rightVersion {
+			if leftVersion < rightVersion {
+				return -1
+			}
+			return 1
+		}
+	}
+	if len(leftIDs) != len(rightIDs) {
+		if len(leftIDs) < len(rightIDs) {
+			return -1
+		}
+		return 1
+	}
+	if len(leftVersions) != len(rightVersions) {
+		if len(leftVersions) < len(rightVersions) {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func (a *agenda) storeActivation(act *activation) activationKey {
@@ -2108,6 +2212,10 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.generation = tokenRefGeneration(token)
 	dst.identity = identity
 	dst.token = token
+	if factIDs, factVersions, ok := terminalTokenFactTuple(rule, token); ok {
+		dst.factIDs = factIDs
+		dst.factVersions = factVersions
+	}
 	dst.salience = rule.salience
 	dst.maxRecency = token.maxRecency()
 	dst.aggregateRecency = token.aggregateRecency()

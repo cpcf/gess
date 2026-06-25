@@ -386,6 +386,8 @@ type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
 	token          tokenRef
 	identity       candidateIdentity
+	factIDs        []FactID
+	factVersions   []FactVersion
 }
 
 type reteTerminalTokenUpdate struct {

@@ -1546,6 +1546,270 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	}
 }
 
+func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		revision,
+		WithSessionID("graph-reset-agenda-delta-session"),
+		WithEventListener(collector),
+		WithEventClock(countingClock()),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: templateKey,
+			Fields: mustFields(t, map[string]any{
+				"age":    32,
+				"note":   "old",
+				"status": "active",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("initial changes = %d, want %d", got, want)
+	}
+	initialID := changes[0].activation.activationID()
+	beforeCounters := session.propagationCounterSnapshot().Totals
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+	if pending[0].id == initialID {
+		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
+	}
+	if pending[0].generation != 2 {
+		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].generation)
+	}
+
+	events := collector.Events()
+	if got, want := len(events), 4; got != want {
+		t.Fatalf("events = %d, want %d: %#v", got, want, events)
+	}
+	if events[0].Type != EventRuleActivated || events[1].Type != EventRuleDeactivated || events[2].Type != EventReset || events[3].Type != EventRuleActivated {
+		t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type})
+	}
+	if events[1].ActivationID != initialID {
+		t.Fatalf("reset deactivation ID = %q, want %q", events[1].ActivationID, initialID)
+	}
+	if events[2].Generation != 2 {
+		t.Fatalf("reset event generation = %d, want 2", events[2].Generation)
+	}
+
+	afterCounters := session.propagationCounterSnapshot().Totals
+	if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("reset full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+		t.Fatalf("reset whole terminal scans = %d, want unchanged %d", got, want)
+	}
+}
+
+func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session, err := NewSession(
+		revision,
+		WithSessionID("graph-reset-no-listener-agenda-delta-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: templateKey,
+			Fields: mustFields(t, map[string]any{
+				"age":    32,
+				"note":   "old",
+				"status": "active",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("initial changes = %d, want %d", got, want)
+	}
+	beforeCounters := session.propagationCounterSnapshot().Totals
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if session.agendaDirty || !session.agendaReady {
+		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+
+	afterCounters := session.propagationCounterSnapshot().Totals
+	if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("reset full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+		t.Fatalf("reset whole terminal scans = %d, want unchanged %d", got, want)
+	}
+}
+
+func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testing.T) {
+	ctx := context.Background()
+	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		revision,
+		WithSessionID("graph-reset-join-agenda-delta-session"),
+		WithEventListener(collector),
+		WithEventClock(countingClock()),
+		WithInitialFacts(
+			SessionInitialFact{TemplateKey: employeeKey, Fields: mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})},
+			SessionInitialFact{TemplateKey: departmentKey, Fields: mustFields(t, map[string]any{"id": "Engineering"})},
+		),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	if err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	if got, want := len(changes), 1; got != want {
+		t.Fatalf("initial changes = %d, want %d", got, want)
+	}
+	initialID := changes[0].activation.activationID()
+	if got, want := len(changes[0].activation.factIDs), 2; got != want {
+		t.Fatalf("initial activation fact IDs = %d, want joined token width %d", got, want)
+	}
+	beforeCounters := session.propagationCounterSnapshot().Totals
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+	if pending[0].id == initialID {
+		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
+	}
+	if got, want := len(pending[0].factIDs), 2; got != want {
+		t.Fatalf("post-reset activation fact IDs = %d, want joined token width %d", got, want)
+	}
+
+	events := collector.Events()
+	if got, want := len(events), 4; got != want {
+		t.Fatalf("events = %d, want %d: %#v", got, want, events)
+	}
+	if events[0].Type != EventRuleActivated || events[1].Type != EventRuleDeactivated || events[2].Type != EventReset || events[3].Type != EventRuleActivated {
+		t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type})
+	}
+	if events[1].ActivationID != initialID {
+		t.Fatalf("reset deactivation ID = %q, want %q", events[1].ActivationID, initialID)
+	}
+	if got, want := len(events[1].FactIDs), 2; got != want {
+		t.Fatalf("reset deactivation fact IDs = %d, want joined token width %d", got, want)
+	}
+
+	afterCounters := session.propagationCounterSnapshot().Totals
+	if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("reset full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+		t.Fatalf("reset whole terminal scans = %d, want unchanged %d", got, want)
+	}
+}
+
+func TestSessionGraphResetAgendaSurvivesResetListenerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	collector := &testEventCollector{}
+	collector.onEvent = func(_ context.Context, event Event) error {
+		if event.Type == EventReset {
+			cancel()
+			return context.Canceled
+		}
+		return nil
+	}
+	session, err := NewSession(
+		revision,
+		WithSessionID("graph-reset-cancel-listener-session"),
+		WithEventListener(collector),
+		WithEventClock(countingClock()),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: templateKey,
+			Fields: mustFields(t, map[string]any{
+				"age":    32,
+				"note":   "old",
+				"status": "active",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
+	} else if !ok {
+		t.Fatal("initial graph terminal reconcile unavailable")
+	}
+	beforeCounters := session.propagationCounterSnapshot().Totals
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("reset listener did not cancel context")
+	}
+	if session.agendaDirty || !session.agendaReady {
+		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after reset = %d, want %d", got, want)
+	}
+
+	events := collector.Events()
+	if got, want := len(events), 4; got != want {
+		t.Fatalf("events = %d, want %d: %#v", got, want, events)
+	}
+	if events[0].Type != EventRuleActivated || events[1].Type != EventRuleDeactivated || events[2].Type != EventReset || events[3].Type != EventRuleActivated {
+		t.Fatalf("event order = %#v", []EventType{events[0].Type, events[1].Type, events[2].Type, events[3].Type})
+	}
+
+	afterCounters := session.propagationCounterSnapshot().Totals
+	if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("reset full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+		t.Fatalf("reset whole terminal scans = %d, want unchanged %d", got, want)
+	}
+}
+
 func countingClock() func() time.Time {
 	var tick int64
 	return func() time.Time {
