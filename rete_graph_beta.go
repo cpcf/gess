@@ -5239,11 +5239,15 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 	return deltas, true, nil
 }
 
-func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, source Snapshot) ([]QueryRow, bool, error) {
+func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
 	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {
 		return nil, false, nil
 	}
+	if event.tag != reteGraphPropagationAdd {
+		return nil, true, ErrUnsupportedRuntime
+	}
+	trigger := event.fact
 	terminalIDs := m.graph.queryTerminalIDs[query.name]
 	if len(terminalIDs) == 0 {
 		return nil, false, nil

@@ -81,6 +81,32 @@ func TestReteGraphPropagationEventCarriesClearMetadata(t *testing.T) {
 	}
 }
 
+func TestReteGraphPropagationEventCarriesQueryTriggerMetadata(t *testing.T) {
+	revision, _ := mustQueryRevision(t)
+	query, ok := revision.query("adults-by-dept")
+	if !ok {
+		t.Fatal("query adults-by-dept not found")
+	}
+	trigger := snapshotQueryTriggerFact(Generation(11), query, map[string]Value{
+		"dept": mustValue(t, "engineering"),
+	})
+
+	event := newReteGraphQueryTriggerEvent(trigger)
+
+	if event.tag != reteGraphPropagationAdd {
+		t.Fatalf("event tag = %d, want add", event.tag)
+	}
+	if event.fact.ID() != trigger.ID() || event.after.ID() != trigger.ID() {
+		t.Fatalf("event trigger IDs = (%#v, %#v), want %#v", event.fact.ID(), event.after.ID(), trigger.ID())
+	}
+	if event.sourceGeneration != trigger.Generation() {
+		t.Fatalf("source generation = %d, want %d", event.sourceGeneration, trigger.Generation())
+	}
+	if event.fact.Name() != internalQueryTriggerName("adults-by-dept") {
+		t.Fatalf("trigger fact name = %q, want query trigger name", event.fact.Name())
+	}
+}
+
 func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)

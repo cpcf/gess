@@ -1161,7 +1161,7 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
 	}
 	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)
-	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, trigger, s)
+	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), s)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
 	}
@@ -1234,7 +1234,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if trigger.ID().IsZero() {
 		return nil, false, nil
 	}
-	rows, handled, err := s.rete.queryRows(ctx, query, compiledArgs, trigger, Snapshot{revision: s.revision})
+	rows, handled, err := s.rete.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), Snapshot{revision: s.revision})
 	if err != nil {
 		return nil, true, fmt.Errorf("%w: %v", ErrQueryExecution, err)
 	}

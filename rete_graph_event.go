@@ -57,6 +57,15 @@ func newReteGraphGeneratedAssertEvent(fact *workingFact, revision *Ruleset, orig
 	}
 }
 
+func newReteGraphQueryTriggerEvent(fact FactSnapshot) reteGraphPropagationEvent {
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationAdd,
+		fact:             fact,
+		after:            fact,
+		sourceGeneration: fact.Generation(),
+	}
+}
+
 func newReteGraphRetractEvent(fact FactSnapshot, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {
 	return reteGraphPropagationEvent{
 		tag:              reteGraphPropagationRemove,

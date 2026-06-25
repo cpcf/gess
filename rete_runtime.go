@@ -243,11 +243,11 @@ func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTer
 	return nil, false, nil
 }
 
-func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, source Snapshot) ([]QueryRow, bool, error) {
+func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
 	if r == nil || r.revision == nil || !r.usesGraphBeta() || r.graphBeta == nil {
 		return nil, false, nil
 	}
-	return r.graphBeta.queryRows(ctx, query, args, trigger, source)
+	return r.graphBeta.queryRows(ctx, query, args, event, source)
 }
 
 func (r *reteRuntime) metrics() reteRuntimeMetrics {
