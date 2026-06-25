@@ -469,6 +469,15 @@ func (a *agenda) reserveActivationRows(capacity int) {
 		return
 	}
 	a.activationRows.reserve(capacity)
+	if capacity <= 0 {
+		return
+	}
+	if len(a.activations) == 0 {
+		a.activations = make(map[activationFingerprint]activationBucket, capacity)
+	}
+	if len(a.byFactID) == 0 {
+		a.byFactID = make(map[FactID]activationKeyBucket, capacity*2)
+	}
 }
 
 func (a *agenda) normalizePendingKeys() []activationKey {
