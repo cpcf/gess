@@ -2550,7 +2550,7 @@ func TestReteRuntimeGraphBetaModifyUnmatchedIrrelevantSlotSkipsPropagation(t *te
 	}
 }
 
-func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotFallsBack(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-matched-irrelevant-slot-session")
@@ -2593,11 +2593,11 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotFallsBack(t *testing.T) 
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
 	snapshot := session.propagationCounterSnapshot()
-	if got := snapshot.Totals.ModifyFastPathSkips; got != 0 {
-		t.Fatalf("modify fast-path skips = %d, want 0", got)
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.ModifyFastPathFallbacks, 1; got != want {
-		t.Fatalf("modify fast-path fallbacks = %d, want %d", got, want)
+	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
+		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
 		t.Fatalf("removal index lookups = %d, want %d", got, want)

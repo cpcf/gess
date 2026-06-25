@@ -3883,7 +3883,7 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 			return reteAgendaDelta{}, false, nil
 		}
 	}
-	if len(scope.betaNodes) == 0 && len(scope.aggregateNodes) == 0 {
+	if len(scope.betaNodes) == 0 && len(scope.aggregateNodes) == 0 && len(scope.terminalNodes) == 0 {
 		return reteAgendaDelta{}, false, nil
 	}
 	removed, err := m.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))
