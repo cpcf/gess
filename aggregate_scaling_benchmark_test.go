@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"testing"
@@ -229,6 +230,7 @@ func runAggregateScalingSeedRunHarnessCase(t *testing.T, tc aggregateScalingCase
 	}
 	results := make([]RunResult, iterations)
 
+	profiles := startAggregateScalingProfiles(t)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
@@ -237,6 +239,7 @@ func runAggregateScalingSeedRunHarnessCase(t *testing.T, tc aggregateScalingCase
 	}
 	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
+	profiles.stop(t)
 
 	for i, session := range sessions {
 		validateAggregateScalingSession(t, session, results[i], tc, "benchmark")
@@ -275,6 +278,7 @@ func runAggregateScalingMutationHarnessCase(t *testing.T, tc aggregateScalingCas
 		prepared[i] = preparedSession{session: session, targetFact: targetFact}
 	}
 
+	profiles := startAggregateScalingProfiles(t)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
@@ -283,6 +287,7 @@ func runAggregateScalingMutationHarnessCase(t *testing.T, tc aggregateScalingCas
 	}
 	elapsed := time.Since(start)
 	runtime.ReadMemStats(&after)
+	profiles.stop(t)
 
 	for i := range prepared {
 		validateAggregateScalingMutationSession(t, prepared[i].session, prepared[i].result, tc, mutation, "benchmark")
@@ -297,6 +302,83 @@ func runAggregateScalingMutationHarnessCase(t *testing.T, tc aggregateScalingCas
 		float64(allocBytes)/float64(iterations),
 		float64(allocs)/float64(iterations),
 	)
+}
+
+type aggregateScalingProfileState struct {
+	cpuPath        string
+	cpuFile        *os.File
+	memPath        string
+	memProfileRate int
+}
+
+func startAggregateScalingProfiles(t testing.TB) *aggregateScalingProfileState {
+	t.Helper()
+
+	state := &aggregateScalingProfileState{
+		cpuPath:        os.Getenv("GESS_AGGREGATE_SCALING_CPU_PROFILE"),
+		memPath:        os.Getenv("GESS_AGGREGATE_SCALING_MEM_PROFILE"),
+		memProfileRate: runtime.MemProfileRate,
+	}
+	if state.memPath != "" {
+		runtime.MemProfileRate = 1
+	}
+	if state.cpuPath == "" {
+		return state
+	}
+	var err error
+	state.cpuFile, err = os.Create(state.cpuPath)
+	if err != nil {
+		if state.memPath != "" {
+			runtime.MemProfileRate = state.memProfileRate
+		}
+		t.Fatalf("create aggregate CPU profile: %v", err)
+	}
+	if err := pprof.StartCPUProfile(state.cpuFile); err != nil {
+		_ = state.cpuFile.Close()
+		if state.memPath != "" {
+			runtime.MemProfileRate = state.memProfileRate
+		}
+		t.Fatalf("start aggregate CPU profile: %v", err)
+	}
+	return state
+}
+
+func (s *aggregateScalingProfileState) stop(t testing.TB) {
+	t.Helper()
+
+	if s == nil {
+		return
+	}
+	if s.cpuPath != "" {
+		pprof.StopCPUProfile()
+		if s.cpuFile != nil {
+			if err := s.cpuFile.Close(); err != nil {
+				t.Fatalf("close aggregate CPU profile: %v", err)
+			}
+		}
+	}
+	if s.memPath == "" {
+		return
+	}
+	runtime.MemProfileRate = s.memProfileRate
+	memProfileFile, err := os.Create(s.memPath)
+	if err != nil {
+		t.Fatalf("create aggregate allocation profile: %v", err)
+	}
+	profile := pprof.Lookup("allocs")
+	if profile == nil {
+		if err := memProfileFile.Close(); err != nil {
+			t.Fatalf("close aggregate allocation profile: %v", err)
+		}
+		t.Fatal("aggregate allocation profile unavailable")
+	}
+	if err := profile.WriteTo(memProfileFile, 0); err != nil {
+		_ = memProfileFile.Close()
+		t.Fatalf("write aggregate allocation profile: %v", err)
+	}
+	if err := memProfileFile.Close(); err != nil {
+		t.Fatalf("close aggregate allocation profile: %v", err)
+	}
 }
 
 func prepareAggregateScalingMutationSession(t testing.TB, ctx context.Context, revision *Ruleset, itemKey TemplateKey, tc aggregateScalingCase, mutation aggregateScalingMutationCase, sessionID SessionID) (*Session, FactID) {

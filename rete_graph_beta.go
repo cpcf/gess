@@ -4949,7 +4949,7 @@ func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, 
 		collector.rowOwner = newQueryRowOwner(source)
 	}
 	if capacity := m.queryTerminalRowCapacity(terminalIDs); capacity > 0 {
-		collector.rows = make([]QueryRow, 0, min(capacity, 256))
+		collector.rows = make([]QueryRow, 0, capacity)
 	}
 	for _, terminalID := range terminalIDs {
 		if err := ctx.Err(); err != nil {
