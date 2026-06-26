@@ -68,18 +68,6 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		steadyStateOK: true,
 	},
 	{
-		path:        "Template value batch insertion: batch reconcile after graph-affecting inserts",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan: "Batch inserts should accumulate graph deltas and apply them incrementally.",
-	},
-	{
-		path:        "Prepared template value batch insertion: batch reconcile after graph-affecting inserts",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan: "Prepared batch inserts should accumulate graph deltas and apply them incrementally.",
-	},
-	{
 		path:          "matcher_oracle_test.go: naive matcher parity helper",
 		class:         reconcilePathTestOracle,
 		owner:         "test-only parity harness",

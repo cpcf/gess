@@ -709,6 +709,7 @@ type templateValueBatch struct {
 	ctx            context.Context
 	session        *Session
 	needsReconcile bool
+	agendaDelta    reteAgendaDelta
 }
 
 func (s *Session) insertTemplateValuesBatchWithContext(ctx context.Context, fn func(*templateValueBatch) error) error {
@@ -743,7 +744,7 @@ func (s *Session) insertTemplateValuesBatchWithContext(ctx context.Context, fn f
 		}
 	}
 	if batch.needsReconcile {
-		_, err := s.reconcileAgendaInternal(ctx)
+		_, err := s.reconcileAgendaAfterMutation(ctx, batch.agendaDelta)
 		return err
 	}
 	return nil
@@ -760,12 +761,12 @@ func (b *templateValueBatch) insert(templateKey TemplateKey, values []Value) err
 		return err
 	}
 	session := b.session
-	_, template, inserted, _, err := session.insertTemplateValuesImmediate(b.ctx, templateKey, values, mutationOrigin{})
+	_, template, inserted, agendaDelta, err := session.insertTemplateValuesImmediate(b.ctx, templateKey, values, mutationOrigin{})
 	if err != nil {
 		return err
 	}
 	if inserted && session.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
-		b.needsReconcile = true
+		b.agendaDelta, b.needsReconcile = accumulateReteAgendaDelta(b.agendaDelta, b.needsReconcile, agendaDelta)
 	}
 	return nil
 }
@@ -779,6 +780,7 @@ type preparedTemplateValueBatch struct {
 	session        *Session
 	state          factWorkspace
 	needsReconcile bool
+	agendaDelta    reteAgendaDelta
 }
 
 func (s *Session) prepareTemplateValueInserter(templateKey TemplateKey) (preparedTemplateValueInserter, error) {
@@ -834,10 +836,17 @@ func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Conte
 	}
 	s.commitFactWorkspace(batch.state)
 	if batch.needsReconcile {
-		_, err := s.reconcileAgendaInternal(ctx)
+		_, err := s.reconcileAgendaAfterMutation(ctx, batch.agendaDelta)
 		return err
 	}
 	return nil
+}
+
+func accumulateReteAgendaDelta(current reteAgendaDelta, hasCurrent bool, next reteAgendaDelta) (reteAgendaDelta, bool) {
+	if !hasCurrent {
+		return next, true
+	}
+	return mergeReteAgendaDelta(current, next), true
 }
 
 func (b *preparedTemplateValueBatch) reserve(facts, slots int) {
@@ -927,7 +936,8 @@ func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateVa
 		counterSpan := session.propagationCounters.beginAssert(p.template.Key(), mutationOrigin{})
 		span = &counterSpan
 	}
-	if _, err := session.updateReteAlphaAfterAssertGenerated(b.ctx, fact, mutationOrigin{}, span); err != nil {
+	agendaDelta, err := session.updateReteAlphaAfterAssertGenerated(b.ctx, fact, mutationOrigin{}, span)
+	if err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -938,7 +948,7 @@ func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateVa
 		span.finish()
 	}
 	if session.revision.factMayAffectRuleMatchesByTarget(p.template.Name(), p.template.Key()) {
-		b.needsReconcile = true
+		b.agendaDelta, b.needsReconcile = accumulateReteAgendaDelta(b.agendaDelta, b.needsReconcile, agendaDelta)
 	}
 	return nil
 }
