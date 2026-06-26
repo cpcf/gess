@@ -241,6 +241,7 @@ func (s RuleActionSpec) clone() RuleActionSpec {
 
 type RuleSpec struct {
 	Name        string
+	Module      ModuleName
 	ID          RuleID
 	Description string
 	Tags        []string
@@ -258,6 +259,7 @@ type RuleSpec struct {
 func (s RuleSpec) clone() RuleSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
+	out.Module = normalizeModuleName(out.Module)
 	out.ID = RuleID(strings.TrimSpace(string(out.ID)))
 	out.Tags = append([]string(nil), s.Tags...)
 	out.Conditions = make([]RuleConditionSpec, len(s.Conditions))
@@ -493,6 +495,7 @@ type Rule struct {
 	id                RuleID
 	revisionID        RuleRevisionID
 	name              string
+	module            ModuleName
 	description       string
 	tags              []string
 	salience          int
@@ -513,6 +516,10 @@ func (r Rule) RevisionID() RuleRevisionID {
 
 func (r Rule) Name() string {
 	return r.name
+}
+
+func (r Rule) Module() ModuleName {
+	return r.module
 }
 
 func (r Rule) Description() string {
@@ -577,6 +584,7 @@ type compiledRule struct {
 	id                          RuleID
 	revisionID                  RuleRevisionID
 	name                        string
+	module                      ModuleName
 	description                 string
 	tags                        []string
 	salience                    int
@@ -599,6 +607,7 @@ func (r compiledRule) inspect() Rule {
 		id:                r.id,
 		revisionID:        r.revisionID,
 		name:              r.name,
+		module:            r.module,
 		description:       r.description,
 		tags:              append([]string(nil), r.tags...),
 		salience:          r.salience,
@@ -1794,6 +1803,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	compiled := compiledRule{
 		id:                          ruleID,
 		name:                        normalized.Name,
+		module:                      normalized.Module,
 		description:                 normalized.Description,
 		tags:                        append([]string(nil), normalized.Tags...),
 		salience:                    normalized.Salience,
@@ -2571,6 +2581,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	sum.Write([]byte("gess/rule/v1\n"))
 	sum.Write([]byte("id:"))
 	sum.Write([]byte(rule.id.String()))
+	sum.Write([]byte("\nmodule:"))
+	sum.Write([]byte(rule.module.String()))
 	sum.Write([]byte("\nname:"))
 	sum.Write([]byte(rule.name))
 	sum.Write([]byte("\nsalience:"))

@@ -47,6 +47,7 @@ func ReturnValue(alias string, expression ExpressionSpec) QueryReturnSpec {
 
 type QuerySpec struct {
 	Name          string
+	Module        ModuleName
 	Description   string
 	Parameters    []QueryParameterSpec
 	Conditions    []RuleConditionSpec
@@ -57,6 +58,7 @@ type QuerySpec struct {
 func (s QuerySpec) clone() QuerySpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
+	out.Module = normalizeModuleName(out.Module)
 	out.Parameters = make([]QueryParameterSpec, len(s.Parameters))
 	for i, param := range s.Parameters {
 		out.Parameters[i] = param.clone()
@@ -121,6 +123,7 @@ func (r QueryReturn) DeclarationOrder() int {
 
 type Query struct {
 	name              string
+	module            ModuleName
 	description       string
 	parameters        []QueryParameter
 	conditions        []RuleCondition
@@ -131,6 +134,10 @@ type Query struct {
 
 func (q Query) Name() string {
 	return q.name
+}
+
+func (q Query) Module() ModuleName {
+	return q.module
 }
 
 func (q Query) Description() string {
@@ -166,6 +173,7 @@ func (q Query) Returns() []QueryReturn {
 
 type compiledQuery struct {
 	name                    string
+	module                  ModuleName
 	description             string
 	parameters              []QueryParameter
 	parameterTypes          map[string]ValueKind
@@ -213,6 +221,7 @@ type compiledQueryReturnProjection struct {
 func (q compiledQuery) inspect() Query {
 	return Query{
 		name:              q.name,
+		module:            q.module,
 		description:       q.description,
 		parameters:        append([]QueryParameter(nil), q.parameters...),
 		conditions:        cloneRuleConditions(q.conditions),
@@ -247,6 +256,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 	}
 	pseudoRule := RuleSpec{
 		Name:          normalized.Name,
+		Module:        normalized.Module,
 		Conditions:    normalized.Conditions,
 		ConditionTree: normalized.ConditionTree,
 	}
@@ -321,6 +331,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 
 	return compiledQuery{
 		name:                    normalized.Name,
+		module:                  normalized.Module,
 		description:             normalized.Description,
 		parameters:              params,
 		parameterTypes:          paramTypes,

@@ -76,6 +76,14 @@ func implicitMainModule() Module {
 	return Module{name: MainModule}
 }
 
+func normalizeModuleName(name ModuleName) ModuleName {
+	name = ModuleName(strings.TrimSpace(string(name)))
+	if name.IsZero() {
+		return MainModule
+	}
+	return name
+}
+
 func sameModuleDeclaration(left, right Module) bool {
 	if left.name != right.name || left.description != right.description {
 		return false
@@ -118,4 +126,10 @@ func compileWorkspaceModules(specs []ModuleSpec) ([]Module, map[ModuleName]Modul
 		compiledModules = append(compiledModules, modules[name].clone())
 	}
 	return compiledModules, modules, moduleOrder, nil
+}
+
+func validateModuleReference(modules map[ModuleName]Module, name ModuleName) (ModuleName, bool) {
+	normalized := normalizeModuleName(name)
+	_, ok := modules[normalized]
+	return normalized, ok
 }

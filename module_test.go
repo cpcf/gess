@@ -68,3 +68,163 @@ func TestWorkspaceAcceptsIdenticalModuleRedeclaration(t *testing.T) {
 		t.Fatalf("ask auto-focus default = (%t, %t), want true default", value, hasDefault)
 	}
 }
+
+func TestDefinitionsDefaultToMainModule(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{Name: "person"})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "person-rule",
+		Conditions: []RuleConditionSpec{{Binding: "person", TemplateKey: person.Key()}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:          "people",
+		ConditionTree: Match{Binding: "person", TemplateKey: person.Key()},
+		Returns:       []QueryReturnSpec{ReturnFact("person", "person")},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+
+	template, ok := revision.Template("person")
+	if !ok {
+		t.Fatal("compiled revision missing person template")
+	}
+	if template.Module() != MainModule {
+		t.Fatalf("template module = %q, want MAIN", template.Module())
+	}
+	rule, ok := revision.Rule("person-rule")
+	if !ok {
+		t.Fatal("compiled revision missing person-rule")
+	}
+	if rule.Module() != MainModule {
+		t.Fatalf("rule module = %q, want MAIN", rule.Module())
+	}
+	query, ok := revision.Query("people")
+	if !ok {
+		t.Fatal("compiled revision missing people query")
+	}
+	if query.Module() != MainModule {
+		t.Fatalf("query module = %q, want MAIN", query.Module())
+	}
+}
+
+func TestWorkspaceRejectsUnknownDefinitionModules(t *testing.T) {
+	tests := []struct {
+		name       string
+		build      func(*Workspace)
+		wantReason string
+		wantQuery  bool
+	}{
+		{
+			name: "template",
+			build: func(workspace *Workspace) {
+				if err := workspace.AddTemplate(TemplateSpec{Name: "person", Module: "missing"}); err != nil {
+					t.Fatalf("AddTemplate: %v", err)
+				}
+			},
+			wantReason: `unknown module "missing" authored in module "missing"`,
+		},
+		{
+			name: "rule",
+			build: func(workspace *Workspace) {
+				mustAddRule(t, workspace, RuleSpec{Name: "person-rule", Module: "missing"})
+			},
+			wantReason: `unknown module "missing" authored in module "missing"`,
+		},
+		{
+			name: "query",
+			build: func(workspace *Workspace) {
+				if err := workspace.AddQuery(QuerySpec{Name: "people", Module: "missing"}); err != nil {
+					t.Fatalf("AddQuery: %v", err)
+				}
+			},
+			wantReason: `unknown module "missing" authored in module "missing"`,
+			wantQuery:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			tt.build(workspace)
+
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded with an unknown definition module")
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("errors.Is(err, ErrValidation) = false for %v", err)
+			}
+			if tt.wantQuery && !errors.Is(err, ErrQueryValidation) {
+				t.Fatalf("errors.Is(err, ErrQueryValidation) = false for %v", err)
+			}
+
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("errors.As(err, *ValidationError) = false for %T", err)
+			}
+			if validation.Reason != tt.wantReason {
+				t.Fatalf("validation reason = %q, want %q", validation.Reason, tt.wantReason)
+			}
+		})
+	}
+}
+
+func TestDeclaredModuleDefinitionsKeepCurrentMatchingBehavior(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddModule(ModuleSpec{Name: "ask"}); err != nil {
+		t.Fatalf("AddModule: %v", err)
+	}
+	person := mustAddTemplate(t, workspace, TemplateSpec{Name: "person", Module: "ask"})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn: func(ActionContext) error {
+			fired++
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "person-rule",
+		Module:     "ask",
+		Conditions: []RuleConditionSpec{{Binding: "person", TemplateKey: person.Key()}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:          "people",
+		Module:        "ask",
+		ConditionTree: Match{Binding: "person", TemplateKey: person.Key()},
+		Returns:       []QueryReturnSpec{ReturnFact("person", "person")},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	template, ok := revision.Template("person")
+	if !ok || template.Module() != "ask" {
+		t.Fatalf("template module = (%q, %t), want ask", template.Module(), ok)
+	}
+	rule, ok := revision.Rule("person-rule")
+	if !ok || rule.Module() != "ask" {
+		t.Fatalf("rule module = (%q, %t), want ask", rule.Module(), ok)
+	}
+	query, ok := revision.Query("people")
+	if !ok || query.Module() != "ask" {
+		t.Fatalf("query module = (%q, %t), want ask", query.Module(), ok)
+	}
+
+	session := mustSession(t, revision, "module-matching-session")
+	if _, err := session.AssertTemplate(context.Background(), person.Key(), nil); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("run fired = (%d result, %d action), want 1", result.Fired, fired)
+	}
+}

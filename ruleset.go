@@ -293,6 +293,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := w.validateDefinitionModules(modules); err != nil {
+		return nil, err
+	}
 
 	compiledTemplates := make([]Template, 0, len(w.templates))
 	for _, spec := range w.templates {
@@ -907,6 +910,38 @@ func (w *Workspace) queryIndex(name string) (int, bool) {
 	return -1, false
 }
 
+func (w *Workspace) validateDefinitionModules(modules map[ModuleName]Module) error {
+	for _, spec := range w.templates {
+		module, ok := validateModuleReference(modules, spec.Module)
+		if !ok {
+			return &ValidationError{
+				TemplateName: strings.TrimSpace(spec.Name),
+				Reason:       fmt.Sprintf("unknown module %q authored in module %q", module, module),
+			}
+		}
+	}
+	for _, spec := range w.rules {
+		module, ok := validateModuleReference(modules, spec.Module)
+		if !ok {
+			return &ValidationError{
+				RuleName: strings.TrimSpace(spec.Name),
+				Reason:   fmt.Sprintf("unknown module %q authored in module %q", module, module),
+			}
+		}
+	}
+	for _, spec := range w.queries {
+		module, ok := validateModuleReference(modules, spec.Module)
+		if !ok {
+			return &ValidationError{
+				RuleName: strings.TrimSpace(spec.Name),
+				Reason:   fmt.Sprintf("unknown module %q authored in module %q", module, module),
+				Err:      ErrQueryValidation,
+			}
+		}
+	}
+	return nil
+}
+
 func rulesetID(modules []Module, templates []Template, actions []compiledAction, functions []compiledPureFunction, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
@@ -921,7 +956,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 	}
 
 	for _, template := range templates {
-		sum.Write(fmt.Appendf(nil, "template:%s:%s:%s:%d:%t\n", template.name, template.key, template.compatibilityKey, template.duplicatePolicy, template.closed))
+		sum.Write(fmt.Appendf(nil, "template:%s:%s:%s:%s:%d:%t\n", template.module, template.name, template.key, template.compatibilityKey, template.duplicatePolicy, template.closed))
 		sum.Write(fmt.Appendf(nil, "dup:%d:", template.duplicatePolicy))
 		sum.Write(fmt.Appendf(nil, "%d\n", len(template.duplicateKeyNames)))
 		for _, fieldName := range template.duplicateKeyNames {
@@ -963,7 +998,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 
 	sum.Write([]byte("rules:\n"))
 	for _, rule := range rules {
-		sum.Write(fmt.Appendf(nil, "rule:%s:%s:%s:%d:%d\n", rule.id, rule.revisionID, rule.name, rule.salience, rule.declarationOrder))
+		sum.Write(fmt.Appendf(nil, "rule:%s:%s:%s:%s:%d:%d\n", rule.module, rule.id, rule.revisionID, rule.name, rule.salience, rule.declarationOrder))
 		sum.Write([]byte("description:"))
 		sum.Write([]byte(rule.description))
 		sum.Write([]byte("\n"))
@@ -990,7 +1025,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 
 	sum.Write([]byte("queries:\n"))
 	for _, query := range queries {
-		sum.Write(fmt.Appendf(nil, "query:%s:%d\n", query.name, len(query.parameters)))
+		sum.Write(fmt.Appendf(nil, "query:%s:%s:%d\n", query.module, query.name, len(query.parameters)))
 		for _, param := range query.parameters {
 			sum.Write(fmt.Appendf(nil, "param:%d:%s:%s\n", param.order, param.name, param.kind))
 		}

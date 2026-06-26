@@ -34,6 +34,7 @@ type FieldSpec struct {
 
 type TemplateSpec struct {
 	Name              string
+	Module            ModuleName
 	Key               TemplateKey
 	CompatibilityKey  TemplateKey
 	Fields            []FieldSpec
@@ -43,6 +44,7 @@ type TemplateSpec struct {
 
 type Template struct {
 	name               string
+	module             ModuleName
 	key                TemplateKey
 	compatibilityKey   TemplateKey
 	fields             []FieldSpec
@@ -68,6 +70,7 @@ type fieldValidationSpec struct {
 
 func (s TemplateSpec) clone() TemplateSpec {
 	out := s
+	out.Module = normalizeModuleName(out.Module)
 	out.Fields = make([]FieldSpec, len(s.Fields))
 	for i, field := range s.Fields {
 		out.Fields[i] = cloneFieldSpec(field)
@@ -97,6 +100,10 @@ func cloneSpecValue(value any) any {
 
 func (t Template) Name() string {
 	return t.name
+}
+
+func (t Template) Module() ModuleName {
+	return t.module
 }
 
 func (t Template) Key() TemplateKey {
@@ -414,6 +421,7 @@ func (t Template) clone() Template {
 func (t Template) spec() TemplateSpec {
 	return TemplateSpec{
 		Name:              t.name,
+		Module:            t.module,
 		Key:               t.key,
 		CompatibilityKey:  t.compatibilityKey,
 		Fields:            t.Fields(),
@@ -489,6 +497,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	if name == "" {
 		return Template{}, &ValidationError{Reason: "template name is required"}
 	}
+	module := normalizeModuleName(spec.Module)
 	key := TemplateKey(strings.TrimSpace(string(spec.Key)))
 	if key == "" {
 		key = TemplateKey(name)
@@ -656,6 +665,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 
 	return Template{
 		name:               name,
+		module:             module,
 		key:                key,
 		compatibilityKey:   compatibilityKey,
 		fields:             fields,
