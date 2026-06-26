@@ -61,6 +61,82 @@ func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
 	}
 }
 
+func TestSessionRunRejectsDirtyAgendaWithoutWholeTerminalReconcile(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(person): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	}); err != nil {
+		t.Fatalf("AddAction(mark): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "person-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "person", TemplateKey: TemplateKey("person")},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	}); err != nil {
+		t.Fatalf("AddRule(person-rule): %v", err)
+	}
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("run-dirty-agenda-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("initial Run: %v", err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("initial run status = %v, want %v", result.Status, RunCompleted)
+	}
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state after initial run = ready %v dirty %v, want ready clean", session.agendaReady, session.agendaDirty)
+	}
+	beforeCounters := session.propagationCounterSnapshot().Totals
+	if got, want := beforeCounters.WholeTerminalScans, 1; got != want {
+		t.Fatalf("initial run whole terminal scans = %d, want %d", got, want)
+	}
+	if got, want := beforeCounters.InitialWholeTerminalScans, 1; got != want {
+		t.Fatalf("initial run initial whole terminal scans = %d, want %d", got, want)
+	}
+
+	session.markAgendaDirty()
+	result, err = session.Run(context.Background())
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("dirty Run error = %v, want ErrUnsupportedRuntime", err)
+	}
+	if result.Status != RunFailed {
+		t.Fatalf("dirty run status = %v, want %v", result.Status, RunFailed)
+	}
+	if result.Fired != 0 {
+		t.Fatalf("dirty run fired = %d, want 0", result.Fired)
+	}
+	afterCounters := session.propagationCounterSnapshot().Totals
+	if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("dirty run full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+		t.Fatalf("dirty run whole terminal scans = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterCounters.SteadyStateWholeTerminalScans, beforeCounters.SteadyStateWholeTerminalScans; got != want {
+		t.Fatalf("dirty run steady-state whole terminal scans = %d, want unchanged %d", got, want)
+	}
+}
+
 func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1119,18 +1195,27 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if !session.agendaDirty || session.agendaReady {
 			t.Fatalf("agenda state after action failure = dirty %v ready %v, want dirty not ready", session.agendaDirty, session.agendaReady)
 		}
+		session.attachPropagationCounters()
+		beforeCounters := session.propagationCounterSnapshot().Totals
 
 		result, err = session.Run(context.Background())
-		if err != nil {
-			t.Fatalf("second Run: %v", err)
+		if !errors.Is(err, ErrUnsupportedRuntime) {
+			t.Fatalf("second Run error = %v, want ErrUnsupportedRuntime", err)
 		}
-		if result.Status != RunCompleted {
-			t.Fatalf("second run status = %v, want %v", result.Status, RunCompleted)
+		if result.Status != RunFailed {
+			t.Fatalf("second run status = %v, want %v", result.Status, RunFailed)
 		}
-		if result.Fired != 1 {
-			t.Fatalf("second run fired = %d, want 1", result.Fired)
+		if result.Fired != 0 {
+			t.Fatalf("second run fired = %d, want 0", result.Fired)
 		}
-		if got, want := actionsSeen, []string{"assert-audit", "fail", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		afterCounters := session.propagationCounterSnapshot().Totals
+		if got, want := afterCounters.FullAgendaReconciles, beforeCounters.FullAgendaReconciles; got != want {
+			t.Fatalf("second run full agenda reconciles = %d, want unchanged %d", got, want)
+		}
+		if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
+			t.Fatalf("second run whole terminal scans = %d, want unchanged %d", got, want)
+		}
+		if got, want := actionsSeen, []string{"assert-audit", "fail"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
 	})
@@ -1235,16 +1320,16 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		}
 
 		result, err = session.Run(context.Background())
-		if err != nil {
-			t.Fatalf("second Run: %v", err)
+		if !errors.Is(err, ErrUnsupportedRuntime) {
+			t.Fatalf("second Run error = %v, want ErrUnsupportedRuntime", err)
 		}
-		if result.Status != RunCompleted {
-			t.Fatalf("second run status = %v, want %v", result.Status, RunCompleted)
+		if result.Status != RunFailed {
+			t.Fatalf("second run status = %v, want %v", result.Status, RunFailed)
 		}
-		if result.Fired != 1 {
-			t.Fatalf("second run fired = %d, want 1", result.Fired)
+		if result.Fired != 0 {
+			t.Fatalf("second run fired = %d, want 0", result.Fired)
 		}
-		if got, want := actionsSeen, []string{"assert-audit", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		if got, want := actionsSeen, []string{"assert-audit"}; len(got) != len(want) || got[0] != want[0] {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
 	})

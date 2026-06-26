@@ -3,6 +3,7 @@ package gess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 )
 
@@ -62,7 +63,10 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		}
 		return abort(RunFailed, 0, err)
 	}
-	if !s.agendaReady || s.agendaDirty {
+	if s.agendaDirty {
+		return abort(RunFailed, 0, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
+	}
+	if !s.agendaReady {
 		if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return abort(RunCanceled, 0, err)
@@ -121,13 +125,8 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			}
 			return abort(RunFailed, fired, err)
 		}
-		if s.consumeAgendaDirty() {
-			if _, err := s.reconcileAgendaInternal(ctx); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return abort(RunCanceled, fired, err)
-				}
-				return abort(RunFailed, fired, err)
-			}
+		if s.agendaDirty {
+			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}
 	}
 }

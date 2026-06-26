@@ -4227,14 +4227,6 @@ func (s *Session) markAgendaDirty() {
 	}
 }
 
-func (s *Session) consumeAgendaDirty() bool {
-	if s == nil || !s.agendaDirty {
-		return false
-	}
-	s.agendaDirty = false
-	return true
-}
-
 func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 	if s == nil {
 		return nil

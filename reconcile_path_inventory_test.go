@@ -74,12 +74,6 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		steadyStateOK: true,
 	},
 	{
-		path:        "Run: dirty agenda fallback after unsupported run delta",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan: "Run-time action deltas should remain graph-supported or fail instead of dirtying the agenda.",
-	},
-	{
 		path:        "Template value batch insertion: batch reconcile after graph-affecting inserts",
 		class:       reconcilePathMigrationDebt,
 		owner:       "P1 Introduce Explicit Graph Propagation Events",
