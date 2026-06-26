@@ -22,10 +22,11 @@ type reconcilePathInventoryEntry struct {
 
 var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 	{
-		path:        "Session.reconcileAgenda: snapshot-backed rete.match plus agenda.reconcile",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P4 Remove Steady-State Whole-Terminal Reconcile",
-		removalPlan: "Keep only initial/diagnostic use; steady-state mutation callers must apply terminal deltas or return ErrUnsupportedRuntime.",
+		path:          "Session.reconcileAgenda: snapshot-backed rete.match plus agenda.reconcile",
+		class:         reconcilePathInitialBuild,
+		owner:         "P4 Remove Steady-State Whole-Terminal Reconcile",
+		removalPlan:   "Retain only for initial agenda construction and test parity helpers; steady-state mutation callers must apply terminal deltas or return ErrUnsupportedRuntime.",
+		steadyStateOK: true,
 	},
 	{
 		path:          "Session.reconcileAgendaWithoutSnapshot: current terminal token collection",
@@ -35,10 +36,11 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		steadyStateOK: true,
 	},
 	{
-		path:        "Session.reconcileAgendaWithoutSnapshot: matchWithoutSnapshot plus agenda.reconcile",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P4 Remove Steady-State Whole-Terminal Reconcile",
-		removalPlan: "Replace with retained terminal deltas; unsupported terminal deltas should fail instead of falling back.",
+		path:          "Session.reconcileAgendaWithoutSnapshot: matchWithoutSnapshot plus agenda.reconcile",
+		class:         reconcilePathInitialBuild,
+		owner:         "P4 Remove Steady-State Whole-Terminal Reconcile",
+		removalPlan:   "Retain only as an initial-build fallback when terminal token collection is unavailable.",
+		steadyStateOK: true,
 	},
 	{
 		path:          "Session.Reset: post-reset terminal token collection and fallback reconcile",
@@ -55,10 +57,11 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		steadyStateOK: true,
 	},
 	{
-		path:        "Session.reconcileAgendaAfterMutation: unsupported delta fallback",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan: "Unsupported mutation deltas should return ErrUnsupportedRuntime instead of forcing a full agenda reconcile.",
+		path:          "Session.reconcileAgendaAfterMutation: initial agenda fallback",
+		class:         reconcilePathInitialBuild,
+		owner:         "P1 Introduce Explicit Graph Propagation Events",
+		removalPlan:   "Retain only before agenda readiness; unsupported steady-state mutation deltas return ErrUnsupportedRuntime.",
+		steadyStateOK: true,
 	},
 	{
 		path:          "Run: initial agenda readiness reconcile",
