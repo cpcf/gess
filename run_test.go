@@ -2547,6 +2547,7 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 		t.Fatalf("AssertTemplate(person): %v", err)
 	}
 	personID = asserted.Fact.ID()
+	session.attachPropagationCounters()
 
 	type assertOutcome struct {
 		result AssertResult
@@ -2639,6 +2640,16 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	}
 	if runResult.Fired != 3 {
 		t.Fatalf("run fired = %d, want 3", runResult.Fired)
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if got := counters.SteadyStateWholeTerminalScans; got != 0 {
+		t.Fatalf("steady-state whole-terminal scans after queued mutations = %d, want 0", got)
+	}
+	if got := counters.FullAgendaReconciles; got != 0 {
+		t.Fatalf("full agenda reconciles after queued mutations = %d, want 0", got)
+	}
+	if got := counters.AgendaDeltaApplications; got == 0 {
+		t.Fatal("agenda delta applications after queued mutations = 0, want queued mutations to apply incrementally")
 	}
 	if session.rete == nil {
 		t.Fatal("session Rete runtime is nil")

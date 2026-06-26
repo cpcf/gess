@@ -126,7 +126,7 @@ type Session struct {
 
 type queuedMutation struct {
 	ctx    context.Context
-	apply  func(context.Context) (any, error)
+	apply  func(context.Context) (any, reteAgendaDelta, error)
 	result chan queuedMutationResult
 }
 
@@ -553,9 +553,9 @@ func (s *Session) insertFactWithContextAndOrigin(ctx context.Context, name strin
 		resultCh := make(chan queuedMutationResult, 1)
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
-			apply: func(mutationCtx context.Context) (any, error) {
-				result, _, err := s.insertFactImmediate(mutationCtx, name, templateKey, fields, origin)
-				return result, err
+			apply: func(mutationCtx context.Context) (any, reteAgendaDelta, error) {
+				result, agendaDelta, err := s.insertFactImmediate(mutationCtx, name, templateKey, fields, origin)
+				return result, agendaDelta, err
 			},
 			result: resultCh,
 		}) {
@@ -620,9 +620,9 @@ func (s *Session) insertLogicalFactWithContextAndOrigin(ctx context.Context, nam
 		resultCh := make(chan queuedMutationResult, 1)
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
-			apply: func(mutationCtx context.Context) (any, error) {
-				result, _, err := s.insertLogicalFactImmediate(mutationCtx, name, templateKey, fields, origin, supportingFacts)
-				return result, err
+			apply: func(mutationCtx context.Context) (any, reteAgendaDelta, error) {
+				result, agendaDelta, err := s.insertLogicalFactImmediate(mutationCtx, name, templateKey, fields, origin, supportingFacts)
+				return result, agendaDelta, err
 			},
 			result: resultCh,
 		}) {
@@ -1323,9 +1323,9 @@ func (s *Session) retractWithContextAndOrigin(ctx context.Context, id FactID, or
 		resultCh := make(chan queuedMutationResult, 1)
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
-			apply: func(mutationCtx context.Context) (any, error) {
-				result, _, err := s.retractImmediate(mutationCtx, id, origin)
-				return result, err
+			apply: func(mutationCtx context.Context) (any, reteAgendaDelta, error) {
+				result, agendaDelta, err := s.retractImmediate(mutationCtx, id, origin)
+				return result, agendaDelta, err
 			},
 			result: resultCh,
 		}) {
@@ -1554,8 +1554,9 @@ func (s *Session) ApplyRuleset(ctx context.Context, next *Ruleset) (ApplyRuleset
 		resultCh := make(chan queuedMutationResult, 1)
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
-			apply: func(mutationCtx context.Context) (any, error) {
-				return s.applyRulesetImmediate(mutationCtx, next)
+			apply: func(mutationCtx context.Context) (any, reteAgendaDelta, error) {
+				result, err := s.applyRulesetImmediate(mutationCtx, next)
+				return result, reteAgendaDelta{}, err
 			},
 			result: resultCh,
 		}) {
@@ -2351,9 +2352,9 @@ func (s *Session) modifyWithContextAndOrigin(ctx context.Context, id FactID, pat
 		resultCh := make(chan queuedMutationResult, 1)
 		if s.enqueueMutationDuringRun(queuedMutation{
 			ctx: ctx,
-			apply: func(mutationCtx context.Context) (any, error) {
-				result, _, err := s.modifyImmediate(mutationCtx, id, patch, origin)
-				return result, err
+			apply: func(mutationCtx context.Context) (any, reteAgendaDelta, error) {
+				result, agendaDelta, err := s.modifyImmediate(mutationCtx, id, patch, origin)
+				return result, agendaDelta, err
 			},
 			result: resultCh,
 		}) {
@@ -4538,10 +4539,10 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 			if req.ctx != nil {
 				mutationCtx = req.ctx
 			}
-			value, err := req.apply(mutationCtx)
+			value, agendaDelta, err := req.apply(mutationCtx)
 			s.endMutation()
 			if err == nil && mutationResultNeedsReconcile(value, s.revision) {
-				if _, reconcileErr := s.reconcileAgendaInternal(ctx); reconcileErr != nil {
+				if _, reconcileErr := s.reconcileAgendaAfterMutation(ctx, agendaDelta); reconcileErr != nil {
 					err = reconcileErr
 				}
 			}

@@ -61,12 +61,6 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 		removalPlan: "Unsupported mutation deltas should return ErrUnsupportedRuntime instead of forcing a full agenda reconcile.",
 	},
 	{
-		path:        "Session.drainQueuedMutations: queued mutation reconcile fallback",
-		class:       reconcilePathMigrationDebt,
-		owner:       "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan: "Queued mutations should carry supported graph deltas through run agenda coalescing.",
-	},
-	{
 		path:          "Run: initial agenda readiness reconcile",
 		class:         reconcilePathInitialBuild,
 		owner:         "P4 Remove Steady-State Whole-Terminal Reconcile",
