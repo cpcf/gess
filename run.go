@@ -39,6 +39,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 
 	s.nextRunSequence++
 	runID := RunID("run:" + strconv.FormatUint(s.nextRunSequence, 10))
+	s.runHaltRequested.Store(false)
 	s.runActive.Store(true)
 	s.endMutation()
 	defer s.endRun()
@@ -128,7 +129,17 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		if s.agendaDirty {
 			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}
+		if s.runHaltRequested.Load() {
+			return RunResult{RunID: runID, Status: RunHalted, Fired: fired}, nil
+		}
 	}
+}
+
+func (s *Session) requestRunHalt() {
+	if s == nil {
+		return
+	}
+	s.runHaltRequested.Store(true)
 }
 
 func (s *Session) beginRun() bool {

@@ -85,6 +85,7 @@ type Session struct {
 	runGuard             chan struct{}
 	runActive            atomic.Bool
 	runActivation        atomic.Pointer[activation]
+	runHaltRequested     atomic.Bool
 	runAgendaDelta       reteAgendaDelta
 	runAgendaDeltas      []reteAgendaDelta
 	runAgendaStates      []runAgendaDeltaState

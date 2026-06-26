@@ -15,6 +15,7 @@ type RunStatus string
 
 const (
 	RunCompleted         RunStatus = "completed"
+	RunHalted            RunStatus = "halted"
 	RunCanceled          RunStatus = "canceled"
 	RunActionFailed      RunStatus = "action_failed"
 	RunClosed            RunStatus = "closed"

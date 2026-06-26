@@ -137,6 +137,197 @@ func TestSessionRunRejectsDirtyAgendaWithoutWholeTerminalReconcile(t *testing.T)
 	}
 }
 
+func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(event): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "audit",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(audit): %v", err)
+	}
+
+	var actions []string
+	if err := workspace.AddAction(ActionSpec{
+		Name: "before",
+		Fn: func(ctx ActionContext) error {
+			actions = append(actions, "before")
+			_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "before"}))
+			return err
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(before): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "halt",
+		Fn: func(ctx ActionContext) error {
+			actions = append(actions, "halt")
+			return ctx.Halt()
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(halt): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "after",
+		Fn: func(ctx ActionContext) error {
+			actions = append(actions, "after")
+			_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "after"}))
+			return err
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(after): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "follow-up",
+		Fn: func(ActionContext) error {
+			actions = append(actions, "follow-up")
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(follow-up): %v", err)
+	}
+
+	if err := workspace.AddRule(RuleSpec{
+		Name:     "halt-rule",
+		Salience: 10,
+		Conditions: []RuleConditionSpec{
+			{Binding: "event", Target: TemplateKeyFact(TemplateKey("event"))},
+		},
+		Actions: []RuleActionSpec{{Name: "before"}, {Name: "halt"}, {Name: "after"}},
+	}); err != nil {
+		t.Fatalf("AddRule(halt-rule): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "follow-up-rule",
+		Conditions: []RuleConditionSpec{
+			{Binding: "event", Target: TemplateKeyFact(TemplateKey("event"))},
+		},
+		Actions: []RuleActionSpec{{Name: "follow-up"}},
+	}); err != nil {
+		t.Fatalf("AddRule(follow-up-rule): %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("run-halt-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
+		t.Fatalf("AssertTemplate(event): %v", err)
+	}
+
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run halted error = %v, want nil", err)
+	}
+	if result.Status != RunHalted || result.Fired != 1 {
+		t.Fatalf("halted run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunHalted)
+	}
+	if got, want := len(actions), 3; got != want {
+		t.Fatalf("actions after halted run = %#v, want 3 current-activation actions", actions)
+	}
+	for i, want := range []string{"before", "halt", "after"} {
+		if actions[i] != want {
+			t.Fatalf("actions[%d] = %q, want %q in %#v", i, actions[i], want, actions)
+		}
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("pending activations after halted run = %d, want %d", got, want)
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	auditFacts := 0
+	for _, fact := range snapshot.Facts() {
+		if fact.TemplateKey() == TemplateKey("audit") {
+			auditFacts++
+		}
+	}
+	if auditFacts != 2 {
+		t.Fatalf("audit facts after halted run = %d, want 2", auditFacts)
+	}
+
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("second run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	if got, want := actions[len(actions)-1], "follow-up"; got != want {
+		t.Fatalf("last action after second run = %q, want %q in %#v", got, want, actions)
+	}
+}
+
+func TestSessionRunActionFailureRemainsDistinctFromHalt(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(event): %v", err)
+	}
+
+	terminalErr := errors.New("terminal failure")
+	if err := workspace.AddAction(ActionSpec{
+		Name: "halt",
+		Fn: func(ctx ActionContext) error {
+			return ctx.Halt()
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(halt): %v", err)
+	}
+	if err := workspace.AddAction(ActionSpec{
+		Name: "fail",
+		Fn: func(ActionContext) error {
+			return terminalErr
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(fail): %v", err)
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name: "halt-then-fail",
+		Conditions: []RuleConditionSpec{
+			{Binding: "event", Target: TemplateKeyFact(TemplateKey("event"))},
+		},
+		Actions: []RuleActionSpec{{Name: "halt"}, {Name: "fail"}},
+	}); err != nil {
+		t.Fatalf("AddRule(halt-then-fail): %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision, WithSessionID("run-halt-failure-session"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
+		t.Fatalf("AssertTemplate(event): %v", err)
+	}
+
+	result, err := session.Run(context.Background())
+	if result.Status != RunActionFailed || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunActionFailed)
+	}
+	if !errors.Is(err, ErrActionFailed) || !errors.Is(err, terminalErr) {
+		t.Fatalf("run error = %v, want action failure wrapping terminal error", err)
+	}
+}
+
 func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -268,6 +268,14 @@ func (c ActionContext) Retract(id FactID) (RetractResult, error) {
 	return c.session.retractWithContextAndOrigin(c.Context(), id, c.mutationOrigin())
 }
 
+func (c ActionContext) Halt() error {
+	if c.session == nil || c.session.closed {
+		return ErrClosedSession
+	}
+	c.session.requestRunHalt()
+	return nil
+}
+
 func (c ActionContext) supportingFactIDs() []FactID {
 	if c.bindings == nil || c.bindings.len() == 0 {
 		return nil
