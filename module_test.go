@@ -328,6 +328,116 @@ func TestModuleRelativeTemplateTargetsUseAuthorModule(t *testing.T) {
 	}
 }
 
+func TestRuleAutoFocusMetadataDefaultsToFalse(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "default-focus",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("default-focus")
+	if !ok {
+		t.Fatal("compiled revision missing default-focus rule")
+	}
+	if value, ok := rule.AutoFocus(); ok || value {
+		t.Fatalf("rule auto-focus = (%t, %t), want no authored value", value, ok)
+	}
+	if rule.EffectiveAutoFocus() {
+		t.Fatal("effective rule auto-focus = true, want false")
+	}
+}
+
+func TestRuleAutoFocusMetadataCompilesRuleAndModulePrecedence(t *testing.T) {
+	moduleAutoFocus := true
+	ruleAutoFocusTrue := true
+	ruleAutoFocusFalse := false
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask", AutoFocus: &moduleAutoFocus})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	tests := []struct {
+		name            string
+		module          ModuleName
+		autoFocus       *bool
+		wantAuthored    bool
+		wantHasAuthored bool
+		wantEffective   bool
+	}{
+		{
+			name:          "inherits-module-default",
+			module:        "ask",
+			wantEffective: true,
+		},
+		{
+			name:            "rule-true-over-main-default",
+			autoFocus:       &ruleAutoFocusTrue,
+			wantAuthored:    true,
+			wantHasAuthored: true,
+			wantEffective:   true,
+		},
+		{
+			name:            "rule-false-over-module-default",
+			module:          "ask",
+			autoFocus:       &ruleAutoFocusFalse,
+			wantHasAuthored: true,
+			wantEffective:   false,
+		},
+	}
+	for _, tt := range tests {
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       tt.name,
+			Module:     tt.module,
+			AutoFocus:  tt.autoFocus,
+			Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact(tt.name)}},
+			Actions:    []RuleActionSpec{{Name: "mark"}},
+		})
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, ok := revision.Rule(tt.name)
+			if !ok {
+				t.Fatalf("compiled revision missing %s rule", tt.name)
+			}
+			authored, hasAuthored := rule.AutoFocus()
+			if authored != tt.wantAuthored || hasAuthored != tt.wantHasAuthored {
+				t.Fatalf("rule auto-focus = (%t, %t), want (%t, %t)", authored, hasAuthored, tt.wantAuthored, tt.wantHasAuthored)
+			}
+			if got := rule.EffectiveAutoFocus(); got != tt.wantEffective {
+				t.Fatalf("effective rule auto-focus = %t, want %t", got, tt.wantEffective)
+			}
+		})
+	}
+}
+
+func TestRuleAutoFocusMetadataChangesRuleRevision(t *testing.T) {
+	build := func(autoFocus bool) RuleRevisionID {
+		workspace := NewWorkspace()
+		mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "focus-sensitive",
+			AutoFocus:  &autoFocus,
+			Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
+			Actions:    []RuleActionSpec{{Name: "mark"}},
+		})
+		revision := mustCompileWorkspace(t, workspace)
+		rule, ok := revision.Rule("focus-sensitive")
+		if !ok {
+			t.Fatal("compiled revision missing focus-sensitive rule")
+		}
+		return rule.RevisionID()
+	}
+
+	withoutFocus := build(false)
+	withFocus := build(true)
+	if withoutFocus == withFocus {
+		t.Fatalf("rule revision IDs matched after auto-focus metadata changed: %s", withFocus)
+	}
+}
+
 func TestModuleQualifiedTemplateTargetDiagnosticsNameReferenceAndAuthor(t *testing.T) {
 	workspace := NewWorkspace()
 	mustAddModule(t, workspace, ModuleSpec{Name: "interview"})

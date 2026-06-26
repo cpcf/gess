@@ -386,6 +386,7 @@ type RuleSpec struct {
 	Description string
 	Tags        []string
 	Salience    int
+	AutoFocus   *bool
 	// Conditions is the flat positive conjunction form. When ConditionTree is
 	// nil, compile normalizes Conditions to And(Match...) without changing
 	// condition ordering, condition identity, graph topology, or agenda behavior.
@@ -402,6 +403,10 @@ func (s RuleSpec) clone() RuleSpec {
 	out.Module = normalizeModuleName(out.Module)
 	out.ID = RuleID(strings.TrimSpace(string(out.ID)))
 	out.Tags = append([]string(nil), s.Tags...)
+	if s.AutoFocus != nil {
+		autoFocus := *s.AutoFocus
+		out.AutoFocus = &autoFocus
+	}
 	out.Conditions = make([]RuleConditionSpec, len(s.Conditions))
 	for i, condition := range s.Conditions {
 		out.Conditions[i] = condition.clone()
@@ -642,18 +647,21 @@ func (a RuleAction) clone() RuleAction {
 }
 
 type Rule struct {
-	id                RuleID
-	revisionID        RuleRevisionID
-	name              string
-	module            ModuleName
-	description       string
-	tags              []string
-	salience          int
-	declarationOrder  int
-	conditions        []RuleCondition
-	conditionTree     RuleConditionTree
-	conditionBranches []RuleConditionBranch
-	actions           []RuleAction
+	id                 RuleID
+	revisionID         RuleRevisionID
+	name               string
+	module             ModuleName
+	description        string
+	tags               []string
+	salience           int
+	autoFocus          bool
+	hasAutoFocus       bool
+	effectiveAutoFocus bool
+	declarationOrder   int
+	conditions         []RuleCondition
+	conditionTree      RuleConditionTree
+	conditionBranches  []RuleConditionBranch
+	actions            []RuleAction
 }
 
 func (r Rule) ID() RuleID {
@@ -684,6 +692,14 @@ func (r Rule) Tags() []string {
 
 func (r Rule) Salience() int {
 	return r.salience
+}
+
+func (r Rule) AutoFocus() (bool, bool) {
+	return r.autoFocus, r.hasAutoFocus
+}
+
+func (r Rule) EffectiveAutoFocus() bool {
+	return r.effectiveAutoFocus
 }
 
 func (r Rule) DeclarationOrder() int {
@@ -738,6 +754,9 @@ type compiledRule struct {
 	description                 string
 	tags                        []string
 	salience                    int
+	autoFocus                   bool
+	hasAutoFocus                bool
+	effectiveAutoFocus          bool
 	declarationOrder            int
 	identityScopeHash           uint64
 	conditions                  []RuleCondition
@@ -754,18 +773,21 @@ type compiledRule struct {
 
 func (r compiledRule) inspect() Rule {
 	return Rule{
-		id:                r.id,
-		revisionID:        r.revisionID,
-		name:              r.name,
-		module:            r.module,
-		description:       r.description,
-		tags:              append([]string(nil), r.tags...),
-		salience:          r.salience,
-		declarationOrder:  r.declarationOrder,
-		conditions:        cloneRuleConditions(r.conditions),
-		conditionTree:     r.conditionTree.clone(),
-		conditionBranches: cloneRuleConditionBranches(r.conditionBranchPlans),
-		actions:           append([]RuleAction(nil), r.actions...),
+		id:                 r.id,
+		revisionID:         r.revisionID,
+		name:               r.name,
+		module:             r.module,
+		description:        r.description,
+		tags:               append([]string(nil), r.tags...),
+		salience:           r.salience,
+		autoFocus:          r.autoFocus,
+		hasAutoFocus:       r.hasAutoFocus,
+		effectiveAutoFocus: r.effectiveAutoFocus,
+		declarationOrder:   r.declarationOrder,
+		conditions:         cloneRuleConditions(r.conditions),
+		conditionTree:      r.conditionTree.clone(),
+		conditionBranches:  cloneRuleConditionBranches(r.conditionBranchPlans),
+		actions:            append([]RuleAction(nil), r.actions...),
 	}
 }
 
@@ -1837,7 +1859,7 @@ func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions
 	}, nil
 }
 
-func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction) (compiledRule, error) {
+func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction) (compiledRule, error) {
 	normalized, err := normalizeRuleSpec(spec)
 	if err != nil {
 		return compiledRule{}, err
@@ -1913,6 +1935,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 			conditions: cloneRuleConditionBranchConditions(branch.branchConditions),
 		}
 	}
+	autoFocus, hasAutoFocus, effectiveAutoFocus := ruleAutoFocusValues(normalized, modules)
 
 	actions := make([]RuleAction, 0, len(normalized.Actions))
 	actionExecutions := make([]compiledRuleAction, 0, len(normalized.Actions))
@@ -1957,6 +1980,9 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 		description:                 normalized.Description,
 		tags:                        append([]string(nil), normalized.Tags...),
 		salience:                    normalized.Salience,
+		autoFocus:                   autoFocus,
+		hasAutoFocus:                hasAutoFocus,
+		effectiveAutoFocus:          effectiveAutoFocus,
 		declarationOrder:            declarationOrder,
 		conditions:                  conditions,
 		treeConditions:              treeConditions,
@@ -1972,6 +1998,22 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, templat
 	compiled.revisionID = ruleRevisionIDFor(compiled)
 	compiled.identityScopeHash = candidateIdentityScopeHash(compiled.id, compiled.revisionID)
 	return compiled, nil
+}
+
+func ruleAutoFocusValues(rule RuleSpec, modules map[ModuleName]Module) (bool, bool, bool) {
+	if rule.AutoFocus != nil {
+		autoFocus := *rule.AutoFocus
+		return autoFocus, true, autoFocus
+	}
+	module, ok := modules[normalizeModuleName(rule.Module)]
+	if !ok {
+		return false, false, false
+	}
+	moduleAutoFocus, ok := module.AutoFocusDefault()
+	if !ok {
+		return false, false, false
+	}
+	return false, false, moduleAutoFocus
 }
 
 func bindingSlotsForRuleConditions(conditions []RuleCondition) map[string]int {
@@ -2702,6 +2744,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	sum.Write([]byte(rule.name))
 	sum.Write([]byte("\nsalience:"))
 	sum.Write(fmt.Appendf(nil, "%d", rule.salience))
+	sum.Write([]byte("\nauto-focus:"))
+	sum.Write(fmt.Appendf(nil, "%t:%t:%t", rule.hasAutoFocus, rule.autoFocus, rule.effectiveAutoFocus))
 	sum.Write([]byte("\nall-actions-skip-binding-freeze:"))
 	sum.Write(fmt.Appendf(nil, "%t", rule.allActionsSkipBindingFreeze))
 	sum.Write([]byte("\nconditions:"))

@@ -397,7 +397,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if ruleID.IsZero() {
 			ruleID = RuleID(strings.TrimSpace(spec.Name))
 		}
-		rule, err := compileRuleSpec(spec, ruleID, i, templateResolver, actionsByName, functionsByName)
+		rule, err := compileRuleSpec(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -1002,6 +1002,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 	sum.Write([]byte("rules:\n"))
 	for _, rule := range rules {
 		sum.Write(fmt.Appendf(nil, "rule:%s:%s:%s:%s:%d:%d\n", rule.module, rule.id, rule.revisionID, rule.name, rule.salience, rule.declarationOrder))
+		sum.Write(fmt.Appendf(nil, "auto-focus:%t:%t:%t\n", rule.hasAutoFocus, rule.autoFocus, rule.effectiveAutoFocus))
 		sum.Write([]byte("description:"))
 		sum.Write([]byte(rule.description))
 		sum.Write([]byte("\n"))
