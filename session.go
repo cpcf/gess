@@ -1183,6 +1183,16 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
 	if span != nil {
 		span.finish()
 	}
@@ -1288,6 +1298,16 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		s.restoreReteAfterPropagationFailure()
 		return nil, false, agendaDelta, err
 	}
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return nil, false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
 	if span != nil {
 		span.finish()
 	}
@@ -1295,6 +1315,56 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
 
 	return fact, true, agendaDelta, nil
+}
+
+func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || state == nil || len(demands) == 0 {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	combined := reteAgendaDelta{supported: true}
+	queue := append([]backchainDemandRequest(nil), demands...)
+	for i := 0; i < len(queue); i++ {
+		demand := queue[i]
+		template, ok := s.revision.templateByKey(demand.templateKey)
+		if !ok || !template.backchainDemand {
+			return combined, &ValidationError{
+				TemplateName: string(demand.templateKey),
+				Reason:       "unknown backchain demand template",
+			}
+		}
+		if len(demand.slots) != len(template.fields) {
+			return combined, &ValidationError{
+				TemplateName: template.Name(),
+				Reason:       "backchain demand slot count does not match template",
+			}
+		}
+		slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(demand.slots))
+		copy(slots, demand.slots)
+		fact, _, inserted, err := state.insertPreparedEngineGeneratedFactSlots(s.revision, s.generation, template, slots, slotMark)
+		if err != nil {
+			return combined, err
+		}
+		if !inserted {
+			continue
+		}
+		var span *propagationCounterSpan
+		if s.propagationCounters != nil {
+			counterSpan := s.propagationCounters.beginAssert(template.Key(), origin)
+			span = &counterSpan
+		}
+		next, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, origin, span)
+		if span != nil {
+			span.finish()
+		}
+		if err != nil {
+			return combined, err
+		}
+		if len(next.demands) > 0 {
+			queue = append(queue, next.demands...)
+		}
+		combined = mergeReteAgendaDelta(combined, next)
+	}
+	return combined, nil
 }
 
 func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
@@ -3920,6 +3990,14 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 		w.rollbackGeneratedFactSlots(slotMark)
 		return nil, "", false, err
 	}
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark)
+}
+
+func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark)
+}
+
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
 	name := template.Name()
 	templateKey := template.Key()
 	var duplicateIndex duplicateIndexKey

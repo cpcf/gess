@@ -39,6 +39,22 @@ func BenchmarkGessBackchainReactiveCompile(b *testing.B) {
 	}
 }
 
+func BenchmarkGessBackchainRuntimeDemand(b *testing.B) {
+	ctx := context.Background()
+	revision, requestKey := mustCompileBackchainRuntimeRuleset(b)
+	b.ReportAllocs()
+	b.ReportMetric(1, "requests")
+	b.ReportMetric(1, "generated-demand-facts")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		session, err := NewSession(revision)
+		if err != nil {
+			b.Fatalf("NewSession: %v", err)
+		}
+		runBackchainRuntimeDemand(b, ctx, session, requestKey)
+	}
+}
+
 func TestBackchainReactiveCompileHarness(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_REACTIVE_RUNNER")) == "" {
 		t.Skip("set GESS_BACKCHAIN_REACTIVE_RUNNER=1 to run benchmark harness")
@@ -75,6 +91,47 @@ func TestBackchainReactiveCompileHarness(t *testing.T) {
 		tc.templates, tc.reactive, tc.reactive, iterations, warmup, elapsed.Nanoseconds(), nsPerOp)
 }
 
+func TestBackchainRuntimeDemandHarness(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_RUNTIME_RUNNER")) == "" {
+		t.Skip("set GESS_BACKCHAIN_RUNTIME_RUNNER=1 to run benchmark harness")
+	}
+
+	iterations := backchainReactiveHarnessEnvInt(t, "GESS_BACKCHAIN_RUNTIME_ITERATIONS", 1000)
+	warmup := backchainReactiveHarnessEnvInt(t, "GESS_BACKCHAIN_RUNTIME_WARMUP", 20)
+	if iterations <= 0 {
+		t.Fatalf("iterations must be positive, got %d", iterations)
+	}
+	if warmup < 0 {
+		t.Fatalf("warmup must be non-negative, got %d", warmup)
+	}
+
+	ctx := context.Background()
+	revision, requestKey := mustCompileBackchainRuntimeRuleset(t)
+	for range warmup {
+		session, err := NewSession(revision)
+		if err != nil {
+			t.Fatalf("NewSession(warmup): %v", err)
+		}
+		runBackchainRuntimeDemand(t, ctx, session, requestKey)
+	}
+
+	var elapsed time.Duration
+	for range iterations {
+		session, err := NewSession(revision)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		start := time.Now()
+		runBackchainRuntimeDemand(t, ctx, session, requestKey)
+		elapsed += time.Since(start)
+	}
+	nsPerOp := float64(elapsed.Nanoseconds()) / float64(iterations)
+
+	fmt.Printf(
+		"GESS_RUNNER|backchain-reactive|runtime-demand|requests=%d|generated-demand-facts=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f\n",
+		1, 1, iterations, warmup, elapsed.Nanoseconds(), nsPerOp)
+}
+
 func mustCompileBackchainReactiveRuleset(t testing.TB, tc backchainReactiveCase) *Ruleset {
 	t.Helper()
 	if tc.templates < 0 || tc.reactive < 0 || tc.reactive > tc.templates {
@@ -101,6 +158,95 @@ func mustCompileBackchainReactiveRuleset(t testing.TB, tc backchainReactiveCase)
 		t.Fatalf("Compile: %v", err)
 	}
 	return revision
+}
+
+func mustCompileBackchainRuntimeRuleset(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	request := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "request",
+		Key:  "request",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	answer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "answer",
+		Key:               "answer",
+		BackchainReactive: true,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "value", Kind: ValueString},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "provide-answer",
+		Fn: func(ctx ActionContext) error {
+			demand, ok := ctx.Binding("need")
+			if !ok {
+				t.Fatal("need binding did not resolve")
+			}
+			id, _ := demand.Field("id")
+			kind, _ := demand.Field("kind")
+			_, err := ctx.AssertTemplate(answer.Key(), Fields{
+				"id":    id,
+				"kind":  kind,
+				"value": newStringValue("provided"),
+			})
+			return err
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "consume-answer", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "answer-need",
+		ConditionTree: Match{
+			Binding: "need",
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+			},
+			Target: TemplateKeyFact(TemplateKey("need-answer")),
+		},
+		Actions: []RuleActionSpec{{Name: "provide-answer"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "consume-request-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "consume-answer"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return revision, request.Key()
+}
+
+func runBackchainRuntimeDemand(t testing.TB, ctx context.Context, session *Session, requestKey TemplateKey) {
+	t.Helper()
+	if _, err := session.AssertTemplate(ctx, requestKey, Fields{"id": newStringValue("q1")}); err != nil {
+		t.Fatalf("AssertTemplate(request): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
 }
 
 func validateBackchainReactiveRuleset(t testing.TB, revision *Ruleset, tc backchainReactiveCase) {

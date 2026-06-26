@@ -513,6 +513,12 @@ type reteAgendaDelta struct {
 	added     []reteTerminalTokenDelta
 	removed   []reteTerminalTokenDelta
 	updated   []reteTerminalTokenUpdate
+	demands   []backchainDemandRequest
+}
+
+type backchainDemandRequest struct {
+	templateKey TemplateKey
+	slots       []factSlot
 }
 
 type reteTerminalTokenDelta struct {

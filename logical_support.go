@@ -547,5 +547,6 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	left.added = append(left.added, right.added...)
 	left.removed = append(left.removed, right.removed...)
 	left.updated = append(left.updated, right.updated...)
+	left.demands = append(left.demands, right.demands...)
 	return left
 }

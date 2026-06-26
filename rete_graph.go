@@ -85,8 +85,16 @@ type reteGraphBetaNode struct {
 	predicates         []compiledExpressionPredicate
 	rightPredicates    []compiledExpressionPredicate
 	entry              bindingTupleEntry
+	backchainDemands   []reteGraphBackchainDemandPlan
 	rightHasLeftPrefix bool
 	rightPrefixWidth   int
+}
+
+type reteGraphBackchainDemandPlan struct {
+	templateKey TemplateKey
+	side        reteGraphBetaInputSide
+	constraints []compiledFieldConstraint
+	joins       []compiledJoinConstraint
 }
 
 type reteGraphAggregateNode struct {
@@ -410,6 +418,10 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 				outputStage := reteGraphStageRef{}
 				if betaKind == reteGraphBetaNodeJoin {
 					betaID, outputStage = graph.internJoinWithResidualFilter(betaIndex, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates), conditionEntry)
+					graph.appendBackchainDemandPlan(betaID, condition, reteGraphBetaInputRight, condition.joins, templatesByKey)
+					if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+						graph.appendBackchainDemandPlan(betaID, plans[conditionIndex-1], reteGraphBetaInputLeft, condition.joins, templatesByKey)
+					}
 				} else {
 					betaID, _ = graph.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
 					outputStage = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
@@ -529,6 +541,10 @@ func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch co
 		outputStage := reteGraphStageRef{}
 		if betaKind == reteGraphBetaNodeJoin {
 			betaID, outputStage = g.internJoinWithResidualFilter(betaIndex, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates), conditionEntry)
+			g.appendBackchainDemandPlan(betaID, condition, reteGraphBetaInputRight, condition.joins, templatesByKey)
+			if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
+				g.appendBackchainDemandPlan(betaID, branch.plans[conditionIndex-1], reteGraphBetaInputLeft, condition.joins, templatesByKey)
+			}
 		} else {
 			betaID, _ = g.internBetaNode(betaIndex, betaKind, current, alphaRef, condition.joins, betaResidualExpressionPredicates(condition.predicates))
 			outputStage = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
@@ -1624,6 +1640,42 @@ func (g *reteGraph) internJoinWithResidualFilter(index map[reteGraphBetaKey]rete
 		})
 	}
 	return betaID, reteGraphStageRef{kind: reteGraphStageBeta, id: int(filterID)}
+}
+
+func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condition compiledConditionPlan, side reteGraphBetaInputSide, joins []compiledJoinConstraint, templatesByKey map[TemplateKey]Template) {
+	if g == nil || betaID == 0 || condition.explicit || condition.negated || condition.target.kind != conditionTargetTemplateKey {
+		return
+	}
+	if side != reteGraphBetaInputLeft && side != reteGraphBetaInputRight {
+		return
+	}
+	source, ok := templatesByKey[condition.target.templateKey]
+	if !ok || !source.backchainReactive {
+		return
+	}
+	demandKey, ok := source.BackchainDemandTemplateKey()
+	if !ok {
+		return
+	}
+	node := g.betaNode(betaID)
+	if node == nil || node.kind != reteGraphBetaNodeJoin {
+		return
+	}
+	plan := reteGraphBackchainDemandPlan{
+		templateKey: demandKey,
+		side:        side,
+		constraints: cloneCompiledFieldConstraints(condition.constraints),
+		joins:       cloneCompiledJoinConstraints(joins),
+	}
+	for _, existing := range node.backchainDemands {
+		if existing.templateKey == plan.templateKey &&
+			existing.side == plan.side &&
+			serializeCompiledFieldConstraints(existing.constraints) == serializeCompiledFieldConstraints(plan.constraints) &&
+			serializeCompiledJoinConstraints(existing.joins) == serializeCompiledJoinConstraints(plan.joins) {
+			return
+		}
+	}
+	node.backchainDemands = append(node.backchainDemands, plan)
 }
 
 func (g *reteGraph) internResidualFilterNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, input reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
