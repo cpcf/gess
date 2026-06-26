@@ -10,6 +10,7 @@ import (
 )
 
 type Workspace struct {
+	modules   []ModuleSpec
 	templates []TemplateSpec
 	actions   []ActionSpec
 	functions []PureFunctionSpec
@@ -19,6 +20,18 @@ type Workspace struct {
 
 func NewWorkspace() *Workspace {
 	return &Workspace{}
+}
+
+// AddModule records a module declaration. Compile treats identical repeated
+// declarations as idempotent and rejects conflicting metadata.
+func (w *Workspace) AddModule(spec ModuleSpec) error {
+	module, err := compileModuleSpec(spec)
+	if err != nil {
+		return err
+	}
+
+	w.modules = append(w.modules, module.spec())
+	return nil
 }
 
 func (w *Workspace) AddTemplate(spec TemplateSpec) error {
@@ -276,12 +289,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		return nil, err
 	}
 
-	compiledModules := []Module{implicitMainModule()}
-	modules := make(map[ModuleName]Module, len(compiledModules))
-	moduleOrder := make([]ModuleName, 0, len(compiledModules))
-	for _, module := range compiledModules {
-		modules[module.name] = module.clone()
-		moduleOrder = append(moduleOrder, module.name)
+	compiledModules, modules, moduleOrder, err := compileWorkspaceModules(w.modules)
+	if err != nil {
+		return nil, err
 	}
 
 	compiledTemplates := make([]Template, 0, len(w.templates))
