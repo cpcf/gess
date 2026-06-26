@@ -93,7 +93,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 			s.mutationQueueMu.Unlock()
 			continue
 		}
-		currentActivation, activation, ok := s.agenda.nextInternalPtr()
+		currentActivation, activation, ok := s.nextFocusedActivation()
 		if !ok {
 			s.mutationQueueMu.Unlock()
 			return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil

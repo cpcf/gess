@@ -171,6 +171,7 @@ type activation struct {
 	publicOrdinal    uint64
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
+	module           ModuleName
 	generation       Generation
 	identity         candidateIdentity
 	bindings         []bindingTupleEntry
@@ -1316,6 +1317,10 @@ func (a *agenda) nextInternalPtr() (*activation, activation, bool) {
 	return a.nextActivationPtr(false)
 }
 
+func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activation, bool) {
+	return a.nextActivationPtrForModule(normalizeModuleName(module), false)
+}
+
 func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
@@ -1348,6 +1353,39 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 	a.pending = a.pending[:0]
 	a.pendingHead = 0
 	a.lazyDeactivated = 0
+	return nil, activation{}, false
+}
+
+func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID bool) (*activation, activation, bool) {
+	if a == nil {
+		return nil, activation{}, false
+	}
+	a.normalizePendingKeys()
+	for i, key := range a.pending {
+		current, ok := a.activationByKeyPtr(key)
+		if !ok || current.status != activationStatusPending || current.module != module {
+			continue
+		}
+		copy(a.pending[i:], a.pending[i+1:])
+		last := len(a.pending) - 1
+		a.pending[last] = activationKey{}
+		a.pending = a.pending[:last]
+		current.status = activationStatusConsumed
+		out := *current
+		if materializeID {
+			out.id = current.ensureActivationID()
+		}
+		if current.token.isZero() {
+			out.factIDs = cloneFactIDs(current.factIDs)
+			out.factVersions = cloneFactVersions(current.factVersions)
+		} else {
+			out.factIDs = nil
+			out.factVersions = nil
+			out.bindings = nil
+			out.path = nil
+		}
+		return current, out, true
+	}
 	return nil, activation{}, false
 }
 
@@ -2215,6 +2253,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	}
 	dst.ruleID = candidate.ruleID
 	dst.ruleRevisionID = candidate.ruleRevisionID
+	dst.module = rule.module
 	dst.generation = candidate.generation
 	dst.identity = candidate.identity
 	dst.bindings = cloneBindingTupleEntries(candidate.bindingTuple)
@@ -2258,6 +2297,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	}
 	dst.ruleID = rule.id
 	dst.ruleRevisionID = rule.revisionID
+	dst.module = rule.module
 	dst.generation = token.generation()
 	dst.identity = identity
 	dst.token = token

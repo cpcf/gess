@@ -73,6 +73,8 @@ type Session struct {
 	propagationCounters  *propagationCounterLedger
 	rete                 *reteRuntime
 	generation           Generation
+	initialFocusStack    []ModuleName
+	focusStack           []ModuleName
 	initials             []SessionInitialFact
 	initialCount         int
 	compiledInitials     []compiledSessionInitialFact
@@ -181,6 +183,8 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		agenda:              agenda,
 		rete:                rete,
 		generation:          1,
+		initialFocusStack:   []ModuleName{MainModule},
+		focusStack:          []ModuleName{MainModule},
 		initials:            initials,
 		initialCount:        len(initials),
 		compiledInitials:    compiledInitials,
@@ -1673,6 +1677,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	oldGeneration := s.generation
 	s.agendaReady = resetAgendaWithDeltas
 	s.agendaDirty = false
+	s.resetFocusStack()
 	s.clearLogicalSupports()
 	s.swapFactWorkspace(next)
 	s.generation = next.generation
@@ -1736,6 +1741,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.nextEventSequence++
 	}
 	if resetAgendaWithDeltas {
+		s.applyAutoFocus(resetActivations)
 		s.emitAgendaEvents(ctx, resetActivations)
 	}
 
@@ -1854,6 +1860,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		}
 		s.agendaReady = true
 		s.agendaDirty = false
+		s.applyAutoFocus(changes)
 		s.emitAgendaEvents(ctx, changes)
 
 		return ApplyRulesetResult{
@@ -1875,6 +1882,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
+	s.applyAutoFocus(changes)
 	s.emitAgendaEvents(ctx, changes)
 
 	return ApplyRulesetResult{
@@ -1930,6 +1938,7 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
+	s.applyAutoFocus(changes)
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
 }
@@ -1946,7 +1955,7 @@ func (s *Session) reconcileAgendaWithoutSnapshot(ctx context.Context) ([]agendaC
 }
 
 func (s *Session) reconcileAgendaWithoutSnapshotAndChanges(ctx context.Context) (bool, error) {
-	_, ok, err := s.reconcileAgendaWithoutSnapshotInternal(ctx, false)
+	_, ok, err := s.reconcileAgendaWithoutSnapshotInternal(ctx, s.shouldCollectAgendaChanges())
 	return ok, err
 }
 
@@ -1993,6 +2002,7 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 		s.agendaReady = true
 		s.agendaDirty = false
 		if collectChanges {
+			s.applyAutoFocus(changes)
 			s.emitAgendaEvents(ctx, changes)
 		}
 		return changes, true, nil
@@ -2013,12 +2023,13 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
+	s.applyAutoFocus(changes)
 	s.emitAgendaEvents(ctx, changes)
 	return changes, true, nil
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
-	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
+	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); ok || err != nil {
 		return changes, err
 	}
 	if !delta.supported && s.agendaReady && !s.agendaDirty {
@@ -2102,6 +2113,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	s.agendaReady = true
 	s.agendaDirty = false
 	if collectChanges {
+		s.applyAutoFocus(changes)
 		s.emitAgendaEvents(ctx, changes)
 	}
 	return changes, true, nil
@@ -4579,6 +4591,8 @@ func mutationResultNeedsReconcile(value any, revision *Ruleset) bool {
 	case ResetResult:
 		return result.Status == ResetApplied
 	case ApplyRulesetResult:
+		return false
+	case focusMutationResult, ModuleName:
 		return false
 	default:
 		return true

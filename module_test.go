@@ -220,6 +220,9 @@ func TestDeclaredModuleDefinitionsKeepCurrentMatchingBehavior(t *testing.T) {
 	if _, err := session.AssertTemplate(context.Background(), person.Key(), nil); err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
+	if err := session.PushFocus(context.Background(), "ask"); err != nil {
+		t.Fatalf("PushFocus: %v", err)
+	}
 	result, err := session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -267,6 +270,9 @@ func TestModuleQualifiedTemplateTargetsResolveAtCompile(t *testing.T) {
 	session := mustSession(t, revision, "qualified-template-target-session")
 	if _, err := session.AssertTemplate(context.Background(), answer.Key(), nil); err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if err := session.PushFocus(context.Background(), "interview"); err != nil {
+		t.Fatalf("PushFocus: %v", err)
 	}
 	result, err := session.Run(context.Background())
 	if err != nil {
@@ -318,6 +324,9 @@ func TestModuleRelativeTemplateTargetsUseAuthorModule(t *testing.T) {
 	session := mustSession(t, revision, "relative-template-target-session")
 	if _, err := session.AssertTemplate(context.Background(), answer.Key(), nil); err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if err := session.PushFocus(context.Background(), "ask"); err != nil {
+		t.Fatalf("PushFocus: %v", err)
 	}
 	result, err := session.Run(context.Background())
 	if err != nil {

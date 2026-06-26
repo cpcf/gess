@@ -385,6 +385,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	rulesByID := make(map[RuleID]compiledRule, len(w.rules))
 	rulesByRevisionID := make(map[RuleRevisionID]compiledRule, len(w.rules))
 	ruleOrder := make([]string, 0, len(w.rules))
+	hasEffectiveAutoFocus := false
 	conditionTemplateKeys := make(map[TemplateKey]struct{})
 	conditionNames := make(map[string]struct{})
 	queryConditionTemplateKeys := make(map[TemplateKey]struct{})
@@ -418,6 +419,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 				RuleName: rule.name,
 				Reason:   "duplicate rule revision",
 			}
+		}
+		if rule.effectiveAutoFocus {
+			hasEffectiveAutoFocus = true
 		}
 		rulesByName[rule.name] = rule
 		rulesByID[rule.id] = rule
@@ -469,6 +473,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryConditionTemplateKeys: queryConditionTemplateKeys,
 		queryConditionNames:        queryConditionNames,
 		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
+		hasEffectiveAutoFocus:      hasEffectiveAutoFocus,
 		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
@@ -495,7 +500,12 @@ type Ruleset struct {
 	queryConditionTemplateKeys map[TemplateKey]struct{}
 	queryConditionNames        map[string]struct{}
 	assertTemplateActionCount  int
+	hasEffectiveAutoFocus      bool
 	graph                      *reteGraph
+}
+
+func (r *Ruleset) hasAutoFocusRules() bool {
+	return r != nil && r.hasEffectiveAutoFocus
 }
 
 const (
