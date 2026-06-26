@@ -4448,22 +4448,18 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 	if !match.hasValue && match.fact.ID() == id {
 		match.fact = after
 		recency = after.Recency()
-		row.generation = after.Generation()
 	}
 	row.match = match
-	row.matchSource = tokenParentHandle{}
+	row.matchSource = tokenSourceHandle{}
 	row.refreshFactSpan(token.handle.arena, parentRow, match)
 	if haveParent {
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
 		row.identityState = parentRow.identityState
-		if row.generation == 0 {
-			row.generation = parentRow.generation
-		}
 	} else {
 		row.maxRecency = recency
 		row.aggregateRecency = recency
-		row.identityState = candidateIdentityHashStart(row.generation)
+		row.identityState = candidateIdentityHashStart(token.generation())
 	}
 	identityEntry := row.entry
 	identityEntry.value = match.value
@@ -4544,7 +4540,7 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefCached(token tokenRef, id FactI
 		return tokenRef{}, false
 	}
 	recency := match.fact.Recency()
-	generation := row.generation
+	generation := token.generation()
 	if !match.hasValue && match.fact.ID() == id {
 		match.fact = after
 		recency = after.Recency()
@@ -5316,7 +5312,7 @@ func (m *reteGraphBetaMemory) appendTokenRows(parent tokenRef, token tokenRef, s
 	if !match.hasValue {
 		recency = match.fact.Recency()
 	}
-	return m.newTokenRowRefSource(parent, token, row, recency, row.generation, span)
+	return m.newTokenRowRefSource(parent, token, row, recency, token.generation(), span)
 }
 
 func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) tokenRef {
@@ -5343,7 +5339,7 @@ func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) to
 	if !ok {
 		return tokenRef{}
 	}
-	return arena.addCompactSource(parent, token, row.entry, recency, row.generation, pathStepLen)
+	return arena.addCompactSource(parent, token, row.entry, recency, token.generation(), pathStepLen)
 }
 
 func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {

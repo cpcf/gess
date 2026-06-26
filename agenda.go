@@ -2258,7 +2258,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	}
 	dst.ruleID = rule.id
 	dst.ruleRevisionID = rule.revisionID
-	dst.generation = row.generation
+	dst.generation = token.generation()
 	dst.identity = identity
 	dst.token = token
 	dst.salience = rule.salience

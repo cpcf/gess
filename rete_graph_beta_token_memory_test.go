@@ -82,6 +82,33 @@ func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
 	}
 }
 
+func TestTokenArenaCopiedRowsRejectResetSourceArena(t *testing.T) {
+	sourceArena := newTokenArena()
+	targetArena := newTokenArena()
+	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
+	source := sourceArena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	sourceRow, ok := source.resolve()
+	if !ok {
+		t.Fatal("source token did not resolve")
+	}
+
+	memory := &reteGraphBetaMemory{arena: targetArena}
+	copied := memory.newTokenRowRefSource(tokenRef{}, source, sourceRow, fact.Recency(), fact.Generation(), nil)
+	if _, ok := tokenRefAtSlot(copied, 0); !ok {
+		t.Fatal("copied token match did not resolve before source reset")
+	}
+
+	sourceArena.reset()
+	reusedFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	reusedEntry := bindingTupleEntry{bindingSlot: 0, factID: reusedFact.ID(), factVersion: reusedFact.Version()}
+	sourceArena.add(tokenRef{}, reusedEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(reusedFact)}, reusedFact.Recency(), reusedFact.Generation())
+
+	if match, ok := tokenRefAtSlot(copied, 0); ok {
+		t.Fatalf("copied token resolved stale source match after reset: %#v", match)
+	}
+}
+
 func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
