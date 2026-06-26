@@ -1638,6 +1638,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		if ok {
 			oldTerminalDeltas = cloneStableTerminalTokenDeltas(s.revision, tokens)
+			if s.agenda != nil {
+				s.agenda.materializePendingTokenFacts(s.revision)
+			}
 			resetAgendaWithDeltas = true
 		}
 	}

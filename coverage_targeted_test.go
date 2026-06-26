@@ -51,8 +51,9 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	if got, want := len(matches), 1; got != want {
 		t.Fatalf("matches = %d, want %d", got, want)
 	}
-	if matches[0].fact.ID() != activation.factIDs[0] {
-		t.Fatalf("match fact ID = %q, want %q", matches[0].fact.ID(), activation.factIDs[0])
+	activationFactIDs := cloneActivationFactIDs(activation)
+	if matches[0].fact.ID() != activationFactIDs[0] {
+		t.Fatalf("match fact ID = %q, want %q", matches[0].fact.ID(), activationFactIDs[0])
 	}
 
 	expression, ok, err := compileExpressionSpec(
@@ -77,6 +78,9 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	}
 
 	stale := *activation
+	stale.factIDs = cloneActivationFactIDs(&stale)
+	stale.factVersions = cloneActivationFactVersions(&stale)
+	stale.token = tokenRef{}
 	stale.factVersions[0]++
 	if _, err := session.actionMatchesForActivation(stale, rule); !errors.Is(err, ErrMatcher) {
 		t.Fatalf("stale actionMatchesForActivation error = %v, want ErrMatcher", err)
@@ -437,7 +441,8 @@ func TestCoverageAgendaActivationFromCandidateAndTerminalToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("activationFromTerminalToken: %v", err)
 	}
-	if activation.ruleRevisionID != rule.revisionID || activation.salience != rule.salience || activation.factIDs[0] != fact.ID() {
+	activationFactIDs := cloneActivationFactIDs(&activation)
+	if activation.ruleRevisionID != rule.revisionID || activation.salience != rule.salience || activationFactIDs[0] != fact.ID() {
 		t.Fatalf("terminal token activation = %#v, want rule/fact metadata", activation)
 	}
 	if _, count, ok := terminalTokenIdentityStateForRule(rule, token, candidateIdentityHashStart(fact.Generation()), 0); !ok || count != 1 {

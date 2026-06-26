@@ -1555,6 +1555,8 @@ func evaluateTokenActionStringCall2(ctx context.Context, value compiledTokenActi
 }
 
 func (s *Session) actionMatchesForActivation(activation activation, rule compiledRule) ([]conditionMatch, error) {
+	factIDs := cloneActivationFactIDs(&activation)
+	factVersions := cloneActivationFactVersions(&activation)
 	matches := s.actionMatchScratch
 	if cap(matches) < len(rule.conditions) {
 		matches = make([]conditionMatch, len(rule.conditions))
@@ -1565,11 +1567,11 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 		matches = matches[:len(rule.conditions)]
 	}
 	for i, condition := range rule.conditions {
-		if i >= len(activation.factIDs) || i >= len(activation.factVersions) {
+		if i >= len(factIDs) || i >= len(factVersions) {
 			s.actionMatchScratch = matches
 			return nil, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 		}
-		factID := activation.factIDs[i]
+		factID := factIDs[i]
 		if factID.IsZero() {
 			continue
 		}
@@ -1578,7 +1580,7 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 			s.actionMatchScratch = matches
 			return nil, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 		}
-		if fact.id.Generation() != activation.generation || fact.version != activation.factVersions[i] {
+		if fact.id.Generation() != activation.generation || fact.version != factVersions[i] {
 			s.actionMatchScratch = matches
 			return nil, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 		}

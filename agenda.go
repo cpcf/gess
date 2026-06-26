@@ -293,13 +293,7 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 	}
 	out := *act
 	out.bindings = nil
-	if len(act.factIDs) > 0 {
-		out.factIDs = cloneFactIDs(act.factIDs)
-	} else if act.token.isZero() {
-		out.factIDs = cloneFactIDs(act.factIDs)
-	} else {
-		out.factIDs = nil
-	}
+	out.factIDs = cloneActivationFactIDs(act)
 	out.factVersions = nil
 	out.path = nil
 	return out
@@ -1374,6 +1368,32 @@ func (a *agenda) clear() []agendaChange {
 	return changes
 }
 
+func (a *agenda) materializePendingTokenFacts(revision *Ruleset) {
+	if a == nil || revision == nil {
+		return
+	}
+	a.normalizePendingKeys()
+	for _, key := range a.pending {
+		current, ok := a.activationByKeyPtr(key)
+		if !ok || current.status != activationStatusPending || current.token.isZero() {
+			continue
+		}
+		if len(current.factIDs) > 0 && len(current.factVersions) > 0 {
+			continue
+		}
+		rule, ok := revision.rulesByRevisionID[current.ruleRevisionID]
+		if !ok {
+			continue
+		}
+		factIDs, factVersions, ok := terminalTokenFactTuple(rule, current.token)
+		if !ok {
+			continue
+		}
+		current.factIDs = cloneFactIDs(factIDs)
+		current.factVersions = cloneFactVersions(factVersions)
+	}
+}
+
 func (a *agenda) activationByKey(key activationKey) (activation, bool) {
 	if a == nil {
 		return activation{}, false
@@ -1860,6 +1880,15 @@ func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule,
 	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
 		return false
 	}
+	if !current.token.isZero() && (len(delta.factIDs) > 0 || len(delta.factVersions) > 0) {
+		if matchTokenFactsEqualSlices(current.token, delta.factIDs, delta.factVersions) {
+			return true
+		}
+		if len(current.factIDs) > 0 || len(current.factVersions) > 0 {
+			return factVersionSlicesEqual(current.factIDs, current.factVersions, delta.factIDs, delta.factVersions)
+		}
+		return false
+	}
 	if len(delta.factIDs) > 0 || len(delta.factVersions) > 0 {
 		return factVersionSlicesEqual(current.factIDs, current.factVersions, delta.factIDs, delta.factVersions)
 	}
@@ -2212,10 +2241,6 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.generation = tokenRefGeneration(token)
 	dst.identity = identity
 	dst.token = token
-	if factIDs, factVersions, ok := terminalTokenFactTuple(rule, token); ok {
-		dst.factIDs = factIDs
-		dst.factVersions = factVersions
-	}
 	dst.salience = rule.salience
 	dst.maxRecency = token.maxRecency()
 	dst.aggregateRecency = token.aggregateRecency()
