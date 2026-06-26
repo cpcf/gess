@@ -1796,7 +1796,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
-	phase := s.propagationCounterPhase()
+	phase := propagationCounterPhaseInitial
 	if err := rete.resetGraphBetaForGeneration(ctx, snapshot.facts, s.generation); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
