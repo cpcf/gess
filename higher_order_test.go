@@ -27,21 +27,21 @@ func TestExistsEmitsOneActivationForMultipleContributors(t *testing.T) {
 		Name: "exists-ready",
 		ConditionTree: Exists(And{Conditions: []ConditionSpec{
 			Match(RuleConditionSpec{
-				Binding:     "open",
-				TemplateKey: item.Key(),
+				Binding: "open",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "open"},
-				},
+				}, Target: TemplateKeyFact(item.Key()),
 			}),
 			Match(RuleConditionSpec{
-				Binding:     "ready",
-				TemplateKey: item.Key(),
+				Binding: "ready",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "ready"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "open", Field: "group"}},
-				},
+				}, Target: TemplateKeyFact(item.Key()),
 			}),
 		}}),
 		Actions: []RuleActionSpec{{Name: "hit"}},
@@ -80,7 +80,7 @@ func TestForallUsesCounterexamplesAndVacuousTruth(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "all-good",
 		ConditionTree: Forall(
-			Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()}),
+			Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())}),
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     BindingPath("item", Path("score")),
@@ -155,16 +155,16 @@ func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "all-customers-have-ready-order",
 		ConditionTree: Forall(
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			Match(RuleConditionSpec{
-				Binding:     "order",
-				TemplateKey: order.Key(),
+				Binding: "order",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "ready"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(order.Key()),
 			}),
 		),
 		Actions: []RuleActionSpec{{Name: "hit"}},
@@ -243,14 +243,14 @@ func TestForallRequirementMatchAndTestUsesQualifiedAbsence(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "all-customers-have-large-order",
 		ConditionTree: Forall(
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			And{Conditions: []ConditionSpec{
 				Match(RuleConditionSpec{
-					Binding:     "order",
-					TemplateKey: order.Key(),
+					Binding: "order",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(order.Key()),
 				}),
 				Test{Expression: CompareExpr{
 					Operator: ExpressionCompareGreaterOrEqual,
@@ -309,11 +309,11 @@ func TestExistsContributorReplacementDoesNotChurnWhenTruthUnchanged(t *testing.T
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "exists-open",
 		ConditionTree: Exists(Match(RuleConditionSpec{
-			Binding:     "item",
-			TemplateKey: item.Key(),
+			Binding: "item",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "status", Operator: FieldConstraintEqual, Value: "open"},
-			},
+			}, Target: TemplateKeyFact(item.Key()),
 		})),
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
@@ -363,16 +363,16 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-with-open-order",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			Exists(Match(RuleConditionSpec{
-				Binding:     "order",
-				TemplateKey: order.Key(),
+				Binding: "order",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "open"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(order.Key()),
 			})),
 		}},
 		Actions: []RuleActionSpec{{Name: "hit"}},
@@ -437,14 +437,14 @@ func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-all-orders-large",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			Forall(
 				Match(RuleConditionSpec{
-					Binding:     "order",
-					TemplateKey: order.Key(),
+					Binding: "order",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(order.Key()),
 				}),
 				Test{Expression: CompareExpr{
 					Operator: ExpressionCompareGreaterOrEqual,
@@ -534,7 +534,7 @@ func TestHigherOrderGraphKeepsGeneralAggregatesOnAggregateNodes(t *testing.T) {
 	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:          "count-items",
-		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()}), Count().As("count")),
+		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())}), Count().As("count")),
 		Actions:       []RuleActionSpec{{Name: "hit"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
@@ -556,15 +556,14 @@ func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "root-exists",
 		ConditionTree: Exists(Match(RuleConditionSpec{
-			Binding:     "item",
-			TemplateKey: item.Key(),
+			Binding: "item", Target: TemplateKeyFact(item.Key()),
 		})),
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "root-forall",
 		ConditionTree: Forall(
-			Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()}),
+			Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())}),
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     BindingPath("item", Path("amount")),
@@ -652,8 +651,8 @@ func TestHigherOrderRejectsUnsupportedShapes(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "bad-exists",
 		ConditionTree: Or{Conditions: []ConditionSpec{
-			Exists(Match(RuleConditionSpec{Binding: "item", TemplateKey: item.Key()})),
-			Match(RuleConditionSpec{Binding: "other", TemplateKey: item.Key()}),
+			Exists(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())})),
+			Match(RuleConditionSpec{Binding: "other", Target: TemplateKeyFact(item.Key())}),
 		}},
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})

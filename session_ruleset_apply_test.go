@@ -42,7 +42,7 @@ func TestSessionApplyRulesetAddsRuleCreatesActivationAndKeepsInitialFactsValidFo
 	mustAddRule(t, workspace2, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -120,7 +120,7 @@ func TestSessionApplyRulesetRemovesPendingActivationsWithoutTouchingFacts(t *tes
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -200,7 +200,7 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 		Name:     "match-person",
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -225,7 +225,7 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 		Name:     "match-person",
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
@@ -285,7 +285,7 @@ func TestSessionApplyRulesetUnchangedPreservesAgendaStateAndEvents(t *testing.T)
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -360,7 +360,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 		Name:     "keep-person",
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "keep"}},
 	})
@@ -368,7 +368,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 		Name:     "change-person",
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "change"}},
 	})
@@ -398,7 +398,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 		Name:     "change-person",
 		Salience: 30,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "change"}},
 	}); err != nil {
@@ -488,20 +488,20 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 		Name:     "employee-department-region-a",
 		Salience: 5,
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employeeKey},
+			{Binding: "employee", Target: TemplateKeyFact(employeeKey)},
 			{
-				Binding:     "department",
-				TemplateKey: departmentKey,
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(departmentKey),
 			},
 			{
-				Binding:     "region",
-				TemplateKey: regionKey,
+				Binding: "region",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "region"}},
-				},
+				}, Target: TemplateKeyFact(regionKey),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -571,7 +571,7 @@ func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSes
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -608,7 +608,7 @@ func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSes
 	mustAddRule(t, workspace2, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -689,7 +689,7 @@ func TestSessionApplyRulesetQueuesDuringRunBeforeNextActivation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "pause-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "pause"}},
 	})
@@ -720,7 +720,7 @@ func TestSessionApplyRulesetQueuesDuringRunBeforeNextActivation(t *testing.T) {
 	mustAddRule(t, workspace2, RuleSpec{
 		Name: "audit-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "audit", TemplateKey: auditTemplate.Key()},
+			{Binding: "audit", Target: TemplateKeyFact(auditTemplate.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "audit"}},
 	})

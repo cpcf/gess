@@ -75,12 +75,12 @@ func TestDefinitionsDefaultToMainModule(t *testing.T) {
 	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "person-rule",
-		Conditions: []RuleConditionSpec{{Binding: "person", TemplateKey: person.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "person", Target: TemplateKeyFact(person.Key())}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	if err := workspace.AddQuery(QuerySpec{
 		Name:          "people",
-		ConditionTree: Match{Binding: "person", TemplateKey: person.Key()},
+		ConditionTree: Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 		Returns:       []QueryReturnSpec{ReturnFact("person", "person")},
 	}); err != nil {
 		t.Fatalf("AddQuery: %v", err)
@@ -190,13 +190,13 @@ func TestDeclaredModuleDefinitionsKeepCurrentMatchingBehavior(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "person-rule",
 		Module:     "ask",
-		Conditions: []RuleConditionSpec{{Binding: "person", TemplateKey: person.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "person", Target: TemplateKeyFact(person.Key())}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	if err := workspace.AddQuery(QuerySpec{
 		Name:          "people",
 		Module:        "ask",
-		ConditionTree: Match{Binding: "person", TemplateKey: person.Key()},
+		ConditionTree: Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 		Returns:       []QueryReturnSpec{ReturnFact("person", "person")},
 	}); err != nil {
 		t.Fatalf("AddQuery: %v", err)
@@ -226,5 +226,137 @@ func TestDeclaredModuleDefinitionsKeepCurrentMatchingBehavior(t *testing.T) {
 	}
 	if result.Fired != 1 || fired != 1 {
 		t.Fatalf("run fired = (%d result, %d action), want 1", result.Fired, fired)
+	}
+}
+
+func TestModuleQualifiedTemplateTargetsResolveAtCompile(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask"})
+	mustAddModule(t, workspace, ModuleSpec{Name: "interview"})
+	answer := mustAddTemplate(t, workspace, TemplateSpec{Name: "answer", Module: "ask"})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn: func(ActionContext) error {
+			fired++
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:   "mark-answer",
+		Module: "interview",
+		Conditions: []RuleConditionSpec{
+			{Binding: "answer", Target: TemplateFactIn("ask", "answer")},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("mark-answer")
+	if !ok {
+		t.Fatal("compiled revision missing mark-answer rule")
+	}
+	conditions := rule.Conditions()
+	if len(conditions) != 1 {
+		t.Fatalf("compiled conditions = %d, want 1", len(conditions))
+	}
+	if got, want := conditions[0].TemplateKey(), answer.Key(); got != want {
+		t.Fatalf("condition template key = %q, want %q", got, want)
+	}
+
+	session := mustSession(t, revision, "qualified-template-target-session")
+	if _, err := session.AssertTemplate(context.Background(), answer.Key(), nil); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("run fired = (%d result, %d action), want 1", result.Fired, fired)
+	}
+}
+
+func TestModuleRelativeTemplateTargetsUseAuthorModule(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask"})
+	answer := mustAddTemplate(t, workspace, TemplateSpec{Name: "answer", Module: "ask"})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn: func(ActionContext) error {
+			fired++
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:   "mark-answer",
+		Module: "ask",
+		Conditions: []RuleConditionSpec{
+			{Binding: "answer", Target: TemplateFact("answer")},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:          "answers",
+		Module:        "ask",
+		ConditionTree: Match{Binding: "answer", Target: TemplateFact("answer")},
+		Returns:       []QueryReturnSpec{ReturnFact("answer", "answer")},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	query, ok := revision.Query("answers")
+	if !ok {
+		t.Fatal("compiled revision missing answers query")
+	}
+	if got, want := query.Conditions()[0].TemplateKey(), answer.Key(); got != want {
+		t.Fatalf("query condition template key = %q, want %q", got, want)
+	}
+
+	session := mustSession(t, revision, "relative-template-target-session")
+	if _, err := session.AssertTemplate(context.Background(), answer.Key(), nil); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("run fired = (%d result, %d action), want 1", result.Fired, fired)
+	}
+}
+
+func TestModuleQualifiedTemplateTargetDiagnosticsNameReferenceAndAuthor(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "interview"})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:   "mark-answer",
+		Module: "interview",
+		Conditions: []RuleConditionSpec{
+			{Binding: "answer", Target: TemplateFactIn("missing", "answer")},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	_, err := workspace.Compile(context.Background())
+	if err == nil {
+		t.Fatal("Compile succeeded with an unknown qualified template target")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("expected ValidationError, got %T: %v", err, err)
+	}
+	if got, want := validation.Reason, `unknown template reference "missing.answer" authored in module "interview"`; got != want {
+		t.Fatalf("validation reason = %q, want %q", got, want)
+	}
+}
+
+func mustAddModule(t testing.TB, workspace *Workspace, spec ModuleSpec) {
+	t.Helper()
+	if err := workspace.AddModule(spec); err != nil {
+		t.Fatalf("AddModule(%q): %v", spec.Name, err)
 	}
 }

@@ -101,9 +101,9 @@ func benchmarkListPatternRevision(tb testing.TB, shape listPatternBenchmarkShape
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "list-pattern",
 		Conditions: []RuleConditionSpec{{
-			Binding:      "event",
-			TemplateKey:  event.Key(),
-			ListPatterns: []ListPatternSpec{benchmarkListPatternSpec(tb, shape)},
+			Binding: "event",
+
+			ListPatterns: []ListPatternSpec{benchmarkListPatternSpec(tb, shape)}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "touch"}},
 	})

@@ -78,7 +78,7 @@ func TestSessionModifyNoOpDoesNotCreateAgendaNoise(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -129,7 +129,7 @@ func TestSessionModifyReconcilesAgendaForChangedAndDroppedMatches(t *testing.T) 
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "match-person",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: template.Key()},
+				{Binding: "person", Target: TemplateKeyFact(template.Key())},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
@@ -184,7 +184,7 @@ func TestSessionModifyReconcilesAgendaForChangedAndDroppedMatches(t *testing.T) 
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "pending-only",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: template.Key(), FieldConstraints: []FieldConstraintSpec{{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")}}},
+				{Binding: "person", FieldConstraints: []FieldConstraintSpec{{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")}}, Target: TemplateKeyFact(template.Key())},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
@@ -324,11 +324,11 @@ func TestSessionModifyRebuildsDeclaredTemplateSlots(t *testing.T) {
 		Name: "age-21",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: template.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintEqual, Value: 21},
-				},
+				}, Target: TemplateKeyFact(template.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -459,7 +459,7 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "targeted-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "fact", TemplateKey: targeted.Key()},
+			{Binding: "fact", Target: TemplateKeyFact(targeted.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})

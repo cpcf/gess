@@ -438,11 +438,11 @@ func mustCompileAggregateScalingRuleset(t testing.TB, tc aggregateScalingCase) (
 			Name: fmt.Sprintf("aggregate-stream-%03d", stream),
 			ConditionTree: Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 			),
@@ -486,7 +486,7 @@ func mustCompileAggregateValueProjectionRuleset(t testing.TB) (*Ruleset, Templat
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "aggregate-value-projection",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			specs...,
 		),
 		Actions: []RuleActionSpec{{Name: "record-aggregate-value"}},

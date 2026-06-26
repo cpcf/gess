@@ -370,24 +370,24 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Name:     "escalate-fraud-watch",
 		Salience: 100,
 		Conditions: []RuleConditionSpec{
-			{Binding: "claim", TemplateKey: claim.Key()},
+			{Binding: "claim", Target: TemplateKeyFact(claim.Key())},
 			{
-				Binding:     "customer",
-				TemplateKey: customer.Key(),
+				Binding: "customer",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "customer-id"}},
-				},
+				}, Target: TemplateKeyFact(customer.Key()),
 			},
 			{
-				Binding:     "signal",
-				TemplateKey: signal.Key(),
+				Binding: "signal",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "kind", Operator: FieldConstraintEqual, Value: "fraud"},
 					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 80},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "claim-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(signal.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-fraud-watch"}},
@@ -397,21 +397,21 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Salience: 85,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "claim",
-				TemplateKey: claim.Key(),
+				Binding: "claim",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "injury", Operator: FieldConstraintEqual, Value: "yes"},
-				},
+				}, Target: TemplateKeyFact(claim.Key()),
 			},
 			{
-				Binding:     "policy",
-				TemplateKey: policy.Key(),
+				Binding: "policy",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "product", Operator: FieldConstraintEqual, Value: "auto"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "policy-id"}},
-				},
+				}, Target: TemplateKeyFact(policy.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-complex-injury"}},
@@ -420,16 +420,16 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Name:     "review-repeat-claimant",
 		Salience: 70,
 		Conditions: []RuleConditionSpec{
-			{Binding: "claim", TemplateKey: claim.Key()},
+			{Binding: "claim", Target: TemplateKeyFact(claim.Key())},
 			{
-				Binding:     "customer",
-				TemplateKey: customer.Key(),
+				Binding: "customer",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "previous-claims", Operator: FieldConstraintGreaterOrEqual, Value: 3},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "customer-id"}},
-				},
+				}, Target: TemplateKeyFact(customer.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-repeat-claimant"}},
@@ -439,21 +439,21 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Salience: 60,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "claim",
-				TemplateKey: claim.Key(),
+				Binding: "claim",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "amount", Operator: FieldConstraintGreaterThan, Value: 10000},
-				},
+				}, Target: TemplateKeyFact(claim.Key()),
 			},
 			{
-				Binding:     "policy",
-				TemplateKey: policy.Key(),
+				Binding: "policy",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "policy-id"}},
-				},
+				}, Target: TemplateKeyFact(policy.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-high-exposure"}},
@@ -463,32 +463,32 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "claim",
-				TemplateKey: claim.Key(),
+				Binding: "claim",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "claim-type", Operator: FieldConstraintEqual, Value: "auto"},
 					{Field: "amount", Operator: FieldConstraintLessThan, Value: 2500},
-				},
+				}, Target: TemplateKeyFact(claim.Key()),
 			},
 			{
-				Binding:     "customer",
-				TemplateKey: customer.Key(),
+				Binding: "customer",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "tier", Operator: FieldConstraintEqual, Value: "gold"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "customer-id"}},
-				},
+				}, Target: TemplateKeyFact(customer.Key()),
 			},
 			{
-				Binding:     "policy",
-				TemplateKey: policy.Key(),
+				Binding: "policy",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "policy-id"}},
-				},
+				}, Target: TemplateKeyFact(policy.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-gold-auto"}},
@@ -498,33 +498,33 @@ func mustCompileClaimsTriageRuleset(t testing.TB, trace *[]string) *Ruleset {
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "claim",
-				TemplateKey: claim.Key(),
+				Binding: "claim",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "claim-type", Operator: FieldConstraintEqual, Value: "property"},
 					{Field: "amount", Operator: FieldConstraintLessOrEqual, Value: 4000},
-				},
+				}, Target: TemplateKeyFact(claim.Key()),
 			},
 			{
-				Binding:     "customer",
-				TemplateKey: customer.Key(),
+				Binding: "customer",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "tier", Operator: FieldConstraintEqual, Value: "silver"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "customer-id"}},
-				},
+				}, Target: TemplateKeyFact(customer.Key()),
 			},
 			{
-				Binding:     "policy",
-				TemplateKey: policy.Key(),
+				Binding: "policy",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "product", Operator: FieldConstraintEqual, Value: "home"},
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "claim", Field: "policy-id"}},
-				},
+				}, Target: TemplateKeyFact(policy.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark-silver-property"}},

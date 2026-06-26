@@ -43,11 +43,11 @@ func TestSemanticScenario(t *testing.T) {
 			Name: "classify-adult",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "classify-adult"}},
@@ -130,13 +130,13 @@ func TestSemanticScenario(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "person-department-match",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: person.Key()},
+				{Binding: "person", Target: TemplateKeyFact(person.Key())},
 				{
-					Binding:     "department",
-					TemplateKey: department.Key(),
+					Binding: "department",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "name", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
-					},
+					}, Target: TemplateKeyFact(department.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "join-match"}},
@@ -218,13 +218,13 @@ func TestSemanticScenario(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "same-fact-join",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: person.Key()},
+				{Binding: "left", Target: TemplateKeyFact(person.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: person.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "self-join"}},
@@ -301,11 +301,11 @@ func TestSemanticScenario(t *testing.T) {
 			Name: "classify",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "classify"}},
@@ -393,11 +393,11 @@ func TestSemanticScenario(t *testing.T) {
 			Name: "classify",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "base"}},
@@ -430,11 +430,11 @@ func TestSemanticScenario(t *testing.T) {
 			Salience: 10,
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "bonus"}},
@@ -471,11 +471,11 @@ func TestSemanticScenario(t *testing.T) {
 			Salience: 5,
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "base"}},
@@ -565,11 +565,11 @@ func TestSemanticScenario(t *testing.T) {
 			Name: "mutate-and-fail",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-					},
+					}, Target: TemplateKeyFact(person.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "modify"}, {Name: "fail"}, {Name: "unexpected"}},
@@ -751,11 +751,11 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 		Salience: 30,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "task",
-				TemplateKey: task.Key(),
+				Binding: "task",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Value: "top"},
-				},
+				}, Target: TemplateKeyFact(task.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "salience-first"}},
@@ -765,11 +765,11 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "task",
-				TemplateKey: task.Key(),
+				Binding: "task",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Value: "recent-new"},
-				},
+				}, Target: TemplateKeyFact(task.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "recent-new"}},
@@ -779,11 +779,11 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "task",
-				TemplateKey: task.Key(),
+				Binding: "task",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Value: "recent-old"},
-				},
+				}, Target: TemplateKeyFact(task.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "recent-old"}},
@@ -793,11 +793,11 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "task",
-				TemplateKey: task.Key(),
+				Binding: "task",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Value: "tie"},
-				},
+				}, Target: TemplateKeyFact(task.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "decl-first"}},
@@ -807,11 +807,11 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "task",
-				TemplateKey: task.Key(),
+				Binding: "task",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Value: "tie"},
-				},
+				}, Target: TemplateKeyFact(task.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "decl-second"}},

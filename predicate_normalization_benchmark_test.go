@@ -168,17 +168,17 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 		Name: "predicate-normalized-hit",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "system",
-				TemplateKey: system.Key(),
+				Binding: "system",
+
 				FieldConstraints: []FieldConstraintSpec{{
 					Field:    "environment",
 					Operator: FieldConstraintEqual,
 					Value:    "prod",
-				}},
+				}}, Target: TemplateKeyFact(system.Key()),
 			},
 			Match{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				FieldConstraints: []FieldConstraintSpec{{
 					Field:    "band",
 					Operator: FieldConstraintEqual,
@@ -238,7 +238,7 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 							},
 						},
 					},
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
@@ -252,17 +252,17 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 		Name: "predicate-complex-prefilter",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "system",
-				TemplateKey: system.Key(),
+				Binding: "system",
+
 				FieldConstraints: []FieldConstraintSpec{{
 					Field:    "environment",
 					Operator: FieldConstraintEqual,
 					Value:    "prod",
-				}},
+				}}, Target: TemplateKeyFact(system.Key()),
 			},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				JoinConstraints: []JoinConstraintSpec{{
 					Field:    "primary-system",
 					Operator: FieldConstraintEqual,
@@ -275,7 +275,7 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 						Right:    ConstExpr{Value: 90},
 					},
 					Call("pn-complex-ok", CurrentFieldExpr{Field: "risk-score"}, CurrentFieldExpr{Field: "age-days"}),
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-pn-prefilter-alert"}},
@@ -284,17 +284,17 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 		Name: "predicate-complex-residual",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "system",
-				TemplateKey: system.Key(),
+				Binding: "system",
+
 				FieldConstraints: []FieldConstraintSpec{{
 					Field:    "environment",
 					Operator: FieldConstraintEqual,
 					Value:    "prod",
-				}},
+				}}, Target: TemplateKeyFact(system.Key()),
 			},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				JoinConstraints: []JoinConstraintSpec{{
 					Field:    "primary-system",
 					Operator: FieldConstraintEqual,
@@ -302,7 +302,7 @@ func mustCompilePredicateNormalizationRuleset(t testing.TB) *Ruleset {
 				}},
 				Predicates: []ExpressionSpec{
 					Call("pn-complex-ok", CurrentFieldExpr{Field: "risk-score"}, CurrentFieldExpr{Field: "age-days"}),
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-pn-residual-alert"}},

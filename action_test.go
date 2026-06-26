@@ -81,7 +81,7 @@ func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "mutate"},
@@ -146,7 +146,7 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	}); err != nil {
@@ -296,8 +296,8 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 	if err := workspace.AddRule(RuleSpec{
 		Name: "inspect-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
-			{Binding: "openPerson", Name: "openPerson"},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
+			{Binding: "openPerson", Target: DynamicFact("openPerson")},
 		},
 		Actions: []RuleActionSpec{{Name: "inspect"}},
 	}); err != nil {
@@ -389,7 +389,7 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "inspect"}},
 	})
@@ -458,7 +458,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 	if err := workspace.AddRule(RuleSpec{
 		Name: "inspect-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "inspect"}},
 	}); err != nil {
@@ -510,7 +510,7 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	}); err != nil {
@@ -638,7 +638,7 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 			if err := workspace.AddRule(RuleSpec{
 				Name: "person-rule",
 				Conditions: []RuleConditionSpec{
-					{Binding: "person", TemplateKey: TemplateKey("person")},
+					{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 				},
 				Actions: []RuleActionSpec{{Name: "mutate"}},
 			}); err != nil {
@@ -742,7 +742,7 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "mutate-before-read"}},
 	}); err != nil {
@@ -814,7 +814,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "save-without-read"}},
 	}); err != nil {
@@ -904,7 +904,7 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "save-without-read"}},
 	}); err != nil {
@@ -995,7 +995,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *t
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "save-cancel-without-read"}, {Name: "unexpected"}},
 	}); err != nil {
@@ -1156,7 +1156,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "capture"},
@@ -1336,7 +1336,7 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "noop"}},
 	}); err != nil {
@@ -1345,8 +1345,8 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	if err := workspace.AddRule(RuleSpec{
 		Name: "audit-gate-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "audit", TemplateKey: TemplateKey("audit")},
-			{Binding: "gate", TemplateKey: TemplateKey("gate")},
+			{Binding: "audit", Target: TemplateKeyFact(TemplateKey("audit"))},
+			{Binding: "gate", Target: TemplateKeyFact(TemplateKey("gate"))},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	}); err != nil {
@@ -1453,7 +1453,7 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1525,8 +1525,7 @@ func TestNativeAssertTemplateValuesAction(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate-native",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "source",
-			TemplateKey: source.Key(),
+			Binding: "source", Target: TemplateKeyFact(source.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1590,8 +1589,7 @@ func TestNativeAssertTemplateValuesActionUsesUntargetedTokenFastPath(t *testing.
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate-native",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "source",
-			TemplateKey: source.Key(),
+			Binding: "source", Target: TemplateKeyFact(source.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1655,7 +1653,7 @@ func TestNativeAssertTemplateValuesActionUsesAggregateValueTokenFastPath(t *test
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "summarize-items",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
 		Actions: []RuleActionSpec{{Name: "summarize"}},
@@ -1729,7 +1727,7 @@ func TestNativeAssertTemplateValuesActionRetainsStoredSlotBackingsAcrossFullFiel
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1794,7 +1792,7 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1851,7 +1849,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1915,7 +1913,7 @@ func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratch
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -1976,7 +1974,7 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "generate",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
@@ -2106,7 +2104,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	if err := workspace.AddRule(RuleSpec{
 		Name: "action-mutations",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "assert-dynamic"},
@@ -2251,7 +2249,7 @@ func TestSessionExecuteActivationActionsRejectsStaleBindings(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {

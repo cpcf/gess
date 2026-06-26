@@ -24,11 +24,11 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Operator: FieldConstraintEqual, Value: 1},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -69,11 +69,11 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintOperator("bogus"), Value: 1},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -111,11 +111,11 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Value: math.NaN()},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -153,11 +153,11 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintExists, Value: 1},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -192,11 +192,11 @@ func TestFieldConstraintCompileValidation(t *testing.T) {
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "name", Operator: FieldConstraintEqual, Value: "Ada"},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -244,11 +244,11 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			Name: "closed-age",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Value: 18},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -299,10 +299,10 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			Conditions: []RuleConditionSpec{
 				{
 					Binding: "p",
-					Name:    "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Value: 18},
-					},
+					}, Target: DynamicFact("person"),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -356,11 +356,11 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			Name: "tag-exists",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "tag", Operator: FieldConstraintExists},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -369,11 +369,11 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			Name: "tag-eq",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "p",
-					TemplateKey: personTemplate.Key(),
+					Binding: "p",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "tag", Operator: FieldConstraintEqual, Value: "blue"},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -449,11 +449,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "age-eq",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -462,11 +462,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "age-neq",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintNotEqual, Value: 21},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -475,12 +475,12 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "age-range",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Value: 17},
 					{Field: "age", Operator: FieldConstraintLessThan, Value: 19},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -489,11 +489,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "name-eq",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "name", Operator: FieldConstraintEqual, Value: "Ada"},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -502,11 +502,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "name-order",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "name", Operator: FieldConstraintLessThan, Value: "Bob"},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -515,11 +515,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "tag-exists",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "tag", Operator: FieldConstraintExists},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -528,11 +528,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "incompatible",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Value: "18"},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -541,11 +541,11 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		Name: "incompatible-neq",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintNotEqual, Value: "18"},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -641,11 +641,11 @@ func TestFieldConstraintScanCancellation(t *testing.T) {
 		Name: "age-eq",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: personTemplate.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

@@ -277,12 +277,12 @@ func authoredOrderConditionTree(shape authoredOrderBenchmarkShape, templates aut
 
 func authoredOrderRootMatch(templates authoredOrderBenchmarkTemplates) Match {
 	return Match{
-		Binding:     "root",
-		TemplateKey: templates.root,
+		Binding: "root",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "group", Operator: FieldConstraintEqual, Value: "target"},
 			{Field: "active", Operator: FieldConstraintEqual, Value: true},
-		},
+		}, Target: TemplateKeyFact(templates.root),
 	}
 }
 
@@ -296,11 +296,11 @@ func authoredOrderRootJoinedToEventMatch(templates authoredOrderBenchmarkTemplat
 
 func authoredOrderEventMatch(templates authoredOrderBenchmarkTemplates) Match {
 	return Match{
-		Binding:     "event",
-		TemplateKey: templates.event,
+		Binding: "event",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: authoredOrderScoreThreshold},
-		},
+		}, Target: TemplateKeyFact(templates.event),
 	}
 }
 
@@ -314,40 +314,40 @@ func authoredOrderEventJoinedToRootMatch(templates authoredOrderBenchmarkTemplat
 
 func authoredOrderDetailJoinedToEventMatch(templates authoredOrderBenchmarkTemplates) Match {
 	return Match{
-		Binding:     "detail",
-		TemplateKey: templates.detail,
+		Binding: "detail",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "code", Operator: FieldConstraintEqual, Value: "selected"},
 		},
 		JoinConstraints: []JoinConstraintSpec{
 			{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-		},
+		}, Target: TemplateKeyFact(templates.detail),
 	}
 }
 
 func authoredOrderTagJoinedToEventMatch(templates authoredOrderBenchmarkTemplates) Match {
 	return Match{
-		Binding:     "tag",
-		TemplateKey: templates.tag,
+		Binding: "tag",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "label", Operator: FieldConstraintEqual, Value: "priority"},
 		},
 		JoinConstraints: []JoinConstraintSpec{
 			{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-		},
+		}, Target: TemplateKeyFact(templates.tag),
 	}
 }
 
 func authoredOrderBlockNotJoinedToEvent(templates authoredOrderBenchmarkTemplates) Not {
 	return Not{Condition: Match{
-		Binding:     "block",
-		TemplateKey: templates.block,
+		Binding: "block",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "active", Operator: FieldConstraintEqual, Value: true},
 		},
 		JoinConstraints: []JoinConstraintSpec{
 			{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-		},
+		}, Target: TemplateKeyFact(templates.block),
 	}}
 }
 

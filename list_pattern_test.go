@@ -32,15 +32,15 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "vip-active",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListSegment("middle"),
 					ListElem(ConstExpr{Value: "active"}),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
@@ -127,15 +127,15 @@ func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "vip-active",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListSegment("middle"),
 					ListElem(ConstExpr{Value: "active"}),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
@@ -248,15 +248,15 @@ func TestListPatternSupportsFixedAndRestWildcardMatches(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "fixed-and-rest",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListWildcard(),
 					ListRestWildcard(),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -293,15 +293,15 @@ func TestQueryListPatternReturnsSegmentBindingValue(t *testing.T) {
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "vip-active-events",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListSegment("middle"),
 					ListElem(ConstExpr{Value: "active"}),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Returns: []QueryReturnSpec{
 			ReturnValue("middle", BindingValueExpr{Binding: "middle"}),
@@ -341,11 +341,11 @@ func TestListPatternValidationRejectsAmbiguousOrCollidingSegments(t *testing.T) 
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "bad-pattern",
 			Conditions: []RuleConditionSpec{{
-				Binding:     "event",
-				TemplateKey: event.Key(),
+				Binding: "event",
+
 				ListPatterns: []ListPatternSpec{
 					ListPattern(Path("tags"), ListSegment("a"), ListRestWildcard()),
-				},
+				}, Target: TemplateKeyFact(event.Key()),
 			}},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
@@ -360,11 +360,11 @@ func TestListPatternValidationRejectsAmbiguousOrCollidingSegments(t *testing.T) 
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "bad-pattern",
 			Conditions: []RuleConditionSpec{{
-				Binding:     "event",
-				TemplateKey: event.Key(),
+				Binding: "event",
+
 				ListPatterns: []ListPatternSpec{
 					ListPattern(Path("tags"), ListSegment("event")),
-				},
+				}, Target: TemplateKeyFact(event.Key()),
 			}},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})

@@ -68,7 +68,7 @@ func newQueryGraphBranchPlanningIR(queryName string, branchID int, conditions []
 	lowered = append(lowered, normalizedRuleCondition{
 		spec: RuleConditionSpec{
 			Binding: internalQueryTriggerBinding,
-			Name:    internalQueryTriggerName(queryName),
+			Target:  DynamicFact(internalQueryTriggerName(queryName)),
 		},
 		visible: true,
 	})
@@ -149,8 +149,8 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 	return out
 }
 
-func compileBranchPlanningIR(ruleName string, ruleID RuleID, ir branchPlanningIR, templatesByKey map[TemplateKey]Template, allowDuplicateBindings bool, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
-	return compileNormalizedRuleConditionBranchWithParams(ruleName, ruleID, ir.normalizedConditions(), templatesByKey, allowDuplicateBindings, params, functions)
+func compileBranchPlanningIR(ruleName string, ruleID RuleID, author ModuleName, ir branchPlanningIR, templates templateResolver, allowDuplicateBindings bool, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithParams(ruleName, ruleID, author, ir.normalizedConditions(), templates, allowDuplicateBindings, params, functions)
 }
 
 func compiledConditionBranchFromPlanningIR(ir branchPlanningIR, compiled compiledRuleConditionSet) compiledConditionBranch {
@@ -454,7 +454,7 @@ func branchPlanningSelectivityScore(node branchPlanningNode) int {
 		return score + 10
 	}
 	condition := node.condition.spec
-	if strings.TrimSpace(condition.TemplateKey.String()) != "" || strings.TrimSpace(condition.Name) != "" {
+	if condition.Target.normalized().kind != FactTargetUnknown {
 		score -= 10
 	}
 	for _, constraint := range condition.FieldConstraints {

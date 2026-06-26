@@ -330,12 +330,12 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 		mustAddRule(t, workspace, RuleSpec{
 			Name: fmt.Sprintf("mixed-advance-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{{
-				Binding:     "tick",
-				TemplateKey: tick.Key(),
+				Binding: "tick",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 					{Field: "n", Operator: FieldConstraintLessThan, Value: tc.limit},
-				},
+				}, Target: TemplateKeyFact(tick.Key()),
 			}},
 			Actions: []RuleActionSpec{{Name: advanceAction}},
 		})
@@ -362,27 +362,27 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-signal-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "tick",
-					TemplateKey: tick.Key(),
+					Binding: "tick",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "customer", Operator: FieldConstraintEqual, Value: customer},
-					},
+					}, Target: TemplateKeyFact(tick.Key()),
 				},
 				{
-					Binding:     "account",
-					TemplateKey: account.Key(),
+					Binding: "account",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "customer", Operator: FieldConstraintEqual, Value: customer},
 						{Field: "tier", Operator: FieldConstraintNotEqual, Value: "blocked"},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "tick", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(account.Key()),
 				},
 				{
-					Binding:     "policy",
-					TemplateKey: policy.Key(),
+					Binding: "policy",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Value: region},
 						{Field: "segment", Operator: FieldConstraintEqual, Value: segment},
@@ -391,7 +391,7 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "tick", Field: "region"}},
 						{Field: "segment", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "account", Field: "segment"}},
-					},
+					}, Target: TemplateKeyFact(policy.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: signalAction}},
@@ -427,23 +427,23 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-exposure-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "kind", Operator: FieldConstraintNotEqual, Value: "blocked"},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "policy",
-					TemplateKey: policy.Key(),
+					Binding: "policy",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Value: region},
 						{Field: "segment", Operator: FieldConstraintEqual, Value: segment},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(policy.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: exposureAction}},
@@ -474,15 +474,15 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-correlated-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "peer",
-					TemplateKey: signal.Key(),
+					Binding: "peer",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: peer},
 						{Field: "region", Operator: FieldConstraintEqual, Value: region},
@@ -491,7 +491,7 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: correlatedAction}},
@@ -526,16 +526,16 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-case-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "severity", Operator: FieldConstraintGreaterOrEqual, Value: 10},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "exposure",
-					TemplateKey: exposure.Key(),
+					Binding: "exposure",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "amount", Operator: FieldConstraintGreaterOrEqual, Value: 100},
@@ -543,18 +543,18 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
 						{Field: "customer", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "customer"}},
-					},
+					}, Target: TemplateKeyFact(exposure.Key()),
 				},
 				{
-					Binding:     "correlated",
-					TemplateKey: correlated.Key(),
+					Binding: "correlated",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(correlated.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: caseAction}},
@@ -585,15 +585,15 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-escalation-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "case",
-					TemplateKey: caseFact.Key(),
+					Binding: "case",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "priority", Operator: FieldConstraintNotEqual, Value: "blocked"},
@@ -601,18 +601,18 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
 						{Field: "customer", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "customer"}},
-					},
+					}, Target: TemplateKeyFact(caseFact.Key()),
 				},
 				{
-					Binding:     "policy",
-					TemplateKey: policy.Key(),
+					Binding: "policy",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Value: region},
 						{Field: "segment", Operator: FieldConstraintEqual, Value: segment},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(policy.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: escalationAction}},
@@ -639,32 +639,32 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-audit-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "case",
-					TemplateKey: caseFact.Key(),
+					Binding: "case",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
-					},
+					}, Target: TemplateKeyFact(caseFact.Key()),
 				},
 				{
-					Binding:     "escalation",
-					TemplateKey: escalation.Key(),
+					Binding: "escalation",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "signal", Field: "n"}},
 						{Field: "customer", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "case", Field: "customer"}},
-					},
+					}, Target: TemplateKeyFact(escalation.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: auditAction}},
@@ -684,16 +684,16 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 			Name: fmt.Sprintf("mixed-complete-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "tick",
-					TemplateKey: tick.Key(),
+					Binding: "tick",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
-					},
+					}, Target: TemplateKeyFact(tick.Key()),
 				},
 				{
-					Binding:     "audit",
-					TemplateKey: audit.Key(),
+					Binding: "audit",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
@@ -701,18 +701,18 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "customer", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "tick", Field: "customer"}},
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "tick", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(audit.Key()),
 				},
 				{
-					Binding:     "policy",
-					TemplateKey: policy.Key(),
+					Binding: "policy",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Value: region},
 						{Field: "segment", Operator: FieldConstraintEqual, Value: segment},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "tick", Field: "region"}},
-					},
+					}, Target: TemplateKeyFact(policy.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: completeAction}},

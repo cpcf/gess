@@ -146,12 +146,12 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("advance-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "step",
-					TemplateKey: step.Key(),
+					Binding: "step",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintLessThan, Value: tc.limit},
-					},
+					}, Target: TemplateKeyFact(step.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: advanceAction}},
@@ -178,11 +178,11 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("signal-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "step",
-					TemplateKey: step.Key(),
+					Binding: "step",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(step.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: signalAction}},
@@ -208,15 +208,15 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("route-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "step",
-					TemplateKey: step.Key(),
+					Binding: "step",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(step.Key()),
 				},
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "kind", Operator: FieldConstraintNotEqual, Value: "blocked"},
@@ -224,7 +224,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "step", Field: "n"}},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: routeAction}},
@@ -250,15 +250,15 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("decision-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "step",
-					TemplateKey: step.Key(),
+					Binding: "step",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(step.Key()),
 				},
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "kind", Operator: FieldConstraintNotEqual, Value: "blocked"},
@@ -266,18 +266,18 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "step", Field: "n"}},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "route",
-					TemplateKey: route.Key(),
+					Binding: "route",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "lane", Operator: FieldConstraintNotEqual, Value: "blocked"},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "n", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "step", Field: "n"}},
-					},
+					}, Target: TemplateKeyFact(route.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: decisionAction}},
@@ -294,12 +294,12 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("finish-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "decision",
-					TemplateKey: decision.Key(),
+					Binding: "decision",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
-					},
+					}, Target: TemplateKeyFact(decision.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: doneAction}},
@@ -316,15 +316,15 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 			Name: fmt.Sprintf("complete-stream-%03d", stream),
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "done",
-					TemplateKey: done.Key(),
+					Binding: "done",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(done.Key()),
 				},
 				{
-					Binding:     "signal",
-					TemplateKey: signal.Key(),
+					Binding: "signal",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
@@ -333,11 +333,11 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "done", Field: "stream"}},
-					},
+					}, Target: TemplateKeyFact(signal.Key()),
 				},
 				{
-					Binding:     "route",
-					TemplateKey: route.Key(),
+					Binding: "route",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
@@ -345,11 +345,11 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "done", Field: "stream"}},
-					},
+					}, Target: TemplateKeyFact(route.Key()),
 				},
 				{
-					Binding:     "decision",
-					TemplateKey: decision.Key(),
+					Binding: "decision",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "n", Operator: FieldConstraintEqual, Value: tc.limit},
@@ -357,7 +357,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "done", Field: "stream"}},
-					},
+					}, Target: TemplateKeyFact(decision.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: completeAction}},

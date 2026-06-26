@@ -110,8 +110,7 @@ func BenchmarkRuntimeMaterializationQueryFactProjection(b *testing.B) {
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "fact-wide",
 		ConditionTree: Match{
-			Binding:     "p",
-			TemplateKey: personKey,
+			Binding: "p", Target: TemplateKeyFact(personKey),
 		},
 		Returns: []QueryReturnSpec{
 			ReturnFact("person", "p"),
@@ -261,24 +260,24 @@ func mustAddBenchmarkJoinQuery(tb testing.TB, workspace *Workspace, personKey, d
 		},
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "d",
-				TemplateKey: departmentKey,
+				Binding: "d",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				Predicates: []ExpressionSpec{
 					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "region"}, Right: ParamExpr{Name: "region"}},
-				},
+				}, Target: TemplateKeyFact(departmentKey),
 			},
 			Match{
-				Binding:     "p",
-				TemplateKey: personKey,
+				Binding: "p",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "d", Field: "id"}},
 				},
 				Predicates: []ExpressionSpec{
 					CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "age"}, Right: ConstExpr{Value: 18}},
-				},
+				}, Target: TemplateKeyFact(personKey),
 			},
 		}},
 		Returns: []QueryReturnSpec{
@@ -300,14 +299,14 @@ func mustAddBenchmarkNegationQuery(tb testing.TB, workspace *Workspace, personKe
 		ConditionTree: And{Conditions: []ConditionSpec{
 			benchmarkAdultPersonMatch(personKey, ParamExpr{Name: "dept"}),
 			Not{Condition: Match{
-				Binding:     "b",
-				TemplateKey: blockKey,
+				Binding: "b",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "person_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "p", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(blockKey),
 			}},
 		}},
 		Returns: []QueryReturnSpec{
@@ -320,12 +319,12 @@ func mustAddBenchmarkNegationQuery(tb testing.TB, workspace *Workspace, personKe
 
 func benchmarkAdultPersonMatch(personKey TemplateKey, dept ExpressionSpec) Match {
 	return Match{
-		Binding:     "p",
-		TemplateKey: personKey,
+		Binding: "p",
+
 		Predicates: []ExpressionSpec{
 			CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dept"}, Right: dept},
 			CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "age"}, Right: ConstExpr{Value: 18}},
-		},
+		}, Target: TemplateKeyFact(personKey),
 	}
 }
 

@@ -20,8 +20,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "source-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "source",
-			TemplateKey: source.Key(),
+			Binding: "source", Target: TemplateKeyFact(source.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -94,29 +93,29 @@ func TestCoverageLowerQueryConditionTreeParamsAcrossShapes(t *testing.T) {
 		"limit":   ValueInt,
 	}
 	match := Match{
-		Binding:     "person",
-		TemplateKey: TemplateKey("person"),
+		Binding: "person",
+
 		Predicates: []ExpressionSpec{
 			CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dept"}, Right: ParamExpr{Name: "dept"}},
 			Call("check-limit", ParamExpr{Name: "limit"}),
-		},
+		}, Target: TemplateKeyFact(TemplateKey("person")),
 	}
 	tree := &And{Conditions: []ConditionSpec{
 		&match,
 		&Or{Conditions: []ConditionSpec{
 			&Test{Expression: CompareExpr{Operator: ExpressionCompareEqual, Left: ParamExpr{Name: "enabled"}, Right: ConstExpr{Value: true}}},
-			&Not{Condition: Exists(&Match{Binding: "blocked", TemplateKey: TemplateKey("person")})},
+			&Not{Condition: Exists(&Match{Binding: "blocked", Target: TemplateKeyFact(TemplateKey("person"))})},
 			Forall(
-				&Match{Binding: "domain", TemplateKey: TemplateKey("person")},
+				&Match{Binding: "domain", Target: TemplateKeyFact(TemplateKey("person"))},
 				&Test{Expression: CompareExpr{Operator: ExpressionCompareLessOrEqual, Left: ParamExpr{Name: "limit"}, Right: ConstExpr{Value: 10}}},
 			),
 		}},
 		Accumulate(&Match{
-			Binding:     "item",
-			TemplateKey: TemplateKey("item"),
+			Binding: "item",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{Operator: ExpressionCompareGreaterThan, Left: CurrentFieldExpr{Field: "score"}, Right: ParamExpr{Name: "limit"}},
-			},
+			}, Target: TemplateKeyFact(TemplateKey("item")),
 		}, Sum(ParamExpr{Name: "limit"}).As("total")),
 	}}
 

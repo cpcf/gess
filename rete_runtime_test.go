@@ -266,22 +266,22 @@ func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnce(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-a",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-b",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -343,22 +343,22 @@ func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnceForGeneratedFacts(t *te
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-a",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-b",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -413,12 +413,12 @@ func TestReteRuntimePlansNameTargetsAsGraphRoutes(t *testing.T) {
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "name-target",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "template-target",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(eventTemplate.Key())}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
@@ -498,11 +498,11 @@ func TestReteRuntimeRoutesDeclaredTemplateSubscribersByTemplateKey(t *testing.T)
 		Name: "left-a",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "left",
-				TemplateKey: left.Key(),
+				Binding: "left",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
-				},
+				}, Target: TemplateKeyFact(left.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -511,11 +511,11 @@ func TestReteRuntimeRoutesDeclaredTemplateSubscribersByTemplateKey(t *testing.T)
 		Name: "left-b",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "left",
-				TemplateKey: left.Key(),
+				Binding: "left",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Value: 2},
-				},
+				}, Target: TemplateKeyFact(left.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -524,11 +524,11 @@ func TestReteRuntimeRoutesDeclaredTemplateSubscribersByTemplateKey(t *testing.T)
 		Name: "right-a",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -537,11 +537,11 @@ func TestReteRuntimeRoutesDeclaredTemplateSubscribersByTemplateKey(t *testing.T)
 		Name: "extra-a",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "extra",
-				TemplateKey: extra.Key(),
+				Binding: "extra",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Value: 1},
-				},
+				}, Target: TemplateKeyFact(extra.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -657,12 +657,10 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 		Name: "paired",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "left",
-				TemplateKey: left.Key(),
+				Binding: "left", Target: TemplateKeyFact(left.Key()),
 			},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right", Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -716,12 +714,12 @@ func TestSessionReconcileAgendaInternalSupportsNameAndTemplateTargets(t *testing
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "by-name",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "by-template",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(eventTemplate.Key())}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
@@ -1120,7 +1118,7 @@ func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "dynamic-event",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision := mustCompileWorkspace(t, workspace)
@@ -1169,8 +1167,8 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "left-right-no-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
-			{Binding: "right", TemplateKey: right.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
+			{Binding: "right", Target: TemplateKeyFact(right.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1380,13 +1378,13 @@ func TestReteRuntimeUsesGraphBetaForResidualOnlyNumericJoinPlans(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "older-than-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(threshold.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1451,16 +1449,15 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "threshold",
-				TemplateKey: threshold.Key(),
+				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
 			},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1616,8 +1613,8 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-person",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{BooleanExpr{
 				Operator: ExpressionBoolAnd,
 				Operands: []ExpressionSpec{
@@ -1650,7 +1647,7 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 						},
 					},
 				},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1723,10 +1720,10 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "system-finding-risk",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
@@ -1738,7 +1735,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 						Left:     CurrentFieldExpr{Field: "risk"},
 						Right:    ConstExpr{Value: 90},
 					},
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1849,10 +1846,10 @@ func TestReteRuntimeResidualFilterEvaluatesExpressionPredicateOnce(t *testing.T)
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(threshold.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{{
 					Field:    "group",
 					Operator: FieldConstraintEqual,
@@ -1860,7 +1857,7 @@ func TestReteRuntimeResidualFilterEvaluatesExpressionPredicateOnce(t *testing.T)
 				}},
 				Predicates: []ExpressionSpec{
 					Call("above-threshold", CurrentFieldExpr{Field: "score"}, BindingFieldExpr{Binding: "threshold", Field: "minimum"}),
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1914,18 +1911,18 @@ func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
 		Name: "or-dedupe",
 		ConditionTree: Or{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			Match{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1973,15 +1970,15 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "or-support",
 		ConditionTree: Or{Conditions: []ConditionSpec{
-			Match{Binding: "person", TemplateKey: person.Key()},
+			Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 			And{Conditions: []ConditionSpec{
-				Match{Binding: "person", TemplateKey: person.Key()},
+				Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 				Not{Condition: Match{
-					Binding:     "block",
-					TemplateKey: block.Key(),
+					Binding: "block",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "person_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(block.Key()),
 				}},
 			}},
 		}},
@@ -2054,13 +2051,13 @@ func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-person",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     CurrentFieldExpr{Field: "age"},
 				Right:    ConstExpr{Value: 18},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -2216,7 +2213,7 @@ func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) 
 	}
 	if err := workspace.AddRule(RuleSpec{
 		Name:       "dynamic-event",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("AddRule(dynamic-event): %v", err)
@@ -2383,13 +2380,13 @@ func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "int-float-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "bucket", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "bucket"}},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -2883,13 +2880,13 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivati
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-person",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     CurrentFieldExpr{Field: "age"},
 				Right:    ConstExpr{Value: 18},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -3742,16 +3739,15 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "threshold",
-				TemplateKey: threshold.Key(),
+				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
 			},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -3988,7 +3984,7 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "item-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "item", TemplateKey: item.Key()},
+			{Binding: "item", Target: TemplateKeyFact(item.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -4058,16 +4054,15 @@ func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "threshold",
-				TemplateKey: threshold.Key(),
+				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
 			},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4213,13 +4208,13 @@ func mustBetaMemoryRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Te
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "employee-department",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
+			{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4252,13 +4247,13 @@ func mustBetaModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, Templa
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "employee-department",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
+			{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4287,7 +4282,7 @@ func mustFilterModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, Temp
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "active-event",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "event", TemplateKey: event.Key()}),
+			Match(RuleConditionSpec{Binding: "event", Target: TemplateKeyFact(event.Key())}),
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareEqual,
 				Left:     BindingFieldExpr{Binding: "event", Field: "status"},
@@ -4327,16 +4322,16 @@ func mustNegationRuleset(t testing.TB, action func(ActionContext) error) (*Rules
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-without-active-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4373,16 +4368,16 @@ func mustNegationModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, Te
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-without-active-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4415,37 +4410,37 @@ func mustGraphTopologyRemovalWorkspace(t testing.TB) (*Workspace, TemplateKey, T
 		Fn:   func(ActionContext) error { return nil },
 	})
 	conditionsA := []RuleConditionSpec{
-		{Binding: "employee", TemplateKey: employee.Key()},
+		{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 		{
-			Binding:     "department",
-			TemplateKey: department.Key(),
+			Binding: "department",
+
 			JoinConstraints: []JoinConstraintSpec{
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-			},
+			}, Target: TemplateKeyFact(department.Key()),
 		},
 		{
-			Binding:     "region",
-			TemplateKey: region.Key(),
+			Binding: "region",
+
 			JoinConstraints: []JoinConstraintSpec{
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "region"}},
-			},
+			}, Target: TemplateKeyFact(region.Key()),
 		},
 	}
 	conditionsB := []RuleConditionSpec{
-		{Binding: "employee", TemplateKey: employee.Key()},
+		{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 		{
-			Binding:     "department",
-			TemplateKey: department.Key(),
+			Binding: "department",
+
 			JoinConstraints: []JoinConstraintSpec{
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-			},
+			}, Target: TemplateKeyFact(department.Key()),
 		},
 		{
-			Binding:     "office",
-			TemplateKey: office.Key(),
+			Binding: "office",
+
 			JoinConstraints: []JoinConstraintSpec{
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "department", Field: "office"}},
-			},
+			}, Target: TemplateKeyFact(office.Key()),
 		},
 	}
 	mustAddRule(t, workspace, RuleSpec{
@@ -4555,7 +4550,7 @@ func mustTokenBackingRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-item",
 		Conditions: []RuleConditionSpec{
-			{Binding: "item", TemplateKey: item.Key()},
+			{Binding: "item", Target: TemplateKeyFact(item.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -4662,9 +4657,9 @@ func mustAlphaMemoryRuleset(t testing.TB, ruleName string, constraints []FieldCo
 		Name: ruleName,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:          "person",
-				TemplateKey:      person.Key(),
-				FieldConstraints: constraints,
+				Binding: "person",
+
+				FieldConstraints: constraints, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4695,12 +4690,12 @@ func mustRuntimeGuardRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 		Name: "active-adult",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4755,11 +4750,11 @@ func mustModifyFastPathRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 		Name: "active-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -4789,11 +4784,11 @@ func mustModifyFastPathDeclaredNoReadRuleset(t testing.TB) (*Ruleset, TemplateKe
 		Name: "active-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

@@ -106,6 +106,10 @@ func (t Template) Module() ModuleName {
 	return t.module
 }
 
+func (t Template) QualifiedName() QualifiedName {
+	return QualifiedName{Module: t.module, Name: t.name}.normalized()
+}
+
 func (t Template) Key() TemplateKey {
 	return t.key
 }

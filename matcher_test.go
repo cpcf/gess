@@ -23,20 +23,20 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", Name: "person"},
+			{Binding: "person", Target: DynamicFact("person")},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "age-pairs",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: personTemplate.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: personTemplate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -429,13 +429,13 @@ func mustMatcherJoinFixture(tb testing.TB) (*Ruleset, Snapshot) {
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "age-pairs",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: personTemplate.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: personTemplate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -474,13 +474,13 @@ func TestNaiveMatcherCancellationReturnsContextError(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "join-cancel",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: personTemplate.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: personTemplate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

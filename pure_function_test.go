@@ -36,27 +36,27 @@ func TestPureFunctionPredicatesExecuteAlphaAndBeta(t *testing.T) {
 		Name: "alpha-call",
 		Conditions: []RuleConditionSpec{{
 			Binding: "finding",
-			Name:    "finding",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{Operator: ExpressionCompareEqual, Left: Call("risk-band", CurrentFieldExpr{Field: "score"}), Right: ConstExpr{Value: "high"}},
-			},
+			}, Target: DynamicFact("finding"),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "beta-call",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", Name: "system"},
+			{Binding: "system", Target: DynamicFact("system")},
 			{
 				Binding: "finding",
-				Name:    "finding",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     Call("same-id", CurrentFieldExpr{Field: "system-id"}, BindingFieldExpr{Binding: "system", Field: "id"}),
 						Right:    ConstExpr{Value: true},
 					},
-				},
+				}, Target: DynamicFact("finding"),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -132,13 +132,13 @@ func TestPureFunctionPredicatesExecuteFixedArityCalls(t *testing.T) {
 		Name: "fixed-arity-calls",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
-			Name:    "event",
+
 			Predicates: []ExpressionSpec{
 				Call("zero"),
 				Call("one", CurrentFieldExpr{Field: "a"}),
 				Call("two", CurrentFieldExpr{Field: "a"}, CurrentFieldExpr{Field: "b"}),
 				Call("three", CurrentFieldExpr{Field: "a"}, CurrentFieldExpr{Field: "b"}, CurrentFieldExpr{Field: "c"}),
-			},
+			}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -163,10 +163,10 @@ func TestPureFunctionCompileValidation(t *testing.T) {
 		Name: "unknown-call",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
-			Name:    "event",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{Operator: ExpressionCompareEqual, Left: Call("missing", CurrentFieldExpr{Field: "value"}), Right: ConstExpr{Value: true}},
-			},
+			}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -182,9 +182,9 @@ func TestPureFunctionCompileValidation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "bad-arity",
 		Conditions: []RuleConditionSpec{{
-			Binding:    "event",
-			Name:       "event",
-			Predicates: []ExpressionSpec{Call("positive")},
+			Binding: "event",
+
+			Predicates: []ExpressionSpec{Call("positive")}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -286,9 +286,9 @@ func TestPureFunctionEvaluationErrorsAreStructured(t *testing.T) {
 			mustAddRule(t, workspace, RuleSpec{
 				Name: "failing-call",
 				Conditions: []RuleConditionSpec{{
-					Binding:    "event",
-					Name:       "event",
-					Predicates: []ExpressionSpec{Call("fail")},
+					Binding: "event",
+
+					Predicates: []ExpressionSpec{Call("fail")}, Target: DynamicFact("event"),
 				}},
 				Actions: []RuleActionSpec{{Name: "noop"}},
 			})
@@ -383,9 +383,9 @@ func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T)
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "status-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
-			Predicates:  []ExpressionSpec{Call("status-ok", CurrentFieldExpr{Field: "status"})},
+			Binding: "event",
+
+			Predicates: []ExpressionSpec{Call("status-ok", CurrentFieldExpr{Field: "status"})}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})
@@ -561,13 +561,13 @@ func TestPureFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 	}})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "aggregate-call",
-		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", Name: "item"}),
+		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", Target: DynamicFact("item")}),
 			Sum(Call("double", BindingFieldExpr{Binding: "item", Field: "amount"})).As("total")),
 		Actions: []RuleActionSpec{{Name: "observe-total"}},
 	})
 	if err := workspace.AddQuery(QuerySpec{
 		Name:       "item-values",
-		Conditions: []RuleConditionSpec{{Binding: "item", Name: "item"}},
+		Conditions: []RuleConditionSpec{{Binding: "item", Target: DynamicFact("item")}},
 		Returns: []QueryReturnSpec{
 			ReturnValue("doubled", Call("double", BindingFieldExpr{Binding: "item", Field: "amount"})),
 		},
@@ -636,9 +636,9 @@ func mustPureFunctionSwitchRuleset(t testing.TB, fail *bool) *Ruleset {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "status-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:    "event",
-			Name:       "event",
-			Predicates: []ExpressionSpec{Call("status-ok", CurrentFieldExpr{Field: "status"})},
+			Binding: "event",
+
+			Predicates: []ExpressionSpec{Call("status-ok", CurrentFieldExpr{Field: "status"})}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "noop"}},
 	})

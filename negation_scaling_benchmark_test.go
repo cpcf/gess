@@ -85,22 +85,22 @@ func mustCompileNegationScalingRuleset(t testing.TB, tc negationScalingCase) (*R
 			Name: fmt.Sprintf("negation-stream-%03d", stream),
 			ConditionTree: And{Conditions: []ConditionSpec{
 				Match{
-					Binding:     "customer",
-					TemplateKey: customer.Key(),
+					Binding: "customer",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
-					},
+					}, Target: TemplateKeyFact(customer.Key()),
 				},
 				Not{Condition: Match{
-					Binding:     "block",
-					TemplateKey: block.Key(),
+					Binding: "block",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "stream", Operator: FieldConstraintEqual, Value: stream},
 						{Field: "active", Operator: FieldConstraintEqual, Value: true},
 					},
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "customer", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(block.Key()),
 				}},
 			}},
 			Actions: []RuleActionSpec{{Name: "mark-negation-customer"}},

@@ -160,14 +160,14 @@ func mustCompilePureFunctionPredicateRuleset(t testing.TB) *Ruleset {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "pure-function-hit",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				Predicates: []ExpressionSpec{
 					Call("pf-high-score", CurrentFieldExpr{Field: "score"}),
 					Call("pf-same-id", CurrentFieldExpr{Field: "system-id"}, BindingFieldExpr{Binding: "system", Field: "id"}),
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-pf-alert"}},

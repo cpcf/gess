@@ -219,26 +219,26 @@ func mustCompileJoinStrengthBenchmark(t testing.TB) (*Ruleset, joinStrengthBench
 		Name: "join-strength-rule",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "root",
-				TemplateKey: templates.root,
+				Binding: "root",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
+				}, Target: TemplateKeyFact(templates.root),
 			},
 			Match{
-				Binding:     "event",
-				TemplateKey: templates.event,
+				Binding: "event",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(templates.event),
 			},
 			Match{
-				Binding:     "grant",
-				TemplateKey: templates.grant,
+				Binding: "grant",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
 					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "region"}},
-				},
+				}, Target: TemplateKeyFact(templates.grant),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "record-join-strength"}},

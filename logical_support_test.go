@@ -284,7 +284,7 @@ func TestLogicalSupportFromFailedFiringIsCleanedUp(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "derive-then-fail",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "derive"}, {Name: "fail"}},
 	})
@@ -370,14 +370,14 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "derive",
 		Conditions: []RuleConditionSpec{
-			{Binding: "source", TemplateKey: source.Key()},
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "derive"}},
 	})
 	if !duplicateOnly {
 		mustAddRule(t, workspace, RuleSpec{
 			Name:       "derive-child",
-			Conditions: []RuleConditionSpec{{Binding: "derived", Name: "derived"}},
+			Conditions: []RuleConditionSpec{{Binding: "derived", Target: DynamicFact("derived")}},
 			Actions:    []RuleActionSpec{{Name: "derive-child"}},
 		})
 	}

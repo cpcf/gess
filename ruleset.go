@@ -315,6 +315,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 
 	templates := make(map[string]Template, len(compiledTemplates))
 	templatesByKey := make(map[TemplateKey]Template, len(compiledTemplates))
+	templatesByQualifiedName := make(map[QualifiedName]Template, len(compiledTemplates))
 	templateOrder := make([]string, 0, len(compiledTemplates))
 	for _, template := range compiledTemplates {
 		if _, exists := templates[template.name]; exists {
@@ -331,8 +332,10 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		templates[template.name] = template.clone()
 		templatesByKey[template.key] = template.clone()
+		templatesByQualifiedName[template.QualifiedName()] = template.clone()
 		templateOrder = append(templateOrder, template.name)
 	}
+	templateResolver := newTemplateResolver(templatesByKey, templatesByQualifiedName)
 
 	compiledActions := make([]compiledAction, 0, len(w.actions))
 	actionsByName := make(map[string]compiledAction, len(w.actions))
@@ -394,7 +397,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if ruleID.IsZero() {
 			ruleID = RuleID(strings.TrimSpace(spec.Name))
 		}
-		rule, err := compileRuleSpec(spec, ruleID, i, templatesByKey, actionsByName, functionsByName)
+		rule, err := compileRuleSpec(spec, ruleID, i, templateResolver, actionsByName, functionsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -431,7 +434,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		query, err := compileQuerySpec(spec, templatesByKey, functionsByName)
+		query, err := compileQuerySpec(spec, templateResolver, functionsByName)
 		if err != nil {
 			return nil, err
 		}

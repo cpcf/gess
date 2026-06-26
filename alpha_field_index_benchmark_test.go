@@ -185,11 +185,11 @@ func mustCompileAlphaLiteralEqualityRuleset(t testing.TB) (*Ruleset, TemplateKey
 		Name: ruleName,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "event",
-				TemplateKey: event.Key(),
+				Binding: "event",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "category", Operator: FieldConstraintEqual, Value: "hot"},
-				},
+				}, Target: TemplateKeyFact(event.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "noop"}},
@@ -215,14 +215,14 @@ func mustCompileAlphaLiteralEqualityQueryRuleset(t testing.TB) (*Ruleset, Templa
 		Name:       queryName,
 		Parameters: []QueryParameterSpec{{Name: "min_score", Kind: ValueInt}},
 		ConditionTree: Match{
-			Binding:     "e",
-			TemplateKey: event.Key(),
+			Binding: "e",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "category", Operator: FieldConstraintEqual, Value: "hot"},
 			},
 			Predicates: []ExpressionSpec{
 				CompareExpr{Operator: ExpressionCompareGreaterOrEqual, Left: CurrentFieldExpr{Field: "score"}, Right: ParamExpr{Name: "min_score"}},
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		},
 		Returns: []QueryReturnSpec{
 			ReturnValue("score", BindingFieldExpr{Binding: "e", Field: "score"}),

@@ -56,18 +56,18 @@ func benchmarkOrBranchRevision(tb testing.TB, separateRules bool) *Ruleset {
 	})
 	mustAddAction(tb, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
 	activeBranch := Match{
-		Binding:     "person",
-		TemplateKey: person.Key(),
+		Binding: "person",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "active", Operator: FieldConstraintEqual, Value: true},
-		},
+		}, Target: TemplateKeyFact(person.Key()),
 	}
 	deptBranch := Match{
-		Binding:     "person",
-		TemplateKey: person.Key(),
+		Binding: "person",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
-		},
+		}, Target: TemplateKeyFact(person.Key()),
 	}
 	if separateRules {
 		mustAddRule(tb, workspace, RuleSpec{

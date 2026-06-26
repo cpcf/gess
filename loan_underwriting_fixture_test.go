@@ -311,16 +311,16 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		Name:     "hard-stop-sanctions",
 		Salience: 100,
 		Conditions: []RuleConditionSpec{
-			{Binding: "applicant", TemplateKey: applicant.Key()},
+			{Binding: "applicant", Target: TemplateKeyFact(applicant.Key())},
 			{
-				Binding:     "risk",
-				TemplateKey: riskFlag.Key(),
+				Binding: "risk",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "code", Operator: FieldConstraintEqual, Value: "sanctions"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "applicant-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "applicant", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(riskFlag.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "decline-sanctions"}},
@@ -330,11 +330,11 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		Salience: 90,
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "applicant",
-				TemplateKey: applicant.Key(),
+				Binding: "applicant",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintLessThan, Value: 18},
-				},
+				}, Target: TemplateKeyFact(applicant.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "decline-underage"}},
@@ -343,16 +343,16 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		Name:     "manual-review-low-credit",
 		Salience: 50,
 		Conditions: []RuleConditionSpec{
-			{Binding: "applicant", TemplateKey: applicant.Key()},
+			{Binding: "applicant", Target: TemplateKeyFact(applicant.Key())},
 			{
-				Binding:     "financial",
-				TemplateKey: financial.Key(),
+				Binding: "financial",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "credit-score", Operator: FieldConstraintLessThan, Value: 620},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "applicant-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "applicant", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(financial.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "review-low-credit"}},
@@ -361,16 +361,16 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		Name:     "manual-review-high-debt",
 		Salience: 45,
 		Conditions: []RuleConditionSpec{
-			{Binding: "applicant", TemplateKey: applicant.Key()},
+			{Binding: "applicant", Target: TemplateKeyFact(applicant.Key())},
 			{
-				Binding:     "financial",
-				TemplateKey: financial.Key(),
+				Binding: "financial",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "monthly-debt", Operator: FieldConstraintGreaterThan, Value: 3500},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "applicant-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "applicant", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(financial.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "review-high-debt"}},
@@ -379,27 +379,27 @@ func mustCompileLoanUnderwritingRuleset(t testing.TB, trace *[]string) *Ruleset 
 		Name:     "approve-prime-employed",
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "applicant", TemplateKey: applicant.Key()},
+			{Binding: "applicant", Target: TemplateKeyFact(applicant.Key())},
 			{
-				Binding:     "financial",
-				TemplateKey: financial.Key(),
+				Binding: "financial",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "credit-score", Operator: FieldConstraintGreaterOrEqual, Value: 720},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "applicant-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "applicant", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(financial.Key()),
 			},
 			{
-				Binding:     "employment",
-				TemplateKey: employment.Key(),
+				Binding: "employment",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "employed"},
 					{Field: "months", Operator: FieldConstraintGreaterOrEqual, Value: 12},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "applicant-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "applicant", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(employment.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "approve-prime"}},

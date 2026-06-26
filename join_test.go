@@ -24,13 +24,13 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -65,13 +65,13 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "later", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -106,13 +106,13 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "height", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -150,13 +150,13 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "height"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -194,13 +194,13 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintNotEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -274,13 +274,13 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-eq",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -342,13 +342,13 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-dynamic-ref",
 			Conditions: []RuleConditionSpec{
-				{Binding: "baseline", Name: "baseline"},
+				{Binding: "baseline", Target: DynamicFact("baseline")},
 				{
-					Binding:     "candidate",
-					TemplateKey: personTemplate.Key(),
+					Binding: "candidate",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "baseline", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -413,13 +413,13 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-dynamic-current",
 			Conditions: []RuleConditionSpec{
-				{Binding: "baseline", TemplateKey: personTemplate.Key()},
+				{Binding: "baseline", Target: TemplateKeyFact(personTemplate.Key())},
 				{
 					Binding: "candidate",
-					Name:    "candidate",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "baseline", Field: "age"}},
-					},
+					}, Target: DynamicFact("candidate"),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -487,13 +487,13 @@ func TestJoinConstraintMatching(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-eq",
 			Conditions: []RuleConditionSpec{
-				{Binding: "left", TemplateKey: personTemplate.Key()},
+				{Binding: "left", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "right",
-					TemplateKey: personTemplate.Key(),
+					Binding: "right",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -592,13 +592,13 @@ func TestJoinConstraintMatching(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-gt",
 			Conditions: []RuleConditionSpec{
-				{Binding: "threshold", TemplateKey: personTemplate.Key()},
+				{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "candidate",
-					TemplateKey: personTemplate.Key(),
+					Binding: "candidate",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -667,13 +667,13 @@ func TestJoinConstraintMatching(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "join-gt",
 			Conditions: []RuleConditionSpec{
-				{Binding: "threshold", TemplateKey: personTemplate.Key()},
+				{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 				{
-					Binding:     "candidate",
-					TemplateKey: personTemplate.Key(),
+					Binding: "candidate",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-					},
+					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
@@ -717,13 +717,13 @@ func TestJoinConstraintCancellation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "join-cancel",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: personTemplate.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(personTemplate.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: personTemplate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(personTemplate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

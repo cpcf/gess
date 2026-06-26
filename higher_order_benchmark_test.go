@@ -143,16 +143,16 @@ func mustCompileHigherOrderRuleset(t testing.TB) *Ruleset {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "higher-order-exists",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			Exists(Match(RuleConditionSpec{
-				Binding:     "order",
-				TemplateKey: order.Key(),
+				Binding: "order",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "open"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(order.Key()),
 			})),
 		}},
 		Actions: []RuleActionSpec{{Name: "assert-exists-hit"}},
@@ -160,14 +160,14 @@ func mustCompileHigherOrderRuleset(t testing.TB) *Ruleset {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "higher-order-forall",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "customer", TemplateKey: customer.Key()}),
+			Match(RuleConditionSpec{Binding: "customer", Target: TemplateKeyFact(customer.Key())}),
 			Forall(
 				Match(RuleConditionSpec{
-					Binding:     "order",
-					TemplateKey: order.Key(),
+					Binding: "order",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "customer-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(order.Key()),
 				}),
 				Test{Expression: CompareExpr{
 					Operator: ExpressionCompareGreaterOrEqual,

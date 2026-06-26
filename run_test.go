@@ -26,7 +26,7 @@ func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
@@ -80,7 +80,7 @@ func TestSessionRunRejectsDirtyAgendaWithoutWholeTerminalReconcile(t *testing.T)
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
@@ -195,13 +195,13 @@ func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 			mustAddRule(t, workspace, RuleSpec{
 				Name: "open-task",
 				Conditions: []RuleConditionSpec{{
-					Binding:     "task",
-					TemplateKey: task.Key(),
+					Binding: "task",
+
 					FieldConstraints: []FieldConstraintSpec{{
 						Field:    "status",
 						Operator: FieldConstraintEqual,
 						Value:    mustValue(t, "open"),
-					}},
+					}}, Target: TemplateKeyFact(task.Key()),
 				}},
 				Actions: []RuleActionSpec{{Name: "record"}},
 			})
@@ -316,7 +316,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "seed-creates-children",
 		Conditions: []RuleConditionSpec{
-			{Binding: "seed", TemplateKey: TemplateKey("seed")},
+			{Binding: "seed", Target: TemplateKeyFact(TemplateKey("seed"))},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "child-a"},
@@ -329,7 +329,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "record-created-child",
 		Conditions: []RuleConditionSpec{
-			{Binding: "child", TemplateKey: TemplateKey("child")},
+			{Binding: "child", Target: TemplateKeyFact(TemplateKey("child"))},
 		},
 		Actions: []RuleActionSpec{{Name: "record-child"}},
 	}); err != nil {
@@ -414,7 +414,7 @@ func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "seed-creates-children",
 		Conditions: []RuleConditionSpec{
-			{Binding: "seed", TemplateKey: TemplateKey("seed")},
+			{Binding: "seed", Target: TemplateKeyFact(TemplateKey("seed"))},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "child-first"},
@@ -426,7 +426,7 @@ func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "record-created-child",
 		Conditions: []RuleConditionSpec{
-			{Binding: "child", TemplateKey: TemplateKey("child")},
+			{Binding: "child", Target: TemplateKeyFact(TemplateKey("child"))},
 		},
 		Actions: []RuleActionSpec{{Name: "record-child"}},
 	}); err != nil {
@@ -561,11 +561,11 @@ func TestSessionRunFiresActivationAndAllowsActionContextMutations(t *testing.T) 
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
-				},
+				}, Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{
@@ -712,11 +712,11 @@ func TestSessionRunActionContextMutationAdvancesNextActivation(t *testing.T) {
 		Name: "pending-rule",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
-				},
+				}, Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "promote"}},
@@ -727,11 +727,11 @@ func TestSessionRunActionContextMutationAdvancesNextActivation(t *testing.T) {
 		Name: "done-rule",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
-				},
+				}, Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -855,7 +855,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "input-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "input", TemplateKey: TemplateKey("input")},
+				{Binding: "input", Target: TemplateKeyFact(TemplateKey("input"))},
 			},
 			Actions: []RuleActionSpec{{Name: "assert-audit"}},
 		}); err != nil {
@@ -864,7 +864,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "audit-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+				{Binding: "audit", Target: TemplateKeyFact(TemplateKey("audit"))},
 			},
 			Actions: []RuleActionSpec{{Name: "record"}},
 		}); err != nil {
@@ -982,7 +982,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name:     "close-rule",
 			Salience: 20,
 			Conditions: []RuleConditionSpec{
-				{Binding: "trigger", TemplateKey: TemplateKey("trigger")},
+				{Binding: "trigger", Target: TemplateKeyFact(TemplateKey("trigger"))},
 			},
 			Actions: []RuleActionSpec{{Name: "close-task"}},
 		}); err != nil {
@@ -992,11 +992,11 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "open-task",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "task",
-					TemplateKey: TemplateKey("task"),
+					Binding: "task",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "open")},
-					},
+					}, Target: TemplateKeyFact(TemplateKey("task")),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "unexpected-open"}},
@@ -1007,11 +1007,11 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "done-task",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "task",
-					TemplateKey: TemplateKey("task"),
+					Binding: "task",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
-					},
+					}, Target: TemplateKeyFact(TemplateKey("task")),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "record-done"}},
@@ -1147,7 +1147,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "input-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "input", TemplateKey: TemplateKey("input")},
+				{Binding: "input", Target: TemplateKeyFact(TemplateKey("input"))},
 			},
 			Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "fail"}},
 		}); err != nil {
@@ -1156,7 +1156,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "audit-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+				{Binding: "audit", Target: TemplateKeyFact(TemplateKey("audit"))},
 			},
 			Actions: []RuleActionSpec{{Name: "record"}},
 		}); err != nil {
@@ -1262,7 +1262,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "input-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "input", TemplateKey: TemplateKey("input")},
+				{Binding: "input", Target: TemplateKeyFact(TemplateKey("input"))},
 			},
 			Actions: []RuleActionSpec{{Name: "assert-audit"}},
 		}); err != nil {
@@ -1271,7 +1271,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "audit-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "audit", TemplateKey: TemplateKey("audit")},
+				{Binding: "audit", Target: TemplateKeyFact(TemplateKey("audit"))},
 			},
 			Actions: []RuleActionSpec{{Name: "record"}},
 		}); err != nil {
@@ -1394,18 +1394,18 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "refresh-person-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "trigger", TemplateKey: trigger.Key()},
+				{Binding: "trigger", Target: TemplateKeyFact(trigger.Key())},
 			},
 			Actions: []RuleActionSpec{{Name: "refresh-person"}},
 		})
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "active-person-rule",
 			Conditions: []RuleConditionSpec{{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			}},
 			Actions: []RuleActionSpec{{Name: "record-person"}},
 		})
@@ -1576,15 +1576,14 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "pending-person",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: TemplateKey("person"),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
-					},
+					}, Target: TemplateKeyFact(TemplateKey("person")),
 				},
 				{
-					Binding:     "obsolete",
-					TemplateKey: TemplateKey("obsolete"),
+					Binding: "obsolete", Target: TemplateKeyFact(TemplateKey("obsolete")),
 				},
 			},
 			Actions: []RuleActionSpec{
@@ -1599,11 +1598,11 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "audit-created",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "audit",
-					TemplateKey: TemplateKey("audit"),
+					Binding: "audit",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "kind", Operator: FieldConstraintEqual, Value: mustValue(t, "created")},
-					},
+					}, Target: TemplateKeyFact(TemplateKey("audit")),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "record-audit"}},
@@ -1614,11 +1613,11 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "person-done",
 			Conditions: []RuleConditionSpec{
 				{
-					Binding:     "person",
-					TemplateKey: TemplateKey("person"),
+					Binding: "person",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
-					},
+					}, Target: TemplateKeyFact(TemplateKey("person")),
 				},
 			},
 			Actions: []RuleActionSpec{{Name: "record-done"}},
@@ -1824,7 +1823,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "trigger-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "trigger", TemplateKey: TemplateKey("trigger")},
+				{Binding: "trigger", Target: TemplateKeyFact(TemplateKey("trigger"))},
 			},
 			Actions: []RuleActionSpec{{Name: "assert-temp"}, {Name: "retract-temp"}},
 		}); err != nil {
@@ -1833,7 +1832,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "temp-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "temp", TemplateKey: TemplateKey("temp")},
+				{Binding: "temp", Target: TemplateKeyFact(TemplateKey("temp"))},
 			},
 			Actions: []RuleActionSpec{{Name: "record-temp"}},
 		}); err != nil {
@@ -1904,7 +1903,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "seed-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "seed", Name: "seed"},
+				{Binding: "seed", Target: DynamicFact("seed")},
 			},
 			Actions: []RuleActionSpec{{Name: "seed-audit"}},
 		}); err != nil {
@@ -1913,7 +1912,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "audit-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "audit", Name: "audit"},
+				{Binding: "audit", Target: DynamicFact("audit")},
 			},
 			Actions: []RuleActionSpec{{Name: "record"}},
 		}); err != nil {
@@ -2035,8 +2034,7 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 		Name: "action-failure-rule",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person", Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{
@@ -2182,7 +2180,7 @@ func TestSessionRunCancellationBeforeSelectionDoesNotConsumeActivation(t *testin
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
@@ -2276,7 +2274,7 @@ func TestSessionRunCancellationBeforeLaterActionReturnsCanceled(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "person-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: TemplateKey("person")},
+			{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 		},
 		Actions: []RuleActionSpec{{Name: "first"}, {Name: "second"}},
 	}); err != nil {
@@ -2339,7 +2337,7 @@ func TestSessionRunRejectsRecursiveAndOverlappingRuns(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "person-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: TemplateKey("person")},
+				{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 			},
 			Actions: []RuleActionSpec{{Name: "recurse"}},
 		}); err != nil {
@@ -2396,7 +2394,7 @@ func TestSessionRunRejectsRecursiveAndOverlappingRuns(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "person-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: TemplateKey("person")},
+				{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 			},
 			Actions: []RuleActionSpec{{Name: "block"}},
 		}); err != nil {
@@ -2494,11 +2492,11 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 		Name: "pending-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "pending")},
-				},
+				}, Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "pause"}},
@@ -2508,7 +2506,7 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	if err := workspace.AddRule(RuleSpec{
 		Name: "audit-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "audit", TemplateKey: TemplateKey("audit")},
+			{Binding: "audit", Target: TemplateKeyFact(TemplateKey("audit"))},
 		},
 		Actions: []RuleActionSpec{{Name: "record-audit"}},
 	}); err != nil {
@@ -2518,11 +2516,11 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 		Name: "done-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: TemplateKey("person"),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "done")},
-				},
+				}, Target: TemplateKeyFact(TemplateKey("person")),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record-done"}},

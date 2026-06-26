@@ -1187,7 +1187,7 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 		Name:     "match-person",
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1215,7 +1215,7 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 		Name:     "match-person",
 		Salience: 20,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
@@ -1833,7 +1833,7 @@ func mustAgendaRevision(t testing.TB, salience int) (*Ruleset, TemplateKey) {
 		Name:     "match-person",
 		Salience: salience,
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})

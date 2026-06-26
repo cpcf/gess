@@ -2,6 +2,50 @@ package gess
 
 import "strings"
 
+type QualifiedName struct {
+	Module ModuleName
+	Name   string
+}
+
+func (n QualifiedName) normalized() QualifiedName {
+	return QualifiedName{
+		Module: normalizeModuleName(n.Module),
+		Name:   strings.TrimSpace(n.Name),
+	}
+}
+
+func (n QualifiedName) String() string {
+	normalized := n.normalized()
+	if normalized.Name == "" {
+		return normalized.Module.String()
+	}
+	return normalized.Module.String() + "." + normalized.Name
+}
+
+type NameRef struct {
+	Module ModuleName
+	Name   string
+}
+
+func Ref(name string) NameRef {
+	return NameRef{Name: name}
+}
+
+func ModuleRef(module ModuleName, name string) NameRef {
+	return NameRef{Module: module, Name: name}
+}
+
+func (r NameRef) normalized(author ModuleName) QualifiedName {
+	module := normalizeModuleName(r.Module)
+	if r.Module.IsZero() {
+		module = normalizeModuleName(author)
+	}
+	return QualifiedName{
+		Module: module,
+		Name:   strings.TrimSpace(r.Name),
+	}
+}
+
 type ModuleSpec struct {
 	Name        ModuleName
 	Description string

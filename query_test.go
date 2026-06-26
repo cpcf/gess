@@ -58,8 +58,7 @@ func TestSessionQueryDoesNotFireRulesOrEmitFactEvents(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "ordinary-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p", Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -182,11 +181,11 @@ func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) 
 		t.Fatalf("AddAction(record-adult): %v", err)
 	}
 	adult := RuleConditionSpec{
-		Binding:     "p",
-		TemplateKey: person.Key(),
+		Binding: "p",
+
 		FieldConstraints: []FieldConstraintSpec{
 			{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: mustValue(t, 18)},
-		},
+		}, Target: TemplateKeyFact(person.Key()),
 	}
 	if err := workspace.AddRule(RuleSpec{
 		Name:       "adult-rule",
@@ -373,16 +372,15 @@ func TestSessionJoinedQueryProbesResidualFilterStage(t *testing.T) {
 		Name: "passing-candidates",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "threshold",
-				TemplateKey: threshold.Key(),
+				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
 			},
 			Match{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		}},
 		Returns: []QueryReturnSpec{
@@ -467,18 +465,18 @@ func TestQueryRetainsDuplicateReturnValuesFromDistinctBranchTokens(t *testing.T)
 		Name: "matching-people",
 		ConditionTree: Or{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "p",
-				TemplateKey: person.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			Match{
-				Binding:     "p",
-				TemplateKey: person.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		}},
 		Returns: []QueryReturnSpec{
@@ -520,8 +518,7 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "people-values",
 		ConditionTree: Match{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p", Target: TemplateKeyFact(person.Key()),
 		},
 		Returns: []QueryReturnSpec{
 			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
@@ -610,15 +607,15 @@ func TestQueryAggregateReturnsParameterizedValuesAndTracksUpdates(t *testing.T) 
 		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
 		ConditionTree: Accumulate(
 			Match{
-				Binding:     "item",
-				TemplateKey: item.Key(),
+				Binding: "item",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentPath(Path("dept")),
 						Right:    ParamExpr{Name: "dept"},
 					},
-				},
+				}, Target: TemplateKeyFact(item.Key()),
 			},
 			Count().As("count"),
 			Sum(BindingPath("item", Path("amount"))).As("total"),
@@ -697,15 +694,15 @@ func TestQueryAggregateCountReturnsEmptyParameterizedBucket(t *testing.T) {
 		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
 		ConditionTree: Accumulate(
 			Match{
-				Binding:     "item",
-				TemplateKey: item.Key(),
+				Binding: "item",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentPath(Path("dept")),
 						Right:    ParamExpr{Name: "dept"},
 					},
-				},
+				}, Target: TemplateKeyFact(item.Key()),
 			},
 			Count().As("count"),
 		),
@@ -748,23 +745,23 @@ func TestQueryAggregateGroupsByOuterBinding(t *testing.T) {
 		Parameters: []QueryParameterSpec{{Name: "kind", Kind: ValueString}},
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "group",
-				TemplateKey: group.Key(),
+				Binding: "group",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentPath(Path("kind")),
 						Right:    ParamExpr{Name: "kind"},
 					},
-				},
+				}, Target: TemplateKeyFact(group.Key()),
 			},
 			Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group-id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingPath("item", Path("amount"))).As("total"),
@@ -818,19 +815,19 @@ func TestQueryAggregateResultFeedsDownstreamCondition(t *testing.T) {
 		Name: "count-gates",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Accumulate(
-				Match{Binding: "item", TemplateKey: item.Key()},
+				Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 				Count().As("count"),
 			),
 			Match{
-				Binding:     "gate",
-				TemplateKey: gate.Key(),
+				Binding: "gate",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentPath(Path("count")),
 						Right:    BindingValueExpr{Binding: "count"},
 					},
-				},
+				}, Target: TemplateKeyFact(gate.Key()),
 			},
 		}},
 		Returns: []QueryReturnSpec{
@@ -873,7 +870,7 @@ func TestQueryAggregateMinMaxCollectReturnsValues(t *testing.T) {
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "item-extrema",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Min(BindingPath("item", Path("amount"))).As("min"),
 			Max(BindingPath("item", Path("amount"))).As("max"),
 			Collect(BindingPath("item", Path("amount"))).As("collected"),
@@ -913,8 +910,8 @@ func TestQueryAggregateValidationRejectsUnsupportedShapes(t *testing.T) {
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "unsupported-aggregate-query",
 		ConditionTree: Accumulate(Or{Conditions: []ConditionSpec{
-			Match{Binding: "a", TemplateKey: TemplateKey("item")},
-			Match{Binding: "b", TemplateKey: TemplateKey("item")},
+			Match{Binding: "a", Target: TemplateKeyFact(TemplateKey("item"))},
+			Match{Binding: "b", Target: TemplateKeyFact(TemplateKey("item"))},
 		}}, Count().As("count")),
 		Returns: []QueryReturnSpec{
 			ReturnValue("count", BindingValueExpr{Binding: "count"}),
@@ -940,8 +937,7 @@ func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "people-facts",
 		ConditionTree: Match{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p", Target: TemplateKeyFact(person.Key()),
 		},
 		Returns: []QueryReturnSpec{
 			ReturnFact("person", "p"),
@@ -1014,11 +1010,11 @@ func TestQueryValidationAndArgumentsFailPrecisely(t *testing.T) {
 			{Name: "missing", Kind: ValueString},
 		},
 		ConditionTree: Match{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "id"}, Right: ParamExpr{Name: "unknown"}},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		},
 		Returns: []QueryReturnSpec{ReturnFact("person", "p")},
 	}); err != nil {
@@ -1064,8 +1060,7 @@ func TestSessionQueryDuringRunFailsConcurrencyMisuse(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "blocking-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p", Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "block"}},
 	})
@@ -1115,8 +1110,8 @@ func mustAddAdultQuery(t testing.TB, workspace *Workspace, personKey TemplateKey
 			{Name: "dept", Kind: ValueString},
 		},
 		ConditionTree: Match{
-			Binding:     "p",
-			TemplateKey: personKey,
+			Binding: "p",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{
 					Operator: ExpressionCompareEqual,
@@ -1128,7 +1123,7 @@ func mustAddAdultQuery(t testing.TB, workspace *Workspace, personKey TemplateKey
 					Left:     CurrentFieldExpr{Field: "age"},
 					Right:    ConstExpr{Value: 18},
 				},
-			},
+			}, Target: TemplateKeyFact(personKey),
 		},
 		Returns: []QueryReturnSpec{
 			ReturnFact("person", "p"),
@@ -1165,26 +1160,26 @@ func mustJoinedQueryModifyRevision(t testing.TB) (*Ruleset, TemplateKey, Templat
 		},
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding:     "employee",
-				TemplateKey: employee.Key(),
+				Binding: "employee",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "dept"},
 						Right:    ParamExpr{Name: "dept"},
 					},
-				},
+				}, Target: TemplateKeyFact(employee.Key()),
 			},
 			Match{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "id"},
 						Right:    BindingFieldExpr{Binding: "employee", Field: "dept"},
 					},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		}},
 		Returns: []QueryReturnSpec{

@@ -92,7 +92,7 @@ func TestSessionRetractImmediatelyDeactivatesPendingActivation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -311,7 +311,7 @@ func TestSessionResetRebuildsAgendaForInitialFacts(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -690,7 +690,7 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-settings",
 		Conditions: []RuleConditionSpec{
-			{Binding: "settings", TemplateKey: template.Key()},
+			{Binding: "settings", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -857,7 +857,7 @@ func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "dynamic-event",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "event"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("event")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	revision, err := workspace.Compile(context.Background())
@@ -917,7 +917,7 @@ func TestSessionResetSlotBackedValidationFailureLeavesStateIntact(t *testing.T) 
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-settings",
 		Conditions: []RuleConditionSpec{
-			{Binding: "settings", TemplateKey: template.Key()},
+			{Binding: "settings", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})

@@ -87,11 +87,11 @@ func mustTemplateValueBatchSession(t testing.TB, actions *[]string) (*Session, T
 		Name: "active-item",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "item",
-				TemplateKey: templateKey,
+				Binding: "item",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: mustValue(t, "active")},
-				},
+				}, Target: TemplateKeyFact(templateKey),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record-active"}},

@@ -36,7 +36,7 @@ func TestAccumulateBuiltInsBindValuesAndUpdateAcrossMutations(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "totals",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("sum"),
 			Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
@@ -121,7 +121,7 @@ func TestAccumulateEmptyCountSumCollectAndMinMaxNoContinuation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "empty-count-sum-collect",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("sum"),
 			Collect(BindingFieldExpr{Binding: "item", Field: "amount"}).As("collected"),
@@ -131,7 +131,7 @@ func TestAccumulateEmptyCountSumCollectAndMinMaxNoContinuation(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "empty-min-suppresses",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
 		),
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -176,7 +176,7 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "total",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
@@ -246,7 +246,7 @@ func TestAccumulateGraphMatchUsesRetainedTerminalRows(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "total",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
@@ -292,11 +292,11 @@ func TestAccumulateUnsupportedGraphShapeReturnsRuntimeError(t *testing.T) {
 		Name: "two-aggregates",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Accumulate(
-				Match{Binding: "left", TemplateKey: item.Key()},
+				Match{Binding: "left", Target: TemplateKeyFact(item.Key())},
 				Count().As("left_count"),
 			),
 			Accumulate(
-				Match{Binding: "right", TemplateKey: item.Key()},
+				Match{Binding: "right", Target: TemplateKeyFact(item.Key())},
 				Sum(BindingFieldExpr{Binding: "right", Field: "amount"}).As("right_total"),
 			),
 		}},
@@ -352,7 +352,7 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "total",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
@@ -470,7 +470,7 @@ func TestAccumulateMinAndMaxUseIncrementalAgendaDeltas(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "extrema",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
 			Max(BindingFieldExpr{Binding: "item", Field: "amount"}).As("max"),
 		),
@@ -576,7 +576,7 @@ func TestAccumulateCollectUsesIncrementalAgendaDeltas(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "collected",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Collect(BindingFieldExpr{Binding: "item", Field: "amount"}).As("collected"),
 		),
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -691,14 +691,14 @@ func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) 
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "group-totals",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "group", TemplateKey: group.Key()},
+			Match{Binding: "group", Target: TemplateKeyFact(group.Key())},
 			Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
@@ -812,14 +812,14 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "group-totals",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "group", TemplateKey: group.Key()},
+			Match{Binding: "group", Target: TemplateKeyFact(group.Key())},
 			Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
@@ -969,14 +969,14 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "group-totals",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "group", TemplateKey: group.Key()},
+			Match{Binding: "group", Target: TemplateKeyFact(group.Key())},
 			Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
@@ -1110,19 +1110,19 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 		Name: "count-gate",
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Accumulate(
-				Match{Binding: "item", TemplateKey: item.Key()},
+				Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 				Count().As("count"),
 			),
 			Match{
-				Binding:     "gate",
-				TemplateKey: gate.Key(),
+				Binding: "gate",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "expected"},
 						Right:    BindingValueExpr{Binding: "count"},
 					},
-				},
+				}, Target: TemplateKeyFact(gate.Key()),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -1203,7 +1203,7 @@ func TestAccumulateSharedInputRulesUseIncrementalAgendaDeltas(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: spec.rule,
 			ConditionTree: Accumulate(
-				Match{Binding: "item", TemplateKey: item.Key()},
+				Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 				Count().As("count"),
 			),
 			Actions: []RuleActionSpec{{Name: spec.action}},
@@ -1257,7 +1257,7 @@ func TestAccumulateSumHandlesDuplicateFactsAndNumericTransitionsIncrementally(t 
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "sum",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -1329,22 +1329,22 @@ func TestAccumulateValidationRejectsUnsupportedShapesAndCollisions(t *testing.T)
 		{
 			name: "or input",
 			tree: Accumulate(Or{Conditions: []ConditionSpec{
-				Match{Binding: "a", TemplateKey: TemplateKey("item")},
-				Match{Binding: "b", TemplateKey: TemplateKey("item")},
+				Match{Binding: "a", Target: TemplateKeyFact(TemplateKey("item"))},
+				Match{Binding: "b", Target: TemplateKeyFact(TemplateKey("item"))},
 			}}, Count().As("count")),
 		},
 		{
 			name: "result collision",
 			tree: And{Conditions: []ConditionSpec{
-				Match{Binding: "count", TemplateKey: TemplateKey("item")},
-				Accumulate(Match{Binding: "item", TemplateKey: TemplateKey("item")}, Count().As("count")),
+				Match{Binding: "count", Target: TemplateKeyFact(TemplateKey("item"))},
+				Accumulate(Match{Binding: "item", Target: TemplateKeyFact(TemplateKey("item"))}, Count().As("count")),
 			}},
 		},
 		{
 			name: "accumulate inside or",
 			tree: Or{Conditions: []ConditionSpec{
-				Accumulate(Match{Binding: "item", TemplateKey: TemplateKey("item")}, Count().As("count")),
-				Match{Binding: "other", TemplateKey: TemplateKey("item")},
+				Accumulate(Match{Binding: "item", Target: TemplateKeyFact(TemplateKey("item"))}, Count().As("count")),
+				Match{Binding: "other", Target: TemplateKeyFact(TemplateKey("item"))},
 			}},
 		},
 	}

@@ -662,24 +662,24 @@ func mustSlotSpecificModifyMixedBenchmarkRuleset(tb testing.TB) (*Ruleset, slotS
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-active-person",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-employee-department",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
+			{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -687,7 +687,7 @@ func mustSlotSpecificModifyMixedBenchmarkRuleset(tb testing.TB) (*Ruleset, slotS
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-active-event",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "event", TemplateKey: event.Key()}),
+			Match(RuleConditionSpec{Binding: "event", Target: TemplateKeyFact(event.Key())}),
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareEqual,
 				Left:     BindingFieldExpr{Binding: "event", Field: "status"},
@@ -699,31 +699,31 @@ func mustSlotSpecificModifyMixedBenchmarkRuleset(tb testing.TB) (*Ruleset, slotS
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-list-event",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListSegment("middle"),
 					ListElem(ConstExpr{Value: "active"}),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark-list"}},
 	})
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-customer-without-active-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: "active"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -731,7 +731,7 @@ func mustSlotSpecificModifyMixedBenchmarkRuleset(tb testing.TB) (*Ruleset, slotS
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-aggregate-total",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
@@ -740,14 +740,14 @@ func mustSlotSpecificModifyMixedBenchmarkRuleset(tb testing.TB) (*Ruleset, slotS
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "ssm-mixed-bucketed-aggregate-total",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "group", TemplateKey: group.Key()},
+			Match{Binding: "group", Target: TemplateKeyFact(group.Key())},
 			Accumulate(
 				Match{
-					Binding:     "bucketItem",
-					TemplateKey: bucketItem.Key(),
+					Binding: "bucketItem",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(bucketItem.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingFieldExpr{Binding: "bucketItem", Field: "amount"}).As("total"),
@@ -784,11 +784,11 @@ func mustSlotSpecificModifyBenchmarkRulesetWithDeclaredReads(tb testing.TB, decl
 		Name: "slot-specific-active-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -821,13 +821,13 @@ func mustSlotSpecificModifyJoinedBenchmarkRuleset(tb testing.TB) (*Ruleset, Temp
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-employee-department",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
+			{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -856,7 +856,7 @@ func mustSlotSpecificModifyFilterBenchmarkRuleset(tb testing.TB) (*Ruleset, Temp
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-active-event",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match(RuleConditionSpec{Binding: "event", TemplateKey: event.Key()}),
+			Match(RuleConditionSpec{Binding: "event", Target: TemplateKeyFact(event.Key())}),
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareEqual,
 				Left:     BindingFieldExpr{Binding: "event", Field: "status"},
@@ -889,13 +889,13 @@ func mustSlotSpecificModifyAlphaPredicateBenchmarkRuleset(tb testing.TB) (*Rules
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-alpha-predicate-person",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     CurrentFieldExpr{Field: "age"},
 				Right:    ConstExpr{Value: 18},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -925,15 +925,15 @@ func mustSlotSpecificModifyListPatternBenchmarkRuleset(tb testing.TB) (*Ruleset,
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-list-pattern-event",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "event",
-			TemplateKey: event.Key(),
+			Binding: "event",
+
 			ListPatterns: []ListPatternSpec{
 				ListPattern(Path("tags"),
 					ListElem(ConstExpr{Value: "vip"}),
 					ListSegment("middle"),
 					ListElem(ConstExpr{Value: "active"}),
 				),
-			},
+			}, Target: TemplateKeyFact(event.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -969,16 +969,16 @@ func mustSlotSpecificModifyNegationBenchmarkRuleset(tb testing.TB) (*Ruleset, Te
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-customer-without-active-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: "active"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1007,7 +1007,7 @@ func mustSlotSpecificModifyAggregateBenchmarkRuleset(tb testing.TB) (*Ruleset, T
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-aggregate-total",
 		ConditionTree: Accumulate(
-			Match{Binding: "item", TemplateKey: item.Key()},
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
 			Count().As("count"),
 			Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),
 		),
@@ -1046,14 +1046,14 @@ func mustSlotSpecificModifyBucketedAggregateBenchmarkRuleset(tb testing.TB) (*Ru
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "slot-specific-bucketed-aggregate-total",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "group", TemplateKey: group.Key()},
+			Match{Binding: "group", Target: TemplateKeyFact(group.Key())},
 			Accumulate(
 				Match{
-					Binding:     "item",
-					TemplateKey: item.Key(),
+					Binding: "item",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
-					},
+					}, Target: TemplateKeyFact(item.Key()),
 				},
 				Count().As("count"),
 				Sum(BindingFieldExpr{Binding: "item", Field: "amount"}).As("total"),

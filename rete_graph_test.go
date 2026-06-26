@@ -30,19 +30,19 @@ func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
 		Name: "eligible-person",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: person.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			{
-				Binding:     "d",
-				TemplateKey: department.Key(),
+				Binding: "d",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "p", Field: "dept"}},
 					{Field: "floor", Operator: FieldConstraintLessOrEqual, Ref: FieldRef{Binding: "p", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -52,18 +52,18 @@ func TestReteGraphPlanInspectionExplainsRuleAndQueryShape(t *testing.T) {
 		Parameters: []QueryParameterSpec{{Name: "region", Kind: ValueString}},
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "d",
-				TemplateKey: department.Key(),
+				Binding: "d",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "region"}, Right: ParamExpr{Name: "region"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 			{
-				Binding:     "p",
-				TemplateKey: person.Key(),
+				Binding: "p",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "dept", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "d", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"})},
@@ -233,18 +233,18 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 		Name: "adult-department-a",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -253,18 +253,18 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 		Name: "adult-department-b",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -273,18 +273,18 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 		Name: "adult-department-c",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "managerDept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -293,18 +293,18 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 		Name: "adult-department-d",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "p",
-				TemplateKey: person.Key(),
+				Binding: "p",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 			{
-				Binding:     "d",
-				TemplateKey: department.Key(),
+				Binding: "d",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "p", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -448,20 +448,20 @@ func TestReteGraphMarksNegatedBetaStages(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-without-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 			Match{
-				Binding:     "note",
-				TemplateKey: note.Key(),
+				Binding: "note",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(note.Key()),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -528,14 +528,14 @@ func TestReteGraphSplitsMixedBetaJoinsIntoHashAndResidualGroups(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "mixed-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "left", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -694,10 +694,10 @@ func TestReteGraphPlansMixedDeclaredAndExpressionEqualityHashKeys(t *testing.T) 
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "mixed-equality-keys",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "left", Field: "score"}},
@@ -708,7 +708,7 @@ func TestReteGraphPlansMixedDeclaredAndExpressionEqualityHashKeys(t *testing.T) 
 						Left:     CurrentFieldExpr{Field: "region"},
 						Right:    BindingFieldExpr{Binding: "left", Field: "region"},
 					},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -758,10 +758,10 @@ func TestReteGraphDedupesEquivalentHashJoinExtractors(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "duplicate-equality-keys",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
 				},
@@ -771,7 +771,7 @@ func TestReteGraphDedupesEquivalentHashJoinExtractors(t *testing.T) {
 						Left:     CurrentFieldExpr{Field: "group"},
 						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
 					},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -811,10 +811,10 @@ func TestReteGraphQueryPlansCompoundEqualityHashKeys(t *testing.T) {
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "compound-query",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "left", Field: "group"}},
 				},
@@ -824,7 +824,7 @@ func TestReteGraphQueryPlansCompoundEqualityHashKeys(t *testing.T) {
 						Left:     CurrentFieldExpr{Field: "region"},
 						Right:    BindingFieldExpr{Binding: "left", Field: "region"},
 					},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "right", Field: "id"})},
@@ -863,17 +863,17 @@ func TestReteGraphIndexesEqualityExpressionPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "expression-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "group"},
 						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
 					},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -920,15 +920,15 @@ func TestReteGraphRoutesAlphaExpressionPredicateConstraints(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "expression-alpha",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "item",
-			TemplateKey: item.Key(),
+			Binding: "item",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     CurrentFieldExpr{Field: "status"},
 					Right:    ConstExpr{Value: "open"},
 				},
-			},
+			}, Target: TemplateKeyFact(item.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -982,13 +982,13 @@ func TestReteGraphIndexesEqualityComparatorFunctionPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "function-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{
 					Call("same-group", CurrentFieldExpr{Field: "group"}, BindingFieldExpr{Binding: "left", Field: "group"}),
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1038,13 +1038,13 @@ func TestReteGraphLeavesUncertifiedFunctionPredicatesResidual(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "function-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{
 					Call("same-group", CurrentFieldExpr{Field: "group"}, BindingFieldExpr{Binding: "left", Field: "group"}),
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1106,15 +1106,15 @@ func TestReteGraphIndexesCertifiedKeyExtractorFunctionPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "folded-function-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     Call("fold-key", CurrentFieldExpr{Field: "group"}),
 					Right:    Call("fold-key", BindingFieldExpr{Binding: "left", Field: "group"}),
-				}},
+				}}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1190,15 +1190,15 @@ func TestReteGraphLeavesUncertifiedKeyExtractorCallsResidual(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "residual-function-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     Call("fold-key", CurrentFieldExpr{Field: "group"}),
 					Right:    Call("fold-key", BindingFieldExpr{Binding: "left", Field: "group"}),
-				}},
+				}}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1249,10 +1249,10 @@ func TestReteGraphIndexesConjunctivePredicateTerms(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "conjunctive-predicate-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{
 					BooleanExpr{
 						Operator: ExpressionBoolAnd,
@@ -1270,7 +1270,7 @@ func TestReteGraphIndexesConjunctivePredicateTerms(t *testing.T) {
 							Call("high-score-for-group", CurrentFieldExpr{Field: "score"}, BindingFieldExpr{Binding: "left", Field: "group"}),
 						},
 					},
-				},
+				}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1312,8 +1312,8 @@ func TestReteGraphIndexesNegatedComparisonPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "not-closed",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{BooleanExpr{
 				Operator: ExpressionBoolNot,
 				Operands: []ExpressionSpec{CompareExpr{
@@ -1321,7 +1321,7 @@ func TestReteGraphIndexesNegatedComparisonPredicates(t *testing.T) {
 					Left:     CurrentFieldExpr{Field: "status"},
 					Right:    ConstExpr{Value: "closed"},
 				}},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1358,10 +1358,10 @@ func TestReteGraphIndexesNegatedNotEqualJoinPredicates(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "not-not-equal-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{BooleanExpr{
 					Operator: ExpressionBoolNot,
 					Operands: []ExpressionSpec{CompareExpr{
@@ -1369,7 +1369,7 @@ func TestReteGraphIndexesNegatedNotEqualJoinPredicates(t *testing.T) {
 						Left:     CurrentFieldExpr{Field: "group"},
 						Right:    BindingFieldExpr{Binding: "left", Field: "group"},
 					}},
-				}},
+				}}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1400,12 +1400,12 @@ func TestReteGraphRoutesTemplateAndNameTargets(t *testing.T) {
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "name-target",
-		Conditions: []RuleConditionSpec{{Binding: "event", Name: "matched-by-name"}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact("matched-by-name")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name:       "template-target",
-		Conditions: []RuleConditionSpec{{Binding: "event", TemplateKey: eventTemplate.Key()}},
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(eventTemplate.Key())}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	})
 
@@ -1442,24 +1442,24 @@ func TestReteGraphSharesAlphaConstraintsIndependentOfDeclarationOrder(t *testing
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-active-a",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 				{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "adult-active-b",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1493,11 +1493,11 @@ func TestReteGraphAlphaRouteSelectorRequiresTypedScalarField(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "numeric-any",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "item",
-			TemplateKey: item.Key(),
+			Binding: "item",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "value", Operator: FieldConstraintEqual, Value: 1},
-			},
+			}, Target: TemplateKeyFact(item.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1537,11 +1537,11 @@ func mustCompoundEqualityOrderRuleset(tb testing.TB, joins []JoinConstraintSpec)
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "compound-order",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:         "right",
-				TemplateKey:     right.Key(),
-				JoinConstraints: joins,
+				Binding: "right",
+
+				JoinConstraints: joins, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

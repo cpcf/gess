@@ -9,15 +9,14 @@ func TestBranchPlanningIRComputesDependenciesAndBarriers(t *testing.T) {
 	ir := newBranchPlanningIR(0, []normalizedRuleCondition{
 		{
 			spec: RuleConditionSpec{
-				Binding: "root",
-				Name:    "root",
+				Binding: "root", Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "event",
-				Name:    "event",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
 				},
@@ -27,17 +26,17 @@ func TestBranchPlanningIRComputesDependenciesAndBarriers(t *testing.T) {
 						Left:     BindingFieldExpr{Binding: "root", Field: "group"},
 						Right:    ConstExpr{Value: "target"},
 					},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "block",
-				Name:    "block",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-				},
+				}, Target: DynamicFact("block"),
 			},
 			negated: true,
 		},
@@ -45,10 +44,10 @@ func TestBranchPlanningIRComputesDependenciesAndBarriers(t *testing.T) {
 			isAggregate: true,
 			aggregate: Accumulate(Match{
 				Binding: "line",
-				Name:    "line",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-				},
+				}, Target: DynamicFact("line"),
 			}, Count().As("line_count")),
 			visible: true,
 		},
@@ -65,24 +64,24 @@ func TestBranchPlanningIRReordersAndCanonicalizesJoins(t *testing.T) {
 		{
 			spec: RuleConditionSpec{
 				Binding: "event",
-				Name:    "event",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 50},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "root",
-				Name:    "root",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Value: "target"},
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "root"}},
-				},
+				}, Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
@@ -115,50 +114,50 @@ func TestBranchPlanningIRKeepsStarJoinConnectedToCurrentToken(t *testing.T) {
 		{
 			spec: RuleConditionSpec{
 				Binding: "root",
-				Name:    "root",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Value: "target"},
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
+				}, Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "event",
-				Name:    "event",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 50},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "detail",
-				Name:    "detail",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "code", Operator: FieldConstraintEqual, Value: "selected"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-				},
+				}, Target: DynamicFact("detail"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "tag",
-				Name:    "tag",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "label", Operator: FieldConstraintEqual, Value: "priority"},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "event", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "id"}},
-				},
+				}, Target: DynamicFact("tag"),
 			},
 			visible: true,
 		},
@@ -175,31 +174,31 @@ func TestBranchPlanningIRPrefersStrongerJoinToCurrentToken(t *testing.T) {
 		{
 			spec: RuleConditionSpec{
 				Binding: "root",
-				Name:    "root",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
-				},
+				}, Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "event",
-				Name:    "event",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "grant",
-				Name:    "grant",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}},
 					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "region"}},
-				},
+				}, Target: DynamicFact("grant"),
 			},
 			visible: true,
 		},
@@ -221,18 +220,17 @@ func TestBranchPlanningIRPreservesJoinsWithoutReordering(t *testing.T) {
 	ir := newBranchPlanningIR(0, []normalizedRuleCondition{
 		{
 			spec: RuleConditionSpec{
-				Binding: "event",
-				Name:    "event",
+				Binding: "event", Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "root",
-				Name:    "root",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "root"}},
-				},
+				}, Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
@@ -259,24 +257,24 @@ func TestQueryGraphBranchPlanningIRPinsTriggerBeforeReorderedConditions(t *testi
 		{
 			spec: RuleConditionSpec{
 				Binding: "event",
-				Name:    "event",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "score", Operator: FieldConstraintGreaterOrEqual, Value: 50},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			visible: true,
 		},
 		{
 			spec: RuleConditionSpec{
 				Binding: "root",
-				Name:    "root",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Value: "target"},
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "event", Field: "root"}},
-				},
+				}, Target: DynamicFact("root"),
 			},
 			visible: true,
 		},
@@ -304,14 +302,14 @@ func TestQueryGraphBranchPlanningIRLowersTriggerAndParameters(t *testing.T) {
 	branch := []normalizedRuleCondition{{
 		spec: RuleConditionSpec{
 			Binding: "person",
-			Name:    "person",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     CurrentFieldExpr{Field: "dept"},
 					Right:    ParamExpr{Name: "dept"},
 				},
-			},
+			}, Target: DynamicFact("person"),
 		},
 		path:    []int{3},
 		visible: true,
@@ -333,8 +331,11 @@ func TestQueryGraphBranchPlanningIRLowersTriggerAndParameters(t *testing.T) {
 	if trigger.Binding != internalQueryTriggerBinding {
 		t.Fatalf("trigger binding = %q, want %q", trigger.Binding, internalQueryTriggerBinding)
 	}
-	if trigger.Name != internalQueryTriggerName("people-by-dept") {
-		t.Fatalf("trigger name = %q, want %q", trigger.Name, internalQueryTriggerName("people-by-dept"))
+	if got, want := trigger.Target.Kind(), FactTargetDynamic; got != want {
+		t.Fatalf("trigger target kind = %v, want %v", got, want)
+	}
+	if got, want := trigger.Target.Ref().Name, internalQueryTriggerName("people-by-dept"); got != want {
+		t.Fatalf("trigger target name = %q, want %q", got, want)
 	}
 
 	lowered := conditions[1].spec
@@ -363,8 +364,7 @@ func TestQueryGraphBranchPlanningIRAcceptsAggregatesAsBarriers(t *testing.T) {
 	ir, ok := newQueryGraphBranchPlanningIR("aggregate-query", 0, []normalizedRuleCondition{{
 		isAggregate: true,
 		aggregate: Accumulate(Match{
-			Binding: "person",
-			Name:    "person",
+			Binding: "person", Target: DynamicFact("person"),
 		}, Count().As("count")),
 		visible: true,
 	}}, nil)

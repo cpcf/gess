@@ -245,7 +245,7 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 	return out
 }
 
-func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) (compiledQuery, error) {
+func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction) (compiledQuery, error) {
 	normalized := spec.clone()
 	if normalized.Name == "" {
 		return compiledQuery{}, &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
@@ -276,7 +276,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 	}
 
 	queryRuleID := RuleID("query:" + normalized.Name)
-	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalizedConditions, templatesByKey, true, paramTypes, functions)
+	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalized.Module, normalizedConditions, templates, true, paramTypes, functions)
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
 	}
@@ -285,7 +285,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		branchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
-		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, branchIR, templatesByKey, false, paramTypes, functions)
+		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, normalized.Module, branchIR, templates, false, paramTypes, functions)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -295,7 +295,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 			return compiledQuery{}, markQueryValidation(err)
 		}
 		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
-		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, branchIndex, branch.conditions, templatesByKey, paramTypes, functions)
+		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, normalized.Module, branchIndex, branch.conditions, templates, paramTypes, functions)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -321,7 +321,7 @@ func compileQuerySpec(spec QuerySpec, templatesByKey map[TemplateKey]Template, f
 	for i, condition := range representative.conditions {
 		bindingSlots[condition.binding] = i
 	}
-	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templatesByKey, paramTypes, functions)
+	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templates.byKey, paramTypes, functions)
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -493,12 +493,12 @@ func internalQueryTriggerName(queryName string) string {
 	return "__gess_query_trigger:" + queryName
 }
 
-func compileQueryGraphBranch(queryName string, queryRuleID RuleID, branchIndex int, branch []normalizedRuleCondition, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledConditionBranch, bool, error) {
+func compileQueryGraphBranch(queryName string, queryRuleID RuleID, author ModuleName, branchIndex int, branch []normalizedRuleCondition, templates templateResolver, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledConditionBranch, bool, error) {
 	branchIR, ok := newQueryGraphBranchPlanningIR(queryName, branchIndex, branch, params)
 	if !ok {
 		return compiledConditionBranch{}, false, nil
 	}
-	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, branchIR, templatesByKey, false, nil, functions)
+	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, author, branchIR, templates, false, nil, functions)
 	if err != nil {
 		return compiledConditionBranch{}, false, err
 	}

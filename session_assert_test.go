@@ -147,7 +147,7 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "targeted-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "fact", TemplateKey: targeted.Key()},
+			{Binding: "fact", Target: TemplateKeyFact(targeted.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -315,8 +315,8 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 			if err := slotWorkspace.AddRule(RuleSpec{
 				Name: "slot-event-rule",
 				Conditions: []RuleConditionSpec{
-					{Binding: "event", TemplateKey: TemplateKey("event")},
-					{Binding: "gate", TemplateKey: TemplateKey("gate")},
+					{Binding: "event", Target: TemplateKeyFact(TemplateKey("event"))},
+					{Binding: "gate", Target: TemplateKeyFact(TemplateKey("gate"))},
 				},
 				Actions: []RuleActionSpec{{Name: "mark"}},
 			}); err != nil {
@@ -373,7 +373,7 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "targeted-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "fact", TemplateKey: targeted.Key()},
+			{Binding: "fact", Target: TemplateKeyFact(targeted.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -433,7 +433,7 @@ func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "targeted-rule",
 		Conditions: []RuleConditionSpec{
-			{Binding: "fact", TemplateKey: targeted.Key()},
+			{Binding: "fact", Target: TemplateKeyFact(targeted.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -711,7 +711,7 @@ func TestSessionAssertImmediatelyReconcilesAgendaAndSkipsDuplicateNoise(t *testi
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: template.Key()},
+			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})

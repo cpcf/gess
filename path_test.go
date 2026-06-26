@@ -61,7 +61,7 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 		Name: "high-risk",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
-			Name:    "event",
+
 			Predicates: []ExpressionSpec{
 				HasPath(Path("payload", MapKey("risk"))),
 				CompareExpr{
@@ -69,7 +69,7 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 					Left:     CurrentPath(Path("payload", MapKey("risk"))),
 					Right:    ConstExpr{Value: 90},
 				},
-			},
+			}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -77,12 +77,12 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 		Name: "missing-not-equal-does-not-match",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
-			Name:    "event",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareNotEqual,
 				Left:     CurrentPath(Path("payload", MapKey("missing"))),
 				Right:    ConstExpr{Value: "anything"},
-			}},
+			}}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -145,15 +145,15 @@ func TestNestedPathBetaResidualJoin(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "nested-join",
 		Conditions: []RuleConditionSpec{
-			{Binding: "l", TemplateKey: left.Key()},
+			{Binding: "l", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "r",
-				TemplateKey: right.Key(),
+				Binding: "r",
+
 				Predicates: []ExpressionSpec{CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     CurrentPath(Path("meta", MapKey("id"))),
 					Right:    BindingPath("l", Path("payload", MapKey("id"))),
-				}},
+				}}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -195,13 +195,13 @@ func TestClosedTemplateRejectsImpossibleNestedPath(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "broken",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "p",
-			TemplateKey: person.Key(),
+			Binding: "p",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareEqual,
 				Left:     CurrentPath(Path("age", MapKey("value"))),
 				Right:    ConstExpr{Value: 1},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -222,13 +222,13 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 				Name: "ambiguous-field-constraint",
 				Conditions: []RuleConditionSpec{{
 					Binding: "event",
-					Name:    "event",
+
 					FieldConstraints: []FieldConstraintSpec{{
 						Field:    "payload",
 						Path:     Path("payload", MapKey("risk")),
 						Operator: FieldConstraintEqual,
 						Value:    90,
-					}},
+					}}, Target: DynamicFact("event"),
 				}},
 				Actions: []RuleActionSpec{{Name: "mark"}},
 			},
@@ -238,16 +238,16 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 			rule: RuleSpec{
 				Name: "ambiguous-join-left",
 				Conditions: []RuleConditionSpec{
-					{Binding: "left", Name: "left"},
+					{Binding: "left", Target: DynamicFact("left")},
 					{
 						Binding: "right",
-						Name:    "right",
+
 						JoinConstraints: []JoinConstraintSpec{{
 							Field:    "payload",
 							Path:     Path("payload", MapKey("id")),
 							Operator: FieldConstraintEqual,
 							Ref:      FieldRef{Binding: "left", Field: "id"},
-						}},
+						}}, Target: DynamicFact("right"),
 					},
 				},
 				Actions: []RuleActionSpec{{Name: "mark"}},
@@ -258,10 +258,10 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 			rule: RuleSpec{
 				Name: "ambiguous-join-ref",
 				Conditions: []RuleConditionSpec{
-					{Binding: "left", Name: "left"},
+					{Binding: "left", Target: DynamicFact("left")},
 					{
 						Binding: "right",
-						Name:    "right",
+
 						JoinConstraints: []JoinConstraintSpec{{
 							Field:    "id",
 							Operator: FieldConstraintEqual,
@@ -270,7 +270,7 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 								Field:   "payload",
 								Path:    Path("payload", MapKey("id")),
 							},
-						}},
+						}}, Target: DynamicFact("right"),
 					},
 				},
 				Actions: []RuleActionSpec{{Name: "mark"}},
@@ -282,7 +282,7 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 				Name: "ambiguous-current-expression",
 				Conditions: []RuleConditionSpec{{
 					Binding: "event",
-					Name:    "event",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left: CurrentFieldExpr{
@@ -290,7 +290,7 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 							Path:  Path("payload", MapKey("risk")),
 						},
 						Right: ConstExpr{Value: 90},
-					}},
+					}}, Target: DynamicFact("event"),
 				}},
 				Actions: []RuleActionSpec{{Name: "mark"}},
 			},
@@ -300,10 +300,10 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 			rule: RuleSpec{
 				Name: "ambiguous-binding-expression",
 				Conditions: []RuleConditionSpec{
-					{Binding: "left", Name: "left"},
+					{Binding: "left", Target: DynamicFact("left")},
 					{
 						Binding: "right",
-						Name:    "right",
+
 						Predicates: []ExpressionSpec{CompareExpr{
 							Operator: ExpressionCompareEqual,
 							Left:     CurrentFieldExpr{Field: "id"},
@@ -312,7 +312,7 @@ func TestRejectsAmbiguousFieldAndPathSpecs(t *testing.T) {
 								Field:   "payload",
 								Path:    Path("payload", MapKey("id")),
 							},
-						}},
+						}}, Target: DynamicFact("right"),
 					},
 				},
 				Actions: []RuleActionSpec{{Name: "mark"}},

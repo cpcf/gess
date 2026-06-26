@@ -221,22 +221,22 @@ func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
 		Name:     "advance",
 		Salience: 10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "trigger", TemplateKey: trigger.Key()},
+			{Binding: "trigger", Target: TemplateKeyFact(trigger.Key())},
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "pending"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
-			{Binding: "obsolete", TemplateKey: obsolete.Key()},
+			{Binding: "obsolete", Target: TemplateKeyFact(obsolete.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-audit"}, {Name: "promote-person"}, {Name: "retire-obsolete"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "audit-created",
 		Conditions: []RuleConditionSpec{
-			{Binding: "audit", TemplateKey: audit.Key()},
+			{Binding: "audit", Target: TemplateKeyFact(audit.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
@@ -244,11 +244,11 @@ func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
 		Name: "person-done",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "status", Operator: FieldConstraintEqual, Value: "done"},
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -1097,13 +1097,13 @@ func mustGraphRemovalBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey, Tem
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "employee-department",
 		Conditions: []RuleConditionSpec{
-			{Binding: "employee", TemplateKey: employee.Key()},
+			{Binding: "employee", Target: TemplateKeyFact(employee.Key())},
 			{
-				Binding:     "department",
-				TemplateKey: department.Key(),
+				Binding: "department",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "employee", Field: "dept"}},
-				},
+				}, Target: TemplateKeyFact(department.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1249,27 +1249,27 @@ func mustGraphNegativePropagationBenchmarkRuleset(tb testing.TB) (*Ruleset, grap
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "graph-removal-chain",
 		Conditions: []RuleConditionSpec{
-			{Binding: "root", TemplateKey: root.Key()},
+			{Binding: "root", Target: TemplateKeyFact(root.Key())},
 			{
-				Binding:     "level1",
-				TemplateKey: level1.Key(),
+				Binding: "level1",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "group"}},
-				},
+				}, Target: TemplateKeyFact(level1.Key()),
 			},
 			{
-				Binding:     "level2",
-				TemplateKey: level2.Key(),
+				Binding: "level2",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "level1", Field: "group"}},
-				},
+				}, Target: TemplateKeyFact(level2.Key()),
 			},
 			{
-				Binding:     "level3",
-				TemplateKey: level3.Key(),
+				Binding: "level3",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "level2", Field: "group"}},
-				},
+				}, Target: TemplateKeyFact(level3.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1512,14 +1512,14 @@ func mustGraphResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(threshold.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1617,16 +1617,16 @@ func mustCompoundEqualityResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, 
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "candidate-above-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(threshold.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
 					{Field: "region", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "region"}},
 					{Path: Path("meta", MapKey("id")), Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Path: Path("payload", MapKey("id"))}},
 					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1707,13 +1707,13 @@ func mustPureResidualJoinBenchmarkRuleset(tb testing.TB) (*Ruleset, TemplateKey,
 	mustAddRule(tb, workspace, RuleSpec{
 		Name: "older-than-threshold",
 		Conditions: []RuleConditionSpec{
-			{Binding: "threshold", TemplateKey: threshold.Key()},
+			{Binding: "threshold", Target: TemplateKeyFact(threshold.Key())},
 			{
-				Binding:     "candidate",
-				TemplateKey: candidate.Key(),
+				Binding: "candidate",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "age", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "age"}},
-				},
+				}, Target: TemplateKeyFact(candidate.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},

@@ -197,16 +197,16 @@ func mustCompileExpressionPredicateRuleset(t testing.TB) *Ruleset {
 		Name: "critical-unpatched-production-system",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "system",
-				TemplateKey: system.Key(),
+				Binding: "system",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "criticality", Operator: FieldConstraintEqual, Value: "critical"},
 					{Field: "environment", Operator: FieldConstraintEqual, Value: "prod"},
-				},
+				}, Target: TemplateKeyFact(system.Key()),
 			},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				Predicates: []ExpressionSpec{
 					CompareExpr{
 						Operator: ExpressionCompareGreaterOrEqual,
@@ -223,11 +223,11 @@ func mustCompileExpressionPredicateRuleset(t testing.TB) *Ruleset {
 						Left:     CurrentFieldExpr{Field: "system-id"},
 						Right:    BindingFieldExpr{Binding: "system", Field: "id"},
 					},
-				},
+				}, Target: TemplateKeyFact(finding.Key()),
 			},
 			{
-				Binding:     "vulnerability",
-				TemplateKey: vulnerability.Key(),
+				Binding: "vulnerability",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "known-exploited", Operator: FieldConstraintEqual, Value: "no"},
 					{Field: "patch-available", Operator: FieldConstraintEqual, Value: "yes"},
@@ -235,7 +235,7 @@ func mustCompileExpressionPredicateRuleset(t testing.TB) *Ruleset {
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "cve", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "finding", Field: "cve"}},
-				},
+				}, Target: TemplateKeyFact(vulnerability.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-alert"}},

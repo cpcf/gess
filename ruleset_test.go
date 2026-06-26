@@ -24,15 +24,15 @@ func TestRulesetReteDependencyIndexIncludesQueries(t *testing.T) {
 			Kind: ValueString,
 		}},
 		ConditionTree: Match{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{
 				CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     CurrentFieldExpr{Field: "dept"},
 					Right:    ParamExpr{Name: "dept"},
 				},
-			},
+			}, Target: TemplateKeyFact(person.Key()),
 		},
 		Returns: []QueryReturnSpec{{
 			Alias:   "person",

@@ -142,15 +142,15 @@ func mustCompileFunctionKeyExtractorRuleset(t testing.TB, indexed bool) *Ruleset
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "function-key-extractor",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				Predicates: []ExpressionSpec{CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     Call("fk-fold-key", CurrentFieldExpr{Field: "system-id"}),
 					Right:    Call("fk-fold-key", BindingFieldExpr{Binding: "system", Field: "id"}),
-				}},
+				}}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "assert-fk-alert"}},

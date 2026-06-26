@@ -38,7 +38,7 @@ func TestWorkspaceCompilesRulesIntoImmutableRevision(t *testing.T) {
 		Tags:        []string{"age", "adult"},
 		Salience:    10,
 		Conditions: []RuleConditionSpec{
-			{Binding: "p", Name: "person"},
+			{Binding: "p", Target: DynamicFact("person")},
 		},
 		Actions: []RuleActionSpec{
 			{Name: "mark"},
@@ -146,14 +146,14 @@ func TestRuleRevisionIdentitySurvivesUnrelatedWorkspaceEdits(t *testing.T) {
 	}
 	if err := workspace.AddRule(RuleSpec{
 		Name:       "classify-adult",
-		Conditions: []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions: []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("AddRule(classify-adult): %v", err)
 	}
 	if err := workspace.AddRule(RuleSpec{
 		Name:       "other",
-		Conditions: []RuleConditionSpec{{Binding: "q", Name: "person"}},
+		Conditions: []RuleConditionSpec{{Binding: "q", Target: DynamicFact("person")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("AddRule(other): %v", err)
@@ -337,23 +337,23 @@ func TestConditionTreeNotCompilesAsLocalUnsupportedCondition(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "customer-without-block",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "customer", TemplateKey: customer.Key()},
+			Match{Binding: "customer", Target: TemplateKeyFact(customer.Key())},
 			Not{Condition: Match{
-				Binding:     "block",
-				TemplateKey: block.Key(),
+				Binding: "block",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "active", Operator: FieldConstraintEqual, Value: true},
 				},
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(block.Key()),
 			}},
 			Match{
-				Binding:     "note",
-				TemplateKey: note.Key(),
+				Binding: "note",
+
 				JoinConstraints: []JoinConstraintSpec{
 					{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "customer", Field: "id"}},
-				},
+				}, Target: TemplateKeyFact(note.Key()),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -437,7 +437,7 @@ func TestConditionTreeNotBindingScopeValidation(t *testing.T) {
 				return RuleSpec{
 					Name: "broken",
 					ConditionTree: And{Conditions: []ConditionSpec{
-						Not{Condition: Match{Binding: "block", TemplateKey: blockKey}},
+						Not{Condition: Match{Binding: "block", Target: TemplateKeyFact(blockKey)}},
 					}},
 					Actions: []RuleActionSpec{{Name: "mark"}},
 				}
@@ -450,14 +450,14 @@ func TestConditionTreeNotBindingScopeValidation(t *testing.T) {
 				return RuleSpec{
 					Name: "broken",
 					ConditionTree: And{Conditions: []ConditionSpec{
-						Match{Binding: "customer", TemplateKey: customerKey},
-						Not{Condition: Match{Binding: "block", TemplateKey: blockKey}},
+						Match{Binding: "customer", Target: TemplateKeyFact(customerKey)},
+						Not{Condition: Match{Binding: "block", Target: TemplateKeyFact(blockKey)}},
 						Match{
-							Binding:     "later",
-							TemplateKey: blockKey,
+							Binding: "later",
+
 							JoinConstraints: []JoinConstraintSpec{
 								{Field: "customer_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "block", Field: "customer_id"}},
-							},
+							}, Target: TemplateKeyFact(blockKey),
 						},
 					}},
 					Actions: []RuleActionSpec{{Name: "mark"}},
@@ -471,9 +471,9 @@ func TestConditionTreeNotBindingScopeValidation(t *testing.T) {
 				return RuleSpec{
 					Name: "broken",
 					ConditionTree: And{Conditions: []ConditionSpec{
-						Match{Binding: "customer", TemplateKey: customerKey},
+						Match{Binding: "customer", Target: TemplateKeyFact(customerKey)},
 						Not{Condition: And{Conditions: []ConditionSpec{
-							Match{Binding: "block", TemplateKey: blockKey},
+							Match{Binding: "block", Target: TemplateKeyFact(blockKey)},
 						}}},
 					}},
 					Actions: []RuleActionSpec{{Name: "mark"}},
@@ -540,13 +540,13 @@ func TestConditionTreeOrSingleBranchCompilesForInspection(t *testing.T) {
 		Name: "single-branch-or",
 		ConditionTree: Or{Conditions: []ConditionSpec{
 			And{Conditions: []ConditionSpec{
-				Match{Binding: "person", TemplateKey: person.Key()},
+				Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 				Match{
-					Binding:     "department",
-					TemplateKey: department.Key(),
+					Binding: "department",
+
 					JoinConstraints: []JoinConstraintSpec{
 						{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
-					},
+					}, Target: TemplateKeyFact(department.Key()),
 				},
 			}},
 		}},
@@ -610,29 +610,29 @@ func TestConditionTreeOrBranchInspectionExpandsSourcePaths(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "nested-or",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "person", TemplateKey: person.Key()},
+			Match{Binding: "person", Target: TemplateKeyFact(person.Key())},
 			Or{Conditions: []ConditionSpec{
 				Match{
-					Binding:     "marker",
-					TemplateKey: marker.Key(),
+					Binding: "marker",
+
 					FieldConstraints: []FieldConstraintSpec{
 						{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
-					},
+					}, Target: TemplateKeyFact(marker.Key()),
 				},
 				Or{Conditions: []ConditionSpec{
 					Match{
-						Binding:     "marker",
-						TemplateKey: marker.Key(),
+						Binding: "marker",
+
 						FieldConstraints: []FieldConstraintSpec{
 							{Field: "status", Operator: FieldConstraintEqual, Value: "probation"},
-						},
+						}, Target: TemplateKeyFact(marker.Key()),
 					},
 					Match{
-						Binding:     "marker",
-						TemplateKey: marker.Key(),
+						Binding: "marker",
+
 						FieldConstraints: []FieldConstraintSpec{
 							{Field: "status", Operator: FieldConstraintEqual, Value: "contractor"},
-						},
+						}, Target: TemplateKeyFact(marker.Key()),
 					},
 				}},
 			}},
@@ -728,8 +728,8 @@ func TestConditionTreeOrValidation(t *testing.T) {
 				return RuleSpec{
 					Name: "broken",
 					ConditionTree: Or{Conditions: []ConditionSpec{
-						Match{Binding: "first", TemplateKey: personKey},
-						Match{Binding: "second", TemplateKey: personKey},
+						Match{Binding: "first", Target: TemplateKeyFact(personKey)},
+						Match{Binding: "second", Target: TemplateKeyFact(personKey)},
 					}},
 					Actions: []RuleActionSpec{{Name: "mark"}},
 				}
@@ -742,9 +742,9 @@ func TestConditionTreeOrValidation(t *testing.T) {
 				return RuleSpec{
 					Name: "broken",
 					ConditionTree: And{Conditions: []ConditionSpec{
-						Match{Binding: "person", TemplateKey: personKey},
+						Match{Binding: "person", Target: TemplateKeyFact(personKey)},
 						Not{Condition: Or{Conditions: []ConditionSpec{
-							Match{Binding: "blocked", TemplateKey: personKey},
+							Match{Binding: "blocked", Target: TemplateKeyFact(personKey)},
 						}}},
 					}},
 					Actions: []RuleActionSpec{{Name: "mark"}},
@@ -814,16 +814,15 @@ func TestExpressionPredicatesCompileAndClassify(t *testing.T) {
 		Name: "expression-classification",
 		Conditions: []RuleConditionSpec{
 			{
-				Binding:     "threshold",
-				TemplateKey: threshold.Key(),
+				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
 			},
 			{
-				Binding:     "candidate",
-				TemplateKey: person.Key(),
+				Binding: "candidate",
+
 				Predicates: []ExpressionSpec{
 					alphaPredicate,
 					betaPredicate,
-				},
+				}, Target: TemplateKeyFact(person.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -904,13 +903,13 @@ func TestExpressionPredicatesAffectRuleIdentity(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "age-rule",
 			Conditions: []RuleConditionSpec{{
-				Binding:     "person",
-				TemplateKey: person.Key(),
+				Binding: "person",
+
 				Predicates: []ExpressionSpec{CompareExpr{
 					Operator: ExpressionCompareGreaterOrEqual,
 					Left:     CurrentFieldExpr{Field: "age"},
 					Right:    ConstExpr{Value: value},
-				}},
+				}}, Target: TemplateKeyFact(person.Key()),
 			}},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
@@ -959,14 +958,14 @@ func TestDisjunctiveLiteralPredicateCompilesToAlphaMembershipConstraint(t *testi
 		Name: "status-membership",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
-			Name:    event.Name(),
+
 			Predicates: []ExpressionSpec{BooleanExpr{
 				Operator: ExpressionBoolOr,
 				Operands: []ExpressionSpec{
 					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "status"}, Right: ConstExpr{Value: "open"}},
 					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "status"}, Right: ConstExpr{Value: "pending"}},
 				},
-			}},
+			}}, Target: DynamicFact(event.Name()),
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
@@ -1068,8 +1067,8 @@ func TestDisjunctiveJoinPredicateExpandsToHashJoinBranches(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "system-finding",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
-			{Binding: "finding", TemplateKey: finding.Key(), Predicates: []ExpressionSpec{predicate}},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
+			{Binding: "finding", Predicates: []ExpressionSpec{predicate}, Target: TemplateKeyFact(finding.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
@@ -1180,28 +1179,28 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "literal-return-value",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "system",
-			TemplateKey: system.Key(),
+			Binding: "system",
+
 			FieldConstraints: []FieldConstraintSpec{{
 				Field:    "band",
 				Operator: FieldConstraintEqual,
 				Value:    ConstExpr{Value: "high"},
-			}},
+			}}, Target: TemplateKeyFact(system.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "binding-return-value",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				FieldConstraints: []FieldConstraintSpec{{
 					Field:    "system-id",
 					Operator: FieldConstraintEqual,
 					Value:    BindingFieldExpr{Binding: "system", Field: "id"},
-				}},
+				}}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -1209,10 +1208,10 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "function-return-value",
 		Conditions: []RuleConditionSpec{
-			{Binding: "system", TemplateKey: system.Key()},
+			{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				JoinConstraints: []JoinConstraintSpec{{
 					Field:    "system-id",
 					Operator: FieldConstraintEqual,
@@ -1222,7 +1221,7 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 					Field:    "band",
 					Operator: FieldConstraintEqual,
 					Value:    Call("risk-band", BindingFieldExpr{Binding: "system", Field: "risk"}),
-				}},
+				}}, Target: TemplateKeyFact(finding.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "record"}},
@@ -1336,15 +1335,15 @@ func TestStandaloneTestConditionCompilesToBetaFilter(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "standalone-test",
 		ConditionTree: And{Conditions: []ConditionSpec{
-			Match{Binding: "system", TemplateKey: system.Key()},
+			Match{Binding: "system", Target: TemplateKeyFact(system.Key())},
 			Match{
-				Binding:     "finding",
-				TemplateKey: finding.Key(),
+				Binding: "finding",
+
 				JoinConstraints: []JoinConstraintSpec{{
 					Field:    "system-id",
 					Operator: FieldConstraintEqual,
 					Ref:      FieldRef{Binding: "system", Field: "id"},
-				}},
+				}}, Target: TemplateKeyFact(finding.Key()),
 			},
 			Test{Expression: CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
@@ -1434,13 +1433,13 @@ func TestStandaloneTestConditionValidatesLocalBindingScope(t *testing.T) {
 			name: "future-binding",
 			tree: And{Conditions: []ConditionSpec{
 				Test{Expression: BindingFieldExpr{Binding: "system", Field: "id"}},
-				Match{Binding: "system", Name: "system"},
+				Match{Binding: "system", Target: DynamicFact("system")},
 			}},
 		},
 		{
 			name: "current-field",
 			tree: And{Conditions: []ConditionSpec{
-				Match{Binding: "system", Name: "system"},
+				Match{Binding: "system", Target: DynamicFact("system")},
 				Test{Expression: CompareExpr{
 					Operator: ExpressionCompareEqual,
 					Left:     CurrentFieldExpr{Field: "id"},
@@ -1474,13 +1473,13 @@ func TestConditionTreeMatchPreservesExpressionPredicates(t *testing.T) {
 	})
 	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
 	condition := RuleConditionSpec{
-		Binding:     "person",
-		TemplateKey: person.Key(),
+		Binding: "person",
+
 		Predicates: []ExpressionSpec{CompareExpr{
 			Operator: ExpressionCompareGreaterOrEqual,
 			Left:     CurrentFieldExpr{Field: "age"},
 			Right:    ConstExpr{Value: 18},
-		}},
+		}}, Target: TemplateKeyFact(person.Key()),
 	}
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "tree-expression",
@@ -1540,9 +1539,9 @@ func TestExpressionPredicateInspectionIsImmutable(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "immutable-expression",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
-			Predicates:  []ExpressionSpec{predicate},
+			Binding: "person",
+
+			Predicates: []ExpressionSpec{predicate}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1584,10 +1583,10 @@ func TestExpressionPredicatesSplitConjunctiveCompiledPlan(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "conjunctive-expression",
 		Conditions: []RuleConditionSpec{
-			{Binding: "left", TemplateKey: left.Key()},
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
 			{
-				Binding:     "right",
-				TemplateKey: right.Key(),
+				Binding: "right",
+
 				Predicates: []ExpressionSpec{BooleanExpr{
 					Operator: ExpressionBoolAnd,
 					Operands: []ExpressionSpec{
@@ -1602,7 +1601,7 @@ func TestExpressionPredicatesSplitConjunctiveCompiledPlan(t *testing.T) {
 							Right:    BindingFieldExpr{Binding: "left", Field: "group"},
 						},
 					},
-				}},
+				}}, Target: TemplateKeyFact(right.Key()),
 			},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -1649,8 +1648,8 @@ func TestExpressionPredicatesInvertGuaranteedNegatedComparisons(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "negated-comparison",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{BooleanExpr{
 				Operator: ExpressionBoolNot,
 				Operands: []ExpressionSpec{CompareExpr{
@@ -1658,7 +1657,7 @@ func TestExpressionPredicatesInvertGuaranteedNegatedComparisons(t *testing.T) {
 					Left:     CurrentFieldExpr{Field: "age"},
 					Right:    ConstExpr{Value: 18},
 				}},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1697,15 +1696,15 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{
 					{
-						Binding:     "person",
-						TemplateKey: person.Key(),
+						Binding: "person",
+
 						Predicates: []ExpressionSpec{CompareExpr{
 							Operator: ExpressionCompareEqual,
 							Left:     CurrentFieldExpr{Field: "dept"},
 							Right:    BindingFieldExpr{Binding: "future", Field: "dept"},
-						}},
+						}}, Target: TemplateKeyFact(person.Key()),
 					},
-					{Binding: "future", TemplateKey: person.Key()},
+					{Binding: "future", Target: TemplateKeyFact(person.Key())},
 				}
 			},
 			wantReason:    "binding field expression must refer to an earlier condition",
@@ -1716,13 +1715,13 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "unknown binding",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "dept"},
 						Right:    BindingFieldExpr{Binding: "missing", Field: "dept"},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "binding field expression must refer to an earlier condition",
@@ -1733,13 +1732,13 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "unknown current field",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "missing"},
 						Right:    ConstExpr{Value: "engineering"},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "unknown field",
@@ -1751,15 +1750,15 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "unknown binding field",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{
-					{Binding: "left", TemplateKey: person.Key()},
+					{Binding: "left", Target: TemplateKeyFact(person.Key())},
 					{
-						Binding:     "right",
-						TemplateKey: person.Key(),
+						Binding: "right",
+
 						Predicates: []ExpressionSpec{CompareExpr{
 							Operator: ExpressionCompareEqual,
 							Left:     CurrentFieldExpr{Field: "dept"},
 							Right:    BindingFieldExpr{Binding: "left", Field: "missing"},
-						}},
+						}}, Target: TemplateKeyFact(person.Key()),
 					},
 				}
 			},
@@ -1772,12 +1771,12 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "missing operand",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareEqual,
 						Left:     CurrentFieldExpr{Field: "dept"},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "comparison expression requires left and right operands",
@@ -1788,13 +1787,13 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "invalid operator",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareUnknown,
 						Left:     CurrentFieldExpr{Field: "dept"},
 						Right:    ConstExpr{Value: "engineering"},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "invalid expression comparison operator",
@@ -1805,13 +1804,13 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "type mismatch",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{CompareExpr{
 						Operator: ExpressionCompareGreaterThan,
 						Left:     CurrentFieldExpr{Field: "dept"},
 						Right:    ConstExpr{Value: 10},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "expression operands have incompatible types",
@@ -1822,9 +1821,9 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "unsupported node",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
-					Predicates:  []ExpressionSpec{unsupportedExpressionSpec{}},
+					Binding: "person",
+
+					Predicates: []ExpressionSpec{unsupportedExpressionSpec{}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "unsupported expression node",
@@ -1835,9 +1834,9 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "predicate not bool",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
-					Predicates:  []ExpressionSpec{CurrentFieldExpr{Field: "dept"}},
+					Binding: "person",
+
+					Predicates: []ExpressionSpec{CurrentFieldExpr{Field: "dept"}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "expression predicate must produce a bool",
@@ -1848,12 +1847,12 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			name: "boolean operand not bool",
 			conditions: func(person Template) []RuleConditionSpec {
 				return []RuleConditionSpec{{
-					Binding:     "person",
-					TemplateKey: person.Key(),
+					Binding: "person",
+
 					Predicates: []ExpressionSpec{BooleanExpr{
 						Operator: ExpressionBoolAnd,
 						Operands: []ExpressionSpec{CurrentFieldExpr{Field: "dept"}},
-					}},
+					}}, Target: TemplateKeyFact(person.Key()),
 				}}
 			},
 			wantReason:    "boolean expression operands must produce bool values",
@@ -1920,13 +1919,13 @@ func TestExpressionPredicatesAreExecutableByGraphRuntime(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "age-rule",
 		Conditions: []RuleConditionSpec{{
-			Binding:     "person",
-			TemplateKey: person.Key(),
+			Binding: "person",
+
 			Predicates: []ExpressionSpec{CompareExpr{
 				Operator: ExpressionCompareGreaterOrEqual,
 				Left:     CurrentFieldExpr{Field: "age"},
 				Right:    ConstExpr{Value: 18},
-			}},
+			}}, Target: TemplateKeyFact(person.Key()),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -1977,7 +1976,7 @@ func TestReplacingRuleBySameNamePreservesIdentity(t *testing.T) {
 	baseRule := RuleSpec{
 		Name:        "classify-adult",
 		Description: "initial",
-		Conditions:  []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions:  []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:     []RuleActionSpec{{Name: "mark"}},
 	}
 	if err := workspace.AddRule(baseRule); err != nil {
@@ -2018,7 +2017,7 @@ func TestReplacingRuleBySameNamePreservesIdentity(t *testing.T) {
 		Name:        "classify-adult",
 		Description: "updated",
 		Salience:    50,
-		Conditions:  []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions:  []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:     []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("ReplaceRule with changed content: %v", err)
@@ -2054,7 +2053,7 @@ func TestRuleMetadataChangesDoNotChangeRuleRevisionIdentity(t *testing.T) {
 		Name:        "classify",
 		Description: "initial",
 		Tags:        []string{"old"},
-		Conditions:  []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions:  []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:     []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("AddRule: %v", err)
@@ -2073,7 +2072,7 @@ func TestRuleMetadataChangesDoNotChangeRuleRevisionIdentity(t *testing.T) {
 		Name:        "classify",
 		Description: "updated",
 		Tags:        []string{"new"},
-		Conditions:  []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions:  []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:     []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("ReplaceRule: %v", err)
@@ -2113,7 +2112,7 @@ func TestWorkspaceCompileRejectsDuplicateRules(t *testing.T) {
 	}
 	if err := workspace.AddRule(RuleSpec{
 		Name:       "classify-adult",
-		Conditions: []RuleConditionSpec{{Binding: "p", Name: "person"}},
+		Conditions: []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
 		Actions:    []RuleActionSpec{{Name: "mark"}},
 	}); err != nil {
 		t.Fatalf("AddRule: %v", err)
@@ -2187,8 +2186,8 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		}
 		if err := workspace.AddRule(RuleSpec{
 			Name:          "broken",
-			Conditions:    []RuleConditionSpec{{Binding: "p", Name: "person"}},
-			ConditionTree: And{Conditions: []ConditionSpec{Match{Binding: "q", Name: "person"}}},
+			Conditions:    []RuleConditionSpec{{Binding: "p", Target: DynamicFact("person")}},
+			ConditionTree: And{Conditions: []ConditionSpec{Match{Binding: "q", Target: DynamicFact("person")}}},
 			Actions:       []RuleActionSpec{{Name: "mark"}},
 		}); err != nil {
 			t.Fatalf("AddRule: %v", err)
@@ -2259,8 +2258,8 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "p", Name: "person"},
-				{Binding: "p", Name: "person"},
+				{Binding: "p", Target: DynamicFact("person")},
+				{Binding: "p", Target: DynamicFact("person")},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		}); err != nil {
@@ -2300,7 +2299,7 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: " ", Name: "person"},
+				{Binding: " ", Target: DynamicFact("person")},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		}); err != nil {
@@ -2343,7 +2342,7 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "1person", Name: "person"},
+				{Binding: "1person", Target: DynamicFact("person")},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		}); err != nil {
@@ -2373,14 +2372,12 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		for _, tc := range []struct {
 			name      string
 			condition RuleConditionSpec
+			want      string
 		}{
 			{
 				name:      "missing",
 				condition: RuleConditionSpec{Binding: "p"},
-			},
-			{
-				name:      "conflicting",
-				condition: RuleConditionSpec{Binding: "p", Name: "person", TemplateKey: TemplateKey("person")},
+				want:      "condition target is required",
 			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -2419,8 +2416,8 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 				if !validation.HasConditionIndex || validation.ConditionIndex != 0 {
 					t.Fatalf("condition index = (%v, %d), want (true, 0)", validation.HasConditionIndex, validation.ConditionIndex)
 				}
-				if validation.Reason != "condition target must be either a name or a template key" {
-					t.Fatalf("reason = %q, want target validation failure", validation.Reason)
+				if validation.Reason != tc.want {
+					t.Fatalf("reason = %q, want %q", validation.Reason, tc.want)
 				}
 			})
 		}
@@ -2437,7 +2434,7 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "p", TemplateKey: TemplateKey("person:v1")},
+				{Binding: "p", Target: TemplateKeyFact(TemplateKey("person:v1"))},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		}); err != nil {
@@ -2471,7 +2468,7 @@ func TestWorkspaceCompileRejectsInvalidRuleDefinitions(t *testing.T) {
 		if err := workspace.AddRule(RuleSpec{
 			Name: "broken",
 			Conditions: []RuleConditionSpec{
-				{Binding: "p", Name: "person"},
+				{Binding: "p", Target: DynamicFact("person")},
 			},
 			Actions: []RuleActionSpec{{Name: "missing"}},
 		}); err != nil {
@@ -2540,14 +2537,14 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person-by-name",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", Name: "person"},
+			{Binding: "person", Target: DynamicFact("person")},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "match-person-by-template",
 		Conditions: []RuleConditionSpec{
-			{Binding: "person", TemplateKey: personTemplate.Key()},
+			{Binding: "person", Target: TemplateKeyFact(personTemplate.Key())},
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
@@ -2662,7 +2659,7 @@ func TestRuleRevisionIDIncludesActionFreezeSemantics(t *testing.T) {
 		mustAddRule(t, workspace, RuleSpec{
 			Name: "person-rule",
 			Conditions: []RuleConditionSpec{
-				{Binding: "person", TemplateKey: TemplateKey("person")},
+				{Binding: "person", Target: TemplateKeyFact(TemplateKey("person"))},
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
@@ -2756,18 +2753,18 @@ func mustCompileConditionTreeCompatibilityRevision(t testing.TB, tree bool) *Rul
 func conditionTreeCompatibilityConditions(personKey, departmentKey TemplateKey) []RuleConditionSpec {
 	return []RuleConditionSpec{
 		{
-			Binding:     "person",
-			TemplateKey: personKey,
+			Binding: "person",
+
 			FieldConstraints: []FieldConstraintSpec{
 				{Field: "dept", Operator: FieldConstraintEqual, Value: "engineering"},
-			},
+			}, Target: TemplateKeyFact(personKey),
 		},
 		{
-			Binding:     "department",
-			TemplateKey: departmentKey,
+			Binding: "department",
+
 			JoinConstraints: []JoinConstraintSpec{
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
-			},
+			}, Target: TemplateKeyFact(departmentKey),
 		},
 	}
 }

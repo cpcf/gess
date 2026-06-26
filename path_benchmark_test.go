@@ -114,7 +114,7 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 		ConditionTree: Or{Conditions: []ConditionSpec{
 			Match{
 				Binding: "event",
-				Name:    "event",
+
 				FieldConstraints: []FieldConstraintSpec{
 					{
 						Path:     Path("payload", MapKey("risk"), MapKey("score")),
@@ -126,11 +126,11 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 						Operator: FieldConstraintEqual,
 						Value:    true,
 					},
-				},
+				}, Target: DynamicFact("event"),
 			},
 			Match{
 				Binding: "event",
-				Name:    "event",
+
 				Predicates: []ExpressionSpec{
 					HasPath(Path("payload", MapKey("risk"), MapKey("score"))),
 					CompareExpr{
@@ -143,7 +143,7 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 						Left:     CurrentPath(Path("payload", MapKey("source"))),
 						Right:    ConstExpr{Value: "runtime"},
 					},
-				},
+				}, Target: DynamicFact("event"),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
