@@ -206,7 +206,6 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, source tokenSourceHandl
 	} else {
 		row.matchSource = source
 	}
-	row.factSpanStart = -1
 
 	if parentRow != nil {
 		row.parent = tokenParentHandle{row: parent.handle.row}
