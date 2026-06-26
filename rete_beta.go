@@ -509,16 +509,23 @@ func (r tokenRef) factVersions() ([]FactVersion, bool) {
 }
 
 type reteAgendaDelta struct {
-	supported bool
-	added     []reteTerminalTokenDelta
-	removed   []reteTerminalTokenDelta
-	updated   []reteTerminalTokenUpdate
-	demands   []backchainDemandRequest
+	supported       bool
+	added           []reteTerminalTokenDelta
+	removed         []reteTerminalTokenDelta
+	updated         []reteTerminalTokenUpdate
+	demands         []backchainDemandRequest
+	resolvedDemands []backchainDemandRequest
 }
 
 type backchainDemandRequest struct {
-	templateKey TemplateKey
-	slots       []factSlot
+	templateKey  TemplateKey
+	slots        []factSlot
+	supportFacts []backchainDemandSupportFact
+}
+
+type backchainDemandSupportFact struct {
+	id      FactID
+	version FactVersion
 }
 
 type reteTerminalTokenDelta struct {

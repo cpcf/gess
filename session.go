@@ -116,25 +116,28 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextFactSequence       uint64
-	nextRecency            Recency
-	nextRunSequence        uint64
-	facts                  []workingFact
-	factsByID              map[FactID]int
-	factsByDuplicate       duplicateIndexes
-	factsByTemplate        map[TemplateKey][]FactID
-	factsByName            map[string][]FactID
-	factFieldEqualIndexes  map[factFieldEqualKey][]FactSnapshot
-	factTargetIndexesDirty bool
-	insertionOrder         []FactID
-	slotStorage            []factSlot
-	resetWorkspace         factWorkspace
-	resetFactsScratch      []FactSnapshot
-	logicalSupportEdges    map[SupportID]logicalSupportEdgeRecord
-	logicalSupportBySource map[logicalSupportSourceKey]map[SupportID]struct{}
-	logicalSupportByFact   map[FactID]map[SupportID]struct{}
-	logicalSupportCounters LogicalSupportCounters
-	nextEventSequence      uint64
+	nextFactSequence        uint64
+	nextRecency             Recency
+	nextRunSequence         uint64
+	facts                   []workingFact
+	factsByID               map[FactID]int
+	factsByDuplicate        duplicateIndexes
+	factsByTemplate         map[TemplateKey][]FactID
+	factsByName             map[string][]FactID
+	factFieldEqualIndexes   map[factFieldEqualKey][]FactSnapshot
+	factTargetIndexesDirty  bool
+	insertionOrder          []FactID
+	slotStorage             []factSlot
+	resetWorkspace          factWorkspace
+	resetFactsScratch       []FactSnapshot
+	logicalSupportEdges     map[SupportID]logicalSupportEdgeRecord
+	logicalSupportBySource  map[logicalSupportSourceKey]map[SupportID]struct{}
+	logicalSupportByFact    map[FactID]map[SupportID]struct{}
+	logicalSupportCounters  LogicalSupportCounters
+	backchainDemandSupports map[string]backchainDemandSupportRecord
+	backchainDemandByFact   map[FactID]map[string]struct{}
+	backchainDemandByDemand map[FactID]map[string]struct{}
+	nextEventSequence       uint64
 }
 
 type queuedMutation struct {
@@ -1183,6 +1186,16 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
 			span.finish()
@@ -1298,6 +1311,16 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		s.restoreReteAfterPropagationFailure()
 		return nil, false, agendaDelta, err
 	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return nil, false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
 			span.finish()
@@ -1344,7 +1367,9 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		if err != nil {
 			return combined, err
 		}
+		fact.supportState = FactSupportLogical
 		if !inserted {
+			s.addBackchainDemandSupport(fact, demand)
 			continue
 		}
 		var span *propagationCounterSpan
@@ -1359,10 +1384,34 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		if err != nil {
 			return combined, err
 		}
+		next = normalizeBackchainDemandNoopDelta(next)
+		s.addBackchainDemandSupport(fact, demand)
 		if len(next.demands) > 0 {
 			queue = append(queue, next.demands...)
 		}
 		combined = mergeReteAgendaDelta(combined, next)
+	}
+	for _, resolved := range combined.resolvedDemands {
+		resolvedDelta, err := s.removeBackchainDemandSupportForRequest(ctx, resolved, origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, resolvedDelta)
+	}
+	return combined, nil
+}
+
+func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || len(resolved) == 0 {
+		return combined, nil
+	}
+	for _, request := range resolved {
+		delta, err := s.removeBackchainDemandSupportForRequest(ctx, request, origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, delta)
 	}
 	return combined, nil
 }
@@ -1517,6 +1566,23 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	result, agendaDelta, err := s.removeFactImmediate(ctx, id, origin, false)
 	if err != nil {
 		return result, agendaDelta, err
+	}
+	if demandDelta, err := s.removeBackchainDemandSupportsForFact(ctx, id, origin); err != nil {
+		return result, agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+		return result, agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
+	demandState := s.activeFactWorkspace()
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, agendaDelta.demands, origin); err != nil {
+		return result, agendaDelta, err
+	} else {
+		s.commitFactWorkspace(demandState)
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
 	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
@@ -1763,6 +1829,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.agendaDirty = false
 	s.resetFocusStack()
 	s.clearLogicalSupports()
+	s.clearBackchainDemandSupports()
 	s.swapFactWorkspace(next)
 	s.generation = next.generation
 	s.rete = rete
@@ -2645,6 +2712,23 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	}
 	s.commitFactWorkspace(state)
+	if demandDelta, err := s.removeBackchainDemandSupportsForFactVersion(ctx, before.ID(), before.Version(), origin); err != nil {
+		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
+	demandState := s.activeFactWorkspace()
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, agendaDelta.demands, origin); err != nil {
+		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
+	} else {
+		s.commitFactWorkspace(demandState)
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
 		sourceGeneration: after.Generation(),

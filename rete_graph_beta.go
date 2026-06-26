@@ -3393,6 +3393,8 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 				continue
 			}
 			matched = true
+			m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, token, delta)
+			m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, rightRow.token, delta)
 			output := m.appendTokenRows(token, rightRow.token, span)
 			if output.isZero() {
 				continue
@@ -3432,6 +3434,8 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 				continue
 			}
 			matched = true
+			m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, leftRow.token, delta)
+			m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, token, delta)
 			output := m.appendTokenRows(leftRow.token, token, span)
 			if output.isZero() {
 				continue
@@ -3467,12 +3471,33 @@ func (m *reteGraphBetaMemory) appendBackchainDemandRequests(node *reteGraphBetaN
 	}
 }
 
+func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBetaNode, side reteGraphBetaInputSide, context tokenRef, delta *reteAgendaDelta) {
+	if m == nil || node == nil || delta == nil || context.isZero() || len(node.backchainDemands) == 0 {
+		return
+	}
+	for _, plan := range node.backchainDemands {
+		if plan.side != side {
+			continue
+		}
+		request, ok := m.backchainDemandRequest(plan, context)
+		if !ok {
+			delta.supported = false
+			continue
+		}
+		delta.resolvedDemands = append(delta.resolvedDemands, request)
+	}
+}
+
 func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandRequest, bool) {
 	if m == nil || m.revision == nil || plan.templateKey == "" {
 		return backchainDemandRequest{}, false
 	}
 	template, ok := m.revision.templateByKey(plan.templateKey)
 	if !ok || !template.backchainDemand || !template.closed {
+		return backchainDemandRequest{}, false
+	}
+	supportFacts, ok := backchainDemandSupportFactsForToken(context)
+	if !ok {
 		return backchainDemandRequest{}, false
 	}
 	slots := make([]factSlot, len(template.fields))
@@ -3556,9 +3581,43 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 		}
 	}
 	return backchainDemandRequest{
-		templateKey: plan.templateKey,
-		slots:       slots,
+		templateKey:  plan.templateKey,
+		slots:        slots,
+		supportFacts: supportFacts,
 	}, true
+}
+
+func backchainDemandSupportFactsForToken(token tokenRef) ([]backchainDemandSupportFact, bool) {
+	ids, idsOK := token.factIDs()
+	versions, versionsOK := token.factVersions()
+	if idsOK && versionsOK && len(ids) > 0 && len(ids) == len(versions) {
+		out := make([]backchainDemandSupportFact, 0, len(ids))
+		for i, id := range ids {
+			if id.IsZero() {
+				continue
+			}
+			out = append(out, backchainDemandSupportFact{
+				id:      id,
+				version: versions[i],
+			})
+		}
+		return out, len(out) > 0
+	}
+	matches, ok := tokenConditionMatches(token)
+	if !ok || len(matches) == 0 {
+		return nil, false
+	}
+	out := make([]backchainDemandSupportFact, 0, len(matches))
+	for _, match := range matches {
+		if match.hasValue || match.fact.ID().IsZero() {
+			continue
+		}
+		out = append(out, backchainDemandSupportFact{
+			id:      match.fact.ID(),
+			version: match.fact.Version(),
+		})
+	}
+	return out, len(out) > 0
 }
 
 func (m *reteGraphBetaMemory) insertFilterBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
@@ -3730,6 +3789,11 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 				continue
 			}
 			m.propagateRemoveFromStage(source, output, counters, delta)
+			if ok, supported := m.rightTokenHasLeftMatch(node, nodeMemory, joinKey, rightRow.token); !supported {
+				delta.supported = false
+			} else if !ok {
+				m.appendBackchainDemandRequests(node, reteGraphBetaInputLeft, rightRow.token, delta)
+			}
 		}
 	case reteGraphBetaInputRight:
 		currentMatch, ok := tokenLastMatch(token)
@@ -3755,10 +3819,67 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 				continue
 			}
 			m.propagateRemoveFromStage(source, output, counters, delta)
+			if ok, supported := m.leftTokenHasRightMatch(node, nodeMemory, joinKey, leftRow.token); !supported {
+				delta.supported = false
+			} else if !ok {
+				m.appendBackchainDemandRequests(node, reteGraphBetaInputRight, leftRow.token, delta)
+			}
 		}
 	default:
 		delta.supported = false
 	}
+}
+
+func (m *reteGraphBetaMemory) rightTokenHasLeftMatch(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, right tokenRef) (bool, bool) {
+	if m == nil || node == nil || nodeMemory == nil || right.isZero() {
+		return false, false
+	}
+	rightMatch, ok := tokenFactMatchForBindingSlot(right, node.entry.bindingSlot)
+	if !ok {
+		return false, false
+	}
+	bucket := nodeMemory.left.bucketForKey(joinKey)
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
+		leftRow := nodeMemory.left.row(rowID)
+		if leftRow == nil || leftRow.token.isZero() {
+			continue
+		}
+		ok, err := m.residualJoinsMatch(node, rightMatch.fact, leftRow.token, nil)
+		if err != nil {
+			return false, false
+		}
+		if ok {
+			return true, true
+		}
+	}
+	return false, true
+}
+
+func (m *reteGraphBetaMemory) leftTokenHasRightMatch(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef) (bool, bool) {
+	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
+		return false, false
+	}
+	bucket := nodeMemory.right.bucketForKey(joinKey)
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
+		rightRow := nodeMemory.right.row(rowID)
+		if rightRow == nil || rightRow.token.isZero() {
+			continue
+		}
+		rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
+		if !ok {
+			return false, false
+		}
+		ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, nil)
+		if err != nil {
+			return false, false
+		}
+		if ok {
+			return true, true
+		}
+	}
+	return false, true
 }
 
 func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
@@ -4042,9 +4163,12 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 	m.upsertFactSource(after)
 	addedTokens, removedTokens := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
 	return reteAgendaDelta{
-		supported: removed.supported && added.supported,
-		added:     addedTokens,
-		removed:   removedTokens,
+		supported:       removed.supported && added.supported,
+		added:           addedTokens,
+		removed:         removedTokens,
+		updated:         append(removed.updated, added.updated...),
+		demands:         append(removed.demands, added.demands...),
+		resolvedDemands: append(removed.resolvedDemands, added.resolvedDemands...),
 	}, true, nil
 }
 
