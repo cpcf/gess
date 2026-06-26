@@ -1442,8 +1442,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 }
 
 func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mutationOrigin, cascade bool) (RetractResult, reteAgendaDelta, error) {
-	state := s.clonedFactWorkspace()
-	fact, ok := state.workingFactByID(id)
+	fact, ok := s.workingFactByID(id)
 	if !ok {
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
@@ -1456,6 +1455,13 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	factTemplateKey := fact.templateKey
 	factName := fact.name
 
+	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
+	if err != nil {
+		s.restoreReteAfterPropagationFailure()
+		return RetractResult{Status: RetractValidationFailure, Fact: before}, agendaDelta, err
+	}
+
+	state := s.activeFactWorkspace()
 	if !fact.dupIndex.isZero() {
 		state.factsByDuplicate.deleteFact(fact.dupIndex, id)
 	}
@@ -1463,11 +1469,6 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
 	delete(state.factsByID, id)
-	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
-	if err != nil {
-		s.restoreReteAfterPropagationFailure()
-		return RetractResult{Status: RetractValidationFailure, Fact: before}, agendaDelta, err
-	}
 	s.commitFactWorkspace(state)
 	if cascade {
 		s.logicalSupportCounters.LogicalFactsRetracted++
