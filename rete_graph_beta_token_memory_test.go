@@ -27,6 +27,61 @@ func TestTokenHashMemoryStoresNegativeBlockerCount(t *testing.T) {
 	}
 }
 
+func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
+	arena := newTokenArena()
+	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
+	source := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	sourceRow, ok := source.resolve()
+	if !ok {
+		t.Fatal("source token did not resolve")
+	}
+
+	memory := &reteGraphBetaMemory{arena: arena}
+	copied := memory.newTokenRowRefSource(tokenRef{}, source, sourceRow, fact.Recency(), fact.Generation(), nil)
+	copiedRow, ok := copied.resolve()
+	if !ok {
+		t.Fatal("copied token did not resolve")
+	}
+	if copiedRow.matchSource.isZero() {
+		t.Fatal("copied token row did not retain source match handle")
+	}
+	copiedMatch, ok := tokenRefAtSlot(copied, 0)
+	if !ok {
+		t.Fatal("copied token match did not resolve")
+	}
+	if got, want := copiedMatch.fact.ID(), fact.ID(); got != want {
+		t.Fatalf("copied match fact ID = %q, want %q", got, want)
+	}
+
+	after := FactSnapshot{id: fact.ID(), version: 2, recency: 2, generation: 1}
+	refreshed, ok := memory.refreshTokenFactRefInPlace(copied, fact.ID(), newConditionFactRefFromSnapshot(after))
+	if !ok {
+		t.Fatal("refreshTokenFactRefInPlace returned false")
+	}
+	refreshedRow, ok := refreshed.resolve()
+	if !ok {
+		t.Fatal("refreshed token did not resolve")
+	}
+	if !refreshedRow.matchSource.isZero() {
+		t.Fatal("refreshed token row still references source match")
+	}
+	refreshedMatch, ok := tokenRefAtSlot(refreshed, 0)
+	if !ok {
+		t.Fatal("refreshed token match did not resolve")
+	}
+	if got, want := refreshedMatch.fact.Version(), after.Version(); got != want {
+		t.Fatalf("refreshed match version = %d, want %d", got, want)
+	}
+	sourceMatch, ok := tokenRefAtSlot(source, 0)
+	if !ok {
+		t.Fatal("source token match did not resolve")
+	}
+	if got, want := sourceMatch.fact.Version(), fact.Version(); got != want {
+		t.Fatalf("source match version = %d, want %d", got, want)
+	}
+}
+
 func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}

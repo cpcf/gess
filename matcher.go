@@ -186,7 +186,11 @@ func fillTokenRef(rule compiledRule, entries []bindingTupleEntry, factIDs []Fact
 	if err != nil {
 		return entryIndex, pathIndex, err
 	}
-	entry, err := bindingTupleEntryForMatch(rule, row.match)
+	match, ok := row.conditionMatch()
+	if !ok {
+		return entryIndex, pathIndex, fmt.Errorf("%w: stale token for rule %q", ErrMatcher, rule.name)
+	}
+	entry, err := bindingTupleEntryForMatch(rule, match)
 	if err != nil {
 		return entryIndex, pathIndex, err
 	}

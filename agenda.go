@@ -382,15 +382,19 @@ func fillActivationBindingTupleEntriesFromTokenRef(entries []bindingTupleEntry, 
 	if !ok {
 		return index
 	}
+	match, ok := row.conditionMatch()
+	if !ok {
+		return index
+	}
 	entries[index] = bindingTupleEntry{
 		binding:        condition.binding,
 		bindingSlot:    index,
 		conditionOrder: condition.order,
 		conditionID:    condition.id,
-		factID:         row.match.fact.ID(),
-		factVersion:    row.match.fact.Version(),
-		value:          cloneValue(row.match.value),
-		hasValue:       row.match.hasValue,
+		factID:         match.fact.ID(),
+		factVersion:    match.fact.Version(),
+		value:          cloneValue(match.value),
+		hasValue:       match.hasValue,
 	}
 	if includePath {
 		entries[index].conditionPath = cloneIntPath(plan.path)
@@ -1629,7 +1633,11 @@ func (a *agenda) indexActivationTokenFacts(key activationKey, token tokenRef) {
 		return
 	}
 	a.indexActivationTokenFacts(key, token.parent())
-	factID := row.match.fact.ID()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return
+	}
+	factID := match.fact.ID()
 	if tokenRefContainsFactID(token.parent(), factID) {
 		return
 	}
@@ -2170,7 +2178,11 @@ func fillTokenRefFactIDs(factIDs []FactID, index int, token tokenRef) int {
 		return index
 	}
 	index = fillTokenRefFactIDs(factIDs, index, token.parent())
-	factIDs[index] = row.match.fact.ID()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return index
+	}
+	factIDs[index] = match.fact.ID()
 	return index + 1
 }
 
@@ -2183,7 +2195,11 @@ func fillTokenRefFactVersions(factVersions []FactVersion, index int, token token
 		return index
 	}
 	index = fillTokenRefFactVersions(factVersions, index, token.parent())
-	factVersions[index] = row.match.fact.Version()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return index
+	}
+	factVersions[index] = match.fact.Version()
 	return index + 1
 }
 
@@ -2381,7 +2397,11 @@ func terminalTokenFactTuple(rule compiledRule, token tokenRef) ([]FactID, []Fact
 			if !ok {
 				return nil, nil, false
 			}
-			slot := row.match.bindingSlot
+			match, ok := row.conditionMatch()
+			if !ok {
+				return nil, nil, false
+			}
+			slot := match.bindingSlot
 			if slot < 0 {
 				continue
 			}
@@ -2393,8 +2413,8 @@ func terminalTokenFactTuple(rule compiledRule, token tokenRef) ([]FactID, []Fact
 				return nil, nil, false
 			}
 			seen |= mask
-			factIDs[slot] = row.match.fact.ID()
-			factVersions[slot] = row.match.fact.Version()
+			factIDs[slot] = match.fact.ID()
+			factVersions[slot] = match.fact.Version()
 		}
 		wantSeen := ^uint64(0)
 		if n < 64 {
@@ -2413,7 +2433,11 @@ func terminalTokenFactTuple(rule compiledRule, token tokenRef) ([]FactID, []Fact
 		if !ok {
 			return nil, nil, false
 		}
-		slot := row.match.bindingSlot
+		match, ok := row.conditionMatch()
+		if !ok {
+			return nil, nil, false
+		}
+		slot := match.bindingSlot
 		if slot < 0 {
 			continue
 		}
@@ -2422,8 +2446,8 @@ func terminalTokenFactTuple(rule compiledRule, token tokenRef) ([]FactID, []Fact
 		}
 		seen[slot] = true
 		seenCount++
-		factIDs[slot] = row.match.fact.ID()
-		factVersions[slot] = row.match.fact.Version()
+		factIDs[slot] = match.fact.ID()
+		factVersions[slot] = match.fact.Version()
 	}
 	if seenCount != n {
 		return nil, nil, false
@@ -2442,14 +2466,18 @@ func tokenPublicMatchesForRule(rule compiledRule, token tokenRef) ([]conditionMa
 		if !ok {
 			return nil, false
 		}
-		slot := row.match.bindingSlot
+		match, ok := row.conditionMatch()
+		if !ok {
+			return nil, false
+		}
+		slot := match.bindingSlot
 		if slot < 0 {
 			continue
 		}
 		if slot >= len(matches) || seen[slot] {
 			return nil, false
 		}
-		matches[slot] = row.match
+		matches[slot] = match
 		seen[slot] = true
 	}
 	for _, ok := range seen {
@@ -2472,7 +2500,11 @@ func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state 
 	if !ok {
 		return state, count, false
 	}
-	entry, err := bindingTupleEntryForMatch(rule, row.match)
+	match, ok := row.conditionMatch()
+	if !ok {
+		return state, count, false
+	}
+	entry, err := bindingTupleEntryForMatch(rule, match)
 	if err != nil {
 		return state, count, false
 	}
@@ -2547,7 +2579,11 @@ func matchTokenFactsEqualSlicesAt(token tokenRef, factIDs []FactID, factVersions
 	if !ok || next >= len(factIDs) || next >= len(factVersions) {
 		return next, false
 	}
-	if factIDs[next] != row.match.fact.ID() || factVersions[next] != row.match.fact.Version() {
+	match, ok := row.conditionMatch()
+	if !ok {
+		return next, false
+	}
+	if factIDs[next] != match.fact.ID() || factVersions[next] != match.fact.Version() {
 		return next, false
 	}
 	return next + 1, true
@@ -2587,7 +2623,9 @@ func terminalTokenFactVersionsEqualAt(left, right tokenRef) bool {
 	if !terminalTokenFactVersionsEqualAt(left.parent(), right.parent()) {
 		return false
 	}
-	return leftRow.match.fact.ID() == rightRow.match.fact.ID() && leftRow.match.fact.Version() == rightRow.match.fact.Version()
+	leftMatch, leftOK := leftRow.conditionMatch()
+	rightMatch, rightOK := rightRow.conditionMatch()
+	return leftOK && rightOK && leftMatch.fact.ID() == rightMatch.fact.ID() && leftMatch.fact.Version() == rightMatch.fact.Version()
 }
 
 func compareTerminalTokenFacts(left, right tokenRef) int {
@@ -2609,14 +2647,19 @@ func compareTerminalTokenFacts(left, right tokenRef) int {
 	if compare := compareTerminalTokenFacts(left.parent(), right.parent()); compare != 0 {
 		return compare
 	}
-	if leftRow.match.fact.ID() != rightRow.match.fact.ID() {
-		if factIDLess(leftRow.match.fact.ID(), rightRow.match.fact.ID()) {
+	leftMatch, leftOK := leftRow.conditionMatch()
+	rightMatch, rightOK := rightRow.conditionMatch()
+	if !leftOK || !rightOK {
+		return 0
+	}
+	if leftMatch.fact.ID() != rightMatch.fact.ID() {
+		if factIDLess(leftMatch.fact.ID(), rightMatch.fact.ID()) {
 			return -1
 		}
 		return 1
 	}
-	if leftRow.match.fact.Version() != rightRow.match.fact.Version() {
-		if leftRow.match.fact.Version() < rightRow.match.fact.Version() {
+	if leftMatch.fact.Version() != rightMatch.fact.Version() {
+		if leftMatch.fact.Version() < rightMatch.fact.Version() {
 			return -1
 		}
 		return 1

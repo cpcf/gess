@@ -1350,7 +1350,11 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 		if !ok {
 			return
 		}
-		id := row.match.fact.ID()
+		match, ok := row.conditionMatch()
+		if !ok {
+			return
+		}
+		id := match.fact.ID()
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
@@ -1387,7 +1391,11 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 		if !ok {
 			return
 		}
-		id := row.match.fact.ID()
+		match, ok := row.conditionMatch()
+		if !ok {
+			return
+		}
+		id := match.fact.ID()
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
@@ -1425,7 +1433,11 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 		if !ok {
 			return
 		}
-		id := row.match.fact.ID()
+		match, ok := row.conditionMatch()
+		if !ok {
+			return
+		}
+		id := match.fact.ID()
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
@@ -2511,7 +2523,11 @@ func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry binding
 		if !ok {
 			return tokenRef{}
 		}
-		if !row.match.hasValue || row.match.bindingSlot != entry.bindingSlot {
+		retainedMatch, ok := row.conditionMatch()
+		if !ok {
+			return tokenRef{}
+		}
+		if !retainedMatch.hasValue || retainedMatch.bindingSlot != entry.bindingSlot {
 			continue
 		}
 		if len(overflow) != 0 {
@@ -2531,7 +2547,7 @@ func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry binding
 		if !ok {
 			return false
 		}
-		token = m.newTokenRowRef(token, ref, row, row.match, 0, match.fact.Generation(), span)
+		token = m.newTokenRowRefSource(token, ref, row, 0, match.fact.Generation(), span)
 		return !token.isZero()
 	}
 	if len(overflow) != 0 {
@@ -4424,7 +4440,10 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		return false
 	}
 	parentRow, haveParent := parent.resolve()
-	match := row.match
+	match, ok := row.conditionMatch()
+	if !ok {
+		return false
+	}
 	recency := match.fact.Recency()
 	if !match.hasValue && match.fact.ID() == id {
 		match.fact = after
@@ -4432,6 +4451,7 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		row.generation = after.Generation()
 	}
 	row.match = match
+	row.matchSource = tokenParentHandle{}
 	row.refreshFactSpan(token.handle.arena, parentRow, match)
 	if haveParent {
 		row.maxRecency = max(recency, parentRow.maxRecency)
@@ -4519,7 +4539,10 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefCached(token tokenRef, id FactI
 	if !ok {
 		return tokenRef{}, false
 	}
-	match := row.match
+	match, ok := row.conditionMatch()
+	if !ok {
+		return tokenRef{}, false
+	}
 	recency := match.fact.Recency()
 	generation := row.generation
 	if !match.hasValue && match.fact.ID() == id {
@@ -5091,6 +5114,23 @@ func (m *reteGraphBetaMemory) newTokenRowRef(parent tokenRef, source tokenRef, r
 	return m.arena.addCompact(parent, row.entry, match, recency, generation, pathStepLen)
 }
 
+func (m *reteGraphBetaMemory) newTokenRowRefSource(parent tokenRef, source tokenRef, row *tokenRow, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {
+	if m == nil || row == nil {
+		return tokenRef{}
+	}
+	pathStepLen, ok := tokenRowPathStepLen(source, row)
+	if !ok {
+		return tokenRef{}
+	}
+	if span != nil {
+		span.recordTokenCreated()
+	}
+	if m.arena == nil {
+		m.arena = newTokenArenaWithoutFactSpans()
+	}
+	return m.arena.addCompactSource(parent, source, row.entry, recency, generation, pathStepLen)
+}
+
 func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propagationCounterSpan) tokenRef {
 	if m == nil {
 		return tokenRef{}
@@ -5231,7 +5271,7 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 	if !ok {
 		return conditionMatch{}, false
 	}
-	return row.match, true
+	return row.conditionMatch()
 }
 
 func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMatch, bool) {
@@ -5245,8 +5285,12 @@ func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMat
 		if !ok {
 			return conditionMatch{}, false
 		}
-		if !row.match.hasValue {
-			return row.match, true
+		match, ok := row.conditionMatch()
+		if !ok {
+			return conditionMatch{}, false
+		}
+		if !match.hasValue {
+			return match, true
 		}
 	}
 	return conditionMatch{}, false
@@ -5265,10 +5309,14 @@ func (m *reteGraphBetaMemory) appendTokenRows(parent tokenRef, token tokenRef, s
 		return tokenRef{}
 	}
 	recency := Recency(0)
-	if !row.match.hasValue {
-		recency = row.match.fact.Recency()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return tokenRef{}
 	}
-	return m.newTokenRowRef(parent, token, row, row.match, recency, row.generation, span)
+	if !match.hasValue {
+		recency = match.fact.Recency()
+	}
+	return m.newTokenRowRefSource(parent, token, row, recency, row.generation, span)
 }
 
 func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) tokenRef {
@@ -5284,14 +5332,18 @@ func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) to
 		return tokenRef{}
 	}
 	recency := Recency(0)
-	if !row.match.hasValue {
-		recency = row.match.fact.Recency()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return tokenRef{}
+	}
+	if !match.hasValue {
+		recency = match.fact.Recency()
 	}
 	pathStepLen, ok := tokenRowPathStepLen(token, row)
 	if !ok {
 		return tokenRef{}
 	}
-	return arena.addCompact(parent, row.entry, row.match, recency, row.generation, pathStepLen)
+	return arena.addCompactSource(parent, token, row.entry, recency, row.generation, pathStepLen)
 }
 
 func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {
@@ -5312,11 +5364,15 @@ func tokenConditionMatches(token tokenRef) ([]conditionMatch, bool) {
 		if !ok {
 			return nil, false
 		}
-		slot := row.match.bindingSlot
+		match, ok := row.conditionMatch()
+		if !ok {
+			return nil, false
+		}
+		slot := match.bindingSlot
 		if slot < 0 || slot >= len(matches) || seen[slot] {
 			return nil, false
 		}
-		matches[slot] = row.match
+		matches[slot] = match
 		seen[slot] = true
 	}
 	for _, ok := range seen {
@@ -5471,9 +5527,13 @@ func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, righ
 		if !ok {
 			return false, nil
 		}
-		slot := row.match.bindingSlot
+		match, ok := row.conditionMatch()
+		if !ok {
+			return false, nil
+		}
+		slot := match.bindingSlot
 		if slot >= 0 && slot < len(bindings) {
-			bindings[slot] = row.match
+			bindings[slot] = match
 		}
 	}
 	if right.bindingSlot < 0 || right.bindingSlot >= len(bindings) {
@@ -5758,7 +5818,11 @@ func (m tokenHashMemory) factIndexKeyCount() int {
 			if !ok {
 				break
 			}
-			id := tokenRow.match.fact.ID()
+			match, ok := tokenRow.conditionMatch()
+			if !ok {
+				break
+			}
+			id := match.fact.ID()
 			if id.IsZero() || current.parent().containsFact(id) {
 				continue
 			}
