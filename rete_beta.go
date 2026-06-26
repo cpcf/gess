@@ -153,6 +153,7 @@ func (a *tokenArena) addCompact(parent tokenRef, entry tokenRowEntry, match cond
 	a.chunks[chunkIndex] = chunk
 	row := &a.chunks[chunkIndex][len(chunk)-1]
 	row.slotGeneration = a.nextGeneration
+	match = tokenStoredConditionMatch(entry, match)
 	row.match = match
 	row.generation = generation
 	row.factSpanStart = -1
@@ -185,6 +186,12 @@ func (a *tokenArena) addCompact(parent tokenRef, entry tokenRowEntry, match cond
 	a.count++
 	handle := tokenHandle{arena: a, row: row, generation: row.slotGeneration}
 	return tokenRef{handle: handle}
+}
+
+func tokenStoredConditionMatch(entry tokenRowEntry, match conditionMatch) conditionMatch {
+	match.conditionID = ""
+	match.bindingSlot = entry.bindingSlot
+	return match
 }
 
 func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenRowEntry {

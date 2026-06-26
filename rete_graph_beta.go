@@ -2511,7 +2511,7 @@ func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry binding
 		if !ok {
 			return tokenRef{}
 		}
-		if !row.match.hasValue || row.match.conditionID != entry.conditionID {
+		if !row.match.hasValue || row.match.bindingSlot != entry.bindingSlot {
 			continue
 		}
 		if len(overflow) != 0 {
