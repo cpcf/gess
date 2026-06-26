@@ -259,6 +259,261 @@ func TestTemplateStableKeysAndCompatibilityMetadata(t *testing.T) {
 	}
 }
 
+func TestBackchainReactiveTemplateGeneratesDemandTemplateMetadata(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask"})
+	if err := workspace.AddTemplate(TemplateSpec{
+		Name:              "answer",
+		Module:            "ask",
+		Key:               "ask.answer:v1",
+		CompatibilityKey:  "ask.answer:v1",
+		BackchainReactive: true,
+		Fields: []FieldSpec{
+			{Name: "question", Kind: ValueString, Required: true},
+			{Name: "value", Kind: ValueInt, Required: true},
+		},
+	}); err != nil {
+		t.Fatalf("AddTemplate(answer): %v", err)
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	answer, ok := revision.Template("answer")
+	if !ok {
+		t.Fatal("compiled revision missing answer template")
+	}
+	if !answer.BackchainReactive() {
+		t.Fatal("answer should be backchain-reactive")
+	}
+	demandKey, ok := answer.BackchainDemandTemplateKey()
+	if !ok || demandKey != "need-ask.answer:v1" {
+		t.Fatalf("answer demand key = (%q, %t), want need-ask.answer:v1", demandKey, ok)
+	}
+
+	demand, ok := revision.Template("need-answer")
+	if !ok {
+		t.Fatal("compiled revision missing need-answer template")
+	}
+	if demand.Module() != "ask" {
+		t.Fatalf("demand module = %q, want ask", demand.Module())
+	}
+	if !demand.IsBackchainDemandTemplate() {
+		t.Fatal("need-answer should inspect as a backchain demand template")
+	}
+	sourceKey, ok := demand.BackchainSourceTemplateKey()
+	if !ok || sourceKey != answer.Key() {
+		t.Fatalf("need-answer source key = (%q, %t), want %q", sourceKey, ok, answer.Key())
+	}
+	if demand.BackchainReactive() {
+		t.Fatal("generated demand template should not itself be backchain-reactive")
+	}
+	if got := demand.Key(); got != demandKey {
+		t.Fatalf("need-answer key = %q, want %q", got, demandKey)
+	}
+
+	fields := demand.Fields()
+	if len(fields) != 2 {
+		t.Fatalf("need-answer field count = %d, want 2", len(fields))
+	}
+	for _, field := range fields {
+		if field.Kind != ValueAny || field.Required {
+			t.Fatalf("demand field %q = kind %q required %t, want any optional", field.Name, field.Kind, field.Required)
+		}
+		if !field.HasDefault {
+			t.Fatalf("demand field %q missing null default", field.Name)
+		}
+		defaultValue, ok := field.Default.(Value)
+		if !ok || defaultValue.Kind() != ValueNull {
+			t.Fatalf("demand field %q default = %#v, want null Value", field.Name, field.Default)
+		}
+	}
+
+	byKey, ok := revision.TemplateByKey(demandKey)
+	if !ok || byKey.Name() != "need-answer" {
+		t.Fatalf("TemplateByKey(%q) = (%q, %t), want need-answer", demandKey, byKey.Name(), ok)
+	}
+
+	session := mustSession(t, revision, "backchain-demand-public-assert-session")
+	_, err = session.AssertTemplate(context.Background(), demandKey, nil)
+	if err == nil {
+		t.Fatal("public AssertTemplate succeeded for engine-owned demand template")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("errors.Is(err, ErrValidation) = false for %v", err)
+	}
+
+	_, err = NewSession(revision, WithInitialFacts(SessionInitialFact{TemplateKey: demandKey}))
+	if err == nil {
+		t.Fatal("NewSession accepted engine-owned demand template as an initial fact")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("errors.Is(initial err, ErrValidation) = false for %v", err)
+	}
+}
+
+func TestBackchainReactiveTemplateChangesRulesetID(t *testing.T) {
+	base := mustCompile(t, TemplateSpec{Name: "answer"})
+	explicitFalse := mustCompile(t, TemplateSpec{Name: "answer", BackchainReactive: false})
+	reactive := mustCompile(t, TemplateSpec{Name: "answer", BackchainReactive: true})
+	if base.ID() != explicitFalse.ID() {
+		t.Fatalf("explicit false backchain metadata changed ruleset ID: %q vs %q", base.ID(), explicitFalse.ID())
+	}
+	if base.ID() == reactive.ID() {
+		t.Fatalf("ruleset ID did not change after backchain metadata was enabled: %q", base.ID())
+	}
+}
+
+func TestBackchainDemandTemplateCollisionValidation(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{Name: "answer", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(answer): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{Name: "need-answer"}); err != nil {
+		t.Fatalf("AddTemplate(need-answer): %v", err)
+	}
+	_, err := workspace.Compile(context.Background())
+	if err == nil {
+		t.Fatal("Compile succeeded with colliding generated demand template")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("errors.Is(err, ErrValidation) = false for %v", err)
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("errors.As(err, *ValidationError) = false for %T", err)
+	}
+	if validation.TemplateName != "need-answer" {
+		t.Fatalf("validation template = %q, want need-answer", validation.TemplateName)
+	}
+
+	workspace = NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{Name: "answer", Key: "answer:v1", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(answer keyed): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{Name: "other", Key: "need-answer:v1"}); err != nil {
+		t.Fatalf("AddTemplate(other): %v", err)
+	}
+	_, err = workspace.Compile(context.Background())
+	if err == nil {
+		t.Fatal("Compile succeeded with colliding generated demand template key")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("errors.Is(key collision err, ErrValidation) = false for %v", err)
+	}
+}
+
+func TestBackchainReactiveRejectsSpecialConditionNames(t *testing.T) {
+	for _, name := range []string{"and", "or", "not", "exists", "forall", "logical", "explicit", "accumulate", "test"} {
+		t.Run(name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			if err := workspace.AddTemplate(TemplateSpec{Name: name, BackchainReactive: true}); err != nil {
+				t.Fatalf("AddTemplate(%s): %v", name, err)
+			}
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded with backchain-reactive special condition name")
+			}
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("errors.As(err, *ValidationError) = false for %T", err)
+			}
+			if validation.Reason != "cannot backchain on special condition" {
+				t.Fatalf("validation reason = %q, want special condition rejection", validation.Reason)
+			}
+		})
+	}
+}
+
+func TestBackchainReactiveRejectsDemandTemplateSourceNames(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{Name: "need-answer", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(need-answer): %v", err)
+	}
+	_, err := workspace.Compile(context.Background())
+	if err == nil {
+		t.Fatal("Compile succeeded with backchain-reactive demand template source")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("errors.As(err, *ValidationError) = false for %T", err)
+	}
+	if validation.Reason != "backchain-reactive template cannot be a demand template" {
+		t.Fatalf("validation reason = %q, want demand source rejection", validation.Reason)
+	}
+}
+
+func TestBackchainDemandTemplateRejectsPublicGeneratedFactActions(t *testing.T) {
+	workspace := NewWorkspace()
+	trigger := mustAddTemplate(t, workspace, TemplateSpec{Name: "trigger"})
+	if err := workspace.AddTemplate(TemplateSpec{Name: "answer", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(answer): %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	answer, ok := revision.Template("answer")
+	if !ok {
+		t.Fatal("compiled revision missing answer template")
+	}
+	demandKey, ok := answer.BackchainDemandTemplateKey()
+	if !ok {
+		t.Fatal("answer missing demand template key")
+	}
+
+	workspace = NewWorkspace()
+	if err := workspace.AddTemplate(TemplateSpec{Name: "trigger"}); err != nil {
+		t.Fatalf("AddTemplate(trigger): %v", err)
+	}
+	if err := workspace.AddTemplate(TemplateSpec{Name: "answer", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(answer): %v", err)
+	}
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "demand-via-context",
+		Fn: func(ctx ActionContext) error {
+			return ctx.AssertTemplateValues(demandKey, NullValue(), NullValue())
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "try-context-demand",
+		Conditions: []RuleConditionSpec{{Binding: "trigger", Target: TemplateKeyFact(trigger.Key())}},
+		Actions:    []RuleActionSpec{{Name: "demand-via-context"}},
+	})
+	revision = mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "backchain-demand-context-action-session")
+	if _, err := session.AssertTemplate(context.Background(), trigger.Key(), nil); err != nil {
+		t.Fatalf("AssertTemplate(trigger): %v", err)
+	}
+	if _, err := session.Run(context.Background()); err == nil || !errors.Is(err, ErrValidation) {
+		t.Fatalf("Run context action error = %v, want ErrValidation", err)
+	}
+
+	workspace = NewWorkspace()
+	trigger = mustAddTemplate(t, workspace, TemplateSpec{Name: "trigger"})
+	if err := workspace.AddTemplate(TemplateSpec{Name: "answer", BackchainReactive: true}); err != nil {
+		t.Fatalf("AddTemplate(answer): %v", err)
+	}
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "native-demand",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: demandKey,
+			Values:      []ExpressionSpec{ConstExpr{Value: NullValue()}, ConstExpr{Value: NullValue()}},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "try-native-demand",
+		Conditions: []RuleConditionSpec{{Binding: "trigger", Target: TemplateKeyFact(trigger.Key())}},
+		Actions:    []RuleActionSpec{{Name: "native-demand"}},
+	})
+	_, err := workspace.Compile(context.Background())
+	if err == nil {
+		t.Fatal("Compile succeeded with native action targeting engine-owned demand template")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("errors.Is(native action err, ErrValidation) = false for %v", err)
+	}
+}
+
 func TestTemplateCompilationNormalizesSemanticOrdering(t *testing.T) {
 	revisionA := mustCompile(t, TemplateSpec{
 		Name: "device",

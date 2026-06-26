@@ -308,6 +308,11 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		compiledTemplates = append(compiledTemplates, template)
 	}
+	demandTemplates, err := compileBackchainDemandTemplates(compiledTemplates)
+	if err != nil {
+		return nil, err
+	}
+	compiledTemplates = append(compiledTemplates, demandTemplates...)
 
 	sort.Slice(compiledTemplates, func(i, j int) bool {
 		return compiledTemplates[i].name < compiledTemplates[j].name
@@ -970,6 +975,9 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 
 	for _, template := range templates {
 		sum.Write(fmt.Appendf(nil, "template:%s:%s:%s:%s:%d:%t\n", template.module, template.name, template.key, template.compatibilityKey, template.duplicatePolicy, template.closed))
+		if template.backchainReactive || template.backchainDemandKey != "" || template.backchainDemand || template.backchainSourceKey != "" {
+			sum.Write(fmt.Appendf(nil, "backchain:%t:%s:%t:%s\n", template.backchainReactive, template.backchainDemandKey, template.backchainDemand, template.backchainSourceKey))
+		}
 		sum.Write(fmt.Appendf(nil, "dup:%d:", template.duplicatePolicy))
 		sum.Write(fmt.Appendf(nil, "%d\n", len(template.duplicateKeyNames)))
 		for _, fieldName := range template.duplicateKeyNames {

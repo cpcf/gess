@@ -920,6 +920,16 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 			Reason:         "template values require a fixed template",
 		}
 	}
+	if err := validatePublicTemplateMutation(template); err != nil {
+		return compiledRuleAction{}, &ValidationError{
+			RuleName:       ruleName,
+			ActionIndex:    actionIndex,
+			HasActionIndex: true,
+			TemplateName:   template.Name(),
+			Reason:         "backchain demand template is engine-owned",
+			Err:            err,
+		}
+	}
 	if len(spec.Values) > len(template.fields) {
 		return compiledRuleAction{}, &ValidationError{
 			RuleName:       ruleName,

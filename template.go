@@ -40,6 +40,7 @@ type TemplateSpec struct {
 	Fields            []FieldSpec
 	DuplicatePolicy   DuplicatePolicy
 	DuplicateKeyNames []string
+	BackchainReactive bool
 }
 
 type Template struct {
@@ -57,6 +58,10 @@ type Template struct {
 	duplicateKeyNames  []string
 	duplicateKeySlots  []int
 	duplicateIndexMode duplicateIndexKind
+	backchainReactive  bool
+	backchainDemandKey TemplateKey
+	backchainDemand    bool
+	backchainSourceKey TemplateKey
 	closed             bool
 }
 
@@ -126,6 +131,28 @@ func (t Template) DuplicateKeys() []string {
 	out := make([]string, len(t.duplicateKeyNames))
 	copy(out, t.duplicateKeyNames)
 	return out
+}
+
+func (t Template) BackchainReactive() bool {
+	return t.backchainReactive
+}
+
+func (t Template) BackchainDemandTemplateKey() (TemplateKey, bool) {
+	if !t.backchainReactive || t.backchainDemandKey == "" {
+		return "", false
+	}
+	return t.backchainDemandKey, true
+}
+
+func (t Template) IsBackchainDemandTemplate() bool {
+	return t.backchainDemand
+}
+
+func (t Template) BackchainSourceTemplateKey() (TemplateKey, bool) {
+	if !t.backchainDemand || t.backchainSourceKey == "" {
+		return "", false
+	}
+	return t.backchainSourceKey, true
 }
 
 func (t Template) Fields() []FieldSpec {
@@ -431,6 +458,7 @@ func (t Template) spec() TemplateSpec {
 		Fields:            t.Fields(),
 		DuplicatePolicy:   t.duplicatePolicy,
 		DuplicateKeyNames: t.DuplicateKeys(),
+		BackchainReactive: t.backchainReactive,
 	}
 }
 
@@ -682,8 +710,100 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		duplicateKeyNames:  duplicateKeyNames,
 		duplicateKeySlots:  duplicateKeySlots,
 		duplicateIndexMode: duplicateIndexMode,
+		backchainReactive:  spec.BackchainReactive,
 		closed:             closed,
 	}, nil
+}
+
+func compileBackchainDemandTemplates(templates []Template) ([]Template, error) {
+	if len(templates) == 0 {
+		return nil, nil
+	}
+
+	names := make(map[string]Template, len(templates))
+	keys := make(map[TemplateKey]Template, len(templates))
+	for _, template := range templates {
+		names[template.name] = template
+		keys[template.key] = template
+	}
+
+	demands := make([]Template, 0)
+	for i := range templates {
+		template := &templates[i]
+		if !template.backchainReactive {
+			continue
+		}
+		if strings.HasPrefix(template.name, "need-") {
+			return nil, &ValidationError{
+				TemplateName: template.name,
+				Reason:       "backchain-reactive template cannot be a demand template",
+			}
+		}
+		if isSpecialBackchainConditionName(template.name) {
+			return nil, &ValidationError{
+				TemplateName: template.name,
+				Reason:       "cannot backchain on special condition",
+			}
+		}
+
+		demandName := "need-" + template.name
+		if existing, exists := names[demandName]; exists {
+			return nil, &ValidationError{
+				TemplateName: demandName,
+				Reason:       fmt.Sprintf("backchain demand template collides with template %q", existing.name),
+			}
+		}
+		demandKey := TemplateKey("need-" + string(template.key))
+		if existing, exists := keys[demandKey]; exists {
+			return nil, &ValidationError{
+				TemplateName: demandName,
+				Reason:       fmt.Sprintf("backchain demand template key collides with template %q", existing.name),
+			}
+		}
+
+		demand, err := compileTemplateSpec(backchainDemandTemplateSpec(*template, demandName, demandKey))
+		if err != nil {
+			return nil, err
+		}
+		demand.backchainDemand = true
+		demand.backchainSourceKey = template.key
+		template.backchainDemandKey = demand.key
+
+		names[demand.name] = demand
+		keys[demand.key] = demand
+		demands = append(demands, demand)
+	}
+
+	return demands, nil
+}
+
+func backchainDemandTemplateSpec(source Template, name string, key TemplateKey) TemplateSpec {
+	fields := make([]FieldSpec, len(source.fields))
+	for i, field := range source.fields {
+		fields[i] = FieldSpec{
+			Name:       field.Name,
+			Kind:       ValueAny,
+			Default:    NullValue(),
+			HasDefault: true,
+		}
+	}
+	return TemplateSpec{
+		Name:             name,
+		Module:           source.module,
+		Key:              key,
+		CompatibilityKey: key,
+		Fields:           fields,
+		DuplicatePolicy:  DuplicateStructural,
+	}
+}
+
+func isSpecialBackchainConditionName(name string) bool {
+	switch name {
+	case "and", "or", "not", "exists", "forall", "logical", "explicit", "accumulate", "test":
+		return true
+	default:
+		return false
+	}
 }
 
 func duplicateIndexKeyMode(closed bool, policy DuplicatePolicy, fields []FieldSpec, duplicateKeyNames []string) duplicateIndexKind {

@@ -29,6 +29,16 @@ type SessionInitialFact struct {
 	Fields      Fields
 }
 
+func validatePublicTemplateMutation(template Template) error {
+	if !template.backchainDemand {
+		return nil
+	}
+	return &ValidationError{
+		TemplateName: template.name,
+		Reason:       "backchain demand template is engine-owned",
+	}
+}
+
 func WithSessionID(id SessionID) SessionOption {
 	return func(cfg *sessionConfig) {
 		cfg.id = id
@@ -1228,6 +1238,9 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 			TemplateName: string(templateKey),
 			Reason:       "unknown template key",
 		}
+	}
+	if err := validatePublicTemplateMutation(template); err != nil {
+		return nil, Template{}, false, reteAgendaDelta{}, err
 	}
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
@@ -3755,6 +3768,9 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 
 	if templateExists {
+		if err := validatePublicTemplateMutation(template); err != nil {
+			return nil, "", false, err
+		}
 		name = template.Name()
 	}
 
@@ -3900,6 +3916,10 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 }
 
 func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+	if err := validatePublicTemplateMutation(template); err != nil {
+		w.rollbackGeneratedFactSlots(slotMark)
+		return nil, "", false, err
+	}
 	name := template.Name()
 	templateKey := template.Key()
 	var duplicateIndex duplicateIndexKey
@@ -4046,6 +4066,9 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		}
 	}
 	if templateExists {
+		if err := validatePublicTemplateMutation(template); err != nil {
+			return compiledSessionInitialFact{}, err
+		}
 		name = template.Name()
 	}
 
