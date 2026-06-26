@@ -24,9 +24,18 @@ func (r tokenRef) isZero() bool {
 	return r.handle.isZero()
 }
 
+type tokenParentHandle struct {
+	row        *tokenRow
+	generation uint64
+}
+
+func (h tokenParentHandle) isZero() bool {
+	return h.row == nil || h.generation == 0
+}
+
 type tokenRow struct {
 	slotGeneration   uint64
-	parent           tokenHandle
+	parent           tokenParentHandle
 	entry            bindingTupleEntry
 	match            conditionMatch
 	size             int
@@ -137,7 +146,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	a.nextGeneration++
 
 	if parentRow != nil {
-		row.parent = parent.handle
+		row.parent = tokenParentHandle{row: parent.handle.row, generation: parent.handle.generation}
 		row.size = parentRow.size + 1
 		row.pathLen = parentRow.pathLen + len(entry.conditionPath)
 		row.maxRecency = max(recency, parentRow.maxRecency)
@@ -278,7 +287,7 @@ func (r tokenRef) parent() tokenRef {
 	if !ok || row.parent.isZero() {
 		return tokenRef{}
 	}
-	return tokenRef{handle: row.parent}
+	return tokenRef{handle: tokenHandle{arena: r.handle.arena, row: row.parent.row, generation: row.parent.generation}}
 }
 
 func (r tokenRef) size() int {
