@@ -2233,17 +2233,21 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	if len(rule.conditionPlans) == 0 {
 		return fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
 	}
+	row, ok := token.resolve()
+	if !ok {
+		return fmt.Errorf("%w: stale token for rule %q", ErrMatcher, rule.name)
+	}
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
 	dst.ruleID = rule.id
 	dst.ruleRevisionID = rule.revisionID
-	dst.generation = tokenRefGeneration(token)
+	dst.generation = row.generation
 	dst.identity = identity
 	dst.token = token
 	dst.salience = rule.salience
-	dst.maxRecency = token.maxRecency()
-	dst.aggregateRecency = token.aggregateRecency()
+	dst.maxRecency = row.maxRecency
+	dst.aggregateRecency = row.aggregateRecency
 	dst.declarationOrder = rule.declarationOrder
 	dst.status = activationStatusPending
 	return nil
@@ -2277,7 +2281,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 	}
 	var factIDs [8]FactID
 	var factVersions [8]FactVersion
-	var valueEntries [8]bindingTupleEntry
+	var valueEntries [8]tokenRowEntry
 	var seen uint8
 	var values uint8
 	for current := token; !current.isZero(); current = current.parent() {
@@ -2314,7 +2318,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 	for i := 0; i < len(rule.conditions); i++ {
 		mask := uint8(1 << uint(i))
 		if values&mask != 0 {
-			state = candidateIdentityHashStep(state, valueEntries[i])
+			state = candidateIdentityHashTokenEntryStep(state, valueEntries[i])
 		} else {
 			state = candidateIdentityHashFactStep(state, factIDs[i], factVersions[i])
 		}

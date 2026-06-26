@@ -2531,7 +2531,7 @@ func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry binding
 		if !ok {
 			return false
 		}
-		token = m.newTokenRef(token, row.entry, row.match, 0, match.fact.Generation(), span)
+		token = m.newTokenRowRef(token, ref, row, row.match, 0, match.fact.Generation(), span)
 		return !token.isZero()
 	}
 	if len(overflow) != 0 {
@@ -4453,7 +4453,7 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		identityEntry.factVersion = match.fact.Version()
 	}
 	row.entry = identityEntry
-	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
+	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, identityEntry)
 	if cache != nil {
 		cache[token.handle] = token
 	}
@@ -4527,7 +4527,7 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefCached(token tokenRef, id FactI
 		recency = after.Recency()
 		generation = after.Generation()
 	}
-	next := m.newTokenRef(parent, row.entry, match, recency, generation, nil)
+	next := m.newTokenRowRef(parent, token, row, match, recency, generation, nil)
 	if next.isZero() {
 		return tokenRef{}, false
 	}
@@ -5074,6 +5074,23 @@ func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEnt
 	return m.arena.add(parent, entry, match, recency, generation)
 }
 
+func (m *reteGraphBetaMemory) newTokenRowRef(parent tokenRef, source tokenRef, row *tokenRow, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {
+	if m == nil || row == nil {
+		return tokenRef{}
+	}
+	pathStepLen, ok := tokenRowPathStepLen(source, row)
+	if !ok {
+		return tokenRef{}
+	}
+	if span != nil {
+		span.recordTokenCreated()
+	}
+	if m.arena == nil {
+		m.arena = newTokenArenaWithoutFactSpans()
+	}
+	return m.arena.addCompact(parent, row.entry, match, recency, generation, pathStepLen)
+}
+
 func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propagationCounterSpan) tokenRef {
 	if m == nil {
 		return tokenRef{}
@@ -5251,7 +5268,7 @@ func (m *reteGraphBetaMemory) appendTokenRows(parent tokenRef, token tokenRef, s
 	if !row.match.hasValue {
 		recency = row.match.fact.Recency()
 	}
-	return m.newTokenRef(parent, row.entry, row.match, recency, row.generation, span)
+	return m.newTokenRowRef(parent, token, row, row.match, recency, row.generation, span)
 }
 
 func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) tokenRef {
@@ -5270,7 +5287,11 @@ func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) to
 	if !row.match.hasValue {
 		recency = row.match.fact.Recency()
 	}
-	return arena.add(parent, row.entry, row.match, recency, row.generation)
+	pathStepLen, ok := tokenRowPathStepLen(token, row)
+	if !ok {
+		return tokenRef{}
+	}
+	return arena.addCompact(parent, row.entry, row.match, recency, row.generation, pathStepLen)
 }
 
 func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {

@@ -33,10 +33,19 @@ func (h tokenParentHandle) isZero() bool {
 	return h.row == nil || h.generation == 0
 }
 
+type tokenRowEntry struct {
+	binding     string
+	bindingSlot int
+	factID      FactID
+	factVersion FactVersion
+	value       Value
+	hasValue    bool
+}
+
 type tokenRow struct {
 	slotGeneration   uint64
 	parent           tokenParentHandle
-	entry            bindingTupleEntry
+	entry            tokenRowEntry
 	match            conditionMatch
 	size             int
 	factSpanStart    int
@@ -113,6 +122,10 @@ func (a *tokenArena) reset() {
 }
 
 func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
+	return a.addCompact(parent, tokenRowEntryForMatch(entry, match), match, recency, generation, len(entry.conditionPath))
+}
+
+func (a *tokenArena) addCompact(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
 	if a == nil {
 		return tokenRef{}
 	}
@@ -148,7 +161,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	if parentRow != nil {
 		row.parent = tokenParentHandle{row: parent.handle.row, generation: parent.handle.generation}
 		row.size = parentRow.size + 1
-		row.pathLen = parentRow.pathLen + len(entry.conditionPath)
+		row.pathLen = parentRow.pathLen + pathStepLen
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
 		row.identityState = parentRow.identityState
@@ -157,7 +170,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		}
 	} else {
 		row.size = 1
-		row.pathLen = len(entry.conditionPath)
+		row.pathLen = pathStepLen
 		row.maxRecency = recency
 		row.aggregateRecency = recency
 		row.identityState = candidateIdentityHashStart(generation)
@@ -166,19 +179,53 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 		}
 	}
 	row.factSpanStart = a.appendFactSpan(parentRow, match)
-	identityEntry := entry
-	identityEntry.value = match.value
-	identityEntry.hasValue = match.hasValue
-	if !match.hasValue {
-		identityEntry.factID = match.fact.ID()
-		identityEntry.factVersion = match.fact.Version()
-	}
-	row.entry = identityEntry
-	row.identityState = candidateIdentityHashStep(row.identityState, identityEntry)
+	row.entry = entry
+	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
 
 	a.count++
 	handle := tokenHandle{arena: a, row: row, generation: row.slotGeneration}
 	return tokenRef{handle: handle}
+}
+
+func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenRowEntry {
+	out := tokenRowEntry{
+		bindingSlot: entry.bindingSlot,
+		value:       match.value,
+		hasValue:    match.hasValue,
+	}
+	if match.hasValue {
+		out.binding = entry.binding
+		return out
+	}
+	out.factID = match.fact.ID()
+	out.factVersion = match.fact.Version()
+	return out
+}
+
+func candidateIdentityHashTokenEntryStep(hash uint64, entry tokenRowEntry) uint64 {
+	if entry.hasValue {
+		return candidateIdentityHashValueStep(hash, entry.binding, entry.value)
+	}
+	return candidateIdentityHashFactStep(hash, entry.factID, entry.factVersion)
+}
+
+func tokenRowPathStepLen(token tokenRef, row *tokenRow) (int, bool) {
+	if row == nil {
+		return 0, false
+	}
+	parent := token.parent()
+	if parent.isZero() {
+		return row.pathLen, true
+	}
+	parentRow, ok := parent.resolve()
+	if !ok {
+		return 0, false
+	}
+	stepLen := row.pathLen - parentRow.pathLen
+	if stepLen < 0 {
+		return 0, false
+	}
+	return stepLen, true
 }
 
 func (a *tokenArena) appendFactSpan(parent *tokenRow, match conditionMatch) int {
