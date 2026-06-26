@@ -30,7 +30,6 @@ type reteGraphBetaMemory struct {
 	factTargetIndexesDirty bool
 	factFieldIndexesDirty  bool
 	arena                  *tokenArena
-	queryArena             *tokenArena
 	terminalTokenDeltas    []reteTerminalTokenDelta
 	alphaRouteScratch      []reteGraphAlphaNodeID
 	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
@@ -4679,6 +4678,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		return
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleTerminal := ruleRevisionID != ""
 	identity := m.terminalTokenIdentity(ruleRevisionID, token)
 	branchKey, haveBranchKey := m.terminalBranchKey(terminalID, branchID)
 	if !terminal.rows.insertTerminal(token, identity, branchID) {
@@ -4696,13 +4696,13 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			span.recordTerminalRowInsertedForBranch(branchKey)
 		}
 	}
-	if span != nil && !m.suppressTerminalDeltas {
+	if span != nil && ruleTerminal && !m.suppressTerminalDeltas {
 		span.recordTerminalDeltaEmitted()
 		if haveBranchKey {
 			span.recordTerminalDeltaEmittedForBranch(branchKey)
 		}
 	}
-	if m.suppressTerminalDeltas {
+	if !ruleTerminal || m.suppressTerminalDeltas {
 		return
 	}
 	delta.added = append(delta.added, reteTerminalTokenDelta{
@@ -4721,19 +4721,26 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		return
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleTerminal := ruleRevisionID != ""
 	terminal.rows.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
-		delta.removed = append(delta.removed, reteTerminalTokenDelta{
-			ruleRevisionID: ruleRevisionID,
-			token:          row.token,
-			identity:       row.terminalIdentity,
-		})
+		if ruleTerminal {
+			delta.removed = append(delta.removed, reteTerminalTokenDelta{
+				ruleRevisionID: ruleRevisionID,
+				token:          row.token,
+				identity:       row.terminalIdentity,
+			})
+		}
 		if counters != nil {
-			counters.recordTerminalDeltaRemoved()
 			counters.recordTerminalRowRemoved()
+			if ruleTerminal {
+				counters.recordTerminalDeltaRemoved()
+			}
 			for _, branchID := range row.terminalBranchIDs() {
 				if key, ok := m.terminalBranchKey(terminalID, branchID); ok {
-					counters.recordTerminalDeltaRemovedForBranch(key)
 					counters.recordTerminalRowRemovedForBranch(key)
+					if ruleTerminal {
+						counters.recordTerminalDeltaRemovedForBranch(key)
+					}
 				}
 			}
 		}
@@ -4774,18 +4781,25 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 		return
 	}
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
-	delta.removed = append(delta.removed, reteTerminalTokenDelta{
-		ruleRevisionID: ruleRevisionID,
-		token:          removed.token,
-		identity:       removed.terminalIdentity,
-	})
+	ruleTerminal := ruleRevisionID != ""
+	if ruleTerminal {
+		delta.removed = append(delta.removed, reteTerminalTokenDelta{
+			ruleRevisionID: ruleRevisionID,
+			token:          removed.token,
+			identity:       removed.terminalIdentity,
+		})
+	}
 	if counters != nil {
-		counters.recordTerminalDeltaRemoved()
 		counters.recordTerminalRowRemoved()
-		counters.recordNegativeTerminalRowRemoved()
+		if ruleTerminal {
+			counters.recordTerminalDeltaRemoved()
+			counters.recordNegativeTerminalRowRemoved()
+		}
 		if key, ok := m.terminalBranchKey(terminalID, branchID); ok {
-			counters.recordTerminalDeltaRemovedForBranch(key)
 			counters.recordTerminalRowRemovedForBranch(key)
+			if ruleTerminal {
+				counters.recordTerminalDeltaRemovedForBranch(key)
+			}
 		}
 	}
 }
@@ -4871,57 +4885,23 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
-	if m.queryArena == nil {
-		m.queryArena = newTokenArenaWithoutFactSpans()
-	} else {
-		m.queryArena.reset()
-	}
 	if source.revision == nil {
 		source.revision = m.revision
 	}
-	rowCapacity := m.queryTerminalRowCapacity(terminalIDs)
-	valueRows := query.valueReturnsOnly()
-	collector := reteGraphQueryCollector{
-		ctx:          ctx,
-		query:        query,
-		args:         args,
-		triggerEvent: event,
-		source:       source,
-		terminal:     make(map[reteGraphTerminalNodeID]struct{}, len(terminalIDs)),
-		tokenArena:   m.queryArena,
-		valueRows:    valueRows,
-	}
-	if !valueRows {
-		collector.rowOwner = newQueryRowOwner(source)
-	}
-	if rowCapacity > 0 {
-		collector.rows = make([]QueryRow, 0, min(rowCapacity, 256))
-	}
-	for _, terminalID := range terminalIDs {
-		collector.terminal[terminalID] = struct{}{}
-	}
-	routeIDs := m.snapshotAlphaRouteIDsForFact(trigger)
-	for _, nodeID := range routeIDs {
-		if err := ctx.Err(); err != nil {
-			return nil, true, err
-		}
-		node := m.graph.alphaNode(nodeID)
-		if node == nil || !node.matchesSnapshot(trigger) {
-			continue
-		}
-		match := conditionMatch{
-			conditionID: node.entry.conditionID,
-			bindingSlot: node.entry.bindingSlot,
-			fact:        newConditionFactRefFromSnapshot(trigger),
-		}
-		if err := m.queryPropagateAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, &collector); err != nil {
-			return nil, true, err
-		}
-	}
-	if err := m.queryFlushAggregateBuckets(&collector); err != nil {
+
+	_, _ = m.removeFactInternal(ctx, trigger, nil, false)
+	if _, err := m.insertFactInternal(ctx, trigger, nil, false); err != nil {
 		return nil, true, err
 	}
-	return collector.rows, true, nil
+	defer func() {
+		_, _ = m.removeFactInternal(context.Background(), trigger, nil, false)
+	}()
+
+	rows, err := m.materializeQueryTerminalRows(ctx, query, args, source, terminalIDs, trigger.ID())
+	if err != nil {
+		return nil, true, err
+	}
+	return rows, true, nil
 }
 
 const (
@@ -4946,479 +4926,49 @@ func (m *reteGraphBetaMemory) queryTerminalRowCapacity(terminalIDs []reteGraphTe
 }
 
 type reteGraphQueryCollector struct {
-	ctx          context.Context
-	query        compiledQuery
-	args         map[string]Value
-	triggerEvent reteGraphPropagationEvent
-	source       Snapshot
-	terminal     map[reteGraphTerminalNodeID]struct{}
-	tokenArena   *tokenArena
-	rows         []QueryRow
-	rowItems     []queryRowValue
-	rowValues    []Value
-	rowOwner     *queryRowOwner
-	valueRows    bool
-	aggregates   map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket
+	ctx       context.Context
+	query     compiledQuery
+	args      map[string]Value
+	source    Snapshot
+	rows      []QueryRow
+	rowItems  []queryRowValue
+	rowValues []Value
+	rowOwner  *queryRowOwner
+	valueRows bool
 }
 
-func (m *reteGraphBetaMemory) queryPropagateAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, collector *reteGraphQueryCollector) error {
-	if m == nil || collector == nil {
-		return nil
+func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, query compiledQuery, args map[string]Value, source Snapshot, terminalIDs []reteGraphTerminalNodeID, triggerID FactID) ([]QueryRow, error) {
+	collector := reteGraphQueryCollector{
+		ctx:       ctx,
+		query:     query,
+		args:      args,
+		source:    source,
+		valueRows: query.valueReturnsOnly(),
 	}
-	captures, capturesOK := m.alphaListPatternCaptures(source, match)
-	if !capturesOK {
-		return fmt.Errorf("%w: malformed query list pattern captures", ErrQueryExecution)
+	if !collector.valueRows {
+		collector.rowOwner = newQueryRowOwner(source)
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
-		if _, ok := collector.terminal[terminal.terminalID]; !ok {
+	if capacity := m.queryTerminalRowCapacity(terminalIDs); capacity > 0 {
+		collector.rows = make([]QueryRow, 0, min(capacity, 256))
+	}
+	for _, terminalID := range terminalIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		terminal := m.terminalAt(terminalID)
+		if terminal == nil {
 			continue
 		}
-		entry := terminal.entry
-		if entry.conditionID == "" {
-			entry = sourceEntry
-		}
-		if entry.conditionID == "" {
-			return fmt.Errorf("%w: malformed query alpha terminal", ErrQueryExecution)
-		}
-		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
-		if token.isZero() {
-			return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
-		}
-		if err := m.queryCollectTerminalToken(token, collector); err != nil {
-			return err
-		}
-	}
-	for _, successor := range m.graph.successorsByStage[source] {
-		if err := collector.ctx.Err(); err != nil {
-			return err
-		}
-		node := m.graph.betaNode(successor.betaNodeID)
-		if node == nil {
-			return fmt.Errorf("%w: malformed query beta successor", ErrQueryExecution)
-		}
-		switch successor.side {
-		case reteGraphBetaInputLeft:
-			entry := successor.entry
-			if entry.conditionID == "" {
-				entry = sourceEntry
-			}
-			if entry.conditionID == "" {
-				return fmt.Errorf("%w: malformed query left input", ErrQueryExecution)
-			}
-			token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
-			if token.isZero() {
-				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
-			}
-			if err := m.queryProbeBetaInput(successor.betaNodeID, successor.side, token, node.entry, collector); err != nil {
-				return err
-			}
-		case reteGraphBetaInputRight:
-			edgeMatch := conditionMatch{
-				conditionID: successor.entry.conditionID,
-				bindingSlot: successor.entry.bindingSlot,
-				fact:        match.fact,
-			}
-			token := queryAlphaTokenRef(collector.tokenArena, successor.entry, edgeMatch, captures)
-			if token.isZero() {
-				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
-			}
-			if err := m.queryProbeBetaInput(successor.betaNodeID, successor.side, token, node.entry, collector); err != nil {
-				return err
-			}
-		default:
-			return fmt.Errorf("%w: malformed query beta side", ErrQueryExecution)
-		}
-	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
-		entry := sourceEntry
-		if entry.conditionID == "" {
-			return fmt.Errorf("%w: malformed query aggregate outer", ErrQueryExecution)
-		}
-		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
-		if token.isZero() {
-			return fmt.Errorf("%w: failed to create query aggregate outer token", ErrQueryExecution)
-		}
-		m.queryOpenAggregateBucket(aggregateID, token, collector)
-	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
-		entry := sourceEntry
-		if entry.conditionID == "" {
-			return fmt.Errorf("%w: malformed query aggregate input", ErrQueryExecution)
-		}
-		token := queryAlphaTokenRef(collector.tokenArena, entry, match, captures)
-		if token.isZero() {
-			return fmt.Errorf("%w: failed to create query aggregate input token", ErrQueryExecution)
-		}
-		if err := m.queryInsertAggregateToken(aggregateID, token, collector); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *reteGraphBetaMemory) queryPropagateFromStage(source reteGraphStageRef, token tokenRef, collector *reteGraphQueryCollector) error {
-	if m == nil || collector == nil || token.isZero() {
-		return nil
-	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
-		if _, ok := collector.terminal[terminal.terminalID]; !ok {
-			continue
-		}
-		if err := m.queryCollectTerminalToken(token, collector); err != nil {
-			return err
-		}
-	}
-	for _, successor := range m.graph.successorsByStage[source] {
-		if err := collector.ctx.Err(); err != nil {
-			return err
-		}
-		node := m.graph.betaNode(successor.betaNodeID)
-		if node == nil {
-			return fmt.Errorf("%w: malformed query beta successor", ErrQueryExecution)
-		}
-		if err := m.queryProbeBetaInput(successor.betaNodeID, successor.side, token, node.entry, collector); err != nil {
-			return err
-		}
-	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
-		m.queryOpenAggregateBucket(aggregateID, token, collector)
-	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
-		if err := m.queryInsertAggregateToken(aggregateID, token, collector); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func queryAlphaTokenRef(arena *tokenArena, entry bindingTupleEntry, match conditionMatch, captures []listPatternCapture) tokenRef {
-	if arena == nil {
-		return tokenRef{}
-	}
-	token := arena.add(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation())
-	if token.isZero() {
-		return tokenRef{}
-	}
-	for _, capture := range captures {
-		captureEntry := bindingTupleEntry{
-			binding:        capture.binding,
-			bindingSlot:    capture.bindingSlot,
-			conditionOrder: capture.bindingSlot,
-			conditionID:    entry.conditionID,
-			conditionPath:  cloneIntPath(entry.conditionPath),
-		}
-		captureMatch := conditionMatch{
-			conditionID: entry.conditionID,
-			bindingSlot: capture.bindingSlot,
-			value:       cloneValue(capture.value),
-			hasValue:    true,
-		}
-		token = arena.add(token, captureEntry, captureMatch, 0, match.fact.Generation())
-		if token.isZero() {
-			return tokenRef{}
-		}
-	}
-	return token
-}
-
-func (m *reteGraphBetaMemory) queryOpenAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef, collector *reteGraphQueryCollector) {
-	if m == nil || collector == nil || parent.isZero() {
-		return
-	}
-	collector.queryAggregateBucket(id, parent)
-}
-
-func (m *reteGraphBetaMemory) queryInsertAggregateToken(id reteGraphAggregateNodeID, token tokenRef, collector *reteGraphQueryCollector) error {
-	if m == nil || collector == nil || token.isZero() {
-		return nil
-	}
-	node := m.graph.aggregateNode(id)
-	if node == nil {
-		return fmt.Errorf("%w: malformed query aggregate node", ErrQueryExecution)
-	}
-	bucket := collector.queryAggregateBucket(id, m.aggregateParentToken(node, token))
-	if bucket == nil {
-		return fmt.Errorf("%w: malformed query aggregate bucket", ErrQueryExecution)
-	}
-	if !aggregateSpecsNeedInputValues(node.specs) {
-		bucket.addCountOnlyMember(token)
-		return nil
-	}
-	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
-	if !ok {
-		return fmt.Errorf("%w: malformed query aggregate input token", ErrQueryExecution)
-	}
-	member, ok := m.aggregateMember(node, token, match)
-	if !ok {
-		return fmt.Errorf("%w: failed to evaluate query aggregate input", ErrQueryExecution)
-	}
-	memberKey := tokenRefKey(token)
-	if existing, ok := bucket.members[memberKey]; ok {
-		bucket.removeMember(node, existing)
-	}
-	if bucket.members == nil {
-		bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
-	}
-	bucket.members[memberKey] = member
-	if err := bucket.addMember(node, member); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (c *reteGraphQueryCollector) queryAggregateBucket(id reteGraphAggregateNodeID, parent tokenRef) *reteGraphAggregateBucket {
-	if c == nil {
-		return nil
-	}
-	if c.aggregates == nil {
-		c.aggregates = make(map[reteGraphAggregateNodeID]map[graphTokenIdentityKey]*reteGraphAggregateBucket)
-	}
-	buckets := c.aggregates[id]
-	if buckets == nil {
-		buckets = make(map[graphTokenIdentityKey]*reteGraphAggregateBucket)
-		c.aggregates[id] = buckets
-	}
-	key := tokenRefKey(parent)
-	bucket := buckets[key]
-	if bucket != nil {
-		return bucket
-	}
-	bucket = &reteGraphAggregateBucket{parent: parent}
-	buckets[key] = bucket
-	return bucket
-}
-
-func (m *reteGraphBetaMemory) queryFlushAggregateBuckets(collector *reteGraphQueryCollector) error {
-	if m == nil || collector == nil || len(collector.aggregates) == 0 {
-		return nil
-	}
-	aggregateIDs := make([]reteGraphAggregateNodeID, 0, len(collector.aggregates))
-	for id := range collector.aggregates {
-		aggregateIDs = append(aggregateIDs, id)
-	}
-	slices.Sort(aggregateIDs)
-	for _, aggregateID := range aggregateIDs {
-		node := m.graph.aggregateNode(aggregateID)
-		if node == nil {
-			return fmt.Errorf("%w: malformed query aggregate node", ErrQueryExecution)
-		}
-		buckets := collector.aggregates[aggregateID]
-		keys := make([]graphTokenIdentityKey, 0, len(buckets))
-		for key := range buckets {
-			keys = append(keys, key)
-		}
-		sort.Slice(keys, func(i, j int) bool {
-			if keys[i].generation != keys[j].generation {
-				return keys[i].generation < keys[j].generation
-			}
-			if keys[i].size != keys[j].size {
-				return keys[i].size < keys[j].size
-			}
-			return keys[i].identityState < keys[j].identityState
-		})
-		for _, key := range keys {
-			bucket := buckets[key]
-			values, ok := bucket.results(node)
-			if !ok || len(values) != len(node.entries) {
+		for _, terminalRow := range terminal.rows.rows {
+			if terminalRow.token.isZero() || !terminalRow.token.containsFact(triggerID) {
 				continue
 			}
-			token := bucket.parent
-			generation := m.aggregateGeneration()
-			if !token.isZero() {
-				generation = token.generation()
-			}
-			for i, value := range values {
-				entry := node.entries[i]
-				entry.value = value
-				entry.hasValue = true
-				match := conditionMatch{
-					conditionID: node.conditionID,
-					bindingSlot: node.bindingSlot + i,
-					value:       value,
-					hasValue:    true,
-				}
-				token = collector.tokenArena.add(token, entry, match, 0, generation)
-				if token.isZero() {
-					return fmt.Errorf("%w: failed to create query aggregate output token", ErrQueryExecution)
-				}
-			}
-			if err := m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}, token, collector); err != nil {
-				return err
+			if err := m.queryCollectTerminalToken(terminalRow.token, &collector); err != nil {
+				return nil, err
 			}
 		}
 	}
-	return nil
-}
-
-func (m *reteGraphBetaMemory) queryProbeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, entry bindingTupleEntry, collector *reteGraphQueryCollector) error {
-	node := m.graph.betaNode(nodeID)
-	if node == nil {
-		return fmt.Errorf("%w: malformed query beta node", ErrQueryExecution)
-	}
-	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
-		return m.queryProbeFilterBetaInput(nodeID, side, node, token, collector)
-	}
-	if node.kind == reteGraphBetaNodeNot {
-		return m.queryProbeNegativeBetaInput(nodeID, side, node, token, collector)
-	}
-	nodeMemory := m.nodeMemory(nodeID)
-	switch side {
-	case reteGraphBetaInputLeft:
-		joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(collector.ctx, node, token, nil)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("%w: malformed query left join key", ErrQueryExecution)
-		}
-		bucket := nodeMemory.right.bucketForKey(joinKey)
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			rightRow := nodeMemory.right.row(rowID)
-			if rightRow == nil || rightRow.token.isZero() {
-				continue
-			}
-			rightMatch, ok := tokenLastMatch(rightRow.token)
-			if !ok {
-				continue
-			}
-			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, nil); err != nil {
-				return err
-			} else if !ok {
-				continue
-			}
-			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-			if collector.tokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
-				if err := m.queryCollectTerminalsFromStage(stage, rightRow.token, collector); err != nil {
-					return err
-				}
-				continue
-			}
-			output := queryAppendTokenRows(collector.tokenArena, token, rightRow.token)
-			if output.isZero() {
-				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
-			}
-			if err := m.queryPropagateFromStage(stage, output, collector); err != nil {
-				return err
-			}
-		}
-	case reteGraphBetaInputRight:
-		currentMatch, ok := tokenFactMatchForBindingSlot(token, node.entry.bindingSlot)
-		if !ok {
-			return fmt.Errorf("%w: malformed query right token", ErrQueryExecution)
-		}
-		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(collector.ctx, node, token, nil)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return fmt.Errorf("%w: malformed query right join key", ErrQueryExecution)
-		}
-		bucket := nodeMemory.left.bucketForKey(joinKey)
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			leftRow := nodeMemory.left.row(rowID)
-			if leftRow == nil || leftRow.token.isZero() {
-				continue
-			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
-				return err
-			} else if !ok {
-				continue
-			}
-			stage := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-			if collector.tokenOnlyTrigger(token) && m.queryStageTerminalOnly(stage, collector) {
-				if err := m.queryCollectTerminalsFromStage(stage, leftRow.token, collector); err != nil {
-					return err
-				}
-				continue
-			}
-			output := queryAppendTokenRows(collector.tokenArena, leftRow.token, token)
-			if output.isZero() {
-				return fmt.Errorf("%w: failed to create query token", ErrQueryExecution)
-			}
-			if err := m.queryPropagateFromStage(stage, output, collector); err != nil {
-				return err
-			}
-		}
-	default:
-		return fmt.Errorf("%w: malformed query beta side", ErrQueryExecution)
-	}
-	return nil
-}
-
-func (c *reteGraphQueryCollector) tokenOnlyTrigger(token tokenRef) bool {
-	if c == nil || c.triggerEvent.tag != reteGraphPropagationAdd || c.triggerEvent.fact.ID().IsZero() {
-		return false
-	}
-	if token.size() != 1 {
-		return false
-	}
-	match, ok := token.matchAt(0)
-	return ok && match.bindingSlot == 0 && match.fact.ID() == c.triggerEvent.fact.ID()
-}
-
-func (m *reteGraphBetaMemory) queryStageTerminalOnly(stage reteGraphStageRef, collector *reteGraphQueryCollector) bool {
-	if m == nil || collector == nil || len(m.graph.successorsByStage[stage]) != 0 {
-		return false
-	}
-	for _, terminal := range m.graph.terminalsByStage[stage] {
-		if _, ok := collector.terminal[terminal.terminalID]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *reteGraphBetaMemory) queryCollectTerminalsFromStage(stage reteGraphStageRef, token tokenRef, collector *reteGraphQueryCollector) error {
-	if m == nil || collector == nil {
-		return nil
-	}
-	for _, terminal := range m.graph.terminalsByStage[stage] {
-		if _, ok := collector.terminal[terminal.terminalID]; !ok {
-			continue
-		}
-		if err := m.queryCollectTerminalToken(token, collector); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *reteGraphBetaMemory) queryProbeFilterBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, collector *reteGraphQueryCollector) error {
-	if side != reteGraphBetaInputLeft {
-		return nil
-	}
-	ok, err := m.filterTokenMatches(node, token, nil)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return nil
-	}
-	return m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, token, collector)
-}
-
-func (m *reteGraphBetaMemory) queryProbeNegativeBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, collector *reteGraphQueryCollector) error {
-	if side != reteGraphBetaInputLeft {
-		return nil
-	}
-	negativeMemory := m.negativeBetaMemory(nodeID, node)
-	joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(collector.ctx, node, token, nil)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("%w: malformed query negative join key", ErrQueryExecution)
-	}
-	count, ok := negativeMemory.blockerCountForLeft(joinKey, token, nil)
-	if !ok {
-		return fmt.Errorf("%w: malformed query negative input", ErrQueryExecution)
-	}
-	if count != 0 {
-		return nil
-	}
-	return m.queryPropagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, token, collector)
+	return collector.rows, nil
 }
 
 func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collector *reteGraphQueryCollector) error {

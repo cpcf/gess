@@ -114,6 +114,132 @@ func TestSessionQueryInitializesGraphTerminalMemoryForQueryOnlyRuleset(t *testin
 	}
 }
 
+func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustQueryRevision(t)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	query, ok := revision.query("adults-by-dept")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	compiledArgs, err := query.compileArgs(QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("compileArgs: %v", err)
+	}
+	trigger := session.queryTriggerFact(query, compiledArgs)
+	memory := session.rete.graphBeta
+	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
+		t.Fatalf("query terminal rows before trigger = %d, want 0", got)
+	}
+
+	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("insert query trigger: %v", err)
+	}
+	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
+		t.Fatalf("query terminal rows after trigger = %d, want 1", got)
+	}
+	rows, err := memory.materializeQueryTerminalRows(ctx, query, compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	if err != nil {
+		t.Fatalf("materializeQueryTerminalRows: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p1")
+
+	if _, err := memory.removeFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("remove query trigger: %v", err)
+	}
+	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
+		t.Fatalf("query terminal rows after trigger cleanup = %d, want 0", got)
+	}
+}
+
+func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	var actions []string
+	if err := workspace.AddAction(ActionSpec{
+		Name: "record-adult",
+		Fn: func(ActionContext) error {
+			actions = append(actions, "adult")
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("AddAction(record-adult): %v", err)
+	}
+	adult := RuleConditionSpec{
+		Binding:     "p",
+		TemplateKey: person.Key(),
+		FieldConstraints: []FieldConstraintSpec{
+			{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: mustValue(t, 18)},
+		},
+	}
+	if err := workspace.AddRule(RuleSpec{
+		Name:       "adult-rule",
+		Conditions: []RuleConditionSpec{adult},
+		Actions:    []RuleActionSpec{{Name: "record-adult"}},
+	}); err != nil {
+		t.Fatalf("AddRule(adult-rule): %v", err)
+	}
+	if err := workspace.AddQuery(QuerySpec{
+		Name:          "adult-query",
+		ConditionTree: Match(adult),
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery(adult-query): %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: person.Key(),
+		Fields:      mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 1 || queryRows != 0 {
+		t.Fatalf("terminal rows before query = rule %d query %d, want rule 1 query 0", ruleRows, queryRows)
+	}
+
+	rows, err := session.QueryAll(ctx, "adult-query", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("query rows = %d, want 1", len(rows))
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p1")
+	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 1 || queryRows != 0 {
+		t.Fatalf("terminal rows after query cleanup = rule %d query %d, want rule 1 query 0", ruleRows, queryRows)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 {
+		t.Fatalf("run fired = %d, want 1", result.Fired)
+	}
+	if len(actions) != 1 {
+		t.Fatalf("actions = %d, want 1", len(actions))
+	}
+}
+
 func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T) {
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
@@ -439,14 +565,14 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if got, want := len(rows), len(initials); got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || session.rete.graphBeta.queryArena == nil {
+	if session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatal("query did not use graph beta terminal memory")
 	}
-	if got := session.rete.graphBeta.queryArena.rowCount(); got >= len(rows) {
-		t.Fatalf("query arena rows = %d, result rows = %d; want terminal projection without per-result query token copies", got, len(rows))
+	if got := len(revision.graph.queryTerminalIDs["people-values"]); got == 0 {
+		t.Fatal("query graph terminal was not compiled")
 	}
-	if session.rete.graphBeta.queryArena.keepFactSpans || cap(session.rete.graphBeta.queryArena.factIDs) != 0 || cap(session.rete.graphBeta.queryArena.factVersions) != 0 {
-		t.Fatal("query arena should use compact parent-linked rows without fact span caches")
+	if got := queryTerminalRowsRetained(session.rete.graphBeta, "people-values"); got != 0 {
+		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
 	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
 		t.Fatalf("row storage = items %d valueItems %d, want value-only projected storage", len(rows[0].items), len(rows[0].valueItems))
@@ -1094,6 +1220,37 @@ func assertQueryRowIntValue(t testing.TB, row QueryRow, alias string, want int64
 	if !ok || got != want {
 		t.Fatalf("row value %q = (%d, %v), want %d", alias, got, ok, want)
 	}
+}
+
+func queryTerminalRowsRetained(memory *reteGraphBetaMemory, queryName string) int {
+	if memory == nil {
+		return 0
+	}
+	rows := 0
+	for _, terminal := range memory.diagnostics().Terminals {
+		if terminal.Kind == reteGraphTerminalQuery && terminal.QueryName == queryName {
+			rows += terminal.Rows
+		}
+	}
+	return rows
+}
+
+func terminalRowsByKind(memory *reteGraphBetaMemory, queryName string) (int, int) {
+	if memory == nil {
+		return 0, 0
+	}
+	var ruleRows, queryRows int
+	for _, terminal := range memory.diagnostics().Terminals {
+		switch terminal.Kind {
+		case reteGraphTerminalRule:
+			ruleRows += terminal.Rows
+		case reteGraphTerminalQuery:
+			if terminal.QueryName == queryName {
+				queryRows += terminal.Rows
+			}
+		}
+	}
+	return ruleRows, queryRows
 }
 
 func assertQueryAggregateGroupRow(t testing.TB, rows []QueryRow, groupID string, count, total int64) {
