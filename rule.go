@@ -234,6 +234,20 @@ func (s Not) clone() Not {
 	return out
 }
 
+// Explicit marks a positive match as ineligible for backward-chaining demand
+// generation while keeping ordinary match behavior unchanged.
+type Explicit struct {
+	Condition ConditionSpec
+}
+
+func (Explicit) conditionSpecNode() {}
+
+func (s Explicit) clone() Explicit {
+	out := s
+	out.Condition = cloneConditionSpec(s.Condition)
+	return out
+}
+
 // Exists tests whether at least one tuple matching Condition exists. Bindings
 // introduced inside Exists are local to the condition.
 type ExistsCondition struct {
@@ -319,6 +333,14 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 	case Not:
 		return condition.clone()
 	case *Not:
+		if condition == nil {
+			return nil
+		}
+		cloned := condition.clone()
+		return &cloned
+	case Explicit:
+		return condition.clone()
+	case *Explicit:
 		if condition == nil {
 			return nil
 		}
@@ -428,6 +450,7 @@ type RuleCondition struct {
 	listPatterns     []RuleListPattern
 	joinConstraints  []JoinConstraint
 	predicates       []ExpressionPredicate
+	explicit         bool
 	order            int
 }
 
@@ -483,6 +506,10 @@ func (c RuleCondition) JoinConstraints() []JoinConstraint {
 
 func (c RuleCondition) Predicates() []ExpressionPredicate {
 	return cloneExpressionPredicates(c.predicates)
+}
+
+func (c RuleCondition) Explicit() bool {
+	return c.explicit
 }
 
 func (c RuleCondition) DeclarationOrder() int {
@@ -544,6 +571,7 @@ type RuleConditionBranchCondition struct {
 	path      []int
 	visible   bool
 	negated   bool
+	explicit  bool
 }
 
 func (c RuleConditionBranchCondition) Condition() RuleCondition {
@@ -560,6 +588,10 @@ func (c RuleConditionBranchCondition) Visible() bool {
 
 func (c RuleConditionBranchCondition) Negated() bool {
 	return c.negated
+}
+
+func (c RuleConditionBranchCondition) Explicit() bool {
+	return c.explicit
 }
 
 func (c RuleConditionBranchCondition) clone() RuleConditionBranchCondition {
@@ -885,6 +917,7 @@ type normalizedRuleCondition struct {
 	path        []int
 	visible     bool
 	negated     bool
+	explicit    bool
 }
 
 type conditionHigherOrderKind string
@@ -1303,6 +1336,28 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 			}
 		}
 		return expandNotConditionTreeBranches(ruleName, condition.Condition, path)
+	case Explicit:
+		match, err := explicitMatchCondition(ruleName, condition.Condition, negated)
+		if err != nil {
+			return nil, err
+		}
+		return []normalizedRuleConditionBranch{{
+			conditions: []normalizedRuleCondition{{
+				spec:     match,
+				path:     cloneIntPath(path),
+				visible:  visible,
+				negated:  negated,
+				explicit: true,
+			}},
+		}}, nil
+	case *Explicit:
+		if condition == nil {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return expandConditionTreeNodeBranches(ruleName, *condition, path, visible, negated)
 	case ExistsCondition:
 		if negated {
 			return nil, higherOrderValidationError(ruleName, -1, "exists condition is not supported under not")
@@ -1582,6 +1637,31 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			}
 		}
 		return flattenNotConditionTreeNode(ruleName, condition.Condition, conditions, path)
+	case Explicit:
+		match, err := explicitMatchCondition(ruleName, condition.Condition, negated)
+		if err != nil {
+			return compiledConditionTreeShape{}, err
+		}
+		index := len(*conditions)
+		*conditions = append(*conditions, normalizedRuleCondition{
+			spec:     match,
+			path:     cloneIntPath(path),
+			visible:  visible,
+			negated:  negated,
+			explicit: true,
+		})
+		return compiledConditionTreeShape{
+			kind:           ConditionTreeKindMatch,
+			conditionIndex: index,
+		}, nil
+	case *Explicit:
+		if condition == nil {
+			return compiledConditionTreeShape{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "condition tree node is required",
+			}
+		}
+		return flattenConditionTreeNode(ruleName, *condition, conditions, path, visible, negated)
 	case ExistsCondition:
 		if negated {
 			return compiledConditionTreeShape{}, higherOrderValidationError(ruleName, -1, "exists condition is not supported under not")
@@ -1857,6 +1937,32 @@ func flattenNotConditionTreeNode(ruleName string, spec ConditionSpec, conditions
 		kind:     ConditionTreeKindNot,
 		children: []compiledConditionTreeShape{child},
 	}, nil
+}
+
+func explicitMatchCondition(ruleName string, spec ConditionSpec, negated bool) (RuleConditionSpec, error) {
+	if negated {
+		return RuleConditionSpec{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "explicit condition requires a positive match",
+		}
+	}
+	switch condition := spec.(type) {
+	case Match:
+		return RuleConditionSpec(condition).clone(), nil
+	case *Match:
+		if condition == nil {
+			return RuleConditionSpec{}, &ValidationError{
+				RuleName: ruleName,
+				Reason:   "explicit condition requires a positive match",
+			}
+		}
+		return RuleConditionSpec(*condition).clone(), nil
+	default:
+		return RuleConditionSpec{}, &ValidationError{
+			RuleName: ruleName,
+			Reason:   "explicit condition requires a positive match",
+		}
+	}
 }
 
 func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction) (compiledRule, error) {
@@ -2341,6 +2447,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			listPatterns:     listPatterns,
 			joinConstraints:  joinConstraints,
 			predicates:       predicates,
+			explicit:         node.explicit,
 			order:            i,
 		}
 		publicBindingSlot := -1
@@ -2373,6 +2480,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			path:      cloneIntPath(node.path),
 			visible:   node.visible,
 			negated:   node.negated,
+			explicit:  node.explicit,
 		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
 			id:           conditionID,
@@ -2380,6 +2488,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			bindingSlot:  publicBindingSlot,
 			path:         []int{i},
 			negated:      node.negated,
+			explicit:     node.explicit,
 			target:       target,
 			constraints:  compiledConstraints,
 			listPatterns: compiledListPatterns,
@@ -2407,6 +2516,17 @@ func validateAggregateInputShape(ruleName string, conditionIndex int, spec Condi
 		return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input is required", nil)
 	case Match, *Match:
 		return nil
+	case Explicit:
+		match, err := explicitMatchCondition(ruleName, condition.Condition, false)
+		if err != nil {
+			return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input supports only positive match conjunctions", nil)
+		}
+		return validateAggregateInputShape(ruleName, conditionIndex, Match(match))
+	case *Explicit:
+		if condition == nil {
+			return aggregateValidationError(ruleName, conditionIndex, -1, "accumulate input is required", nil)
+		}
+		return validateAggregateInputShape(ruleName, conditionIndex, *condition)
 	case And:
 		for _, child := range condition.Conditions {
 			if err := validateAggregateInputShape(ruleName, conditionIndex, child); err != nil {
@@ -2444,6 +2564,17 @@ func validateHigherOrderPositiveInputShape(ruleName string, conditionIndex int, 
 		return higherOrderValidationError(ruleName, conditionIndex, label+" is required")
 	case Match, *Match:
 		return nil
+	case Explicit:
+		match, err := explicitMatchCondition(ruleName, condition.Condition, false)
+		if err != nil {
+			return higherOrderValidationError(ruleName, conditionIndex, label+" supports only positive match conjunctions")
+		}
+		return validateHigherOrderPositiveInputShape(ruleName, conditionIndex, Match(match), label)
+	case *Explicit:
+		if condition == nil {
+			return higherOrderValidationError(ruleName, conditionIndex, label+" is required")
+		}
+		return validateHigherOrderPositiveInputShape(ruleName, conditionIndex, *condition, label)
 	case And:
 		if len(condition.Conditions) == 0 {
 			return higherOrderValidationError(ruleName, conditionIndex, label+" requires at least one child")
@@ -2551,6 +2682,17 @@ func collectForallRequirementParts(spec ConditionSpec, out *forallRequirementPar
 			return fmt.Errorf("forall requirement is required")
 		}
 		out.matches = append(out.matches, RuleConditionSpec(*condition).clone())
+	case Explicit:
+		match, err := explicitMatchCondition("", condition.Condition, false)
+		if err != nil {
+			return fmt.Errorf("forall requirement supports positive match/test conjunctions")
+		}
+		out.matches = append(out.matches, match)
+	case *Explicit:
+		if condition == nil {
+			return fmt.Errorf("forall requirement is required")
+		}
+		return collectForallRequirementParts(*condition, out)
 	case And:
 		if len(condition.Conditions) == 0 {
 			return fmt.Errorf("forall requirement requires at least one child")
@@ -2795,6 +2937,9 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte("|"))
 			sum.Write([]byte(serializeCompiledExpressionPredicates(rule.conditionPlans[condition.order].predicates)))
 		}
+		if condition.explicit {
+			sum.Write([]byte("|explicit"))
+		}
 		sum.Write([]byte(";"))
 	}
 	if ruleUsesConditionTreeIdentity(rule) {
@@ -2830,6 +2975,9 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write(fmt.Appendf(nil, "%d:", condition.order))
 			if plan.negated {
 				sum.Write([]byte("not:"))
+			}
+			if plan.explicit {
+				sum.Write([]byte("explicit:"))
 			}
 			sum.Write([]byte(condition.binding))
 			sum.Write([]byte(":"))
@@ -2900,6 +3048,9 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 					if plan.negated {
 						sum.Write([]byte("not:"))
 					}
+					if plan.explicit {
+						sum.Write([]byte("explicit:"))
+					}
 					sum.Write([]byte(plan.target.name))
 					sum.Write([]byte(":"))
 					sum.Write([]byte(plan.target.templateKey.String()))
@@ -2941,7 +3092,7 @@ func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
 		return true
 	}
 	for _, plan := range rule.conditionPlans {
-		if plan.negated {
+		if plan.negated || plan.explicit {
 			return true
 		}
 	}

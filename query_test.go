@@ -39,6 +39,65 @@ func TestSnapshotQueryReturnsDeterministicParameterizedRows(t *testing.T) {
 	}
 }
 
+func TestQueryExplicitPositiveMatchCompilesAsMatchMetadata(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "explicit-people-by-dept",
+		Parameters: []QueryParameterSpec{{Name: "dept", Kind: ValueString}},
+		ConditionTree: Explicit{Condition: Match{
+			Binding: "person",
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dept"}, Right: ParamExpr{Name: "dept"}},
+			},
+			Target: TemplateKeyFact(person.Key()),
+		}},
+		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "person", Field: "id"})},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	query, ok := revision.Query("explicit-people-by-dept")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	conditions := query.Conditions()
+	if len(conditions) != 1 || !conditions[0].Explicit() {
+		t.Fatalf("query conditions = %#v, want one explicit condition", conditions)
+	}
+	treeMatch, ok := query.ConditionTree().Match()
+	if !ok || !treeMatch.Explicit() {
+		t.Fatalf("query condition tree match = (%#v, %v), want explicit match", treeMatch, ok)
+	}
+	branch := findPlanInspectionBranch(t, revision.reteGraphDebugSummary().Plan.Branches, reteGraphBranchOwnerQuery, "", "explicit-people-by-dept")
+	if len(branch.AuthoredOrder) != 1 || !branch.AuthoredOrder[0].Explicit {
+		t.Fatalf("query authored order = %#v, want one explicit authored condition", branch.AuthoredOrder)
+	}
+
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: person.Key(), Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering"})},
+		SessionInitialFact{TemplateKey: person.Key(), Fields: mustFields(t, map[string]any{"id": "p2", "dept": "sales"})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "explicit-people-by-dept", QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p1")
+}
+
 func TestSessionQueryDoesNotFireRulesOrEmitFactEvents(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

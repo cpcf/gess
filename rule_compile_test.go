@@ -247,6 +247,165 @@ func TestConditionTreeNormalizesPositiveMatches(t *testing.T) {
 	}
 }
 
+func TestConditionTreeExplicitPositiveMatchMetadataAndRuntime(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	var firedName string
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ctx ActionContext) error {
+			fact, ok := ctx.Binding("person")
+			if !ok {
+				return errors.New("person binding did not resolve")
+			}
+			firedName, _ = fact.Fields()["name"].AsString()
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "explicit-adult",
+		ConditionTree: Explicit{Condition: Match{
+			Binding: "person",
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
+			},
+			Target: TemplateKeyFact(person.Key()),
+		}},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	rule, ok := revision.Rule("explicit-adult")
+	if !ok {
+		t.Fatal("compiled revision missing explicit-adult")
+	}
+	conditions := rule.Conditions()
+	if len(conditions) != 1 {
+		t.Fatalf("conditions = %d, want 1", len(conditions))
+	}
+	if !conditions[0].Explicit() {
+		t.Fatal("condition was not marked explicit")
+	}
+	treeMatch, ok := rule.ConditionTree().Match()
+	if !ok {
+		t.Fatalf("condition tree kind = %q, want match", rule.ConditionTree().Kind())
+	}
+	if !treeMatch.Explicit() {
+		t.Fatal("condition tree match was not marked explicit")
+	}
+	branches := rule.ConditionBranches()
+	if len(branches) != 1 || len(branches[0].Conditions()) != 1 {
+		t.Fatalf("condition branches = %#v, want one branch with one condition", branches)
+	}
+	if !branches[0].Conditions()[0].Explicit() {
+		t.Fatal("branch condition was not marked explicit")
+	}
+	compiled := revision.rules["explicit-adult"]
+	if len(compiled.conditionPlans) != 1 || !compiled.conditionPlans[0].explicit {
+		t.Fatalf("compiled condition plans = %#v, want explicit first plan", compiled.conditionPlans)
+	}
+	branch := findPlanInspectionBranch(t, revision.reteGraphDebugSummary().Plan.Branches, reteGraphBranchOwnerRule, "explicit-adult", "")
+	if len(branch.AuthoredOrder) != 1 || len(branch.PlannedOrder) != 1 {
+		t.Fatalf("plan branch orders = authored %d planned %d, want one each", len(branch.AuthoredOrder), len(branch.PlannedOrder))
+	}
+	if !branch.AuthoredOrder[0].Explicit || !branch.PlannedOrder[0].Explicit {
+		t.Fatalf("plan explicit metadata = authored %v planned %v, want true/true", branch.AuthoredOrder[0].Explicit, branch.PlannedOrder[0].Explicit)
+	}
+
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"name": "Ada", "age": 20})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+	if firedName != "Ada" {
+		t.Fatalf("fired name = %q, want Ada", firedName)
+	}
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatal("explicit match did not use graph beta runtime")
+	}
+}
+
+func TestConditionTreeExplicitAffectsRuleRevisionButNotConditionID(t *testing.T) {
+	plain := mustCompileExplicitIdentityRevision(t, false)
+	explicit := mustCompileExplicitIdentityRevision(t, true)
+
+	plainRule, ok := plain.Rule("identity-rule")
+	if !ok {
+		t.Fatal("plain revision missing identity-rule")
+	}
+	explicitRule, ok := explicit.Rule("identity-rule")
+	if !ok {
+		t.Fatal("explicit revision missing identity-rule")
+	}
+	if plainRule.RevisionID() == explicitRule.RevisionID() {
+		t.Fatalf("explicit rule revision ID = %q, want different from plain", explicitRule.RevisionID())
+	}
+	plainConditions := plainRule.Conditions()
+	explicitConditions := explicitRule.Conditions()
+	if len(plainConditions) != 1 || len(explicitConditions) != 1 {
+		t.Fatalf("conditions = plain %d explicit %d, want one each", len(plainConditions), len(explicitConditions))
+	}
+	if plainConditions[0].ID() != explicitConditions[0].ID() {
+		t.Fatalf("condition ID changed for explicit metadata: plain %q explicit %q", plainConditions[0].ID(), explicitConditions[0].ID())
+	}
+}
+
+func TestConditionTreeExplicitRejectsNonPositiveMatchForms(t *testing.T) {
+	match := Match{Binding: "person", Target: DynamicFact("person")}
+	tests := []struct {
+		name string
+		tree ConditionSpec
+	}{
+		{name: "nil", tree: Explicit{}},
+		{name: "and", tree: Explicit{Condition: And{Conditions: []ConditionSpec{match}}}},
+		{name: "or", tree: Explicit{Condition: Or{Conditions: []ConditionSpec{match, Match{Binding: "dept", Target: DynamicFact("dept")}}}}},
+		{name: "not", tree: Explicit{Condition: Not{Condition: match}}},
+		{name: "test", tree: Explicit{Condition: Test{Expression: ConstExpr{Value: true}}}},
+		{name: "exists", tree: Explicit{Condition: Exists(match)}},
+		{name: "forall", tree: Explicit{Condition: Forall(match, Test{Expression: ConstExpr{Value: true}})}},
+		{name: "accumulate", tree: Explicit{Condition: Accumulate(match, Count().As("count"))}},
+		{name: "under not", tree: Not{Condition: Explicit{Condition: match}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			if err := workspace.AddAction(ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }}); err != nil {
+				t.Fatalf("AddAction: %v", err)
+			}
+			if err := workspace.AddRule(RuleSpec{
+				Name:          "invalid-explicit",
+				ConditionTree: tt.tree,
+				Actions:       []RuleActionSpec{{Name: "mark"}},
+			}); err != nil {
+				t.Fatalf("AddRule: %v", err)
+			}
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded, want validation error")
+			}
+			if !strings.Contains(err.Error(), "explicit condition requires a positive match") {
+				t.Fatalf("Compile error = %v, want explicit positive match validation", err)
+			}
+		})
+	}
+}
+
 func TestConditionTreeAndFlatRulesProduceEquivalentActivations(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
@@ -2747,6 +2906,30 @@ func mustCompileConditionTreeCompatibilityRevision(t testing.TB, tree bool) *Rul
 		spec.Conditions = conditions
 	}
 	mustAddRule(t, workspace, spec)
+	return mustCompileWorkspace(t, workspace)
+}
+
+func mustCompileExplicitIdentityRevision(t testing.TB, explicit bool) *Ruleset {
+	t.Helper()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "name", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	match := Match{Binding: "person", Target: TemplateKeyFact(person.Key())}
+	var condition ConditionSpec = match
+	if explicit {
+		condition = Explicit{Condition: match}
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		ID:            "stable-rule-id",
+		Name:          "identity-rule",
+		ConditionTree: condition,
+		Actions:       []RuleActionSpec{{Name: "mark"}},
+	})
 	return mustCompileWorkspace(t, workspace)
 }
 

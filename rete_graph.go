@@ -239,6 +239,7 @@ type reteGraphConditionOrderInspection struct {
 	Path        []int
 	Visible     bool
 	Negated     bool
+	Explicit    bool
 	Aggregate   bool
 	Test        bool
 	Target      conditionTarget
@@ -1997,6 +1998,7 @@ func inspectReteGraphAuthoredOrder(conditions []RuleConditionBranchCondition) []
 			Path:        condition.Path(),
 			Visible:     condition.visible,
 			Negated:     condition.negated,
+			Explicit:    condition.explicit,
 			Target: conditionTarget{
 				kind:        conditionTargetKindForRuleCondition(public),
 				name:        public.name,
@@ -2021,6 +2023,7 @@ func inspectReteGraphPlannedOrder(plans []compiledConditionPlan) []reteGraphCond
 			Path:        cloneIntPath(plan.path),
 			Visible:     !plan.negated,
 			Negated:     plan.negated,
+			Explicit:    plan.explicit,
 			Aggregate:   plan.aggregate != nil,
 			Test:        plan.isTest,
 			Target:      plan.target,

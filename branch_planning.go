@@ -609,6 +609,12 @@ func addConditionSpecBranchPlanningDependencies(bindings map[string]struct{}, sp
 		if condition != nil {
 			addConditionSpecBranchPlanningDependencies(bindings, condition.Condition)
 		}
+	case Explicit:
+		addConditionSpecBranchPlanningDependencies(bindings, condition.Condition)
+	case *Explicit:
+		if condition != nil {
+			addConditionSpecBranchPlanningDependencies(bindings, condition.Condition)
+		}
 	case AccumulateCondition:
 		addConditionSpecBranchPlanningDependencies(bindings, condition.Input)
 		for _, spec := range condition.Specs {
@@ -652,6 +658,12 @@ func addConditionSpecDefinedBindings(bindings map[string]struct{}, spec Conditio
 	case *And:
 		if condition != nil {
 			addConditionSpecDefinedBindings(bindings, And{Conditions: condition.Conditions})
+		}
+	case Explicit:
+		addConditionSpecDefinedBindings(bindings, condition.Condition)
+	case *Explicit:
+		if condition != nil {
+			addConditionSpecDefinedBindings(bindings, condition.Condition)
 		}
 	}
 }

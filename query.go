@@ -575,6 +575,16 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		}
 		out := lowerQueryConditionTreeParams(*condition, params).(Not)
 		return &out
+	case Explicit:
+		out := condition.clone()
+		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
+		return out
+	case *Explicit:
+		if condition == nil {
+			return nil
+		}
+		out := lowerQueryConditionTreeParams(*condition, params).(Explicit)
+		return &out
 	case ExistsCondition:
 		out := condition.clone()
 		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
