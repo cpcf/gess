@@ -276,6 +276,14 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		return nil, err
 	}
 
+	compiledModules := []Module{implicitMainModule()}
+	modules := make(map[ModuleName]Module, len(compiledModules))
+	moduleOrder := make([]ModuleName, 0, len(compiledModules))
+	for _, module := range compiledModules {
+		modules[module.name] = module.clone()
+		moduleOrder = append(moduleOrder, module.name)
+	}
+
 	compiledTemplates := make([]Template, 0, len(w.templates))
 	for _, spec := range w.templates {
 		if err := ctx.Err(); err != nil {
@@ -424,7 +432,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	}
 
 	return &Ruleset{
-		id:                         rulesetID(compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
+		id:                         rulesetID(compiledModules, compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
+		modules:                    modules,
+		moduleOrder:                moduleOrder,
 		templates:                  templates,
 		templatesByKey:             templatesByKey,
 		templateOrder:              templateOrder,
@@ -449,6 +459,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 
 type Ruleset struct {
 	id                         RulesetID
+	modules                    map[ModuleName]Module
+	moduleOrder                []ModuleName
 	templates                  map[string]Template
 	templatesByKey             map[TemplateKey]Template
 	templateOrder              []string
@@ -558,6 +570,28 @@ func (r *Ruleset) ID() RulesetID {
 		return ""
 	}
 	return r.id
+}
+
+func (r *Ruleset) Module(name ModuleName) (Module, bool) {
+	if r == nil {
+		return Module{}, false
+	}
+	module, ok := r.modules[ModuleName(strings.TrimSpace(string(name)))]
+	if !ok {
+		return Module{}, false
+	}
+	return module.clone(), true
+}
+
+func (r *Ruleset) Modules() []Module {
+	if r == nil {
+		return nil
+	}
+	out := make([]Module, 0, len(r.moduleOrder))
+	for _, name := range r.moduleOrder {
+		out = append(out, r.modules[name].clone())
+	}
+	return out
 }
 
 func (r *Ruleset) Template(name string) (Template, bool) {
@@ -863,9 +897,19 @@ func (w *Workspace) queryIndex(name string) (int, bool) {
 	return -1, false
 }
 
-func rulesetID(templates []Template, actions []compiledAction, functions []compiledPureFunction, rules []compiledRule, queries []compiledQuery) RulesetID {
+func rulesetID(modules []Module, templates []Template, actions []compiledAction, functions []compiledPureFunction, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
+	sum.Write([]byte("modules:\n"))
+	for _, module := range modules {
+		sum.Write(fmt.Appendf(nil, "module:%s:", module.name))
+		sum.Write([]byte(module.description))
+		if autoFocus, ok := module.AutoFocusDefault(); ok {
+			sum.Write(fmt.Appendf(nil, ":auto-focus:%t", autoFocus))
+		}
+		sum.Write([]byte("\n"))
+	}
+
 	for _, template := range templates {
 		sum.Write(fmt.Appendf(nil, "template:%s:%s:%s:%d:%t\n", template.name, template.key, template.compatibilityKey, template.duplicatePolicy, template.closed))
 		sum.Write(fmt.Appendf(nil, "dup:%d:", template.duplicatePolicy))

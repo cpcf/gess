@@ -73,6 +73,35 @@ func TestWorkspaceCompilesTemplatesIntoImmutableRevision(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCompilesImplicitMainModule(t *testing.T) {
+	revision := mustCompile(t)
+
+	module, ok := revision.Module(MainModule)
+	if !ok {
+		t.Fatal("compiled revision did not contain implicit MAIN module")
+	}
+	if module.Name() != MainModule {
+		t.Fatalf("module name = %q, want %q", module.Name(), MainModule)
+	}
+	if module.Description() != "" {
+		t.Fatalf("MAIN description = %q, want empty", module.Description())
+	}
+	if value, ok := module.AutoFocusDefault(); ok || value {
+		t.Fatalf("MAIN auto-focus default = (%t, %t), want no default", value, ok)
+	}
+
+	modules := revision.Modules()
+	if len(modules) != 1 || modules[0].Name() != MainModule {
+		t.Fatalf("compiled modules = %#v, want only MAIN", modules)
+	}
+
+	modules[0].name = "mutated-by-caller"
+	modules = revision.Modules()
+	if len(modules) != 1 || modules[0].Name() != MainModule {
+		t.Fatalf("Ruleset.Modules leaked mutable module state: %#v", modules)
+	}
+}
+
 func TestValidationErrorsAreStructured(t *testing.T) {
 	workspace := NewWorkspace()
 	err := workspace.AddTemplate(TemplateSpec{})

@@ -11,6 +11,21 @@ func (id RulesetID) String() string {
 	return string(id)
 }
 
+type ModuleName string
+
+const MainModule ModuleName = "MAIN"
+
+func (name ModuleName) String() string {
+	if name.IsZero() {
+		return string(MainModule)
+	}
+	return string(name)
+}
+
+func (name ModuleName) IsZero() bool {
+	return strings.TrimSpace(string(name)) == ""
+}
+
 type SessionID string
 
 func (id SessionID) String() string {
