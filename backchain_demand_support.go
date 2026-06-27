@@ -45,12 +45,18 @@ type backchainDemandInlineSupportKey struct {
 	slots       [backchainDemandSupportInlineLimit]backchainDemandSlotKey
 }
 
+type backchainDemandInlineSupportEntry struct {
+	id           backchainDemandSupportID
+	demandFactID FactID
+	support      backchainDemandSupportFact
+}
+
 type backchainDemandInlineSupportIndex struct {
-	firstKey  backchainDemandInlineSupportKey
-	firstID   backchainDemandSupportID
-	secondKey backchainDemandInlineSupportKey
-	secondID  backchainDemandSupportID
-	overflow  map[backchainDemandInlineSupportKey]backchainDemandSupportID
+	firstKey    backchainDemandInlineSupportKey
+	firstEntry  backchainDemandInlineSupportEntry
+	secondKey   backchainDemandInlineSupportKey
+	secondEntry backchainDemandInlineSupportEntry
+	overflow    map[backchainDemandInlineSupportKey]backchainDemandInlineSupportEntry
 }
 
 type backchainDemandSlotKey struct {
@@ -73,7 +79,7 @@ func (s *Session) ensureBackchainDemandSupportTables() {
 		return
 	}
 	s.backchainDemandSupports.reserve(4)
-	s.ensureBackchainDemandSupportTables()
+	s.ensureBackchainDemandReverseSupportTables()
 }
 
 func (s *Session) ensureBackchainDemandReverseSupportTables() {
@@ -96,7 +102,7 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	if !ok {
 		return
 	}
-	s.ensureBackchainDemandReverseSupportTables()
+	s.ensureBackchainDemandSupportTables()
 	bucket, _ := s.backchainDemandSupports.get(requestKey.key)
 	if _, exists := s.findBackchainDemandSupportID(bucket, requestKey, request); exists {
 		return
@@ -130,7 +136,11 @@ func (s *Session) addBackchainDemandInlineSupport(demandFact *workingFact, reque
 	record.inline = true
 	record.inlineKey = inlineKey
 	s.storeBackchainDemandSupportRecord(record)
-	s.backchainDemandInlineSupports.set(inlineKey, id)
+	s.backchainDemandInlineSupports.set(inlineKey, backchainDemandInlineSupportEntry{
+		id:           id,
+		demandFactID: demandFact.id,
+		support:      inlineKey.support,
+	})
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
 		factBucket, _ := s.backchainDemandByFact.get(support.id)
@@ -147,8 +157,8 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 		return reteAgendaDelta{supported: true}, nil
 	}
 	if inlineKey, keyOK := backchainDemandInlineSupportKeyForRequest(request); keyOK {
-		if id, ok := s.backchainDemandInlineSupports.get(inlineKey); ok {
-			return s.removeBackchainDemandSupportID(ctx, id, origin)
+		if entry, ok := s.backchainDemandInlineSupports.get(inlineKey); ok {
+			return s.removeBackchainDemandInlineSupportEntry(ctx, inlineKey, entry, origin)
 		}
 	}
 	id, ok := s.findBackchainDemandSupportIDByRequest(request)
@@ -164,6 +174,17 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 		}
 	}
 	return s.removeBackchainDemandSupportID(ctx, id, origin)
+}
+
+func (s *Session) removeBackchainDemandInlineSupportEntry(ctx context.Context, key backchainDemandInlineSupportKey, entry backchainDemandInlineSupportEntry, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || entry.id == 0 {
+		return combined, nil
+	}
+	s.clearBackchainDemandSupportRecord(entry.id)
+	s.backchainDemandInlineSupports.delete(key)
+	s.removeBackchainDemandSupportIDFromFactBucket(entry.support.id, entry.id)
+	return s.removeBackchainDemandSupportDemandBucket(ctx, entry.demandFactID, entry.id, origin)
 }
 
 func (s *Session) removeBackchainDemandSupportsForFact(ctx context.Context, id FactID, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -235,17 +256,25 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 		support := backchainDemandSupportRecordFact(record, i)
 		s.removeBackchainDemandSupportIDFromFactBucket(support.id, id)
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(record.demandFactID)
+	return s.removeBackchainDemandSupportDemandBucket(ctx, record.demandFactID, id, origin)
+}
+
+func (s *Session) removeBackchainDemandSupportDemandBucket(ctx context.Context, demandFactID FactID, id backchainDemandSupportID, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || demandFactID.IsZero() || id == 0 {
+		return combined, nil
+	}
+	demandBucket, _ := s.backchainDemandByDemand.get(demandFactID)
 	demandBucket.remove(id)
 	if !demandBucket.empty() {
-		s.backchainDemandByDemand.set(record.demandFactID, demandBucket)
+		s.backchainDemandByDemand.set(demandFactID, demandBucket)
 		return combined, nil
 	}
-	s.backchainDemandByDemand.delete(record.demandFactID)
-	if _, ok := s.workingFactByID(record.demandFactID); !ok {
+	s.backchainDemandByDemand.delete(demandFactID)
+	if _, ok := s.workingFactByID(demandFactID); !ok {
 		return combined, nil
 	}
-	delta, err := s.removeBackchainDemandFactImmediate(ctx, record.demandFactID, origin)
+	delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
 	if err != nil {
 		return combined, err
 	}
@@ -501,66 +530,66 @@ func backchainDemandInlineSupportKeyForRequest(request backchainDemandRequest) (
 	return out, true
 }
 
-func (i *backchainDemandInlineSupportIndex) get(key backchainDemandInlineSupportKey) (backchainDemandSupportID, bool) {
+func (i *backchainDemandInlineSupportIndex) get(key backchainDemandInlineSupportKey) (backchainDemandInlineSupportEntry, bool) {
 	if i == nil {
-		return 0, false
+		return backchainDemandInlineSupportEntry{}, false
 	}
-	if i.firstID != 0 && i.firstKey == key {
-		return i.firstID, true
+	if i.firstEntry.id != 0 && i.firstKey == key {
+		return i.firstEntry, true
 	}
-	if i.secondID != 0 && i.secondKey == key {
-		return i.secondID, true
+	if i.secondEntry.id != 0 && i.secondKey == key {
+		return i.secondEntry, true
 	}
 	if i.overflow == nil {
-		return 0, false
+		return backchainDemandInlineSupportEntry{}, false
 	}
-	id, ok := i.overflow[key]
-	return id, ok
+	entry, ok := i.overflow[key]
+	return entry, ok
 }
 
-func (i *backchainDemandInlineSupportIndex) set(key backchainDemandInlineSupportKey, id backchainDemandSupportID) {
-	if i == nil || id == 0 {
+func (i *backchainDemandInlineSupportIndex) set(key backchainDemandInlineSupportKey, entry backchainDemandInlineSupportEntry) {
+	if i == nil || entry.id == 0 {
 		return
 	}
-	if i.firstID == 0 {
+	if i.firstEntry.id == 0 {
 		i.firstKey = key
-		i.firstID = id
+		i.firstEntry = entry
 		return
 	}
 	if i.firstKey == key {
-		i.firstID = id
+		i.firstEntry = entry
 		return
 	}
-	if i.secondID == 0 {
+	if i.secondEntry.id == 0 {
 		i.secondKey = key
-		i.secondID = id
+		i.secondEntry = entry
 		return
 	}
 	if i.secondKey == key {
-		i.secondID = id
+		i.secondEntry = entry
 		return
 	}
 	if i.overflow == nil {
-		i.overflow = make(map[backchainDemandInlineSupportKey]backchainDemandSupportID, 4)
+		i.overflow = make(map[backchainDemandInlineSupportKey]backchainDemandInlineSupportEntry, 4)
 	}
-	i.overflow[key] = id
+	i.overflow[key] = entry
 }
 
 func (i *backchainDemandInlineSupportIndex) delete(key backchainDemandInlineSupportKey) {
 	if i == nil {
 		return
 	}
-	if i.firstID != 0 && i.firstKey == key {
+	if i.firstEntry.id != 0 && i.firstKey == key {
 		i.firstKey = i.secondKey
-		i.firstID = i.secondID
+		i.firstEntry = i.secondEntry
 		i.secondKey = backchainDemandInlineSupportKey{}
-		i.secondID = 0
+		i.secondEntry = backchainDemandInlineSupportEntry{}
 		i.promoteOverflow()
 		return
 	}
-	if i.secondID != 0 && i.secondKey == key {
+	if i.secondEntry.id != 0 && i.secondKey == key {
 		i.secondKey = backchainDemandInlineSupportKey{}
-		i.secondID = 0
+		i.secondEntry = backchainDemandInlineSupportEntry{}
 		i.promoteOverflow()
 		return
 	}
@@ -570,12 +599,12 @@ func (i *backchainDemandInlineSupportIndex) delete(key backchainDemandInlineSupp
 }
 
 func (i *backchainDemandInlineSupportIndex) promoteOverflow() {
-	if i == nil || i.secondID != 0 || len(i.overflow) == 0 {
+	if i == nil || i.secondEntry.id != 0 || len(i.overflow) == 0 {
 		return
 	}
-	for key, id := range i.overflow {
+	for key, entry := range i.overflow {
 		i.secondKey = key
-		i.secondID = id
+		i.secondEntry = entry
 		delete(i.overflow, key)
 		return
 	}
@@ -586,9 +615,9 @@ func (i *backchainDemandInlineSupportIndex) clear() {
 		return
 	}
 	i.firstKey = backchainDemandInlineSupportKey{}
-	i.firstID = 0
+	i.firstEntry = backchainDemandInlineSupportEntry{}
 	i.secondKey = backchainDemandInlineSupportKey{}
-	i.secondID = 0
+	i.secondEntry = backchainDemandInlineSupportEntry{}
 	clear(i.overflow)
 }
 

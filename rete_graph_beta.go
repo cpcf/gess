@@ -113,7 +113,8 @@ type reteGraphTerminalMemory struct {
 }
 
 type reteGraphAlphaFactSet struct {
-	facts map[FactID]struct{}
+	inline   [4]FactID
+	overflow map[FactID]struct{}
 }
 
 type reteGraphBetaMemoryStats struct {
@@ -807,50 +808,76 @@ func (m *tokenHashMemory) len() int {
 }
 
 func (s *reteGraphAlphaFactSet) reserve(capacity int) {
-	if s == nil || capacity <= 0 || s.facts != nil {
-		return
-	}
-	s.facts = make(map[FactID]struct{}, capacity)
 }
 
 func (s *reteGraphAlphaFactSet) insert(id FactID) bool {
 	if s == nil || id.IsZero() {
 		return false
 	}
-	if s.facts == nil {
-		s.facts = make(map[FactID]struct{}, 1)
-	}
-	if _, ok := s.facts[id]; ok {
+	if s.contains(id) {
 		return false
 	}
-	s.facts[id] = struct{}{}
+	for i, existing := range s.inline {
+		if existing.IsZero() {
+			s.inline[i] = id
+			return true
+		}
+	}
+	if s.overflow == nil {
+		s.overflow = make(map[FactID]struct{}, 8)
+	}
+	s.overflow[id] = struct{}{}
 	return true
 }
 
 func (s *reteGraphAlphaFactSet) remove(id FactID) bool {
-	if s == nil || id.IsZero() || s.facts == nil {
+	if s == nil || id.IsZero() {
 		return false
 	}
-	if _, ok := s.facts[id]; !ok {
+	for i, existing := range s.inline {
+		if existing != id {
+			continue
+		}
+		s.inline[i] = FactID{}
+		for overflowID := range s.overflow {
+			s.inline[i] = overflowID
+			delete(s.overflow, overflowID)
+			break
+		}
+		return true
+	}
+	if s.overflow == nil {
 		return false
 	}
-	delete(s.facts, id)
+	if _, ok := s.overflow[id]; !ok {
+		return false
+	}
+	delete(s.overflow, id)
 	return true
 }
 
 func (s *reteGraphAlphaFactSet) contains(id FactID) bool {
-	if s == nil || id.IsZero() || s.facts == nil {
+	if s == nil || id.IsZero() {
 		return false
 	}
-	_, ok := s.facts[id]
+	for _, existing := range s.inline {
+		if existing == id {
+			return true
+		}
+	}
+	if s.overflow == nil {
+		return false
+	}
+	_, ok := s.overflow[id]
 	return ok
 }
 
 func (s *reteGraphAlphaFactSet) clear() {
-	if s == nil || s.facts == nil {
+	if s == nil {
 		return
 	}
-	clear(s.facts)
+	s.inline = [4]FactID{}
+	clear(s.overflow)
 }
 
 func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
