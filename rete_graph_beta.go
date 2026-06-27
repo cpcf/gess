@@ -2490,6 +2490,63 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 	return delta.supported, nil
 }
 
+func (m *reteGraphBetaMemory) removeGeneratedAlphaOps(node *reteGraphAlphaNode, match conditionMatch, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || node == nil || delta == nil {
+		return
+	}
+	if counters != nil {
+		counters.recordNegativePropagationEvent()
+	}
+	if len(node.generatedOps) == 0 {
+		return
+	}
+	captures, capturesOK := node.listPatternCaptures(match.fact, tokenRef{})
+	if !capturesOK {
+		delta.supported = false
+		return
+	}
+	for _, op := range node.generatedOps {
+		switch op.kind {
+		case reteGraphGeneratedAlphaOpTerminal:
+			m.removeTerminalTokenContainingFact(op.terminalID, op.branchID, match.fact.ID(), counters, delta)
+		case reteGraphGeneratedAlphaOpBetaLeft:
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
+			if token.isZero() || !m.removeBetaInputToken(op.betaNodeID, op.side, token, counters, delta) {
+				delta.supported = false
+			}
+		case reteGraphGeneratedAlphaOpBetaRight:
+			edgeMatch := conditionMatch{
+				conditionID: op.entry.conditionID,
+				bindingSlot: op.entry.bindingSlot,
+				fact:        match.fact,
+			}
+			token := m.newAlphaTokenRef(op.entry, edgeMatch, captures, nil)
+			if token.isZero() || !m.removeBetaInputToken(op.betaNodeID, op.side, token, counters, delta) {
+				delta.supported = false
+			}
+		case reteGraphGeneratedAlphaOpAggregateOuter:
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			m.removeAggregateBucket(op.aggregateID, token, counters, delta)
+		case reteGraphGeneratedAlphaOpAggregateInput:
+			m.removeAggregateInput(op.aggregateID, match, counters, delta)
+		default:
+			delta.supported = false
+		}
+	}
+}
+
 func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) error {
 	if m == nil || delta == nil {
 		return nil
@@ -4156,7 +4213,7 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 			bindingSlot: node.entry.bindingSlot,
 			fact:        newConditionFactRefFromWorkingFact(fact),
 		}
-		m.propagateRemoveAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, counters, &delta)
+		m.removeGeneratedAlphaOps(node, match, counters, &delta)
 	}
 	m.removeAlphaFact(id)
 	return delta, nil
