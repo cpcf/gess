@@ -1029,6 +1029,19 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.runAgendaPending {
 					return errors.New("single supported assert did not record run delta")
 				}
+				auditRule := session.revision.rules["audit-rule"]
+				terminal := session.rete.graphBeta.terminalForRule(auditRule.revisionID)
+				if terminal == nil || terminal.rows.len() != 1 {
+					return errors.New("audit terminal row was not retained")
+				}
+				handle := terminal.rows.rows[0].activation
+				if handle.isZero() {
+					return errors.New("audit terminal row did not receive activation handle")
+				}
+				activation, ok := session.agenda.activationByHandlePtr(handle)
+				if !ok || activation.status != activationStatusPending {
+					return errors.New("audit activation handle did not resolve to a pending activation")
+				}
 				return nil
 			},
 		}); err != nil {

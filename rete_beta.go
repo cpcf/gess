@@ -543,6 +543,9 @@ type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
 	token          tokenRef
 	identity       candidateIdentity
+	terminalID     reteGraphTerminalNodeID
+	terminalRow    graphTokenRowHandle
+	activation     activationHandle
 	factIDs        []FactID
 	factVersions   []FactVersion
 }

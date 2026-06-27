@@ -2427,7 +2427,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 		if err != nil {
 			return nil, true, err
 		}
-	} else if err := s.agenda.applyTerminalTokenDeltasWithoutChanges(ctx, s.revision, delta.removed, delta.added); err != nil {
+	} else if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return nil, true, err
 	}
 	if s.propagationCounters != nil {
@@ -4928,7 +4928,7 @@ func (s *Session) applyRunAgendaDeltaDirect(delta reteAgendaDelta) error {
 	if s == nil {
 		return nil
 	}
-	if _, ok, err := s.applyReteAgendaDeltaInternal(context.Background(), delta, false); err != nil {
+	if ok, err := s.applyReteAgendaDeltaDirect(context.Background(), delta); err != nil {
 		s.markAgendaDirty()
 		return err
 	} else if !ok {
@@ -4937,6 +4937,60 @@ func (s *Session) applyRunAgendaDeltaDirect(delta reteAgendaDelta) error {
 	s.runAgendaPending = true
 	s.runAgendaDirect = true
 	return nil
+}
+
+func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgendaDelta) (bool, error) {
+	if s == nil || s.revision == nil {
+		return true, ErrInvalidRuleset
+	}
+	if s.agenda == nil {
+		s.agenda = newAgenda()
+		s.syncPropagationCounters()
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
+		if s.propagationCounters != nil && !delta.supported {
+			s.propagationCounters.recordUnsupportedAgendaDelta()
+		}
+		return false, nil
+	}
+	if len(delta.updated) != 0 {
+		if err := s.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
+			return true, err
+		}
+	}
+	if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
+		return true, err
+	}
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordAgendaDeltaApplication()
+	}
+	s.agendaReady = true
+	s.agendaDirty = false
+	return true, nil
+}
+
+func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Context, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
+	if s == nil || s.agenda == nil || s.revision == nil {
+		return ErrInvalidRuleset
+	}
+	if len(removed) <= 1 && len(added) <= 1 {
+		handle, err := s.agenda.applySingleTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
+		if err != nil {
+			return err
+		}
+		if len(added) == 1 && !handle.isZero() && s.rete != nil && s.rete.graphBeta != nil {
+			token := added[0]
+			s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
+		}
+		return nil
+	}
+	return s.agenda.applyTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
 }
 
 func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {

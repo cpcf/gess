@@ -246,6 +246,7 @@ type graphTokenRow struct {
 	joinKey          betaJoinKey
 	identity         graphTokenIdentityKey
 	terminalIdentity candidateIdentity
+	activation       activationHandle
 	supportCount     int
 	branchSupport    terminalBranchSupport
 	branchOverflow   []terminalBranchSupport
@@ -4540,6 +4541,9 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
 				identity:       row.terminalIdentity,
+				terminalID:     terminalNode.id,
+				terminalRow:    row.handle,
+				activation:     row.activation,
 			})
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
@@ -5570,6 +5574,8 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
 		identity:       identity,
+		terminalID:     terminalID,
+		terminalRow:    handle,
 	})
 	return handle, true
 }
@@ -5590,6 +5596,9 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 				ruleRevisionID: ruleRevisionID,
 				token:          row.token,
 				identity:       row.terminalIdentity,
+				terminalID:     terminalID,
+				terminalRow:    row.handle,
+				activation:     row.activation,
 			})
 		}
 		if counters != nil {
@@ -5649,6 +5658,9 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
 			identity:       removed.terminalIdentity,
+			terminalID:     terminalID,
+			terminalRow:    removed.handle,
+			activation:     removed.activation,
 		})
 	}
 	if counters != nil {
@@ -5688,6 +5700,9 @@ func (m *reteGraphBetaMemory) removeTerminalTokenByHandle(terminalID reteGraphTe
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
 			identity:       removed.terminalIdentity,
+			terminalID:     terminalID,
+			terminalRow:    removed.handle,
+			activation:     removed.activation,
 		})
 	}
 	if counters != nil {
@@ -5761,6 +5776,9 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
 				identity:       row.terminalIdentity,
+				terminalID:     terminalNode.id,
+				terminalRow:    row.handle,
+				activation:     row.activation,
 			})
 		}
 	}
@@ -6089,6 +6107,22 @@ func (m *reteGraphBetaMemory) terminalAt(id reteGraphTerminalNodeID) *reteGraphT
 		return nil
 	}
 	return m.terminals[index]
+}
+
+func (m *reteGraphBetaMemory) setTerminalActivationHandle(terminalID reteGraphTerminalNodeID, rowHandle graphTokenRowHandle, activation activationHandle) bool {
+	if m == nil || rowHandle.isZero() || activation.isZero() {
+		return false
+	}
+	terminal := m.terminalAt(terminalID)
+	if terminal == nil {
+		return false
+	}
+	row := terminal.rows.rowByHandle(rowHandle)
+	if row == nil || row.token.isZero() || !row.isTerminal() {
+		return false
+	}
+	row.activation = activation
+	return true
 }
 
 func (m *reteGraphBetaMemory) terminalRuleRevision(id reteGraphTerminalNodeID) RuleRevisionID {
