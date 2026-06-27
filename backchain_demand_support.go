@@ -13,6 +13,8 @@ type backchainDemandSupportID uint64
 type backchainDemandSupportRecord struct {
 	id           backchainDemandSupportID
 	key          backchainDemandSupportKey
+	inlineKey    backchainDemandInlineSupportKey
+	inline       bool
 	demandFactID FactID
 	supportCount int
 	supportFacts [backchainDemandSupportInlineLimit]backchainDemandSupportFact
@@ -36,6 +38,21 @@ type backchainDemandSupportRequestKey struct {
 	slotExtra []backchainDemandSlotKey
 }
 
+type backchainDemandInlineSupportKey struct {
+	templateKey TemplateKey
+	support     backchainDemandSupportFact
+	slotCount   uint8
+	slots       [backchainDemandSupportInlineLimit]backchainDemandSlotKey
+}
+
+type backchainDemandInlineSupportIndex struct {
+	firstKey  backchainDemandInlineSupportKey
+	firstID   backchainDemandSupportID
+	secondKey backchainDemandInlineSupportKey
+	secondID  backchainDemandSupportID
+	overflow  map[backchainDemandInlineSupportKey]backchainDemandSupportID
+}
+
 type backchainDemandSlotKey struct {
 	ok          bool
 	scalar      bool
@@ -56,6 +73,13 @@ func (s *Session) ensureBackchainDemandSupportTables() {
 		return
 	}
 	s.backchainDemandSupports.reserve(4)
+	s.ensureBackchainDemandSupportTables()
+}
+
+func (s *Session) ensureBackchainDemandReverseSupportTables() {
+	if s == nil {
+		return
+	}
 	s.backchainDemandByFact.reserve(4)
 	s.backchainDemandByDemand.reserve(4)
 }
@@ -64,11 +88,15 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	if s == nil || demandFact == nil || demandFact.id.IsZero() || len(request.supportFacts) == 0 {
 		return
 	}
+	if inlineKey, ok := backchainDemandInlineSupportKeyForRequest(request); ok {
+		s.addBackchainDemandInlineSupport(demandFact, request, inlineKey)
+		return
+	}
 	requestKey, ok := backchainDemandSupportKeyForRequest(request)
 	if !ok {
 		return
 	}
-	s.ensureBackchainDemandSupportTables()
+	s.ensureBackchainDemandReverseSupportTables()
 	bucket, _ := s.backchainDemandSupports.get(requestKey.key)
 	if _, exists := s.findBackchainDemandSupportID(bucket, requestKey, request); exists {
 		return
@@ -89,9 +117,39 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
 }
 
+func (s *Session) addBackchainDemandInlineSupport(demandFact *workingFact, request backchainDemandRequest, inlineKey backchainDemandInlineSupportKey) {
+	if s == nil || demandFact == nil || demandFact.id.IsZero() {
+		return
+	}
+	if _, exists := s.backchainDemandInlineSupports.get(inlineKey); exists {
+		return
+	}
+	s.ensureBackchainDemandReverseSupportTables()
+	id := s.nextBackchainDemandSupportIDValue()
+	record := newBackchainDemandSupportRecord(id, demandFact.id, backchainDemandSupportRequestKey{}, request)
+	record.inline = true
+	record.inlineKey = inlineKey
+	s.storeBackchainDemandSupportRecord(record)
+	s.backchainDemandInlineSupports.set(inlineKey, id)
+	for i := 0; i < record.supportCount; i++ {
+		support := backchainDemandSupportRecordFact(record, i)
+		factBucket, _ := s.backchainDemandByFact.get(support.id)
+		factBucket.add(id)
+		s.backchainDemandByFact.set(support.id, factBucket)
+	}
+	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
+	demandBucket.add(id)
+	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
+}
+
 func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, request backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || len(request.supportFacts) == 0 {
 		return reteAgendaDelta{supported: true}, nil
+	}
+	if inlineKey, keyOK := backchainDemandInlineSupportKeyForRequest(request); keyOK {
+		if id, ok := s.backchainDemandInlineSupports.get(inlineKey); ok {
+			return s.removeBackchainDemandSupportID(ctx, id, origin)
+		}
 	}
 	id, ok := s.findBackchainDemandSupportIDByRequest(request)
 	if !ok {
@@ -168,7 +226,11 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 		return combined, nil
 	}
 	s.clearBackchainDemandSupportRecord(id)
-	s.removeBackchainDemandSupportIDFromSupportBucket(record.key, id)
+	if record.inline {
+		s.backchainDemandInlineSupports.delete(record.inlineKey)
+	} else {
+		s.removeBackchainDemandSupportIDFromSupportBucket(record.key, id)
+	}
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
 		s.removeBackchainDemandSupportIDFromFactBucket(support.id, id)
@@ -227,6 +289,7 @@ func (s *Session) clearBackchainDemandSupports() {
 		return
 	}
 	s.backchainDemandSupports.clear()
+	s.backchainDemandInlineSupports.clear()
 	for i := range s.backchainDemandSupportRecords {
 		s.backchainDemandSupportRecords[i] = backchainDemandSupportRecord{}
 	}
@@ -421,6 +484,112 @@ func backchainDemandSupportRequestSlot(requestKey backchainDemandSupportRequestK
 		return requestKey.slotKeys[index]
 	}
 	return requestKey.slotExtra[index-backchainDemandSupportInlineLimit]
+}
+
+func backchainDemandInlineSupportKeyForRequest(request backchainDemandRequest) (backchainDemandInlineSupportKey, bool) {
+	if request.templateKey == "" || len(request.supportFacts) != 1 || len(request.slots) > backchainDemandSupportInlineLimit {
+		return backchainDemandInlineSupportKey{}, false
+	}
+	out := backchainDemandInlineSupportKey{
+		templateKey: request.templateKey,
+		support:     request.supportFacts[0],
+		slotCount:   uint8(len(request.slots)),
+	}
+	for i, slot := range request.slots {
+		out.slots[i] = backchainDemandSlotKeyForFactSlot(slot)
+	}
+	return out, true
+}
+
+func (i *backchainDemandInlineSupportIndex) get(key backchainDemandInlineSupportKey) (backchainDemandSupportID, bool) {
+	if i == nil {
+		return 0, false
+	}
+	if i.firstID != 0 && i.firstKey == key {
+		return i.firstID, true
+	}
+	if i.secondID != 0 && i.secondKey == key {
+		return i.secondID, true
+	}
+	if i.overflow == nil {
+		return 0, false
+	}
+	id, ok := i.overflow[key]
+	return id, ok
+}
+
+func (i *backchainDemandInlineSupportIndex) set(key backchainDemandInlineSupportKey, id backchainDemandSupportID) {
+	if i == nil || id == 0 {
+		return
+	}
+	if i.firstID == 0 {
+		i.firstKey = key
+		i.firstID = id
+		return
+	}
+	if i.firstKey == key {
+		i.firstID = id
+		return
+	}
+	if i.secondID == 0 {
+		i.secondKey = key
+		i.secondID = id
+		return
+	}
+	if i.secondKey == key {
+		i.secondID = id
+		return
+	}
+	if i.overflow == nil {
+		i.overflow = make(map[backchainDemandInlineSupportKey]backchainDemandSupportID, 4)
+	}
+	i.overflow[key] = id
+}
+
+func (i *backchainDemandInlineSupportIndex) delete(key backchainDemandInlineSupportKey) {
+	if i == nil {
+		return
+	}
+	if i.firstID != 0 && i.firstKey == key {
+		i.firstKey = i.secondKey
+		i.firstID = i.secondID
+		i.secondKey = backchainDemandInlineSupportKey{}
+		i.secondID = 0
+		i.promoteOverflow()
+		return
+	}
+	if i.secondID != 0 && i.secondKey == key {
+		i.secondKey = backchainDemandInlineSupportKey{}
+		i.secondID = 0
+		i.promoteOverflow()
+		return
+	}
+	if i.overflow != nil {
+		delete(i.overflow, key)
+	}
+}
+
+func (i *backchainDemandInlineSupportIndex) promoteOverflow() {
+	if i == nil || i.secondID != 0 || len(i.overflow) == 0 {
+		return
+	}
+	for key, id := range i.overflow {
+		i.secondKey = key
+		i.secondID = id
+		delete(i.overflow, key)
+		return
+	}
+}
+
+func (i *backchainDemandInlineSupportIndex) clear() {
+	if i == nil {
+		return
+	}
+	i.firstKey = backchainDemandInlineSupportKey{}
+	i.firstID = 0
+	i.secondKey = backchainDemandInlineSupportKey{}
+	i.secondID = 0
+	clear(i.overflow)
 }
 
 func backchainDemandSupportKeyForRequest(request backchainDemandRequest) (backchainDemandSupportRequestKey, bool) {
