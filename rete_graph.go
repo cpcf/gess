@@ -1678,6 +1678,18 @@ func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condit
 	node.backchainDemands = append(node.backchainDemands, plan)
 }
 
+func (g *reteGraph) hasBackchainDemandPlans() bool {
+	if g == nil {
+		return false
+	}
+	for i := range g.betaNodes {
+		if len(g.betaNodes[i].backchainDemands) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *reteGraph) internResidualFilterNode(index map[reteGraphBetaKey]reteGraphBetaNodeID, input reteGraphStageRef, joins []compiledJoinConstraint, predicates []compiledExpressionPredicate) (reteGraphBetaNodeID, bool) {
 	if g == nil {
 		return 0, false

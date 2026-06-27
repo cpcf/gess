@@ -376,7 +376,7 @@ func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnceForGeneratedFacts(t *te
 		RuleID:         originRule.id,
 		RuleRevisionID: originRule.revisionID,
 	}
-	if _, _, _, _, err := session.insertTemplateValuesImmediate(ctx, person.Key(), []Value{mustValue(t, 20)}, origin); err != nil {
+	if _, _, _, _, _, err := session.insertTemplateValuesImmediate(ctx, person.Key(), []Value{mustValue(t, 20)}, origin); err != nil {
 		t.Fatalf("insertTemplateValuesImmediate: %v", err)
 	}
 

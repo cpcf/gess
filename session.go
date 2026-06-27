@@ -116,28 +116,30 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextFactSequence        uint64
-	nextRecency             Recency
-	nextRunSequence         uint64
-	facts                   []workingFact
-	factsByID               map[FactID]int
-	factsByDuplicate        duplicateIndexes
-	factsByTemplate         map[TemplateKey][]FactID
-	factsByName             map[string][]FactID
-	factFieldEqualIndexes   map[factFieldEqualKey][]FactSnapshot
-	factTargetIndexesDirty  bool
-	insertionOrder          []FactID
-	slotStorage             []factSlot
-	resetWorkspace          factWorkspace
-	resetFactsScratch       []FactSnapshot
-	logicalSupportEdges     map[SupportID]logicalSupportEdgeRecord
-	logicalSupportBySource  map[logicalSupportSourceKey]map[SupportID]struct{}
-	logicalSupportByFact    map[FactID]map[SupportID]struct{}
-	logicalSupportCounters  LogicalSupportCounters
-	backchainDemandSupports map[string]backchainDemandSupportRecord
-	backchainDemandByFact   map[FactID]map[string]struct{}
-	backchainDemandByDemand map[FactID]map[string]struct{}
-	nextEventSequence       uint64
+	nextFactSequence              uint64
+	nextRecency                   Recency
+	nextRunSequence               uint64
+	facts                         []workingFact
+	factsByID                     map[FactID]int
+	factsByDuplicate              duplicateIndexes
+	factsByTemplate               map[TemplateKey][]FactID
+	factsByName                   map[string][]FactID
+	factFieldEqualIndexes         map[factFieldEqualKey][]FactSnapshot
+	factTargetIndexesDirty        bool
+	insertionOrder                []FactID
+	slotStorage                   []factSlot
+	resetWorkspace                factWorkspace
+	resetFactsScratch             []FactSnapshot
+	logicalSupportEdges           map[SupportID]logicalSupportEdgeRecord
+	logicalSupportBySource        map[logicalSupportSourceKey]map[SupportID]struct{}
+	logicalSupportByFact          map[FactID]map[SupportID]struct{}
+	logicalSupportCounters        LogicalSupportCounters
+	nextBackchainDemandSupportID  backchainDemandSupportID
+	backchainDemandSupports       map[backchainDemandSupportKey]backchainDemandSupportIDBucket
+	backchainDemandSupportRecords map[backchainDemandSupportID]backchainDemandSupportRecord
+	backchainDemandByFact         map[FactID]backchainDemandSupportIDBucket
+	backchainDemandByDemand       map[FactID]backchainDemandSupportIDBucket
+	nextEventSequence             uint64
 }
 
 type queuedMutation struct {
@@ -553,6 +555,10 @@ func (s *Session) AssertTemplate(ctx context.Context, templateKey TemplateKey, f
 	return s.insertFactWithContextAndOrigin(ctx, "", templateKey, fields, mutationOrigin{})
 }
 
+func (s *Session) AssertTemplateValues(ctx context.Context, templateKey TemplateKey, values ...Value) error {
+	return s.insertTemplateValuesWithContextAndOrigin(ctx, templateKey, values, mutationOrigin{})
+}
+
 func (s *Session) insertFact(name string, templateKey TemplateKey, fields Fields) (AssertResult, error) {
 	return s.insertFactWithContextAndOrigin(context.Background(), name, templateKey, fields, mutationOrigin{})
 }
@@ -707,7 +713,7 @@ func (s *Session) insertTemplateValuesWithContextAndOrigin(ctx context.Context, 
 		defer s.endMutation()
 	}
 
-	_, template, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, templateKey, values, origin)
+	_, template, _, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, templateKey, values, origin)
 	if err != nil {
 		return err
 	}
@@ -779,7 +785,7 @@ func (b *templateValueBatch) insert(templateKey TemplateKey, values []Value) err
 		return err
 	}
 	session := b.session
-	_, template, inserted, agendaDelta, err := session.insertTemplateValuesImmediate(b.ctx, templateKey, values, mutationOrigin{})
+	_, template, _, inserted, agendaDelta, err := session.insertTemplateValuesImmediate(b.ctx, templateKey, values, mutationOrigin{})
 	if err != nil {
 		return err
 	}
@@ -1251,19 +1257,19 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	return result, agendaDelta, nil
 }
 
-func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (*workingFact, Template, bool, reteAgendaDelta, error) {
+func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (*workingFact, Template, DuplicateKey, bool, reteAgendaDelta, error) {
 	if s == nil || s.closed {
-		return nil, Template{}, false, reteAgendaDelta{}, ErrClosedSession
+		return nil, Template{}, "", false, reteAgendaDelta{}, ErrClosedSession
 	}
 	template, ok := s.revision.templateByKey(templateKey)
 	if !ok {
-		return nil, Template{}, false, reteAgendaDelta{}, &ValidationError{
+		return nil, Template{}, "", false, reteAgendaDelta{}, &ValidationError{
 			TemplateName: string(templateKey),
 			Reason:       "unknown template key",
 		}
 	}
 	if err := validatePublicTemplateMutation(template); err != nil {
-		return nil, Template{}, false, reteAgendaDelta{}, err
+		return nil, Template{}, "", false, reteAgendaDelta{}, err
 	}
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
@@ -1271,30 +1277,30 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 	if err != nil {
 		state.rollbackGeneratedFactSlots(slotMark)
-		return nil, Template{}, false, reteAgendaDelta{}, err
+		return nil, Template{}, "", false, reteAgendaDelta{}, err
 	}
 
-	fact, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, template, fieldSlots, mark, slotMark, origin)
+	fact, duplicateKey, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, template, fieldSlots, mark, slotMark, origin)
 	if err != nil {
-		return nil, Template{}, false, agendaDelta, err
+		return nil, Template{}, "", false, agendaDelta, err
 	}
-	return fact, template, inserted, agendaDelta, nil
+	return fact, template, duplicateKey, inserted, agendaDelta, nil
 }
 
-func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template Template, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
-	fact, _, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
+func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template Template, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
+	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil)
-		return nil, false, reteAgendaDelta{}, err
+		return nil, "", false, reteAgendaDelta{}, err
 	}
 	if !inserted {
-		return fact, false, reteAgendaDelta{}, nil
+		return fact, duplicateKey, false, reteAgendaDelta{}, nil
 	}
 
 	if !s.revision.factMayAffectReteByTarget(template.Name(), template.Key()) {
 		s.commitFactWorkspace(state)
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
-		return fact, true, reteAgendaDelta{}, nil
+		return fact, duplicateKey, true, reteAgendaDelta{}, nil
 	}
 
 	var span *propagationCounterSpan
@@ -1309,7 +1315,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		}
 		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, agendaDelta, err
+		return nil, "", false, agendaDelta, err
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
 		if span != nil {
@@ -1317,7 +1323,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		}
 		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+		return nil, "", false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
 	}
@@ -1327,7 +1333,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		}
 		state.rollbackGeneratedFactInsert(mark, fact)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+		return nil, "", false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
 	}
@@ -1337,7 +1343,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 	s.commitFactWorkspace(state)
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
 
-	return fact, true, agendaDelta, nil
+	return fact, duplicateKey, true, agendaDelta, nil
 }
 
 func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -1785,7 +1791,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	var oldTerminalDeltas []reteTerminalTokenDelta
 	resetAgendaWithDeltas := false
-	if s.agendaReady && !s.agendaDirty && s.rete != nil {
+	mayEmitBackchainDemandDeltas := s.rete != nil && s.rete.mayEmitBackchainDemandDeltas()
+	if s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
 		tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err

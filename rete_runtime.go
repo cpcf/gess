@@ -244,6 +244,13 @@ func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTer
 	return nil, false, nil
 }
 
+func (r *reteRuntime) mayEmitBackchainDemandDeltas() bool {
+	if r == nil || !r.usesGraphBeta() || r.graph == nil {
+		return false
+	}
+	return r.graph.hasBackchainDemandPlans()
+}
+
 func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
 	if r == nil || r.revision == nil || !r.usesGraphBeta() || r.graphBeta == nil {
 		return nil, false, nil

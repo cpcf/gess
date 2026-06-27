@@ -191,7 +191,11 @@ func mustCompileBackchainRuntimeRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 			},
 		},
 	})
-	mustAddAction(t, workspace, ActionSpec{Name: "consume-answer", Fn: func(ActionContext) error { return nil }})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "consume-answer",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "answer-need",
 		ConditionTree: Match{
@@ -230,8 +234,8 @@ func mustCompileBackchainRuntimeRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 
 func runBackchainRuntimeDemand(t testing.TB, ctx context.Context, session *Session, requestKey TemplateKey) {
 	t.Helper()
-	if _, err := session.AssertTemplate(ctx, requestKey, Fields{"id": newStringValue("q1")}); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("q1")); err != nil {
+		t.Fatalf("AssertTemplateValues(request): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {

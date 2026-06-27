@@ -1353,7 +1353,7 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 		defer s.endMutation()
 	}
 
-	_, template, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, action.template.Key(), values, origin)
+	_, template, _, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, action.template.Key(), values, origin)
 	if err != nil {
 		return err
 	}
@@ -1422,7 +1422,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 		}
 	}
 
-	_, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, action.template, slots, mark, slotMark, origin)
+	_, _, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, action.template, slots, mark, slotMark, origin)
 	if err != nil {
 		return err
 	}
