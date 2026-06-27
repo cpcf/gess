@@ -136,7 +136,7 @@ type Session struct {
 	logicalSupportCounters        LogicalSupportCounters
 	nextBackchainDemandSupportID  backchainDemandSupportID
 	backchainDemandSupports       map[backchainDemandSupportKey]backchainDemandSupportIDBucket
-	backchainDemandSupportRecords map[backchainDemandSupportID]backchainDemandSupportRecord
+	backchainDemandSupportRecords []backchainDemandSupportRecord
 	backchainDemandByFact         map[FactID]backchainDemandSupportIDBucket
 	backchainDemandByDemand       map[FactID]backchainDemandSupportIDBucket
 	nextEventSequence             uint64
