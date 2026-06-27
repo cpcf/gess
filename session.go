@@ -1288,7 +1288,22 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 }
 
 func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template Template, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
-	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlots(s.revision, s.generation, template, fieldSlots, slotMark)
+	plan, ok := s.revision.generatedFactInsertPlan(template.Key())
+	if !ok {
+		compiled := newCompiledGeneratedFactInsertPlan(template)
+		plan = &compiled
+	}
+	return s.insertPreparedTemplateSlotsWithPlanImmediate(ctx, state, plan, fieldSlots, mark, slotMark, origin)
+}
+
+func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Context, state factWorkspace, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
+	if !plan.valid() {
+		state.rollbackGeneratedFactInsert(mark, nil)
+		return nil, "", false, reteAgendaDelta{}, &ValidationError{
+			Reason: "generated fact insert plan is missing",
+		}
+	}
+	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlan(s.revision, s.generation, plan, fieldSlots, slotMark)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil)
 		return nil, "", false, reteAgendaDelta{}, err
@@ -1297,7 +1312,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		return fact, duplicateKey, false, reteAgendaDelta{}, nil
 	}
 
-	if !s.revision.factMayAffectReteByTarget(template.Name(), template.Key()) {
+	if !s.revision.factMayAffectReteByTarget(plan.name, plan.templateKey) {
 		s.commitFactWorkspace(state)
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
 		return fact, duplicateKey, true, reteAgendaDelta{}, nil
@@ -1305,7 +1320,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 
 	var span *propagationCounterSpan
 	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(template.Key(), origin)
+		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, origin, span)
@@ -4214,19 +4229,38 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 		w.rollbackGeneratedFactSlots(slotMark)
 		return nil, "", false, err
 	}
-	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, factTargetIndexDirty)
+	plan, ok := revision.generatedFactInsertPlan(template.Key())
+	if !ok {
+		compiled := newCompiledGeneratedFactInsertPlan(template)
+		plan = &compiled
+	}
+	return w.insertPreparedGeneratedFactSlotsWithPlan(revision, generation, plan, fieldSlots, slotMark)
 }
 
 func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
 	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, factTargetIndexSkip)
 }
 
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlan(revision *Ruleset, generation Generation, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+	return w.insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision, generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
+}
+
 func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
-	name := template.Name()
-	templateKey := template.Key()
+	plan, ok := revision.generatedFactInsertPlan(template.Key())
+	if !ok {
+		compiled := newCompiledGeneratedFactInsertPlan(template)
+		plan = &compiled
+	}
+	return w.insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision, generation, plan, fieldSlots, slotMark, indexMode)
+}
+
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision *Ruleset, generation Generation, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
+	template := plan.template
+	name := plan.name
+	templateKey := plan.templateKey
 	var duplicateIndex duplicateIndexKey
-	if template.duplicatePolicy != DuplicateAllow {
-		duplicateIndex = makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
+	if plan.duplicatePolicy != DuplicateAllow {
+		duplicateIndex = plan.duplicateIndex(fieldSlots)
 		if duplicateIndex.kind == duplicateIndexStructural {
 			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
 				w.rollbackGeneratedFactSlots(slotMark)
@@ -4259,7 +4293,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Rule
 	}
 
 	stored := w.storeFact(fact)
-	if template.duplicatePolicy != DuplicateAllow {
+	if plan.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
 	switch indexMode {

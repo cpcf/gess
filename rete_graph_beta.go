@@ -1473,7 +1473,7 @@ func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) 
 		return nil
 	}
 	root := reteGraphStageRef{kind: reteGraphStageRoot}
-	if len(m.graph.successorsByStage[root]) == 0 && len(m.graph.terminalsByStage[root]) == 0 && len(m.graph.aggregatesByStage[root]) == 0 && len(m.graph.aggregateOuters[root]) == 0 {
+	if len(m.graph.stageSuccessors(root)) == 0 && len(m.graph.stageTerminals(root)) == 0 && len(m.graph.stageAggregateInputs(root)) == 0 && len(m.graph.stageAggregateOuters(root)) == 0 {
 		m.rootToken = tokenRef{}
 		return nil
 	}
@@ -2406,7 +2406,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		delta.supported = false
 		return nil
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		entry := terminal.entry
 		if entry.conditionID == "" {
 			entry = sourceEntry
@@ -2423,7 +2423,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		}
 		m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
 	}
-	for _, successor := range m.graph.successorsByStage[source] {
+	for _, successor := range m.graph.stageSuccessors(source) {
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
 			delta.supported = false
@@ -2475,7 +2475,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 		}
 	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
+	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
 		entry := sourceEntry
 		if entry.conditionID == "" {
 			delta.supported = false
@@ -2489,7 +2489,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		}
 		m.openAggregateBucket(aggregateID, token, span, delta)
 	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.recordAlphaFact(alphaNodeID, match.fact)
 		m.insertAggregateInput(aggregateID, match, span, delta)
 	}
@@ -2508,7 +2508,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		delta.supported = false
 		return
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		entry := terminal.entry
 		if entry.conditionID == "" {
 			entry = sourceEntry
@@ -2519,7 +2519,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		}
 		m.removeTerminalTokenContainingFact(terminal.terminalID, terminal.branchID, match.fact.ID(), counters, delta)
 	}
-	for _, successor := range m.graph.successorsByStage[source] {
+	for _, successor := range m.graph.stageSuccessors(source) {
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
 			delta.supported = false
@@ -2553,7 +2553,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 		}
 	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
+	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
 		entry := sourceEntry
 		if entry.conditionID == "" {
 			delta.supported = false
@@ -2566,7 +2566,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		}
 		m.removeAggregateBucket(aggregateID, token, counters, delta)
 	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.removeAggregateInput(aggregateID, match, counters, delta)
 	}
 }
@@ -3331,16 +3331,16 @@ func (m *reteGraphBetaMemory) propagateFromStage(source reteGraphStageRef, token
 	if m == nil || delta == nil {
 		return nil
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
 	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
+	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
 		m.openAggregateBucket(aggregateID, token, span, delta)
 	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.insertAggregateToken(aggregateID, token, span, delta)
 	}
-	for _, successor := range m.graph.successorsByStage[source] {
+	for _, successor := range m.graph.stageSuccessors(source) {
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
 			delta.supported = false
@@ -3364,16 +3364,16 @@ func (m *reteGraphBetaMemory) propagateRemoveFromStage(source reteGraphStageRef,
 	if counters != nil {
 		counters.recordNegativePropagationEvent()
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
 	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
+	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
 		m.removeAggregateBucket(aggregateID, token, counters, delta)
 	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.removeAggregateToken(aggregateID, token, counters, delta)
 	}
-	for _, successor := range m.graph.successorsByStage[source] {
+	for _, successor := range m.graph.stageSuccessors(source) {
 		if !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 			delta.supported = false
 		}
@@ -3384,16 +3384,16 @@ func (m *reteGraphBetaMemory) propagateRemoveFactFromStage(source reteGraphStage
 	if m == nil || delta == nil {
 		return
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		m.removeTerminalTokensContainingFact(terminal.terminalID, id, counters, delta)
 	}
-	for _, aggregateID := range m.graph.aggregateOuters[source] {
+	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
 		m.removeAggregateBucketsContainingFact(aggregateID, id, counters, delta)
 	}
-	for _, aggregateID := range m.graph.aggregatesByStage[source] {
+	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.removeAggregateMembersContainingFact(aggregateID, id, counters, delta)
 	}
-	for _, successor := range m.graph.successorsByStage[source] {
+	for _, successor := range m.graph.stageSuccessors(source) {
 		if !m.removeBetaInputContainingFact(successor.betaNodeID, successor.side, id, counters, delta) {
 			delta.supported = false
 		}
@@ -4360,7 +4360,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, e
 	}
 	for _, nodeID := range nodeIDs {
 		source := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}
-		if len(m.graph.successorsByStage[source]) != 0 || len(m.graph.aggregateOuters[source]) != 0 || len(m.graph.aggregatesByStage[source]) != 0 {
+		if len(m.graph.stageSuccessors(source)) != 0 || len(m.graph.stageAggregateOuters(source)) != 0 || len(m.graph.stageAggregateInputs(source)) != 0 {
 			return reteAgendaDelta{}, false
 		}
 		node := m.graph.alphaNode(nodeID)
@@ -4389,7 +4389,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, e
 			bindingSlot: node.entry.bindingSlot,
 			fact:        newConditionFactRefFromSnapshot(after),
 		}
-		for _, terminal := range m.graph.terminalsByStage[source] {
+		for _, terminal := range m.graph.stageTerminals(source) {
 			entry := terminal.entry
 			if entry.conditionID == "" {
 				entry = node.entry
@@ -4422,7 +4422,7 @@ func (m *reteGraphBetaMemory) terminalRuleActionsIgnoreModify(source reteGraphSt
 	if m == nil || m.graph == nil || m.revision == nil {
 		return false
 	}
-	for _, terminal := range m.graph.terminalsByStage[source] {
+	for _, terminal := range m.graph.stageTerminals(source) {
 		terminalNode := m.terminalNode(terminal.terminalID)
 		if terminalNode == nil {
 			return false
@@ -4457,18 +4457,18 @@ func (m *reteGraphBetaMemory) modifyRouteScopeForAlphaRoutes(nodeIDs []reteGraph
 	}
 	for head := 0; head < len(scope.stageQueue); head++ {
 		stage := scope.stageQueue[head]
-		for _, terminal := range m.graph.terminalsByStage[stage] {
+		for _, terminal := range m.graph.stageTerminals(stage) {
 			scope.appendTerminal(terminal.terminalID)
 		}
-		for _, successor := range m.graph.successorsByStage[stage] {
+		for _, successor := range m.graph.stageSuccessors(stage) {
 			scope.appendBeta(successor.betaNodeID)
 			scope.appendStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(successor.betaNodeID)})
 		}
-		for _, aggregateID := range m.graph.aggregateOuters[stage] {
+		for _, aggregateID := range m.graph.stageAggregateOuters(stage) {
 			scope.appendAggregate(aggregateID)
 			scope.appendStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)})
 		}
-		for _, aggregateID := range m.graph.aggregatesByStage[stage] {
+		for _, aggregateID := range m.graph.stageAggregateInputs(stage) {
 			scope.appendAggregate(aggregateID)
 			scope.appendStage(reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)})
 		}

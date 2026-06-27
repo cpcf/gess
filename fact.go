@@ -3,6 +3,7 @@ package gess
 import (
 	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -335,6 +336,132 @@ type duplicateIndexKey struct {
 	second      duplicateScalarKey
 	stringKey   DuplicateKey
 	hash        uint64
+}
+
+type compiledGeneratedFactInsertPlan struct {
+	template             Template
+	name                 string
+	templateKey          TemplateKey
+	duplicatePolicy      DuplicatePolicy
+	duplicateIndexMode   duplicateIndexKind
+	duplicateKeySlots    []int
+	structuralHashPrefix uint64
+}
+
+func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
+	plan := compiledGeneratedFactInsertPlan{
+		template:           template,
+		name:               template.Name(),
+		templateKey:        template.Key(),
+		duplicatePolicy:    template.duplicatePolicy,
+		duplicateIndexMode: template.duplicateIndexMode,
+	}
+	if len(template.duplicateKeySlots) > 0 {
+		plan.duplicateKeySlots = slices.Clone(template.duplicateKeySlots)
+	}
+	if template.duplicatePolicy == DuplicateStructural && template.closed && len(template.fields) > 0 {
+		plan.structuralHashPrefix = structuralDuplicateHashString(structuralDuplicateHashOffset, template.key.String())
+	}
+	return plan
+}
+
+func (p *compiledGeneratedFactInsertPlan) valid() bool {
+	return p != nil && p.templateKey != ""
+}
+
+func (p *compiledGeneratedFactInsertPlan) duplicateIndex(slots []factSlot) duplicateIndexKey {
+	if p.duplicatePolicy == DuplicateAllow {
+		return duplicateIndexKey{}
+	}
+	if index, ok := p.typedDuplicateIndex(slots); ok {
+		return index
+	}
+	if index, ok := p.structuralDuplicateIndex(slots); ok {
+		return index
+	}
+	return makeDuplicateIndexForValidatedFact(p.name, p.template, nil, slots)
+}
+
+func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) (duplicateIndexKey, bool) {
+	if p.duplicatePolicy != DuplicateUniqueKey {
+		return duplicateIndexKey{}, false
+	}
+	switch p.duplicateIndexMode {
+	case duplicateIndexSingleScalar:
+		if len(p.duplicateKeySlots) != 1 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if first.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexSingleInt,
+				templateKey: p.templateKey,
+				firstInt:    int64(first.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexSingleScalar,
+			templateKey: p.templateKey,
+			first:       first,
+		}, true
+	case duplicateIndexDoubleScalar:
+		if len(p.duplicateKeySlots) != 2 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if first.kind == duplicateScalarInt && second.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexDoubleInt,
+				templateKey: p.templateKey,
+				firstInt:    int64(first.bits),
+				secondInt:   int64(second.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexDoubleScalar,
+			templateKey: p.templateKey,
+			first:       first,
+			second:      second,
+		}, true
+	default:
+		return duplicateIndexKey{}, false
+	}
+}
+
+func duplicateScalarKeyFromFactSlot(slots []factSlot, slot int) (duplicateScalarKey, bool) {
+	if slot < 0 || slot >= len(slots) {
+		return duplicateScalarKey{}, false
+	}
+	current := slots[slot]
+	if !current.ok {
+		return duplicateScalarKey{}, false
+	}
+	return duplicateScalarKeyFromValue(current.value)
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factSlot) (duplicateIndexKey, bool) {
+	if p.duplicatePolicy != DuplicateStructural || p.structuralHashPrefix == 0 || len(slots) == 0 || len(p.template.fields) == 0 {
+		return duplicateIndexKey{}, false
+	}
+	hash, ok := structuralDuplicateSlotsHashWithPrefix(p.template, slots, p.structuralHashPrefix)
+	if !ok {
+		return duplicateIndexKey{}, false
+	}
+	return duplicateIndexKey{
+		kind:        duplicateIndexStructural,
+		templateKey: p.templateKey,
+		hash:        hash,
+	}, true
 }
 
 func (k duplicateIndexKey) isZero() bool {
@@ -822,6 +949,10 @@ const (
 func structuralDuplicateSlotsHash(template Template, slots []factSlot) (uint64, bool) {
 	hash := structuralDuplicateHashOffset
 	hash = structuralDuplicateHashString(hash, template.key.String())
+	return structuralDuplicateSlotsHashWithPrefix(template, slots, hash)
+}
+
+func structuralDuplicateSlotsHashWithPrefix(template Template, slots []factSlot, hash uint64) (uint64, bool) {
 	for i, field := range template.fields {
 		if i >= len(slots) {
 			break

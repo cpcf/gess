@@ -677,6 +677,7 @@ type compiledRuleAction struct {
 
 type compiledAssertTemplateValuesAction struct {
 	template    Template
+	insertPlan  compiledGeneratedFactInsertPlan
 	values      []compiledExpression
 	tokenValues []compiledTokenActionValue
 }
@@ -978,6 +979,7 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 	}
 	out.assertTemplateValues = compiledAssertTemplateValuesAction{
 		template:    template,
+		insertPlan:  newCompiledGeneratedFactInsertPlan(template),
 		values:      values,
 		tokenValues: tokenValues,
 	}
@@ -1422,7 +1424,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 		}
 	}
 
-	_, _, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, action.template, slots, mark, slotMark, origin)
+	_, _, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsWithPlanImmediate(ctx, state, &action.insertPlan, slots, mark, slotMark, origin)
 	if err != nil {
 		return err
 	}

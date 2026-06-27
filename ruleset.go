@@ -479,6 +479,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryConditionNames:        queryConditionNames,
 		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
 		hasEffectiveAutoFocus:      hasEffectiveAutoFocus,
+		generatedFactInsertPlans:   compileGeneratedFactInsertPlans(templatesByKey),
 		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
@@ -506,6 +507,7 @@ type Ruleset struct {
 	queryConditionNames        map[string]struct{}
 	assertTemplateActionCount  int
 	hasEffectiveAutoFocus      bool
+	generatedFactInsertPlans   map[TemplateKey]*compiledGeneratedFactInsertPlan
 	graph                      *reteGraph
 }
 
@@ -539,6 +541,29 @@ func countAssertTemplateActions(rules []compiledRule) int {
 		}
 	}
 	return count
+}
+
+func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template) map[TemplateKey]*compiledGeneratedFactInsertPlan {
+	if len(templatesByKey) == 0 {
+		return nil
+	}
+	out := make(map[TemplateKey]*compiledGeneratedFactInsertPlan, len(templatesByKey))
+	for key, template := range templatesByKey {
+		plan := newCompiledGeneratedFactInsertPlan(template)
+		if !plan.valid() {
+			continue
+		}
+		out[key] = &plan
+	}
+	return out
+}
+
+func (r *Ruleset) generatedFactInsertPlan(templateKey TemplateKey) (*compiledGeneratedFactInsertPlan, bool) {
+	if r == nil || templateKey == "" || r.generatedFactInsertPlans == nil {
+		return nil, false
+	}
+	plan, ok := r.generatedFactInsertPlans[templateKey]
+	return plan, ok && plan != nil
 }
 
 func (r *Ruleset) estimatedRunSlotCapacity(factCapacity int) int {

@@ -72,6 +72,7 @@ type reteGraphAlphaNode struct {
 	consumers    []reteBetaConditionRoute
 	entry        bindingTupleEntry
 	route        reteGraphAlphaRouteSelector
+	edges        reteGraphStageEdges
 }
 
 type reteGraphBetaNode struct {
@@ -88,6 +89,7 @@ type reteGraphBetaNode struct {
 	backchainDemands   []reteGraphBackchainDemandPlan
 	rightHasLeftPrefix bool
 	rightPrefixWidth   int
+	edges              reteGraphStageEdges
 }
 
 type reteGraphBackchainDemandPlan struct {
@@ -121,6 +123,14 @@ type reteGraphAggregateNode struct {
 	bindingSlot int
 	specs       []compiledAggregateSpec
 	entries     []bindingTupleEntry
+	edges       reteGraphStageEdges
+}
+
+type reteGraphStageEdges struct {
+	successors      []reteGraphStageSuccessor
+	aggregateInputs []reteGraphAggregateNodeID
+	aggregateOuters []reteGraphAggregateNodeID
+	terminals       []reteGraphTerminalRoute
 }
 
 type reteGraphTerminalNode struct {
@@ -1304,8 +1314,10 @@ func (g *reteGraph) appendAggregate(input, outer reteGraphStageRef, inputEntry b
 		entries:     cloneBindingTupleEntries(entries),
 	})
 	g.aggregatesByStage[input] = append(g.aggregatesByStage[input], id)
+	g.appendStageAggregateInput(input, id)
 	if outer.kind != reteGraphStageUnknown {
 		g.aggregateOuters[outer] = append(g.aggregateOuters[outer], id)
+		g.appendStageAggregateOuter(outer, id)
 	}
 	return id
 }
@@ -1315,6 +1327,10 @@ func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor ret
 		return
 	}
 	g.successorsByStage[source] = append(g.successorsByStage[source], successor)
+	edges := g.stageEdges(source)
+	if edges != nil {
+		edges.successors = append(edges.successors, successor)
+	}
 }
 
 func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphTerminalRoute) {
@@ -1322,6 +1338,86 @@ func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphT
 		return
 	}
 	g.terminalsByStage[source] = append(g.terminalsByStage[source], terminal)
+	edges := g.stageEdges(source)
+	if edges != nil {
+		edges.terminals = append(edges.terminals, terminal)
+	}
+}
+
+func (g *reteGraph) appendStageAggregateInput(source reteGraphStageRef, id reteGraphAggregateNodeID) {
+	if g == nil || source.kind == reteGraphStageUnknown || id <= 0 {
+		return
+	}
+	edges := g.stageEdges(source)
+	if edges != nil {
+		edges.aggregateInputs = append(edges.aggregateInputs, id)
+	}
+}
+
+func (g *reteGraph) appendStageAggregateOuter(source reteGraphStageRef, id reteGraphAggregateNodeID) {
+	if g == nil || source.kind == reteGraphStageUnknown || id <= 0 {
+		return
+	}
+	edges := g.stageEdges(source)
+	if edges != nil {
+		edges.aggregateOuters = append(edges.aggregateOuters, id)
+	}
+}
+
+func (g *reteGraph) stageEdges(source reteGraphStageRef) *reteGraphStageEdges {
+	if g == nil {
+		return nil
+	}
+	switch source.kind {
+	case reteGraphStageAlpha:
+		node := g.alphaNode(reteGraphAlphaNodeID(source.id))
+		if node == nil {
+			return nil
+		}
+		return &node.edges
+	case reteGraphStageBeta:
+		node := g.betaNode(reteGraphBetaNodeID(source.id))
+		if node == nil {
+			return nil
+		}
+		return &node.edges
+	case reteGraphStageAggregate:
+		node := g.aggregateNode(reteGraphAggregateNodeID(source.id))
+		if node == nil {
+			return nil
+		}
+		return &node.edges
+	default:
+		return nil
+	}
+}
+
+func (g *reteGraph) stageSuccessors(source reteGraphStageRef) []reteGraphStageSuccessor {
+	if edges := g.stageEdges(source); edges != nil {
+		return edges.successors
+	}
+	return g.successorsByStage[source]
+}
+
+func (g *reteGraph) stageAggregateInputs(source reteGraphStageRef) []reteGraphAggregateNodeID {
+	if edges := g.stageEdges(source); edges != nil {
+		return edges.aggregateInputs
+	}
+	return g.aggregatesByStage[source]
+}
+
+func (g *reteGraph) stageAggregateOuters(source reteGraphStageRef) []reteGraphAggregateNodeID {
+	if edges := g.stageEdges(source); edges != nil {
+		return edges.aggregateOuters
+	}
+	return g.aggregateOuters[source]
+}
+
+func (g *reteGraph) stageTerminals(source reteGraphStageRef) []reteGraphTerminalRoute {
+	if edges := g.stageEdges(source); edges != nil {
+		return edges.terminals
+	}
+	return g.terminalsByStage[source]
 }
 
 func (g *reteGraph) alphaNode(id reteGraphAlphaNodeID) *reteGraphAlphaNode {
