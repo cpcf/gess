@@ -4050,13 +4050,6 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 			delta.supported = false
 			continue
 		}
-		ok, err := node.matchesWorkingWithContextAndCounters(ctx, fact, nil)
-		if err != nil {
-			return delta, err
-		}
-		if !ok {
-			continue
-		}
 		match := conditionMatch{
 			conditionID: node.entry.conditionID,
 			bindingSlot: node.entry.bindingSlot,
