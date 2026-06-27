@@ -3851,7 +3851,7 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 
 	duplicateDelta := reteAgendaDelta{supported: true}
 	duplicateSpan := propagationCounterSpan{ledger: session.propagationCounters}
-	session.rete.graphBeta.insertTerminalToken(terminalID, 0, terminalToken, &duplicateDelta, &duplicateSpan)
+	_, _ = session.rete.graphBeta.insertTerminalToken(terminalID, 0, terminalToken, &duplicateDelta, &duplicateSpan)
 	duplicateSpan.finish()
 	if len(duplicateDelta.added) != 0 {
 		t.Fatalf("duplicate terminal delta additions = %d, want 0", len(duplicateDelta.added))

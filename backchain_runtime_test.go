@@ -115,6 +115,23 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
 		t.Fatalf("AssertTemplate(request): %v", err)
 	}
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	beforeRun := mustSnapshot(t, ctx, session)
+	demands := beforeRun.FactsByTemplateKey(demandKey)
+	if len(demands) != 1 {
+		t.Fatalf("demands before run = %d, want 1", len(demands))
+	}
+	demandID := demands[0].ID()
+	if session.rete == nil || session.rete.graphBeta == nil {
+		t.Fatal("session runtime is not graph beta-backed")
+	}
+	terminalRows := session.rete.graphBeta.alphaFactTerminalRows[demandID]
+	if len(terminalRows) != 1 {
+		t.Fatalf("generated demand terminal row handles = %d, want 1", len(terminalRows))
+	}
+	if row := session.rete.graphBeta.terminal(terminalRows[0].terminalID).rows.rowByHandle(terminalRows[0].handle); row == nil || row.token.isZero() {
+		t.Fatalf("generated demand terminal row handle resolved to %#v, want live terminal row", row)
+	}
 
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -125,6 +142,9 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	}
 	if consumed != 1 {
 		t.Fatalf("consume action fired %d times, want 1", consumed)
+	}
+	if rows := session.rete.graphBeta.alphaFactTerminalRows[demandID]; len(rows) != 0 {
+		t.Fatalf("generated demand terminal row handles after run = %d, want 0", len(rows))
 	}
 	snapshot := mustSnapshot(t, ctx, session)
 	answers := snapshot.FactsByTemplateKey(answer.Key())
