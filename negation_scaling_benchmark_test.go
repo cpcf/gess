@@ -154,7 +154,7 @@ func validateNegationScalingSession(t testing.TB, session *Session, result RunRe
 	if result.Status != RunCompleted || result.Fired != tc.firedCount() {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, tc.firedCount())
 	}
-	if got := len(session.factsByID); got != tc.finalFacts() {
+	if got := len(session.facts); got != tc.finalFacts() {
 		t.Fatalf("%s final fact count = %d, want %d", phase, got, tc.finalFacts())
 	}
 }

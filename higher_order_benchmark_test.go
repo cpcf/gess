@@ -244,7 +244,7 @@ func assertHigherOrderBenchmarkResult(t testing.TB, session *Session, result Run
 	if result.Fired != tc.firedCount() {
 		t.Fatalf("Run fired = %d, want %d", result.Fired, tc.firedCount())
 	}
-	if got, want := len(session.factsByID), tc.initialFacts()+tc.firedCount(); got != want {
+	if got, want := len(session.facts), tc.initialFacts()+tc.firedCount(); got != want {
 		t.Fatalf("fact count = %d, want %d", got, want)
 	}
 }

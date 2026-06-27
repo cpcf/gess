@@ -681,7 +681,7 @@ func validateLargeSteadyStateHarnessSession(t testing.TB, session *Session, resu
 	if result.Status != RunCompleted || result.Fired != largeSteadyStateFiredCount(tc) {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, largeSteadyStateFiredCount(tc))
 	}
-	if got := len(session.factsByID); got != largeSteadyStateFinalFacts(tc) {
+	if got := len(session.facts); got != largeSteadyStateFinalFacts(tc) {
 		t.Fatalf("%s final fact count = %d, want %d", phase, got, largeSteadyStateFinalFacts(tc))
 	}
 
@@ -767,7 +767,7 @@ func assertLargeSteadyStateFact(t testing.TB, session *Session, template string,
 	for _, id := range session.factsByTemplate[templateKey] {
 		fact := mustWorkingFactByID(t, session, id)
 		if fact == nil {
-			t.Fatalf("%s fact %s missing from factsByID", templateKey, id)
+			t.Fatalf("%s fact %s missing from working facts", templateKey, id)
 		}
 		snapshot := fact.snapshotForRevision(session.revision)
 		if largeSteadyStateFactMatches(snapshot, expected) {

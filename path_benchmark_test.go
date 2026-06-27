@@ -69,7 +69,7 @@ func BenchmarkGessNestedPathPredicatesResetOnly(b *testing.B) {
 				if result.Status != ResetApplied {
 					b.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
 				}
-				if got := len(session.factsByID); got != tc.events {
+				if got := len(session.facts); got != tc.events {
 					b.Fatalf("fact count after reset = %d, want %d", got, tc.events)
 				}
 				benchmarkNestedPathResetResult = result

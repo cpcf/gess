@@ -408,7 +408,7 @@ func validateGraphRuleNetworkSeedRunHarnessSession(t testing.TB, session *Sessio
 	if result.Status != RunCompleted || result.Fired != expected {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, expected)
 	}
-	if got := len(session.factsByID); got != initialFacts {
+	if got := len(session.facts); got != initialFacts {
 		t.Fatalf("%s facts retained = %d, want %d", phase, got, initialFacts)
 	}
 }

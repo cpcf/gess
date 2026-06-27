@@ -121,6 +121,7 @@ type Session struct {
 	nextRunSequence               uint64
 	facts                         []workingFact
 	factsByID                     map[FactID]int
+	factsBySequence               []int
 	factsByDuplicate              duplicateIndexes
 	factsByTemplate               map[TemplateKey][]FactID
 	factsByName                   map[string][]FactID
@@ -214,6 +215,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
 		factsByID:              state.factsByID,
+		factsBySequence:        state.factsBySequence,
 		factsByDuplicate:       state.factsByDuplicate,
 		factsByTemplate:        state.factsByTemplate,
 		factsByName:            state.factsByName,
@@ -327,10 +329,10 @@ func (s *Session) propagationCounterPhase() propagationCounterPhase {
 }
 
 func (s *Session) removeStoredFact(id FactID) {
-	if s == nil || len(s.facts) == 0 || s.factsByID == nil {
+	if s == nil || len(s.facts) == 0 {
 		return
 	}
-	index, ok := s.factsByID[id]
+	index, ok := s.factRowIndex(id)
 	if !ok || index < 0 || index >= len(s.facts) || s.facts[index].id != id {
 		return
 	}
@@ -338,29 +340,27 @@ func (s *Session) removeStoredFact(id FactID) {
 	if index != last {
 		moved := s.facts[last]
 		s.facts[index] = moved
-		s.factsByID[moved.id] = index
+		s.setFactRowIndex(moved.id, index)
 	}
+	s.deleteFactRowIndex(id)
 	s.facts[last] = workingFact{}
 	s.facts = s.facts[:last]
 }
 
 func (s *Session) reindexStoredFactRowsFrom(start int) {
-	if s == nil || s.factsByID == nil || start < 0 {
+	if s == nil || start < 0 {
 		return
 	}
 	for i := start; i < len(s.facts); i++ {
-		id := s.facts[i].id
-		if _, ok := s.factsByID[id]; ok {
-			s.factsByID[id] = i
-		}
+		s.setFactRowIndex(s.facts[i].id, i)
 	}
 }
 
 func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
-	if s == nil || s.factsByID == nil {
+	if s == nil {
 		return nil, false
 	}
-	index, ok := s.factsByID[id]
+	index, ok := s.factRowIndex(id)
 	if !ok || index < 0 || index >= len(s.facts) {
 		return nil, false
 	}
@@ -369,6 +369,61 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	return fact, true
+}
+
+func (s *Session) factRowIndex(id FactID) (int, bool) {
+	if s == nil || id.IsZero() {
+		return 0, false
+	}
+	if id.generation == s.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
+			row := s.factsBySequence[index]
+			if row >= 0 {
+				return row, true
+			}
+		}
+	}
+	if s.factsByID == nil {
+		return 0, false
+	}
+	index, ok := s.factsByID[id]
+	return index, ok
+}
+
+func (s *Session) setFactRowIndex(id FactID, row int) {
+	if s == nil || id.IsZero() || row < 0 {
+		return
+	}
+	if id.generation == s.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 {
+			for len(s.factsBySequence) <= index {
+				s.factsBySequence = append(s.factsBySequence, -1)
+			}
+			s.factsBySequence[index] = row
+			return
+		}
+	}
+	if s.factsByID != nil {
+		s.factsByID[id] = row
+	}
+}
+
+func (s *Session) deleteFactRowIndex(id FactID) {
+	if s == nil || id.IsZero() {
+		return
+	}
+	if id.generation == s.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
+			s.factsBySequence[index] = -1
+			return
+		}
+	}
+	if s.factsByID != nil {
+		delete(s.factsByID, id)
+	}
 }
 
 // factsForTarget is an internal matcher view. Callers must hold session
@@ -1683,7 +1738,6 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	state.removeFactTargetIndexes(factTemplateKey, factName, id)
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
-	delete(state.factsByID, id)
 	s.commitFactWorkspace(state)
 	if cascade {
 		s.logicalSupportCounters.LogicalFactsRetracted++
@@ -1752,7 +1806,6 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	state.removeFactTargetIndexes(factTemplateKey, factName, id)
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
-	delete(state.factsByID, id)
 	s.commitFactWorkspace(state)
 	s.logicalSupportCounters.LogicalFactsRetracted++
 	s.logicalSupportCounters.CascadeRetractions++
@@ -3337,6 +3390,7 @@ type factWorkspace struct {
 	facts                     []workingFact
 	insertionOrder            []FactID
 	factsByID                 map[FactID]int
+	factsBySequence           []int
 	factsByDuplicate          duplicateIndexes
 	duplicateReserveRulesetID RulesetID
 	factsByTemplate           map[TemplateKey][]FactID
@@ -3667,11 +3721,8 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	w.recency = 0
 	w.skipFactTargetIndexes = false
 	w.factTargetIndexesDirty = false
-	if w.factsByID == nil {
-		w.factsByID = make(map[FactID]int, initialCapacity)
-	} else {
-		clear(w.factsByID)
-	}
+	w.factsByID = nil
+	w.factsBySequence = resetFactRowSequenceIndex(w.factsBySequence, initialCapacity)
 	w.factsByDuplicate.reset(initialCapacity)
 	if w.factsByTemplate == nil {
 		w.factsByTemplate = make(map[TemplateKey][]FactID, initialCapacity)
@@ -3778,10 +3829,10 @@ func (w *factWorkspace) removeFactTargetIndexes(templateKey TemplateKey, name st
 }
 
 func (w *factWorkspace) removeStoredFact(id FactID) {
-	if w == nil || len(w.facts) == 0 || w.factsByID == nil {
+	if w == nil || len(w.facts) == 0 {
 		return
 	}
-	index, ok := w.factsByID[id]
+	index, ok := w.factRowIndex(id)
 	if !ok || index < 0 || index >= len(w.facts) || w.facts[index].id != id {
 		return
 	}
@@ -3789,8 +3840,9 @@ func (w *factWorkspace) removeStoredFact(id FactID) {
 	if index != last {
 		moved := w.facts[last]
 		w.facts[index] = moved
-		w.factsByID[moved.id] = index
+		w.setFactRowIndex(moved.id, index)
 	}
+	w.deleteFactRowIndex(id)
 	w.facts[last] = workingFact{}
 	w.facts = w.facts[:last]
 }
@@ -3861,9 +3913,7 @@ func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 
 	w.facts = append(w.facts, fact)
 	stored := &w.facts[len(w.facts)-1]
-	if w.factsByID != nil {
-		w.factsByID[stored.id] = len(w.facts) - 1
-	}
+	w.setFactRowIndex(stored.id, len(w.facts)-1)
 	return stored
 }
 
@@ -3918,7 +3968,7 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 			w.factsByDuplicate.deleteFact(fact.dupIndex, fact.id)
 		}
 		w.removeFactTargetIndexes(fact.templateKey, fact.name, fact.id)
-		delete(w.factsByID, fact.id)
+		w.deleteFactRowIndex(fact.id)
 	}
 	w.sequence = mark.sequence
 	w.recency = mark.recency
@@ -3943,10 +3993,8 @@ func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex 
 		return factWorkspaceModifyMark{factIndex: -1}
 	}
 	index := -1
-	if w.factsByID != nil {
-		if found, ok := w.factsByID[fact.id]; ok {
-			index = found
-		}
+	if found, ok := w.factRowIndex(fact.id); ok {
+		index = found
 	}
 	mark := factWorkspaceModifyMark{
 		recency:                w.recency,
@@ -3976,10 +4024,10 @@ func (w *factWorkspace) rollbackFactModify(mark factWorkspaceModifyMark) {
 }
 
 func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
-	if w == nil || w.factsByID == nil {
+	if w == nil {
 		return nil, false
 	}
-	index, ok := w.factsByID[id]
+	index, ok := w.factRowIndex(id)
 	if !ok || index < 0 || index >= len(w.facts) {
 		return nil, false
 	}
@@ -3988,6 +4036,61 @@ func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	return fact, true
+}
+
+func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
+	if w == nil || id.IsZero() {
+		return 0, false
+	}
+	if id.generation == w.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
+			row := w.factsBySequence[index]
+			if row >= 0 {
+				return row, true
+			}
+		}
+	}
+	if w.factsByID == nil {
+		return 0, false
+	}
+	index, ok := w.factsByID[id]
+	return index, ok
+}
+
+func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
+	if w == nil || id.IsZero() || row < 0 {
+		return
+	}
+	if id.generation == w.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 {
+			for len(w.factsBySequence) <= index {
+				w.factsBySequence = append(w.factsBySequence, -1)
+			}
+			w.factsBySequence[index] = row
+			return
+		}
+	}
+	if w.factsByID != nil {
+		w.factsByID[id] = row
+	}
+}
+
+func (w *factWorkspace) deleteFactRowIndex(id FactID) {
+	if w == nil || id.IsZero() {
+		return
+	}
+	if id.generation == w.generation && id.sequence > 0 {
+		index := int(id.sequence - 1)
+		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
+			w.factsBySequence[index] = -1
+			return
+		}
+	}
+	if w.factsByID != nil {
+		delete(w.factsByID, id)
+	}
 }
 
 func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
@@ -4013,14 +4116,11 @@ func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factS
 }
 
 func (w *factWorkspace) reindexFactRowsFrom(start int) {
-	if w == nil || w.factsByID == nil || start < 0 {
+	if w == nil || start < 0 {
 		return
 	}
 	for i := start; i < len(w.facts); i++ {
-		id := w.facts[i].id
-		if _, ok := w.factsByID[id]; ok {
-			w.factsByID[id] = i
-		}
+		w.setFactRowIndex(w.facts[i].id, i)
 	}
 }
 
@@ -5098,6 +5198,7 @@ func (s *Session) activeFactWorkspace() factWorkspace {
 		facts:                  s.facts,
 		insertionOrder:         s.insertionOrder,
 		factsByID:              s.factsByID,
+		factsBySequence:        s.factsBySequence,
 		factsByDuplicate:       s.factsByDuplicate,
 		factsByTemplate:        s.factsByTemplate,
 		factsByName:            s.factsByName,
@@ -5111,6 +5212,7 @@ func (s *Session) clonedFactWorkspace() factWorkspace {
 	state.facts = cloneWorkingFacts(state.facts)
 	state.insertionOrder = cloneFactIDs(state.insertionOrder)
 	state.factsByID = cloneFactIDIndex(state.factsByID)
+	state.factsBySequence = cloneFactRowSequenceIndex(state.factsBySequence)
 	state.factsByDuplicate = cloneDuplicateIndexes(state.factsByDuplicate)
 	state.factsByTemplate = cloneFactIDSliceMap(state.factsByTemplate)
 	state.factsByName = cloneStringFactIDSliceMap(state.factsByName)
@@ -5126,6 +5228,7 @@ func (s *Session) commitFactWorkspace(state factWorkspace) {
 	s.nextRecency = state.recency
 	s.facts = state.facts
 	s.factsByID = state.factsByID
+	s.factsBySequence = state.factsBySequence
 	s.factsByDuplicate = state.factsByDuplicate
 	s.factsByTemplate = state.factsByTemplate
 	s.factsByName = state.factsByName
@@ -5143,6 +5246,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.nextRecency, workspace.recency = workspace.recency, s.nextRecency
 	s.facts, workspace.facts = workspace.facts, s.facts
 	s.factsByID, workspace.factsByID = workspace.factsByID, s.factsByID
+	s.factsBySequence, workspace.factsBySequence = workspace.factsBySequence, s.factsBySequence
 	s.factsByDuplicate, workspace.factsByDuplicate = workspace.factsByDuplicate, s.factsByDuplicate
 	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
 	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
@@ -5157,7 +5261,8 @@ func (s *Session) resetWorkingMemory() {
 	s.nextFactSequence = 0
 	s.nextRecency = 0
 	s.facts = nil
-	s.factsByID = make(map[FactID]int)
+	s.factsByID = nil
+	s.factsBySequence = nil
 	s.factsByDuplicate = duplicateIndexes{}
 	s.factsByDuplicate.reset(0)
 	s.factsByTemplate = make(map[TemplateKey][]FactID)
@@ -5187,6 +5292,25 @@ func cloneFactIDIndex(in map[FactID]int) map[FactID]int {
 	}
 	out := make(map[FactID]int, len(in))
 	maps.Copy(out, in)
+	return out
+}
+
+func resetFactRowSequenceIndex(index []int, capacity int) []int {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if cap(index) < capacity {
+		return make([]int, 0, capacity)
+	}
+	return index[:0]
+}
+
+func cloneFactRowSequenceIndex(in []int) []int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]int, len(in), cap(in))
+	copy(out, in)
 	return out
 }
 

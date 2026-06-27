@@ -403,7 +403,7 @@ func assertPredicateNormalizationBenchmarkResult(t testing.TB, session *Session,
 	if result.Status != RunCompleted || result.Fired != tc.firedCount() {
 		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, tc.firedCount())
 	}
-	if got := len(session.factsByID); got != tc.finalFacts() {
+	if got := len(session.facts); got != tc.finalFacts() {
 		t.Fatalf("final facts = %d, want %d", got, tc.finalFacts())
 	}
 }

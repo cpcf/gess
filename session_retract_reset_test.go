@@ -471,8 +471,8 @@ func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
 	if got, want := session.Generation(), Generation(2); got != want {
 		t.Fatalf("session generation after failed reused reset = %d, want %d", got, want)
 	}
-	if got, want := len(session.factsByID), baseline.Len(); got != want {
-		t.Fatalf("factsByID len after failed reused reset = %d, want %d", got, want)
+	if got, want := len(session.facts), baseline.Len(); got != want {
+		t.Fatalf("working fact len after failed reused reset = %d, want %d", got, want)
 	}
 	if got, want := len(session.insertionOrder), baseline.Len(); got != want {
 		t.Fatalf("insertion order len after failed reused reset = %d, want %d", got, want)
@@ -547,8 +547,8 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 		t.Fatalf("remaining fact id = (%v, %v), want person-1", got, ok)
 	}
 
-	if got, want := len(session.factsByID), 1; got != want {
-		t.Fatalf("factsByID len after shrinking reset = %d, want %d", got, want)
+	if got, want := len(session.facts), 1; got != want {
+		t.Fatalf("working fact len after shrinking reset = %d, want %d", got, want)
 	}
 	if got, want := len(session.insertionOrder), 1; got != want {
 		t.Fatalf("insertion order len after shrinking reset = %d, want %d", got, want)
@@ -1026,7 +1026,7 @@ func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	if session == nil {
 		t.Fatal("session is nil")
 	}
-	if got, want := len(session.factsByID), 1; got != want {
+	if got, want := len(session.facts), 1; got != want {
 		t.Fatalf("working facts = %d, want %d", got, want)
 	}
 	for i := range session.facts {

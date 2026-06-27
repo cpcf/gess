@@ -96,17 +96,17 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	if got, want := len(session.facts), 2; got != want {
 		t.Fatalf("facts slice length after second assert = %d, want %d", got, want)
 	}
-	if got, want := session.factsByID[first.Fact.ID()], 0; got != want {
-		t.Fatalf("first fact row after growth = %d, want %d", got, want)
+	if got, ok := session.factRowIndex(first.Fact.ID()); !ok || got != 0 {
+		t.Fatalf("first fact row after growth = %d/%v, want 0/true", got, ok)
 	}
-	if got, want := session.factsByID[second.Fact.ID()], 1; got != want {
-		t.Fatalf("second fact row = %d, want %d", got, want)
+	if got, ok := session.factRowIndex(second.Fact.ID()); !ok || got != 1 {
+		t.Fatalf("second fact row = %d/%v, want 1/true", got, ok)
 	}
 
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
 		t.Fatalf("retract first fact: %v", err)
 	}
-	if _, ok := session.factsByID[first.Fact.ID()]; ok {
+	if _, ok := session.factRowIndex(first.Fact.ID()); ok {
 		t.Fatalf("retracted fact %q remained in factsByID", first.Fact.ID())
 	}
 	if got, want := len(session.facts), 1; got != want {
@@ -119,13 +119,13 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 			t.Fatalf("growth assert %d: %v", i, err)
 		}
 	}
-	if _, ok := session.factsByID[first.Fact.ID()]; ok {
+	if _, ok := session.factRowIndex(first.Fact.ID()); ok {
 		t.Fatalf("retracted fact %q was resurrected after slice growth", first.Fact.ID())
 	}
 	for i := range session.facts {
 		fact := &session.facts[i]
-		if got := session.factsByID[fact.id]; got != i {
-			t.Fatalf("fact %q row after growth = %d, want %d", fact.id, got, i)
+		if got, ok := session.factRowIndex(fact.id); !ok || got != i {
+			t.Fatalf("fact %q row after growth = %d/%v, want %d/true", fact.id, got, ok, i)
 		}
 	}
 }
