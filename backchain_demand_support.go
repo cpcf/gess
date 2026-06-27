@@ -644,13 +644,16 @@ func backchainDemandHashStart() uint64 {
 }
 
 func backchainDemandHashAddUint64(hash uint64, value uint64) uint64 {
-	const prime uint64 = 1099511628211
-	for range 8 {
-		hash ^= value & 0xff
-		hash *= prime
-		value >>= 8
-	}
-	return hash
+	return backchainDemandHashAvalanche(hash ^ backchainDemandHashAvalanche(value+0x9e3779b97f4a7c15))
+}
+
+func backchainDemandHashAvalanche(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	value ^= value >> 31
+	return value
 }
 
 func backchainDemandHashAddString(hash uint64, value string) uint64 {
