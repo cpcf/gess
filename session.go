@@ -178,7 +178,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 	state := newFactWorkspace(1, revision.estimatedRunFactCapacity(len(compiledInitials)))
 	state.reserveTemplateIndexes(revision)
-	state.factsByDuplicate.reserve(revision, cap(state.facts))
+	state.reserveDuplicateIndexes(revision)
 	state.reserveSlotStorage(revision.estimatedRunSlotCapacity(cap(state.facts)))
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
@@ -1847,7 +1847,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
-	next.factsByDuplicate.reserve(s.revision, cap(next.facts))
+	next.reserveDuplicateIndexes(s.revision)
 	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 
@@ -3306,18 +3306,19 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 }
 
 type factWorkspace struct {
-	generation             Generation
-	sequence               uint64
-	recency                Recency
-	facts                  []workingFact
-	insertionOrder         []FactID
-	factsByID              map[FactID]int
-	factsByDuplicate       duplicateIndexes
-	factsByTemplate        map[TemplateKey][]FactID
-	factsByName            map[string][]FactID
-	slotStorage            []factSlot
-	skipFactTargetIndexes  bool
-	factTargetIndexesDirty bool
+	generation                Generation
+	sequence                  uint64
+	recency                   Recency
+	facts                     []workingFact
+	insertionOrder            []FactID
+	factsByID                 map[FactID]int
+	factsByDuplicate          duplicateIndexes
+	duplicateReserveRulesetID RulesetID
+	factsByTemplate           map[TemplateKey][]FactID
+	factsByName               map[string][]FactID
+	slotStorage               []factSlot
+	skipFactTargetIndexes     bool
+	factTargetIndexesDirty    bool
 }
 
 type factWorkspaceInsertMark struct {
@@ -3676,6 +3677,18 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 	} else {
 		w.slotStorage = w.slotStorage[:0]
 	}
+}
+
+func (w *factWorkspace) reserveDuplicateIndexes(revision *Ruleset) {
+	if w == nil || revision == nil {
+		return
+	}
+	rulesetID := revision.ID()
+	if w.duplicateReserveRulesetID == rulesetID {
+		return
+	}
+	w.factsByDuplicate.reserve(revision, cap(w.facts))
+	w.duplicateReserveRulesetID = rulesetID
 }
 
 func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
