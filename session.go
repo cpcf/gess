@@ -1983,7 +1983,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
-	next.reserveDuplicateIndexes(s.revision)
+	if len(compiledInitials) > 0 {
+		next.reserveDuplicateIndexes(s.revision)
+	}
 	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
 	s.resetFactsScratch = facts
 

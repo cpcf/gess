@@ -1021,6 +1021,39 @@ func TestSessionResetSlotBackedValidationFailureLeavesStateIntact(t *testing.T) 
 	}
 }
 
+func TestSessionResetWithoutInitialFactsDefersDuplicateIndexReserve(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "dedupe",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "reset-empty-duplicate-reserve-session")
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if got := session.factsByDuplicate.len(); got != 0 {
+		t.Fatalf("duplicate index length = %d, want 0 after empty reset", got)
+	}
+
+	if _, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("AssertTemplate first: %v", err)
+	}
+	if got := session.factsByDuplicate.len(); got != 1 {
+		t.Fatalf("duplicate index length = %d, want 1 after first assert", got)
+	}
+	if result, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("AssertTemplate duplicate: %v", err)
+	} else if result.Inserted() {
+		t.Fatal("duplicate unique-key assert inserted a second fact")
+	}
+}
+
 func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	t.Helper()
 	if session == nil {
