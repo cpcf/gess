@@ -1428,7 +1428,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if inserted && s.revision.factMayAffectRuleMatchesByTarget(action.template.Name(), action.template.Key()) {
+	if inserted && action.insertPlan.affectsRuleMatches {
 		if !s.canMutateDuringRun(origin) {
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err

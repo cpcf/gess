@@ -1369,7 +1369,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		return fact, duplicateKey, false, reteAgendaDelta{}, nil
 	}
 
-	if !s.revision.factMayAffectReteByTarget(plan.name, plan.templateKey) {
+	if !plan.affectsRete {
 		s.commitFactWorkspace(state)
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
 		return fact, duplicateKey, true, reteAgendaDelta{}, nil

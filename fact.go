@@ -346,6 +346,8 @@ type compiledGeneratedFactInsertPlan struct {
 	duplicateIndexMode   duplicateIndexKind
 	duplicateKeySlots    []int
 	structuralHashPrefix uint64
+	affectsRuleMatches   bool
+	affectsRete          bool
 }
 
 func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
@@ -355,6 +357,8 @@ func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFact
 		templateKey:        template.Key(),
 		duplicatePolicy:    template.duplicatePolicy,
 		duplicateIndexMode: template.duplicateIndexMode,
+		affectsRuleMatches: true,
+		affectsRete:        true,
 	}
 	if len(template.duplicateKeySlots) > 0 {
 		plan.duplicateKeySlots = slices.Clone(template.duplicateKeySlots)

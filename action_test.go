@@ -1554,6 +1554,85 @@ func TestNativeAssertTemplateValuesAction(t *testing.T) {
 	}
 }
 
+func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing.T) {
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "generated",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "source", Field: "id"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate-native",
+		Conditions: []RuleConditionSpec{{
+			Binding: "source", Target: TemplateKeyFact(source.Key()),
+		}},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	collector := &testEventCollector{}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("native-assert-action-listener-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	result, err := session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	events := collector.Events()
+	if got, want := len(events), 4; got != want {
+		t.Fatalf("events = %d, want %d: %#v", got, want, events)
+	}
+	if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventRuleFired || events[3].Type != EventFactAsserted {
+		t.Fatalf("event types = %q, %q, %q, %q; want assert, activate, fired, assert", events[0].Type, events[1].Type, events[2].Type, events[3].Type)
+	}
+	generatedEvent := events[3]
+	selected := events[1]
+	if generatedEvent.RuleID != selected.RuleID || generatedEvent.RuleRevisionID != selected.RuleRevisionID || generatedEvent.ActivationID != selected.ActivationID {
+		t.Fatalf("generated event origin = (%q, %q, %q), want (%q, %q, %q)", generatedEvent.RuleID, generatedEvent.RuleRevisionID, generatedEvent.ActivationID, selected.RuleID, selected.RuleRevisionID, selected.ActivationID)
+	}
+	if generatedEvent.Delta == nil {
+		t.Fatal("generated assert event delta is nil")
+	}
+	if generatedEvent.Delta.RuleID != selected.RuleID || generatedEvent.Delta.RuleRevisionID != selected.RuleRevisionID || generatedEvent.Delta.ActivationID != selected.ActivationID {
+		t.Fatalf("generated event delta origin = %#v, want selected activation", generatedEvent.Delta)
+	}
+	if generatedEvent.Delta.NewDuplicate == "" {
+		t.Fatal("generated assert event duplicate key is empty")
+	}
+	if generatedEvent.Delta.After == nil {
+		t.Fatal("generated assert event after snapshot is nil")
+	}
+	if got, ok := generatedEvent.Delta.After.Field("id"); !ok || !got.Equal(mustValue(t, "s-1")) {
+		t.Fatalf("generated assert event after id = (%v, %t), want s-1", got, ok)
+	}
+}
+
 func TestNativeAssertTemplateValuesActionUsesUntargetedTokenFastPath(t *testing.T) {
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1598,6 +1677,9 @@ func TestNativeAssertTemplateValuesActionUsesUntargetedTokenFastPath(t *testing.
 	compiled := revision.rules["generate-native"].actionExecutions[0].assertTemplateValues
 	if got, want := compiled.tokenValues[0].kind, compiledTokenActionValueStringCall2ConstBindingField; got != want {
 		t.Fatalf("token action value kind = %v, want %v", got, want)
+	}
+	if compiled.insertPlan.affectsRuleMatches || compiled.insertPlan.affectsRete {
+		t.Fatalf("untargeted generated insert plan affects rule=%v rete=%v, want false/false", compiled.insertPlan.affectsRuleMatches, compiled.insertPlan.affectsRete)
 	}
 
 	session := mustSession(t, revision, "native-assert-action-token-fast-path-session")

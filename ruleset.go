@@ -456,6 +456,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		indexQueryConditionDependencies(query, queryConditionTemplateKeys, queryConditionNames)
 	}
 
+	generatedFactInsertPlans := compileGeneratedFactInsertPlans(templatesByKey, conditionTemplateKeys, conditionNames, queryConditionTemplateKeys, queryConditionNames)
+	compiledRules = annotateGeneratedFactInsertPlansOnRules(compiledRules, rulesByName, rulesByID, rulesByRevisionID, generatedFactInsertPlans)
+
 	return &Ruleset{
 		id:                         rulesetID(compiledModules, compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
 		modules:                    modules,
@@ -479,7 +482,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryConditionNames:        queryConditionNames,
 		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
 		hasEffectiveAutoFocus:      hasEffectiveAutoFocus,
-		generatedFactInsertPlans:   compileGeneratedFactInsertPlans(templatesByKey),
+		generatedFactInsertPlans:   generatedFactInsertPlans,
 		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
 }
@@ -543,7 +546,7 @@ func countAssertTemplateActions(rules []compiledRule) int {
 	return count
 }
 
-func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template) map[TemplateKey]*compiledGeneratedFactInsertPlan {
+func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
 	if len(templatesByKey) == 0 {
 		return nil
 	}
@@ -553,9 +556,56 @@ func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template) ma
 		if !plan.valid() {
 			continue
 		}
+		plan.affectsRuleMatches = targetMayAffectConditions(plan.name, plan.templateKey, conditionTemplateKeys, conditionNames)
+		plan.affectsRete = plan.affectsRuleMatches || targetMayAffectConditions(plan.name, plan.templateKey, queryConditionTemplateKeys, queryConditionNames)
 		out[key] = &plan
 	}
 	return out
+}
+
+func annotateGeneratedFactInsertPlansOnRules(rules []compiledRule, byName map[string]compiledRule, byID map[RuleID]compiledRule, byRevisionID map[RuleRevisionID]compiledRule, plans map[TemplateKey]*compiledGeneratedFactInsertPlan) []compiledRule {
+	if len(rules) == 0 || len(plans) == 0 {
+		return rules
+	}
+	for i := range rules {
+		rule := rules[i]
+		changed := false
+		for actionIndex := range rule.actionExecutions {
+			action := &rule.actionExecutions[actionIndex]
+			if action.kind != compiledRuleActionAssertTemplateValues {
+				continue
+			}
+			plan, ok := plans[action.assertTemplateValues.template.Key()]
+			if !ok {
+				continue
+			}
+			action.assertTemplateValues.insertPlan.affectsRuleMatches = plan.affectsRuleMatches
+			action.assertTemplateValues.insertPlan.affectsRete = plan.affectsRete
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		rules[i] = rule
+		byName[rule.name] = rule
+		byID[rule.id] = rule
+		byRevisionID[rule.revisionID] = rule
+	}
+	return rules
+}
+
+func targetMayAffectConditions(name string, templateKey TemplateKey, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}) bool {
+	if templateKey != "" {
+		if _, ok := conditionTemplateKeys[templateKey]; ok {
+			return true
+		}
+	}
+	if name != "" {
+		if _, ok := conditionNames[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Ruleset) generatedFactInsertPlan(templateKey TemplateKey) (*compiledGeneratedFactInsertPlan, bool) {
