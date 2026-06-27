@@ -728,8 +728,81 @@ func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset
 }
 
 func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
+	if len(removed) <= 1 && len(added) <= 1 {
+		return a.applySingleTerminalTokenDeltasWithoutChanges(ctx, revision, removed, added)
+	}
 	_, err := a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, false)
 	return err
+}
+
+func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
+	if a == nil || revision == nil {
+		return ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.revision = revision
+	a.normalizePendingKeys()
+
+	if len(removed) == 1 {
+		delta := removed[0]
+		if !delta.token.isZero() {
+			rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+			if !ok {
+				return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+			}
+			existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
+			if ok {
+				switch existing.status {
+				case activationStatusPending:
+					existing.status = activationStatusDeactivated
+					a.lazyDeactivated++
+				case activationStatusConsumed:
+					existing.status = activationStatusDeactivated
+				}
+			}
+		}
+	}
+
+	if len(added) != 1 {
+		return nil
+	}
+	delta := added[0]
+	if delta.token.isZero() {
+		return nil
+	}
+	rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+	if !ok {
+		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+	}
+	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		if existing.status == activationStatusDeactivated {
+			existing.status = activationStatusPending
+			pending := activationKeyPending(a.pending, key)
+			if pending && a.lazyDeactivated > 0 {
+				a.lazyDeactivated--
+			}
+			if !pending {
+				a.pending = a.insertActivationKeySorted(a.pending, key, existing)
+			}
+		}
+		return nil
+	}
+	a.reservePendingActivationKeys(1)
+	rowMark := a.activationRows.count
+	created := a.activationRows.addEmpty()
+	if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
+		a.activationRows.truncate(rowMark)
+		return err
+	}
+	key := a.storePreparedActivation(created)
+	a.pending = a.insertActivationKeySorted(a.pending, key, created)
+	return nil
 }
 
 func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {

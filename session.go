@@ -104,6 +104,7 @@ type Session struct {
 	runAgendaRemoved     []reteTerminalTokenDelta
 	runAgendaUpdated     []reteTerminalTokenUpdate
 	runAgendaPending     bool
+	runAgendaDirect      bool
 	agendaReady          bool
 	agendaDirty          bool
 	actionBindingScratch actionContextBindingState
@@ -4884,6 +4885,9 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 	if s.agendaDirty {
 		return fmt.Errorf("%w: cannot record run agenda delta while agenda is dirty", ErrUnsupportedRuntime)
 	}
+	if s.canApplyRunAgendaDeltaDirect(delta) {
+		return s.applyRunAgendaDeltaDirect(delta)
+	}
 	total := len(delta.added) + len(delta.removed) + len(delta.updated)
 	if !s.runAgendaPending {
 		s.runAgendaDeltas = s.runAgendaDeltas[:0]
@@ -4904,6 +4908,34 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 		s.markAgendaDirty()
 		return err
 	}
+	return nil
+}
+
+func (s *Session) canApplyRunAgendaDeltaDirect(delta reteAgendaDelta) bool {
+	if s == nil || !delta.supported || s.agendaDirty || !s.agendaReady {
+		return false
+	}
+	if s.revision == nil || s.revision.hasAutoFocusRules() || len(s.listeners) > 0 {
+		return false
+	}
+	if s.runAgendaPending && !s.runAgendaDirect {
+		return false
+	}
+	return true
+}
+
+func (s *Session) applyRunAgendaDeltaDirect(delta reteAgendaDelta) error {
+	if s == nil {
+		return nil
+	}
+	if _, ok, err := s.applyReteAgendaDeltaInternal(context.Background(), delta, false); err != nil {
+		s.markAgendaDirty()
+		return err
+	} else if !ok {
+		return fmt.Errorf("%w: unsupported direct agenda delta during run", ErrUnsupportedRuntime)
+	}
+	s.runAgendaPending = true
+	s.runAgendaDirect = true
 	return nil
 }
 
@@ -4983,6 +5015,17 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 	if s == nil || !s.runAgendaPending {
 		return nil
 	}
+	if s.runAgendaDirect {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := ctx.Err(); err != nil {
+			s.markAgendaDirty()
+			return err
+		}
+		s.clearRunAgendaDelta()
+		return nil
+	}
 	delta, err := s.coalesceRunAgendaDeltas()
 	if err != nil {
 		s.clearRunAgendaDelta()
@@ -5043,6 +5086,7 @@ func (s *Session) clearRunAgendaDelta() {
 	s.runAgendaRemoved = s.runAgendaRemoved[:0]
 	s.runAgendaUpdated = s.runAgendaUpdated[:0]
 	s.runAgendaPending = false
+	s.runAgendaDirect = false
 }
 
 type runAgendaDeltaState struct {
