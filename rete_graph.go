@@ -93,8 +93,23 @@ type reteGraphBetaNode struct {
 type reteGraphBackchainDemandPlan struct {
 	templateKey TemplateKey
 	side        reteGraphBetaInputSide
+	slotCount   int
+	constSlots  []reteGraphBackchainDemandConstSlot
+	joinSlots   []reteGraphBackchainDemandJoinSlot
 	constraints []compiledFieldConstraint
 	joins       []compiledJoinConstraint
+}
+
+type reteGraphBackchainDemandConstSlot struct {
+	slot  int
+	value Value
+}
+
+type reteGraphBackchainDemandJoinSlot struct {
+	slot        int
+	bindingSlot int
+	access      compiledPathAccess
+	last        bool
 }
 
 type reteGraphAggregateNode struct {
@@ -1657,6 +1672,10 @@ func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condit
 	if !ok {
 		return
 	}
+	demandTemplate, ok := templatesByKey[demandKey]
+	if !ok || !demandTemplate.backchainDemand || !demandTemplate.closed {
+		return
+	}
 	node := g.betaNode(betaID)
 	if node == nil || node.kind != reteGraphBetaNodeJoin {
 		return
@@ -1664,9 +1683,12 @@ func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condit
 	plan := reteGraphBackchainDemandPlan{
 		templateKey: demandKey,
 		side:        side,
+		slotCount:   len(demandTemplate.fields),
 		constraints: cloneCompiledFieldConstraints(condition.constraints),
 		joins:       cloneCompiledJoinConstraints(joins),
 	}
+	plan.constSlots = compileReteGraphBackchainDemandConstSlots(demandTemplate, condition.constraints)
+	plan.joinSlots = compileReteGraphBackchainDemandJoinSlots(demandTemplate, side, joins)
 	for _, existing := range node.backchainDemands {
 		if existing.templateKey == plan.templateKey &&
 			existing.side == plan.side &&
@@ -1676,6 +1698,89 @@ func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condit
 		}
 	}
 	node.backchainDemands = append(node.backchainDemands, plan)
+}
+
+func compileReteGraphBackchainDemandConstSlots(template Template, constraints []compiledFieldConstraint) []reteGraphBackchainDemandConstSlot {
+	if len(constraints) == 0 || len(template.fields) == 0 {
+		return nil
+	}
+	out := make([]reteGraphBackchainDemandConstSlot, 0, len(constraints))
+	for _, constraint := range constraints {
+		if constraint.operator != FieldConstraintOpEqual || !constraint.access.topLevel() {
+			continue
+		}
+		slot := constraint.access.rootSlot
+		if slot < 0 {
+			var ok bool
+			slot, ok = template.fieldSlot(constraint.access.root)
+			if !ok {
+				continue
+			}
+		}
+		if slot < 0 || slot >= len(template.fields) {
+			continue
+		}
+		out = append(out, reteGraphBackchainDemandConstSlot{
+			slot:  slot,
+			value: cloneValue(constraint.value),
+		})
+	}
+	return out
+}
+
+func compileReteGraphBackchainDemandJoinSlots(template Template, side reteGraphBetaInputSide, joins []compiledJoinConstraint) []reteGraphBackchainDemandJoinSlot {
+	if len(joins) == 0 || len(template.fields) == 0 {
+		return nil
+	}
+	out := make([]reteGraphBackchainDemandJoinSlot, 0, len(joins))
+	for _, join := range joins {
+		if join.operator != FieldConstraintOpEqual {
+			continue
+		}
+		switch side {
+		case reteGraphBetaInputRight:
+			if !join.access.topLevel() {
+				continue
+			}
+			slot := join.access.rootSlot
+			if slot < 0 {
+				var ok bool
+				slot, ok = template.fieldSlot(join.access.root)
+				if !ok {
+					continue
+				}
+			}
+			if slot < 0 || slot >= len(template.fields) {
+				continue
+			}
+			out = append(out, reteGraphBackchainDemandJoinSlot{
+				slot:        slot,
+				bindingSlot: join.refBindingSlot,
+				access:      join.refAccess,
+			})
+		case reteGraphBetaInputLeft:
+			if !join.refAccess.topLevel() {
+				continue
+			}
+			slot := join.refAccess.rootSlot
+			if slot < 0 {
+				var ok bool
+				slot, ok = template.fieldSlot(join.refAccess.root)
+				if !ok {
+					continue
+				}
+			}
+			if slot < 0 || slot >= len(template.fields) {
+				continue
+			}
+			out = append(out, reteGraphBackchainDemandJoinSlot{
+				slot:   slot,
+				access: join.access,
+				last:   true,
+			})
+		}
+	}
+	return out
 }
 
 func (g *reteGraph) hasBackchainDemandPlans() bool {

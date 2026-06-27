@@ -3594,11 +3594,7 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 }
 
 func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandID, bool) {
-	if m == nil || m.revision == nil || plan.templateKey == "" {
-		return 0, false
-	}
-	template, ok := m.revision.templateByKey(plan.templateKey)
-	if !ok || !template.backchainDemand || !template.closed {
+	if m == nil || plan.templateKey == "" || plan.slotCount <= 0 {
 		return 0, false
 	}
 	supportStart := len(m.backchainDemandSupport)
@@ -3608,83 +3604,43 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 	}
 	supportCount := len(m.backchainDemandSupport) - supportStart
 	slotStart := len(m.backchainDemandSlots)
-	for range template.fields {
+	for i := 0; i < plan.slotCount; i++ {
 		m.backchainDemandSlots = append(m.backchainDemandSlots, factSlot{
 			value:    NullValue(),
 			ok:       true,
 			presence: fieldPresenceExplicit,
 		})
 	}
-	for _, constraint := range plan.constraints {
-		if constraint.operator != FieldConstraintOpEqual || !constraint.access.topLevel() {
+	for _, slot := range plan.constSlots {
+		if slot.slot < 0 || slot.slot >= plan.slotCount {
 			continue
 		}
-		slot := constraint.access.rootSlot
-		if slot < 0 {
-			var ok bool
-			slot, ok = template.fieldSlot(constraint.access.root)
-			if !ok {
-				continue
-			}
-		}
-		if slot < 0 || slot >= len(template.fields) {
-			continue
-		}
-		m.backchainDemandSlots[slotStart+slot].value = cloneValue(constraint.value)
+		m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(slot.value)
 	}
-	for _, join := range plan.joins {
-		if join.operator != FieldConstraintOpEqual {
+	for _, slot := range plan.joinSlots {
+		if slot.slot < 0 || slot.slot >= plan.slotCount {
 			continue
 		}
-		switch plan.side {
-		case reteGraphBetaInputRight:
-			if !join.access.topLevel() {
-				continue
-			}
-			slot := join.access.rootSlot
-			if slot < 0 {
-				var ok bool
-				slot, ok = template.fieldSlot(join.access.root)
-				if !ok {
-					continue
-				}
-			}
-			if slot < 0 || slot >= len(template.fields) {
-				continue
-			}
-			match, ok := tokenRefAtSlot(context, join.refBindingSlot)
-			if !ok || match.hasValue {
-				continue
-			}
-			value, ok := join.rightValueFromFact(match.fact)
-			if !ok {
-				continue
-			}
-			m.backchainDemandSlots[slotStart+slot].value = cloneValue(value)
-		case reteGraphBetaInputLeft:
-			if !join.refAccess.topLevel() {
-				continue
-			}
-			slot := join.refAccess.rootSlot
-			if slot < 0 {
-				var ok bool
-				slot, ok = template.fieldSlot(join.refAccess.root)
-				if !ok {
-					continue
-				}
-			}
-			if slot < 0 || slot >= len(template.fields) {
-				continue
-			}
+		var match conditionMatch
+		var ok bool
+		if slot.last {
 			match, ok := tokenLastMatch(context)
 			if !ok || match.hasValue {
 				continue
 			}
-			value, ok := join.leftValueFromFact(match.fact)
-			if !ok {
-				continue
+			value, ok := slot.access.valueFromFact(match.fact)
+			if ok {
+				m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(value)
 			}
-			m.backchainDemandSlots[slotStart+slot].value = cloneValue(value)
+			continue
+		}
+		match, ok = tokenRefAtSlot(context, slot.bindingSlot)
+		if !ok || match.hasValue {
+			continue
+		}
+		value, ok := slot.access.valueFromFact(match.fact)
+		if ok {
+			m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(value)
 		}
 	}
 	id := m.nextBackchainDemandIDValue()
@@ -3692,7 +3648,7 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 		id:           id,
 		templateKey:  plan.templateKey,
 		slotStart:    slotStart,
-		slotCount:    len(template.fields),
+		slotCount:    plan.slotCount,
 		supportStart: supportStart,
 		supportCount: supportCount,
 	})
