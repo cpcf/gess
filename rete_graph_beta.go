@@ -2680,7 +2680,12 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		m.removeTerminalTokenContainingFact(terminal.terminalID, terminal.branchID, match.fact.ID(), counters, delta)
+		token := m.newAlphaTokenRef(entry, match, captures, nil)
+		if token.isZero() {
+			delta.supported = false
+			continue
+		}
+		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
 	}
 	for _, successor := range m.graph.stageSuccessors(source) {
 		node := m.graph.betaNode(successor.betaNodeID)
