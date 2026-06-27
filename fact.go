@@ -861,13 +861,29 @@ func structuralDuplicateSlotsEqual(template Template, left, right []factSlot) bo
 }
 
 func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
-	if scalar, ok := duplicateScalarKeyFromValue(value); ok {
-		hash = structuralDuplicateHashByte(hash, 1)
-		hash = structuralDuplicateHashByte(hash, byte(scalar.kind))
-		hash = structuralDuplicateHashUint64(hash, scalar.bits)
-		return structuralDuplicateHashString(hash, scalar.stringValue), true
-	}
 	switch value.Kind() {
+	case ValueNull:
+		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
+	case ValueBool:
+		if value.boolValue {
+			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
+	case ValueInt:
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+	case ValueFloat:
+		floating := value.floatValue
+		if math.IsNaN(floating) {
+			return 0, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(int64(floating)), ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
+	case ValueString:
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
 	case ValueList:
 		hash = structuralDuplicateHashByte(hash, 6)
 		values, ok := value.data.([]Value)
@@ -888,6 +904,13 @@ func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
 	}
 }
 
+func structuralDuplicateHashScalar(hash uint64, kind duplicateScalarKind, bits uint64, stringValue string) uint64 {
+	hash = structuralDuplicateHashByte(hash, 1)
+	hash = structuralDuplicateHashByte(hash, byte(kind))
+	hash = structuralDuplicateHashUint64(hash, bits)
+	return structuralDuplicateHashString(hash, stringValue)
+}
+
 func structuralDuplicateHashString(hash uint64, value string) uint64 {
 	hash = structuralDuplicateHashUint64(hash, uint64(len(value)))
 	for i := range value {
@@ -897,10 +920,16 @@ func structuralDuplicateHashString(hash uint64, value string) uint64 {
 }
 
 func structuralDuplicateHashUint64(hash, value uint64) uint64 {
-	for shift := 0; shift < 64; shift += 8 {
-		hash = structuralDuplicateHashByte(hash, byte(value>>shift))
-	}
-	return hash
+	return structuralDuplicateHashAvalanche(hash ^ structuralDuplicateHashAvalanche(value+0x9e3779b97f4a7c15))
+}
+
+func structuralDuplicateHashAvalanche(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	value ^= value >> 31
+	return value
 }
 
 func structuralDuplicateHashByte(hash uint64, value byte) uint64 {
