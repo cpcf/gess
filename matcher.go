@@ -283,12 +283,16 @@ func fnvMixString(hash uint64, value string) uint64 {
 }
 
 func fnvMixUint64(hash uint64, value uint64) uint64 {
-	for range 8 {
-		hash ^= uint64(byte(value))
-		hash *= 1099511628211
-		value >>= 8
-	}
-	return hash
+	return candidateIdentityAvalanche(hash ^ candidateIdentityAvalanche(value+0x9e3779b97f4a7c15))
+}
+
+func candidateIdentityAvalanche(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	value ^= value >> 31
+	return value
 }
 
 func (s *candidateSeenSet) seen(candidates []matchCandidate, candidate matchCandidate) bool {
