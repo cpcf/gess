@@ -1675,6 +1675,37 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	return result, agendaDelta, nil
 }
 
+func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id FactID, origin mutationOrigin) (reteAgendaDelta, error) {
+	fact, ok := s.workingFactByID(id)
+	if !ok {
+		return reteAgendaDelta{}, ErrFactNotFound
+	}
+
+	before := fact.snapshotForRevision(s.revision)
+	factTemplateKey := fact.templateKey
+	factName := fact.name
+
+	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
+	if err != nil {
+		s.restoreReteAfterPropagationFailure()
+		return agendaDelta, err
+	}
+
+	state := s.activeFactWorkspace()
+	if !fact.dupIndex.isZero() {
+		state.factsByDuplicate.deleteFact(fact.dupIndex, id)
+	}
+	state.removeFactTargetIndexes(factTemplateKey, factName, id)
+	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
+	state.removeStoredFact(id)
+	delete(state.factsByID, id)
+	s.commitFactWorkspace(state)
+	s.logicalSupportCounters.LogicalFactsRetracted++
+	s.logicalSupportCounters.CascadeRetractions++
+
+	return agendaDelta, nil
+}
+
 func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if s == nil {
 		return ResetResult{Status: ResetClosed}, ErrClosedSession

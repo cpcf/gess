@@ -188,7 +188,7 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 	if _, ok := s.workingFactByID(record.demandFactID); !ok {
 		return combined, nil
 	}
-	_, delta, err := s.removeFactImmediate(ctx, record.demandFactID, origin, true)
+	delta, err := s.removeBackchainDemandFactImmediate(ctx, record.demandFactID, origin)
 	if err != nil {
 		return combined, err
 	}
