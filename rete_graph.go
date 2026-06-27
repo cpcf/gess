@@ -64,15 +64,30 @@ type reteGraphStageRef struct {
 }
 
 type reteGraphAlphaNode struct {
-	id           reteGraphAlphaNodeID
-	target       conditionTarget
-	constraints  []compiledFieldConstraint
-	listPatterns []compiledListPattern
-	predicates   []compiledExpressionPredicate
-	consumers    []reteBetaConditionRoute
-	entry        bindingTupleEntry
-	route        reteGraphAlphaRouteSelector
-	edges        reteGraphStageEdges
+	id             reteGraphAlphaNodeID
+	target         conditionTarget
+	constraints    []compiledFieldConstraint
+	listPatterns   []compiledListPattern
+	predicates     []compiledExpressionPredicate
+	consumers      []reteBetaConditionRoute
+	entry          bindingTupleEntry
+	route          reteGraphAlphaRouteSelector
+	generatedMatch reteGraphAlphaGeneratedMatch
+	edges          reteGraphStageEdges
+}
+
+type reteGraphAlphaGeneratedMatchKind uint8
+
+const (
+	reteGraphAlphaGeneratedMatchNone reteGraphAlphaGeneratedMatchKind = iota
+	reteGraphAlphaGeneratedMatchTargetOnly
+	reteGraphAlphaGeneratedMatchSlotEqual
+)
+
+type reteGraphAlphaGeneratedMatch struct {
+	kind      reteGraphAlphaGeneratedMatchKind
+	fieldSlot int
+	value     reteGraphAlphaRouteValue
 }
 
 type reteGraphBetaNode struct {
@@ -419,6 +434,7 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 						template := templatesByKey[condition.target.templateKey]
 						route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 						alphaNode.route = route
+						alphaNode.configureGeneratedMatch(route)
 					}
 					switch condition.target.kind {
 					case conditionTargetTemplateKey:
@@ -1114,6 +1130,7 @@ func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, conditio
 			template := templatesByKey[condition.target.templateKey]
 			route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 			alphaNode.route = route
+			alphaNode.configureGeneratedMatch(route)
 		}
 		switch condition.target.kind {
 		case conditionTargetTemplateKey:
@@ -1560,6 +1577,32 @@ func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []
 	return reteGraphAlphaRouteSelector{}
 }
 
+func (n *reteGraphAlphaNode) configureGeneratedMatch(route reteGraphAlphaRouteSelector) {
+	if n == nil || len(n.listPatterns) != 0 || len(n.predicates) != 0 {
+		return
+	}
+	if len(n.constraints) == 0 {
+		n.generatedMatch = reteGraphAlphaGeneratedMatch{kind: reteGraphAlphaGeneratedMatchTargetOnly}
+		return
+	}
+	if !route.enabled || len(n.constraints) != 1 {
+		return
+	}
+	constraint := n.constraints[0]
+	if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot != route.fieldSlot || !constraint.access.topLevel() {
+		return
+	}
+	routeValue, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
+	if !ok || routeValue != route.value {
+		return
+	}
+	n.generatedMatch = reteGraphAlphaGeneratedMatch{
+		kind:      reteGraphAlphaGeneratedMatchSlotEqual,
+		fieldSlot: route.fieldSlot,
+		value:     route.value,
+	}
+}
+
 func reteGraphAlphaRouteFieldKindMatches(template Template, fieldSlot int, kind ValueKind) bool {
 	if fieldSlot < 0 || fieldSlot >= len(template.fields) {
 		return false
@@ -1669,6 +1712,61 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 		return ok, err
 	}
 	return true, nil
+}
+
+func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (bool, error) {
+	if n.generatedMatch.kind != reteGraphAlphaGeneratedMatchNone {
+		return n.generatedMatch.matchesWorking(n.target, fact), nil
+	}
+	return n.matchesWorkingWithContextAndCounters(ctx, fact, span)
+}
+
+func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact) bool {
+	if fact == nil || !target.matchesWorkingFact(fact) {
+		return false
+	}
+	switch m.kind {
+	case reteGraphAlphaGeneratedMatchTargetOnly:
+		return true
+	case reteGraphAlphaGeneratedMatchSlotEqual:
+		value, ok := fact.compiledFieldValue("", m.fieldSlot)
+		return ok && m.value.matchesValue(value)
+	default:
+		return false
+	}
+}
+
+func (target conditionTarget) matchesWorkingFact(fact *workingFact) bool {
+	if fact == nil {
+		return false
+	}
+	switch target.kind {
+	case conditionTargetTemplateKey:
+		return fact.templateKey == target.templateKey
+	case conditionTargetName:
+		return fact.name == target.name
+	default:
+		return false
+	}
+}
+
+func (v reteGraphAlphaRouteValue) matchesValue(value Value) bool {
+	if !v.valid || value.Kind() != v.kind {
+		return false
+	}
+	switch v.kind {
+	case ValueBool:
+		if value.boolValue {
+			return v.bits == 1
+		}
+		return v.bits == 0
+	case ValueInt:
+		return value.intValue == v.bits
+	case ValueString:
+		return value.stringValue == v.text
+	default:
+		return false
+	}
 }
 
 func (n reteGraphAlphaNode) listPatternsMatch(fact conditionFactRef, bindings tokenRef) bool {

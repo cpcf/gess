@@ -2040,7 +2040,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		ok, err := node.matchesWorkingWithContextAndCounters(ctx, fact, span)
+		ok, err := node.matchesGeneratedWorkingWithContextAndCounters(ctx, fact, span)
 		if err != nil {
 			return delta, err
 		}
