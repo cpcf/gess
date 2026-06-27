@@ -2508,7 +2508,16 @@ func (m *reteGraphBetaMemory) removeGeneratedAlphaOps(node *reteGraphAlphaNode, 
 	for _, op := range node.generatedOps {
 		switch op.kind {
 		case reteGraphGeneratedAlphaOpTerminal:
-			m.removeTerminalTokenContainingFact(op.terminalID, op.branchID, match.fact.ID(), counters, delta)
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			m.removeTerminalToken(op.terminalID, op.branchID, token, counters, delta)
 		case reteGraphGeneratedAlphaOpBetaLeft:
 			if op.entry.conditionID == "" {
 				delta.supported = false
