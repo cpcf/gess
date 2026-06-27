@@ -357,7 +357,16 @@ func (r *reteRuntime) insertBetaFactGenerated(ctx context.Context, fact *working
 	if r == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
-	return r.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, r.revision, origin, span))
+	incrementalAgendaSupported := r.supportsIncrementalAgenda()
+	if r.usesGraphBeta() && r.graphBeta != nil {
+		delta, err := r.graphBeta.insertFactGenerated(ctx, fact, span)
+		if err != nil {
+			return delta, err
+		}
+		delta.supported = delta.supported && incrementalAgendaSupported
+		return delta, nil
+	}
+	return reteAgendaDelta{}, nil
 }
 
 func (r *reteRuntime) insertBetaFactWithOrigin(ctx context.Context, fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
