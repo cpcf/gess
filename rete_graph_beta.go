@@ -31,6 +31,10 @@ type reteGraphBetaMemory struct {
 	factFieldIndexesDirty  bool
 	arena                  *tokenArena
 	terminalTokenDeltas    []reteTerminalTokenDelta
+	backchainDemandRecords []backchainDemandRecord
+	backchainDemandSlots   []factSlot
+	backchainDemandSupport []backchainDemandSupportFact
+	nextBackchainDemandID  backchainDemandID
 	alphaRouteScratch      []reteGraphAlphaNodeID
 	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
 	alphaRouteEpoch        uint64
@@ -1637,7 +1641,55 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
+	m.clearBackchainDemandRequests()
 	m.rootToken = tokenRef{}
+}
+
+func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
+	if m == nil {
+		return
+	}
+	clear(m.backchainDemandRecords)
+	m.backchainDemandRecords = m.backchainDemandRecords[:0]
+	for i := range m.backchainDemandSlots {
+		m.backchainDemandSlots[i] = factSlot{}
+	}
+	m.backchainDemandSlots = m.backchainDemandSlots[:0]
+	clear(m.backchainDemandSupport)
+	m.backchainDemandSupport = m.backchainDemandSupport[:0]
+	m.nextBackchainDemandID = 0
+}
+
+func (m *reteGraphBetaMemory) backchainDemandRequestByID(id backchainDemandID) (backchainDemandRequest, bool) {
+	if m == nil || id == 0 {
+		return backchainDemandRequest{}, false
+	}
+	index := int(id - 1)
+	if index < 0 || index >= len(m.backchainDemandRecords) {
+		return backchainDemandRequest{}, false
+	}
+	record := m.backchainDemandRecords[index]
+	if record.id != id || record.templateKey == "" || record.slotStart < 0 || record.supportStart < 0 {
+		return backchainDemandRequest{}, false
+	}
+	slotEnd := record.slotStart + record.slotCount
+	supportEnd := record.supportStart + record.supportCount
+	if slotEnd < record.slotStart || supportEnd < record.supportStart || slotEnd > len(m.backchainDemandSlots) || supportEnd > len(m.backchainDemandSupport) {
+		return backchainDemandRequest{}, false
+	}
+	return backchainDemandRequest{
+		templateKey:  record.templateKey,
+		slots:        m.backchainDemandSlots[record.slotStart:slotEnd],
+		supportFacts: m.backchainDemandSupport[record.supportStart:supportEnd],
+	}, true
+}
+
+func (m *reteGraphBetaMemory) nextBackchainDemandIDValue() backchainDemandID {
+	m.nextBackchainDemandID++
+	if m.nextBackchainDemandID == 0 {
+		m.nextBackchainDemandID++
+	}
+	return m.nextBackchainDemandID
 }
 
 func (m *reteGraphBetaMemory) initializeAggregateOutputs() {
@@ -3476,12 +3528,12 @@ func (m *reteGraphBetaMemory) appendBackchainDemandRequests(node *reteGraphBetaN
 		if plan.side != missingSide {
 			continue
 		}
-		request, ok := m.backchainDemandRequest(plan, context)
+		id, ok := m.storeBackchainDemandRequest(plan, context)
 		if !ok {
 			delta.supported = false
 			continue
 		}
-		delta.demands = append(delta.demands, request)
+		delta.demands = append(delta.demands, id)
 	}
 }
 
@@ -3493,34 +3545,36 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 		if plan.side != side {
 			continue
 		}
-		request, ok := m.backchainDemandRequest(plan, context)
+		id, ok := m.storeBackchainDemandRequest(plan, context)
 		if !ok {
 			delta.supported = false
 			continue
 		}
-		delta.resolvedDemands = append(delta.resolvedDemands, request)
+		delta.resolvedDemands = append(delta.resolvedDemands, id)
 	}
 }
 
-func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandRequest, bool) {
+func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandID, bool) {
 	if m == nil || m.revision == nil || plan.templateKey == "" {
-		return backchainDemandRequest{}, false
+		return 0, false
 	}
 	template, ok := m.revision.templateByKey(plan.templateKey)
 	if !ok || !template.backchainDemand || !template.closed {
-		return backchainDemandRequest{}, false
+		return 0, false
 	}
-	supportFacts, ok := backchainDemandSupportFactsForToken(context)
-	if !ok {
-		return backchainDemandRequest{}, false
+	supportStart := len(m.backchainDemandSupport)
+	if !m.appendBackchainDemandSupportFactsForToken(context) {
+		m.backchainDemandSupport = m.backchainDemandSupport[:supportStart]
+		return 0, false
 	}
-	slots := make([]factSlot, len(template.fields))
-	for i := range slots {
-		slots[i] = factSlot{
+	supportCount := len(m.backchainDemandSupport) - supportStart
+	slotStart := len(m.backchainDemandSlots)
+	for range template.fields {
+		m.backchainDemandSlots = append(m.backchainDemandSlots, factSlot{
 			value:    NullValue(),
 			ok:       true,
 			presence: fieldPresenceExplicit,
-		}
+		})
 	}
 	for _, constraint := range plan.constraints {
 		if constraint.operator != FieldConstraintOpEqual || !constraint.access.topLevel() {
@@ -3534,10 +3588,10 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 				continue
 			}
 		}
-		if slot < 0 || slot >= len(slots) {
+		if slot < 0 || slot >= len(template.fields) {
 			continue
 		}
-		slots[slot].value = cloneValue(constraint.value)
+		m.backchainDemandSlots[slotStart+slot].value = cloneValue(constraint.value)
 	}
 	for _, join := range plan.joins {
 		if join.operator != FieldConstraintOpEqual {
@@ -3556,7 +3610,7 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 					continue
 				}
 			}
-			if slot < 0 || slot >= len(slots) {
+			if slot < 0 || slot >= len(template.fields) {
 				continue
 			}
 			match, ok := tokenRefAtSlot(context, join.refBindingSlot)
@@ -3567,7 +3621,7 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 			if !ok {
 				continue
 			}
-			slots[slot].value = cloneValue(value)
+			m.backchainDemandSlots[slotStart+slot].value = cloneValue(value)
 		case reteGraphBetaInputLeft:
 			if !join.refAccess.topLevel() {
 				continue
@@ -3580,7 +3634,7 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 					continue
 				}
 			}
-			if slot < 0 || slot >= len(slots) {
+			if slot < 0 || slot >= len(template.fields) {
 				continue
 			}
 			match, ok := tokenLastMatch(context)
@@ -3591,56 +3645,63 @@ func (m *reteGraphBetaMemory) backchainDemandRequest(plan reteGraphBackchainDema
 			if !ok {
 				continue
 			}
-			slots[slot].value = cloneValue(value)
+			m.backchainDemandSlots[slotStart+slot].value = cloneValue(value)
 		}
 	}
-	return backchainDemandRequest{
+	id := m.nextBackchainDemandIDValue()
+	m.backchainDemandRecords = append(m.backchainDemandRecords, backchainDemandRecord{
+		id:           id,
 		templateKey:  plan.templateKey,
-		slots:        slots,
-		supportFacts: supportFacts,
-	}, true
+		slotStart:    slotStart,
+		slotCount:    len(template.fields),
+		supportStart: supportStart,
+		supportCount: supportCount,
+	})
+	return id, true
 }
 
-func backchainDemandSupportFactsForToken(token tokenRef) ([]backchainDemandSupportFact, bool) {
+func (m *reteGraphBetaMemory) appendBackchainDemandSupportFactsForToken(token tokenRef) bool {
+	if m == nil {
+		return false
+	}
 	ids, idsOK := token.factIDs()
 	versions, versionsOK := token.factVersions()
 	if idsOK && versionsOK && len(ids) > 0 && len(ids) == len(versions) {
-		out := make([]backchainDemandSupportFact, 0, len(ids))
+		start := len(m.backchainDemandSupport)
 		for i, id := range ids {
 			if id.IsZero() {
 				continue
 			}
-			out = append(out, backchainDemandSupportFact{
+			m.backchainDemandSupport = append(m.backchainDemandSupport, backchainDemandSupportFact{
 				id:      id,
 				version: versions[i],
 			})
 		}
-		return out, len(out) > 0
+		return len(m.backchainDemandSupport) > start
 	}
-	row, ok := token.resolve()
-	if !ok {
-		return nil, false
+	if _, ok := token.resolve(); !ok {
+		return false
 	}
-	out := make([]backchainDemandSupportFact, 0, row.size)
+	start := len(m.backchainDemandSupport)
 	for current := token; !current.isZero(); current = current.parent() {
 		row, ok := current.resolve()
 		if !ok {
-			return nil, false
+			return false
 		}
 		match, ok := row.conditionMatch()
 		if !ok {
-			return nil, false
+			return false
 		}
 		if match.hasValue || match.fact.ID().IsZero() {
 			continue
 		}
-		out = append(out, backchainDemandSupportFact{
+		m.backchainDemandSupport = append(m.backchainDemandSupport, backchainDemandSupportFact{
 			id:      match.fact.ID(),
 			version: match.fact.Version(),
 		})
 	}
-	slices.SortFunc(out, compareBackchainDemandSupportFacts)
-	return out, len(out) > 0
+	slices.SortFunc(m.backchainDemandSupport[start:], compareBackchainDemandSupportFacts)
+	return len(m.backchainDemandSupport) > start
 }
 
 func compareBackchainDemandSupportFacts(left, right backchainDemandSupportFact) int {

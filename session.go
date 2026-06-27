@@ -1346,15 +1346,21 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 	return fact, duplicateKey, true, agendaDelta, nil
 }
 
-func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || state == nil || len(demands) == 0 {
+		s.clearBackchainDemandRequestArena()
 		return reteAgendaDelta{supported: true}, nil
 	}
+	defer s.clearBackchainDemandRequestArena()
 	combined := reteAgendaDelta{supported: true}
 	queue := demands
 	queueOwned := false
 	for i := 0; i < len(queue); i++ {
-		demand := queue[i]
+		demand, ok := s.backchainDemandRequestByID(queue[i])
+		if !ok {
+			combined.supported = false
+			continue
+		}
 		template, ok := s.revision.templateByKey(demand.templateKey)
 		if !ok || !template.backchainDemand {
 			return combined, &ValidationError{
@@ -1395,7 +1401,7 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		s.addBackchainDemandSupport(fact, demand)
 		if len(next.demands) > 0 {
 			if !queueOwned {
-				copied := make([]backchainDemandRequest, len(queue), len(queue)+len(next.demands))
+				copied := make([]backchainDemandID, len(queue), len(queue)+len(next.demands))
 				copy(copied, queue)
 				queue = copied
 				queueOwned = true
@@ -1405,21 +1411,33 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		combined = mergeReteAgendaDelta(combined, next)
 	}
 	for _, resolved := range combined.resolvedDemands {
-		resolvedDelta, err := s.removeBackchainDemandSupportForRequest(ctx, resolved, origin)
+		request, ok := s.backchainDemandRequestByID(resolved)
+		if !ok {
+			combined.supported = false
+			continue
+		}
+		resolvedDelta, err := s.removeBackchainDemandSupportForRequest(ctx, request, origin)
 		if err != nil {
 			return combined, err
 		}
 		combined = mergeReteAgendaDelta(combined, resolvedDelta)
 	}
+	combined.demands = nil
+	combined.resolvedDemands = nil
 	return combined, nil
 }
 
-func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
 	if s == nil || len(resolved) == 0 {
 		return combined, nil
 	}
-	for _, request := range resolved {
+	for _, id := range resolved {
+		request, ok := s.backchainDemandRequestByID(id)
+		if !ok {
+			combined.supported = false
+			continue
+		}
 		delta, err := s.removeBackchainDemandSupportForRequest(ctx, request, origin)
 		if err != nil {
 			return combined, err
@@ -1427,6 +1445,20 @@ func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, r
 		combined = mergeReteAgendaDelta(combined, delta)
 	}
 	return combined, nil
+}
+
+func (s *Session) backchainDemandRequestByID(id backchainDemandID) (backchainDemandRequest, bool) {
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return backchainDemandRequest{}, false
+	}
+	return s.rete.graphBeta.backchainDemandRequestByID(id)
+}
+
+func (s *Session) clearBackchainDemandRequestArena() {
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return
+	}
+	s.rete.graphBeta.clearBackchainDemandRequests()
 }
 
 func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
