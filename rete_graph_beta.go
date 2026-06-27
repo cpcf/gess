@@ -3642,7 +3642,7 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 		if slot.slot < 0 || slot.slot >= plan.slotCount {
 			continue
 		}
-		m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(slot.value)
+		m.backchainDemandSlots[slotStart+slot.slot].value = cloneDemandSlotValue(slot.value)
 	}
 	for _, slot := range plan.joinSlots {
 		if slot.slot < 0 || slot.slot >= plan.slotCount {
@@ -3657,7 +3657,7 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 			}
 			value, ok := slot.access.valueFromFact(match.fact)
 			if ok {
-				m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(value)
+				m.backchainDemandSlots[slotStart+slot.slot].value = cloneDemandSlotValue(value)
 			}
 			continue
 		}
@@ -3667,7 +3667,7 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 		}
 		value, ok := slot.access.valueFromFact(match.fact)
 		if ok {
-			m.backchainDemandSlots[slotStart+slot.slot].value = cloneValue(value)
+			m.backchainDemandSlots[slotStart+slot.slot].value = cloneDemandSlotValue(value)
 		}
 	}
 	id := m.nextBackchainDemandIDValue()
@@ -3680,6 +3680,13 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 		supportCount: supportCount,
 	})
 	return id, true
+}
+
+func cloneDemandSlotValue(value Value) Value {
+	if valueShareable(value) {
+		return value
+	}
+	return cloneValue(value)
 }
 
 func (m *reteGraphBetaMemory) appendBackchainDemandSupportFactsForToken(token tokenRef) bool {
@@ -3710,16 +3717,13 @@ func (m *reteGraphBetaMemory) appendBackchainDemandSupportFactsForToken(token to
 		if !ok {
 			return false
 		}
-		match, ok := row.conditionMatch()
-		if !ok {
-			return false
-		}
-		if match.hasValue || match.fact.ID().IsZero() {
+		entry := row.entry
+		if entry.hasValue || entry.factID.IsZero() {
 			continue
 		}
 		m.backchainDemandSupport = append(m.backchainDemandSupport, backchainDemandSupportFact{
-			id:      match.fact.ID(),
-			version: match.fact.Version(),
+			id:      entry.factID,
+			version: entry.factVersion,
 		})
 	}
 	slices.SortFunc(m.backchainDemandSupport[start:], compareBackchainDemandSupportFacts)

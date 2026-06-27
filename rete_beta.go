@@ -661,13 +661,14 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 		if !ok {
 			return conditionMatch{}, false
 		}
+		if row.entry.bindingSlot != slot {
+			continue
+		}
 		match, ok := row.conditionMatch()
 		if !ok {
 			return conditionMatch{}, false
 		}
-		if match.bindingSlot == slot {
-			return match, true
-		}
+		return match, true
 	}
 	return token.matchAt(slot)
 }
