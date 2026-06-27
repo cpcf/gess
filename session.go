@@ -1351,7 +1351,8 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		return reteAgendaDelta{supported: true}, nil
 	}
 	combined := reteAgendaDelta{supported: true}
-	queue := append([]backchainDemandRequest(nil), demands...)
+	queue := demands
+	queueOwned := false
 	for i := 0; i < len(queue); i++ {
 		demand := queue[i]
 		template, ok := s.revision.templateByKey(demand.templateKey)
@@ -1393,6 +1394,12 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		next = normalizeBackchainDemandNoopDelta(next)
 		s.addBackchainDemandSupport(fact, demand)
 		if len(next.demands) > 0 {
+			if !queueOwned {
+				copied := make([]backchainDemandRequest, len(queue), len(queue)+len(next.demands))
+				copy(copied, queue)
+				queue = copied
+				queueOwned = true
+			}
 			queue = append(queue, next.demands...)
 		}
 		combined = mergeReteAgendaDelta(combined, next)
