@@ -18,6 +18,7 @@ type reteGraphBetaMemory struct {
 	alphaFacts              []reteGraphAlphaFactSet
 	alphaConditions         [][]ConditionID
 	alphaFactRoutes         map[FactID][]reteGraphAlphaNodeID
+	alphaFactRouteStorage   []reteGraphAlphaNodeID
 	alphaFactCounts         map[ConditionID]int
 	facts                   []FactSnapshot
 	factIndexes             map[FactID]int
@@ -1641,6 +1642,8 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	if m.alphaFactRoutes != nil {
 		clear(m.alphaFactRoutes)
 	}
+	clear(m.alphaFactRouteStorage)
+	m.alphaFactRouteStorage = m.alphaFactRouteStorage[:0]
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 	clear(m.terminalRemovedDeltas)
@@ -1673,6 +1676,31 @@ func (m *reteGraphBetaMemory) terminalRemovedDeltaArenaStart(removed []reteTermi
 		return 0, false
 	}
 	return start, &removed[0] == &m.terminalRemovedDeltas[start]
+}
+
+func (m *reteGraphBetaMemory) appendAlphaFactRoute(routes []reteGraphAlphaNodeID, nodeID reteGraphAlphaNodeID) []reteGraphAlphaNodeID {
+	if m == nil || nodeID <= 0 {
+		return routes
+	}
+	if start, ok := m.alphaFactRouteArenaStart(routes); ok {
+		m.alphaFactRouteStorage = append(m.alphaFactRouteStorage, nodeID)
+		return m.alphaFactRouteStorage[start:len(m.alphaFactRouteStorage)]
+	}
+	return append(routes, nodeID)
+}
+
+func (m *reteGraphBetaMemory) alphaFactRouteArenaStart(routes []reteGraphAlphaNodeID) (int, bool) {
+	if m == nil || len(routes) > len(m.alphaFactRouteStorage) {
+		return 0, false
+	}
+	if len(routes) == 0 {
+		return len(m.alphaFactRouteStorage), true
+	}
+	start := len(m.alphaFactRouteStorage) - len(routes)
+	if start < 0 || start >= len(m.alphaFactRouteStorage) {
+		return 0, false
+	}
+	return start, &routes[0] == &m.alphaFactRouteStorage[start]
 }
 
 func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
@@ -4192,7 +4220,7 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 	}
 	routes := m.alphaFactRoutes[fact.ID()]
 	if !slices.Contains(routes, nodeID) {
-		routes = append(routes, nodeID)
+		routes = m.appendAlphaFactRoute(routes, nodeID)
 		slices.Sort(routes)
 		m.alphaFactRoutes[fact.ID()] = routes
 	}
