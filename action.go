@@ -1424,7 +1424,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 		}
 	}
 
-	_, _, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsWithPlanImmediate(ctx, state, &action.insertPlan, slots, mark, slotMark, origin)
+	inserted, agendaDelta, err := s.insertRuleActionGeneratedFactSlotsImmediate(ctx, &state, &action.insertPlan, slots, mark, slotMark, origin)
 	if err != nil {
 		return err
 	}

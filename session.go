@@ -1418,6 +1418,73 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 	return fact, duplicateKey, true, agendaDelta, nil
 }
 
+func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Context, state *factWorkspace, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (bool, reteAgendaDelta, error) {
+	if state == nil || !plan.valid() {
+		if state != nil {
+			state.rollbackGeneratedFactInsert(mark, nil)
+		}
+		return false, reteAgendaDelta{}, &ValidationError{
+			Reason: "generated fact insert plan is missing",
+		}
+	}
+	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
+	if err != nil {
+		state.rollbackGeneratedFactInsert(mark, nil)
+		return false, reteAgendaDelta{}, err
+	}
+	if !inserted {
+		return false, reteAgendaDelta{}, nil
+	}
+
+	if !plan.affectsRete {
+		s.commitFactWorkspace(*state)
+		s.emitGeneratedAssertEvent(ctx, fact, origin)
+		return true, reteAgendaDelta{}, nil
+	}
+
+	var span *propagationCounterSpan
+	if s.propagationCounters != nil {
+		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+		span = &counterSpan
+	}
+	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, origin, span)
+	if err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return false, agendaDelta, err
+	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, state, agendaDelta.demands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact)
+		s.restoreReteAfterPropagationFailure()
+		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
+	if span != nil {
+		span.finish()
+	}
+	s.commitFactWorkspace(*state)
+	s.emitGeneratedAssertEvent(ctx, fact, origin)
+
+	return true, agendaDelta, nil
+}
+
 func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || state == nil || len(demands) == 0 {
 		s.clearBackchainDemandRequestArena()
