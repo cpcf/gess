@@ -8,44 +8,45 @@ import (
 )
 
 type reteGraphBetaMemory struct {
-	revision               *Ruleset
-	graph                  *reteGraph
-	evalCtx                context.Context
-	nodes                  []*reteGraphBetaNodeMemory
-	aggregates             []*reteGraphAggregateNodeMemory
-	terminals              []*reteGraphTerminalMemory
-	terminalsByRule        map[RuleRevisionID][]*reteGraphTerminalMemory
-	alphaFacts             []reteGraphAlphaFactSet
-	alphaConditions        [][]ConditionID
-	alphaFactRoutes        map[FactID][]reteGraphAlphaNodeID
-	alphaFactCounts        map[ConditionID]int
-	facts                  []FactSnapshot
-	factIndexes            map[FactID]int
-	factIndexReserve       int
-	factsByName            map[string][]FactSnapshot
-	factsByTemplate        map[TemplateKey][]FactSnapshot
-	factNameIndexes        map[FactID]int
-	factTemplateIndexes    map[FactID]int
-	factFieldEqualIndexes  map[factFieldEqualKey][]FactSnapshot
-	factTargetIndexesDirty bool
-	factFieldIndexesDirty  bool
-	arena                  *tokenArena
-	terminalTokenDeltas    []reteTerminalTokenDelta
-	terminalRemovedDeltas  []reteTerminalTokenDelta
-	backchainDemandRecords []backchainDemandRecord
-	backchainDemandSlots   []factSlot
-	backchainDemandSupport []backchainDemandSupportFact
-	nextBackchainDemandID  backchainDemandID
-	alphaRouteScratch      []reteGraphAlphaNodeID
-	alphaRouteSeen         map[reteGraphAlphaNodeID]uint64
-	alphaRouteEpoch        uint64
-	removalTokenScratch    []tokenRef
-	rootToken              tokenRef
-	deferNegativeOutputs   bool
-	suppressTerminalDeltas bool
-	rightPredicateScratch  []conditionMatch
-	tokenRefreshCache      map[tokenHandle]tokenRef
-	modifyRouteScope       reteModifyRouteScope
+	revision                *Ruleset
+	graph                   *reteGraph
+	evalCtx                 context.Context
+	nodes                   []*reteGraphBetaNodeMemory
+	aggregates              []*reteGraphAggregateNodeMemory
+	terminals               []*reteGraphTerminalMemory
+	terminalsByRule         map[RuleRevisionID][]*reteGraphTerminalMemory
+	alphaFacts              []reteGraphAlphaFactSet
+	alphaConditions         [][]ConditionID
+	alphaFactRoutes         map[FactID][]reteGraphAlphaNodeID
+	alphaFactCounts         map[ConditionID]int
+	facts                   []FactSnapshot
+	factIndexes             map[FactID]int
+	factIndexReserve        int
+	factsByName             map[string][]FactSnapshot
+	factsByTemplate         map[TemplateKey][]FactSnapshot
+	factNameIndexes         map[FactID]int
+	factTemplateIndexes     map[FactID]int
+	factFieldEqualIndexes   map[factFieldEqualKey][]FactSnapshot
+	factTargetIndexesDirty  bool
+	factFieldIndexesDirty   bool
+	arena                   *tokenArena
+	terminalTokenDeltas     []reteTerminalTokenDelta
+	terminalRemovedDeltas   []reteTerminalTokenDelta
+	backchainDemandRecords  []backchainDemandRecord
+	backchainDemandSlots    []factSlot
+	backchainDemandSupport  []backchainDemandSupportFact
+	backchainDemandDeltaIDs []backchainDemandID
+	nextBackchainDemandID   backchainDemandID
+	alphaRouteScratch       []reteGraphAlphaNodeID
+	alphaRouteSeen          map[reteGraphAlphaNodeID]uint64
+	alphaRouteEpoch         uint64
+	removalTokenScratch     []tokenRef
+	rootToken               tokenRef
+	deferNegativeOutputs    bool
+	suppressTerminalDeltas  bool
+	rightPredicateScratch   []conditionMatch
+	tokenRefreshCache       map[tokenHandle]tokenRef
+	modifyRouteScope        reteModifyRouteScope
 }
 
 type reteModifyRouteScope struct {
@@ -1686,7 +1687,34 @@ func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
 	m.backchainDemandSlots = m.backchainDemandSlots[:0]
 	clear(m.backchainDemandSupport)
 	m.backchainDemandSupport = m.backchainDemandSupport[:0]
+	clear(m.backchainDemandDeltaIDs)
+	m.backchainDemandDeltaIDs = m.backchainDemandDeltaIDs[:0]
 	m.nextBackchainDemandID = 0
+}
+
+func (m *reteGraphBetaMemory) appendBackchainDemandDeltaID(ids []backchainDemandID, id backchainDemandID) []backchainDemandID {
+	if m == nil || id == 0 {
+		return ids
+	}
+	if start, ok := m.backchainDemandDeltaIDArenaStart(ids); ok {
+		m.backchainDemandDeltaIDs = append(m.backchainDemandDeltaIDs, id)
+		return m.backchainDemandDeltaIDs[start:len(m.backchainDemandDeltaIDs)]
+	}
+	return append(ids, id)
+}
+
+func (m *reteGraphBetaMemory) backchainDemandDeltaIDArenaStart(ids []backchainDemandID) (int, bool) {
+	if m == nil || len(ids) > len(m.backchainDemandDeltaIDs) {
+		return 0, false
+	}
+	if len(ids) == 0 {
+		return len(m.backchainDemandDeltaIDs), true
+	}
+	start := len(m.backchainDemandDeltaIDs) - len(ids)
+	if start < 0 || start >= len(m.backchainDemandDeltaIDs) {
+		return 0, false
+	}
+	return start, &ids[0] == &m.backchainDemandDeltaIDs[start]
 }
 
 func (m *reteGraphBetaMemory) backchainDemandRequestByID(id backchainDemandID) (backchainDemandRequest, bool) {
@@ -3562,7 +3590,7 @@ func (m *reteGraphBetaMemory) appendBackchainDemandRequests(node *reteGraphBetaN
 			delta.supported = false
 			continue
 		}
-		delta.demands = append(delta.demands, id)
+		delta.demands = m.appendBackchainDemandDeltaID(delta.demands, id)
 	}
 }
 
@@ -3579,7 +3607,7 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 			delta.supported = false
 			continue
 		}
-		delta.resolvedDemands = append(delta.resolvedDemands, id)
+		delta.resolvedDemands = m.appendBackchainDemandDeltaID(delta.resolvedDemands, id)
 	}
 }
 
