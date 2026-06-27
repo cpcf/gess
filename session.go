@@ -3443,12 +3443,11 @@ type duplicateStructuralIndexKey struct {
 }
 
 type duplicateIndexes struct {
-	strings        map[DuplicateKey]FactID
-	singleInt      map[duplicateSingleIntIndexKey]FactID
-	doubleInt      map[duplicateDoubleIntIndexKey]FactID
-	scalars        map[duplicateIndexKey]FactID
-	structural     map[duplicateStructuralIndexKey]FactID
-	structuralRest map[duplicateStructuralIndexKey][]FactID
+	strings    map[DuplicateKey]FactID
+	singleInt  map[duplicateSingleIntIndexKey]FactID
+	doubleInt  map[duplicateDoubleIntIndexKey]FactID
+	scalars    map[duplicateIndexKey]FactID
+	structural duplicateStructuralIndexTable
 }
 
 func (i *duplicateIndexes) reset(initialCapacity int) {
@@ -3464,12 +3463,7 @@ func (i *duplicateIndexes) reset(initialCapacity int) {
 	if i.scalars != nil {
 		clear(i.scalars)
 	}
-	if i.structural != nil {
-		clear(i.structural)
-	}
-	if i.structuralRest != nil {
-		clear(i.structuralRest)
-	}
+	i.structural.clear()
 }
 
 func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
@@ -3518,8 +3512,8 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 	if scalarCapacity > 0 && i.scalars == nil {
 		i.scalars = make(map[duplicateIndexKey]FactID, scalarCapacity)
 	}
-	if structuralCapacity > 0 && i.structural == nil {
-		i.structural = make(map[duplicateStructuralIndexKey]FactID, structuralCapacity)
+	if structuralCapacity > 0 {
+		i.structural.reserve(structuralCapacity)
 	}
 }
 
@@ -3564,11 +3558,7 @@ func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
 		factID, ok := i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}]
 		return factID, ok
 	case duplicateIndexStructural:
-		factID, ok := i.structural[duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}]
-		if !ok || factID.IsZero() {
-			return FactID{}, false
-		}
-		return factID, true
+		return i.structural.get(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
 		factID, ok := i.scalars[key]
 		return factID, ok
@@ -3596,18 +3586,7 @@ func (i *duplicateIndexes) set(key duplicateIndexKey, factID FactID) {
 		}
 		i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}] = factID
 	case duplicateIndexStructural:
-		if i.structural == nil {
-			i.structural = make(map[duplicateStructuralIndexKey]FactID)
-		}
-		structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
-		if existingID, ok := i.structural[structuralKey]; !ok || existingID.IsZero() {
-			i.structural[structuralKey] = factID
-			return
-		}
-		if i.structuralRest == nil {
-			i.structuralRest = make(map[duplicateStructuralIndexKey][]FactID)
-		}
-		i.structuralRest[structuralKey] = append(i.structuralRest[structuralKey], factID)
+		i.structural.set(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, factID)
 	default:
 		if i.scalars == nil {
 			i.scalars = make(map[duplicateIndexKey]FactID)
@@ -3628,8 +3607,7 @@ func (i *duplicateIndexes) delete(key duplicateIndexKey) {
 	case duplicateIndexDoubleInt:
 		delete(i.doubleInt, duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt})
 	case duplicateIndexStructural:
-		delete(i.structural, duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
-		delete(i.structuralRest, duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
+		i.structural.delete(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
 		delete(i.scalars, key)
 	}
@@ -3645,62 +3623,235 @@ func (i *duplicateIndexes) deleteFact(key duplicateIndexKey, factID FactID) {
 		}
 		return
 	}
-	structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
-	if existingID, ok := i.structural[structuralKey]; ok && existingID == factID {
-		rest := i.structuralRest[structuralKey]
-		if len(rest) == 0 {
-			delete(i.structural, structuralKey)
-			delete(i.structuralRest, structuralKey)
-		} else {
-			last := len(rest) - 1
-			i.structural[structuralKey] = rest[last]
-			rest[last] = FactID{}
-			rest = rest[:last]
-			if len(rest) == 0 {
-				delete(i.structuralRest, structuralKey)
-			} else {
-				i.structuralRest[structuralKey] = rest
-			}
-		}
-		return
-	}
-	rest := i.structuralRest[structuralKey]
-	for index, id := range rest {
-		if id != factID {
-			continue
-		}
-		last := len(rest) - 1
-		rest[index] = rest[last]
-		rest[last] = FactID{}
-		rest = rest[:last]
-		if len(rest) == 0 {
-			delete(i.structuralRest, structuralKey)
-		} else {
-			i.structuralRest[structuralKey] = rest
-		}
-		return
-	}
+	i.structural.deleteFact(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, factID)
 }
 
 func (i duplicateIndexes) forEachStructuralFactID(key duplicateIndexKey, fn func(FactID) bool) {
 	if key.kind != duplicateIndexStructural || fn == nil {
 		return
 	}
-	structuralKey := duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}
-	if id := i.structural[structuralKey]; !id.IsZero() {
-		if !fn(id) {
+	i.structural.forEachFactID(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, fn)
+}
+
+func (i duplicateIndexes) len() int {
+	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.scalars) + i.structural.len()
+}
+
+type duplicateStructuralIndexEntry struct {
+	key   duplicateStructuralIndexKey
+	first FactID
+	rest  []FactID
+	state uint8
+}
+
+type duplicateStructuralIndexTable struct {
+	entries []duplicateStructuralIndexEntry
+	touched []int
+	count   int
+	used    int
+}
+
+func (t *duplicateStructuralIndexTable) reserve(capacity int) {
+	if capacity <= 0 {
+		return
+	}
+	t.rehash(graphTokenBucketSlotCapacity(capacity))
+}
+
+func (t *duplicateStructuralIndexTable) clear() {
+	if t == nil || len(t.entries) == 0 {
+		return
+	}
+	for _, index := range t.touched {
+		if index < 0 || index >= len(t.entries) {
+			continue
+		}
+		entry := &t.entries[index]
+		for i := range entry.rest {
+			entry.rest[i] = FactID{}
+		}
+		*entry = duplicateStructuralIndexEntry{}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+}
+
+func (t duplicateStructuralIndexTable) len() int {
+	return t.count
+}
+
+func (t *duplicateStructuralIndexTable) get(key duplicateStructuralIndexKey) (FactID, bool) {
+	if t == nil || t.count == 0 || len(t.entries) == 0 {
+		return FactID{}, false
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return FactID{}, false
+	}
+	id := t.entries[index].first
+	if id.IsZero() {
+		return FactID{}, false
+	}
+	return id, true
+}
+
+func (t *duplicateStructuralIndexTable) set(key duplicateStructuralIndexKey, factID FactID) {
+	if t == nil || factID.IsZero() {
+		return
+	}
+	if graphTokenBucketNeedsGrow(t.used+1, len(t.entries)) {
+		t.rehash(max(8, len(t.entries)*2))
+	}
+	index, ok := t.findInsert(key)
+	if ok {
+		entry := &t.entries[index]
+		if entry.first.IsZero() {
+			entry.first = factID
 			return
 		}
+		entry.rest = append(entry.rest, factID)
+		return
 	}
-	for _, id := range i.structuralRest[structuralKey] {
+	if t.entries[index].state == graphTokenBucketEmpty {
+		t.touched = append(t.touched, index)
+		t.used++
+	}
+	t.entries[index] = duplicateStructuralIndexEntry{key: key, first: factID, state: graphTokenBucketFull}
+	t.count++
+}
+
+func (t *duplicateStructuralIndexTable) delete(key duplicateStructuralIndexKey) {
+	if t == nil || t.count == 0 {
+		return
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return
+	}
+	entry := &t.entries[index]
+	for i := range entry.rest {
+		entry.rest[i] = FactID{}
+	}
+	*entry = duplicateStructuralIndexEntry{state: graphTokenBucketDeleted}
+	t.count--
+}
+
+func (t *duplicateStructuralIndexTable) deleteFact(key duplicateStructuralIndexKey, factID FactID) {
+	if t == nil || t.count == 0 || factID.IsZero() {
+		return
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return
+	}
+	entry := &t.entries[index]
+	if entry.first == factID {
+		if len(entry.rest) == 0 {
+			*entry = duplicateStructuralIndexEntry{state: graphTokenBucketDeleted}
+			t.count--
+			return
+		}
+		last := len(entry.rest) - 1
+		entry.first = entry.rest[last]
+		entry.rest[last] = FactID{}
+		entry.rest = entry.rest[:last]
+		return
+	}
+	for restIndex, id := range entry.rest {
+		if id != factID {
+			continue
+		}
+		last := len(entry.rest) - 1
+		entry.rest[restIndex] = entry.rest[last]
+		entry.rest[last] = FactID{}
+		entry.rest = entry.rest[:last]
+		return
+	}
+}
+
+func (t *duplicateStructuralIndexTable) forEachFactID(key duplicateStructuralIndexKey, fn func(FactID) bool) {
+	if t == nil || t.count == 0 || len(t.entries) == 0 || fn == nil {
+		return
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return
+	}
+	entry := t.entries[index]
+	if !entry.first.IsZero() && !fn(entry.first) {
+		return
+	}
+	for _, id := range entry.rest {
 		if id.IsZero() || !fn(id) {
 			return
 		}
 	}
 }
 
-func (i duplicateIndexes) len() int {
-	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.scalars) + len(i.structural)
+func (t *duplicateStructuralIndexTable) find(key duplicateStructuralIndexKey) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hashDuplicateStructuralIndexKey(key) & mask)
+	for {
+		entry := t.entries[index]
+		if entry.state == graphTokenBucketEmpty {
+			return 0, false
+		}
+		if entry.state == graphTokenBucketFull && entry.key == key {
+			return index, true
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *duplicateStructuralIndexTable) findInsert(key duplicateStructuralIndexKey) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hashDuplicateStructuralIndexKey(key) & mask)
+	firstDeleted := -1
+	for {
+		entry := t.entries[index]
+		switch entry.state {
+		case graphTokenBucketEmpty:
+			if firstDeleted >= 0 {
+				return firstDeleted, false
+			}
+			return index, false
+		case graphTokenBucketDeleted:
+			if firstDeleted < 0 {
+				firstDeleted = index
+			}
+		case graphTokenBucketFull:
+			if entry.key == key {
+				return index, true
+			}
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *duplicateStructuralIndexTable) rehash(slotCapacity int) {
+	slotCapacity = graphTokenBucketPowerOfTwo(max(8, slotCapacity))
+	if slotCapacity <= len(t.entries) && t.used == t.count {
+		return
+	}
+	old := t.entries
+	t.entries = make([]duplicateStructuralIndexEntry, slotCapacity)
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+	for i := range old {
+		if old[i].state != graphTokenBucketFull {
+			continue
+		}
+		t.set(old[i].key, old[i].first)
+		for _, id := range old[i].rest {
+			t.set(old[i].key, id)
+		}
+	}
+}
+
+func hashDuplicateStructuralIndexKey(key duplicateStructuralIndexKey) uint64 {
+	return key.hash
 }
 
 func newFactWorkspace(generation Generation, initialCapacity int) *factWorkspace {
@@ -5338,12 +5489,11 @@ func cloneStringFactIDSliceMap(in map[string][]FactID) map[string][]FactID {
 
 func cloneDuplicateIndexes(in duplicateIndexes) duplicateIndexes {
 	return duplicateIndexes{
-		strings:        cloneDuplicateKeyFactIDMap(in.strings),
-		singleInt:      cloneSingleIntFactIDMap(in.singleInt),
-		doubleInt:      cloneDoubleIntFactIDMap(in.doubleInt),
-		scalars:        cloneDuplicateIndexFactIDMap(in.scalars),
-		structural:     cloneStructuralFactIDMap(in.structural),
-		structuralRest: cloneStructuralFactIDSliceMap(in.structuralRest),
+		strings:    cloneDuplicateKeyFactIDMap(in.strings),
+		singleInt:  cloneSingleIntFactIDMap(in.singleInt),
+		doubleInt:  cloneDoubleIntFactIDMap(in.doubleInt),
+		scalars:    cloneDuplicateIndexFactIDMap(in.scalars),
+		structural: cloneDuplicateStructuralIndexTable(in.structural),
 	}
 }
 
@@ -5383,22 +5533,21 @@ func cloneDuplicateIndexFactIDMap(in map[duplicateIndexKey]FactID) map[duplicate
 	return out
 }
 
-func cloneStructuralFactIDMap(in map[duplicateStructuralIndexKey]FactID) map[duplicateStructuralIndexKey]FactID {
-	if in == nil {
-		return nil
+func cloneDuplicateStructuralIndexTable(in duplicateStructuralIndexTable) duplicateStructuralIndexTable {
+	if in.count == 0 || len(in.entries) == 0 {
+		return duplicateStructuralIndexTable{}
 	}
-	out := make(map[duplicateStructuralIndexKey]FactID, len(in))
-	maps.Copy(out, in)
-	return out
-}
-
-func cloneStructuralFactIDSliceMap(in map[duplicateStructuralIndexKey][]FactID) map[duplicateStructuralIndexKey][]FactID {
-	if in == nil {
-		return nil
-	}
-	out := make(map[duplicateStructuralIndexKey][]FactID, len(in))
-	for key, ids := range in {
-		out[key] = cloneFactIDs(ids)
+	out := duplicateStructuralIndexTable{}
+	out.reserve(in.count)
+	for i := range in.entries {
+		entry := in.entries[i]
+		if entry.state != graphTokenBucketFull {
+			continue
+		}
+		out.set(entry.key, entry.first)
+		for _, id := range entry.rest {
+			out.set(entry.key, id)
+		}
 	}
 	return out
 }

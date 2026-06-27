@@ -166,6 +166,53 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	}
 }
 
+func TestDuplicateStructuralIndexTableRetainsHashCollisionsAndDeletesFacts(t *testing.T) {
+	firstKey := duplicateStructuralIndexKey{templateKey: "first", hash: 7}
+	secondKey := duplicateStructuralIndexKey{templateKey: "second", hash: 7}
+	firstID := newFactID(1, 1)
+	secondID := newFactID(1, 2)
+	thirdID := newFactID(1, 3)
+
+	var table duplicateStructuralIndexTable
+	table.reserve(2)
+	table.set(firstKey, firstID)
+	table.set(firstKey, secondID)
+	table.set(secondKey, thirdID)
+
+	if got, ok := table.get(firstKey); !ok || got != firstID {
+		t.Fatalf("first key lookup = (%q, %t), want (%q, true)", got, ok, firstID)
+	}
+	if got, ok := table.get(secondKey); !ok || got != thirdID {
+		t.Fatalf("second key lookup = (%q, %t), want (%q, true)", got, ok, thirdID)
+	}
+
+	var ids []FactID
+	table.forEachFactID(firstKey, func(id FactID) bool {
+		ids = append(ids, id)
+		return true
+	})
+	if len(ids) != 2 || ids[0] != firstID || ids[1] != secondID {
+		t.Fatalf("first key ids = %#v, want [%q %q]", ids, firstID, secondID)
+	}
+
+	table.deleteFact(firstKey, firstID)
+	if got, ok := table.get(firstKey); !ok || got != secondID {
+		t.Fatalf("first key after deleting primary = (%q, %t), want (%q, true)", got, ok, secondID)
+	}
+	table.deleteFact(firstKey, secondID)
+	if got, ok := table.get(firstKey); ok {
+		t.Fatalf("first key after deleting all ids = (%q, %t), want missing", got, ok)
+	}
+	if got, ok := table.get(secondKey); !ok || got != thirdID {
+		t.Fatalf("second key after first deletes = (%q, %t), want (%q, true)", got, ok, thirdID)
+	}
+
+	table.clear()
+	if got, ok := table.get(secondKey); ok {
+		t.Fatalf("second key after clear = (%q, %t), want missing", got, ok)
+	}
+}
+
 func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:              "route",
