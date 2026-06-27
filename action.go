@@ -1360,7 +1360,7 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 		return err
 	}
 	if inserted && s.revision.factMayAffectRuleMatchesByTarget(template.Name(), template.Key()) {
-		if origin.isZero() || !s.runGuardHeld() {
+		if !s.canMutateDuringRun(origin) {
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
 		}
@@ -1429,7 +1429,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 		return err
 	}
 	if inserted && s.revision.factMayAffectRuleMatchesByTarget(action.template.Name(), action.template.Key()) {
-		if origin.isZero() || !s.runGuardHeld() {
+		if !s.canMutateDuringRun(origin) {
 			_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
 			return err
 		}

@@ -4969,10 +4969,11 @@ func (s *Session) beginMutationForOrigin(origin mutationOrigin) (bool, bool) {
 	if s == nil {
 		return false, false
 	}
+	if s.canMutateDuringRun(origin) {
+		return false, true
+	}
 	if s.runGuardHeld() {
-		if !s.canMutateDuringRun(origin) {
-			return false, false
-		}
+		return false, false
 	}
 	if !s.beginMutation() {
 		return false, false
