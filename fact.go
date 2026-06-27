@@ -953,12 +953,11 @@ func structuralDuplicateSlotsHash(template Template, slots []factSlot) (uint64, 
 }
 
 func structuralDuplicateSlotsHashWithPrefix(template Template, slots []factSlot, hash uint64) (uint64, bool) {
-	for i, field := range template.fields {
+	for i := range template.fields {
 		if i >= len(slots) {
 			break
 		}
 		slot := slots[i]
-		hash = structuralDuplicateHashString(hash, field.Name)
 		if !slot.ok {
 			hash = structuralDuplicateHashByte(hash, 0)
 			continue
