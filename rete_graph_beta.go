@@ -31,6 +31,7 @@ type reteGraphBetaMemory struct {
 	factFieldIndexesDirty  bool
 	arena                  *tokenArena
 	terminalTokenDeltas    []reteTerminalTokenDelta
+	terminalRemovedDeltas  []reteTerminalTokenDelta
 	backchainDemandRecords []backchainDemandRecord
 	backchainDemandSlots   []factSlot
 	backchainDemandSupport []backchainDemandSupportFact
@@ -1641,8 +1642,36 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
+	clear(m.terminalRemovedDeltas)
+	m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
 	m.clearBackchainDemandRequests()
 	m.rootToken = tokenRef{}
+}
+
+func (m *reteGraphBetaMemory) appendRemovedTerminalDelta(delta *reteAgendaDelta, removed reteTerminalTokenDelta) {
+	if m == nil || delta == nil {
+		return
+	}
+	if start, ok := m.terminalRemovedDeltaArenaStart(delta.removed); ok {
+		m.terminalRemovedDeltas = append(m.terminalRemovedDeltas, removed)
+		delta.removed = m.terminalRemovedDeltas[start:len(m.terminalRemovedDeltas)]
+		return
+	}
+	delta.removed = append(delta.removed, removed)
+}
+
+func (m *reteGraphBetaMemory) terminalRemovedDeltaArenaStart(removed []reteTerminalTokenDelta) (int, bool) {
+	if m == nil || len(removed) > len(m.terminalRemovedDeltas) {
+		return 0, false
+	}
+	if len(removed) == 0 {
+		return len(m.terminalRemovedDeltas), true
+	}
+	start := len(m.terminalRemovedDeltas) - len(removed)
+	if start < 0 || start >= len(m.terminalRemovedDeltas) {
+		return 0, false
+	}
+	return start, &removed[0] == &m.terminalRemovedDeltas[start]
 }
 
 func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
@@ -4091,7 +4120,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			continue
 		}
 		terminal.rows.forEachTokenContainingFact(id, counters, func(row graphTokenRow) {
-			delta.removed = append(delta.removed, reteTerminalTokenDelta{
+			m.appendRemovedTerminalDelta(&delta, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
 				identity:       row.terminalIdentity,
@@ -5093,7 +5122,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 	ruleTerminal := ruleRevisionID != ""
 	terminal.rows.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
 		if ruleTerminal {
-			delta.removed = append(delta.removed, reteTerminalTokenDelta{
+			m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 				ruleRevisionID: ruleRevisionID,
 				token:          row.token,
 				identity:       row.terminalIdentity,
@@ -5152,7 +5181,7 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 	ruleRevisionID := m.terminalRuleRevision(terminalID)
 	ruleTerminal := ruleRevisionID != ""
 	if ruleTerminal {
-		delta.removed = append(delta.removed, reteTerminalTokenDelta{
+		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
 			identity:       removed.terminalIdentity,
