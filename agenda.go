@@ -26,6 +26,8 @@ func (h activationHandle) isZero() bool {
 
 type activationFingerprint uint64
 
+type activationAttachFunc func(reteTerminalTokenDelta, activationHandle)
+
 type activationBucket struct {
 	first    *activation
 	second   *activation
@@ -736,7 +738,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 }
 
 func (a *agenda) applyTerminalTokenDeltas(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) ([]agendaChange, error) {
-	return a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, true)
+	return a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, true, nil)
 }
 
 func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
@@ -744,7 +746,7 @@ func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, rev
 		_, err := a.applySingleTerminalTokenDeltasWithoutChanges(ctx, revision, removed, added)
 		return err
 	}
-	_, err := a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, false)
+	_, err := a.applyTerminalTokenDeltasInternal(ctx, revision, removed, added, false, nil)
 	return err
 }
 
@@ -820,7 +822,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	return a.handleForActivationKey(key), nil
 }
 
-func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {
+func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool, attachActivation activationAttachFunc) ([]agendaChange, error) {
 	if a == nil || revision == nil {
 		return nil, ErrInvalidRuleset
 	}
@@ -842,6 +844,22 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 	for _, delta := range removed {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if !delta.activation.isZero() {
+			if existing, ok := a.activationByHandlePtr(delta.activation); ok {
+				switch existing.status {
+				case activationStatusPending:
+					if !collectChanges {
+						existing.status = activationStatusDeactivated
+						a.lazyDeactivated++
+					} else {
+						removedKeys[existing.key] = struct{}{}
+					}
+				case activationStatusConsumed:
+					existing.status = activationStatusDeactivated
+				}
+				continue
+			}
 		}
 		if delta.token.isZero() {
 			continue
@@ -940,6 +958,9 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 					})
 				}
 			}
+			if attachActivation != nil {
+				attachActivation(delta, a.handleForActivationKey(key))
+			}
 			continue
 		}
 		rowMark := a.activationRows.count
@@ -950,6 +971,9 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		}
 		key := a.storePreparedActivation(created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, created)
+		if attachActivation != nil {
+			attachActivation(delta, a.handleForActivationKey(key))
+		}
 		if collectChanges {
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,

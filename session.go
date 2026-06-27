@@ -4984,13 +4984,20 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 		if err != nil {
 			return err
 		}
-		if len(added) == 1 && !handle.isZero() && s.rete != nil && s.rete.graphBeta != nil {
-			token := added[0]
-			s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
+		if len(added) == 1 {
+			s.attachTerminalActivationHandle(added[0], handle)
 		}
 		return nil
 	}
-	return s.agenda.applyTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
+	_, err := s.agenda.applyTerminalTokenDeltasInternal(ctx, s.revision, removed, added, false, s.attachTerminalActivationHandle)
+	return err
+}
+
+func (s *Session) attachTerminalActivationHandle(token reteTerminalTokenDelta, handle activationHandle) {
+	if s == nil || handle.isZero() || s.rete == nil || s.rete.graphBeta == nil {
+		return
+	}
+	s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
 }
 
 func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {

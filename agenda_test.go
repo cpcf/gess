@@ -269,6 +269,73 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
+func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-token-delta-batch-handle-session")
+
+	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{}); err != nil {
+		t.Fatalf("insertFactImmediate Ada: %v", err)
+	}
+	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+		"name": "Grace",
+	}), mutationOrigin{}); err != nil {
+		t.Fatalf("insertFactImmediate Grace: %v", err)
+	}
+
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok || len(tokens) != 2 {
+		t.Fatalf("terminal token deltas = %#v, ok=%v, want two", tokens, ok)
+	}
+
+	type attachedActivation struct {
+		delta  reteTerminalTokenDelta
+		handle activationHandle
+	}
+	attached := make([]attachedActivation, 0, len(tokens))
+	agenda := newAgenda()
+	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(delta reteTerminalTokenDelta, handle activationHandle) {
+		attached = append(attached, attachedActivation{delta: delta, handle: handle})
+	}); err != nil {
+		t.Fatalf("applyTerminalTokenDeltasInternal: %v", err)
+	}
+	if got, want := len(attached), 2; got != want {
+		t.Fatalf("attached handles = %d, want %d", got, want)
+	}
+	if got, want := len(agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations = %d, want %d", got, want)
+	}
+	for i, attachment := range attached {
+		if attachment.delta.terminalID == 0 || attachment.delta.terminalRow.isZero() {
+			t.Fatalf("attachment %d terminal ownership = %#v", i, attachment.delta)
+		}
+		if attachment.handle.isZero() {
+			t.Fatalf("attachment %d handle is zero", i)
+		}
+		activation, ok := agenda.activationByHandlePtr(attachment.handle)
+		if !ok || activation.status != activationStatusPending {
+			t.Fatalf("attachment %d activation = %#v, ok=%v, want pending", i, activation, ok)
+		}
+	}
+
+	removed := make([]reteTerminalTokenDelta, len(attached))
+	for i, attachment := range attached {
+		removed[i] = attachment.delta
+		removed[i].activation = attachment.handle
+	}
+	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, removed, nil); err != nil {
+		t.Fatalf("remove by attached handles: %v", err)
+	}
+	if got := agenda.pendingActivations(); len(got) != 0 {
+		t.Fatalf("pending activations after handle removals = %#v, want none", got)
+	}
+}
+
 func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-fact-index-session")
