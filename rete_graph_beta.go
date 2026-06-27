@@ -4031,6 +4031,43 @@ func (m *reteGraphBetaMemory) removeFact(ctx context.Context, fact FactSnapshot,
 	return m.removeFactInternal(ctx, fact, counters, true)
 }
 
+func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *workingFact, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+	if m == nil || m.graph == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	defer m.pushEvalContext(ctx)()
+	delta := reteAgendaDelta{supported: true}
+	id := fact.id
+	defer m.removeFactSource(id)
+	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
+	if len(nodeIDs) == 0 {
+		m.removeAlphaFact(id)
+		return delta, nil
+	}
+	for _, nodeID := range nodeIDs {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			delta.supported = false
+			continue
+		}
+		ok, err := node.matchesWorkingWithContextAndCounters(ctx, fact, nil)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
+			continue
+		}
+		match := conditionMatch{
+			conditionID: node.entry.conditionID,
+			bindingSlot: node.entry.bindingSlot,
+			fact:        newConditionFactRefFromWorkingFact(fact),
+		}
+		m.propagateRemoveAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, counters, &delta)
+	}
+	m.removeAlphaFact(id)
+	return delta, nil
+}
+
 func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger, updateSource bool) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}, nil

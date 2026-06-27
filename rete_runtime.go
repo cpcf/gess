@@ -383,6 +383,22 @@ func (r *reteRuntime) removeBetaFact(ctx context.Context, fact FactSnapshot, ori
 	return r.propagateBetaEvent(ctx, newReteGraphRetractEvent(fact, origin, counters))
 }
 
+func (r *reteRuntime) removeBetaFactGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+	if r == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	incrementalAgendaSupported := r.supportsIncrementalAgenda()
+	if r.usesGraphBeta() && r.graphBeta != nil {
+		delta, err := r.graphBeta.removeFactGenerated(ctx, fact, counters)
+		if err != nil {
+			return delta, err
+		}
+		delta.supported = delta.supported && incrementalAgendaSupported
+		return delta, nil
+	}
+	return reteAgendaDelta{}, nil
+}
+
 func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{}, nil

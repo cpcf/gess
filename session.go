@@ -1720,11 +1720,10 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 		return reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	before := fact.snapshotForRevision(s.revision)
 	factTemplateKey := fact.templateKey
 	factName := fact.name
 
-	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
+	agendaDelta, err := s.updateReteAlphaAfterRetractGenerated(ctx, fact, origin)
 	if err != nil {
 		s.restoreReteAfterPropagationFailure()
 		return agendaDelta, err
@@ -2438,6 +2437,16 @@ func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnap
 	}
 	if s.rete.usesGraphBeta() {
 		return s.rete.removeBetaFact(ctx, fact, origin, s.propagationCounters)
+	}
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+}
+
+func (s *Session) updateReteAlphaAfterRetractGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || s.rete == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	if s.rete.usesGraphBeta() {
+		return s.rete.removeBetaFactGenerated(ctx, fact, origin, s.propagationCounters)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
