@@ -93,3 +93,57 @@ func TestBackchainDemandInlineSupportRemovalUsesPayloadEntry(t *testing.T) {
 		t.Fatalf("demand fact bucket = %#v, want empty", demandBucket)
 	}
 }
+
+func TestBackchainDemandSupportRemovalUsesSingleSupportFactBucket(t *testing.T) {
+	session := &Session{}
+	demandFactID := newFactID(1, 20)
+	support := backchainDemandSupportFact{id: newFactID(1, 21), version: 2}
+	request := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		supportFacts: []backchainDemandSupportFact{support},
+		slots: []factSlot{
+			{value: newStringValue("q1"), ok: true},
+		},
+	}
+	session.addBackchainDemandSupport(&workingFact{id: demandFactID}, request)
+	session.backchainDemandInlineSupports.clear()
+	if id, ok := session.singleBackchainDemandSupportIDForRequest(request); !ok || id != 1 {
+		t.Fatalf("single support id = (%d, %t), want (1, true)", id, ok)
+	}
+
+	delta, err := session.removeBackchainDemandSupportForRequest(context.Background(), request, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("removeBackchainDemandSupportForRequest: %v", err)
+	}
+	if !delta.supported {
+		t.Fatalf("delta.supported = false, want true")
+	}
+	if _, ok := session.backchainDemandSupportRecordByID(1); ok {
+		t.Fatal("support record still present after single-bucket removal")
+	}
+}
+
+func TestBackchainDemandSupportSingleBucketFastPathRequiresUniqueSupport(t *testing.T) {
+	session := &Session{}
+	support := backchainDemandSupportFact{id: newFactID(1, 31), version: 2}
+	first := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		supportFacts: []backchainDemandSupportFact{support},
+		slots: []factSlot{
+			{value: newStringValue("q1"), ok: true},
+		},
+	}
+	second := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		supportFacts: []backchainDemandSupportFact{support},
+		slots: []factSlot{
+			{value: newStringValue("q2"), ok: true},
+		},
+	}
+	session.addBackchainDemandSupport(&workingFact{id: newFactID(1, 32)}, first)
+	session.addBackchainDemandSupport(&workingFact{id: newFactID(1, 33)}, second)
+
+	if id, ok := session.singleBackchainDemandSupportIDForRequest(first); ok {
+		t.Fatalf("single support id = %d, want no fast path with multiple records", id)
+	}
+}

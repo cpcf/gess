@@ -156,6 +156,9 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 	if s == nil || len(request.supportFacts) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
+	if id, ok := s.singleBackchainDemandSupportIDForRequest(request); ok {
+		return s.removeBackchainDemandSupportID(ctx, id, origin)
+	}
 	if inlineKey, keyOK := backchainDemandInlineSupportKeyForRequest(request); keyOK {
 		if entry, ok := s.backchainDemandInlineSupports.get(inlineKey); ok {
 			return s.removeBackchainDemandInlineSupportEntry(ctx, inlineKey, entry, origin)
@@ -174,6 +177,35 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 		}
 	}
 	return s.removeBackchainDemandSupportID(ctx, id, origin)
+}
+
+func (s *Session) singleBackchainDemandSupportIDForRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
+	if s == nil || len(request.supportFacts) != 1 || s.backchainDemandByFact.isEmpty() {
+		return 0, false
+	}
+	support := request.supportFacts[0]
+	bucket, _ := s.backchainDemandByFact.get(support.id)
+	id, ok := bucket.single()
+	if !ok {
+		return 0, false
+	}
+	record, ok := s.backchainDemandSupportRecordByID(id)
+	if !ok || record.supportCount != 1 || record.demandFactID.IsZero() {
+		return 0, false
+	}
+	if backchainDemandSupportRecordFact(record, 0) != support {
+		return 0, false
+	}
+	if record.inline {
+		if record.inlineKey.templateKey != request.templateKey || int(record.inlineKey.slotCount) != len(request.slots) {
+			return 0, false
+		}
+		return id, true
+	}
+	if record.key.templateKey != request.templateKey || int(record.key.slotCount) != len(request.slots) {
+		return 0, false
+	}
+	return id, true
 }
 
 func (s *Session) removeBackchainDemandInlineSupportEntry(ctx context.Context, key backchainDemandInlineSupportKey, entry backchainDemandInlineSupportEntry, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -736,6 +768,13 @@ func (bucket backchainDemandSupportIDBucket) contains(id backchainDemandSupportI
 		return true
 	}
 	return slices.Contains(bucket.overflow, id)
+}
+
+func (bucket backchainDemandSupportIDBucket) single() (backchainDemandSupportID, bool) {
+	if bucket.first == 0 || bucket.second != 0 || len(bucket.overflow) != 0 {
+		return 0, false
+	}
+	return bucket.first, true
 }
 
 func (bucket *backchainDemandSupportIDBucket) add(id backchainDemandSupportID) bool {
