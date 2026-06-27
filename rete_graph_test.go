@@ -208,6 +208,92 @@ func findPlanInspectionBranch(t *testing.T, branches []reteGraphBranchInspection
 	return reteGraphBranchInspection{}
 }
 
+func TestReteGraphCompilesGeneratedAlphaOpsFromStageEdges(t *testing.T) {
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "right",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "single-left",
+		Conditions: []RuleConditionSpec{{
+			Binding: "l",
+			Target:  TemplateKeyFact(left.Key()),
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "joined",
+		Conditions: []RuleConditionSpec{
+			{
+				Binding: "l",
+				Target:  TemplateKeyFact(left.Key()),
+			},
+			{
+				Binding: "r",
+				JoinConstraints: []JoinConstraintSpec{{
+					Field:    "id",
+					Operator: FieldConstraintEqual,
+					Ref:      FieldRef{Binding: "l", Field: "id"},
+				}},
+				Target: TemplateKeyFact(right.Key()),
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	var leftOps, rightOps []reteGraphGeneratedAlphaOp
+	for i := range revision.graph.alphaNodes {
+		node := &revision.graph.alphaNodes[i]
+		switch node.target.templateKey {
+		case left.Key():
+			leftOps = node.generatedOps
+		case right.Key():
+			rightOps = node.generatedOps
+		}
+	}
+	assertGeneratedAlphaOpKinds(t, leftOps, []reteGraphGeneratedAlphaOpKind{
+		reteGraphGeneratedAlphaOpTerminal,
+		reteGraphGeneratedAlphaOpBetaLeft,
+	})
+	assertGeneratedAlphaOpKinds(t, rightOps, []reteGraphGeneratedAlphaOpKind{
+		reteGraphGeneratedAlphaOpBetaRight,
+	})
+	assertGeneratedAlphaOpEntry(t, leftOps[0].entry, "l", 0)
+	assertGeneratedAlphaOpEntry(t, leftOps[1].entry, "l", 0)
+	assertGeneratedAlphaOpEntry(t, leftOps[1].betaEntry, "r", 1)
+	assertGeneratedAlphaOpEntry(t, rightOps[0].entry, "r", 1)
+	assertGeneratedAlphaOpEntry(t, rightOps[0].betaEntry, "r", 1)
+}
+
+func assertGeneratedAlphaOpKinds(t *testing.T, ops []reteGraphGeneratedAlphaOp, want []reteGraphGeneratedAlphaOpKind) {
+	t.Helper()
+	got := make([]reteGraphGeneratedAlphaOpKind, len(ops))
+	for i, op := range ops {
+		got[i] = op.kind
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("generated alpha op kinds = %v, want %v", got, want)
+	}
+}
+
+func assertGeneratedAlphaOpEntry(t *testing.T, entry bindingTupleEntry, binding string, bindingSlot int) {
+	t.Helper()
+	if entry.binding != binding || entry.bindingSlot != bindingSlot || entry.conditionID == "" {
+		t.Fatalf("generated alpha op entry = %#v, want binding=%q slot=%d with condition ID", entry, binding, bindingSlot)
+	}
+}
+
 func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{

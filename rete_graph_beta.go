@@ -2082,7 +2082,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 			bindingSlot: node.entry.bindingSlot,
 			fact:        newConditionFactRefFromWorkingFact(fact),
 		}
-		ok, err = m.insertAlphaMatchGenerated(nodeID, match, span, &delta)
+		ok, err = m.insertGeneratedAlphaOps(nodeID, node, match, span, &delta)
 		if err != nil {
 			return delta, err
 		}
@@ -2406,18 +2406,88 @@ func (m *reteGraphBetaMemory) insertAlphaMatch(nodeID reteGraphAlphaNodeID, matc
 	return true, nil
 }
 
-func (m *reteGraphBetaMemory) insertAlphaMatchGenerated(nodeID reteGraphAlphaNodeID, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
-	if m == nil || delta == nil {
+func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeID, node *reteGraphAlphaNode, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
+	if m == nil || node == nil || delta == nil {
 		return false, nil
 	}
-	node := m.graph.alphaNode(nodeID)
-	if node == nil {
+	if len(node.generatedOps) == 0 {
+		return true, nil
+	}
+	captures, capturesOK := node.listPatternCaptures(match.fact, tokenRef{})
+	if !capturesOK {
 		return false, nil
 	}
-	if err := m.propagateAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, span, delta); err != nil {
-		return false, err
+	for _, op := range node.generatedOps {
+		switch op.kind {
+		case reteGraphGeneratedAlphaOpTerminal:
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			m.recordAlphaFact(nodeID, match.fact)
+			token := m.newAlphaTokenRef(op.entry, match, captures, span)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			m.insertTerminalToken(op.terminalID, op.branchID, token, delta, span)
+		case reteGraphGeneratedAlphaOpBetaLeft:
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			m.recordAlphaFact(nodeID, match.fact)
+			token := m.newAlphaTokenRef(op.entry, match, captures, span)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			ok, err := m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				delta.supported = false
+			}
+		case reteGraphGeneratedAlphaOpBetaRight:
+			m.recordAlphaFact(nodeID, match.fact)
+			edgeMatch := conditionMatch{
+				conditionID: op.entry.conditionID,
+				bindingSlot: op.entry.bindingSlot,
+				fact:        match.fact,
+			}
+			token := m.newAlphaTokenRef(op.entry, edgeMatch, captures, span)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			ok, err := m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				delta.supported = false
+			}
+		case reteGraphGeneratedAlphaOpAggregateOuter:
+			if op.entry.conditionID == "" {
+				delta.supported = false
+				continue
+			}
+			m.recordAlphaFact(nodeID, match.fact)
+			token := m.newAlphaTokenRef(op.entry, match, captures, span)
+			if token.isZero() {
+				delta.supported = false
+				continue
+			}
+			m.openAggregateBucket(op.aggregateID, token, span, delta)
+		case reteGraphGeneratedAlphaOpAggregateInput:
+			m.recordAlphaFact(nodeID, match.fact)
+			m.insertAggregateInput(op.aggregateID, match, span, delta)
+		default:
+			delta.supported = false
+		}
 	}
-	return true, nil
+	return delta.supported, nil
 }
 
 func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sourceEntry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) error {

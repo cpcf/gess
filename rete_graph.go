@@ -73,6 +73,7 @@ type reteGraphAlphaNode struct {
 	entry          bindingTupleEntry
 	route          reteGraphAlphaRouteSelector
 	generatedMatch reteGraphAlphaGeneratedMatch
+	generatedOps   []reteGraphGeneratedAlphaOp
 	edges          reteGraphStageEdges
 }
 
@@ -88,6 +89,27 @@ type reteGraphAlphaGeneratedMatch struct {
 	kind      reteGraphAlphaGeneratedMatchKind
 	fieldSlot int
 	value     reteGraphAlphaRouteValue
+}
+
+type reteGraphGeneratedAlphaOpKind uint8
+
+const (
+	reteGraphGeneratedAlphaOpTerminal reteGraphGeneratedAlphaOpKind = iota + 1
+	reteGraphGeneratedAlphaOpBetaLeft
+	reteGraphGeneratedAlphaOpBetaRight
+	reteGraphGeneratedAlphaOpAggregateOuter
+	reteGraphGeneratedAlphaOpAggregateInput
+)
+
+type reteGraphGeneratedAlphaOp struct {
+	kind        reteGraphGeneratedAlphaOpKind
+	entry       bindingTupleEntry
+	betaEntry   bindingTupleEntry
+	terminalID  reteGraphTerminalNodeID
+	branchID    int
+	betaNodeID  reteGraphBetaNodeID
+	aggregateID reteGraphAggregateNodeID
+	side        reteGraphBetaInputSide
 }
 
 type reteGraphBetaNode struct {
@@ -510,7 +532,79 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 	}
 
 	graph.compileQueryTerminals(compiledQueries, alphaIndex, betaIndex, templatesByKey)
+	graph.compileGeneratedAlphaOps()
 	return graph
+}
+
+func (g *reteGraph) compileGeneratedAlphaOps() {
+	if g == nil {
+		return
+	}
+	for i := range g.alphaNodes {
+		node := &g.alphaNodes[i]
+		sourceEntry := node.entry
+		edges := node.edges
+		total := len(edges.terminals) + len(edges.successors) + len(edges.aggregateOuters) + len(edges.aggregateInputs)
+		if total == 0 {
+			node.generatedOps = nil
+			continue
+		}
+		ops := make([]reteGraphGeneratedAlphaOp, 0, total)
+		for _, terminal := range edges.terminals {
+			entry := terminal.entry
+			if entry.conditionID == "" {
+				entry = sourceEntry
+			}
+			ops = append(ops, reteGraphGeneratedAlphaOp{
+				kind:       reteGraphGeneratedAlphaOpTerminal,
+				entry:      cloneBindingTupleEntry(entry),
+				terminalID: terminal.terminalID,
+				branchID:   terminal.branchID,
+			})
+		}
+		for _, successor := range edges.successors {
+			betaNode := g.betaNode(successor.betaNodeID)
+			if betaNode == nil {
+				continue
+			}
+			switch successor.side {
+			case reteGraphBetaInputLeft:
+				entry := successor.entry
+				if entry.conditionID == "" {
+					entry = sourceEntry
+				}
+				ops = append(ops, reteGraphGeneratedAlphaOp{
+					kind:       reteGraphGeneratedAlphaOpBetaLeft,
+					entry:      cloneBindingTupleEntry(entry),
+					betaEntry:  cloneBindingTupleEntry(betaNode.entry),
+					betaNodeID: successor.betaNodeID,
+					side:       successor.side,
+				})
+			case reteGraphBetaInputRight:
+				ops = append(ops, reteGraphGeneratedAlphaOp{
+					kind:       reteGraphGeneratedAlphaOpBetaRight,
+					entry:      cloneBindingTupleEntry(successor.entry),
+					betaEntry:  cloneBindingTupleEntry(betaNode.entry),
+					betaNodeID: successor.betaNodeID,
+					side:       successor.side,
+				})
+			}
+		}
+		for _, aggregateID := range edges.aggregateOuters {
+			ops = append(ops, reteGraphGeneratedAlphaOp{
+				kind:        reteGraphGeneratedAlphaOpAggregateOuter,
+				entry:       cloneBindingTupleEntry(sourceEntry),
+				aggregateID: aggregateID,
+			})
+		}
+		for _, aggregateID := range edges.aggregateInputs {
+			ops = append(ops, reteGraphGeneratedAlphaOp{
+				kind:        reteGraphGeneratedAlphaOpAggregateInput,
+				aggregateID: aggregateID,
+			})
+		}
+		node.generatedOps = ops
+	}
 }
 
 func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) {
@@ -2417,6 +2511,20 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 		out[i].predicates = cloneCompiledExpressionPredicates(node.predicates)
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
+		out[i].generatedOps = cloneReteGraphGeneratedAlphaOps(node.generatedOps)
+	}
+	return out
+}
+
+func cloneReteGraphGeneratedAlphaOps(in []reteGraphGeneratedAlphaOp) []reteGraphGeneratedAlphaOp {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphGeneratedAlphaOp, len(in))
+	for i, op := range in {
+		out[i] = op
+		out[i].entry = cloneBindingTupleEntry(op.entry)
+		out[i].betaEntry = cloneBindingTupleEntry(op.betaEntry)
 	}
 	return out
 }
