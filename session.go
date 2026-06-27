@@ -4173,14 +4173,14 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 		w.rollbackGeneratedFactSlots(slotMark)
 		return nil, "", false, err
 	}
-	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark)
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, true)
 }
 
 func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
-	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark)
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, false)
 }
 
-func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int, indexTargets bool) (*workingFact, DuplicateKey, bool, error) {
 	name := template.Name()
 	templateKey := template.Key()
 	var duplicateIndex duplicateIndexKey
@@ -4221,7 +4221,9 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Rule
 	if template.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
-	w.addFactTargetIndexes(templateKey, name, id)
+	if indexTargets {
+		w.addFactTargetIndexes(templateKey, name, id)
+	}
 	w.insertionOrder = append(w.insertionOrder, id)
 
 	return stored, "", true, nil
