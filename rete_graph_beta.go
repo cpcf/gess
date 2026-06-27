@@ -197,9 +197,9 @@ type reteGraphTokenMemoryDiagnostics struct {
 
 type tokenHashMemory struct {
 	rows                 []graphTokenRow
-	indexes              map[betaJoinKey]graphTokenRowIDBucket
-	identityRows         map[graphTokenIdentityKey]graphTokenRowIDBucket
-	factRows             map[FactID]graphTokenRowIDBucket
+	indexes              betaJoinTokenBucketTable
+	identityRows         graphTokenIdentityBucketTable
+	factRows             factTokenBucketTable
 	rowReserve           int
 	joinIndexReserve     int
 	identityIndexReserve int
@@ -731,15 +731,16 @@ func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 	if m == nil {
 		return
 	}
-	if joinCapacity > 0 && m.indexes == nil {
-		m.indexes = make(map[betaJoinKey]graphTokenRowIDBucket, joinCapacity)
+	if joinCapacity > 0 {
+		m.indexes.reserve(joinCapacity)
 		m.joinIndexReserve = max(m.joinIndexReserve, joinCapacity)
 	}
-	if identityCapacity > 0 && m.identityRows == nil {
-		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket, identityCapacity)
+	if identityCapacity > 0 {
+		m.identityRows.reserve(identityCapacity)
 		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
 	}
 	if factCapacity > 0 {
+		m.factRows.reserve(factCapacity)
 		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
 	}
 }
@@ -752,12 +753,9 @@ func (m *tokenHashMemory) clear() {
 		m.rows[i] = graphTokenRow{}
 	}
 	m.rows = m.rows[:0]
-	m.recycleBucketRests(m.indexes)
-	m.recycleIdentityBucketRests(m.identityRows)
-	m.recycleFactBucketRests(m.factRows)
-	clear(m.indexes)
-	clear(m.identityRows)
-	clear(m.factRows)
+	m.indexes.clear(m.recycleBucketRest)
+	m.identityRows.clear(m.recycleBucketRest)
+	m.factRows.clear(m.recycleBucketRest)
 	m.factRowsDirty = false
 }
 
@@ -791,33 +789,6 @@ func (m *tokenHashMemory) takeBucketRest() []graphTokenRowID {
 	m.bucketRestFree[last] = nil
 	m.bucketRestFree = m.bucketRestFree[:last]
 	return rest[:0]
-}
-
-func (m *tokenHashMemory) recycleBucketRests(buckets map[betaJoinKey]graphTokenRowIDBucket) {
-	if m == nil || len(buckets) == 0 {
-		return
-	}
-	for _, bucket := range buckets {
-		m.recycleBucketRest(bucket.rest)
-	}
-}
-
-func (m *tokenHashMemory) recycleIdentityBucketRests(buckets map[graphTokenIdentityKey]graphTokenRowIDBucket) {
-	if m == nil || len(buckets) == 0 {
-		return
-	}
-	for _, bucket := range buckets {
-		m.recycleBucketRest(bucket.rest)
-	}
-}
-
-func (m *tokenHashMemory) recycleFactBucketRests(buckets map[FactID]graphTokenRowIDBucket) {
-	if m == nil || len(buckets) == 0 {
-		return
-	}
-	for _, bucket := range buckets {
-		m.recycleBucketRest(bucket.rest)
-	}
 }
 
 func (m *tokenHashMemory) recycleBucketRest(rest []graphTokenRowID) {
@@ -883,10 +854,11 @@ func (s *reteGraphAlphaFactSet) clear() {
 }
 
 func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
-	if m == nil || len(m.indexes) == 0 {
+	if m == nil || m.indexes.isEmpty() {
 		return graphTokenRowIDBucket{}
 	}
-	return m.indexes[key]
+	bucket, _ := m.indexes.get(key)
+	return bucket
 }
 
 func (m *tokenHashMemory) row(rowID graphTokenRowID) *graphTokenRow {
@@ -908,14 +880,8 @@ func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey
 	if m == nil || token.isZero() {
 		return false
 	}
-	if m.identityRows == nil {
-		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
-	}
-	if m.indexes == nil {
-		m.indexes = make(map[betaJoinKey]graphTokenRowIDBucket)
-	}
 	identity := tokenRefKey(token)
-	bucket := m.identityRows[identity]
+	bucket, _ := m.identityRows.get(identity)
 	for i := 0; i < bucket.len(); i++ {
 		rowID, _ := bucket.at(i)
 		row := m.row(rowID)
@@ -934,12 +900,12 @@ func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey
 		identity:     identity,
 		supportCount: negativeBlockerCount,
 	}
-	joinBucket := m.indexes[joinKey]
+	joinBucket, _ := m.indexes.get(joinKey)
 	m.appendBucketRow(&joinBucket, rowID)
-	m.indexes[joinKey] = joinBucket
-	identityBucket := m.identityRows[identity]
+	m.indexes.set(joinKey, joinBucket)
+	identityBucket, _ := m.identityRows.get(identity)
 	m.appendBucketRow(&identityBucket, rowID)
-	m.identityRows[identity] = identityBucket
+	m.identityRows.set(identity, identityBucket)
 	m.markFactRowsDirty()
 	return true
 }
@@ -948,11 +914,8 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 	if m == nil || token.isZero() {
 		return false
 	}
-	if m.identityRows == nil {
-		m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
-	}
 	identity := tokenRefKey(token)
-	bucket := m.identityRows[identity]
+	bucket, _ := m.identityRows.get(identity)
 	for i := 0; i < bucket.len(); i++ {
 		rowID, _ := bucket.at(i)
 		row := m.row(rowID)
@@ -981,21 +944,21 @@ func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candid
 	}
 	row.addTerminalBranchSupport(branchID)
 	m.rows[rowID] = row
-	identityBucket := m.identityRows[identity]
+	identityBucket, _ := m.identityRows.get(identity)
 	m.appendBucketRow(&identityBucket, rowID)
-	m.identityRows[identity] = identityBucket
+	m.identityRows.set(identity, identityBucket)
 	m.markFactRowsDirty()
 	return true
 }
 
 func (m *tokenHashMemory) containsExactToken(token tokenRef) bool {
-	if m == nil || token.isZero() || len(m.identityRows) == 0 {
+	if m == nil || token.isZero() || m.identityRows.isEmpty() {
 		return false
 	}
 	if _, ok := token.resolve(); !ok {
 		return false
 	}
-	bucket, ok := m.identityRows[tokenRefKey(token)]
+	bucket, ok := m.identityRows.get(tokenRefKey(token))
 	if !ok || bucket.len() == 0 {
 		return false
 	}
@@ -1017,7 +980,7 @@ func (m *tokenHashMemory) refreshTerminalTokensContainingFact(id FactID, updates
 		return updates
 	}
 	m.ensureFactRows()
-	bucket, ok := m.factRows[id]
+	bucket, ok := m.factRows.get(id)
 	if !ok || bucket.len() == 0 {
 		return updates
 	}
@@ -1057,7 +1020,7 @@ func (m *tokenHashMemory) refreshTokensContainingFact(id FactID, refresh func(gr
 		return true
 	}
 	m.ensureFactRows()
-	bucket, ok := m.factRows[id]
+	bucket, ok := m.factRows.get(id)
 	if !ok || bucket.len() == 0 {
 		return true
 	}
@@ -1097,22 +1060,19 @@ func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 	}
 	nextIdentity := tokenRefKey(token)
 	if row.identity != nextIdentity {
-		if bucket, ok := m.identityRows[row.identity]; ok {
+		if bucket, ok := m.identityRows.get(row.identity); ok {
 			if bucket.remove(rowID) {
 				if bucket.len() == 0 {
 					m.recycleBucketRest(bucket.rest)
-					delete(m.identityRows, row.identity)
+					m.identityRows.delete(row.identity)
 				} else {
-					m.identityRows[row.identity] = bucket
+					m.identityRows.set(row.identity, bucket)
 				}
 			}
 		}
-		if m.identityRows == nil {
-			m.identityRows = make(map[graphTokenIdentityKey]graphTokenRowIDBucket)
-		}
-		bucket := m.identityRows[nextIdentity]
+		bucket, _ := m.identityRows.get(nextIdentity)
 		m.appendBucketRow(&bucket, rowID)
-		m.identityRows[nextIdentity] = bucket
+		m.identityRows.set(nextIdentity, bucket)
 		row.identity = nextIdentity
 	}
 	row.token = token
@@ -1129,7 +1089,7 @@ func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationC
 	}
 	removed := 0
 	for {
-		bucket, ok := m.factRows[id]
+		bucket, ok := m.factRows.get(id)
 		if !ok || bucket.len() == 0 {
 			return removed
 		}
@@ -1155,7 +1115,7 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 	}
 	removed := 0
 	for {
-		bucket, ok := m.factRows[id]
+		bucket, ok := m.factRows.get(id)
 		if !ok || bucket.len() == 0 {
 			return removed
 		}
@@ -1187,7 +1147,7 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 		counters.recordRemovalIndexLookup()
 	}
 	identity := tokenRefKey(token)
-	bucket, ok := m.identityRows[identity]
+	bucket, ok := m.identityRows.get(identity)
 	if !ok || bucket.len() == 0 {
 		return graphTokenRow{}, false
 	}
@@ -1223,7 +1183,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propag
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	bucket, ok := m.factRows[id]
+	bucket, ok := m.factRows.get(id)
 	if !ok || bucket.len() == 0 {
 		return
 	}
@@ -1256,23 +1216,23 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		return
 	}
 	removed := m.rows[index]
-	if bucket, ok := m.indexes[removed.joinKey]; ok {
+	if bucket, ok := m.indexes.get(removed.joinKey); ok {
 		if bucket.remove(rowID) {
 			if bucket.len() == 0 {
 				m.recycleBucketRest(bucket.rest)
-				delete(m.indexes, removed.joinKey)
+				m.indexes.delete(removed.joinKey)
 			} else {
-				m.indexes[removed.joinKey] = bucket
+				m.indexes.set(removed.joinKey, bucket)
 			}
 		}
 	}
-	if bucket, ok := m.identityRows[removed.identity]; ok {
+	if bucket, ok := m.identityRows.get(removed.identity); ok {
 		if bucket.remove(rowID) {
 			if bucket.len() == 0 {
 				m.recycleBucketRest(bucket.rest)
-				delete(m.identityRows, removed.identity)
+				m.identityRows.delete(removed.identity)
 			} else {
-				m.identityRows[removed.identity] = bucket
+				m.identityRows.set(removed.identity, bucket)
 			}
 		}
 	}
@@ -1287,14 +1247,14 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		if counters != nil {
 			counters.recordRemovalRowMoved()
 		}
-		if bucket, ok := m.indexes[moved.joinKey]; ok {
+		if bucket, ok := m.indexes.get(moved.joinKey); ok {
 			if bucket.replace(graphTokenRowID(last), rowID) {
-				m.indexes[moved.joinKey] = bucket
+				m.indexes.set(moved.joinKey, bucket)
 			}
 		}
-		if bucket, ok := m.identityRows[moved.identity]; ok {
+		if bucket, ok := m.identityRows.get(moved.identity); ok {
 			if bucket.replace(graphTokenRowID(last), rowID) {
-				m.identityRows[moved.identity] = bucket
+				m.identityRows.set(moved.identity, bucket)
 			}
 		}
 		if !m.factRowsDirty {
@@ -1326,11 +1286,8 @@ func (m *tokenHashMemory) rebuildFactRows() {
 	if m == nil {
 		return
 	}
-	if m.factRows == nil {
-		m.factRows = make(map[FactID]graphTokenRowIDBucket, max(m.factIndexReserve, len(m.rows)))
-	} else {
-		clear(m.factRows)
-	}
+	m.factRows.clear(m.recycleBucketRest)
+	m.factRows.reserve(max(m.factIndexReserve, len(m.rows)))
 	for index, row := range m.rows {
 		if row.token.isZero() {
 			continue
@@ -1344,17 +1301,14 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 	if m == nil || token.isZero() {
 		return
 	}
-	if m.factRows == nil {
-		m.factRows = make(map[FactID]graphTokenRowIDBucket)
-	}
 	if factIDs, ok := token.factIDs(); ok {
 		for i, id := range factIDs {
 			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
 				continue
 			}
-			bucket := m.factRows[id]
+			bucket, _ := m.factRows.get(id)
 			m.appendBucketRow(&bucket, rowID)
-			m.factRows[id] = bucket
+			m.factRows.set(id, bucket)
 		}
 		return
 	}
@@ -1371,14 +1325,14 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
-		bucket := m.factRows[id]
+		bucket, _ := m.factRows.get(id)
 		m.appendBucketRow(&bucket, rowID)
-		m.factRows[id] = bucket
+		m.factRows.set(id, bucket)
 	}
 }
 
 func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID) {
-	if m == nil || len(m.factRows) == 0 || token.isZero() {
+	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
 	if factIDs, ok := token.factIDs(); ok {
@@ -1386,15 +1340,15 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
 				continue
 			}
-			bucket, ok := m.factRows[id]
+			bucket, ok := m.factRows.get(id)
 			if !ok || !bucket.remove(rowID) {
 				continue
 			}
 			if bucket.len() == 0 {
 				m.recycleBucketRest(bucket.rest)
-				delete(m.factRows, id)
+				m.factRows.delete(id)
 			} else {
-				m.factRows[id] = bucket
+				m.factRows.set(id, bucket)
 			}
 		}
 		return
@@ -1412,21 +1366,21 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
-		bucket, ok := m.factRows[id]
+		bucket, ok := m.factRows.get(id)
 		if !ok || !bucket.remove(rowID) {
 			continue
 		}
 		if bucket.len() == 0 {
 			m.recycleBucketRest(bucket.rest)
-			delete(m.factRows, id)
+			m.factRows.delete(id)
 		} else {
-			m.factRows[id] = bucket
+			m.factRows.set(id, bucket)
 		}
 	}
 }
 
 func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID graphTokenRowID) {
-	if m == nil || len(m.factRows) == 0 || token.isZero() {
+	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
 	if factIDs, ok := token.factIDs(); ok {
@@ -1434,9 +1388,9 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
 				continue
 			}
-			bucket, ok := m.factRows[id]
+			bucket, ok := m.factRows.get(id)
 			if ok && bucket.replace(oldID, newID) {
-				m.factRows[id] = bucket
+				m.factRows.set(id, bucket)
 			}
 		}
 		return
@@ -1454,9 +1408,9 @@ func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID grap
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
-		bucket, ok := m.factRows[id]
+		bucket, ok := m.factRows.get(id)
 		if ok && bucket.replace(oldID, newID) {
-			m.factRows[id] = bucket
+			m.factRows.set(id, bucket)
 		}
 	}
 }
@@ -6180,13 +6134,13 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
 	s.TokenRowCapacityMax = max(s.TokenRowCapacityMax, rowCapacity)
 	s.TokenRowReserveMax = max(s.TokenRowReserveMax, memory.rowReserve)
 
-	joinKeys := len(memory.indexes)
+	joinKeys := memory.indexes.keyCount()
 	s.JoinIndexKeys += joinKeys
 	s.JoinIndexReserve += memory.joinIndexReserve
 	s.JoinIndexKeysMax = max(s.JoinIndexKeysMax, joinKeys)
 	s.JoinIndexReserveMax = max(s.JoinIndexReserveMax, memory.joinIndexReserve)
 
-	identityKeys := len(memory.identityRows)
+	identityKeys := memory.identityRows.keyCount()
 	s.IdentityIndexKeys += identityKeys
 	s.IdentityIndexReserve += memory.identityIndexReserve
 	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
@@ -6213,21 +6167,21 @@ func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGrap
 func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	diag := reteGraphTokenMemoryDiagnostics{
 		Rows:              len(m.rows),
-		JoinIndexKeys:     len(m.indexes),
-		IdentityIndexKeys: len(m.identityRows),
+		JoinIndexKeys:     m.indexes.keyCount(),
+		IdentityIndexKeys: m.identityRows.keyCount(),
 		FactIndexKeys:     m.factIndexKeyCount(),
 	}
-	for _, bucket := range m.indexes {
+	m.indexes.forEachBucket(func(bucket graphTokenRowIDBucket) {
 		depth := bucket.len()
 		diag.JoinBucketDepthTotal += depth
 		diag.JoinBucketDepthMax = max(diag.JoinBucketDepthMax, depth)
-	}
+	})
 	return diag
 }
 
 func (m tokenHashMemory) factIndexKeyCount() int {
 	if !m.factRowsDirty {
-		return len(m.factRows)
+		return m.factRows.keyCount()
 	}
 	if len(m.rows) == 0 {
 		return 0

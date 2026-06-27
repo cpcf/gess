@@ -151,14 +151,13 @@ func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 
 func TestTokenHashMemoryReusesBucketRestStorage(t *testing.T) {
 	var memory tokenHashMemory
-	memory.indexes = make(map[betaJoinKey]graphTokenRowIDBucket)
 
 	key := betaJoinKey{}
-	bucket := memory.indexes[key]
+	bucket, _ := memory.indexes.get(key)
 	for id := graphTokenRowID(1); id <= 5; id++ {
 		memory.appendBucketRow(&bucket, id)
 	}
-	memory.indexes[key] = bucket
+	memory.indexes.set(key, bucket)
 	if got := bucket.len(); got != 5 {
 		t.Fatalf("bucket length = %d, want 5", got)
 	}
