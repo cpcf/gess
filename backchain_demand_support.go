@@ -51,19 +51,13 @@ type backchainDemandSupportIDBucket struct {
 	overflow []backchainDemandSupportID
 }
 
-func (s *Session) ensureBackchainDemandSupportMaps() {
+func (s *Session) ensureBackchainDemandSupportTables() {
 	if s == nil {
 		return
 	}
-	if s.backchainDemandSupports == nil {
-		s.backchainDemandSupports = make(map[backchainDemandSupportKey]backchainDemandSupportIDBucket)
-	}
-	if s.backchainDemandByFact == nil {
-		s.backchainDemandByFact = make(map[FactID]backchainDemandSupportIDBucket)
-	}
-	if s.backchainDemandByDemand == nil {
-		s.backchainDemandByDemand = make(map[FactID]backchainDemandSupportIDBucket)
-	}
+	s.backchainDemandSupports.reserve(4)
+	s.backchainDemandByFact.reserve(4)
+	s.backchainDemandByDemand.reserve(4)
 }
 
 func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request backchainDemandRequest) {
@@ -74,8 +68,8 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	if !ok {
 		return
 	}
-	s.ensureBackchainDemandSupportMaps()
-	bucket := s.backchainDemandSupports[requestKey.key]
+	s.ensureBackchainDemandSupportTables()
+	bucket, _ := s.backchainDemandSupports.get(requestKey.key)
 	if _, exists := s.findBackchainDemandSupportID(bucket, requestKey, request); exists {
 		return
 	}
@@ -83,16 +77,16 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	record := newBackchainDemandSupportRecord(id, demandFact.id, requestKey, request)
 	s.storeBackchainDemandSupportRecord(record)
 	bucket.add(id)
-	s.backchainDemandSupports[requestKey.key] = bucket
+	s.backchainDemandSupports.set(requestKey.key, bucket)
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
-		factBucket := s.backchainDemandByFact[support.id]
+		factBucket, _ := s.backchainDemandByFact.get(support.id)
 		factBucket.add(id)
-		s.backchainDemandByFact[support.id] = factBucket
+		s.backchainDemandByFact.set(support.id, factBucket)
 	}
-	demandBucket := s.backchainDemandByDemand[demandFact.id]
+	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
 	demandBucket.add(id)
-	s.backchainDemandByDemand[demandFact.id] = demandBucket
+	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
 }
 
 func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, request backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -102,10 +96,11 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 	id, ok := s.findBackchainDemandSupportIDByRequest(request)
 	if !ok {
 		requestKey, keyOK := backchainDemandSupportKeyForRequest(request)
-		if !keyOK || len(s.backchainDemandSupports) == 0 {
+		if !keyOK || s.backchainDemandSupports.isEmpty() {
 			return reteAgendaDelta{supported: true}, nil
 		}
-		id, ok = s.findBackchainDemandSupportID(s.backchainDemandSupports[requestKey.key], requestKey, request)
+		bucket, _ := s.backchainDemandSupports.get(requestKey.key)
+		id, ok = s.findBackchainDemandSupportID(bucket, requestKey, request)
 		if !ok {
 			return reteAgendaDelta{supported: true}, nil
 		}
@@ -123,10 +118,10 @@ func (s *Session) removeBackchainDemandSupportsForFactVersion(ctx context.Contex
 
 func (s *Session) removeBackchainDemandSupportsForFactVersionMatch(ctx context.Context, id FactID, version FactVersion, matchVersion bool, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || id.IsZero() || len(s.backchainDemandByFact) == 0 {
+	if s == nil || id.IsZero() || s.backchainDemandByFact.isEmpty() {
 		return combined, nil
 	}
-	bucket := s.backchainDemandByFact[id]
+	bucket, _ := s.backchainDemandByFact.get(id)
 	if bucket.empty() {
 		return combined, nil
 	}
@@ -178,13 +173,13 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 		support := backchainDemandSupportRecordFact(record, i)
 		s.removeBackchainDemandSupportIDFromFactBucket(support.id, id)
 	}
-	demandBucket := s.backchainDemandByDemand[record.demandFactID]
+	demandBucket, _ := s.backchainDemandByDemand.get(record.demandFactID)
 	demandBucket.remove(id)
 	if !demandBucket.empty() {
-		s.backchainDemandByDemand[record.demandFactID] = demandBucket
+		s.backchainDemandByDemand.set(record.demandFactID, demandBucket)
 		return combined, nil
 	}
-	delete(s.backchainDemandByDemand, record.demandFactID)
+	s.backchainDemandByDemand.delete(record.demandFactID)
 	if _, ok := s.workingFactByID(record.demandFactID); !ok {
 		return combined, nil
 	}
@@ -197,23 +192,23 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 }
 
 func (s *Session) removeBackchainDemandSupportIDFromSupportBucket(key backchainDemandSupportKey, id backchainDemandSupportID) {
-	bucket := s.backchainDemandSupports[key]
+	bucket, _ := s.backchainDemandSupports.get(key)
 	bucket.remove(id)
 	if bucket.empty() {
-		delete(s.backchainDemandSupports, key)
+		s.backchainDemandSupports.delete(key)
 		return
 	}
-	s.backchainDemandSupports[key] = bucket
+	s.backchainDemandSupports.set(key, bucket)
 }
 
 func (s *Session) removeBackchainDemandSupportIDFromFactBucket(factID FactID, id backchainDemandSupportID) {
-	bucket := s.backchainDemandByFact[factID]
+	bucket, _ := s.backchainDemandByFact.get(factID)
 	bucket.remove(id)
 	if bucket.empty() {
-		delete(s.backchainDemandByFact, factID)
+		s.backchainDemandByFact.delete(factID)
 		return
 	}
-	s.backchainDemandByFact[factID] = bucket
+	s.backchainDemandByFact.set(factID, bucket)
 }
 
 func normalizeBackchainDemandNoopDelta(delta reteAgendaDelta) reteAgendaDelta {
@@ -231,13 +226,13 @@ func (s *Session) clearBackchainDemandSupports() {
 	if s == nil {
 		return
 	}
-	clear(s.backchainDemandSupports)
+	s.backchainDemandSupports.clear()
 	for i := range s.backchainDemandSupportRecords {
 		s.backchainDemandSupportRecords[i] = backchainDemandSupportRecord{}
 	}
 	s.backchainDemandSupportRecords = s.backchainDemandSupportRecords[:0]
-	clear(s.backchainDemandByFact)
-	clear(s.backchainDemandByDemand)
+	s.backchainDemandByFact.clear()
+	s.backchainDemandByDemand.clear()
 	s.nextBackchainDemandSupportID = 0
 }
 
@@ -265,10 +260,10 @@ func (s *Session) findBackchainDemandSupportID(bucket backchainDemandSupportIDBu
 }
 
 func (s *Session) findBackchainDemandSupportIDByRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
-	if s == nil || len(s.backchainDemandByFact) == 0 || len(request.supportFacts) == 0 {
+	if s == nil || s.backchainDemandByFact.isEmpty() || len(request.supportFacts) == 0 {
 		return 0, false
 	}
-	bucket := s.backchainDemandByFact[request.supportFacts[0].id]
+	bucket, _ := s.backchainDemandByFact.get(request.supportFacts[0].id)
 	var found backchainDemandSupportID
 	bucket.forEach(func(id backchainDemandSupportID) {
 		if found != 0 {
