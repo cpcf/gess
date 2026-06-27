@@ -500,8 +500,13 @@ func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteG
 }
 
 func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, error) {
+	memory, _, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, revision, graph, facts, generation)
+	return memory, err
+}
+
+func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, reteAgendaDelta, error) {
 	if revision == nil || graph == nil {
-		return nil, nil
+		return nil, reteAgendaDelta{supported: true}, nil
 	}
 	rowCapacity := graphBetaTokenMemoryCapacity(revision, len(facts))
 	arenaCapacity := graphBetaTokenArenaCapacity(revision, len(facts))
@@ -518,10 +523,11 @@ func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset,
 	memory.reserveMemories(rowCapacity)
 	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
-	if err := memory.resetFactsForGeneration(ctx, facts, generation); err != nil {
-		return nil, err
+	delta, err := memory.resetFactsForGenerationWithDelta(ctx, facts, generation)
+	if err != nil {
+		return nil, delta, err
 	}
-	return memory, nil
+	return memory, delta, nil
 }
 
 func (m *reteGraphBetaMemory) pushEvalContext(ctx context.Context) func() {
@@ -1453,8 +1459,14 @@ func (m *reteGraphBetaMemory) resetFacts(ctx context.Context, facts []FactSnapsh
 }
 
 func (m *reteGraphBetaMemory) resetFactsForGeneration(ctx context.Context, facts []FactSnapshot, generation Generation) error {
+	_, err := m.resetFactsForGenerationWithDelta(ctx, facts, generation)
+	return err
+}
+
+func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Context, facts []FactSnapshot, generation Generation) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
 	if m == nil || m.graph == nil {
-		return nil
+		return combined, nil
 	}
 	if len(m.alphaFacts) != len(m.graph.alphaNodes)+1 || len(m.alphaConditions) != len(m.graph.alphaNodes)+1 {
 		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, len(facts)))
@@ -1465,7 +1477,7 @@ func (m *reteGraphBetaMemory) resetFactsForGeneration(ctx context.Context, facts
 		m.arena.reset()
 	}
 	if _, err := m.propagateEvent(ctx, newReteGraphClearEvent(generation, mutationOrigin{}, nil)); err != nil {
-		return err
+		return combined, err
 	}
 	m.setFacts(facts)
 	m.deferNegativeOutputs = true
@@ -1474,23 +1486,25 @@ func (m *reteGraphBetaMemory) resetFactsForGeneration(ctx context.Context, facts
 	if err := m.initializeRootStage(nil); err != nil {
 		m.deferNegativeOutputs = false
 		m.suppressTerminalDeltas = false
-		return err
+		return combined, err
 	}
 	for _, fact := range facts {
-		if _, err := m.insertFactInternal(ctx, fact, nil, false); err != nil {
+		delta, err := m.insertFactInternal(ctx, fact, nil, false)
+		if err != nil {
 			m.deferNegativeOutputs = false
 			m.suppressTerminalDeltas = false
-			return err
+			return combined, err
 		}
+		combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
 	}
 	if err := m.finalizeDeferredNegativeOutputs(nil); err != nil {
 		m.deferNegativeOutputs = false
 		m.suppressTerminalDeltas = false
-		return err
+		return combined, err
 	}
 	m.deferNegativeOutputs = false
 	m.suppressTerminalDeltas = false
-	return nil
+	return combined, nil
 }
 
 func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) error {
@@ -3603,12 +3617,20 @@ func backchainDemandSupportFactsForToken(token tokenRef) ([]backchainDemandSuppo
 		}
 		return out, len(out) > 0
 	}
-	matches, ok := tokenConditionMatches(token)
-	if !ok || len(matches) == 0 {
+	row, ok := token.resolve()
+	if !ok {
 		return nil, false
 	}
-	out := make([]backchainDemandSupportFact, 0, len(matches))
-	for _, match := range matches {
+	out := make([]backchainDemandSupportFact, 0, row.size)
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return nil, false
+		}
+		match, ok := row.conditionMatch()
+		if !ok {
+			return nil, false
+		}
 		if match.hasValue || match.fact.ID().IsZero() {
 			continue
 		}
@@ -3617,7 +3639,29 @@ func backchainDemandSupportFactsForToken(token tokenRef) ([]backchainDemandSuppo
 			version: match.fact.Version(),
 		})
 	}
+	slices.SortFunc(out, compareBackchainDemandSupportFacts)
 	return out, len(out) > 0
+}
+
+func compareBackchainDemandSupportFacts(left, right backchainDemandSupportFact) int {
+	if left.id.generation != right.id.generation {
+		return cmpUint64(uint64(left.id.generation), uint64(right.id.generation))
+	}
+	if left.id.sequence != right.id.sequence {
+		return cmpUint64(left.id.sequence, right.id.sequence)
+	}
+	return cmpUint64(uint64(left.version), uint64(right.version))
+}
+
+func cmpUint64(left, right uint64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (m *reteGraphBetaMemory) insertFilterBetaInput(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {

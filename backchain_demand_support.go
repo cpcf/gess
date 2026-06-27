@@ -2,8 +2,8 @@ package gess
 
 import (
 	"context"
-	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -177,16 +177,18 @@ func backchainDemandSupportKey(request backchainDemandRequest) string {
 		return ""
 	}
 	var b strings.Builder
+	b.Grow(len(request.templateKey) + len(request.supportFacts)*32 + len(request.slots)*16 + 24)
 	b.WriteString("template=")
 	b.WriteString(string(request.templateKey))
 	b.WriteString("|support=")
+	var num [32]byte
 	for i, support := range request.supportFacts {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(support.id.String())
+		writeBackchainDemandFactID(&b, support.id, num[:0])
 		b.WriteByte('@')
-		b.WriteString(fmt.Sprint(uint64(support.version)))
+		b.Write(strconv.AppendUint(num[:0], uint64(support.version), 10))
 	}
 	b.WriteString("|slots=")
 	for i, slot := range request.slots {
@@ -200,6 +202,17 @@ func backchainDemandSupportKey(request backchainDemandRequest) string {
 		b.WriteString(slot.value.canonicalKey())
 	}
 	return b.String()
+}
+
+func writeBackchainDemandFactID(b *strings.Builder, id FactID, scratch []byte) {
+	if id.IsZero() {
+		b.WriteString("fact:zero")
+		return
+	}
+	b.WriteString("fact:g")
+	b.Write(strconv.AppendUint(scratch, uint64(id.generation), 10))
+	b.WriteByte(':')
+	b.Write(strconv.AppendUint(scratch[:0], id.sequence, 10))
 }
 
 func cloneBackchainDemandSupportFacts(in []backchainDemandSupportFact) []backchainDemandSupportFact {

@@ -291,26 +291,31 @@ func (r *reteRuntime) resetGraphBeta(ctx context.Context, facts []FactSnapshot) 
 }
 
 func (r *reteRuntime) resetGraphBetaForGeneration(ctx context.Context, facts []FactSnapshot, generation Generation) error {
+	_, err := r.resetGraphBetaForGenerationWithDelta(ctx, facts, generation)
+	return err
+}
+
+func (r *reteRuntime) resetGraphBetaForGenerationWithDelta(ctx context.Context, facts []FactSnapshot, generation Generation) (reteAgendaDelta, error) {
 	if r == nil {
-		return nil
+		return reteAgendaDelta{supported: true}, nil
 	}
 	r.mode = r.determineMode()
 	if !r.usesGraphBeta() {
 		r.graphBeta = nil
 		if len(r.plan.rules) == 0 {
-			return nil
+			return reteAgendaDelta{supported: true}, nil
 		}
-		return r.unsupportedRuntimeError()
+		return reteAgendaDelta{}, r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, err := newReteGraphBetaMemoryForGeneration(ctx, r.revision, r.graph, facts, generation)
+		memory, delta, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, r.revision, r.graph, facts, generation)
 		if err != nil {
-			return err
+			return delta, err
 		}
 		r.graphBeta = memory
-		return nil
+		return delta, nil
 	}
-	return r.graphBeta.resetFactsForGeneration(ctx, facts, generation)
+	return r.graphBeta.resetFactsForGenerationWithDelta(ctx, facts, generation)
 }
 
 func (r *reteRuntime) clearMemories() {

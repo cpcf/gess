@@ -471,10 +471,10 @@ func (a *agenda) reserveActivationRows(capacity int) {
 	if capacity <= 0 {
 		return
 	}
-	if len(a.activations) == 0 {
+	if a.activations == nil {
 		a.activations = make(map[activationFingerprint]activationBucket, capacity)
 	}
-	if len(a.byFactID) == 0 {
+	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket, capacity*2)
 	}
 }

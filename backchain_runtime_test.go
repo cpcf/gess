@@ -324,6 +324,94 @@ func TestBackchainDemandRegeneratedWhenAnswerRetracted(t *testing.T) {
 	assertFactStringField(t, demands[0], "id", "q1")
 }
 
+func TestBackchainDemandResetClearsRuntimeDemands(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("AssertTemplate(request): %v", err)
+	}
+	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 1 {
+		t.Fatalf("demands before reset = %d, want 1", len(demands))
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 0 {
+		t.Fatalf("demands after reset = %d, want 0", len(demands))
+	}
+}
+
+func TestBackchainDemandResetGeneratesDemandForInitialFact(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: request.Key(),
+		Fields:      mustFields(t, map[string]any{"id": "q1"}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+
+	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
+	if len(demands) != 1 {
+		t.Fatalf("demands after reset = %d, want 1", len(demands))
+	}
+	assertFactStringField(t, demands[0], "id", "q1")
+	assertFactStringField(t, demands[0], "kind", "hardware")
+}
+
 func mustBackchainDemandTemplates(t testing.TB, workspace *Workspace) (Template, Template) {
 	t.Helper()
 	request := mustAddTemplate(t, workspace, TemplateSpec{

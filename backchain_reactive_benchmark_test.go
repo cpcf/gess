@@ -42,15 +42,16 @@ func BenchmarkGessBackchainReactiveCompile(b *testing.B) {
 func BenchmarkGessBackchainRuntimeDemand(b *testing.B) {
 	ctx := context.Background()
 	revision, requestKey := mustCompileBackchainRuntimeRuleset(b)
+	session, err := NewSession(revision, WithResetBeforeSnapshot(false))
+	if err != nil {
+		b.Fatalf("NewSession: %v", err)
+	}
 	b.ReportAllocs()
 	b.ReportMetric(1, "requests")
 	b.ReportMetric(1, "generated-demand-facts")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		session, err := NewSession(revision)
-		if err != nil {
-			b.Fatalf("NewSession: %v", err)
-		}
+		resetBackchainRuntimeDemand(b, ctx, session)
 		runBackchainRuntimeDemand(b, ctx, session, requestKey)
 	}
 }
@@ -107,21 +108,19 @@ func TestBackchainRuntimeDemandHarness(t *testing.T) {
 
 	ctx := context.Background()
 	revision, requestKey := mustCompileBackchainRuntimeRuleset(t)
+	session, err := NewSession(revision, WithResetBeforeSnapshot(false))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
 	for range warmup {
-		session, err := NewSession(revision)
-		if err != nil {
-			t.Fatalf("NewSession(warmup): %v", err)
-		}
+		resetBackchainRuntimeDemand(t, ctx, session)
 		runBackchainRuntimeDemand(t, ctx, session, requestKey)
 	}
 
 	var elapsed time.Duration
 	for range iterations {
-		session, err := NewSession(revision)
-		if err != nil {
-			t.Fatalf("NewSession: %v", err)
-		}
 		start := time.Now()
+		resetBackchainRuntimeDemand(t, ctx, session)
 		runBackchainRuntimeDemand(t, ctx, session, requestKey)
 		elapsed += time.Since(start)
 	}
@@ -181,21 +180,15 @@ func mustCompileBackchainRuntimeRuleset(t testing.TB) (*Ruleset, TemplateKey) {
 			{Name: "value", Kind: ValueString},
 		},
 	})
-	mustAddAction(t, workspace, ActionSpec{
+	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: "provide-answer",
-		Fn: func(ctx ActionContext) error {
-			demand, ok := ctx.Binding("need")
-			if !ok {
-				t.Fatal("need binding did not resolve")
-			}
-			id, _ := demand.Field("id")
-			kind, _ := demand.Field("kind")
-			_, err := ctx.AssertTemplate(answer.Key(), Fields{
-				"id":    id,
-				"kind":  kind,
-				"value": newStringValue("provided"),
-			})
-			return err
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: answer.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "id"},
+				BindingFieldExpr{Binding: "need", Field: "kind"},
+				ConstExpr{Value: "provided"},
+			},
 		},
 	})
 	mustAddAction(t, workspace, ActionSpec{Name: "consume-answer", Fn: func(ActionContext) error { return nil }})
@@ -246,6 +239,13 @@ func runBackchainRuntimeDemand(t testing.TB, ctx context.Context, session *Sessi
 	}
 	if result.Status != RunCompleted || result.Fired != 2 {
 		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+}
+
+func resetBackchainRuntimeDemand(t testing.TB, ctx context.Context, session *Session) {
+	t.Helper()
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
 	}
 }
 

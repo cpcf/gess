@@ -1798,7 +1798,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			resetAgendaWithDeltas = true
 		}
 	}
-	if err := rete.resetGraphBetaForGeneration(ctx, facts, next.generation); err != nil {
+	resetDemandDelta, err := rete.resetGraphBetaForGenerationWithDelta(ctx, facts, next.generation)
+	if err != nil {
 		if s.rete != nil {
 			rollbackFacts := before.facts
 			if !s.resetBeforeSnapshot {
@@ -1807,6 +1808,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			_ = s.rete.resetGraphBetaForGeneration(context.Background(), rollbackFacts, s.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
+	}
+	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 {
+		resetAgendaWithDeltas = false
 	}
 	var newTerminalDeltas []reteTerminalTokenDelta
 	if resetAgendaWithDeltas {
@@ -1834,6 +1838,24 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.generation = next.generation
 	s.rete = rete
 	s.syncPropagationCounters()
+	if len(resetDemandDelta.resolvedDemands) > 0 {
+		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, mutationOrigin{}); err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+	}
+	if len(resetDemandDelta.demands) > 0 {
+		demandState := s.activeFactWorkspace()
+		demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, resetDemandDelta.demands, mutationOrigin{})
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+		}
+		s.commitFactWorkspace(demandState)
+		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
+			resetAgendaWithDeltas = false
+			s.agendaReady = false
+			s.agendaDirty = false
+		}
+	}
 	var resetDeactivations []agendaChange
 	var resetActivations []agendaChange
 	if resetAgendaWithDeltas {

@@ -544,10 +544,24 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	if !left.supported || !right.supported {
 		return reteAgendaDelta{}
 	}
+	if reteAgendaDeltaPayloadEmpty(left) {
+		return right
+	}
+	if reteAgendaDeltaPayloadEmpty(right) {
+		return left
+	}
 	left.added = append(left.added, right.added...)
 	left.removed = append(left.removed, right.removed...)
 	left.updated = append(left.updated, right.updated...)
 	left.demands = append(left.demands, right.demands...)
 	left.resolvedDemands = append(left.resolvedDemands, right.resolvedDemands...)
 	return left
+}
+
+func reteAgendaDeltaPayloadEmpty(delta reteAgendaDelta) bool {
+	return len(delta.added) == 0 &&
+		len(delta.removed) == 0 &&
+		len(delta.updated) == 0 &&
+		len(delta.demands) == 0 &&
+		len(delta.resolvedDemands) == 0
 }
