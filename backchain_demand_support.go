@@ -96,16 +96,19 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 }
 
 func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, request backchainDemandRequest, origin mutationOrigin) (reteAgendaDelta, error) {
-	requestKey, ok := backchainDemandSupportKeyForRequest(request)
-	if !ok {
+	if s == nil || len(request.supportFacts) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
-	if s == nil || len(s.backchainDemandSupports) == 0 {
-		return reteAgendaDelta{supported: true}, nil
-	}
-	id, ok := s.findBackchainDemandSupportID(s.backchainDemandSupports[requestKey.key], requestKey, request)
+	id, ok := s.findBackchainDemandSupportIDByRequest(request)
 	if !ok {
-		return reteAgendaDelta{supported: true}, nil
+		requestKey, keyOK := backchainDemandSupportKeyForRequest(request)
+		if !keyOK || len(s.backchainDemandSupports) == 0 {
+			return reteAgendaDelta{supported: true}, nil
+		}
+		id, ok = s.findBackchainDemandSupportID(s.backchainDemandSupports[requestKey.key], requestKey, request)
+		if !ok {
+			return reteAgendaDelta{supported: true}, nil
+		}
 	}
 	return s.removeBackchainDemandSupportID(ctx, id, origin)
 }
@@ -261,6 +264,25 @@ func (s *Session) findBackchainDemandSupportID(bucket backchainDemandSupportIDBu
 	return found, found != 0
 }
 
+func (s *Session) findBackchainDemandSupportIDByRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
+	if s == nil || len(s.backchainDemandByFact) == 0 || len(request.supportFacts) == 0 {
+		return 0, false
+	}
+	bucket := s.backchainDemandByFact[request.supportFacts[0].id]
+	var found backchainDemandSupportID
+	bucket.forEach(func(id backchainDemandSupportID) {
+		if found != 0 {
+			return
+		}
+		record, ok := s.backchainDemandSupportRecordByID(id)
+		if !ok || !backchainDemandSupportRecordMatchesRawRequest(record, request) {
+			return
+		}
+		found = id
+	})
+	return found, found != 0
+}
+
 func (s *Session) storeBackchainDemandSupportRecord(record backchainDemandSupportRecord) {
 	if s == nil || record.id == 0 {
 		return
@@ -344,6 +366,23 @@ func backchainDemandSupportRecordMatchesRequest(record backchainDemandSupportRec
 	}
 	for i := 0; i < record.slotCount; i++ {
 		if backchainDemandSupportRecordSlot(record, i) != backchainDemandSupportRequestSlot(requestKey, i) {
+			return false
+		}
+	}
+	return true
+}
+
+func backchainDemandSupportRecordMatchesRawRequest(record backchainDemandSupportRecord, request backchainDemandRequest) bool {
+	if record.key.templateKey != request.templateKey || record.supportCount != len(request.supportFacts) || record.slotCount != len(request.slots) {
+		return false
+	}
+	for i := 0; i < record.supportCount; i++ {
+		if backchainDemandSupportRecordFact(record, i) != request.supportFacts[i] {
+			return false
+		}
+	}
+	for i := 0; i < record.slotCount; i++ {
+		if backchainDemandSupportRecordSlot(record, i) != backchainDemandSlotKeyForFactSlot(request.slots[i]) {
 			return false
 		}
 	}
