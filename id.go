@@ -2,6 +2,7 @@ package gess
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -32,17 +33,17 @@ func (id SessionID) String() string {
 	return string(id)
 }
 
-type RunID string
+type RunID uint64
 
 func (id RunID) String() string {
 	if id.IsZero() {
 		return "run:zero"
 	}
-	return string(id)
+	return "run:" + strconv.FormatUint(uint64(id), 10)
 }
 
 func (id RunID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
+	return id == 0
 }
 
 type RuleID string

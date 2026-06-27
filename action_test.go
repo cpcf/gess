@@ -113,7 +113,7 @@ func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-action-detached-binding"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(1), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 
@@ -330,7 +330,7 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-fast-path"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(2), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 }
@@ -483,7 +483,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-assert"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(3), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 }
@@ -665,7 +665,7 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 				t.Fatal("agenda.next returned no activation")
 			}
 
-			if err := session.executeActivationActions(context.Background(), RunID("run:test-scalar-mutation-"+tc.name), selected); err != nil {
+			if err := session.executeActivationActions(context.Background(), RunID(4), selected); err != nil {
 				t.Fatalf("executeActivationActions: %v", err)
 			}
 
@@ -769,7 +769,7 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-lazy-freeze"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(5), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 
@@ -840,7 +840,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-escaped-context"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(6), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 	if saved.bindings == nil || len(saved.bindings.snapshots) != 1 {
@@ -930,7 +930,7 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-non-escaping-context"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(7), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 	if saved.bindings == nil {
@@ -1021,7 +1021,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *t
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	err = session.executeActivationActions(runCtx, RunID("run:test-escaped-context-cancel"), selected)
+	err = session.executeActivationActions(runCtx, RunID(8), selected)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("executeActivationActions error = %v, want context canceled", err)
 	}
@@ -1190,7 +1190,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 		t.Fatal("agenda.next returned no activation")
 	}
 
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-action-order"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(9), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 
@@ -1377,7 +1377,7 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	}
 
 	eventsBefore := len(collector.Events())
-	if err := session.executeActivationActions(context.Background(), RunID("run:test-slot-assert"), selected); err != nil {
+	if err := session.executeActivationActions(context.Background(), RunID(10), selected); err != nil {
 		t.Fatalf("executeActivationActions: %v", err)
 	}
 
@@ -1869,6 +1869,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
 	}
 
+	session.ensureFactTargetIndexes()
 	generatedIDs := session.factsByTemplate[generated.Key()]
 	if got := len(generatedIDs); got != 1 {
 		t.Fatalf("generated fact count = %d, want 1", got)
@@ -1995,6 +1996,7 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
 	}
 
+	session.ensureFactTargetIndexes()
 	generatedIDs := session.factsByTemplate[generated.Key()]
 	if got := len(generatedIDs); got != 1 {
 		t.Fatalf("generated fact count = %d, want 1", got)
@@ -2143,7 +2145,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	selectionRuleID = selected.ruleID
 	selectionRevID = selected.ruleRevisionID
 
-	err = session.executeActivationActions(context.Background(), RunID("run:test-action-failure"), selected)
+	err = session.executeActivationActions(context.Background(), RunID(11), selected)
 	if !errors.Is(err, terminalErr) {
 		t.Fatalf("executeActivationActions error = %v, want %v", err, terminalErr)
 	}
@@ -2151,7 +2153,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	if !errors.As(err, &failure) {
 		t.Fatalf("expected ActionFailureError, got %T: %v", err, err)
 	}
-	if failure.RunID != RunID("run:test-action-failure") || failure.RuleID != selectionRuleID || failure.RuleRevisionID != selectionRevID || failure.ActivationID != selectionID || failure.ActionName != "fail" || failure.ActionIndex != 3 {
+	if failure.RunID != RunID(11) || failure.RuleID != selectionRuleID || failure.RuleRevisionID != selectionRevID || failure.ActivationID != selectionID || failure.ActionName != "fail" || failure.ActionIndex != 3 {
 		t.Fatalf("action failure metadata = %#v", failure)
 	}
 	if terminalCalled {
@@ -2280,7 +2282,7 @@ func TestSessionExecuteActivationActionsRejectsStaleBindings(t *testing.T) {
 		t.Fatalf("Modify: %v", err)
 	}
 
-	err = session.executeActivationActions(context.Background(), RunID("run:test-stale"), selected)
+	err = session.executeActivationActions(context.Background(), RunID(12), selected)
 	if !errors.Is(err, ErrMatcher) {
 		t.Fatalf("executeActivationActions error = %v, want ErrMatcher", err)
 	}

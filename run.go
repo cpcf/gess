@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 )
 
 func (s *Session) Run(ctx context.Context) (RunResult, error) {
@@ -38,7 +37,7 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	}
 
 	s.nextRunSequence++
-	runID := RunID("run:" + strconv.FormatUint(s.nextRunSequence, 10))
+	runID := RunID(s.nextRunSequence)
 	s.runHaltRequested.Store(false)
 	s.runActive.Store(true)
 	s.endMutation()

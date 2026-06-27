@@ -4236,7 +4236,9 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
 	}
-	routes := slices.Clone(m.alphaFactRoutes[id])
+	m.resetAlphaRouteScratch()
+	m.appendAlphaRouteBucket(m.alphaFactRoutes[id])
+	routes := m.alphaRouteScratch
 	for _, nodeID := range routes {
 		index := int(nodeID)
 		if index <= 0 || index >= len(m.alphaFacts) || !m.alphaFacts[index].remove(id) {

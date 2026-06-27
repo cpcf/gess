@@ -1963,21 +1963,25 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	s.agenda.reserveActivationRows(s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 
-	delta := MutationDelta{
-		Kind:          MutationReset,
-		Generation:    s.generation,
-		OldGeneration: oldGeneration,
-	}
 	result := ResetResult{
 		Status:     ResetApplied,
 		Generation: s.generation,
 		Before:     before,
-		Delta:      delta,
+		Delta: MutationDelta{
+			Kind:          MutationReset,
+			Generation:    s.generation,
+			OldGeneration: oldGeneration,
+		},
 	}
 	if resetAgendaWithDeltas {
 		s.emitAgendaEvents(ctx, resetDeactivations)
 	}
 	if len(s.listeners) > 0 {
+		delta := MutationDelta{
+			Kind:          MutationReset,
+			Generation:    s.generation,
+			OldGeneration: oldGeneration,
+		}
 		s.emitEvent(ctx, Event{
 			SessionID:  s.id,
 			RulesetID:  s.revision.ID(),
@@ -3325,6 +3329,14 @@ type factWorkspaceInsertMark struct {
 	factTargetIndexesDirty bool
 }
 
+type factTargetIndexMode uint8
+
+const (
+	factTargetIndexEager factTargetIndexMode = iota
+	factTargetIndexDirty
+	factTargetIndexSkip
+)
+
 type factWorkspaceModifyMark struct {
 	recency                Recency
 	factTargetIndexesDirty bool
@@ -3704,6 +3716,13 @@ func (w *factWorkspace) addFactTargetIndexes(templateKey TemplateKey, name strin
 	}
 	w.factsByTemplate[templateKey] = append(w.factsByTemplate[templateKey], id)
 	w.factsByName[name] = append(w.factsByName[name], id)
+}
+
+func (w *factWorkspace) markFactTargetIndexesDirty() {
+	if w == nil {
+		return
+	}
+	w.factTargetIndexesDirty = true
 }
 
 func (w *factWorkspace) removeFactTargetIndexes(templateKey TemplateKey, name string, id FactID) {
@@ -4173,14 +4192,14 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 		w.rollbackGeneratedFactSlots(slotMark)
 		return nil, "", false, err
 	}
-	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, true)
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, factTargetIndexDirty)
 }
 
 func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
-	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, false)
+	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, factTargetIndexSkip)
 }
 
-func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int, indexTargets bool) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
 	name := template.Name()
 	templateKey := template.Key()
 	var duplicateIndex duplicateIndexKey
@@ -4221,8 +4240,11 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Rule
 	if template.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
-	if indexTargets {
+	switch indexMode {
+	case factTargetIndexEager:
 		w.addFactTargetIndexes(templateKey, name, id)
+	case factTargetIndexDirty:
+		w.markFactTargetIndexesDirty()
 	}
 	w.insertionOrder = append(w.insertionOrder, id)
 
