@@ -105,6 +105,8 @@ func TestBackchainRuntimeDemandHarness(t *testing.T) {
 	if warmup < 0 {
 		t.Fatalf("warmup must be non-negative, got %d", warmup)
 	}
+	measurePhases := strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_RUNTIME_PHASES")) != ""
+	collectCounters := strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_RUNTIME_COUNTERS")) != ""
 
 	ctx := context.Background()
 	revision, requestKey := mustCompileBackchainRuntimeRuleset(t)
@@ -116,19 +118,52 @@ func TestBackchainRuntimeDemandHarness(t *testing.T) {
 		resetBackchainRuntimeDemand(t, ctx, session)
 		runBackchainRuntimeDemand(t, ctx, session, requestKey)
 	}
+	if collectCounters {
+		session, err = NewSession(revision, WithResetBeforeSnapshot(false))
+		if err != nil {
+			t.Fatalf("NewSession(counter): %v", err)
+		}
+		session.attachPropagationCounters()
+	}
 
-	var elapsed time.Duration
+	var elapsed, resetElapsed, assertElapsed, runElapsed time.Duration
 	for range iterations {
 		start := time.Now()
+		resetStart := time.Now()
 		resetBackchainRuntimeDemand(t, ctx, session)
-		runBackchainRuntimeDemand(t, ctx, session, requestKey)
+		resetElapsed += time.Since(resetStart)
+		assertStart := time.Now()
+		if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("q1")); err != nil {
+			t.Fatalf("AssertTemplateValues(request): %v", err)
+		}
+		assertElapsed += time.Since(assertStart)
+		runStart := time.Now()
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		runElapsed += time.Since(runStart)
+		if result.Status != RunCompleted || result.Fired != 2 {
+			t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+		}
 		elapsed += time.Since(start)
 	}
 	nsPerOp := float64(elapsed.Nanoseconds()) / float64(iterations)
-
-	fmt.Printf(
-		"GESS_RUNNER|backchain-reactive|runtime-demand|requests=%d|generated-demand-facts=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f\n",
-		1, 1, iterations, warmup, elapsed.Nanoseconds(), nsPerOp)
+	fields := []string{
+		fmt.Sprintf("GESS_RUNNER|backchain-reactive|runtime-demand|requests=%d|generated-demand-facts=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f",
+			1, 1, iterations, warmup, elapsed.Nanoseconds(), nsPerOp),
+	}
+	if measurePhases {
+		fields = append(fields,
+			fmt.Sprintf("reset-ns/op=%.0f", float64(resetElapsed.Nanoseconds())/float64(iterations)),
+			fmt.Sprintf("assert-ns/op=%.0f", float64(assertElapsed.Nanoseconds())/float64(iterations)),
+			fmt.Sprintf("run-ns/op=%.0f", float64(runElapsed.Nanoseconds())/float64(iterations)),
+		)
+	}
+	if collectCounters {
+		fields = append(fields, session.propagationCounterSnapshot().runnerFields()...)
+	}
+	fmt.Println(strings.Join(fields, "|"))
 }
 
 func mustCompileBackchainReactiveRuleset(t testing.TB, tc backchainReactiveCase) *Ruleset {
