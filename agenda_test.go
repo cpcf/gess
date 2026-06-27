@@ -299,7 +299,7 @@ func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
 	}
 	attached := make([]attachedActivation, 0, len(tokens))
 	agenda := newAgenda()
-	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(delta reteTerminalTokenDelta, handle activationHandle) {
+	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(delta reteTerminalTokenDelta, handle activationHandle, _ *activation) {
 		attached = append(attached, attachedActivation{delta: delta, handle: handle})
 	}); err != nil {
 		t.Fatalf("applyTerminalTokenDeltasInternal: %v", err)

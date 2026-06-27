@@ -26,7 +26,7 @@ func (h activationHandle) isZero() bool {
 
 type activationFingerprint uint64
 
-type activationAttachFunc func(reteTerminalTokenDelta, activationHandle)
+type activationAttachFunc func(reteTerminalTokenDelta, activationHandle, *activation)
 
 type activationBucket struct {
 	first    *activation
@@ -959,7 +959,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 				}
 			}
 			if attachActivation != nil {
-				attachActivation(delta, a.handleForActivationKey(key))
+				attachActivation(delta, a.handleForActivationKey(key), existing)
 			}
 			continue
 		}
@@ -972,7 +972,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		key := a.storePreparedActivation(created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, created)
 		if attachActivation != nil {
-			attachActivation(delta, a.handleForActivationKey(key))
+			attachActivation(delta, a.handleForActivationKey(key), created)
 		}
 		if collectChanges {
 			activated = append(activated, agendaChange{

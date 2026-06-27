@@ -2352,7 +2352,7 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
-	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); ok || err != nil {
+	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
 		return changes, err
 	}
 	if !delta.supported && s.agendaReady && !s.agendaDirty {
@@ -4985,7 +4985,7 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 			return err
 		}
 		if len(added) == 1 {
-			s.attachTerminalActivationHandle(added[0], handle)
+			s.attachTerminalActivationHandle(added[0], handle, nil)
 		}
 		return nil
 	}
@@ -4993,11 +4993,33 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 	return err
 }
 
-func (s *Session) attachTerminalActivationHandle(token reteTerminalTokenDelta, handle activationHandle) {
-	if s == nil || handle.isZero() || s.rete == nil || s.rete.graphBeta == nil {
+func (s *Session) attachTerminalActivationHandle(token reteTerminalTokenDelta, handle activationHandle, act *activation) {
+	if s == nil || handle.isZero() {
 		return
 	}
-	s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
+	if s.rete != nil && s.rete.graphBeta != nil {
+		s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
+	}
+	s.applyAutoFocusForActivation(act, handle)
+}
+
+func (s *Session) applyAutoFocusForActivation(act *activation, handle activationHandle) {
+	if s == nil || s.revision == nil || !s.revision.hasAutoFocusRules() || len(s.listeners) > 0 {
+		return
+	}
+	if act == nil && !handle.isZero() && s.agenda != nil {
+		if resolved, ok := s.agenda.activationByHandlePtr(handle); ok {
+			act = resolved
+		}
+	}
+	if act == nil || act.status != activationStatusPending {
+		return
+	}
+	rule, ok := s.revision.rulesByRevisionID[act.ruleRevisionID]
+	if !ok || !rule.effectiveAutoFocus {
+		return
+	}
+	s.pushFocusInternal(rule.module)
 }
 
 func (s *Session) recordRunAgendaDeltaTokens(delta reteAgendaDelta) error {
