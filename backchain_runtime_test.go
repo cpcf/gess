@@ -48,6 +48,9 @@ func TestBackchainDemandGenerationAssertsNeedFactOnJoinMiss(t *testing.T) {
 	if value, ok := demands[0].Field("value"); !ok || !value.Equal(NullValue()) {
 		t.Fatalf("demand value = (%v, %t), want explicit null", value, ok)
 	}
+	if internal := mustWorkingFactByID(t, session, demands[0].ID()); !internal.targetIndexesSkipped {
+		t.Fatal("engine-owned demand fact should skip public target indexes")
+	}
 }
 
 func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {

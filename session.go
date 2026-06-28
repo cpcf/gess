@@ -1819,7 +1819,9 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	if !fact.dupIndex.isZero() {
 		state.factsByDuplicate.deleteFact(fact.dupIndex, id)
 	}
-	state.removeFactTargetIndexes(factTemplateKey, factName, id)
+	if !fact.targetIndexesSkipped {
+		state.removeFactTargetIndexes(factTemplateKey, factName, id)
+	}
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
 	s.commitFactWorkspace(state)
@@ -1887,7 +1889,9 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	if !fact.dupIndex.isZero() {
 		state.factsByDuplicate.deleteFact(fact.dupIndex, id)
 	}
-	state.removeFactTargetIndexes(factTemplateKey, factName, id)
+	if !fact.targetIndexesSkipped {
+		state.removeFactTargetIndexes(factTemplateKey, factName, id)
+	}
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
 	s.commitFactWorkspace(state)
@@ -4204,7 +4208,9 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 		if !fact.dupIndex.isZero() {
 			w.factsByDuplicate.deleteFact(fact.dupIndex, fact.id)
 		}
-		w.removeFactTargetIndexes(fact.templateKey, fact.name, fact.id)
+		if !fact.targetIndexesSkipped {
+			w.removeFactTargetIndexes(fact.templateKey, fact.name, fact.id)
+		}
 		w.deleteFactRowIndex(fact.id)
 	}
 	w.sequence = mark.sequence
@@ -4621,13 +4627,14 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 	w.recency++
 	id := newFactID(generation, w.sequence)
 	fact := workingFact{
-		id:          id,
-		name:        name,
-		templateKey: templateKey,
-		version:     1,
-		recency:     w.recency,
-		fieldSlots:  fieldSlots,
-		dupIndex:    duplicateIndex,
+		id:                   id,
+		name:                 name,
+		templateKey:          templateKey,
+		version:              1,
+		recency:              w.recency,
+		fieldSlots:           fieldSlots,
+		dupIndex:             duplicateIndex,
+		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
 
 	stored := w.storeFact(fact)

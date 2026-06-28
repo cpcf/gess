@@ -241,16 +241,17 @@ func (f conditionFactRef) fieldSlot(name string) (int, bool) {
 }
 
 type workingFact struct {
-	id            FactID
-	name          string
-	templateKey   TemplateKey
-	version       FactVersion
-	recency       Recency
-	supportState  FactSupportState
-	fields        Fields
-	fieldSlots    []factSlot
-	fieldPresence map[string]FieldPresence
-	dupIndex      duplicateIndexKey
+	id                   FactID
+	name                 string
+	templateKey          TemplateKey
+	version              FactVersion
+	recency              Recency
+	supportState         FactSupportState
+	fields               Fields
+	fieldSlots           []factSlot
+	fieldPresence        map[string]FieldPresence
+	dupIndex             duplicateIndexKey
+	targetIndexesSkipped bool
 }
 
 type duplicateIndexKind uint8
