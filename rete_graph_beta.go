@@ -2687,6 +2687,7 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 	if !capturesOK {
 		return false, nil
 	}
+	m.recordAlphaFact(nodeID, match.fact)
 	for _, op := range node.generatedOps {
 		switch op.kind {
 		case reteGraphGeneratedAlphaOpTerminal:
@@ -2694,7 +2695,6 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 				continue
 			}
-			m.recordAlphaFact(nodeID, match.fact)
 			token := m.newAlphaTokenRef(op.entry, match, captures, span)
 			if token.isZero() {
 				delta.supported = false
@@ -2709,7 +2709,6 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 				continue
 			}
-			m.recordAlphaFact(nodeID, match.fact)
 			token := m.newAlphaTokenRef(op.entry, match, captures, span)
 			if token.isZero() {
 				delta.supported = false
@@ -2723,13 +2722,7 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 			}
 		case reteGraphGeneratedAlphaOpBetaRight:
-			m.recordAlphaFact(nodeID, match.fact)
-			edgeMatch := conditionMatch{
-				conditionID: op.entry.conditionID,
-				bindingSlot: op.entry.bindingSlot,
-				fact:        match.fact,
-			}
-			token := m.newAlphaTokenRef(op.entry, edgeMatch, captures, span)
+			token := m.newAlphaTokenRef(op.entry, match, captures, span)
 			if token.isZero() {
 				delta.supported = false
 				continue
@@ -2746,7 +2739,6 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 				continue
 			}
-			m.recordAlphaFact(nodeID, match.fact)
 			token := m.newAlphaTokenRef(op.entry, match, captures, span)
 			if token.isZero() {
 				delta.supported = false
@@ -2754,7 +2746,6 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 			}
 			m.openAggregateBucket(op.aggregateID, token, span, delta)
 		case reteGraphGeneratedAlphaOpAggregateInput:
-			m.recordAlphaFact(nodeID, match.fact)
 			m.insertAggregateInput(op.aggregateID, match, span, delta)
 		default:
 			delta.supported = false
@@ -2806,12 +2797,7 @@ func (m *reteGraphBetaMemory) removeGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 			}
 		case reteGraphGeneratedAlphaOpBetaRight:
-			edgeMatch := conditionMatch{
-				conditionID: op.entry.conditionID,
-				bindingSlot: op.entry.bindingSlot,
-				fact:        match.fact,
-			}
-			token := m.newAlphaTokenRef(op.entry, edgeMatch, captures, nil)
+			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(op.betaNodeID, op.side, token, counters, delta) {
 				delta.supported = false
 			}
