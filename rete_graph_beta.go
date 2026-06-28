@@ -4045,12 +4045,16 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(nodeID reteGraphBetaNo
 	}
 	supportCount := len(m.backchainDemandSupport) - supportStart
 	slotStart := len(m.backchainDemandSlots)
-	for i := 0; i < plan.slotCount; i++ {
-		m.backchainDemandSlots = append(m.backchainDemandSlots, factSlot{
-			value:    NullValue(),
-			ok:       true,
-			presence: fieldPresenceExplicit,
-		})
+	if len(plan.defaultSlots) == plan.slotCount {
+		m.backchainDemandSlots = append(m.backchainDemandSlots, plan.defaultSlots...)
+	} else {
+		for i := 0; i < plan.slotCount; i++ {
+			m.backchainDemandSlots = append(m.backchainDemandSlots, factSlot{
+				value:    NullValue(),
+				ok:       true,
+				presence: fieldPresenceExplicit,
+			})
+		}
 	}
 	for _, slot := range plan.constSlots {
 		if slot.slot < 0 || slot.slot >= plan.slotCount {
