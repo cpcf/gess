@@ -4812,6 +4812,9 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 	delta := reteAgendaDelta{supported: true}
 	id := fact.id
 	defer m.removeFactSource(id)
+	if m.removeGeneratedTerminalOnlyFact(id, counters, &delta) {
+		return delta, nil
+	}
 	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
 	if len(nodeIDs) == 0 {
 		m.removeAlphaFact(id)
@@ -4832,6 +4835,52 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 	}
 	m.removeAlphaFact(id)
 	return delta, nil
+}
+
+func (m *reteGraphBetaMemory) removeGeneratedTerminalOnlyFact(id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m == nil || m.graph == nil || delta == nil || id.IsZero() || m.alphaFactTerminalRows == nil {
+		return false
+	}
+	rows := m.alphaFactTerminalRows[id]
+	if len(rows) == 0 {
+		return false
+	}
+	routes := m.alphaFactRoutes[id]
+	if len(routes) == 0 {
+		return false
+	}
+	terminalOps := 0
+	for _, nodeID := range routes {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil || len(node.generatedOps) == 0 || len(node.listPatterns) != 0 {
+			return false
+		}
+		for _, op := range node.generatedOps {
+			if op.kind != reteGraphGeneratedAlphaOpTerminal || op.entry.conditionID == "" {
+				return false
+			}
+			terminalOps++
+		}
+	}
+	if terminalOps != len(rows) {
+		return false
+	}
+	for _, row := range rows {
+		terminal := m.terminalAt(row.terminalID)
+		if terminal == nil {
+			return false
+		}
+		if _, ok := terminal.rows.rowIDByHandle(row.handle); !ok {
+			return false
+		}
+	}
+	for _, row := range rows {
+		if !m.removeTerminalTokenByHandle(row.terminalID, row.branchID, row.handle, counters, delta) {
+			return false
+		}
+	}
+	m.removeAlphaFact(id)
+	return true
 }
 
 func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger, updateSource bool) (reteAgendaDelta, error) {
