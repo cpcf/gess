@@ -194,6 +194,62 @@ func TestTokenHashMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	}
 }
 
+func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+
+	var memory tokenHashMemory
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, candidateIdentity{generation: 1, count: 1}, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow(first) returned false")
+	}
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, candidateIdentity{generation: 1, count: 1}, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow(second) returned false")
+	}
+	if got := memory.indexes.keyCount(); got != 0 {
+		t.Fatalf("terminal memory join index keys = %d, want 0", got)
+	}
+	memory.ensureFactRows()
+
+	counters := newPropagationCounterLedger()
+	removed, deleted, consumed := memory.removeTokenByHandle(firstHandle, counters, 0)
+	if !consumed || !deleted {
+		t.Fatalf("removeTokenByHandle consumed=%v deleted=%v, want both true", consumed, deleted)
+	}
+	if !tokenRefEqual(removed.token, firstToken) {
+		t.Fatal("removed terminal row has the wrong token")
+	}
+	if row := memory.rowByHandle(firstHandle); row != nil {
+		t.Fatalf("removed terminal handle resolved to %#v", row)
+	}
+	moved := memory.rowByHandle(secondHandle)
+	if moved == nil {
+		t.Fatal("moved terminal row handle did not resolve")
+	}
+	if got, want := moved.id, graphTokenRowID(0); got != want {
+		t.Fatalf("moved terminal row id = %d, want %d", got, want)
+	}
+	if !memory.containsExactToken(secondToken) {
+		t.Fatal("moved terminal row is missing from identity index")
+	}
+	if got := memory.indexes.keyCount(); got != 0 {
+		t.Fatalf("terminal memory join index keys after removal = %d, want 0", got)
+	}
+	snapshot := counters.snapshot()
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
+		t.Fatalf("removal rows removed = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+		t.Fatalf("removal rows moved = %d, want %d", got, want)
+	}
+}
+
 func TestTokenHashMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}

@@ -1408,6 +1408,10 @@ func (m *tokenHashMemory) removeTokenByHandle(handle graphTokenRowHandle, counte
 		return graphTokenRow{}, false, true
 	}
 	removed := *row
+	if row.isTerminal() {
+		m.removeTerminalRow(rowID, counters)
+		return removed, true, true
+	}
 	m.removeRow(rowID, counters)
 	return removed, true, true
 }
@@ -1489,6 +1493,54 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 			if bucket.replace(graphTokenRowID(last), rowID) {
 				m.indexes.set(moved.joinKey, bucket)
 			}
+		}
+		if bucket, ok := m.identityRows.get(moved.identity); ok {
+			if bucket.replace(graphTokenRowID(last), rowID) {
+				m.identityRows.set(moved.identity, bucket)
+			}
+		}
+		if !m.factRowsDirty {
+			m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
+		}
+	}
+	m.releaseRowHandle(removed.handle)
+	m.rows[last] = graphTokenRow{}
+	m.rows = m.rows[:last]
+	if counters != nil {
+		counters.recordRemovalRowRemoved()
+	}
+}
+
+func (m *tokenHashMemory) removeTerminalRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
+	if m == nil || rowID < 0 {
+		return
+	}
+	index := int(rowID)
+	if index < 0 || index >= len(m.rows) {
+		return
+	}
+	removed := m.rows[index]
+	if bucket, ok := m.identityRows.get(removed.identity); ok {
+		if bucket.remove(rowID) {
+			if bucket.len() == 0 {
+				m.recycleBucketRest(bucket.rest)
+				m.identityRows.delete(removed.identity)
+			} else {
+				m.identityRows.set(removed.identity, bucket)
+			}
+		}
+	}
+	if !m.factRowsDirty {
+		m.removeTokenFacts(removed.token, rowID)
+	}
+	last := len(m.rows) - 1
+	if index != last {
+		moved := m.rows[last]
+		moved.id = rowID
+		m.rows[index] = moved
+		m.moveRowHandle(moved.handle, rowID)
+		if counters != nil {
+			counters.recordRemovalRowMoved()
 		}
 		if bucket, ok := m.identityRows.get(moved.identity); ok {
 			if bucket.replace(graphTokenRowID(last), rowID) {
