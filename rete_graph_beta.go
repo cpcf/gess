@@ -3841,6 +3841,37 @@ func (m *reteGraphBetaMemory) propagateFromStage(source reteGraphStageRef, token
 	return nil
 }
 
+func (m *reteGraphBetaMemory) propagateFromBetaNode(node *reteGraphBetaNode, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) error {
+	if m == nil || node == nil || delta == nil {
+		return nil
+	}
+	edges := node.edges
+	for _, terminal := range edges.terminals {
+		_, _ = m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
+	}
+	for _, aggregateID := range edges.aggregateOuters {
+		m.openAggregateBucket(aggregateID, token, span, delta)
+	}
+	for _, aggregateID := range edges.aggregateInputs {
+		m.insertAggregateToken(aggregateID, token, span, delta)
+	}
+	for _, successor := range edges.successors {
+		next := m.graph.betaNode(successor.betaNodeID)
+		if next == nil {
+			delta.supported = false
+			continue
+		}
+		ok, err := m.insertBetaInput(successor.betaNodeID, successor.side, token, next.entry, span, delta)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			delta.supported = false
+		}
+	}
+	return nil
+}
+
 func (m *reteGraphBetaMemory) propagateRemoveFromStage(source reteGraphStageRef, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
 	if m == nil || delta == nil || token.isZero() {
 		return
@@ -3889,7 +3920,8 @@ func (m *reteGraphBetaMemory) finalizeDeferredNegativeOutputs(span *propagationC
 		return nil
 	}
 	delta := &reteAgendaDelta{supported: true}
-	for _, node := range m.graph.betaNodes {
+	for i := range m.graph.betaNodes {
+		node := &m.graph.betaNodes[i]
 		if node.kind != reteGraphBetaNodeNot {
 			continue
 		}
@@ -3897,7 +3929,6 @@ func (m *reteGraphBetaMemory) finalizeDeferredNegativeOutputs(span *propagationC
 		if nodeMemory == nil {
 			continue
 		}
-		source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)}
 		for i := range nodeMemory.left.rows {
 			row := nodeMemory.left.rows[i]
 			if row.token.isZero() || row.negativeBlockerCount() != 0 {
@@ -3906,7 +3937,7 @@ func (m *reteGraphBetaMemory) finalizeDeferredNegativeOutputs(span *propagationC
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
-			if err := m.propagateFromStage(source, row.token, span, delta); err != nil {
+			if err := m.propagateFromBetaNode(node, row.token, span, delta); err != nil {
 				return err
 			}
 		}
@@ -3991,7 +4022,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
-			if err := m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, span, delta); err != nil {
+			if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
 				return false, err
 			}
 		}
@@ -4032,7 +4063,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
-			if err := m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, output, span, delta); err != nil {
+			if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
 				return false, err
 			}
 		}
