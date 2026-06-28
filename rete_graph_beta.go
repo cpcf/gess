@@ -992,6 +992,63 @@ func (m *tokenHashMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id grap
 	bucket.count++
 }
 
+func (m *tokenHashMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID) {
+	if m == nil {
+		return
+	}
+	if graphTokenBucketNeedsGrow(m.indexes.used+1, len(m.indexes.entries)) {
+		m.indexes.rehash(max(8, len(m.indexes.entries)*2))
+	}
+	index, ok := m.indexes.findInsert(key)
+	if !ok {
+		if m.indexes.entries[index].state == graphTokenBucketEmpty {
+			m.indexes.touched = append(m.indexes.touched, index)
+			m.indexes.used++
+		}
+		m.indexes.entries[index] = betaJoinTokenBucketEntry{key: key, state: graphTokenBucketFull}
+		m.indexes.count++
+	}
+	m.appendBucketRow(&m.indexes.entries[index].bucket, id)
+}
+
+func (m *tokenHashMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
+	if m == nil {
+		return
+	}
+	if graphTokenBucketNeedsGrow(m.identityRows.used+1, len(m.identityRows.entries)) {
+		m.identityRows.rehash(max(8, len(m.identityRows.entries)*2))
+	}
+	index, ok := m.identityRows.findInsert(key)
+	if !ok {
+		if m.identityRows.entries[index].state == graphTokenBucketEmpty {
+			m.identityRows.touched = append(m.identityRows.touched, index)
+			m.identityRows.used++
+		}
+		m.identityRows.entries[index] = graphTokenIdentityBucketEntry{key: key, state: graphTokenBucketFull}
+		m.identityRows.count++
+	}
+	m.appendBucketRow(&m.identityRows.entries[index].bucket, id)
+}
+
+func (m *tokenHashMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
+	if m == nil {
+		return
+	}
+	if graphTokenBucketNeedsGrow(m.factRows.used+1, len(m.factRows.entries)) {
+		m.factRows.rehash(max(8, len(m.factRows.entries)*2))
+	}
+	index, ok := m.factRows.findInsert(key)
+	if !ok {
+		if m.factRows.entries[index].state == graphTokenBucketEmpty {
+			m.factRows.touched = append(m.factRows.touched, index)
+			m.factRows.used++
+		}
+		m.factRows.entries[index] = factTokenBucketEntry{key: key, state: graphTokenBucketFull}
+		m.factRows.count++
+	}
+	m.appendBucketRow(&m.factRows.entries[index].bucket, id)
+}
+
 func (m *tokenHashMemory) takeBucketRest() []graphTokenRowID {
 	if m == nil || len(m.bucketRestFree) == 0 {
 		return make([]graphTokenRowID, 0, 8)
@@ -1140,12 +1197,8 @@ func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey
 		identity:     identity,
 		supportCount: negativeBlockerCount,
 	}
-	joinBucket, _ := m.indexes.get(joinKey)
-	m.appendBucketRow(&joinBucket, rowID)
-	m.indexes.set(joinKey, joinBucket)
-	identityBucket, _ := m.identityRows.get(identity)
-	m.appendBucketRow(&identityBucket, rowID)
-	m.identityRows.set(identity, identityBucket)
+	m.appendJoinIndexRow(joinKey, rowID)
+	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return true
 }
@@ -1191,9 +1244,7 @@ func (m *tokenHashMemory) insertTerminalRow(token tokenRef, terminalIdentity can
 	}
 	row.addTerminalBranchSupport(branchID)
 	m.rows[rowID] = row
-	identityBucket, _ := m.identityRows.get(identity)
-	m.appendBucketRow(&identityBucket, rowID)
-	m.identityRows.set(identity, identityBucket)
+	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return handle, true
 }
@@ -1317,9 +1368,7 @@ func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 				}
 			}
 		}
-		bucket, _ := m.identityRows.get(nextIdentity)
-		m.appendBucketRow(&bucket, rowID)
-		m.identityRows.set(nextIdentity, bucket)
+		m.appendIdentityIndexRow(nextIdentity, rowID)
 		row.identity = nextIdentity
 	}
 	row.token = token
@@ -1632,9 +1681,7 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 			if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
 				continue
 			}
-			bucket, _ := m.factRows.get(id)
-			m.appendBucketRow(&bucket, rowID)
-			m.factRows.set(id, bucket)
+			m.appendFactIndexRow(id, rowID)
 		}
 		return
 	}
@@ -1651,9 +1698,7 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 		if id.IsZero() || current.parent().containsFact(id) {
 			continue
 		}
-		bucket, _ := m.factRows.get(id)
-		m.appendBucketRow(&bucket, rowID)
-		m.factRows.set(id, bucket)
+		m.appendFactIndexRow(id, rowID)
 	}
 }
 
