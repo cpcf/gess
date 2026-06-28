@@ -114,7 +114,10 @@ type reteGraphAggregateMember struct {
 }
 
 type reteGraphTerminalMemory struct {
-	rows tokenHashMemory
+	rows           tokenHashMemory
+	ruleRevisionID RuleRevisionID
+	rule           compiledRule
+	ruleOK         bool
 }
 
 type reteGraphAlphaFactSet struct {
@@ -662,6 +665,26 @@ func (m *reteGraphBetaMemory) indexRuleTerminals() {
 		}
 		m.terminalsByRule[terminalNode.ruleRevisionID] = append(m.terminalsByRule[terminalNode.ruleRevisionID], terminal)
 	}
+}
+
+func (m *reteGraphBetaMemory) initializeTerminalMemory(id reteGraphTerminalNodeID, terminal *reteGraphTerminalMemory) {
+	if m == nil || terminal == nil {
+		return
+	}
+	node := m.terminalNode(id)
+	if node == nil {
+		return
+	}
+	terminal.ruleRevisionID = node.ruleRevisionID
+	if node.kind != reteGraphTerminalRule || node.ruleRevisionID == "" || m.revision == nil {
+		return
+	}
+	rule, ok := m.revision.rulesByRevisionID[node.ruleRevisionID]
+	if !ok {
+		return
+	}
+	terminal.rule = rule
+	terminal.ruleOK = true
 }
 
 func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
@@ -2754,9 +2777,13 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 	if len(node.generatedOps) == 0 {
 		return true, nil
 	}
-	captures, capturesOK := node.listPatternCaptures(match.fact, tokenRef{})
-	if !capturesOK {
-		return false, nil
+	var captures []listPatternCapture
+	if len(node.listPatterns) != 0 {
+		var capturesOK bool
+		captures, capturesOK = node.listPatternCaptures(match.fact, tokenRef{})
+		if !capturesOK {
+			return false, nil
+		}
 	}
 	m.recordAlphaFact(nodeID, match.fact)
 	for _, op := range node.generatedOps {
@@ -2847,10 +2874,14 @@ func (m *reteGraphBetaMemory) removeGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 	if len(node.generatedOps) == 0 {
 		return
 	}
-	captures, capturesOK := node.listPatternCaptures(match.fact, tokenRef{})
-	if !capturesOK {
-		delta.supported = false
-		return
+	var captures []listPatternCapture
+	if len(node.listPatterns) != 0 {
+		var capturesOK bool
+		captures, capturesOK = node.listPatternCaptures(match.fact, tokenRef{})
+		if !capturesOK {
+			delta.supported = false
+			return
+		}
 	}
 	for _, op := range node.generatedOps {
 		switch op.kind {
@@ -5830,9 +5861,9 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		delta.supported = false
 		return graphTokenRowHandle{}, false
 	}
-	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleRevisionID := terminal.ruleRevisionID
 	ruleTerminal := ruleRevisionID != ""
-	identity := m.terminalTokenIdentity(ruleRevisionID, token)
+	identity := terminal.terminalTokenIdentity(token)
 	branchKey, haveBranchKey := m.terminalBranchKey(terminalID, branchID)
 	handle, inserted := terminal.rows.insertTerminalRow(token, identity, branchID)
 	if !inserted {
@@ -5877,7 +5908,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 	if terminal == nil {
 		return
 	}
-	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleRevisionID := terminal.ruleRevisionID
 	ruleTerminal := ruleRevisionID != ""
 	terminal.rows.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
 		if ruleTerminal {
@@ -5940,7 +5971,7 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 	if !ok {
 		return
 	}
-	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleRevisionID := terminal.ruleRevisionID
 	ruleTerminal := ruleRevisionID != ""
 	if ruleTerminal {
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
@@ -5982,7 +6013,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokenByHandle(terminalID reteGraphTe
 	if !deleted {
 		return true
 	}
-	ruleRevisionID := m.terminalRuleRevision(terminalID)
+	ruleRevisionID := terminal.ruleRevisionID
 	ruleTerminal := ruleRevisionID != ""
 	if ruleTerminal {
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
@@ -6259,17 +6290,6 @@ func (c *reteGraphQueryCollector) nextRowItemsCount(count int) []queryRowValue {
 	return c.rowItems[start:end]
 }
 
-func (m *reteGraphBetaMemory) terminalTokenIdentity(ruleRevisionID RuleRevisionID, token tokenRef) candidateIdentity {
-	if m == nil || m.revision == nil || token.isZero() {
-		return candidateIdentity{}
-	}
-	rule, ok := m.revision.rulesByRevisionID[ruleRevisionID]
-	if !ok {
-		return candidateIdentity{}
-	}
-	return candidateIdentityForTerminalToken(rule, token)
-}
-
 func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {
 	if m == nil {
 		return tokenRef{}
@@ -6383,6 +6403,7 @@ func (m *reteGraphBetaMemory) terminal(id reteGraphTerminalNodeID) *reteGraphTer
 		return terminal
 	}
 	terminal = &reteGraphTerminalMemory{}
+	m.initializeTerminalMemory(id, terminal)
 	m.terminals[index] = terminal
 	return terminal
 }
@@ -6415,11 +6436,21 @@ func (m *reteGraphBetaMemory) setTerminalActivationHandle(terminalID reteGraphTe
 }
 
 func (m *reteGraphBetaMemory) terminalRuleRevision(id reteGraphTerminalNodeID) RuleRevisionID {
+	if terminal := m.terminalAt(id); terminal != nil {
+		return terminal.ruleRevisionID
+	}
 	node := m.terminalNode(id)
 	if node == nil {
 		return ""
 	}
 	return node.ruleRevisionID
+}
+
+func (t *reteGraphTerminalMemory) terminalTokenIdentity(token tokenRef) candidateIdentity {
+	if t == nil || !t.ruleOK || token.isZero() {
+		return candidateIdentity{}
+	}
+	return candidateIdentityForTerminalToken(t.rule, token)
 }
 
 func (m *reteGraphBetaMemory) terminalBranchKey(id reteGraphTerminalNodeID, branchID int) (propagationBranchKey, bool) {

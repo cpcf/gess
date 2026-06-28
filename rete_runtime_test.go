@@ -3927,7 +3927,7 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if row.terminalIdentity.isZero() {
 		t.Fatal("terminal row identity is zero")
 	}
-	if row.terminalIdentity != session.rete.graphBeta.terminalTokenIdentity(rule.revisionID, row.token) {
+	if row.terminalIdentity != terminal.terminalTokenIdentity(row.token) {
 		t.Fatalf("terminal row identity = %#v, want token identity", row.terminalIdentity)
 	}
 
