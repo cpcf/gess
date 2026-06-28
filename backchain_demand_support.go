@@ -237,7 +237,47 @@ func (s *Session) removeBackchainDemandSupportForOwner(ctx context.Context, owne
 	if !ok {
 		return reteAgendaDelta{supported: true}, nil
 	}
+	if record, ok := s.backchainDemandSupportRecordPtrByID(id); ok && record.ownerOnly {
+		return s.removeBackchainDemandOwnerOnlySupportID(ctx, id, record, origin)
+	}
 	return s.removeBackchainDemandSupportID(ctx, id, origin)
+}
+
+func (s *Session) removeBackchainDemandOwnerOnlySupportID(ctx context.Context, id backchainDemandSupportID, record *backchainDemandSupportRecord, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || id == 0 || record == nil || !record.ownerOnly {
+		return combined, nil
+	}
+	owner := record.owner
+	demandFactID := record.demandFactID
+	for i := 0; i < record.supportCount; i++ {
+		support := backchainDemandSupportRecordFactPtr(record, i)
+		s.removeBackchainDemandSupportIDFromFactBucket(support.id, id)
+	}
+	s.removeBackchainDemandOwnerSupport(owner, id)
+	s.clearBackchainDemandSupportRecord(id)
+	return s.removeBackchainDemandOwnerOnlySupportDemandBucket(ctx, demandFactID, id, origin)
+}
+
+func (s *Session) removeBackchainDemandOwnerOnlySupportDemandBucket(ctx context.Context, demandFactID FactID, id backchainDemandSupportID, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || demandFactID.IsZero() || id == 0 {
+		return combined, nil
+	}
+	demandBucket, _ := s.backchainDemandByDemand.get(demandFactID)
+	if single, ok := demandBucket.single(); !ok || single != id {
+		return s.removeBackchainDemandSupportDemandBucket(ctx, demandFactID, id, origin)
+	}
+	s.backchainDemandByDemand.delete(demandFactID)
+	if _, ok := s.workingFactByID(demandFactID); !ok {
+		return combined, nil
+	}
+	delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
+	if err != nil {
+		return combined, err
+	}
+	delta = normalizeBackchainDemandNoopDelta(delta)
+	return mergeReteAgendaDelta(combined, delta), nil
 }
 
 func (s *Session) singleBackchainDemandSupportIDForRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
@@ -621,6 +661,16 @@ func backchainDemandSupportRecordContainsFactVersion(record backchainDemandSuppo
 }
 
 func backchainDemandSupportRecordFact(record backchainDemandSupportRecord, index int) backchainDemandSupportFact {
+	if index < backchainDemandSupportInlineLimit {
+		return record.supportFacts[index]
+	}
+	return record.supportExtra[index-backchainDemandSupportInlineLimit]
+}
+
+func backchainDemandSupportRecordFactPtr(record *backchainDemandSupportRecord, index int) backchainDemandSupportFact {
+	if record == nil {
+		return backchainDemandSupportFact{}
+	}
 	if index < backchainDemandSupportInlineLimit {
 		return record.supportFacts[index]
 	}
