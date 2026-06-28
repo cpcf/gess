@@ -5412,16 +5412,17 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		recency = after.Recency()
 	}
 	row.match = match
-	row.matchSource = tokenSourceHandle{}
 	row.refreshFactSpan(token.handle.arena, parentRow, match)
 	if haveParent {
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
 		row.identityState = parentRow.identityState
+		row.orderedSlots = parentRow.orderedSlots && row.entry.bindingSlot == parentRow.size
 	} else {
 		row.maxRecency = recency
 		row.aggregateRecency = recency
 		row.identityState = candidateIdentityHashStart(token.generation())
+		row.orderedSlots = row.entry.bindingSlot == 0
 	}
 	identityEntry := row.entry
 	identityEntry.value = match.value
@@ -6426,22 +6427,58 @@ func graphBetaJoinKeyForLeftTokenWithContext(ctx context.Context, node *reteGrap
 		key, ok := betaJoinKeyForTokenIdentity(token)
 		return key, ok, nil
 	}
-	if len(node.hashJoins) == 0 {
+	joins := node.hashJoins
+	if len(joins) == 0 {
 		return betaJoinKey{}, true, nil
 	}
-	key, ok, err := betaJoinKeyForPlanWithError(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool, error) {
-		if join.hasRightKeyExpression {
-			value, ok, err := join.rightKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, nil, 0, joinFunctionEvaluationMeta(join), span)
-			return value, ok, err
+	if len(joins) == 1 {
+		join := joins[0]
+		if join.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false, nil
 		}
-		match, ok := tokenRefAtSlot(token, join.refBindingSlot)
-		if !ok {
-			return Value{}, false, nil
+		if !join.hasRightKeyExpression {
+			match, ok := tokenRefAtSlot(token, join.refBindingSlot)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			value, ok := join.rightValueFromFact(match.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			key, ok := betaJoinKeyForSingleValue(value)
+			return key, ok, nil
 		}
-		value, ok := join.rightValueFromFact(match.fact)
-		return value, ok, nil
+	} else if len(joins) == 2 {
+		firstJoin := joins[0]
+		secondJoin := joins[1]
+		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false, nil
+		}
+		if !firstJoin.hasRightKeyExpression && !secondJoin.hasRightKeyExpression {
+			firstMatch, ok := tokenRefAtSlot(token, firstJoin.refBindingSlot)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			firstValue, ok := firstJoin.rightValueFromFact(firstMatch.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			secondMatch, ok := tokenRefAtSlot(token, secondJoin.refBindingSlot)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			secondValue, ok := secondJoin.rightValueFromFact(secondMatch.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
+				return key, true, nil
+			}
+		}
+	}
+	return betaJoinKeyForPlanWithError(compiledConditionPlan{joins: joins}, func(join compiledJoinConstraint) (Value, bool, error) {
+		return graphBetaLeftJoinValue(ctx, join, token, span)
 	})
-	return key, ok, err
 }
 
 func graphBetaJoinKeyForRightToken(node *reteGraphBetaNode, token tokenRef) (betaJoinKey, bool) {
@@ -6462,18 +6499,68 @@ func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGra
 	if !ok {
 		return betaJoinKey{}, false, nil
 	}
-	if len(node.hashJoins) == 0 {
+	joins := node.hashJoins
+	if len(joins) == 0 {
 		return betaJoinKey{}, true, nil
 	}
-	key, ok, err := betaJoinKeyForPlanWithError(compiledConditionPlan{joins: node.hashJoins}, func(join compiledJoinConstraint) (Value, bool, error) {
-		if join.hasLeftKeyExpression {
-			value, ok, err := join.leftKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, match.fact, token, nil, 0, joinFunctionEvaluationMeta(join), span)
-			return value, ok, err
+	if len(joins) == 1 {
+		join := joins[0]
+		if join.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false, nil
 		}
-		value, ok := join.leftValueFromFact(match.fact)
-		return value, ok, nil
+		if !join.hasLeftKeyExpression {
+			value, ok := join.leftValueFromFact(match.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			key, ok := betaJoinKeyForSingleValue(value)
+			return key, ok, nil
+		}
+	} else if len(joins) == 2 {
+		firstJoin := joins[0]
+		secondJoin := joins[1]
+		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
+			return betaJoinKey{}, false, nil
+		}
+		if !firstJoin.hasLeftKeyExpression && !secondJoin.hasLeftKeyExpression {
+			firstValue, ok := firstJoin.leftValueFromFact(match.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			secondValue, ok := secondJoin.leftValueFromFact(match.fact)
+			if !ok {
+				return betaJoinKey{}, false, nil
+			}
+			if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
+				return key, true, nil
+			}
+		}
+	}
+	return betaJoinKeyForPlanWithError(compiledConditionPlan{joins: joins}, func(join compiledJoinConstraint) (Value, bool, error) {
+		return graphBetaRightJoinValue(ctx, join, match.fact, token, span)
 	})
-	return key, ok, err
+}
+
+func graphBetaLeftJoinValue(ctx context.Context, join compiledJoinConstraint, token tokenRef, span *propagationCounterSpan) (Value, bool, error) {
+	if join.hasRightKeyExpression {
+		value, ok, err := join.rightKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, nil, 0, joinFunctionEvaluationMeta(join), span)
+		return value, ok, err
+	}
+	match, ok := tokenRefAtSlot(token, join.refBindingSlot)
+	if !ok {
+		return Value{}, false, nil
+	}
+	value, ok := join.rightValueFromFact(match.fact)
+	return value, ok, nil
+}
+
+func graphBetaRightJoinValue(ctx context.Context, join compiledJoinConstraint, fact conditionFactRef, token tokenRef, span *propagationCounterSpan) (Value, bool, error) {
+	if join.hasLeftKeyExpression {
+		value, ok, err := join.leftKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, token, nil, 0, joinFunctionEvaluationMeta(join), span)
+		return value, ok, err
+	}
+	value, ok := join.leftValueFromFact(fact)
+	return value, ok, nil
 }
 
 func joinFunctionEvaluationMeta(join compiledJoinConstraint) *FunctionEvaluationError {

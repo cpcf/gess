@@ -418,6 +418,89 @@ func TestTokenArenaCachesFactSpans(t *testing.T) {
 	}
 }
 
+func TestTerminalTokenIdentityUsesCachedOrderedSlots(t *testing.T) {
+	rule := compiledRule{
+		id:                "rule",
+		revisionID:        "rule-revision",
+		identityScopeHash: candidateIdentityScopeHash("rule", "rule-revision"),
+		conditions: []RuleCondition{
+			{id: "first", binding: "first", order: 0},
+			{id: "second", binding: "second", order: 1},
+		},
+		conditionPlans: []compiledConditionPlan{
+			{id: "first", binding: "first", bindingSlot: 0, path: []int{0}},
+			{id: "second", binding: "second", bindingSlot: 1, path: []int{1}},
+		},
+	}
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 5, recency: 11, generation: 1}
+	firstMatch := conditionMatch{conditionID: "first", bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}
+	secondMatch := conditionMatch{conditionID: "second", bindingSlot: 1, fact: newConditionFactRefFromSnapshot(secondFact)}
+	firstEntry := rule.conditionPlans[0].bindingTupleEntry(firstMatch)
+	secondEntry := rule.conditionPlans[1].bindingTupleEntry(secondMatch)
+
+	arena := newTokenArena()
+	firstToken := arena.add(tokenRef{}, firstEntry, firstMatch, firstFact.Recency(), firstFact.Generation())
+	token := arena.add(firstToken, secondEntry, secondMatch, secondFact.Recency(), secondFact.Generation())
+	if !token.orderedSlots() {
+		t.Fatal("ordered token did not record ordered binding slots")
+	}
+
+	cached, ok := candidateIdentityForTerminalTokenCached(rule, token)
+	if !ok {
+		t.Fatal("candidateIdentityForTerminalTokenCached did not accept ordered token")
+	}
+	fast, ok := candidateIdentityForTerminalTokenFast(rule, token)
+	if !ok {
+		t.Fatal("candidateIdentityForTerminalTokenFast did not accept ordered token")
+	}
+	if cached != fast {
+		t.Fatalf("cached identity = %#v, want existing fast identity %#v", cached, fast)
+	}
+	if got := candidateIdentityForTerminalToken(rule, token); got != cached {
+		t.Fatalf("terminal token identity = %#v, want cached %#v", got, cached)
+	}
+}
+
+func TestTerminalTokenIdentityRejectsCachedOutOfOrderSlots(t *testing.T) {
+	rule := compiledRule{
+		id:                "rule",
+		revisionID:        "rule-revision",
+		identityScopeHash: candidateIdentityScopeHash("rule", "rule-revision"),
+		conditions: []RuleCondition{
+			{id: "first", binding: "first", order: 0},
+			{id: "second", binding: "second", order: 1},
+		},
+		conditionPlans: []compiledConditionPlan{
+			{id: "first", binding: "first", bindingSlot: 0, path: []int{0}},
+			{id: "second", binding: "second", bindingSlot: 1, path: []int{1}},
+		},
+	}
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 5, recency: 11, generation: 1}
+	firstMatch := conditionMatch{conditionID: "first", bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}
+	secondMatch := conditionMatch{conditionID: "second", bindingSlot: 1, fact: newConditionFactRefFromSnapshot(secondFact)}
+	firstEntry := rule.conditionPlans[0].bindingTupleEntry(firstMatch)
+	secondEntry := rule.conditionPlans[1].bindingTupleEntry(secondMatch)
+
+	arena := newTokenArena()
+	secondToken := arena.add(tokenRef{}, secondEntry, secondMatch, secondFact.Recency(), secondFact.Generation())
+	token := arena.add(secondToken, firstEntry, firstMatch, firstFact.Recency(), firstFact.Generation())
+	if token.orderedSlots() {
+		t.Fatal("out-of-order token recorded ordered binding slots")
+	}
+	if _, ok := candidateIdentityForTerminalTokenCached(rule, token); ok {
+		t.Fatal("cached identity accepted out-of-order token")
+	}
+	fast, ok := candidateIdentityForTerminalTokenFast(rule, token)
+	if !ok {
+		t.Fatal("candidateIdentityForTerminalTokenFast did not accept out-of-order token")
+	}
+	if got := candidateIdentityForTerminalToken(rule, token); got != fast {
+		t.Fatalf("terminal token identity = %#v, want fast fallback %#v", got, fast)
+	}
+}
+
 func TestTokenArenaResetInvalidatesReusedRows(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}

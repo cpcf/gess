@@ -32,24 +32,8 @@ func (h tokenParentHandle) isZero() bool {
 	return h.row == nil
 }
 
-type tokenSourceHandle struct {
-	arena *tokenArena
-	row   *tokenRow
-	epoch uint64
-}
-
-func (h tokenSourceHandle) isZero() bool {
-	return h.arena == nil || h.row == nil || h.epoch == 0
-}
-
-func (h tokenSourceHandle) resolve() (*tokenRow, bool) {
-	if h.isZero() || h.epoch != h.arena.epoch {
-		return nil, false
-	}
-	return h.row, true
-}
-
 type tokenRowEntry struct {
+	conditionID ConditionID
 	binding     string
 	bindingSlot int
 	factID      FactID
@@ -60,7 +44,6 @@ type tokenRowEntry struct {
 
 type tokenRow struct {
 	parent           tokenParentHandle
-	matchSource      tokenSourceHandle
 	entry            tokenRowEntry
 	match            conditionMatch
 	size             int
@@ -69,6 +52,7 @@ type tokenRow struct {
 	maxRecency       Recency
 	aggregateRecency Recency
 	identityState    uint64
+	orderedSlots     bool
 }
 
 type tokenArena struct {
@@ -144,7 +128,7 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 }
 
 func (a *tokenArena) addCompact(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
-	return a.addCompactInternal(parent, tokenSourceHandle{}, entry, match, recency, generation, pathStepLen)
+	return a.addCompactInternal(parent, entry, match, recency, generation, pathStepLen)
 }
 
 func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry tokenRowEntry, recency Recency, generation Generation, pathStepLen int) tokenRef {
@@ -159,11 +143,10 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 	if !ok {
 		return tokenRef{}
 	}
-	sourceHandle := tokenSourceHandle{arena: source.handle.arena, row: source.handle.row, epoch: source.handle.generation}
-	return a.addCompactInternal(parent, sourceHandle, entry, match, recency, generation, pathStepLen)
+	return a.addCompactInternal(parent, entry, match, recency, generation, pathStepLen)
 }
 
-func (a *tokenArena) addCompactInternal(parent tokenRef, source tokenSourceHandle, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
+func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
 	if a == nil {
 		return tokenRef{}
 	}
@@ -200,12 +183,8 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, source tokenSourceHandl
 	}
 	a.chunks[chunkIndex] = chunk
 	row := &a.chunks[chunkIndex][len(chunk)-1]
-	if source.isZero() {
-		match = tokenStoredConditionMatch(entry, match)
-		row.match = match
-	} else {
-		row.matchSource = source
-	}
+	match = tokenStoredConditionMatch(entry, match)
+	row.match = match
 
 	if parentRow != nil {
 		row.parent = tokenParentHandle{row: parent.handle.row}
@@ -214,12 +193,14 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, source tokenSourceHandl
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
 		row.identityState = parentRow.identityState
+		row.orderedSlots = parentRow.orderedSlots && entry.bindingSlot == parentRow.size
 	} else {
 		row.size = 1
 		row.pathLen = pathStepLen
 		row.maxRecency = recency
 		row.aggregateRecency = recency
 		row.identityState = candidateIdentityHashStart(tokenGeneration)
+		row.orderedSlots = entry.bindingSlot == 0
 	}
 	row.factSpanStart = a.appendFactSpan(parentRow, match)
 	row.entry = entry
@@ -245,27 +226,24 @@ func (r *tokenRow) conditionMatch() (conditionMatch, bool) {
 	if r == nil {
 		return conditionMatch{}, false
 	}
-	if !r.matchSource.isZero() {
-		source, ok := r.matchSource.resolve()
-		if !ok {
-			return conditionMatch{}, false
-		}
-		return source.conditionMatch()
-	}
 	return r.match, true
 }
 
 func tokenStoredConditionMatch(entry tokenRowEntry, match conditionMatch) conditionMatch {
-	match.conditionID = ""
+	match.conditionID = entry.conditionID
 	match.bindingSlot = entry.bindingSlot
 	return match
 }
 
 func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenRowEntry {
 	out := tokenRowEntry{
+		conditionID: entry.conditionID,
 		bindingSlot: entry.bindingSlot,
 		value:       match.value,
 		hasValue:    match.hasValue,
+	}
+	if out.conditionID == "" {
+		out.conditionID = match.conditionID
 	}
 	if match.hasValue {
 		out.binding = entry.binding
@@ -347,6 +325,7 @@ func (a *tokenArena) addSeed(generation Generation) tokenRef {
 	row := &a.chunks[chunkIndex][len(chunk)-1]
 	row.factSpanStart = -1
 	row.identityState = candidateIdentityHashStart(generation)
+	row.orderedSlots = true
 	a.count++
 	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: a.epoch}}
 }
@@ -456,6 +435,11 @@ func (r tokenRef) identityState() uint64 {
 		return candidateIdentityHashStart(0)
 	}
 	return row.identityState
+}
+
+func (r tokenRef) orderedSlots() bool {
+	row, ok := r.resolve()
+	return ok && row.orderedSlots
 }
 
 func (r tokenRef) matchAt(index int) (conditionMatch, bool) {
@@ -762,6 +746,16 @@ func betaJoinKeyForTwoValues(first, second Value) (betaJoinKey, bool) {
 	firstKey.secondFloatBits = secondKey.floatBits
 	firstKey.secondStringValue = secondKey.stringValue
 	return firstKey, true
+}
+
+func betaJoinKeyForSingleValue(value Value) (betaJoinKey, bool) {
+	if key, ok := betaJoinKeyForValue(value); ok {
+		return key, true
+	}
+	return betaJoinKey{
+		kind:        betaJoinKeyCanonical,
+		stringValue: value.canonicalKey(),
+	}, true
 }
 
 func betaJoinKeyForTokenIdentity(token tokenRef) (betaJoinKey, bool) {

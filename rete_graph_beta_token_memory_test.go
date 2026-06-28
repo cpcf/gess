@@ -27,11 +27,11 @@ func TestTokenHashMemoryStoresNegativeBlockerCount(t *testing.T) {
 	}
 }
 
-func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
+func TestTokenArenaCopiedRowsOwnCopiedMatchUntilRefresh(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
-	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
-	source := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	entry := bindingTupleEntry{conditionID: "event", bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
+	source := arena.add(tokenRef{}, entry, conditionMatch{conditionID: "event", bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
 	sourceRow, ok := source.resolve()
 	if !ok {
 		t.Fatal("source token did not resolve")
@@ -43,8 +43,8 @@ func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
 	if !ok {
 		t.Fatal("copied token did not resolve")
 	}
-	if copiedRow.matchSource.isZero() {
-		t.Fatal("copied token row did not retain source match handle")
+	if copiedRow.match.fact.ID() != fact.ID() {
+		t.Fatal("copied token row did not own copied match")
 	}
 	copiedMatch, ok := tokenRefAtSlot(copied, 0)
 	if !ok {
@@ -52,6 +52,9 @@ func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
 	}
 	if got, want := copiedMatch.fact.ID(), fact.ID(); got != want {
 		t.Fatalf("copied match fact ID = %q, want %q", got, want)
+	}
+	if got, want := copiedMatch.conditionID, ConditionID("event"); got != want {
+		t.Fatalf("copied match condition ID = %q, want %q", got, want)
 	}
 
 	after := FactSnapshot{id: fact.ID(), version: 2, recency: 2, generation: 1}
@@ -63,8 +66,8 @@ func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
 	if !ok {
 		t.Fatal("refreshed token did not resolve")
 	}
-	if !refreshedRow.matchSource.isZero() {
-		t.Fatal("refreshed token row still references source match")
+	if refreshedRow.match.fact.Version() != after.Version() {
+		t.Fatal("refreshed token row did not update owned match")
 	}
 	refreshedMatch, ok := tokenRefAtSlot(refreshed, 0)
 	if !ok {
@@ -82,7 +85,7 @@ func TestTokenArenaCopiedRowsReferenceSourceMatchUntilRefresh(t *testing.T) {
 	}
 }
 
-func TestTokenArenaCopiedRowsRejectResetSourceArena(t *testing.T) {
+func TestTokenArenaCopiedRowsSurviveSourceArenaReset(t *testing.T) {
 	sourceArena := newTokenArena()
 	targetArena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
@@ -104,8 +107,12 @@ func TestTokenArenaCopiedRowsRejectResetSourceArena(t *testing.T) {
 	reusedEntry := bindingTupleEntry{bindingSlot: 0, factID: reusedFact.ID(), factVersion: reusedFact.Version()}
 	sourceArena.add(tokenRef{}, reusedEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(reusedFact)}, reusedFact.Recency(), reusedFact.Generation())
 
-	if match, ok := tokenRefAtSlot(copied, 0); ok {
-		t.Fatalf("copied token resolved stale source match after reset: %#v", match)
+	match, ok := tokenRefAtSlot(copied, 0)
+	if !ok {
+		t.Fatal("copied token lost owned match after source reset")
+	}
+	if got, want := match.fact.ID(), fact.ID(); got != want {
+		t.Fatalf("copied match fact ID after source reset = %q, want %q", got, want)
 	}
 }
 
