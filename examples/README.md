@@ -11,6 +11,8 @@
 - `gess-files`: templates, facts, rules, and queries loaded from `.gess` files.
 - `vulnerability_management`: larger end-to-end example.
 
+Start with `../TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow.
+
 Run the examples with:
 
 ```sh

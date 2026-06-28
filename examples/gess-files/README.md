@@ -1,11 +1,11 @@
 # Gess files
 
 Examples that define templates, facts, rules, and queries in `.gess` source
-files, then load them through `ParseGess` and `LoadGess`.
+files, then compile them to Go with `gessc`.
 
 - `order_routing`: routes VIP orders from templates, facts, rules, and queries
   declared in `rules.gess`. The example uses generated Go (`rules_generated.go`)
-  so application startup does not parse the `.gess` file.
+  so app startup does not parse the `.gess` file.
 
 Regenerate the Go source with:
 
