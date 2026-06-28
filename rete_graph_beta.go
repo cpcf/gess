@@ -2798,7 +2798,13 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 				continue
 			}
-			ok, err := m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
+			var ok bool
+			var err error
+			if len(captures) == 0 {
+				ok, err = m.insertGeneratedBetaRightInput(op.betaNodeID, token, op.entry, match, span, delta)
+			} else {
+				ok, err = m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
+			}
 			if err != nil {
 				return false, err
 			}
@@ -4089,6 +4095,68 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		if !matched {
 			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
 		}
+	}
+	return true, nil
+}
+
+func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBetaNodeID, token tokenRef, entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
+	if m == nil || delta == nil || token.isZero() {
+		return false, nil
+	}
+	node := m.graph.betaNode(nodeID)
+	if node == nil {
+		return false, nil
+	}
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter || node.kind == reteGraphBetaNodeNot || node.rightHasLeftPrefix || entry.bindingSlot != node.entry.bindingSlot {
+		return m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
+	}
+	joinKey, ok, err := graphBetaJoinKeyForRightMatchWithContext(m.context(), node, match.fact, token, span)
+	if err != nil || !ok {
+		return false, err
+	}
+	nodeMemory := m.nodeMemory(nodeID)
+	inserted := nodeMemory.right.insert(token, joinKey)
+	if !inserted {
+		return true, nil
+	}
+	if span != nil {
+		span.recordBetaInputInsert(reteGraphBetaInputRight)
+	}
+	bucket := nodeMemory.left.bucketForKey(joinKey)
+	if span != nil {
+		span.recordBetaBucketProbe(bucket.len())
+	}
+	matched := false
+	for i := 0; i < bucket.len(); i++ {
+		rowID, _ := bucket.at(i)
+		if span != nil {
+			span.recordBetaCandidateRowScanned()
+		}
+		leftRow := nodeMemory.left.row(rowID)
+		if leftRow == nil || leftRow.token.isZero() {
+			continue
+		}
+		if ok, err := m.residualJoinsMatch(node, match.fact, leftRow.token, span); err != nil {
+			return false, err
+		} else if !ok {
+			continue
+		}
+		matched = true
+		m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, leftRow.token, delta)
+		m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, token, delta)
+		output := m.appendTokenRows(leftRow.token, token, span)
+		if output.isZero() {
+			continue
+		}
+		if span != nil {
+			span.recordBetaJoinedTokenProduced()
+		}
+		if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
+			return false, err
+		}
+	}
+	if !matched {
+		m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
 	}
 	return true, nil
 }
@@ -6524,6 +6592,13 @@ func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGra
 	if !ok {
 		return betaJoinKey{}, false, nil
 	}
+	return graphBetaJoinKeyForRightMatchWithContext(ctx, node, match.fact, token, span)
+}
+
+func graphBetaJoinKeyForRightMatchWithContext(ctx context.Context, node *reteGraphBetaNode, fact conditionFactRef, token tokenRef, span *propagationCounterSpan) (betaJoinKey, bool, error) {
+	if node == nil {
+		return betaJoinKey{}, false, nil
+	}
 	joins := node.hashJoins
 	if len(joins) == 0 {
 		return betaJoinKey{}, true, nil
@@ -6534,7 +6609,7 @@ func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGra
 			return betaJoinKey{}, false, nil
 		}
 		if !join.hasLeftKeyExpression {
-			value, ok := join.leftValueFromFact(match.fact)
+			value, ok := join.leftValueFromFact(fact)
 			if !ok {
 				return betaJoinKey{}, false, nil
 			}
@@ -6548,11 +6623,11 @@ func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGra
 			return betaJoinKey{}, false, nil
 		}
 		if !firstJoin.hasLeftKeyExpression && !secondJoin.hasLeftKeyExpression {
-			firstValue, ok := firstJoin.leftValueFromFact(match.fact)
+			firstValue, ok := firstJoin.leftValueFromFact(fact)
 			if !ok {
 				return betaJoinKey{}, false, nil
 			}
-			secondValue, ok := secondJoin.leftValueFromFact(match.fact)
+			secondValue, ok := secondJoin.leftValueFromFact(fact)
 			if !ok {
 				return betaJoinKey{}, false, nil
 			}
@@ -6562,7 +6637,7 @@ func graphBetaJoinKeyForRightTokenWithContext(ctx context.Context, node *reteGra
 		}
 	}
 	return betaJoinKeyForPlanWithError(compiledConditionPlan{joins: joins}, func(join compiledJoinConstraint) (Value, bool, error) {
-		return graphBetaRightJoinValue(ctx, join, match.fact, token, span)
+		return graphBetaRightJoinValue(ctx, join, fact, token, span)
 	})
 }
 
