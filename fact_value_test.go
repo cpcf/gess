@@ -341,6 +341,50 @@ func TestScalarValuesUseTypedStorage(t *testing.T) {
 	}
 }
 
+func TestNewFieldsFromPairsBuildsFields(t *testing.T) {
+	fields, err := NewFieldsFromPairs("name", "Ada", "age", 37, "active", true)
+	if err != nil {
+		t.Fatalf("NewFieldsFromPairs: %v", err)
+	}
+	if got, want := fields["name"], mustValue(t, "Ada"); !got.Equal(want) {
+		t.Fatalf("name = %#v, want %#v", got, want)
+	}
+	if got, want := fields["age"], mustValue(t, 37); !got.Equal(want) {
+		t.Fatalf("age = %#v, want %#v", got, want)
+	}
+	if got, want := fields["active"], mustValue(t, true); !got.Equal(want) {
+		t.Fatalf("active = %#v, want %#v", got, want)
+	}
+}
+
+func TestNewFieldsFromPairsRejectsMalformedInputs(t *testing.T) {
+	cases := []struct {
+		name  string
+		pairs []any
+	}{
+		{name: "odd argument count", pairs: []any{"name"}},
+		{name: "non string key", pairs: []any{1, "Ada"}},
+		{name: "empty key", pairs: []any{"", "Ada"}},
+		{name: "unsupported value", pairs: []any{"value", struct{ Name string }{"Ada"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := NewFieldsFromPairs(tc.pairs...); err == nil {
+				t.Fatal("NewFieldsFromPairs succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestMustFieldsPanicsOnMalformedInputs(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MustFields did not panic")
+		}
+	}()
+	_ = MustFields("name")
+}
+
 func mustFields(t testing.TB, raw map[string]any) Fields {
 	t.Helper()
 	fields, err := NewFields(raw)

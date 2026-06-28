@@ -172,6 +172,36 @@ func NewFields(raw map[string]any) (Fields, error) {
 	return out, nil
 }
 
+// NewFieldsFromPairs builds fields from alternating string keys and raw values.
+func NewFieldsFromPairs(pairs ...any) (Fields, error) {
+	if len(pairs)%2 != 0 {
+		return nil, fmt.Errorf("%w: fields require key/value pairs", ErrUnsupportedValue)
+	}
+	out := make(Fields, len(pairs)/2)
+	for i := 0; i < len(pairs); i += 2 {
+		key, ok := pairs[i].(string)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("%w: field key at argument %d must be a non-empty string", ErrUnsupportedValue, i)
+		}
+		value, err := canonicalValue(pairs[i+1])
+		if err != nil {
+			return nil, fmt.Errorf("field %q: %w", key, err)
+		}
+		out[key] = value
+	}
+	return out, nil
+}
+
+// MustFields builds fields from alternating string keys and raw values, panicking
+// when the inputs cannot be converted.
+func MustFields(pairs ...any) Fields {
+	fields, err := NewFieldsFromPairs(pairs...)
+	if err != nil {
+		panic(err)
+	}
+	return fields
+}
+
 type Fields map[string]Value
 
 func (f Fields) Equal(other Fields) bool {
