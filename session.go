@@ -140,6 +140,7 @@ type Session struct {
 	backchainDemandSupports       backchainDemandSupportTable
 	backchainDemandSupportRecords []backchainDemandSupportRecord
 	backchainDemandInlineSupports backchainDemandInlineSupportIndex
+	backchainDemandSupportOwners  backchainDemandOwnerSupportIndex
 	backchainDemandByFact         backchainDemandFactSupportTable
 	backchainDemandByDemand       backchainDemandFactSupportTable
 	nextEventSequence             uint64

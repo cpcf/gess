@@ -523,6 +523,7 @@ type backchainDemandRequest struct {
 	templateKey  TemplateKey
 	slots        []factSlot
 	supportFacts []backchainDemandSupportFact
+	owner        backchainDemandOwnerKey
 }
 
 type backchainDemandRecord struct {
@@ -532,6 +533,7 @@ type backchainDemandRecord struct {
 	slotCount    int
 	supportStart int
 	supportCount int
+	owner        backchainDemandOwnerKey
 }
 
 type backchainDemandSupportFact struct {

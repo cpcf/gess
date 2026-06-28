@@ -1988,6 +1988,7 @@ func (m *reteGraphBetaMemory) backchainDemandRequestByID(id backchainDemandID) (
 		templateKey:  record.templateKey,
 		slots:        m.backchainDemandSlots[record.slotStart:slotEnd],
 		supportFacts: m.backchainDemandSupport[record.supportStart:supportEnd],
+		owner:        record.owner,
 	}, true
 }
 
@@ -3929,7 +3930,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			}
 		}
 		if !matched {
-			m.appendBackchainDemandRequests(node, reteGraphBetaInputRight, token, delta)
+			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputRight, token, delta)
 		}
 	case reteGraphBetaInputRight:
 		currentMatch, ok := tokenFactMatchForBindingSlot(token, node.entry.bindingSlot)
@@ -3970,21 +3971,21 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			}
 		}
 		if !matched {
-			m.appendBackchainDemandRequests(node, reteGraphBetaInputLeft, token, delta)
+			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
 		}
 	}
 	return true, nil
 }
 
-func (m *reteGraphBetaMemory) appendBackchainDemandRequests(node *reteGraphBetaNode, missingSide reteGraphBetaInputSide, context tokenRef, delta *reteAgendaDelta) {
+func (m *reteGraphBetaMemory) appendBackchainDemandRequests(nodeID reteGraphBetaNodeID, node *reteGraphBetaNode, missingSide reteGraphBetaInputSide, context tokenRef, delta *reteAgendaDelta) {
 	if m == nil || node == nil || delta == nil || context.isZero() || len(node.backchainDemands) == 0 {
 		return
 	}
-	for _, plan := range node.backchainDemands {
+	for planIndex, plan := range node.backchainDemands {
 		if plan.side != missingSide {
 			continue
 		}
-		id, ok := m.storeBackchainDemandRequest(plan, context)
+		id, ok := m.storeBackchainDemandRequest(nodeID, planIndex, plan, context)
 		if !ok {
 			delta.supported = false
 			continue
@@ -3997,11 +3998,11 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 	if m == nil || node == nil || delta == nil || context.isZero() || len(node.backchainDemands) == 0 {
 		return
 	}
-	for _, plan := range node.backchainDemands {
+	for planIndex, plan := range node.backchainDemands {
 		if plan.side != side {
 			continue
 		}
-		id, ok := m.storeBackchainDemandRequest(plan, context)
+		id, ok := m.storeBackchainDemandRequest(node.id, planIndex, plan, context)
 		if !ok {
 			delta.supported = false
 			continue
@@ -4010,7 +4011,7 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 	}
 }
 
-func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandID, bool) {
+func (m *reteGraphBetaMemory) storeBackchainDemandRequest(nodeID reteGraphBetaNodeID, planIndex int, plan reteGraphBackchainDemandPlan, context tokenRef) (backchainDemandID, bool) {
 	if m == nil || plan.templateKey == "" || plan.slotCount <= 0 {
 		return 0, false
 	}
@@ -4068,6 +4069,11 @@ func (m *reteGraphBetaMemory) storeBackchainDemandRequest(plan reteGraphBackchai
 		slotCount:    plan.slotCount,
 		supportStart: supportStart,
 		supportCount: supportCount,
+		owner: backchainDemandOwnerKey{
+			nodeID:    nodeID,
+			planIndex: planIndex,
+			token:     context.handle,
+		},
 	})
 	return id, true
 }
@@ -4313,7 +4319,7 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 			if ok, supported := m.rightTokenHasLeftMatch(node, nodeMemory, joinKey, rightRow.token); !supported {
 				delta.supported = false
 			} else if !ok {
-				m.appendBackchainDemandRequests(node, reteGraphBetaInputLeft, rightRow.token, delta)
+				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputLeft, rightRow.token, delta)
 			}
 		}
 	case reteGraphBetaInputRight:
@@ -4343,7 +4349,7 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 			if ok, supported := m.leftTokenHasRightMatch(node, nodeMemory, joinKey, leftRow.token); !supported {
 				delta.supported = false
 			} else if !ok {
-				m.appendBackchainDemandRequests(node, reteGraphBetaInputRight, leftRow.token, delta)
+				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputRight, leftRow.token, delta)
 			}
 		}
 	default:

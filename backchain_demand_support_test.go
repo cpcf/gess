@@ -147,3 +147,57 @@ func TestBackchainDemandSupportSingleBucketFastPathRequiresUniqueSupport(t *test
 		t.Fatalf("single support id = %d, want no fast path with multiple records", id)
 	}
 }
+
+func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
+	session := &Session{}
+	arena := newTokenArena()
+	token := arena.addCompact(tokenRef{}, tokenRowEntry{binding: "q", bindingSlot: 0, factID: newFactID(1, 40), factVersion: 1}, conditionMatch{}, 1, 1, 1)
+	if token.isZero() {
+		t.Fatal("token arena returned zero token")
+	}
+	support := backchainDemandSupportFact{id: newFactID(1, 41), version: 2}
+	first := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		owner:        backchainDemandOwnerKey{nodeID: 1, planIndex: 0, token: token.handle},
+		supportFacts: []backchainDemandSupportFact{support},
+		slots: []factSlot{
+			{value: newStringValue("q1"), ok: true},
+		},
+	}
+	second := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		owner:        backchainDemandOwnerKey{nodeID: 1, planIndex: 1, token: token.handle},
+		supportFacts: []backchainDemandSupportFact{support},
+		slots: []factSlot{
+			{value: newStringValue("q2"), ok: true},
+		},
+	}
+	firstID := session.addBackchainDemandSupport(&workingFact{id: newFactID(1, 42)}, first)
+	secondID := session.addBackchainDemandSupport(&workingFact{id: newFactID(1, 43)}, second)
+	if firstID == 0 || secondID == 0 || firstID == secondID {
+		t.Fatalf("support ids = (%d, %d), want distinct non-zero", firstID, secondID)
+	}
+	if id, ok := session.singleBackchainDemandSupportIDForRequest(first); ok {
+		t.Fatalf("single support id = %d, want owner path needed with ambiguous support fact bucket", id)
+	}
+
+	delta, err := session.removeBackchainDemandSupportForRequest(context.Background(), first, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("removeBackchainDemandSupportForRequest: %v", err)
+	}
+	if !delta.supported {
+		t.Fatalf("delta.supported = false, want true")
+	}
+	if _, ok := session.backchainDemandSupportRecordByID(firstID); ok {
+		t.Fatalf("first owner support id %d still present", firstID)
+	}
+	if _, ok := session.backchainDemandSupportRecordByID(secondID); !ok {
+		t.Fatalf("second owner support id %d was removed", secondID)
+	}
+	if id, ok := session.backchainDemandSupportByOwner(first.owner); ok {
+		t.Fatalf("first owner index = %d, want removed", id)
+	}
+	if id, ok := session.backchainDemandSupportByOwner(second.owner); !ok || id != secondID {
+		t.Fatalf("second owner index = (%d, %t), want (%d, true)", id, ok, secondID)
+	}
+}
