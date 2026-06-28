@@ -177,6 +177,11 @@ func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
 	if firstID == 0 || secondID == 0 || firstID == secondID {
 		t.Fatalf("support ids = (%d, %d), want distinct non-zero", firstID, secondID)
 	}
+	if inlineKey, ok := backchainDemandInlineSupportKeyForRequest(first); !ok {
+		t.Fatal("first request should be inline-key compatible")
+	} else if _, exists := session.backchainDemandInlineSupports.get(inlineKey); exists {
+		t.Fatal("graph-owned support was stored in inline request-key index")
+	}
 	if id, ok := session.singleBackchainDemandSupportIDForRequest(first); ok {
 		t.Fatalf("single support id = %d, want owner path needed with ambiguous support fact bucket", id)
 	}

@@ -15,6 +15,7 @@ type backchainDemandSupportRecord struct {
 	key          backchainDemandSupportKey
 	inlineKey    backchainDemandInlineSupportKey
 	owner        backchainDemandOwnerKey
+	ownerOnly    bool
 	inline       bool
 	demandFactID FactID
 	supportCount int
@@ -109,6 +110,9 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	if s == nil || demandFact == nil || demandFact.id.IsZero() || len(request.supportFacts) == 0 {
 		return 0
 	}
+	if !request.owner.isZero() {
+		return s.addBackchainDemandOwnerSupport(demandFact, request)
+	}
 	if inlineKey, ok := backchainDemandInlineSupportKeyForRequest(request); ok {
 		return s.addBackchainDemandInlineSupport(demandFact, request, inlineKey)
 	}
@@ -127,6 +131,31 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	s.storeBackchainDemandOwnerSupport(request.owner, id)
 	bucket.add(id)
 	s.backchainDemandSupports.set(requestKey.key, bucket)
+	for i := 0; i < record.supportCount; i++ {
+		support := backchainDemandSupportRecordFact(record, i)
+		factBucket, _ := s.backchainDemandByFact.get(support.id)
+		factBucket.add(id)
+		s.backchainDemandByFact.set(support.id, factBucket)
+	}
+	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
+	demandBucket.add(id)
+	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
+	return id
+}
+
+func (s *Session) addBackchainDemandOwnerSupport(demandFact *workingFact, request backchainDemandRequest) backchainDemandSupportID {
+	if s == nil || demandFact == nil || demandFact.id.IsZero() || request.owner.isZero() {
+		return 0
+	}
+	if id, exists := s.backchainDemandSupportByOwner(request.owner); exists {
+		return id
+	}
+	s.ensureBackchainDemandReverseSupportTables()
+	id := s.nextBackchainDemandSupportIDValue()
+	record := newBackchainDemandSupportRecord(id, demandFact.id, backchainDemandSupportRequestKey{}, request)
+	record.ownerOnly = true
+	s.storeBackchainDemandSupportRecord(record)
+	s.storeBackchainDemandOwnerSupport(request.owner, id)
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
 		factBucket, _ := s.backchainDemandByFact.get(support.id)
@@ -304,7 +333,9 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 	}
 	s.removeBackchainDemandOwnerSupport(record.owner, id)
 	s.clearBackchainDemandSupportRecord(id)
-	if record.inline {
+	if record.ownerOnly {
+		// Owner-only graph supports are intentionally absent from request-key indexes.
+	} else if record.inline {
 		s.backchainDemandInlineSupports.delete(record.inlineKey)
 	} else {
 		s.removeBackchainDemandSupportIDFromSupportBucket(record.key, id)
