@@ -4879,7 +4879,7 @@ func (m *reteGraphBetaMemory) removeGeneratedTerminalOnlyFact(id FactID, counter
 			return false
 		}
 	}
-	m.removeAlphaFact(id)
+	m.removeAlphaFactRoutes(id, routes, true)
 	return true
 }
 
@@ -5047,9 +5047,13 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
 	}
-	m.resetAlphaRouteScratch()
-	m.appendAlphaRouteBucket(m.alphaFactRoutes[id])
-	routes := m.alphaRouteScratch
+	m.removeAlphaFactRoutes(id, m.alphaFactRoutes[id], true)
+}
+
+func (m *reteGraphBetaMemory) removeAlphaFactRoutes(id FactID, routes []reteGraphAlphaNodeID, removeTerminalRows bool) {
+	if m == nil || id.IsZero() {
+		return
+	}
 	for _, nodeID := range routes {
 		index := int(nodeID)
 		if index <= 0 || index >= len(m.alphaFacts) || !m.alphaFacts[index].remove(id) {
@@ -5064,7 +5068,7 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 		}
 	}
 	delete(m.alphaFactRoutes, id)
-	if m.alphaFactTerminalRows != nil {
+	if removeTerminalRows && m.alphaFactTerminalRows != nil {
 		delete(m.alphaFactTerminalRows, id)
 	}
 }
