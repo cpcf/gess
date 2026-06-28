@@ -10,6 +10,7 @@
 - `higher-order`: `exists` and `forall` conditions.
 - `gess-files`: templates, facts, rules, and queries loaded from `.gess` files.
 - `vulnerability_management`: larger end-to-end example.
+- `stress`: temporary synthetic stress tools for local scaling experiments.
 
 Start with `../TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow.
 

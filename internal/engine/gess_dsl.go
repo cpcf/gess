@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 )
 
@@ -825,6 +826,16 @@ func (l *gessLoader) buildAssertAction(ruleName string, index int, module Module
 	if len(reads) > 0 {
 		action.BindingReads = &ActionBindingReadSetSpec{Reads: reads}
 	}
+	if !logical && templateKey != "" {
+		templateSpec, ok := l.templates[QualifiedName{Module: normalizeModuleName(mod), Name: name}.normalized()]
+		if ok {
+			if native, ok := gessNativeAssertTemplateValues(templateKey, templateSpec, fields, values); ok {
+				action.BindingReads = nil
+				action.AssertTemplateValues = native
+				return action, nil
+			}
+		}
+	}
 	action.Fn = func(ctx ActionContext) error {
 		pairs := make([]any, 0, len(fields)*2)
 		for i, field := range fields {
@@ -863,6 +874,57 @@ func (l *gessLoader) buildAssertAction(ruleName string, index int, module Module
 		return err
 	}
 	return action, nil
+}
+
+func gessNativeAssertTemplateValues(templateKey TemplateKey, template TemplateSpec, fields []string, values []gessRuntimeValue) (*AssertTemplateValuesActionSpec, bool) {
+	if len(fields) != len(template.Fields) || len(values) != len(template.Fields) {
+		return nil, false
+	}
+	byField := make(map[string]gessRuntimeValue, len(fields))
+	for i, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			return nil, false
+		}
+		if _, exists := byField[field]; exists {
+			return nil, false
+		}
+		byField[field] = values[i]
+	}
+	compiledFields := make([]FieldSpec, len(template.Fields))
+	copy(compiledFields, template.Fields)
+	slices.SortFunc(compiledFields, func(a, b FieldSpec) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	out := &AssertTemplateValuesActionSpec{
+		TemplateKey: templateKey,
+		Values:      make([]ExpressionSpec, len(values)),
+	}
+	for i, field := range compiledFields {
+		value, ok := byField[field.Name]
+		if !ok {
+			return nil, false
+		}
+		expression, ok := gessRuntimeValueExpression(value)
+		if !ok {
+			return nil, false
+		}
+		out.Values[i] = expression
+	}
+	return out, true
+}
+
+func gessRuntimeValueExpression(value gessRuntimeValue) (ExpressionSpec, bool) {
+	switch {
+	case value.hasConst:
+		return ConstExpr{Value: value.constant}, true
+	case value.fieldRef:
+		return BindingFieldExpr{Binding: value.binding, Field: value.field}, true
+	case value.bindingValue:
+		return BindingValueExpr{Binding: value.binding}, true
+	default:
+		return nil, false
+	}
 }
 
 func (l *gessLoader) runtimeValue(form gessSExpr, scope *gessScope) (gessRuntimeValue, error) {

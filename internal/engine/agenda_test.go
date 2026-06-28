@@ -764,7 +764,7 @@ func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	}
 }
 
-func TestAgendaActivationFingerprintCollisionKeepsFullIdentity(t *testing.T) {
+func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
 	revision, _ := mustAgendaRevision(t, 10)
 	rule := revision.rules["match-person"]
 	firstIdentity := candidateIdentity{
@@ -804,9 +804,9 @@ func TestAgendaActivationFingerprintCollisionKeepsFullIdentity(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if got, want := len(changes), 2; got != want {
-		t.Fatalf("fingerprint collision changes = %d, want %d", got, want)
+		t.Fatalf("scoped fingerprint changes = %d, want %d", got, want)
 	}
-	if got, want := len(agenda.activations), 1; got != want {
+	if got, want := len(agenda.activations), 2; got != want {
 		t.Fatalf("activation fingerprint buckets = %d, want %d", got, want)
 	}
 	pending := agenda.pendingActivations()
@@ -825,11 +825,11 @@ func TestAgendaActivationFingerprintCollisionKeepsFullIdentity(t *testing.T) {
 		t.Fatalf("duplicate reconcile: %v", err)
 	}
 	if len(changes) != 0 {
-		t.Fatalf("duplicate fingerprint collision changes = %#v, want none", changes)
+		t.Fatalf("duplicate scoped fingerprint changes = %#v, want none", changes)
 	}
 }
 
-func TestAgendaActivationFingerprintCollisionDoesNotRequeueConsumedActivation(t *testing.T) {
+func TestAgendaScopedActivationFingerprintDoesNotRequeueConsumedActivation(t *testing.T) {
 	revision, _ := mustAgendaRevision(t, 10)
 	rule := revision.rules["match-person"]
 	firstIdentity := candidateIdentity{
@@ -884,13 +884,13 @@ func TestAgendaActivationFingerprintCollisionDoesNotRequeueConsumedActivation(t 
 	}
 	pending := agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
-		t.Fatalf("pending after consumed fingerprint collision = %d, want %d", got, want)
+		t.Fatalf("pending after consumed scoped activation = %d, want %d", got, want)
 	}
 	if pending[0].id == selected.id {
 		t.Fatalf("consumed activation was requeued: %q", selected.id)
 	}
 	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
-		t.Fatalf("consumed activation after fingerprint collision reconcile = %#v, ok=%v", got, ok)
+		t.Fatalf("consumed activation after scoped reconcile = %#v, ok=%v", got, ok)
 	}
 }
 

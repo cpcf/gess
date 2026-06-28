@@ -658,7 +658,8 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 	}
 	for _, terminalNode := range m.graph.terminalNodes {
 		terminal := m.terminal(terminalNode.id)
-		terminal.rows.reserveTerminal(rowCapacity, graphBetaFactIndexReserve(rowCapacity, m.graph.stageTokenWidth(terminalNode.input)))
+		terminalRowCapacity := graphBetaTerminalTokenMemoryCapacity(rowCapacity)
+		terminal.rows.reserveTerminal(terminalRowCapacity, graphBetaFactIndexReserve(terminalRowCapacity, m.graph.stageTokenWidth(terminalNode.input)))
 	}
 }
 
@@ -714,6 +715,13 @@ func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
 		return rowCapacity
 	}
 	return rowCapacity * 2
+}
+
+func graphBetaTerminalTokenMemoryCapacity(rowCapacity int) int {
+	if rowCapacity <= 8 {
+		return rowCapacity
+	}
+	return max(8, rowCapacity/2)
 }
 
 func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {

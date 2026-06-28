@@ -8,11 +8,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cpcf/gess/internal/fnvhash"
 )
 
 type activationKey struct {
 	fingerprint activationFingerprint
 	ordinal     uint64
+}
+
+type activationSortEntry struct {
+	key activationKey
+	act *activation
 }
 
 type activationHandle struct {
@@ -465,6 +472,8 @@ type agenda struct {
 	purgeActivations map[activationFingerprint]activationBucket
 	purgeNextPending []activationKey
 	purgeChanges     []agendaChange
+
+	sortEntries []activationSortEntry
 }
 
 func newAgenda() *agenda {
@@ -1472,6 +1481,41 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 	if a == nil {
 		return nil, activation{}, false
 	}
+	for a.pendingHead < len(a.pending) {
+		key := a.pending[a.pendingHead]
+		current, ok := a.activationByKeyPtr(key)
+		if !ok || current.status != activationStatusPending {
+			a.pending[a.pendingHead] = activationKey{}
+			a.pendingHead++
+			continue
+		}
+		if current.module != module {
+			break
+		}
+		a.pending[a.pendingHead] = activationKey{}
+		a.pendingHead++
+		current.status = activationStatusConsumed
+		out := *current
+		if materializeID {
+			out.id = current.ensureActivationID()
+		}
+		if current.token.isZero() {
+			out.factIDs = cloneFactIDs(current.factIDs)
+			out.factVersions = cloneFactVersions(current.factVersions)
+		} else {
+			out.factIDs = nil
+			out.factVersions = nil
+			out.bindings = nil
+			out.path = nil
+		}
+		return current, out, true
+	}
+	if a.pendingHead >= len(a.pending) {
+		a.pending = a.pending[:0]
+		a.pendingHead = 0
+		a.lazyDeactivated = 0
+		return nil, activation{}, false
+	}
 	a.normalizePendingKeys()
 	for i, key := range a.pending {
 		current, ok := a.activationByKeyPtr(key)
@@ -1819,11 +1863,27 @@ func factIDSeenBefore(ids []FactID, id FactID) bool {
 }
 
 func (a *agenda) sortActivationKeys(keys []activationKey) {
-	slices.SortStableFunc(keys, func(leftKey, rightKey activationKey) int {
-		left, _ := a.activationByKeyPtr(leftKey)
-		right, _ := a.activationByKeyPtr(rightKey)
-		return activationCompare(left, right)
+	if a == nil || len(keys) < 2 {
+		return
+	}
+	entries := a.sortEntries
+	if cap(entries) < len(keys) {
+		entries = make([]activationSortEntry, len(keys))
+	} else {
+		entries = entries[:len(keys)]
+	}
+	for i, key := range keys {
+		act, _ := a.activationByKeyPtr(key)
+		entries[i] = activationSortEntry{key: key, act: act}
+	}
+	slices.SortStableFunc(entries, func(left, right activationSortEntry) int {
+		return activationCompare(left.act, right.act)
 	})
+	for i, entry := range entries {
+		keys[i] = entry.key
+		entries[i] = activationSortEntry{}
+	}
+	a.sortEntries = entries[:0]
 }
 
 func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationKey, act *activation) []activationKey {
@@ -2233,7 +2293,10 @@ func activationFromBuckets(buckets map[activationFingerprint]activationBucket, k
 }
 
 func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFingerprint {
-	return activationFingerprint(key.hash)
+	hash := fnvhash.Offset64
+	hash = fnvhash.MixUint64(hash, key.scopeHash)
+	hash = fnvhash.MixUint64(hash, key.hash)
+	return activationFingerprint(hash)
 }
 
 func activationIdentityIndex(bucket activationBucket, identity candidateIdentityKey) uint64 {
