@@ -3,7 +3,6 @@ package gess
 import (
 	"context"
 	"slices"
-	"sort"
 )
 
 const backchainDemandSupportInlineLimit = 4
@@ -366,12 +365,7 @@ func (s *Session) removeBackchainDemandSupportsForFactVersionMatch(ctx context.C
 			supportIDs = append(supportIDs, supportID)
 		}
 	})
-	sort.Slice(supportIDs, func(i, j int) bool {
-		if cmp := s.compareBackchainDemandSupportIDs(supportIDs[i], supportIDs[j]); cmp != 0 {
-			return cmp < 0
-		}
-		return supportIDs[i] < supportIDs[j]
-	})
+	s.sortBackchainDemandSupportIDs(supportIDs)
 	for _, supportID := range supportIDs {
 		delta, err := s.removeBackchainDemandSupportID(ctx, supportID, origin)
 		if err != nil {
@@ -380,6 +374,25 @@ func (s *Session) removeBackchainDemandSupportsForFactVersionMatch(ctx context.C
 		combined = mergeReteAgendaDelta(combined, delta)
 	}
 	return combined, nil
+}
+
+func (s *Session) sortBackchainDemandSupportIDs(ids []backchainDemandSupportID) {
+	for i := 1; i < len(ids); i++ {
+		current := ids[i]
+		j := i - 1
+		for j >= 0 && s.lessBackchainDemandSupportID(current, ids[j]) {
+			ids[j+1] = ids[j]
+			j--
+		}
+		ids[j+1] = current
+	}
+}
+
+func (s *Session) lessBackchainDemandSupportID(left, right backchainDemandSupportID) bool {
+	if cmp := s.compareBackchainDemandSupportIDs(left, right); cmp != 0 {
+		return cmp < 0
+	}
+	return left < right
 }
 
 func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backchainDemandSupportID, origin mutationOrigin) (reteAgendaDelta, error) {

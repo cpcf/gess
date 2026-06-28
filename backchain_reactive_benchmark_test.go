@@ -241,6 +241,63 @@ func TestBackchainRuntimeDemandHarness(t *testing.T) {
 	fmt.Println(strings.Join(fields, "|"))
 }
 
+func TestBackchainReachabilityHarness(t *testing.T) {
+	if strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_REACHABILITY_RUNNER")) == "" {
+		t.Skip("set GESS_BACKCHAIN_REACHABILITY_RUNNER=1 to run benchmark harness")
+	}
+
+	iterations := backchainReactiveHarnessEnvInt(t, "GESS_BACKCHAIN_REACHABILITY_ITERATIONS", 1000)
+	warmup := backchainReactiveHarnessEnvInt(t, "GESS_BACKCHAIN_REACHABILITY_WARMUP", 20)
+	if iterations <= 0 {
+		t.Fatalf("iterations must be positive, got %d", iterations)
+	}
+	if warmup < 0 {
+		t.Fatalf("warmup must be non-negative, got %d", warmup)
+	}
+	mode := backchainReachabilityHarnessMode(t)
+	measurePhases := strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_REACHABILITY_PHASES")) != ""
+
+	ctx := context.Background()
+	revision, edgeKey, _, requestKey := mustCompileBackchainReachabilityRuleset(t, mode == "query")
+	session, err := NewSession(revision, WithResetBeforeSnapshot(false))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	for range warmup {
+		runBackchainReachabilityHarnessCase(t, ctx, session, edgeKey, requestKey, mode)
+	}
+
+	var elapsed, resetElapsed, seedElapsed, proveElapsed time.Duration
+	for range iterations {
+		start := time.Now()
+		resetStart := time.Now()
+		if _, err := session.Reset(ctx); err != nil {
+			t.Fatalf("Reset: %v", err)
+		}
+		resetElapsed += time.Since(resetStart)
+		seedStart := time.Now()
+		seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+		seedElapsed += time.Since(seedStart)
+		proveStart := time.Now()
+		proveBackchainReachabilityHarnessCase(t, ctx, session, requestKey, mode)
+		proveElapsed += time.Since(proveStart)
+		elapsed += time.Since(start)
+	}
+	nsPerOp := float64(elapsed.Nanoseconds()) / float64(iterations)
+	fields := []string{
+		fmt.Sprintf("GESS_RUNNER|backchain-reactive|recursive-reachability|mode=%s|edges=%d|derived-reachable-facts=%d|iterations=%d|warmup=%d|elapsed-ns=%d|ns/op=%.0f",
+			mode, 4, 3, iterations, warmup, elapsed.Nanoseconds(), nsPerOp),
+	}
+	if measurePhases {
+		fields = append(fields,
+			fmt.Sprintf("reset-ns/op=%.0f", float64(resetElapsed.Nanoseconds())/float64(iterations)),
+			fmt.Sprintf("seed-ns/op=%.0f", float64(seedElapsed.Nanoseconds())/float64(iterations)),
+			fmt.Sprintf("prove-ns/op=%.0f", float64(proveElapsed.Nanoseconds())/float64(iterations)),
+		)
+	}
+	fmt.Println(strings.Join(fields, "|"))
+}
+
 func mustCompileBackchainReactiveRuleset(t testing.TB, tc backchainReactiveCase) *Ruleset {
 	t.Helper()
 	if tc.templates < 0 || tc.reactive < 0 || tc.reactive > tc.templates {
@@ -360,6 +417,57 @@ func resetBackchainRuntimeDemand(t testing.TB, ctx context.Context, session *Ses
 	t.Helper()
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
+	}
+}
+
+func backchainReachabilityHarnessMode(t testing.TB) string {
+	t.Helper()
+	mode := strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_REACHABILITY_MODE"))
+	if mode == "" {
+		return "query"
+	}
+	switch mode {
+	case "query", "run-request":
+		return mode
+	default:
+		t.Fatalf("unsupported GESS_BACKCHAIN_REACHABILITY_MODE %q", mode)
+		return ""
+	}
+}
+
+func runBackchainReachabilityHarnessCase(t testing.TB, ctx context.Context, session *Session, edgeKey, requestKey TemplateKey, mode string) {
+	t.Helper()
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+	proveBackchainReachabilityHarnessCase(t, ctx, session, requestKey, mode)
+}
+
+func proveBackchainReachabilityHarnessCase(t testing.TB, ctx context.Context, session *Session, requestKey TemplateKey, mode string) {
+	t.Helper()
+	switch mode {
+	case "query":
+		rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+		if err != nil {
+			t.Fatalf("QueryAll: %v", err)
+		}
+		if len(rows) != 1 {
+			t.Fatalf("rows = %d, want 1", len(rows))
+		}
+	case "run-request":
+		if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("db"), newStringValue("internet")); err != nil {
+			t.Fatalf("AssertTemplateValues(request): %v", err)
+		}
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 4 {
+			t.Fatalf("run result = (%v, %d), want (%v, 4)", result.Status, result.Fired, RunCompleted)
+		}
+	default:
+		t.Fatalf("unsupported backchain reachability mode %q", mode)
 	}
 }
 

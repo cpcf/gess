@@ -144,6 +144,8 @@ type Session struct {
 	backchainDemandSupportOwners  backchainDemandOwnerSupportIndex
 	backchainDemandByFact         backchainDemandFactSupportTable
 	backchainDemandByDemand       backchainDemandFactSupportTable
+	activeBackchainQueryProof     *backchainQueryProofContext
+	backchainQueryProofScratch    backchainQueryProofContext
 	nextEventSequence             uint64
 }
 
@@ -363,6 +365,11 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 	if s == nil {
 		return nil, false
 	}
+	if s.activeBackchainQueryProof != nil {
+		if fact, ok := s.activeBackchainQueryProof.workingFactByID(id); ok {
+			return fact, true
+		}
+	}
 	index, ok := s.factRowIndex(id)
 	if !ok || index < 0 || index >= len(s.facts) {
 		return nil, false
@@ -379,6 +386,9 @@ func (s *Session) factRowIndex(id FactID) (int, bool) {
 		return 0, false
 	}
 	if id.generation == s.generation && id.sequence > 0 {
+		if id.sequence-1 > uint64(int(^uint(0)>>1)) {
+			return 0, false
+		}
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
 			row := s.factsBySequence[index]
@@ -1488,6 +1498,9 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 }
 
 func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s != nil && s.activeBackchainQueryProof != nil {
+		return s.activeBackchainQueryProof.flushDemands(ctx, demands, origin)
+	}
 	if s == nil || state == nil || len(demands) == 0 {
 		s.clearBackchainDemandRequestArena()
 		return reteAgendaDelta{supported: true}, nil
@@ -1578,6 +1591,9 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 
 func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
+	if s != nil && s.activeBackchainQueryProof != nil {
+		return combined, nil
+	}
 	if s == nil || len(resolved) == 0 && len(owners) == 0 {
 		return combined, nil
 	}

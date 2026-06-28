@@ -251,7 +251,7 @@ func (r *reteRuntime) mayEmitBackchainDemandDeltas() bool {
 	return r.graph.hasBackchainDemandPlans()
 }
 
-func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
+func (r *reteRuntime) queryRows(ctx context.Context, query compiledQuery, args *compiledQueryArgs, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
 	if r == nil || r.revision == nil || !r.usesGraphBeta() || r.graphBeta == nil {
 		return nil, false, nil
 	}

@@ -177,7 +177,7 @@ func TestGraphBetaAlphaLiteralEqualityIndexRoutesSingleQueryTerminalNode(t *test
 	if err != nil {
 		t.Fatalf("compileArgs: %v", err)
 	}
-	rows, handled, err := runtime.queryRows(ctx, query, args, newReteGraphQueryTriggerEvent(snapshotQueryTriggerFact(snapshot.Generation(), query, args)), snapshot)
+	rows, handled, err := runtime.queryRows(ctx, query, &args, newReteGraphQueryTriggerEvent(snapshotQueryTriggerFact(snapshot.Generation(), query, &args)), snapshot)
 	if err != nil {
 		t.Fatalf("queryRows: %v", err)
 	}

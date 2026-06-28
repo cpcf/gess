@@ -173,9 +173,11 @@ func TestReteGraphPropagationEventCarriesQueryTriggerMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("query adults-by-dept not found")
 	}
-	trigger := snapshotQueryTriggerFact(Generation(11), query, map[string]Value{
-		"dept": mustValue(t, "engineering"),
-	})
+	args, err := query.compileArgs(QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("compileArgs: %v", err)
+	}
+	trigger := snapshotQueryTriggerFact(Generation(11), query, &args)
 
 	event := newReteGraphQueryTriggerEvent(trigger)
 

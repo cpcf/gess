@@ -189,7 +189,7 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileArgs: %v", err)
 	}
-	trigger := session.queryTriggerFact(query, compiledArgs)
+	trigger := session.queryTriggerFact(query, &compiledArgs)
 	memory := session.rete.graphBeta
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
 		t.Fatalf("query terminal rows before trigger = %d, want 0", got)
@@ -201,7 +201,7 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
 		t.Fatalf("query terminal rows after trigger = %d, want 1", got)
 	}
-	rows, err := memory.materializeQueryTerminalRows(ctx, query, compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
 	if err != nil {
 		t.Fatalf("materializeQueryTerminalRows: %v", err)
 	}

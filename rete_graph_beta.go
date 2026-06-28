@@ -21,6 +21,7 @@ type reteGraphBetaMemory struct {
 	alphaFactOwnershipIDs    []FactID
 	alphaFactRouteStorage    []reteGraphAlphaNodeID
 	alphaFactTerminalStorage []generatedTerminalRowHandle
+	alphaFactBetaStorage     []generatedBetaRowHandle
 	alphaFactCounts          map[ConditionID]int
 	facts                    []FactSnapshot
 	factIndexes              map[FactID]int
@@ -266,9 +267,17 @@ type generatedTerminalRowHandle struct {
 	handle      graphTokenRowHandle
 }
 
+type generatedBetaRowHandle struct {
+	alphaNodeID reteGraphAlphaNodeID
+	betaNodeID  reteGraphBetaNodeID
+	side        reteGraphBetaInputSide
+	handle      graphTokenRowHandle
+}
+
 type alphaFactOwnershipRow struct {
 	routes       []reteGraphAlphaNodeID
 	terminalRows []generatedTerminalRowHandle
+	betaRows     []generatedBetaRowHandle
 }
 
 // Negative beta rows reuse supportCount for their blocker count; terminal rows
@@ -760,6 +769,12 @@ func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
 		clear(m.alphaFactTerminalStorage)
 		m.alphaFactTerminalStorage = m.alphaFactTerminalStorage[:0]
 	}
+	if factCapacity > cap(m.alphaFactBetaStorage) {
+		m.alphaFactBetaStorage = make([]generatedBetaRowHandle, 0, factCapacity)
+	} else {
+		clear(m.alphaFactBetaStorage)
+		m.alphaFactBetaStorage = m.alphaFactBetaStorage[:0]
+	}
 }
 
 func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID ConditionID) {
@@ -1172,8 +1187,21 @@ func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 }
 
 func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
+	_, inserted := m.insertRowWithNegativeBlockerCount(token, joinKey, negativeBlockerCount)
+	return inserted
+}
+
+func (m *tokenHashMemory) insertRow(token tokenRef, joinKey betaJoinKey) (graphTokenRowHandle, bool) {
+	return m.insertRowWithNegativeBlockerCount(token, joinKey, 0)
+}
+
+func (m *tokenHashMemory) insertFreshRow(token tokenRef, joinKey betaJoinKey) graphTokenRowHandle {
+	return m.insertFreshRowWithNegativeBlockerCount(token, joinKey, 0)
+}
+
+func (m *tokenHashMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) (graphTokenRowHandle, bool) {
 	if m == nil || token.isZero() {
-		return false
+		return graphTokenRowHandle{}, false
 	}
 	identity := tokenRefKey(token)
 	bucket, _ := m.identityRows.get(identity)
@@ -1181,7 +1209,7 @@ func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey
 		rowID, _ := bucket.at(i)
 		row := m.row(rowID)
 		if row != nil && tokenRefEqual(row.token, token) {
-			return false
+			return row.handle, false
 		}
 	}
 
@@ -1200,7 +1228,30 @@ func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey
 	m.appendJoinIndexRow(joinKey, rowID)
 	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
-	return true
+	return handle, true
+}
+
+func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) graphTokenRowHandle {
+	if m == nil || token.isZero() {
+		return graphTokenRowHandle{}
+	}
+	identity := tokenRefKey(token)
+	rowID := graphTokenRowID(len(m.rows))
+	m.ensureRowCapacity(int(rowID) + 1)
+	m.rows = m.rows[:int(rowID)+1]
+	handle := m.allocateRowHandle(rowID)
+	m.rows[rowID] = graphTokenRow{
+		id:           rowID,
+		handle:       handle,
+		token:        token,
+		joinKey:      joinKey,
+		identity:     identity,
+		supportCount: negativeBlockerCount,
+	}
+	m.appendJoinIndexRow(joinKey, rowID)
+	m.appendIdentityIndexRow(identity, rowID)
+	m.markFactRowsDirty()
+	return handle
 }
 
 func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candidateIdentity, branchID int) bool {
@@ -1973,6 +2024,8 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	m.alphaFactRouteStorage = m.alphaFactRouteStorage[:0]
 	clear(m.alphaFactTerminalStorage)
 	m.alphaFactTerminalStorage = m.alphaFactTerminalStorage[:0]
+	clear(m.alphaFactBetaStorage)
+	m.alphaFactBetaStorage = m.alphaFactBetaStorage[:0]
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 	clear(m.terminalRemovedDeltas)
@@ -2072,6 +2125,31 @@ func (m *reteGraphBetaMemory) generatedTerminalRowArenaStart(rows []generatedTer
 		return 0, false
 	}
 	return start, &rows[0] == &m.alphaFactTerminalStorage[start]
+}
+
+func (m *reteGraphBetaMemory) appendGeneratedBetaRow(rows []generatedBetaRowHandle, row generatedBetaRowHandle) []generatedBetaRowHandle {
+	if m == nil || row.handle.isZero() {
+		return rows
+	}
+	if start, ok := m.generatedBetaRowArenaStart(rows); ok {
+		m.alphaFactBetaStorage = append(m.alphaFactBetaStorage, row)
+		return m.alphaFactBetaStorage[start:len(m.alphaFactBetaStorage)]
+	}
+	return append(rows, row)
+}
+
+func (m *reteGraphBetaMemory) generatedBetaRowArenaStart(rows []generatedBetaRowHandle) (int, bool) {
+	if m == nil || len(rows) > len(m.alphaFactBetaStorage) {
+		return 0, false
+	}
+	if len(rows) == 0 {
+		return len(m.alphaFactBetaStorage), true
+	}
+	start := len(m.alphaFactBetaStorage) - len(rows)
+	if start < 0 || start >= len(m.alphaFactBetaStorage) {
+		return 0, false
+	}
+	return start, &rows[0] == &m.alphaFactBetaStorage[start]
 }
 
 func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
@@ -2868,9 +2946,10 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				continue
 			}
 			var ok bool
+			var handle graphTokenRowHandle
 			var err error
 			if len(captures) == 0 {
-				ok, err = m.insertGeneratedBetaLeftInput(op.betaNodeID, token, op.entry, match, span, delta)
+				ok, handle, err = m.insertGeneratedBetaLeftInput(op.betaNodeID, token, op.entry, match, span, delta)
 			} else {
 				ok, err = m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
 			}
@@ -2879,6 +2958,10 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 			}
 			if !ok {
 				delta.supported = false
+				continue
+			}
+			if !handle.isZero() {
+				m.recordGeneratedBetaRow(match.fact.ID(), nodeID, op.betaNodeID, reteGraphBetaInputLeft, handle)
 			}
 		case reteGraphGeneratedAlphaOpBetaRight:
 			token := m.newAlphaTokenRef(op.entry, match, captures, span)
@@ -2887,9 +2970,10 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				continue
 			}
 			var ok bool
+			var handle graphTokenRowHandle
 			var err error
 			if len(captures) == 0 {
-				ok, err = m.insertGeneratedBetaRightInput(op.betaNodeID, token, op.entry, match, span, delta)
+				ok, handle, err = m.insertGeneratedBetaRightInput(op.betaNodeID, token, op.entry, match, span, delta)
 			} else {
 				ok, err = m.insertBetaInput(op.betaNodeID, op.side, token, op.betaEntry, span, delta)
 			}
@@ -2898,6 +2982,10 @@ func (m *reteGraphBetaMemory) insertGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 			}
 			if !ok {
 				delta.supported = false
+				continue
+			}
+			if !handle.isZero() {
+				m.recordGeneratedBetaRow(match.fact.ID(), nodeID, op.betaNodeID, reteGraphBetaInputRight, handle)
 			}
 		case reteGraphGeneratedAlphaOpAggregateOuter:
 			if op.entry.conditionID == "" {
@@ -2961,11 +3049,23 @@ func (m *reteGraphBetaMemory) removeGeneratedAlphaOps(nodeID reteGraphAlphaNodeI
 				delta.supported = false
 				continue
 			}
+			if handle, ok := m.takeGeneratedBetaRow(match.fact.ID(), nodeID, op.betaNodeID, op.side); ok {
+				if !m.removeBetaInputByHandle(op.betaNodeID, op.side, handle, counters, delta) {
+					delta.supported = false
+				}
+				continue
+			}
 			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(op.betaNodeID, op.side, token, counters, delta) {
 				delta.supported = false
 			}
 		case reteGraphGeneratedAlphaOpBetaRight:
+			if handle, ok := m.takeGeneratedBetaRow(match.fact.ID(), nodeID, op.betaNodeID, op.side); ok {
+				if !m.removeBetaInputByHandle(op.betaNodeID, op.side, handle, counters, delta) {
+					delta.supported = false
+				}
+				continue
+			}
 			token := m.newAlphaTokenRef(op.entry, match, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(op.betaNodeID, op.side, token, counters, delta) {
 				delta.supported = false
@@ -4207,28 +4307,30 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	return true, nil
 }
 
-func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBetaNodeID, token tokenRef, entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
+func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBetaNodeID, token tokenRef, entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, graphTokenRowHandle, error) {
 	if m == nil || delta == nil || token.isZero() {
-		return false, nil
+		return false, graphTokenRowHandle{}, nil
 	}
 	node := m.graph.betaNode(nodeID)
 	if node == nil {
-		return false, nil
+		return false, graphTokenRowHandle{}, nil
 	}
 	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter || node.kind == reteGraphBetaNodeNot || node.rightHasLeftPrefix || entry.bindingSlot != node.entry.bindingSlot {
-		return m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
+		ok, err := m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
+		return ok, graphTokenRowHandle{}, err
 	}
 	joinKey, ok, err := graphBetaJoinKeyForRightMatchWithContext(m.context(), node, match.fact, token, span)
 	if err != nil {
-		return false, err
+		return false, graphTokenRowHandle{}, err
 	}
 	if !ok {
-		return m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
+		ok, err := m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
+		return ok, graphTokenRowHandle{}, err
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	inserted := nodeMemory.right.insert(token, joinKey)
-	if !inserted {
-		return true, nil
+	handle := nodeMemory.right.insertFreshRow(token, joinKey)
+	if handle.isZero() {
+		return false, graphTokenRowHandle{}, nil
 	}
 	if span != nil {
 		span.recordBetaInputInsert(reteGraphBetaInputRight)
@@ -4248,7 +4350,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 			continue
 		}
 		if ok, err := m.residualJoinsMatch(node, match.fact, leftRow.token, span); err != nil {
-			return false, err
+			return false, graphTokenRowHandle{}, err
 		} else if !ok {
 			continue
 		}
@@ -4263,37 +4365,39 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 			span.recordBetaJoinedTokenProduced()
 		}
 		if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-			return false, err
+			return false, graphTokenRowHandle{}, err
 		}
 	}
 	if !matched {
 		m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
 	}
-	return true, nil
+	return true, handle, nil
 }
 
-func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaNodeID, token tokenRef, entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {
+func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaNodeID, token tokenRef, entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, graphTokenRowHandle, error) {
 	if m == nil || delta == nil || token.isZero() {
-		return false, nil
+		return false, graphTokenRowHandle{}, nil
 	}
 	node := m.graph.betaNode(nodeID)
 	if node == nil {
-		return false, nil
+		return false, graphTokenRowHandle{}, nil
 	}
 	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter || node.kind == reteGraphBetaNodeNot || node.rightHasLeftPrefix {
-		return m.insertBetaInput(nodeID, reteGraphBetaInputLeft, token, entry, span, delta)
+		ok, err := m.insertBetaInput(nodeID, reteGraphBetaInputLeft, token, entry, span, delta)
+		return ok, graphTokenRowHandle{}, err
 	}
 	joinKey, ok, err := graphBetaJoinKeyForLeftMatchWithContext(m.context(), node, entry.bindingSlot, match.fact, token, span)
 	if err != nil {
-		return false, err
+		return false, graphTokenRowHandle{}, err
 	}
 	if !ok {
-		return m.insertBetaInput(nodeID, reteGraphBetaInputLeft, token, entry, span, delta)
+		ok, err := m.insertBetaInput(nodeID, reteGraphBetaInputLeft, token, entry, span, delta)
+		return ok, graphTokenRowHandle{}, err
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	inserted := nodeMemory.left.insert(token, joinKey)
-	if !inserted {
-		return true, nil
+	handle := nodeMemory.left.insertFreshRow(token, joinKey)
+	if handle.isZero() {
+		return false, graphTokenRowHandle{}, nil
 	}
 	if span != nil {
 		span.recordBetaInputInsert(reteGraphBetaInputLeft)
@@ -4317,7 +4421,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 			continue
 		}
 		if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
-			return false, err
+			return false, graphTokenRowHandle{}, err
 		} else if !ok {
 			continue
 		}
@@ -4332,13 +4436,13 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 			span.recordBetaJoinedTokenProduced()
 		}
 		if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-			return false, err
+			return false, graphTokenRowHandle{}, err
 		}
 	}
 	if !matched {
 		m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputRight, token, delta)
 	}
-	return true, nil
+	return true, handle, nil
 }
 
 func (m *reteGraphBetaMemory) appendBackchainDemandRequests(nodeID reteGraphBetaNodeID, node *reteGraphBetaNode, missingSide reteGraphBetaInputSide, context tokenRef, delta *reteAgendaDelta) {
@@ -4622,6 +4726,42 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		counters.recordNegativeRowRemoved()
 	}
 	m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, joinKey, removed, counters, delta)
+	return true
+}
+
+func (m *reteGraphBetaMemory) removeBetaInputByHandle(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, handle graphTokenRowHandle, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+	if m == nil || delta == nil || handle.isZero() {
+		return false
+	}
+	node := m.graph.betaNode(nodeID)
+	if node == nil {
+		return false
+	}
+	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter || node.kind == reteGraphBetaNodeNot {
+		return false
+	}
+	nodeMemory := m.nodeMemory(nodeID)
+	var removedRow graphTokenRow
+	var removedOK bool
+	var handleOK bool
+	switch side {
+	case reteGraphBetaInputLeft:
+		removedRow, removedOK, handleOK = nodeMemory.left.removeTokenByHandle(handle, counters, -1)
+	case reteGraphBetaInputRight:
+		removedRow, removedOK, handleOK = nodeMemory.right.removeTokenByHandle(handle, counters, -1)
+	default:
+		return false
+	}
+	if !handleOK {
+		return false
+	}
+	if !removedOK {
+		return true
+	}
+	if counters != nil {
+		counters.recordNegativeRowRemoved()
+	}
+	m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, removedRow.joinKey, removedRow.token, counters, delta)
 	return true
 }
 
@@ -5052,6 +5192,26 @@ func (m *reteGraphBetaMemory) recordGeneratedTerminalRow(factID FactID, nodeID r
 	m.alphaFactOwnership[factID] = row
 }
 
+func (m *reteGraphBetaMemory) recordGeneratedBetaRow(factID FactID, nodeID reteGraphAlphaNodeID, betaNodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, handle graphTokenRowHandle) {
+	if m == nil || factID.IsZero() || nodeID <= 0 || betaNodeID <= 0 || handle.isZero() {
+		return
+	}
+	if m.alphaFactOwnership == nil {
+		m.alphaFactOwnership = make(map[FactID]alphaFactOwnershipRow)
+	}
+	row, exists := m.alphaFactOwnership[factID]
+	if !exists {
+		m.alphaFactOwnershipIDs = append(m.alphaFactOwnershipIDs, factID)
+	}
+	row.betaRows = m.appendGeneratedBetaRow(row.betaRows, generatedBetaRowHandle{
+		alphaNodeID: nodeID,
+		betaNodeID:  betaNodeID,
+		side:        side,
+		handle:      handle,
+	})
+	m.alphaFactOwnership[factID] = row
+}
+
 func (m *reteGraphBetaMemory) takeGeneratedTerminalRow(factID FactID, nodeID reteGraphAlphaNodeID, terminalID reteGraphTerminalNodeID, branchID int) (graphTokenRowHandle, bool) {
 	if m == nil || factID.IsZero() {
 		return graphTokenRowHandle{}, false
@@ -5069,7 +5229,34 @@ func (m *reteGraphBetaMemory) takeGeneratedTerminalRow(factID FactID, nodeID ret
 		rows = rows[:last]
 		owner := m.alphaFactOwnership[factID]
 		owner.terminalRows = rows
-		if len(owner.routes) == 0 && len(owner.terminalRows) == 0 {
+		if len(owner.routes) == 0 && len(owner.terminalRows) == 0 && len(owner.betaRows) == 0 {
+			delete(m.alphaFactOwnership, factID)
+		} else {
+			m.alphaFactOwnership[factID] = owner
+		}
+		return handle, true
+	}
+	return graphTokenRowHandle{}, false
+}
+
+func (m *reteGraphBetaMemory) takeGeneratedBetaRow(factID FactID, nodeID reteGraphAlphaNodeID, betaNodeID reteGraphBetaNodeID, side reteGraphBetaInputSide) (graphTokenRowHandle, bool) {
+	if m == nil || factID.IsZero() {
+		return graphTokenRowHandle{}, false
+	}
+	row := m.alphaFactOwnership[factID]
+	rows := row.betaRows
+	for i, row := range rows {
+		if row.alphaNodeID != nodeID || row.betaNodeID != betaNodeID || row.side != side {
+			continue
+		}
+		last := len(rows) - 1
+		handle := row.handle
+		rows[i] = rows[last]
+		rows[last] = generatedBetaRowHandle{}
+		rows = rows[:last]
+		owner := m.alphaFactOwnership[factID]
+		owner.betaRows = rows
+		if len(owner.routes) == 0 && len(owner.terminalRows) == 0 && len(owner.betaRows) == 0 {
 			delete(m.alphaFactOwnership, factID)
 		} else {
 			m.alphaFactOwnership[factID] = owner
@@ -5110,7 +5297,7 @@ func (m *reteGraphBetaMemory) removeAlphaFactRoutes(id FactID, routes []reteGrap
 	}
 	row := m.alphaFactOwnership[id]
 	row.routes = nil
-	if len(row.terminalRows) == 0 {
+	if len(row.terminalRows) == 0 && len(row.betaRows) == 0 {
 		delete(m.alphaFactOwnership, id)
 		return
 	}
@@ -6242,7 +6429,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 	return deltas, true, nil
 }
 
-func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery, args map[string]Value, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
+func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery, args *compiledQueryArgs, event reteGraphPropagationEvent, source Snapshot) ([]QueryRow, bool, error) {
 	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {
 		return nil, false, nil
@@ -6306,18 +6493,19 @@ func (m *reteGraphBetaMemory) queryTerminalRowCapacity(terminalIDs []reteGraphTe
 }
 
 type reteGraphQueryCollector struct {
-	ctx       context.Context
-	query     compiledQuery
-	args      map[string]Value
-	source    Snapshot
-	rows      []QueryRow
-	rowItems  []queryRowValue
-	rowValues []Value
-	rowOwner  *queryRowOwner
-	valueRows bool
+	ctx         context.Context
+	query       compiledQuery
+	args        *compiledQueryArgs
+	source      Snapshot
+	rows        []QueryRow
+	rowItems    []queryRowValue
+	rowValues   []Value
+	rowOwner    *queryRowOwner
+	rowCapacity int
+	valueRows   bool
 }
 
-func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, query compiledQuery, args map[string]Value, source Snapshot, terminalIDs []reteGraphTerminalNodeID, triggerID FactID) ([]QueryRow, error) {
+func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, query compiledQuery, args *compiledQueryArgs, source Snapshot, terminalIDs []reteGraphTerminalNodeID, triggerID FactID) ([]QueryRow, error) {
 	collector := reteGraphQueryCollector{
 		ctx:       ctx,
 		query:     query,
@@ -6329,6 +6517,7 @@ func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, 
 		collector.rowOwner = newQueryRowOwner(source)
 	}
 	if capacity := m.queryTerminalRowCapacity(terminalIDs); capacity > 0 {
+		collector.rowCapacity = capacity
 		collector.rows = make([]QueryRow, 0, capacity)
 	}
 	for _, terminalID := range terminalIDs {
@@ -6399,7 +6588,11 @@ func (c *reteGraphQueryCollector) nextRowValuesCountWithChunkRows(count int, chu
 		return nil
 	}
 	if len(c.rowValues)+count > cap(c.rowValues) {
-		c.rowValues = make([]Value, 0, count*chunkRows)
+		rows := chunkRows
+		if c.rowCapacity > 0 {
+			rows = c.rowCapacity
+		}
+		c.rowValues = make([]Value, 0, count*rows)
 	}
 	start := len(c.rowValues)
 	end := start + count
@@ -6422,7 +6615,11 @@ func (c *reteGraphQueryCollector) nextRowItemsCount(count int) []queryRowValue {
 		return nil
 	}
 	if len(c.rowItems)+count > cap(c.rowItems) {
-		c.rowItems = make([]queryRowValue, 0, count*queryMixedProjectionChunkRows)
+		rows := queryMixedProjectionChunkRows
+		if c.rowCapacity > 0 {
+			rows = c.rowCapacity
+		}
+		c.rowItems = make([]queryRowValue, 0, count*rows)
 	}
 	start := len(c.rowItems)
 	end := start + count

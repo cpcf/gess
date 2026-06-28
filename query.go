@@ -175,6 +175,8 @@ type compiledQuery struct {
 	name                    string
 	module                  ModuleName
 	description             string
+	triggerName             string
+	triggerFieldSpecs       []FieldSpec
 	parameters              []QueryParameter
 	parameterTypes          map[string]ValueKind
 	conditions              []RuleCondition
@@ -189,6 +191,34 @@ type compiledQuery struct {
 	compactReturnAliasIndex map[string]int
 	factReturnCount         int
 	valueReturnCount        int
+}
+
+type compiledQueryArgs struct {
+	values []Value
+	byName map[string]Value
+}
+
+func (a *compiledQueryArgs) value(index int) (Value, bool) {
+	if a == nil || index < 0 || index >= len(a.values) {
+		return Value{}, false
+	}
+	return a.values[index], true
+}
+
+func (a *compiledQueryArgs) mapView(query compiledQuery) map[string]Value {
+	if a == nil {
+		return nil
+	}
+	if a.byName == nil {
+		values := make(map[string]Value, len(query.parameters))
+		for i, param := range query.parameters {
+			if value, ok := a.value(i); ok {
+				values[param.name] = value
+			}
+		}
+		a.byName = values
+	}
+	return a.byName
 }
 
 type compiledQueryReturn struct {
@@ -333,6 +363,8 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 		name:                    normalized.Name,
 		module:                  normalized.Module,
 		description:             normalized.Description,
+		triggerName:             internalQueryTriggerName(normalized.Name),
+		triggerFieldSpecs:       compileQueryTriggerFieldSpecs(params),
 		parameters:              params,
 		parameterTypes:          paramTypes,
 		conditions:              representative.conditions,
@@ -491,6 +523,17 @@ const internalQueryTriggerBinding = "__gess_query_trigger"
 
 func internalQueryTriggerName(queryName string) string {
 	return "__gess_query_trigger:" + queryName
+}
+
+func compileQueryTriggerFieldSpecs(params []QueryParameter) []FieldSpec {
+	if len(params) == 0 {
+		return nil
+	}
+	specs := make([]FieldSpec, len(params))
+	for i, param := range params {
+		specs[i] = FieldSpec{Name: param.name, Kind: param.kind, Required: true}
+	}
+	return specs
 }
 
 func compileQueryGraphBranch(queryName string, queryRuleID RuleID, author ModuleName, branchIndex int, branch []normalizedRuleCondition, templates templateResolver, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledConditionBranch, bool, error) {
@@ -1181,8 +1224,8 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if err := runtime.resetGraphBetaForGeneration(ctx, s.facts, s.generation); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
 	}
-	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)
-	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), s)
+	trigger := snapshotQueryTriggerFact(s.generation, query, &compiledArgs)
+	rows, handled, err := runtime.queryRows(ctx, query, &compiledArgs, newReteGraphQueryTriggerEvent(trigger), s)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrQueryExecution, err)
 	}
@@ -1256,11 +1299,11 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if s.rete == nil || s.rete.graphBeta == nil || len(query.graphConditionBranches) == 0 {
 		return nil, false, nil
 	}
-	trigger := s.queryTriggerFact(query, compiledArgs)
+	trigger := s.queryTriggerFact(query, &compiledArgs)
 	if trigger.ID().IsZero() {
 		return nil, false, nil
 	}
-	rows, handled, err := s.queryGraphRowsWithBackchain(ctx, query, compiledArgs, trigger, &mutationHeld)
+	rows, handled, err := s.queryGraphRowsWithBackchain(ctx, query, &compiledArgs, trigger, &mutationHeld)
 	if err != nil {
 		return nil, true, fmt.Errorf("%w: %w", ErrQueryExecution, err)
 	}
@@ -1270,7 +1313,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	return rows, true, nil
 }
 
-func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, mutationHeld *bool) ([]QueryRow, bool, error) {
+func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compiledQuery, args *compiledQueryArgs, trigger FactSnapshot, mutationHeld *bool) ([]QueryRow, bool, error) {
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
 		return nil, false, nil
 	}
@@ -1279,14 +1322,21 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, false, nil
 	}
 
-	agendaDelta, needsProof, err := s.insertQueryTriggerImmediate(ctx, trigger)
+	proof := s.beginBackchainQueryProof()
+	previousProof := s.activeBackchainQueryProof
+	s.activeBackchainQueryProof = proof
+	defer func() {
+		s.activeBackchainQueryProof = previousProof
+	}()
+
+	agendaDelta, needsProof, err := s.insertQueryTriggerForProofImmediate(ctx, trigger, proof)
 	if err != nil {
 		return nil, true, err
 	}
 	cleanupTrigger := true
 	defer func() {
 		if cleanupTrigger {
-			_, _ = s.cleanupQueryTriggerImmediate(context.Background(), trigger)
+			_, _ = s.cleanupQueryProofImmediate(context.Background(), trigger, proof)
 		}
 	}()
 	if queryAgendaDeltaHasRuleChanges(agendaDelta) {
@@ -1318,7 +1368,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, true, err
 	}
 	cleanupTrigger = false
-	cleanupDelta, err := s.cleanupQueryTriggerImmediate(ctx, trigger)
+	cleanupDelta, err := s.cleanupQueryProofImmediate(ctx, trigger, proof)
 	if err != nil {
 		return nil, true, err
 	}
@@ -1328,6 +1378,50 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		}
 	}
 	return rows, true, nil
+}
+
+func (s *Session) insertQueryTriggerForProofImmediate(ctx context.Context, trigger FactSnapshot, proof *backchainQueryProofContext) (reteAgendaDelta, bool, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return combined, false, ErrInvalidRuleset
+	}
+	_, _ = s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	delta, err := s.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false)
+	if err != nil {
+		return combined, false, err
+	}
+	combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
+	demandDelta, err := proof.flushDemands(ctx, combined.demands, mutationOrigin{})
+	if err != nil {
+		return mergeReteAgendaDelta(combined, demandDelta), false, err
+	}
+	combined = mergeReteAgendaDelta(combined, demandDelta)
+	combined.demands = nil
+	combined.resolvedDemands = nil
+	combined.resolvedOwners = nil
+	return combined, queryAgendaDeltaHasRuleChanges(combined), nil
+}
+
+func (s *Session) cleanupQueryProofImmediate(ctx context.Context, trigger FactSnapshot, proof *backchainQueryProofContext) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return combined, nil
+	}
+	proofDelta, err := proof.cleanup(ctx)
+	if err != nil {
+		return combined, err
+	}
+	combined = mergeReteAgendaDelta(combined, proofDelta)
+	graphDelta, err := s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	if err != nil {
+		return combined, err
+	}
+	combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(graphDelta))
+	s.clearBackchainDemandRequestArena()
+	combined.demands = nil
+	combined.resolvedDemands = nil
+	combined.resolvedOwners = nil
+	return combined, nil
 }
 
 func (s *Session) insertQueryTriggerImmediate(ctx context.Context, trigger FactSnapshot) (reteAgendaDelta, bool, error) {
@@ -1398,26 +1492,31 @@ func (s *Session) completeBackchainQueryDeltaImmediate(ctx context.Context, delt
 	return combined, nil
 }
 
-func (s *Session) queryTriggerFact(query compiledQuery, args map[string]Value) FactSnapshot {
+func (s *Session) queryTriggerFact(query compiledQuery, args *compiledQueryArgs) FactSnapshot {
 	if s == nil {
 		return FactSnapshot{}
 	}
 	return snapshotQueryTriggerFact(s.generation, query, args).withQueryTriggerRecency(s.nextRecency + 1)
 }
 
-func snapshotQueryTriggerFact(generation Generation, query compiledQuery, args map[string]Value) FactSnapshot {
-	fields := make(Fields, len(args))
-	for _, param := range query.parameters {
-		if value, ok := args[param.name]; ok {
-			fields[param.name] = cloneValue(value)
+func snapshotQueryTriggerFact(generation Generation, query compiledQuery, args *compiledQueryArgs) FactSnapshot {
+	slots := make([]factSlot, len(query.parameters))
+	for i := range query.parameters {
+		if value, ok := args.value(i); ok {
+			slots[i] = factSlot{
+				value:    cloneValue(value),
+				ok:       true,
+				presence: fieldPresenceExplicit,
+			}
 		}
 	}
 	return FactSnapshot{
 		id:         newFactID(generation, ^uint64(0)),
-		name:       internalQueryTriggerName(query.name),
+		name:       query.triggerName,
 		version:    1,
 		generation: generation,
-		fields:     fields,
+		fieldSlots: slots,
+		fieldSpecs: query.triggerFieldSpecs,
 	}
 }
 
@@ -1426,34 +1525,34 @@ func (f FactSnapshot) withQueryTriggerRecency(recency Recency) FactSnapshot {
 	return f
 }
 
-func (q compiledQuery) compileArgs(args QueryArgs) (map[string]Value, error) {
+func (q compiledQuery) compileArgs(args QueryArgs) (compiledQueryArgs, error) {
 	if args == nil {
 		args = QueryArgs{}
 	}
-	values := make(map[string]Value, len(q.parameters))
 	for key := range args {
 		if _, ok := q.parameterTypes[key]; !ok {
-			return nil, fmt.Errorf("%w: unknown argument %q", ErrQueryArgument, key)
+			return compiledQueryArgs{}, fmt.Errorf("%w: unknown argument %q", ErrQueryArgument, key)
 		}
 	}
+	values := make([]Value, len(q.parameters))
 	for _, param := range q.parameters {
 		raw, ok := args[param.name]
 		if !ok {
-			return nil, fmt.Errorf("%w: missing argument %q", ErrQueryArgument, param.name)
+			return compiledQueryArgs{}, fmt.Errorf("%w: missing argument %q", ErrQueryArgument, param.name)
 		}
 		value, err := canonicalValue(raw)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrQueryArgument, err)
+			return compiledQueryArgs{}, fmt.Errorf("%w: %v", ErrQueryArgument, err)
 		}
 		if param.kind != ValueAny && value.Kind() != param.kind {
-			return nil, fmt.Errorf("%w: argument %q has kind %s, want %s", ErrQueryArgument, param.name, value.Kind(), param.kind)
+			return compiledQueryArgs{}, fmt.Errorf("%w: argument %q has kind %s, want %s", ErrQueryArgument, param.name, value.Kind(), param.kind)
 		}
-		values[param.name] = value
+		values[param.order] = value
 	}
-	return values, nil
+	return compiledQueryArgs{values: values}, nil
 }
 
-func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
+func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs) (QueryRow, error) {
 	if q.compactMixedReturns() {
 		return q.materializeCompactRow(ctx, source, matches, args)
 	}
@@ -1468,7 +1567,7 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 			row.items[i] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1484,7 +1583,7 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args map[string]Value, bindingSlotOffset int) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int) (QueryRow, error) {
 	if q.valueReturnsOnly() {
 		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, make([]Value, len(q.returns)))
 	}
@@ -1510,7 +1609,7 @@ func (q compiledQuery) compactMixedReturns() bool {
 	return q.factReturnCount != 0 && q.valueReturnCount != 0
 }
 
-func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapshot, matches []conditionMatch, args map[string]Value) (QueryRow, error) {
+func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs) (QueryRow, error) {
 	row := q.newQueryCompactMixedRowWithItems(make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
 	owner := newQueryRowOwner(source)
 	factIdx := 0
@@ -1525,7 +1624,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 			factIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1542,7 +1641,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
 	if len(items) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row item count %d", ErrQueryExecution, len(items))
 	}
@@ -1563,7 +1662,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 			row.items[i] = queryRowValue{value: value}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1579,7 +1678,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue, values []Value) (QueryRow, error) {
+func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue, values []Value) (QueryRow, error) {
 	if len(items) != q.factReturnCount {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row fact count %d", ErrQueryExecution, len(items))
 	}
@@ -1607,7 +1706,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 			valueIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1624,7 +1723,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token tokenRef, args map[string]Value, bindingSlotOffset int, values []Value) (QueryRow, error) {
+func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, values []Value) (QueryRow, error) {
 	if len(values) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row value count %d", ErrQueryExecution, len(values))
 	}
@@ -1639,7 +1738,7 @@ func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token t
 			row.valueItems[i] = value
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args, bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
