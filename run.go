@@ -31,9 +31,17 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		s.endMutation()
 		return RunResult{Status: RunFailed}, ErrInvalidRuleset
 	}
-	if !s.beginRun() {
+
+	result, mutationHeld, err := s.runAgendaWithMutationReleased(ctx)
+	if mutationHeld {
 		s.endMutation()
-		return RunResult{Status: RunConcurrencyMisuse}, ErrConcurrencyMisuse
+	}
+	return result, err
+}
+
+func (s *Session) runAgendaWithMutationReleased(ctx context.Context) (RunResult, bool, error) {
+	if !s.beginRun() {
+		return RunResult{Status: RunConcurrencyMisuse}, true, ErrConcurrencyMisuse
 	}
 
 	s.nextRunSequence++
@@ -41,11 +49,19 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 	s.runHaltRequested.Store(false)
 	s.runActive.Store(true)
 	s.endMutation()
-	defer s.endRun()
-	defer func() {
-		s.runActivation.Store(nil)
-		s.runActive.Store(false)
-	}()
+
+	result, err := s.runAgendaLoop(ctx, runID)
+	mutationHeld := s.beginMutation()
+	s.runActivation.Store(nil)
+	s.runActive.Store(false)
+	s.endRun()
+	if !mutationHeld {
+		return result, false, ErrConcurrencyMisuse
+	}
+	return result, true, err
+}
+
+func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, error) {
 	var runErr error
 	abort := func(status RunStatus, fired int, err error) (RunResult, error) {
 		runErr = err

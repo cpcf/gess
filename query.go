@@ -1230,7 +1230,12 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if !s.beginMutation() {
 		return nil, true, ErrConcurrencyMisuse
 	}
-	defer s.endMutation()
+	mutationHeld := true
+	defer func() {
+		if mutationHeld {
+			s.endMutation()
+		}
+	}()
 	if s.closed {
 		return nil, true, ErrClosedSession
 	}
@@ -1255,7 +1260,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if trigger.ID().IsZero() {
 		return nil, false, nil
 	}
-	rows, handled, err := s.rete.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), Snapshot{revision: s.revision})
+	rows, handled, err := s.queryGraphRowsWithBackchain(ctx, query, compiledArgs, trigger, &mutationHeld)
 	if err != nil {
 		return nil, true, fmt.Errorf("%w: %w", ErrQueryExecution, err)
 	}
@@ -1263,6 +1268,134 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 		return nil, false, nil
 	}
 	return rows, true, nil
+}
+
+func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compiledQuery, args map[string]Value, trigger FactSnapshot, mutationHeld *bool) ([]QueryRow, bool, error) {
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return nil, false, nil
+	}
+	terminalIDs := s.rete.graphBeta.graph.queryTerminalIDs[query.name]
+	if len(terminalIDs) == 0 {
+		return nil, false, nil
+	}
+
+	agendaDelta, needsProof, err := s.insertQueryTriggerImmediate(ctx, trigger)
+	if err != nil {
+		return nil, true, err
+	}
+	cleanupTrigger := true
+	defer func() {
+		if cleanupTrigger {
+			_, _ = s.cleanupQueryTriggerImmediate(context.Background(), trigger)
+		}
+	}()
+	if queryAgendaDeltaHasRuleChanges(agendaDelta) {
+		if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
+			return nil, true, err
+		}
+	}
+	if needsProof && !queryAgendaDeltaHasRuleChanges(agendaDelta) {
+		needsProof = false
+	}
+	if needsProof {
+		result, held, err := s.runAgendaWithMutationReleased(ctx)
+		if mutationHeld != nil {
+			*mutationHeld = held
+		}
+		if err != nil {
+			return nil, true, err
+		}
+		if result.Status != RunCompleted {
+			return nil, true, fmt.Errorf("%w: query %q proof run ended with status %s", ErrUnsupportedRuntime, query.name, result.Status)
+		}
+	}
+	if mutationHeld != nil && !*mutationHeld {
+		return nil, true, ErrConcurrencyMisuse
+	}
+
+	rows, err := s.rete.graphBeta.materializeQueryTerminalRows(ctx, query, args, Snapshot{revision: s.revision}, terminalIDs, trigger.ID())
+	if err != nil {
+		return nil, true, err
+	}
+	cleanupTrigger = false
+	cleanupDelta, err := s.cleanupQueryTriggerImmediate(ctx, trigger)
+	if err != nil {
+		return nil, true, err
+	}
+	if queryAgendaDeltaHasRuleChanges(cleanupDelta) {
+		if _, err := s.reconcileAgendaAfterMutation(ctx, cleanupDelta); err != nil {
+			return nil, true, err
+		}
+	}
+	return rows, true, nil
+}
+
+func (s *Session) insertQueryTriggerImmediate(ctx context.Context, trigger FactSnapshot) (reteAgendaDelta, bool, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return combined, false, ErrInvalidRuleset
+	}
+	_, _ = s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	delta, err := s.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false)
+	if err != nil {
+		return combined, false, err
+	}
+	combined = mergeReteAgendaDelta(combined, delta)
+	needsProof := len(delta.demands) > 0 || len(delta.resolvedDemands) > 0 || len(delta.resolvedOwners) > 0
+	completed, err := s.completeBackchainQueryDeltaImmediate(ctx, combined, mutationOrigin{})
+	if err != nil {
+		return mergeReteAgendaDelta(combined, completed), needsProof, err
+	}
+	if len(completed.added) > 0 || len(completed.removed) > 0 || len(completed.updated) > 0 {
+		needsProof = true
+	}
+	return completed, needsProof, nil
+}
+
+func (s *Session) cleanupQueryTriggerImmediate(ctx context.Context, trigger FactSnapshot) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+		return combined, nil
+	}
+	supportDelta, err := s.removeBackchainDemandSupportsForFact(ctx, trigger.ID(), mutationOrigin{})
+	if err != nil {
+		return combined, err
+	}
+	combined = mergeReteAgendaDelta(combined, supportDelta)
+	graphDelta, err := s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	if err != nil {
+		return combined, err
+	}
+	combined = mergeReteAgendaDelta(combined, graphDelta)
+	completed, err := s.completeBackchainQueryDeltaImmediate(ctx, combined, mutationOrigin{})
+	if err != nil {
+		return mergeReteAgendaDelta(combined, completed), err
+	}
+	return completed, nil
+}
+
+func queryAgendaDeltaHasRuleChanges(delta reteAgendaDelta) bool {
+	return len(delta.added) > 0 || len(delta.removed) > 0 || len(delta.updated) > 0
+}
+
+func (s *Session) completeBackchainQueryDeltaImmediate(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := normalizeBackchainDemandNoopDelta(delta)
+	resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, combined.resolvedDemands, combined.resolvedOwners, origin)
+	if err != nil {
+		return mergeReteAgendaDelta(combined, resolvedDelta), err
+	}
+	combined = mergeReteAgendaDelta(combined, resolvedDelta)
+	state := s.activeFactWorkspace()
+	demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, combined.demands, origin)
+	if err != nil {
+		return mergeReteAgendaDelta(combined, demandDelta), err
+	}
+	s.commitFactWorkspace(state)
+	combined = mergeReteAgendaDelta(combined, demandDelta)
+	combined.demands = nil
+	combined.resolvedDemands = nil
+	combined.resolvedOwners = nil
+	return combined, nil
 }
 
 func (s *Session) queryTriggerFact(query compiledQuery, args map[string]Value) FactSnapshot {

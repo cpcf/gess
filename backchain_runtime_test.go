@@ -484,26 +484,81 @@ func TestBackchainRecursiveReachabilityDerivesTransitiveGoal(t *testing.T) {
 	assertBackchainDemandAbsent(t, snapshot, demandKey, "internet", "db")
 }
 
-func TestBackchainQueryTimeDemandFailsExplicitly(t *testing.T) {
+func TestBackchainQueryTimeDemandDerivesTransitiveGoal(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+
+	rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	assertQueryRowStringValue(t, rows[0], "src", "internet")
+	assertQueryRowStringValue(t, rows[0], "dst", "db")
+
+	snapshot := mustSnapshot(t, ctx, session)
+	assertBackchainReachableFact(t, snapshot, reachableKey, "api", "db")
+	assertBackchainReachableFact(t, snapshot, reachableKey, "web", "db")
+	assertBackchainReachableFact(t, snapshot, reachableKey, "internet", "db")
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "api", "db")
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "web", "db")
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "internet", "db")
+	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
+	}
+}
+
+func TestBackchainQueryTimeDemandReturnsZeroRowsForUnreachableGoal(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+
+	rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "cache", "dst": "db"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d, want 0: %#v", len(rows), rows)
+	}
+	snapshot := mustSnapshot(t, ctx, session)
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "cache", "db")
+	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
+	}
+}
+
+func TestBackchainSnapshotQueryTimeDemandRemainsUnsupported(t *testing.T) {
 	ctx := context.Background()
 	revision, edgeKey, _, _ := mustCompileBackchainReachabilityRuleset(t, true)
 	session, err := NewSession(revision)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if err := session.AssertTemplateValues(ctx, edgeKey, newStringValue("web"), newStringValue("internet")); err != nil {
-		t.Fatalf("Assert edge: %v", err)
-	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+	snapshot := mustSnapshot(t, ctx, session)
 
-	_, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	_, err = snapshot.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
 	if err == nil {
-		t.Fatal("QueryAll unexpectedly succeeded")
+		t.Fatal("Snapshot QueryAll unexpectedly succeeded")
 	}
 	if !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("QueryAll error = %v, want ErrUnsupportedRuntime", err)
+		t.Fatalf("Snapshot QueryAll error = %v, want ErrUnsupportedRuntime", err)
 	}
 	if !errors.Is(err, ErrQueryExecution) {
-		t.Fatalf("QueryAll error = %v, want ErrQueryExecution wrapper", err)
+		t.Fatalf("Snapshot QueryAll error = %v, want ErrQueryExecution wrapper", err)
 	}
 }
 
@@ -689,6 +744,20 @@ func mustDemandKey(t testing.TB, revision *Ruleset, source TemplateKey) Template
 		t.Fatalf("template %q missing demand key", template.Name())
 	}
 	return demandKey
+}
+
+func seedBackchainReachabilityEdges(t testing.TB, ctx context.Context, session *Session, edgeKey TemplateKey) {
+	t.Helper()
+	for _, edge := range [][2]string{
+		{"internet", "web"},
+		{"web", "api"},
+		{"api", "db"},
+		{"api", "cache"},
+	} {
+		if err := session.AssertTemplateValues(ctx, edgeKey, newStringValue(edge[1]), newStringValue(edge[0])); err != nil {
+			t.Fatalf("Assert edge %v: %v", edge, err)
+		}
+	}
 }
 
 func assertBackchainReachableFact(t testing.TB, snapshot Snapshot, reachableKey TemplateKey, src, dst string) {
