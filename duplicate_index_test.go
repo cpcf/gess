@@ -213,6 +213,84 @@ func TestDuplicateStructuralIndexTableRetainsHashCollisionsAndDeletesFacts(t *te
 	}
 }
 
+func TestCompiledGeneratedFactInsertPlanUsesStructuralScalarDuplicatePath(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:            "answer",
+		DuplicatePolicy: DuplicateStructural,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "value", Kind: ValueString},
+		},
+	})
+	template, ok := revision.Template("answer")
+	if !ok {
+		t.Fatal("expected answer template")
+	}
+	plan := newCompiledGeneratedFactInsertPlan(template)
+	if got, want := len(plan.structuralScalarKinds), 3; got != want {
+		t.Fatalf("compiled structural scalar slots = %d, want %d", got, want)
+	}
+
+	slots, err := template.buildValidatedFieldSlotsFromValues([]Value{mustValue(t, "q1"), mustValue(t, "hardware"), mustValue(t, "provided")})
+	if err != nil {
+		t.Fatalf("build slots: %v", err)
+	}
+	index := plan.duplicateIndex(slots)
+	genericHash, ok := structuralDuplicateSlotsHashWithPrefix(template, slots, plan.structuralHashPrefix)
+	if !ok {
+		t.Fatal("generic structural hash failed")
+	}
+	if index.kind != duplicateIndexStructural || index.hash != genericHash {
+		t.Fatalf("compiled structural index = (%v, %d), want structural hash %d", index.kind, index.hash, genericHash)
+	}
+
+	workspace := newFactWorkspace(1, 0)
+	firstSlots, firstMark := workspace.reserveGeneratedFactSlots(revision, len(template.fields))
+	copy(firstSlots, slots)
+	first, _, inserted, err := workspace.insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision, 1, &plan, firstSlots, firstMark, factTargetIndexSkip)
+	if err != nil {
+		t.Fatalf("insert first: %v", err)
+	}
+	if !inserted {
+		t.Fatal("first insert reported duplicate")
+	}
+	secondSlots, secondMark := workspace.reserveGeneratedFactSlots(revision, len(template.fields))
+	copy(secondSlots, slots)
+	second, _, inserted, err := workspace.insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision, 1, &plan, secondSlots, secondMark, factTargetIndexSkip)
+	if err != nil {
+		t.Fatalf("insert second: %v", err)
+	}
+	if inserted {
+		t.Fatal("second insert inserted duplicate structural fact")
+	}
+	if second != first {
+		t.Fatalf("duplicate fact pointer mismatch: got %p, want %p", second, first)
+	}
+	if got := len(workspace.facts); got != 1 {
+		t.Fatalf("workspace facts = %d, want 1", got)
+	}
+}
+
+func TestCompiledGeneratedFactInsertPlanKeepsGenericStructuralPathForLists(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name:            "answer",
+		DuplicatePolicy: DuplicateStructural,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "items", Kind: ValueList},
+		},
+	})
+	template, ok := revision.Template("answer")
+	if !ok {
+		t.Fatal("expected answer template")
+	}
+	plan := newCompiledGeneratedFactInsertPlan(template)
+	if len(plan.structuralScalarKinds) != 0 {
+		t.Fatalf("compiled structural scalar slots = %d, want 0 for list field", len(plan.structuralScalarKinds))
+	}
+}
+
 func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{
 		Name:              "route",

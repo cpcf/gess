@@ -4358,6 +4358,35 @@ func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factS
 	return nil, false
 }
 
+func (w *factWorkspace) structuralDuplicateFactWithPlan(plan *compiledGeneratedFactInsertPlan, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
+	if w == nil || plan == nil || key.kind != duplicateIndexStructural {
+		return nil, false
+	}
+	var found *workingFact
+	w.factsByDuplicate.forEachStructuralFactID(key, func(id FactID) bool {
+		existing, ok := w.workingFactByID(id)
+		if !ok {
+			return true
+		}
+		if equal, ok := plan.structuralScalarDuplicateSlotsEqual(slots, existing.fieldSlots); ok {
+			if equal {
+				found = existing
+				return false
+			}
+			return true
+		}
+		if structuralDuplicateSlotsEqual(plan.template, slots, existing.fieldSlots) {
+			found = existing
+			return false
+		}
+		return true
+	})
+	if found != nil {
+		return found, true
+	}
+	return nil, false
+}
+
 func (w *factWorkspace) reindexFactRowsFrom(start int) {
 	if w == nil || start < 0 {
 		return
@@ -4599,14 +4628,13 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Rule
 }
 
 func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision *Ruleset, generation Generation, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
-	template := plan.template
 	name := plan.name
 	templateKey := plan.templateKey
 	var duplicateIndex duplicateIndexKey
 	if plan.duplicatePolicy != DuplicateAllow {
 		duplicateIndex = plan.duplicateIndex(fieldSlots)
 		if duplicateIndex.kind == duplicateIndexStructural {
-			if existing, ok := w.structuralDuplicateFact(template, fieldSlots, duplicateIndex); ok {
+			if existing, ok := w.structuralDuplicateFactWithPlan(plan, fieldSlots, duplicateIndex); ok {
 				w.rollbackGeneratedFactSlots(slotMark)
 				return existing, "", false, nil
 			}

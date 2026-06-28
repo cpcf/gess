@@ -340,15 +340,16 @@ type duplicateIndexKey struct {
 }
 
 type compiledGeneratedFactInsertPlan struct {
-	template             Template
-	name                 string
-	templateKey          TemplateKey
-	duplicatePolicy      DuplicatePolicy
-	duplicateIndexMode   duplicateIndexKind
-	duplicateKeySlots    []int
-	structuralHashPrefix uint64
-	affectsRuleMatches   bool
-	affectsRete          bool
+	template              Template
+	name                  string
+	templateKey           TemplateKey
+	duplicatePolicy       DuplicatePolicy
+	duplicateIndexMode    duplicateIndexKind
+	duplicateKeySlots     []int
+	structuralHashPrefix  uint64
+	structuralScalarKinds []ValueKind
+	affectsRuleMatches    bool
+	affectsRete           bool
 }
 
 func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
@@ -366,6 +367,7 @@ func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFact
 	}
 	if template.duplicatePolicy == DuplicateStructural && template.closed && len(template.fields) > 0 {
 		plan.structuralHashPrefix = structuralDuplicateHashString(structuralDuplicateHashOffset, template.key.String())
+		plan.structuralScalarKinds = compiledStructuralDuplicateScalarKinds(template)
 	}
 	return plan
 }
@@ -461,7 +463,10 @@ func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factS
 	if p.duplicatePolicy != DuplicateStructural || p.structuralHashPrefix == 0 || len(slots) == 0 || len(p.template.fields) == 0 {
 		return duplicateIndexKey{}, false
 	}
-	hash, ok := structuralDuplicateSlotsHashWithPrefix(p.template, slots, p.structuralHashPrefix)
+	hash, ok := p.structuralScalarDuplicateHash(slots)
+	if !ok {
+		hash, ok = structuralDuplicateSlotsHashWithPrefix(p.template, slots, p.structuralHashPrefix)
+	}
 	if !ok {
 		return duplicateIndexKey{}, false
 	}
@@ -470,6 +475,74 @@ func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factS
 		templateKey: p.templateKey,
 		hash:        hash,
 	}, true
+}
+
+func compiledStructuralDuplicateScalarKinds(template Template) []ValueKind {
+	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(template.fields) == 0 {
+		return nil
+	}
+	kinds := make([]ValueKind, len(template.fields))
+	for i, field := range template.fields {
+		switch field.Kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+			kinds[i] = field.Kind
+		default:
+			return nil
+		}
+	}
+	return kinds
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateHash(slots []factSlot) (uint64, bool) {
+	if len(p.structuralScalarKinds) == 0 {
+		return 0, false
+	}
+	hash := p.structuralHashPrefix
+	for i := range p.structuralScalarKinds {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			hash = structuralDuplicateHashByte(hash, 0)
+			continue
+		}
+		var ok bool
+		hash, ok = structuralDuplicateHashKnownScalarValue(hash, p.structuralScalarKinds[i], slot.value)
+		if !ok {
+			return 0, false
+		}
+	}
+	return hash, true
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateSlotsEqual(left, right []factSlot) (bool, bool) {
+	if len(p.structuralScalarKinds) == 0 {
+		return false, false
+	}
+	for i, kind := range p.structuralScalarKinds {
+		var leftSlot, rightSlot factSlot
+		if i < len(left) {
+			leftSlot = left[i]
+		}
+		if i < len(right) {
+			rightSlot = right[i]
+		}
+		if leftSlot.ok != rightSlot.ok {
+			return false, true
+		}
+		if !leftSlot.ok {
+			continue
+		}
+		equal, ok := structuralDuplicateScalarValuesEqual(kind, leftSlot.value, rightSlot.value)
+		if !ok {
+			return false, false
+		}
+		if !equal {
+			return false, true
+		}
+	}
+	return true, true
 }
 
 func (k duplicateIndexKey) isZero() bool {
@@ -999,6 +1072,10 @@ func structuralDuplicateSlotsEqual(template Template, left, right []factSlot) bo
 }
 
 func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
+	return structuralDuplicateHashScalarValue(hash, value)
+}
+
+func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool) {
 	switch value.Kind() {
 	case ValueNull:
 		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
@@ -1039,6 +1116,81 @@ func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
 		return hash, true
 	default:
 		return 0, false
+	}
+}
+
+func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value Value) (uint64, bool) {
+	switch kind {
+	case ValueNull:
+		if value.kind != "" && value.kind != ValueNull {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
+	case ValueBool:
+		if value.kind != ValueBool {
+			return 0, false
+		}
+		if value.boolValue {
+			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
+	case ValueInt:
+		if value.kind != ValueInt {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+	case ValueFloat:
+		if value.kind != ValueFloat {
+			return 0, false
+		}
+		floating := value.floatValue
+		if math.IsNaN(floating) {
+			return 0, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(int64(floating)), ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
+	case ValueString:
+		if value.kind != ValueString {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
+	default:
+		return 0, false
+	}
+}
+
+func structuralDuplicateScalarValuesEqual(kind ValueKind, left, right Value) (bool, bool) {
+	switch kind {
+	case ValueNull:
+		leftNull := left.kind == "" || left.kind == ValueNull
+		rightNull := right.kind == "" || right.kind == ValueNull
+		return leftNull && rightNull, true
+	case ValueBool:
+		if left.kind != ValueBool || right.kind != ValueBool {
+			return false, false
+		}
+		return left.boolValue == right.boolValue, true
+	case ValueInt:
+		if left.kind != ValueInt || right.kind != ValueInt {
+			return false, false
+		}
+		return left.intValue == right.intValue, true
+	case ValueFloat:
+		if left.kind != ValueFloat || right.kind != ValueFloat {
+			return false, false
+		}
+		return left.floatValue == right.floatValue, true
+	case ValueString:
+		if left.kind != ValueString || right.kind != ValueString {
+			return false, false
+		}
+		return left.stringValue == right.stringValue, true
+	default:
+		return false, false
 	}
 }
 
