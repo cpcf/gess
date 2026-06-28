@@ -374,14 +374,17 @@ func (p *compiledGeneratedFactInsertPlan) valid() bool {
 }
 
 func (p *compiledGeneratedFactInsertPlan) duplicateIndex(slots []factSlot) duplicateIndexKey {
-	if p.duplicatePolicy == DuplicateAllow {
+	switch p.duplicatePolicy {
+	case DuplicateAllow:
 		return duplicateIndexKey{}
-	}
-	if index, ok := p.typedDuplicateIndex(slots); ok {
-		return index
-	}
-	if index, ok := p.structuralDuplicateIndex(slots); ok {
-		return index
+	case DuplicateUniqueKey:
+		if index, ok := p.typedDuplicateIndex(slots); ok {
+			return index
+		}
+	case DuplicateStructural:
+		if index, ok := p.structuralDuplicateIndex(slots); ok {
+			return index
+		}
 	}
 	return makeDuplicateIndexForValidatedFact(p.name, p.template, nil, slots)
 }
