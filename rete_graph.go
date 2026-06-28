@@ -86,7 +86,11 @@ const (
 )
 
 type reteGraphAlphaGeneratedMatch struct {
-	kind      reteGraphAlphaGeneratedMatchKind
+	kind       reteGraphAlphaGeneratedMatchKind
+	equalities []reteGraphAlphaGeneratedEquality
+}
+
+type reteGraphAlphaGeneratedEquality struct {
 	fieldSlot int
 	value     reteGraphAlphaRouteValue
 }
@@ -1680,21 +1684,29 @@ func (n *reteGraphAlphaNode) configureGeneratedMatch(route reteGraphAlphaRouteSe
 		n.generatedMatch = reteGraphAlphaGeneratedMatch{kind: reteGraphAlphaGeneratedMatchTargetOnly}
 		return
 	}
-	if !route.enabled || len(n.constraints) != 1 {
+	equalities := make([]reteGraphAlphaGeneratedEquality, 0, len(n.constraints))
+	for _, constraint := range n.constraints {
+		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
+			return
+		}
+		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
+		if !ok {
+			return
+		}
+		equalities = append(equalities, reteGraphAlphaGeneratedEquality{
+			fieldSlot: constraint.access.rootSlot,
+			value:     value,
+		})
+	}
+	if len(equalities) == 0 {
 		return
 	}
-	constraint := n.constraints[0]
-	if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot != route.fieldSlot || !constraint.access.topLevel() {
-		return
-	}
-	routeValue, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
-	if !ok || routeValue != route.value {
+	if route.enabled && len(equalities) == 1 && (equalities[0].fieldSlot != route.fieldSlot || equalities[0].value != route.value) {
 		return
 	}
 	n.generatedMatch = reteGraphAlphaGeneratedMatch{
-		kind:      reteGraphAlphaGeneratedMatchSlotEqual,
-		fieldSlot: route.fieldSlot,
-		value:     route.value,
+		kind:       reteGraphAlphaGeneratedMatchSlotEqual,
+		equalities: equalities,
 	}
 }
 
@@ -1824,8 +1836,13 @@ func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fac
 	case reteGraphAlphaGeneratedMatchTargetOnly:
 		return true
 	case reteGraphAlphaGeneratedMatchSlotEqual:
-		value, ok := fact.compiledFieldValue("", m.fieldSlot)
-		return ok && m.value.matchesValue(value)
+		for _, equality := range m.equalities {
+			value, ok := fact.compiledFieldValue("", equality.fieldSlot)
+			if !ok || !equality.value.matchesValue(value) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}
@@ -2531,8 +2548,18 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 		out[i].predicates = cloneCompiledExpressionPredicates(node.predicates)
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
+		out[i].generatedMatch.equalities = cloneReteGraphAlphaGeneratedEqualities(node.generatedMatch.equalities)
 		out[i].generatedOps = cloneReteGraphGeneratedAlphaOps(node.generatedOps)
 	}
+	return out
+}
+
+func cloneReteGraphAlphaGeneratedEqualities(in []reteGraphAlphaGeneratedEquality) []reteGraphAlphaGeneratedEquality {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]reteGraphAlphaGeneratedEquality, len(in))
+	copy(out, in)
 	return out
 }
 

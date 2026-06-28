@@ -1598,6 +1598,76 @@ func TestReteGraphAlphaRouteSelectorRequiresTypedScalarField(t *testing.T) {
 	}
 }
 
+func TestReteGraphGeneratedAlphaMatchCompilesMultipleEqualities(t *testing.T) {
+	workspace := NewWorkspace()
+	answer := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "answer",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString},
+			{Name: "kind", Kind: ValueString},
+			{Name: "value", Kind: ValueString},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "answer-hardware-provided",
+		Conditions: []RuleConditionSpec{{
+			Binding: "answer",
+			Target:  TemplateKeyFact(answer.Key()),
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				{Field: "value", Operator: FieldConstraintEqual, Value: "provided"},
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	var node *reteGraphAlphaNode
+	for _, nodeID := range revision.graph.routesByTemplateKey[answer.Key()] {
+		candidate := revision.graph.alphaNode(nodeID)
+		if candidate != nil && len(candidate.constraints) == 2 {
+			node = candidate
+			break
+		}
+	}
+	if node == nil {
+		t.Fatal("missing generated alpha node with two constraints")
+	}
+	if got, want := node.generatedMatch.kind, reteGraphAlphaGeneratedMatchSlotEqual; got != want {
+		t.Fatalf("generated match kind = %v, want %v", got, want)
+	}
+	if got, want := len(node.generatedMatch.equalities), 2; got != want {
+		t.Fatalf("generated equality count = %d, want %d", got, want)
+	}
+
+	matchingSlots, err := answer.buildValidatedFieldSlots(mustFields(t, map[string]any{
+		"id":    "q1",
+		"kind":  "hardware",
+		"value": "provided",
+	}))
+	if err != nil {
+		t.Fatalf("build matching slots: %v", err)
+	}
+	matching := &workingFact{name: answer.Name(), templateKey: answer.Key(), fieldSlots: matchingSlots}
+	if !node.generatedMatch.matchesWorking(node.target, matching) {
+		t.Fatal("generated match rejected matching fact")
+	}
+
+	mismatchSlots, err := answer.buildValidatedFieldSlots(mustFields(t, map[string]any{
+		"id":    "q1",
+		"kind":  "hardware",
+		"value": "other",
+	}))
+	if err != nil {
+		t.Fatalf("build mismatch slots: %v", err)
+	}
+	mismatch := &workingFact{name: answer.Name(), templateKey: answer.Key(), fieldSlots: mismatchSlots}
+	if node.generatedMatch.matchesWorking(node.target, mismatch) {
+		t.Fatal("generated match accepted fact with mismatched second equality")
+	}
+}
+
 func mustCompoundEqualityOrderRuleset(tb testing.TB, joins []JoinConstraintSpec) *Ruleset {
 	tb.Helper()
 
