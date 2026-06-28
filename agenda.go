@@ -1430,7 +1430,7 @@ func (a *agenda) nextInternalPtr() (*activation, activation, bool) {
 }
 
 func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activation, bool) {
-	return a.nextActivationPtrForModule(normalizeModuleName(module), false)
+	return a.nextActivationPtrForModule(module, false)
 }
 
 func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation, bool) {

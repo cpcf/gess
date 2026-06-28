@@ -270,7 +270,11 @@ func (s *Session) currentFocusInternal() ModuleName {
 	if s == nil || len(s.focusStack) == 0 {
 		return MainModule
 	}
-	return normalizeModuleName(s.focusStack[len(s.focusStack)-1])
+	module := s.focusStack[len(s.focusStack)-1]
+	if module.IsZero() {
+		return MainModule
+	}
+	return module
 }
 
 func (s *Session) pushFocusInternal(module ModuleName) {
@@ -288,7 +292,10 @@ func (s *Session) popFocusInternal() ModuleName {
 	if s == nil || len(s.focusStack) == 0 {
 		return MainModule
 	}
-	top := normalizeModuleName(s.focusStack[len(s.focusStack)-1])
+	top := s.focusStack[len(s.focusStack)-1]
+	if top.IsZero() {
+		top = MainModule
+	}
 	s.focusStack[len(s.focusStack)-1] = ""
 	s.focusStack = s.focusStack[:len(s.focusStack)-1]
 	return top
