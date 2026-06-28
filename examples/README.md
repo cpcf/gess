@@ -8,6 +8,7 @@
 - `modules-focus`: module declarations and agenda focus control.
 - `queries`: query APIs over asserted and derived facts.
 - `higher-order`: `exists` and `forall` conditions.
+- `gess-files`: templates, facts, rules, and queries loaded from `.gess` files.
 - `vulnerability_management`: larger end-to-end example.
 
 Run the examples with:
@@ -15,4 +16,3 @@ Run the examples with:
 ```sh
 go test ./examples/...
 ```
-
