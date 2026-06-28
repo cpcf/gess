@@ -3,7 +3,6 @@ package gess
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 )
 
@@ -467,12 +466,12 @@ func TestBackchainRecursiveReachabilityDerivesTransitiveGoal(t *testing.T) {
 		t.Fatal("expected generated need-reachable facts before run")
 	}
 
-	fired, err := runBackchainReachabilityToQuiescence(ctx, session)
+	result, err := session.Run(ctx)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if fired != 4 {
-		t.Fatalf("fired activations = %d, want 4", fired)
+	if result.Status != RunCompleted || result.Fired != 4 {
+		t.Fatalf("run result = (%v, %d), want (%v, 4)", result.Status, result.Fired, RunCompleted)
 	}
 
 	snapshot := mustSnapshot(t, ctx, session)
@@ -781,24 +780,6 @@ func assertBackchainDemandAbsent(t testing.TB, snapshot Snapshot, demandKey Temp
 			t.Fatalf("need-reachable(%q, %q) still present", src, dst)
 		}
 	}
-}
-
-func runBackchainReachabilityToQuiescence(ctx context.Context, session *Session) (int, error) {
-	total := 0
-	for range 8 {
-		result, err := session.Run(ctx)
-		if err != nil {
-			return total, err
-		}
-		if result.Status != RunCompleted {
-			return total, fmt.Errorf("run status %s", result.Status)
-		}
-		total += result.Fired
-		if result.Fired == 0 {
-			return total, nil
-		}
-	}
-	return total, fmt.Errorf("reachability run did not quiesce")
 }
 
 func assertFactStringField(t testing.TB, fact FactSnapshot, field string, want string) {

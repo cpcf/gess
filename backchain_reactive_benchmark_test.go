@@ -85,12 +85,12 @@ func BenchmarkGessBackchainRecursiveReachability(b *testing.B) {
 		if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("db"), newStringValue("internet")); err != nil {
 			b.Fatalf("Assert request: %v", err)
 		}
-		fired, err := runBackchainReachabilityToQuiescence(ctx, session)
+		result, err := session.Run(ctx)
 		if err != nil {
 			b.Fatalf("Run: %v", err)
 		}
-		if fired != 4 {
-			b.Fatalf("fired activations = %d, want 4", fired)
+		if result.Status != RunCompleted || result.Fired != 4 {
+			b.Fatalf("run result = (%v, %d), want (%v, 4)", result.Status, result.Fired, RunCompleted)
 		}
 	}
 }
