@@ -56,6 +56,45 @@ func BenchmarkGessBackchainRuntimeDemand(b *testing.B) {
 	}
 }
 
+func BenchmarkGessBackchainRecursiveReachability(b *testing.B) {
+	ctx := context.Background()
+	revision, edgeKey, _, requestKey := mustCompileBackchainReachabilityRuleset(b, false)
+	session, err := NewSession(revision, WithResetBeforeSnapshot(false))
+	if err != nil {
+		b.Fatalf("NewSession: %v", err)
+	}
+	edges := [][2]string{
+		{"internet", "web"},
+		{"web", "api"},
+		{"api", "db"},
+		{"api", "cache"},
+	}
+	b.ReportAllocs()
+	b.ReportMetric(float64(len(edges)), "edges")
+	b.ReportMetric(3, "derived-reachable-facts")
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := session.Reset(ctx); err != nil {
+			b.Fatalf("Reset: %v", err)
+		}
+		for _, edge := range edges {
+			if err := session.AssertTemplateValues(ctx, edgeKey, newStringValue(edge[1]), newStringValue(edge[0])); err != nil {
+				b.Fatalf("Assert edge %v: %v", edge, err)
+			}
+		}
+		if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("db"), newStringValue("internet")); err != nil {
+			b.Fatalf("Assert request: %v", err)
+		}
+		fired, err := runBackchainReachabilityToQuiescence(ctx, session)
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if fired != 4 {
+			b.Fatalf("fired activations = %d, want 4", fired)
+		}
+	}
+}
+
 func TestBackchainReactiveCompileHarness(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("GESS_BACKCHAIN_REACTIVE_RUNNER")) == "" {
 		t.Skip("set GESS_BACKCHAIN_REACTIVE_RUNNER=1 to run benchmark harness")

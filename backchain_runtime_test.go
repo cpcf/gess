@@ -2,6 +2,8 @@ package gess
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -435,6 +437,76 @@ func TestBackchainDemandResetGeneratesDemandForInitialFact(t *testing.T) {
 	assertFactStringField(t, demands[0], "kind", "hardware")
 }
 
+func TestBackchainRecursiveReachabilityDerivesTransitiveGoal(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, requestKey := mustCompileBackchainReachabilityRuleset(t, false)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	for _, edge := range [][2]string{
+		{"internet", "web"},
+		{"web", "api"},
+		{"api", "db"},
+		{"api", "cache"},
+	} {
+		if err := session.AssertTemplateValues(ctx, edgeKey, newStringValue(edge[1]), newStringValue(edge[0])); err != nil {
+			t.Fatalf("Assert edge %v: %v", edge, err)
+		}
+	}
+	if err := session.AssertTemplateValues(ctx, requestKey, newStringValue("db"), newStringValue("internet")); err != nil {
+		t.Fatalf("Assert request: %v", err)
+	}
+
+	before := mustSnapshot(t, ctx, session)
+	if got := len(before.FactsByTemplateKey(reachableKey)); got != 0 {
+		t.Fatalf("reachable facts before run = %d, want 0", got)
+	}
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	if got := len(before.FactsByTemplateKey(demandKey)); got == 0 {
+		t.Fatal("expected generated need-reachable facts before run")
+	}
+
+	fired, err := runBackchainReachabilityToQuiescence(ctx, session)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if fired != 4 {
+		t.Fatalf("fired activations = %d, want 4", fired)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	assertBackchainReachableFact(t, snapshot, reachableKey, "api", "db")
+	assertBackchainReachableFact(t, snapshot, reachableKey, "web", "db")
+	assertBackchainReachableFact(t, snapshot, reachableKey, "internet", "db")
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "api", "db")
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "web", "db")
+	assertBackchainDemandAbsent(t, snapshot, demandKey, "internet", "db")
+}
+
+func TestBackchainQueryTimeDemandFailsExplicitly(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, _, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := session.AssertTemplateValues(ctx, edgeKey, newStringValue("web"), newStringValue("internet")); err != nil {
+		t.Fatalf("Assert edge: %v", err)
+	}
+
+	_, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	if err == nil {
+		t.Fatal("QueryAll unexpectedly succeeded")
+	}
+	if !errors.Is(err, ErrUnsupportedRuntime) {
+		t.Fatalf("QueryAll error = %v, want ErrUnsupportedRuntime", err)
+	}
+	if !errors.Is(err, ErrQueryExecution) {
+		t.Fatalf("QueryAll error = %v, want ErrQueryExecution wrapper", err)
+	}
+}
+
 func mustBackchainDemandTemplates(t testing.TB, workspace *Workspace) (Template, Template) {
 	t.Helper()
 	request := mustAddTemplate(t, workspace, TemplateSpec{
@@ -457,6 +529,155 @@ func mustBackchainDemandTemplates(t testing.TB, workspace *Workspace) (Template,
 	return request, answer
 }
 
+func mustCompileBackchainReachabilityRuleset(t testing.TB, includeQuery bool) (*Ruleset, TemplateKey, TemplateKey, TemplateKey) {
+	t.Helper()
+
+	workspace := NewWorkspace()
+	edge := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "edge",
+		DuplicatePolicy: DuplicateUniqueKey,
+		DuplicateKeyNames: []string{
+			"src",
+			"dst",
+		},
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	reachable := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "reachable",
+		BackchainReactive: true,
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{
+			"src",
+			"dst",
+		},
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	request := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "reachability-request",
+		DuplicatePolicy: DuplicateUniqueKey,
+		DuplicateKeyNames: []string{
+			"src",
+			"dst",
+		},
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "assert-direct-reachable",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: reachable.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "dst"},
+				BindingFieldExpr{Binding: "need", Field: "src"},
+			},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "assert-transitive-reachable",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: reachable.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "dst"},
+				BindingFieldExpr{Binding: "need", Field: "src"},
+			},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "consume-reachable",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "direct-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "assert-direct-reachable"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "transitive-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+			Match{
+				Binding: "tail",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "edge", Field: "dst"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(reachable.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "assert-transitive-reachable"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "consume-request-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "reachable",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(reachable.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "consume-reachable"}},
+	})
+	if includeQuery {
+		if err := workspace.AddQuery(QuerySpec{
+			Name: "reachable-paths",
+			Parameters: []QueryParameterSpec{
+				{Name: "src", Kind: ValueString},
+				{Name: "dst", Kind: ValueString},
+			},
+			ConditionTree: Match{
+				Binding: "reachable",
+				Predicates: []ExpressionSpec{
+					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "src"}, Right: ParamExpr{Name: "src"}},
+					CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dst"}, Right: ParamExpr{Name: "dst"}},
+				},
+				Target: TemplateKeyFact(reachable.Key()),
+			},
+			Returns: []QueryReturnSpec{
+				ReturnValue("src", BindingFieldExpr{Binding: "reachable", Field: "src"}),
+				ReturnValue("dst", BindingFieldExpr{Binding: "reachable", Field: "dst"}),
+			},
+		}); err != nil {
+			t.Fatalf("AddQuery(reachable-paths): %v", err)
+		}
+	}
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return revision, edge.Key(), reachable.Key(), request.Key()
+}
+
 func mustDemandKey(t testing.TB, revision *Ruleset, source TemplateKey) TemplateKey {
 	t.Helper()
 	template, ok := revision.TemplateByKey(source)
@@ -468,6 +689,47 @@ func mustDemandKey(t testing.TB, revision *Ruleset, source TemplateKey) Template
 		t.Fatalf("template %q missing demand key", template.Name())
 	}
 	return demandKey
+}
+
+func assertBackchainReachableFact(t testing.TB, snapshot Snapshot, reachableKey TemplateKey, src, dst string) {
+	t.Helper()
+	for _, fact := range snapshot.FactsByTemplateKey(reachableKey) {
+		srcValue, srcOK := fact.Field("src")
+		dstValue, dstOK := fact.Field("dst")
+		if srcOK && dstOK && srcValue.Equal(newStringValue(src)) && dstValue.Equal(newStringValue(dst)) {
+			return
+		}
+	}
+	t.Fatalf("reachable(%q, %q) not found in %#v", src, dst, snapshot.FactsByTemplateKey(reachableKey))
+}
+
+func assertBackchainDemandAbsent(t testing.TB, snapshot Snapshot, demandKey TemplateKey, src, dst string) {
+	t.Helper()
+	for _, fact := range snapshot.FactsByTemplateKey(demandKey) {
+		srcValue, srcOK := fact.Field("src")
+		dstValue, dstOK := fact.Field("dst")
+		if srcOK && dstOK && srcValue.Equal(newStringValue(src)) && dstValue.Equal(newStringValue(dst)) {
+			t.Fatalf("need-reachable(%q, %q) still present", src, dst)
+		}
+	}
+}
+
+func runBackchainReachabilityToQuiescence(ctx context.Context, session *Session) (int, error) {
+	total := 0
+	for range 8 {
+		result, err := session.Run(ctx)
+		if err != nil {
+			return total, err
+		}
+		if result.Status != RunCompleted {
+			return total, fmt.Errorf("run status %s", result.Status)
+		}
+		total += result.Fired
+		if result.Fired == 0 {
+			return total, nil
+		}
+	}
+	return total, fmt.Errorf("reachability run did not quiesce")
 }
 
 func assertFactStringField(t testing.TB, fact FactSnapshot, field string, want string) {

@@ -1184,7 +1184,7 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	trigger := snapshotQueryTriggerFact(s.generation, query, compiledArgs)
 	rows, handled, err := runtime.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), s)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrQueryExecution, err)
+		return nil, fmt.Errorf("%w: %w", ErrQueryExecution, err)
 	}
 	if !handled {
 		return nil, fmt.Errorf("%w: query %q has no graph terminal memory", ErrUnsupportedRuntime, query.name)
@@ -1257,7 +1257,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	}
 	rows, handled, err := s.rete.queryRows(ctx, query, compiledArgs, newReteGraphQueryTriggerEvent(trigger), Snapshot{revision: s.revision})
 	if err != nil {
-		return nil, true, fmt.Errorf("%w: %v", ErrQueryExecution, err)
+		return nil, true, fmt.Errorf("%w: %w", ErrQueryExecution, err)
 	}
 	if !handled {
 		return nil, false, nil

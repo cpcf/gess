@@ -6266,12 +6266,16 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 	}
 
 	_, _ = m.removeFactInternal(ctx, trigger, nil, false)
-	if _, err := m.insertFactInternal(ctx, trigger, nil, false); err != nil {
+	delta, err := m.insertFactInternal(ctx, trigger, nil, false)
+	if err != nil {
 		return nil, true, err
 	}
 	defer func() {
 		_, _ = m.removeFactInternal(context.Background(), trigger, nil, false)
 	}()
+	if len(delta.demands) > 0 || len(delta.resolvedDemands) > 0 || len(delta.resolvedOwners) > 0 {
+		return nil, true, fmt.Errorf("%w: query %q generated backchain demand facts; query-time backward chaining is not supported", ErrUnsupportedRuntime, query.name)
+	}
 
 	rows, err := m.materializeQueryTerminalRows(ctx, query, args, source, terminalIDs, trigger.ID())
 	if err != nil {
