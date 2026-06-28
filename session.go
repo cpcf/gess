@@ -1250,7 +1250,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1390,7 +1390,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1457,7 +1457,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		s.restoreReteAfterPropagationFailure()
 		return false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1550,6 +1550,13 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		}
 		combined = mergeReteAgendaDelta(combined, next)
 	}
+	for _, owner := range combined.resolvedOwners {
+		resolvedDelta, err := s.removeBackchainDemandSupportForOwner(ctx, owner, origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, resolvedDelta)
+	}
 	for _, resolved := range combined.resolvedDemands {
 		request, ok := s.backchainDemandRequestByID(resolved)
 		if !ok {
@@ -1564,13 +1571,21 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 	}
 	combined.demands = nil
 	combined.resolvedDemands = nil
+	combined.resolvedOwners = nil
 	return combined, nil
 }
 
-func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || len(resolved) == 0 {
+	if s == nil || len(resolved) == 0 && len(owners) == 0 {
 		return combined, nil
+	}
+	for _, owner := range owners {
+		delta, err := s.removeBackchainDemandSupportForOwner(ctx, owner, origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, delta)
 	}
 	for _, id := range resolved {
 		request, ok := s.backchainDemandRequestByID(id)
@@ -1757,7 +1772,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		return result, agendaDelta, err
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
@@ -2025,7 +2040,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
-	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 {
+	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
 		resetAgendaWithDeltas = false
 	}
 	var newTerminalDeltas []reteTerminalTokenDelta
@@ -2054,8 +2069,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.generation = next.generation
 	s.rete = rete
 	s.syncPropagationCounters()
-	if len(resetDemandDelta.resolvedDemands) > 0 {
-		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, mutationOrigin{}); err != nil {
+	if len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
+		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, resetDemandDelta.resolvedOwners, mutationOrigin{}); err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
@@ -2969,7 +2984,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	} else {
 		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)

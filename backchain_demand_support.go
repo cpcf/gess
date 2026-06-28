@@ -229,6 +229,17 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 	return s.removeBackchainDemandSupportID(ctx, id, origin)
 }
 
+func (s *Session) removeBackchainDemandSupportForOwner(ctx context.Context, owner backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || owner.isZero() {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	id, ok := s.backchainDemandSupportByOwner(owner)
+	if !ok {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	return s.removeBackchainDemandSupportID(ctx, id, origin)
+}
+
 func (s *Session) singleBackchainDemandSupportIDForRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
 	if s == nil || len(request.supportFacts) != 1 || s.backchainDemandByFact.isEmpty() {
 		return 0, false
@@ -394,7 +405,7 @@ func normalizeBackchainDemandNoopDelta(delta reteAgendaDelta) reteAgendaDelta {
 	if delta.supported {
 		return delta
 	}
-	if len(delta.added) != 0 || len(delta.removed) != 0 || len(delta.updated) != 0 || len(delta.demands) != 0 || len(delta.resolvedDemands) != 0 {
+	if len(delta.added) != 0 || len(delta.removed) != 0 || len(delta.updated) != 0 || len(delta.demands) != 0 || len(delta.resolvedDemands) != 0 || len(delta.resolvedOwners) != 0 {
 		return delta
 	}
 	delta.supported = true

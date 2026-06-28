@@ -515,6 +515,7 @@ type reteAgendaDelta struct {
 	updated         []reteTerminalTokenUpdate
 	demands         []backchainDemandID
 	resolvedDemands []backchainDemandID
+	resolvedOwners  []backchainDemandOwnerKey
 }
 
 type backchainDemandID uint64

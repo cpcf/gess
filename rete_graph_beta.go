@@ -39,6 +39,7 @@ type reteGraphBetaMemory struct {
 	backchainDemandSlots     []factSlot
 	backchainDemandSupport   []backchainDemandSupportFact
 	backchainDemandDeltaIDs  []backchainDemandID
+	backchainDemandOwners    []backchainDemandOwnerKey
 	nextBackchainDemandID    backchainDemandID
 	alphaRouteScratch        []reteGraphAlphaNodeID
 	alphaRouteSeen           map[reteGraphAlphaNodeID]uint64
@@ -1939,6 +1940,8 @@ func (m *reteGraphBetaMemory) clearBackchainDemandRequests() {
 	m.backchainDemandSupport = m.backchainDemandSupport[:0]
 	clear(m.backchainDemandDeltaIDs)
 	m.backchainDemandDeltaIDs = m.backchainDemandDeltaIDs[:0]
+	clear(m.backchainDemandOwners)
+	m.backchainDemandOwners = m.backchainDemandOwners[:0]
 	m.nextBackchainDemandID = 0
 }
 
@@ -1965,6 +1968,31 @@ func (m *reteGraphBetaMemory) backchainDemandDeltaIDArenaStart(ids []backchainDe
 		return 0, false
 	}
 	return start, &ids[0] == &m.backchainDemandDeltaIDs[start]
+}
+
+func (m *reteGraphBetaMemory) appendBackchainDemandOwnerKey(keys []backchainDemandOwnerKey, key backchainDemandOwnerKey) []backchainDemandOwnerKey {
+	if m == nil || key.isZero() {
+		return keys
+	}
+	if start, ok := m.backchainDemandOwnerArenaStart(keys); ok {
+		m.backchainDemandOwners = append(m.backchainDemandOwners, key)
+		return m.backchainDemandOwners[start:len(m.backchainDemandOwners)]
+	}
+	return append(keys, key)
+}
+
+func (m *reteGraphBetaMemory) backchainDemandOwnerArenaStart(keys []backchainDemandOwnerKey) (int, bool) {
+	if m == nil || len(keys) > len(m.backchainDemandOwners) {
+		return 0, false
+	}
+	if len(keys) == 0 {
+		return len(m.backchainDemandOwners), true
+	}
+	start := len(m.backchainDemandOwners) - len(keys)
+	if start < 0 || start >= len(m.backchainDemandOwners) {
+		return 0, false
+	}
+	return start, &keys[0] == &m.backchainDemandOwners[start]
 }
 
 func (m *reteGraphBetaMemory) backchainDemandRequestByID(id backchainDemandID) (backchainDemandRequest, bool) {
@@ -4002,12 +4030,21 @@ func (m *reteGraphBetaMemory) appendBackchainDemandResolutions(node *reteGraphBe
 		if plan.side != side {
 			continue
 		}
-		id, ok := m.storeBackchainDemandRequest(node.id, planIndex, plan, context)
-		if !ok {
-			delta.supported = false
+		owner := backchainDemandOwnerKey{
+			nodeID:    node.id,
+			planIndex: planIndex,
+			token:     context.handle,
+		}
+		if owner.isZero() {
+			id, ok := m.storeBackchainDemandRequest(node.id, planIndex, plan, context)
+			if !ok {
+				delta.supported = false
+				continue
+			}
+			delta.resolvedDemands = m.appendBackchainDemandDeltaID(delta.resolvedDemands, id)
 			continue
 		}
-		delta.resolvedDemands = m.appendBackchainDemandDeltaID(delta.resolvedDemands, id)
+		delta.resolvedOwners = m.appendBackchainDemandOwnerKey(delta.resolvedOwners, owner)
 	}
 }
 
@@ -4775,6 +4812,7 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		updated:         append(removed.updated, added.updated...),
 		demands:         append(removed.demands, added.demands...),
 		resolvedDemands: append(removed.resolvedDemands, added.resolvedDemands...),
+		resolvedOwners:  append(removed.resolvedOwners, added.resolvedOwners...),
 	}, true, nil
 }
 

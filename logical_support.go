@@ -555,6 +555,7 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	left.updated = mergeReteAgendaDeltaSlice(left.updated, right.updated)
 	left.demands = mergeReteAgendaDeltaSlice(left.demands, right.demands)
 	left.resolvedDemands = mergeReteAgendaDeltaSlice(left.resolvedDemands, right.resolvedDemands)
+	left.resolvedOwners = mergeReteAgendaDeltaSlice(left.resolvedOwners, right.resolvedOwners)
 	return left
 }
 
@@ -573,5 +574,6 @@ func reteAgendaDeltaPayloadEmpty(delta reteAgendaDelta) bool {
 		len(delta.removed) == 0 &&
 		len(delta.updated) == 0 &&
 		len(delta.demands) == 0 &&
-		len(delta.resolvedDemands) == 0
+		len(delta.resolvedDemands) == 0 &&
+		len(delta.resolvedOwners) == 0
 }
