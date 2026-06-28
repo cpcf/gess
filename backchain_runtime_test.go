@@ -193,6 +193,157 @@ func TestExplicitBackchainConditionDoesNotGenerateDemand(t *testing.T) {
 	}
 }
 
+func TestNegatedBackchainConditionDoesNotGenerateDemand(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "missing-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Not{Condition: Match{
+				Binding: "answer",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("AssertTemplate(request): %v", err)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	if demands := snapshot.FactsByTemplateKey(demandKey); len(demands) != 0 {
+		t.Fatalf("demands = %d, want 0", len(demands))
+	}
+}
+
+func TestBackchainDemandNonEqualityConstraintLeavesSlotUnknown(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-non-software-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintNotEqual, Value: "software"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("AssertTemplate(request): %v", err)
+	}
+
+	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
+	if len(demands) != 1 {
+		t.Fatalf("demands = %d, want 1", len(demands))
+	}
+	assertFactStringField(t, demands[0], "id", "q1")
+	if value, ok := demands[0].Field("kind"); !ok || !value.Equal(NullValue()) {
+		t.Fatalf("demand kind = (%v, %t), want explicit null", value, ok)
+	}
+	if value, ok := demands[0].Field("value"); !ok || !value.Equal(NullValue()) {
+		t.Fatalf("demand value = (%v, %t), want explicit null", value, ok)
+	}
+}
+
+func TestBackchainQueryParametersPopulateDemandSlots(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	_, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "provide-query-answer",
+		Fn: func(ctx ActionContext) error {
+			demand, ok := ctx.Binding("need")
+			if !ok {
+				t.Fatal("need binding did not resolve")
+			}
+			id, _ := demand.Field("id")
+			kind, _ := demand.Field("kind")
+			_, err := ctx.AssertTemplate(answer.Key(), Fields{
+				"id":    id,
+				"kind":  kind,
+				"value": newStringValue("generated"),
+			})
+			return err
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "answer-query-need",
+		ConditionTree: Match{
+			Binding: "need",
+			Target:  TemplateKeyFact(TemplateKey("need-answer")),
+		},
+		Actions: []RuleActionSpec{{Name: "provide-query-answer"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "answers-by-id-kind",
+		Parameters: []QueryParameterSpec{
+			{Name: "id", Kind: ValueString},
+			{Name: "kind", Kind: ValueString},
+		},
+		ConditionTree: Match{
+			Binding: "answer",
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "id"}, Right: ParamExpr{Name: "id"}},
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "kind"}, Right: ParamExpr{Name: "kind"}},
+			},
+			Target: TemplateKeyFact(answer.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "answer", Field: "id"}),
+			ReturnValue("kind", BindingFieldExpr{Binding: "answer", Field: "kind"}),
+			ReturnValue("value", BindingFieldExpr{Binding: "answer", Field: "value"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "answers-by-id-kind", QueryArgs{"id": "q1", "kind": "hardware"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "q1")
+	assertQueryRowStringValue(t, rows[0], "kind", "hardware")
+	assertQueryRowStringValue(t, rows[0], "value", "generated")
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	assertBackchainAnswerDemandAbsent(t, mustSnapshot(t, ctx, session), demandKey, "q1", "hardware")
+}
+
 func TestBackchainDemandRetractedWhenWaitingFactRetracted(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -778,6 +929,17 @@ func assertBackchainDemandAbsent(t testing.TB, snapshot Snapshot, demandKey Temp
 		dstValue, dstOK := fact.Field("dst")
 		if srcOK && dstOK && srcValue.Equal(newStringValue(src)) && dstValue.Equal(newStringValue(dst)) {
 			t.Fatalf("need-reachable(%q, %q) still present", src, dst)
+		}
+	}
+}
+
+func assertBackchainAnswerDemandAbsent(t testing.TB, snapshot Snapshot, demandKey TemplateKey, id, kind string) {
+	t.Helper()
+	for _, fact := range snapshot.FactsByTemplateKey(demandKey) {
+		idValue, idOK := fact.Field("id")
+		kindValue, kindOK := fact.Field("kind")
+		if idOK && kindOK && idValue.Equal(newStringValue(id)) && kindValue.Equal(newStringValue(kind)) {
+			t.Fatalf("need-answer(%q, %q) still present", id, kind)
 		}
 	}
 }
