@@ -344,6 +344,129 @@ func TestBackchainQueryParametersPopulateDemandSlots(t *testing.T) {
 	assertBackchainAnswerDemandAbsent(t, mustSnapshot(t, ctx, session), demandKey, "q1", "hardware")
 }
 
+func TestBackchainDemandDiagnosticsTrackActiveDemands(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("AssertTemplate(request): %v", err)
+	}
+
+	before := mustSnapshot(t, ctx, session).BackchainDemandDiagnostics()
+	if before.Active != 1 || before.Count(demandKey) != 1 {
+		t.Fatalf("backchain demand diagnostics before answer = %#v, want one active %q", before, demandKey)
+	}
+	if _, err := session.AssertTemplate(ctx, answer.Key(), mustFields(t, map[string]any{
+		"id":    "q1",
+		"kind":  "hardware",
+		"value": "provided",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(answer): %v", err)
+	}
+	after := mustSnapshot(t, ctx, session).BackchainDemandDiagnostics()
+	if after.Active != 0 || after.Count(demandKey) != 0 {
+		t.Fatalf("backchain demand diagnostics after answer = %#v, want none", after)
+	}
+	if counters := mustSnapshot(t, ctx, session).SupportGraph().Counters; counters.CascadeRetractions != 0 || counters.LogicalFactsRetracted != 0 {
+		t.Fatalf("support counters after demand cleanup = %#v, want no logical cascade counts for generated demands", counters)
+	}
+}
+
+func TestBackchainRepeatedQueryGoalsDoNotGrowDemandState(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+
+	rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	if err != nil {
+		t.Fatalf("first reachable QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("first reachable rows = %d, want 1", len(rows))
+	}
+	afterFirst := mustSnapshot(t, ctx, session)
+	firstDemandDiagnostics := afterFirst.BackchainDemandDiagnostics()
+	if firstDemandDiagnostics.Active != 0 || firstDemandDiagnostics.Count(demandKey) != 0 {
+		t.Fatalf("demand diagnostics after first reachable query = %#v, want none", firstDemandDiagnostics)
+	}
+	firstLen := afterFirst.Len()
+
+	rows, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	if err != nil {
+		t.Fatalf("second reachable QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("second reachable rows = %d, want 1", len(rows))
+	}
+	afterSecond := mustSnapshot(t, ctx, session)
+	secondDemandDiagnostics := afterSecond.BackchainDemandDiagnostics()
+	if secondDemandDiagnostics.Active != 0 || secondDemandDiagnostics.Count(demandKey) != 0 {
+		t.Fatalf("demand diagnostics after second reachable query = %#v, want none", secondDemandDiagnostics)
+	}
+	if afterSecond.Len() != firstLen {
+		t.Fatalf("snapshot fact count after repeated reachable query = %d, want %d", afterSecond.Len(), firstLen)
+	}
+
+	rows, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "cache", "dst": "db"})
+	if err != nil {
+		t.Fatalf("first unreachable QueryAll: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("first unreachable rows = %d, want 0", len(rows))
+	}
+	afterFailedFirst := mustSnapshot(t, ctx, session)
+	failedFirstDiagnostics := afterFailedFirst.BackchainDemandDiagnostics()
+	if failedFirstDiagnostics.Active != 0 || failedFirstDiagnostics.Count(demandKey) != 0 {
+		t.Fatalf("demand diagnostics after first unreachable query = %#v, want none", failedFirstDiagnostics)
+	}
+	failedFirstLen := afterFailedFirst.Len()
+
+	rows, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "cache", "dst": "db"})
+	if err != nil {
+		t.Fatalf("second unreachable QueryAll: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("second unreachable rows = %d, want 0", len(rows))
+	}
+	afterFailedSecond := mustSnapshot(t, ctx, session)
+	failedSecondDiagnostics := afterFailedSecond.BackchainDemandDiagnostics()
+	if failedSecondDiagnostics.Active != 0 || failedSecondDiagnostics.Count(demandKey) != 0 {
+		t.Fatalf("demand diagnostics after second unreachable query = %#v, want none", failedSecondDiagnostics)
+	}
+	if afterFailedSecond.Len() != failedFirstLen {
+		t.Fatalf("snapshot fact count after repeated unreachable query = %d, want %d", afterFailedSecond.Len(), failedFirstLen)
+	}
+}
+
 func TestBackchainDemandRetractedWhenWaitingFactRetracted(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

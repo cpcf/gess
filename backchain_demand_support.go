@@ -282,11 +282,10 @@ func (s *Session) removeBackchainDemandOwnerOnlySupportDemandBucket(ctx context.
 	if _, ok := s.workingFactByID(demandFactID); !ok {
 		return combined, nil
 	}
-	delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
+	delta, err := s.removeBackchainDemandFactAndDependentSupportsImmediate(ctx, demandFactID, origin)
 	if err != nil {
 		return combined, err
 	}
-	delta = normalizeBackchainDemandNoopDelta(delta)
 	return mergeReteAgendaDelta(combined, delta), nil
 }
 
@@ -424,12 +423,30 @@ func (s *Session) removeBackchainDemandSupportDemandBucket(ctx context.Context, 
 	if _, ok := s.workingFactByID(demandFactID); !ok {
 		return combined, nil
 	}
-	delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
+	delta, err := s.removeBackchainDemandFactAndDependentSupportsImmediate(ctx, demandFactID, origin)
 	if err != nil {
 		return combined, err
 	}
-	delta = normalizeBackchainDemandNoopDelta(delta)
 	return mergeReteAgendaDelta(combined, delta), nil
+}
+
+func (s *Session) removeBackchainDemandFactAndDependentSupportsImmediate(ctx context.Context, demandFactID FactID, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || demandFactID.IsZero() {
+		return combined, nil
+	}
+	if _, ok := s.workingFactByID(demandFactID); ok {
+		delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
+	}
+	dependentDelta, err := s.removeBackchainDemandSupportsForFact(ctx, demandFactID, origin)
+	if err != nil {
+		return combined, err
+	}
+	return mergeReteAgendaDelta(combined, dependentDelta), nil
 }
 
 func (s *Session) removeBackchainDemandSupportIDFromSupportBucket(key backchainDemandSupportKey, id backchainDemandSupportID) {

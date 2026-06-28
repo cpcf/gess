@@ -1896,8 +1896,6 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	state.insertionOrder = removeFactIDFromSlice(state.insertionOrder, id)
 	state.removeStoredFact(id)
 	s.commitFactWorkspace(state)
-	s.logicalSupportCounters.LogicalFactsRetracted++
-	s.logicalSupportCounters.CascadeRetractions++
 
 	return agendaDelta, nil
 }

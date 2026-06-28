@@ -18,6 +18,21 @@ type Snapshot struct {
 	byTemplate map[TemplateKey][]int
 }
 
+// BackchainDemandDiagnostics summarizes active generated backward-chaining
+// demand facts visible in a snapshot.
+type BackchainDemandDiagnostics struct {
+	Active     int
+	ByTemplate map[TemplateKey]int
+}
+
+// Count returns the active demand fact count for a demand template key.
+func (d BackchainDemandDiagnostics) Count(templateKey TemplateKey) int {
+	if len(d.ByTemplate) == 0 {
+		return 0
+	}
+	return d.ByTemplate[templateKey]
+}
+
 func (s Snapshot) sourceGeneration() Generation {
 	return s.generation
 }
@@ -100,6 +115,27 @@ func (s Snapshot) Facts() []FactSnapshot {
 
 func (s Snapshot) SupportGraph() SupportGraph {
 	return s.support.clone()
+}
+
+// BackchainDemandDiagnostics returns active generated backward-chaining demand
+// fact counts for the snapshot.
+func (s Snapshot) BackchainDemandDiagnostics() BackchainDemandDiagnostics {
+	out := BackchainDemandDiagnostics{}
+	if s.revision == nil || len(s.facts) == 0 {
+		return out
+	}
+	for _, fact := range s.facts {
+		template, ok := s.revision.templateByKey(fact.TemplateKey())
+		if !ok || !template.backchainDemand {
+			continue
+		}
+		if out.ByTemplate == nil {
+			out.ByTemplate = make(map[TemplateKey]int, 1)
+		}
+		out.Active++
+		out.ByTemplate[fact.TemplateKey()]++
+	}
+	return out
 }
 
 func (s Snapshot) Fact(id FactID) (FactSnapshot, bool) {
