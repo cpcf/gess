@@ -18,8 +18,10 @@ type reteGraphBetaMemory struct {
 	alphaFacts               []reteGraphAlphaFactSet
 	alphaConditions          [][]ConditionID
 	alphaFactRoutes          map[FactID][]reteGraphAlphaNodeID
+	alphaFactRouteIDs        []FactID
 	alphaFactRouteStorage    []reteGraphAlphaNodeID
 	alphaFactTerminalRows    map[FactID][]generatedTerminalRowHandle
+	alphaFactTerminalFactIDs []FactID
 	alphaFactTerminalStorage []generatedTerminalRowHandle
 	alphaFactCounts          map[ConditionID]int
 	facts                    []FactSnapshot
@@ -714,10 +716,21 @@ func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
 	} else {
 		clear(m.alphaFactRoutes)
 	}
+	if factCapacity > cap(m.alphaFactRouteIDs) {
+		m.alphaFactRouteIDs = make([]FactID, 0, factCapacity)
+	} else {
+		m.alphaFactRouteIDs = m.alphaFactRouteIDs[:0]
+	}
 	if m.alphaFactTerminalRows == nil {
 		m.alphaFactTerminalRows = make(map[FactID][]generatedTerminalRowHandle, factCapacity)
 	} else {
 		clear(m.alphaFactTerminalRows)
+	}
+	if factCapacity > cap(m.alphaFactTerminalFactIDs) {
+		m.alphaFactTerminalFactIDs = make([]FactID, 0, factCapacity)
+	} else {
+		clear(m.alphaFactTerminalFactIDs)
+		m.alphaFactTerminalFactIDs = m.alphaFactTerminalFactIDs[:0]
 	}
 	if factCapacity > cap(m.alphaFactTerminalStorage) {
 		m.alphaFactTerminalStorage = make([]generatedTerminalRowHandle, 0, factCapacity)
@@ -1885,12 +1898,18 @@ func (m *reteGraphBetaMemory) clearMemories() {
 		clear(m.alphaFactCounts)
 	}
 	if m.alphaFactRoutes != nil {
-		clear(m.alphaFactRoutes)
+		for _, id := range m.alphaFactRouteIDs {
+			delete(m.alphaFactRoutes, id)
+		}
 	}
 	if m.alphaFactTerminalRows != nil {
-		clear(m.alphaFactTerminalRows)
+		for _, id := range m.alphaFactTerminalFactIDs {
+			delete(m.alphaFactTerminalRows, id)
+		}
 	}
-	clear(m.alphaFactRouteStorage)
+	m.alphaFactRouteIDs = m.alphaFactRouteIDs[:0]
+	clear(m.alphaFactTerminalFactIDs)
+	m.alphaFactTerminalFactIDs = m.alphaFactTerminalFactIDs[:0]
 	m.alphaFactRouteStorage = m.alphaFactRouteStorage[:0]
 	clear(m.alphaFactTerminalStorage)
 	m.alphaFactTerminalStorage = m.alphaFactTerminalStorage[:0]
@@ -4699,6 +4718,9 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 		m.alphaFactRoutes = make(map[FactID][]reteGraphAlphaNodeID)
 	}
 	routes := m.alphaFactRoutes[fact.ID()]
+	if len(routes) == 0 {
+		m.alphaFactRouteIDs = append(m.alphaFactRouteIDs, fact.ID())
+	}
 	if !slices.Contains(routes, nodeID) {
 		routes = m.appendAlphaFactRoute(routes, nodeID)
 		slices.Sort(routes)
@@ -4720,6 +4742,9 @@ func (m *reteGraphBetaMemory) recordGeneratedTerminalRow(factID FactID, nodeID r
 		m.alphaFactTerminalRows = make(map[FactID][]generatedTerminalRowHandle)
 	}
 	rows := m.alphaFactTerminalRows[factID]
+	if len(rows) == 0 {
+		m.alphaFactTerminalFactIDs = append(m.alphaFactTerminalFactIDs, factID)
+	}
 	rows = m.appendGeneratedTerminalRow(rows, generatedTerminalRowHandle{
 		alphaNodeID: nodeID,
 		terminalID:  terminalID,

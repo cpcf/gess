@@ -93,6 +93,35 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 	}
 }
 
+func TestGraphBetaAlphaFactRoutesClearTouchedKeysOnReset(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-fact-route-reset-session")
+
+	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+	memory := session.rete.graphBeta
+	if memory == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 1)
+	if got := len(memory.alphaFactRouteIDs); got == 0 {
+		t.Fatal("alpha fact route touched keys were not recorded")
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if got := len(memory.alphaFactRoutes); got != 0 {
+		t.Fatalf("alpha fact route index keys after reset = %d, want 0", got)
+	}
+	if got := len(memory.alphaFactRouteIDs); got != 0 {
+		t.Fatalf("alpha fact route touched keys after reset = %d, want 0", got)
+	}
+}
+
 func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
