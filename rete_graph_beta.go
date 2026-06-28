@@ -17,11 +17,9 @@ type reteGraphBetaMemory struct {
 	terminalsByRule          map[RuleRevisionID][]*reteGraphTerminalMemory
 	alphaFacts               []reteGraphAlphaFactSet
 	alphaConditions          [][]ConditionID
-	alphaFactRoutes          map[FactID][]reteGraphAlphaNodeID
-	alphaFactRouteIDs        []FactID
+	alphaFactOwnership       map[FactID]alphaFactOwnershipRow
+	alphaFactOwnershipIDs    []FactID
 	alphaFactRouteStorage    []reteGraphAlphaNodeID
-	alphaFactTerminalRows    map[FactID][]generatedTerminalRowHandle
-	alphaFactTerminalFactIDs []FactID
 	alphaFactTerminalStorage []generatedTerminalRowHandle
 	alphaFactCounts          map[ConditionID]int
 	facts                    []FactSnapshot
@@ -266,6 +264,11 @@ type generatedTerminalRowHandle struct {
 	terminalID  reteGraphTerminalNodeID
 	branchID    int
 	handle      graphTokenRowHandle
+}
+
+type alphaFactOwnershipRow struct {
+	routes       []reteGraphAlphaNodeID
+	terminalRows []generatedTerminalRowHandle
 }
 
 // Negative beta rows reuse supportCount for their blocker count; terminal rows
@@ -741,26 +744,15 @@ func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
 	} else {
 		clear(m.alphaFactCounts)
 	}
-	if m.alphaFactRoutes == nil {
-		m.alphaFactRoutes = make(map[FactID][]reteGraphAlphaNodeID, factCapacity)
+	if m.alphaFactOwnership == nil {
+		m.alphaFactOwnership = make(map[FactID]alphaFactOwnershipRow, factCapacity)
 	} else {
-		clear(m.alphaFactRoutes)
+		clear(m.alphaFactOwnership)
 	}
-	if factCapacity > cap(m.alphaFactRouteIDs) {
-		m.alphaFactRouteIDs = make([]FactID, 0, factCapacity)
+	if factCapacity > cap(m.alphaFactOwnershipIDs) {
+		m.alphaFactOwnershipIDs = make([]FactID, 0, factCapacity)
 	} else {
-		m.alphaFactRouteIDs = m.alphaFactRouteIDs[:0]
-	}
-	if m.alphaFactTerminalRows == nil {
-		m.alphaFactTerminalRows = make(map[FactID][]generatedTerminalRowHandle, factCapacity)
-	} else {
-		clear(m.alphaFactTerminalRows)
-	}
-	if factCapacity > cap(m.alphaFactTerminalFactIDs) {
-		m.alphaFactTerminalFactIDs = make([]FactID, 0, factCapacity)
-	} else {
-		clear(m.alphaFactTerminalFactIDs)
-		m.alphaFactTerminalFactIDs = m.alphaFactTerminalFactIDs[:0]
+		m.alphaFactOwnershipIDs = m.alphaFactOwnershipIDs[:0]
 	}
 	if factCapacity > cap(m.alphaFactTerminalStorage) {
 		m.alphaFactTerminalStorage = make([]generatedTerminalRowHandle, 0, factCapacity)
@@ -1927,19 +1919,12 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	if m.alphaFactCounts != nil {
 		clear(m.alphaFactCounts)
 	}
-	if m.alphaFactRoutes != nil {
-		for _, id := range m.alphaFactRouteIDs {
-			delete(m.alphaFactRoutes, id)
+	if m.alphaFactOwnership != nil {
+		for _, id := range m.alphaFactOwnershipIDs {
+			delete(m.alphaFactOwnership, id)
 		}
 	}
-	if m.alphaFactTerminalRows != nil {
-		for _, id := range m.alphaFactTerminalFactIDs {
-			delete(m.alphaFactTerminalRows, id)
-		}
-	}
-	m.alphaFactRouteIDs = m.alphaFactRouteIDs[:0]
-	clear(m.alphaFactTerminalFactIDs)
-	m.alphaFactTerminalFactIDs = m.alphaFactTerminalFactIDs[:0]
+	m.alphaFactOwnershipIDs = m.alphaFactOwnershipIDs[:0]
 	m.alphaFactRouteStorage = m.alphaFactRouteStorage[:0]
 	clear(m.alphaFactTerminalStorage)
 	m.alphaFactTerminalStorage = m.alphaFactTerminalStorage[:0]
@@ -2775,7 +2760,8 @@ func (m *reteGraphBetaMemory) matchedAlphaRouteIDsForFact(id FactID) []reteGraph
 		return nil
 	}
 	m.resetAlphaRouteScratch()
-	m.appendAlphaRouteBucket(m.alphaFactRoutes[id])
+	row := m.alphaFactOwnership[id]
+	m.appendAlphaRouteBucket(row.routes)
 	m.sortAlphaRouteScratch()
 	return m.alphaRouteScratch
 }
@@ -4838,14 +4824,15 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 }
 
 func (m *reteGraphBetaMemory) removeGeneratedTerminalOnlyFact(id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
-	if m == nil || m.graph == nil || delta == nil || id.IsZero() || m.alphaFactTerminalRows == nil {
+	if m == nil || m.graph == nil || delta == nil || id.IsZero() {
 		return false
 	}
-	rows := m.alphaFactTerminalRows[id]
+	row := m.alphaFactOwnership[id]
+	rows := row.terminalRows
 	if len(rows) == 0 {
 		return false
 	}
-	routes := m.alphaFactRoutes[id]
+	routes := row.routes
 	if len(routes) == 0 {
 		return false
 	}
@@ -4980,16 +4967,17 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 	if !m.alphaFacts[index].insert(fact.ID()) {
 		return
 	}
-	if m.alphaFactRoutes == nil {
-		m.alphaFactRoutes = make(map[FactID][]reteGraphAlphaNodeID)
+	factID := fact.ID()
+	if m.alphaFactOwnership == nil {
+		m.alphaFactOwnership = make(map[FactID]alphaFactOwnershipRow)
 	}
-	routes := m.alphaFactRoutes[fact.ID()]
-	if len(routes) == 0 {
-		m.alphaFactRouteIDs = append(m.alphaFactRouteIDs, fact.ID())
+	row, exists := m.alphaFactOwnership[factID]
+	if !exists {
+		m.alphaFactOwnershipIDs = append(m.alphaFactOwnershipIDs, factID)
 	}
-	if next, inserted := m.appendAlphaFactRouteOrdered(routes, nodeID); inserted {
-		routes = next
-		m.alphaFactRoutes[fact.ID()] = routes
+	if next, inserted := m.appendAlphaFactRouteOrdered(row.routes, nodeID); inserted {
+		row.routes = next
+		m.alphaFactOwnership[factID] = row
 	}
 	if m.alphaFactCounts == nil {
 		m.alphaFactCounts = make(map[ConditionID]int)
@@ -5003,27 +4991,28 @@ func (m *reteGraphBetaMemory) recordGeneratedTerminalRow(factID FactID, nodeID r
 	if m == nil || factID.IsZero() || nodeID <= 0 || terminalID <= 0 || handle.isZero() {
 		return
 	}
-	if m.alphaFactTerminalRows == nil {
-		m.alphaFactTerminalRows = make(map[FactID][]generatedTerminalRowHandle)
+	if m.alphaFactOwnership == nil {
+		m.alphaFactOwnership = make(map[FactID]alphaFactOwnershipRow)
 	}
-	rows := m.alphaFactTerminalRows[factID]
-	if len(rows) == 0 {
-		m.alphaFactTerminalFactIDs = append(m.alphaFactTerminalFactIDs, factID)
+	row, exists := m.alphaFactOwnership[factID]
+	if !exists {
+		m.alphaFactOwnershipIDs = append(m.alphaFactOwnershipIDs, factID)
 	}
-	rows = m.appendGeneratedTerminalRow(rows, generatedTerminalRowHandle{
+	row.terminalRows = m.appendGeneratedTerminalRow(row.terminalRows, generatedTerminalRowHandle{
 		alphaNodeID: nodeID,
 		terminalID:  terminalID,
 		branchID:    branchID,
 		handle:      handle,
 	})
-	m.alphaFactTerminalRows[factID] = rows
+	m.alphaFactOwnership[factID] = row
 }
 
 func (m *reteGraphBetaMemory) takeGeneratedTerminalRow(factID FactID, nodeID reteGraphAlphaNodeID, terminalID reteGraphTerminalNodeID, branchID int) (graphTokenRowHandle, bool) {
-	if m == nil || factID.IsZero() || m.alphaFactTerminalRows == nil {
+	if m == nil || factID.IsZero() {
 		return graphTokenRowHandle{}, false
 	}
-	rows := m.alphaFactTerminalRows[factID]
+	row := m.alphaFactOwnership[factID]
+	rows := row.terminalRows
 	for i, row := range rows {
 		if row.alphaNodeID != nodeID || row.terminalID != terminalID || row.branchID != branchID {
 			continue
@@ -5033,10 +5022,12 @@ func (m *reteGraphBetaMemory) takeGeneratedTerminalRow(factID FactID, nodeID ret
 		rows[i] = rows[last]
 		rows[last] = generatedTerminalRowHandle{}
 		rows = rows[:last]
-		if len(rows) == 0 {
-			delete(m.alphaFactTerminalRows, factID)
+		owner := m.alphaFactOwnership[factID]
+		owner.terminalRows = rows
+		if len(owner.routes) == 0 && len(owner.terminalRows) == 0 {
+			delete(m.alphaFactOwnership, factID)
 		} else {
-			m.alphaFactTerminalRows[factID] = rows
+			m.alphaFactOwnership[factID] = owner
 		}
 		return handle, true
 	}
@@ -5047,7 +5038,8 @@ func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
 	}
-	m.removeAlphaFactRoutes(id, m.alphaFactRoutes[id], true)
+	row := m.alphaFactOwnership[id]
+	m.removeAlphaFactRoutes(id, row.routes, true)
 }
 
 func (m *reteGraphBetaMemory) removeAlphaFactRoutes(id FactID, routes []reteGraphAlphaNodeID, removeTerminalRows bool) {
@@ -5067,10 +5059,17 @@ func (m *reteGraphBetaMemory) removeAlphaFactRoutes(id FactID, routes []reteGrap
 			m.alphaFactCounts[conditionID]--
 		}
 	}
-	delete(m.alphaFactRoutes, id)
-	if removeTerminalRows && m.alphaFactTerminalRows != nil {
-		delete(m.alphaFactTerminalRows, id)
+	if removeTerminalRows {
+		delete(m.alphaFactOwnership, id)
+		return
 	}
+	row := m.alphaFactOwnership[id]
+	row.routes = nil
+	if len(row.terminalRows) == 0 {
+		delete(m.alphaFactOwnership, id)
+		return
+	}
+	m.alphaFactOwnership[id] = row
 }
 
 func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {

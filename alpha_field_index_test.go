@@ -64,7 +64,7 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 	}
 	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 1)
 	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 0)
-	if got, want := len(memory.alphaFactRoutes), 1; got != want {
+	if got, want := len(memory.alphaFactOwnership), 1; got != want {
 		t.Fatalf("alpha fact route index keys = %d, want %d", got, want)
 	}
 
@@ -72,7 +72,7 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 		t.Fatalf("Modify(hot -> cold): %v", err)
 	}
 	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 0)
-	if got := len(memory.alphaFactRoutes); got != 0 {
+	if got := len(memory.alphaFactOwnership); got != 0 {
 		t.Fatalf("alpha fact route index keys after modify out = %d, want 0", got)
 	}
 
@@ -80,7 +80,7 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 		t.Fatalf("Modify(cold -> hot): %v", err)
 	}
 	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 1)
-	if got, want := len(memory.alphaFactRoutes), 1; got != want {
+	if got, want := len(memory.alphaFactOwnership), 1; got != want {
 		t.Fatalf("alpha fact route index keys after modify in = %d, want %d", got, want)
 	}
 
@@ -88,7 +88,7 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 		t.Fatalf("Retract(cold): %v", err)
 	}
 	assertAlphaFactRouteIndex(t, memory, cold.Fact.ID(), 0)
-	if got := len(memory.alphaFactRoutes); got != 0 {
+	if got := len(memory.alphaFactOwnership); got != 0 {
 		t.Fatalf("alpha fact route index keys after retract = %d, want 0", got)
 	}
 }
@@ -107,17 +107,17 @@ func TestGraphBetaAlphaFactRoutesClearTouchedKeysOnReset(t *testing.T) {
 		t.Fatal("graph beta memory is nil")
 	}
 	assertAlphaFactRouteIndex(t, memory, hot.Fact.ID(), 1)
-	if got := len(memory.alphaFactRouteIDs); got == 0 {
+	if got := len(memory.alphaFactOwnershipIDs); got == 0 {
 		t.Fatal("alpha fact route touched keys were not recorded")
 	}
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if got := len(memory.alphaFactRoutes); got != 0 {
+	if got := len(memory.alphaFactOwnership); got != 0 {
 		t.Fatalf("alpha fact route index keys after reset = %d, want 0", got)
 	}
-	if got := len(memory.alphaFactRouteIDs); got != 0 {
+	if got := len(memory.alphaFactOwnershipIDs); got != 0 {
 		t.Fatalf("alpha fact route touched keys after reset = %d, want 0", got)
 	}
 }
@@ -268,7 +268,7 @@ func assertAlphaLiteralEqualityCandidates(t testing.TB, revision *Ruleset, sessi
 
 func assertAlphaFactRouteIndex(t testing.TB, memory *reteGraphBetaMemory, factID FactID, wantRoutes int) {
 	t.Helper()
-	routes := memory.alphaFactRoutes[factID]
+	routes := memory.alphaFactOwnership[factID].routes
 	if got := len(routes); got != wantRoutes {
 		t.Fatalf("alpha fact routes for %s = %d, want %d: %#v", factID, got, wantRoutes, routes)
 	}
