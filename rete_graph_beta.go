@@ -114,10 +114,12 @@ type reteGraphAggregateMember struct {
 }
 
 type reteGraphTerminalMemory struct {
-	rows           tokenHashMemory
-	ruleRevisionID RuleRevisionID
-	rule           compiledRule
-	ruleOK         bool
+	rows                  tokenHashMemory
+	ruleRevisionID        RuleRevisionID
+	rule                  compiledRule
+	ruleOK                bool
+	ruleConditionCount    int
+	ruleIdentityScopeHash uint64
 }
 
 type reteGraphAlphaFactSet struct {
@@ -685,6 +687,11 @@ func (m *reteGraphBetaMemory) initializeTerminalMemory(id reteGraphTerminalNodeI
 	}
 	terminal.rule = rule
 	terminal.ruleOK = true
+	terminal.ruleConditionCount = len(rule.conditions)
+	terminal.ruleIdentityScopeHash = rule.identityScopeHash
+	if terminal.ruleIdentityScopeHash == 0 {
+		terminal.ruleIdentityScopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+	}
 }
 
 func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
@@ -6450,7 +6457,81 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentity(token tokenRef) candidat
 	if t == nil || !t.ruleOK || token.isZero() {
 		return candidateIdentity{}
 	}
+	if t.ruleConditionCount > 0 {
+		if row, ok := token.resolve(); ok && row.size == t.ruleConditionCount && row.orderedSlots {
+			return candidateIdentity{
+				generation: token.handle.arena.generation,
+				count:      row.size,
+				key: candidateIdentityKey{
+					scopeHash: t.ruleIdentityScopeHash,
+					hash:      candidateIdentityHashFinish(row.identityState, row.size),
+				},
+			}
+		}
+		if identity, ok := t.terminalTokenIdentitySmall(token); ok {
+			return identity
+		}
+	}
 	return candidateIdentityForTerminalToken(t.rule, token)
+}
+
+func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (candidateIdentity, bool) {
+	if t == nil || token.isZero() || t.ruleConditionCount <= 0 || t.ruleConditionCount > 8 {
+		return candidateIdentity{}, false
+	}
+	var factIDs [8]FactID
+	var factVersions [8]FactVersion
+	var valueEntries [8]tokenRowEntry
+	var seen uint8
+	var values uint8
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
+		if !ok {
+			return candidateIdentity{}, false
+		}
+		slot := row.entry.bindingSlot
+		if slot < 0 {
+			continue
+		}
+		if slot >= t.ruleConditionCount {
+			return candidateIdentity{}, false
+		}
+		mask := uint8(1 << uint(slot))
+		if seen&mask != 0 {
+			return candidateIdentity{}, false
+		}
+		if row.entry.hasValue {
+			valueEntries[slot] = row.entry
+			values |= mask
+		} else {
+			factIDs[slot] = row.entry.factID
+			factVersions[slot] = row.entry.factVersion
+		}
+		seen |= mask
+	}
+	if seen != uint8(1<<uint(t.ruleConditionCount))-1 {
+		return candidateIdentity{}, false
+	}
+	generation := token.handle.arena.generation
+	state := candidateIdentityHashStart(generation)
+	count := 0
+	for i := 0; i < t.ruleConditionCount; i++ {
+		mask := uint8(1 << uint(i))
+		if values&mask != 0 {
+			state = candidateIdentityHashTokenEntryStep(state, valueEntries[i])
+		} else {
+			state = candidateIdentityHashFactStep(state, factIDs[i], factVersions[i])
+		}
+		count++
+	}
+	return candidateIdentity{
+		generation: generation,
+		count:      count,
+		key: candidateIdentityKey{
+			scopeHash: t.ruleIdentityScopeHash,
+			hash:      candidateIdentityHashFinish(state, count),
+		},
+	}, true
 }
 
 func (m *reteGraphBetaMemory) terminalBranchKey(id reteGraphTerminalNodeID, branchID int) (propagationBranchKey, bool) {
@@ -6488,10 +6569,15 @@ func (m *reteGraphBetaMemory) terminalNode(id reteGraphTerminalNodeID) *reteGrap
 }
 
 func tokenRefKey(token tokenRef) graphTokenIdentityKey {
+	if row, ok := token.resolve(); ok {
+		return graphTokenIdentityKey{
+			size:          row.size,
+			generation:    token.handle.arena.generation,
+			identityState: row.identityState,
+		}
+	}
 	return graphTokenIdentityKey{
-		size:          token.size(),
-		generation:    token.generation(),
-		identityState: token.identityState(),
+		identityState: candidateIdentityHashStart(0),
 	}
 }
 
