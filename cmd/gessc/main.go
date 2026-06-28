@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cpcf/gess"
+	dsl "github.com/cpcf/gess/dsl"
 )
 
 func main() {
@@ -22,16 +22,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: gessc [-o file] [-package name] [-func name] rules.gess [...]")
 		os.Exit(2)
 	}
-	sources := make([]gess.GessSourceFile, 0, flag.NArg())
+	sources := make([]dsl.SourceFile, 0, flag.NArg())
 	for _, path := range flag.Args() {
 		source, err := os.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "read %s: %v\n", path, err)
 			os.Exit(1)
 		}
-		sources = append(sources, gess.GessSourceFile{Name: path, Source: source})
+		sources = append(sources, dsl.SourceFile{Name: path, Source: source})
 	}
-	generated, err := gess.GenerateGessGo(context.Background(), sources, gess.GessGoGeneratorOptions{
+	generated, err := dsl.GenerateGo(context.Background(), sources, dsl.GoGeneratorOptions{
 		PackageName:  packageName,
 		FunctionName: functionName,
 	})

@@ -6,16 +6,17 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	serviceTemplate             = gess.TemplateKey("service")
-	dependencyTemplate          = gess.TemplateKey("dependency")
-	advisoryTemplate            = gess.TemplateKey("security-advisory")
-	waiverTemplate              = gess.TemplateKey("risk-waiver")
-	reachableDependencyTemplate = gess.TemplateKey("reachable-dependency")
-	serviceImpactTemplate       = gess.TemplateKey("service-impact")
+	serviceTemplate             = rules.TemplateKey("service")
+	dependencyTemplate          = rules.TemplateKey("dependency")
+	advisoryTemplate            = rules.TemplateKey("security-advisory")
+	waiverTemplate              = rules.TemplateKey("risk-waiver")
+	reachableDependencyTemplate = rules.TemplateKey("reachable-dependency")
+	serviceImpactTemplate       = rules.TemplateKey("service-impact")
 	impactQuery                 = "service-affected-by-cve"
 )
 
@@ -32,15 +33,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	facts := []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{serviceTemplate, fields("name", "checkout", "root", "checkout-api")},
 		{serviceTemplate, fields("name", "billing", "root", "billing-worker")},
@@ -66,7 +67,7 @@ func run(out io.Writer) error {
 		{"billing", "CVE-2026-4242"},
 		{"billing", "CVE-2026-9000"},
 	} {
-		rows, err := session.QueryAll(ctx, impactQuery, gess.QueryArgs{"service": q.service, "cve": q.cve})
+		rows, err := session.QueryAll(ctx, impactQuery, sess.QueryArgs{"service": q.service, "cve": q.cve})
 		if err != nil {
 			return err
 		}
@@ -79,58 +80,58 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	for _, spec := range []gess.TemplateSpec{
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	for _, spec := range []rules.TemplateSpec{
 		{
 			Name: string(serviceTemplate),
-			Fields: []gess.FieldSpec{
-				{Name: "name", Kind: gess.ValueString, Required: true},
-				{Name: "root", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "name", Kind: rules.ValueString, Required: true},
+				{Name: "root", Kind: rules.ValueString, Required: true},
 			},
 		},
 		{
 			Name: string(dependencyTemplate),
-			Fields: []gess.FieldSpec{
-				{Name: "src", Kind: gess.ValueString, Required: true},
-				{Name: "dst", Kind: gess.ValueString, Required: true},
-				{Name: "scope", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "src", Kind: rules.ValueString, Required: true},
+				{Name: "dst", Kind: rules.ValueString, Required: true},
+				{Name: "scope", Kind: rules.ValueString, Required: true},
 			},
 		},
 		{
 			Name: string(advisoryTemplate),
-			Fields: []gess.FieldSpec{
-				{Name: "package", Kind: gess.ValueString, Required: true},
-				{Name: "cve", Kind: gess.ValueString, Required: true},
-				{Name: "severity", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "package", Kind: rules.ValueString, Required: true},
+				{Name: "cve", Kind: rules.ValueString, Required: true},
+				{Name: "severity", Kind: rules.ValueString, Required: true},
 			},
 		},
 		{
 			Name: string(waiverTemplate),
-			Fields: []gess.FieldSpec{
-				{Name: "service", Kind: gess.ValueString, Required: true},
-				{Name: "cve", Kind: gess.ValueString, Required: true},
-				{Name: "reason", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "service", Kind: rules.ValueString, Required: true},
+				{Name: "cve", Kind: rules.ValueString, Required: true},
+				{Name: "reason", Kind: rules.ValueString, Required: true},
 			},
 		},
 		{
 			Name:              string(reachableDependencyTemplate),
 			BackchainReactive: true,
-			DuplicatePolicy:   gess.DuplicateUniqueKey,
+			DuplicatePolicy:   rules.DuplicateUniqueKey,
 			DuplicateKeyNames: []string{"src", "dst"},
-			Fields: []gess.FieldSpec{
-				{Name: "src", Kind: gess.ValueString, Required: true},
-				{Name: "dst", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "src", Kind: rules.ValueString, Required: true},
+				{Name: "dst", Kind: rules.ValueString, Required: true},
 			},
 		},
 		{
 			Name:              string(serviceImpactTemplate),
 			BackchainReactive: true,
-			DuplicatePolicy:   gess.DuplicateUniqueKey,
+			DuplicatePolicy:   rules.DuplicateUniqueKey,
 			DuplicateKeyNames: []string{"service", "cve"},
-			Fields: []gess.FieldSpec{
-				{Name: "service", Kind: gess.ValueString, Required: true},
-				{Name: "cve", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "service", Kind: rules.ValueString, Required: true},
+				{Name: "cve", Kind: rules.ValueString, Required: true},
 			},
 		},
 	} {
@@ -138,34 +139,34 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 			return nil, err
 		}
 	}
-	for _, spec := range []gess.ActionSpec{
+	for _, spec := range []rules.ActionSpec{
 		{
 			Name: "assert-direct-reachable-dependency",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: reachableDependencyTemplate,
-				Values: []gess.ExpressionSpec{
-					gess.BindingFieldExpr{Binding: "need", Field: "dst"},
-					gess.BindingFieldExpr{Binding: "need", Field: "src"},
+				Values: []rules.ExpressionSpec{
+					rules.BindingFieldExpr{Binding: "need", Field: "dst"},
+					rules.BindingFieldExpr{Binding: "need", Field: "src"},
 				},
 			},
 		},
 		{
 			Name: "assert-transitive-reachable-dependency",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: reachableDependencyTemplate,
-				Values: []gess.ExpressionSpec{
-					gess.BindingFieldExpr{Binding: "need", Field: "dst"},
-					gess.BindingFieldExpr{Binding: "need", Field: "src"},
+				Values: []rules.ExpressionSpec{
+					rules.BindingFieldExpr{Binding: "need", Field: "dst"},
+					rules.BindingFieldExpr{Binding: "need", Field: "src"},
 				},
 			},
 		},
 		{
 			Name: "assert-service-impact",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: serviceImpactTemplate,
-				Values: []gess.ExpressionSpec{
-					gess.BindingFieldExpr{Binding: "need", Field: "cve"},
-					gess.BindingFieldExpr{Binding: "need", Field: "service"},
+				Values: []rules.ExpressionSpec{
+					rules.BindingFieldExpr{Binding: "need", Field: "cve"},
+					rules.BindingFieldExpr{Binding: "need", Field: "service"},
 				},
 			},
 		},
@@ -177,65 +178,65 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	if err := addReachableDependencyRules(workspace); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-service-impact",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-service-impact"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-service-impact"))},
+			rules.Match{
 				Binding: "service",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "name", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "service"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "name", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "service"}},
 				},
-				Target: gess.TemplateKeyFact(serviceTemplate),
+				Target: rules.TemplateKeyFact(serviceTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "advisory",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "severity", Operator: gess.FieldConstraintEqual, Value: "critical"},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "severity", Operator: rules.FieldConstraintEqual, Value: "critical"},
 				},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "cve", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "cve"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "cve", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "cve"}},
 				},
-				Target: gess.TemplateKeyFact(advisoryTemplate),
+				Target: rules.TemplateKeyFact(advisoryTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "path",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "service", Field: "root"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "advisory", Field: "package"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "service", Field: "root"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "advisory", Field: "package"}},
 				},
-				Target: gess.TemplateKeyFact(reachableDependencyTemplate),
+				Target: rules.TemplateKeyFact(reachableDependencyTemplate),
 			},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "waiver",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "service", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "service"}},
-					{Field: "cve", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "cve"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "service", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "service"}},
+					{Field: "cve", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "cve"}},
 				},
-				Target: gess.TemplateKeyFact(waiverTemplate),
+				Target: rules.TemplateKeyFact(waiverTemplate),
 			}},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-service-impact"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-service-impact"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name: impactQuery,
-		Parameters: []gess.QueryParameterSpec{
-			{Name: "service", Kind: gess.ValueString},
-			{Name: "cve", Kind: gess.ValueString},
+		Parameters: []rules.QueryParameterSpec{
+			{Name: "service", Kind: rules.ValueString},
+			{Name: "cve", Kind: rules.ValueString},
 		},
-		ConditionTree: gess.Match{
+		ConditionTree: rules.Match{
 			Binding: "impact",
-			Predicates: []gess.ExpressionSpec{
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "service"}, Right: gess.ParamExpr{Name: "service"}},
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "cve"}, Right: gess.ParamExpr{Name: "cve"}},
+			Predicates: []rules.ExpressionSpec{
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "service"}, Right: rules.ParamExpr{Name: "service"}},
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "cve"}, Right: rules.ParamExpr{Name: "cve"}},
 			},
-			Target: gess.TemplateKeyFact(serviceImpactTemplate),
+			Target: rules.TemplateKeyFact(serviceImpactTemplate),
 		},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("service", gess.BindingFieldExpr{Binding: "impact", Field: "service"}),
-			gess.ReturnValue("cve", gess.BindingFieldExpr{Binding: "impact", Field: "cve"}),
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("service", rules.BindingFieldExpr{Binding: "impact", Field: "service"}),
+			rules.ReturnValue("cve", rules.BindingFieldExpr{Binding: "impact", Field: "cve"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -243,54 +244,54 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func addReachableDependencyRules(workspace *gess.Workspace) error {
-	if err := workspace.AddRule(gess.RuleSpec{
+func addReachableDependencyRules(workspace *rules.Workspace) error {
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-direct-runtime-dependency",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-reachable-dependency"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-reachable-dependency"))},
+			rules.Match{
 				Binding: "dependency",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "scope", Operator: gess.FieldConstraintEqual, Value: "runtime"},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "scope", Operator: rules.FieldConstraintEqual, Value: "runtime"},
 				},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(dependencyTemplate),
+				Target: rules.TemplateKeyFact(dependencyTemplate),
 			},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-direct-reachable-dependency"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-direct-reachable-dependency"}},
 	}); err != nil {
 		return err
 	}
-	return workspace.AddRule(gess.RuleSpec{
+	return workspace.AddRule(rules.RuleSpec{
 		Name: "prove-transitive-runtime-dependency",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-reachable-dependency"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-reachable-dependency"))},
+			rules.Match{
 				Binding: "dependency",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "scope", Operator: gess.FieldConstraintEqual, Value: "runtime"},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "scope", Operator: rules.FieldConstraintEqual, Value: "runtime"},
 				},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
 				},
-				Target: gess.TemplateKeyFact(dependencyTemplate),
+				Target: rules.TemplateKeyFact(dependencyTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "tail",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "dependency", Field: "dst"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "dependency", Field: "dst"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(reachableDependencyTemplate),
+				Target: rules.TemplateKeyFact(reachableDependencyTemplate),
 			},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-transitive-reachable-dependency"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-transitive-reachable-dependency"}},
 	})
 }
 
-func fields(pairs ...any) gess.Fields {
-	return gess.MustFields(pairs...)
+func fields(pairs ...any) rules.Fields {
+	return rules.MustFields(pairs...)
 }

@@ -6,15 +6,16 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	requestTemplate  = gess.TemplateKey("deployment-request")
-	checkTemplate    = gess.TemplateKey("release-check")
-	hasCheckTemplate = gess.TemplateKey("deployment-has-check")
-	gateTemplate     = gess.TemplateKey("rollout-gate")
+	requestTemplate  = rules.TemplateKey("deployment-request")
+	checkTemplate    = rules.TemplateKey("release-check")
+	hasCheckTemplate = rules.TemplateKey("deployment-has-check")
+	gateTemplate     = rules.TemplateKey("rollout-gate")
 )
 
 func main() {
@@ -30,15 +31,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	for _, fact := range []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{requestTemplate, exampleutil.Fields("service", "checkout", "version", "2026.06.1")},
 		{checkTemplate, exampleutil.Fields("service", "checkout", "name", "tests", "status", "pass")},
@@ -64,106 +65,106 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	for _, spec := range []gess.TemplateSpec{
-		{Name: string(requestTemplate), Fields: []gess.FieldSpec{
-			{Name: "service", Kind: gess.ValueString, Required: true},
-			{Name: "version", Kind: gess.ValueString, Required: true},
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	for _, spec := range []rules.TemplateSpec{
+		{Name: string(requestTemplate), Fields: []rules.FieldSpec{
+			{Name: "service", Kind: rules.ValueString, Required: true},
+			{Name: "version", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(checkTemplate), DuplicatePolicy: gess.DuplicateAllow, Fields: []gess.FieldSpec{
-			{Name: "service", Kind: gess.ValueString, Required: true},
-			{Name: "name", Kind: gess.ValueString, Required: true},
-			{Name: "status", Kind: gess.ValueString, Required: true},
+		{Name: string(checkTemplate), DuplicatePolicy: rules.DuplicateAllow, Fields: []rules.FieldSpec{
+			{Name: "service", Kind: rules.ValueString, Required: true},
+			{Name: "name", Kind: rules.ValueString, Required: true},
+			{Name: "status", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(hasCheckTemplate), DuplicatePolicy: gess.DuplicateUniqueKey, DuplicateKeyNames: []string{"service", "version"}, Fields: []gess.FieldSpec{
-			{Name: "service", Kind: gess.ValueString, Required: true},
-			{Name: "version", Kind: gess.ValueString, Required: true},
+		{Name: string(hasCheckTemplate), DuplicatePolicy: rules.DuplicateUniqueKey, DuplicateKeyNames: []string{"service", "version"}, Fields: []rules.FieldSpec{
+			{Name: "service", Kind: rules.ValueString, Required: true},
+			{Name: "version", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(gateTemplate), DuplicatePolicy: gess.DuplicateUniqueKey, DuplicateKeyNames: []string{"service", "version"}, Fields: []gess.FieldSpec{
-			{Name: "service", Kind: gess.ValueString, Required: true},
-			{Name: "version", Kind: gess.ValueString, Required: true},
+		{Name: string(gateTemplate), DuplicatePolicy: rules.DuplicateUniqueKey, DuplicateKeyNames: []string{"service", "version"}, Fields: []rules.FieldSpec{
+			{Name: "service", Kind: rules.ValueString, Required: true},
+			{Name: "version", Kind: rules.ValueString, Required: true},
 		}},
 	} {
 		if err := workspace.AddTemplate(spec); err != nil {
 			return nil, err
 		}
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "mark-has-check",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			service, _ := ctx.BindingScalarValue("request", "service")
 			version, _ := ctx.BindingScalarValue("request", "version")
-			_, err := ctx.AssertTemplate(hasCheckTemplate, gess.Fields{"service": service, "version": version})
+			_, err := ctx.AssertTemplate(hasCheckTemplate, rules.Fields{"service": service, "version": version})
 			return err
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "open-gate",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			service, _ := ctx.BindingScalarValue("request", "service")
 			version, _ := ctx.BindingScalarValue("request", "version")
-			_, err := ctx.AssertTemplate(gateTemplate, gess.Fields{"service": service, "version": version})
+			_, err := ctx.AssertTemplate(gateTemplate, rules.Fields{"service": service, "version": version})
 			return err
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "deployment-request-has-checks",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "request", Target: gess.TemplateKeyFact(requestTemplate)},
-			gess.Exists(gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "request", Target: rules.TemplateKeyFact(requestTemplate)},
+			rules.Exists(rules.Match{
 				Binding: "check",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "service", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "request", Field: "service"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "service", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "request", Field: "service"}},
 				},
-				Target: gess.TemplateKeyFact(checkTemplate),
+				Target: rules.TemplateKeyFact(checkTemplate),
 			}),
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "mark-has-check"}},
+		Actions: []rules.RuleActionSpec{{Name: "mark-has-check"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "deployment-request-with-all-checks-passing",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "request", Target: gess.TemplateKeyFact(requestTemplate)},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "request", Target: rules.TemplateKeyFact(requestTemplate)},
+			rules.Match{
 				Binding: "hasCheck",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "service", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "request", Field: "service"}},
-					{Field: "version", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "request", Field: "version"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "service", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "request", Field: "service"}},
+					{Field: "version", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "request", Field: "version"}},
 				},
-				Target: gess.TemplateKeyFact(hasCheckTemplate),
+				Target: rules.TemplateKeyFact(hasCheckTemplate),
 			},
-			gess.Forall(
-				gess.Match{
+			rules.Forall(
+				rules.Match{
 					Binding: "candidate",
-					JoinConstraints: []gess.JoinConstraintSpec{
-						{Field: "service", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "request", Field: "service"}},
+					JoinConstraints: []rules.JoinConstraintSpec{
+						{Field: "service", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "request", Field: "service"}},
 					},
-					Target: gess.TemplateKeyFact(checkTemplate),
+					Target: rules.TemplateKeyFact(checkTemplate),
 				},
-				gess.Test{Expression: gess.CompareExpr{
-					Operator: gess.ExpressionCompareEqual,
-					Left:     gess.BindingPath("candidate", gess.Path("status")),
-					Right:    gess.ConstExpr{Value: "pass"},
+				rules.Test{Expression: rules.CompareExpr{
+					Operator: rules.ExpressionCompareEqual,
+					Left:     rules.BindingPath("candidate", rules.Path("status")),
+					Right:    rules.ConstExpr{Value: "pass"},
 				}},
 			),
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "open-gate"}},
+		Actions: []rules.RuleActionSpec{{Name: "open-gate"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name:          "open-gates",
-		ConditionTree: gess.Match{Binding: "gate", Target: gess.TemplateKeyFact(gateTemplate)},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("service", gess.BindingFieldExpr{Binding: "gate", Field: "service"}),
-			gess.ReturnValue("version", gess.BindingFieldExpr{Binding: "gate", Field: "version"}),
+		ConditionTree: rules.Match{Binding: "gate", Target: rules.TemplateKeyFact(gateTemplate)},
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("service", rules.BindingFieldExpr{Binding: "gate", Field: "service"}),
+			rules.ReturnValue("version", rules.BindingFieldExpr{Binding: "gate", Field: "version"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -171,7 +172,7 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func stringValue(row gess.QueryRow, alias string) string {
+func stringValue(row sess.QueryRow, alias string) string {
 	value, _ := row.Value(alias)
 	out, _ := value.AsString()
 	return out

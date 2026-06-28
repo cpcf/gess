@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
+	dsl "github.com/cpcf/gess/dsl"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 //go:generate go run ../../../cmd/gessc -package main -func buildGeneratedRuleset -o rules_generated.go rules.gess
@@ -24,7 +26,7 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset, gess.WithInitialFacts(initials...))
+	session, err := sess.New(ruleset, sess.WithInitialFacts(initials...))
 	if err != nil {
 		return err
 	}
@@ -33,7 +35,7 @@ func run(out io.Writer) error {
 	if _, err := session.Run(ctx); err != nil {
 		return err
 	}
-	rows, err := session.QueryAll(ctx, "routes-by-lane", gess.QueryArgs{"lane": "expedite"})
+	rows, err := session.QueryAll(ctx, "routes-by-lane", sess.QueryArgs{"lane": "expedite"})
 	if err != nil {
 		return err
 	}
@@ -43,11 +45,11 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, []gess.SessionInitialFact, error) {
-	return buildGeneratedRuleset(ctx, gess.DSLRegistry{})
+func buildRuleset(ctx context.Context) (*rules.Ruleset, []sess.InitialFact, error) {
+	return buildGeneratedRuleset(ctx, dsl.Registry{})
 }
 
-func stringValue(row gess.QueryRow, alias string) string {
+func stringValue(row sess.QueryRow, alias string) string {
 	value, _ := row.Value(alias)
 	out, _ := value.AsString()
 	return out

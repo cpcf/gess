@@ -6,19 +6,20 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	claimTemplate          = gess.TemplateKey("claim")
-	policyTemplate         = gess.TemplateKey("policy")
-	coverageTemplate       = gess.TemplateKey("coverage")
-	exclusionTemplate      = gess.TemplateKey("exclusion")
-	duplicateTemplate      = gess.TemplateKey("duplicate-claim")
-	vendorTemplate         = gess.TemplateKey("vendor")
-	estimateTemplate       = gess.TemplateKey("repair-estimate")
-	approvedVendorTemplate = gess.TemplateKey("approved-vendor")
-	payableClaimTemplate   = gess.TemplateKey("payable-claim")
+	claimTemplate          = rules.TemplateKey("claim")
+	policyTemplate         = rules.TemplateKey("policy")
+	coverageTemplate       = rules.TemplateKey("coverage")
+	exclusionTemplate      = rules.TemplateKey("exclusion")
+	duplicateTemplate      = rules.TemplateKey("duplicate-claim")
+	vendorTemplate         = rules.TemplateKey("vendor")
+	estimateTemplate       = rules.TemplateKey("repair-estimate")
+	approvedVendorTemplate = rules.TemplateKey("approved-vendor")
+	payableClaimTemplate   = rules.TemplateKey("payable-claim")
 	payableQuery           = "payable-claim"
 )
 
@@ -35,15 +36,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	for _, fact := range []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{policyTemplate, fields("id", "P-100", "status", "active")},
 		{policyTemplate, fields("id", "P-200", "status", "active")},
@@ -69,7 +70,7 @@ func run(out io.Writer) error {
 	}
 
 	for _, claim := range []string{"C-100", "C-200", "C-300", "C-400"} {
-		rows, err := session.QueryAll(ctx, payableQuery, gess.QueryArgs{"claim": claim})
+		rows, err := session.QueryAll(ctx, payableQuery, sess.QueryArgs{"claim": claim})
 		if err != nil {
 			return err
 		}
@@ -84,55 +85,55 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	for _, spec := range []gess.TemplateSpec{
-		{Name: string(claimTemplate), Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "policy", Kind: gess.ValueString, Required: true},
-			{Name: "cause", Kind: gess.ValueString, Required: true},
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	for _, spec := range []rules.TemplateSpec{
+		{Name: string(claimTemplate), Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "policy", Kind: rules.ValueString, Required: true},
+			{Name: "cause", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(policyTemplate), Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "status", Kind: gess.ValueString, Required: true},
+		{Name: string(policyTemplate), Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "status", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(coverageTemplate), Fields: []gess.FieldSpec{
-			{Name: "policy", Kind: gess.ValueString, Required: true},
-			{Name: "cause", Kind: gess.ValueString, Required: true},
+		{Name: string(coverageTemplate), Fields: []rules.FieldSpec{
+			{Name: "policy", Kind: rules.ValueString, Required: true},
+			{Name: "cause", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(exclusionTemplate), Fields: []gess.FieldSpec{
-			{Name: "policy", Kind: gess.ValueString, Required: true},
-			{Name: "cause", Kind: gess.ValueString, Required: true},
-			{Name: "reason", Kind: gess.ValueString, Required: true},
+		{Name: string(exclusionTemplate), Fields: []rules.FieldSpec{
+			{Name: "policy", Kind: rules.ValueString, Required: true},
+			{Name: "cause", Kind: rules.ValueString, Required: true},
+			{Name: "reason", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(duplicateTemplate), Fields: []gess.FieldSpec{
-			{Name: "claim", Kind: gess.ValueString, Required: true},
-			{Name: "original", Kind: gess.ValueString, Required: true},
+		{Name: string(duplicateTemplate), Fields: []rules.FieldSpec{
+			{Name: "claim", Kind: rules.ValueString, Required: true},
+			{Name: "original", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(vendorTemplate), Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "parent", Kind: gess.ValueString, Required: true},
-			{Name: "status", Kind: gess.ValueString, Required: true},
+		{Name: string(vendorTemplate), Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "parent", Kind: rules.ValueString, Required: true},
+			{Name: "status", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(estimateTemplate), Fields: []gess.FieldSpec{
-			{Name: "claim", Kind: gess.ValueString, Required: true},
-			{Name: "vendor", Kind: gess.ValueString, Required: true},
+		{Name: string(estimateTemplate), Fields: []rules.FieldSpec{
+			{Name: "claim", Kind: rules.ValueString, Required: true},
+			{Name: "vendor", Kind: rules.ValueString, Required: true},
 		}},
 		{
 			Name:              string(approvedVendorTemplate),
 			BackchainReactive: true,
-			DuplicatePolicy:   gess.DuplicateUniqueKey,
+			DuplicatePolicy:   rules.DuplicateUniqueKey,
 			DuplicateKeyNames: []string{"vendor"},
-			Fields:            []gess.FieldSpec{{Name: "vendor", Kind: gess.ValueString, Required: true}},
+			Fields:            []rules.FieldSpec{{Name: "vendor", Kind: rules.ValueString, Required: true}},
 		},
 		{
 			Name:              string(payableClaimTemplate),
 			BackchainReactive: true,
-			DuplicatePolicy:   gess.DuplicateUniqueKey,
+			DuplicatePolicy:   rules.DuplicateUniqueKey,
 			DuplicateKeyNames: []string{"claim"},
-			Fields: []gess.FieldSpec{
-				{Name: "claim", Kind: gess.ValueString, Required: true},
-				{Name: "result", Kind: gess.ValueString, Required: true},
+			Fields: []rules.FieldSpec{
+				{Name: "claim", Kind: rules.ValueString, Required: true},
+				{Name: "result", Kind: rules.ValueString, Required: true},
 			},
 		},
 	} {
@@ -140,28 +141,28 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 			return nil, err
 		}
 	}
-	for _, spec := range []gess.ActionSpec{
+	for _, spec := range []rules.ActionSpec{
 		{
 			Name: "assert-direct-approved-vendor",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: approvedVendorTemplate,
-				Values:      []gess.ExpressionSpec{gess.BindingFieldExpr{Binding: "need", Field: "vendor"}},
+				Values:      []rules.ExpressionSpec{rules.BindingFieldExpr{Binding: "need", Field: "vendor"}},
 			},
 		},
 		{
 			Name: "assert-inherited-approved-vendor",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: approvedVendorTemplate,
-				Values:      []gess.ExpressionSpec{gess.BindingFieldExpr{Binding: "need", Field: "vendor"}},
+				Values:      []rules.ExpressionSpec{rules.BindingFieldExpr{Binding: "need", Field: "vendor"}},
 			},
 		},
 		{
 			Name: "assert-payable-claim",
-			AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+			AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 				TemplateKey: payableClaimTemplate,
-				Values: []gess.ExpressionSpec{
-					gess.BindingFieldExpr{Binding: "need", Field: "claim"},
-					gess.ConstExpr{Value: "payable"},
+				Values: []rules.ExpressionSpec{
+					rules.BindingFieldExpr{Binding: "need", Field: "claim"},
+					rules.ConstExpr{Value: "payable"},
 				},
 			},
 		},
@@ -173,80 +174,80 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	if err := addVendorRules(workspace); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-payable-property-claim",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-payable-claim"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-payable-claim"))},
+			rules.Match{
 				Binding: "claim",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "id", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "claim"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "id", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "claim"}},
 				},
-				Target: gess.TemplateKeyFact(claimTemplate),
+				Target: rules.TemplateKeyFact(claimTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding:          "policy",
-				FieldConstraints: []gess.FieldConstraintSpec{{Field: "status", Operator: gess.FieldConstraintEqual, Value: "active"}},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "id", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "policy"}},
+				FieldConstraints: []rules.FieldConstraintSpec{{Field: "status", Operator: rules.FieldConstraintEqual, Value: "active"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "id", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "policy"}},
 				},
-				Target: gess.TemplateKeyFact(policyTemplate),
+				Target: rules.TemplateKeyFact(policyTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "coverage",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "policy", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "policy"}},
-					{Field: "cause", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "cause"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "policy", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "policy"}},
+					{Field: "cause", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "cause"}},
 				},
-				Target: gess.TemplateKeyFact(coverageTemplate),
+				Target: rules.TemplateKeyFact(coverageTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "estimate",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "claim", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "id"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "claim", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "id"}},
 				},
-				Target: gess.TemplateKeyFact(estimateTemplate),
+				Target: rules.TemplateKeyFact(estimateTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "approved",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "vendor", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "estimate", Field: "vendor"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "vendor", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "estimate", Field: "vendor"}},
 				},
-				Target: gess.TemplateKeyFact(approvedVendorTemplate),
+				Target: rules.TemplateKeyFact(approvedVendorTemplate),
 			},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "exclusion",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "policy", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "policy"}},
-					{Field: "cause", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "cause"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "policy", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "policy"}},
+					{Field: "cause", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "cause"}},
 				},
-				Target: gess.TemplateKeyFact(exclusionTemplate),
+				Target: rules.TemplateKeyFact(exclusionTemplate),
 			}},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "duplicate",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "claim", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "claim", Field: "id"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "claim", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "claim", Field: "id"}},
 				},
-				Target: gess.TemplateKeyFact(duplicateTemplate),
+				Target: rules.TemplateKeyFact(duplicateTemplate),
 			}},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-payable-claim"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-payable-claim"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name:       payableQuery,
-		Parameters: []gess.QueryParameterSpec{{Name: "claim", Kind: gess.ValueString}},
-		ConditionTree: gess.Match{
+		Parameters: []rules.QueryParameterSpec{{Name: "claim", Kind: rules.ValueString}},
+		ConditionTree: rules.Match{
 			Binding: "payable",
-			Predicates: []gess.ExpressionSpec{
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "claim"}, Right: gess.ParamExpr{Name: "claim"}},
+			Predicates: []rules.ExpressionSpec{
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "claim"}, Right: rules.ParamExpr{Name: "claim"}},
 			},
-			Target: gess.TemplateKeyFact(payableClaimTemplate),
+			Target: rules.TemplateKeyFact(payableClaimTemplate),
 		},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("claim", gess.BindingFieldExpr{Binding: "payable", Field: "claim"}),
-			gess.ReturnValue("result", gess.BindingFieldExpr{Binding: "payable", Field: "result"}),
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("claim", rules.BindingFieldExpr{Binding: "payable", Field: "claim"}),
+			rules.ReturnValue("result", rules.BindingFieldExpr{Binding: "payable", Field: "result"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -254,47 +255,47 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func addVendorRules(workspace *gess.Workspace) error {
-	if err := workspace.AddRule(gess.RuleSpec{
+func addVendorRules(workspace *rules.Workspace) error {
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-direct-approved-vendor",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-approved-vendor"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-approved-vendor"))},
+			rules.Match{
 				Binding:          "vendor",
-				FieldConstraints: []gess.FieldConstraintSpec{{Field: "status", Operator: gess.FieldConstraintEqual, Value: "approved"}},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "id", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "vendor"}},
+				FieldConstraints: []rules.FieldConstraintSpec{{Field: "status", Operator: rules.FieldConstraintEqual, Value: "approved"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "id", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "vendor"}},
 				},
-				Target: gess.TemplateKeyFact(vendorTemplate),
+				Target: rules.TemplateKeyFact(vendorTemplate),
 			},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-direct-approved-vendor"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-direct-approved-vendor"}},
 	}); err != nil {
 		return err
 	}
-	return workspace.AddRule(gess.RuleSpec{
+	return workspace.AddRule(rules.RuleSpec{
 		Name: "prove-inherited-approved-vendor",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-approved-vendor"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-approved-vendor"))},
+			rules.Match{
 				Binding: "vendor",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "id", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "vendor"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "id", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "vendor"}},
 				},
-				Target: gess.TemplateKeyFact(vendorTemplate),
+				Target: rules.TemplateKeyFact(vendorTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "parent",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "vendor", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "vendor", Field: "parent"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "vendor", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "vendor", Field: "parent"}},
 				},
-				Target: gess.TemplateKeyFact(approvedVendorTemplate),
+				Target: rules.TemplateKeyFact(approvedVendorTemplate),
 			},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-inherited-approved-vendor"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-inherited-approved-vendor"}},
 	})
 }
 
-func fields(pairs ...any) gess.Fields {
-	return gess.MustFields(pairs...)
+func fields(pairs ...any) rules.Fields {
+	return rules.MustFields(pairs...)
 }

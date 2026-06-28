@@ -1,0 +1,1507 @@
+package engine
+
+import (
+	"maps"
+	"math"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type FactVersion uint64
+
+type Recency uint64
+
+// Generation is the working-memory reset epoch. Fact IDs include a generation
+// component so IDs from before Reset cannot address post-reset facts.
+type Generation uint64
+
+type FactSnapshot struct {
+	id            FactID
+	name          string
+	templateKey   TemplateKey
+	version       FactVersion
+	recency       Recency
+	generation    Generation
+	fields        Fields
+	fieldSlots    []factSlot
+	fieldSpecs    []FieldSpec
+	fieldPresence map[string]FieldPresence
+	support       FactSupportProvenance
+}
+
+type conditionFactRef struct {
+	id          FactID
+	name        string
+	templateKey TemplateKey
+	version     FactVersion
+	recency     Recency
+	generation  Generation
+	fields      Fields
+	fieldSlots  []factSlot
+	fieldSpecs  []FieldSpec
+}
+
+func (f FactSnapshot) ID() FactID {
+	return f.id
+}
+
+func (f FactSnapshot) Name() string {
+	return f.name
+}
+
+func (f FactSnapshot) TemplateKey() TemplateKey {
+	return f.templateKey
+}
+
+func (f FactSnapshot) Version() FactVersion {
+	return f.version
+}
+
+func (f FactSnapshot) Recency() Recency {
+	return f.recency
+}
+
+func (f FactSnapshot) Generation() Generation {
+	return f.generation
+}
+
+// Fields returns a defensive copy of the fact fields.
+func (f FactSnapshot) Fields() Fields {
+	if f.fields != nil {
+		return cloneFields(f.fields)
+	}
+	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+// Field returns a defensive copy of one fact field.
+func (f FactSnapshot) Field(name string) (Value, bool) {
+	value, ok := f.fieldValue(name)
+	if !ok {
+		return Value{}, false
+	}
+	return cloneValue(value), true
+}
+
+func (f FactSnapshot) Path(path PathSpec) (Value, bool, error) {
+	access, _, err := compilePathAccess(path, nil)
+	if err != nil {
+		return Value{}, false, err
+	}
+	value, ok := access.valueFromSnapshot(f)
+	if !ok {
+		return Value{}, false, nil
+	}
+	return cloneValue(value), true, nil
+}
+
+func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+
+	return f.fieldValue(field)
+}
+
+func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
+	if f == nil {
+		return Value{}, false
+	}
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	return f.fieldValue(field)
+}
+
+func (f FactSnapshot) Support() FactSupportProvenance {
+	return f.support
+}
+
+func newConditionFactRefFromSnapshot(snapshot FactSnapshot) conditionFactRef {
+	return conditionFactRef{
+		id:          snapshot.id,
+		name:        snapshot.name,
+		templateKey: snapshot.templateKey,
+		version:     snapshot.version,
+		recency:     snapshot.recency,
+		generation:  snapshot.generation,
+		fields:      snapshot.fields,
+		fieldSlots:  snapshot.fieldSlots,
+		fieldSpecs:  snapshot.fieldSpecs,
+	}
+}
+
+func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
+	if fact == nil {
+		return conditionFactRef{}
+	}
+	return conditionFactRef{
+		id:          fact.id,
+		name:        fact.name,
+		templateKey: fact.templateKey,
+		version:     fact.version,
+		recency:     fact.recency,
+		generation:  fact.id.Generation(),
+		fieldSlots:  fact.fieldSlots,
+	}
+}
+
+func (f conditionFactRef) ID() FactID {
+	return f.id
+}
+
+func (f conditionFactRef) Name() string {
+	return f.name
+}
+
+func (f conditionFactRef) TemplateKey() TemplateKey {
+	return f.templateKey
+}
+
+func (f conditionFactRef) Version() FactVersion {
+	return f.version
+}
+
+func (f conditionFactRef) Recency() Recency {
+	return f.recency
+}
+
+func (f conditionFactRef) Generation() Generation {
+	return f.generation
+}
+
+func (f conditionFactRef) compiledFieldValue(field string, slot int) (Value, bool) {
+	if slot >= 0 && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	if f.fields != nil {
+		value, ok := f.fields[field]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	return Value{}, false
+}
+
+func (f conditionFactRef) Fields() Fields {
+	if f.fields != nil {
+		return cloneFields(f.fields)
+	}
+	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+func (f conditionFactRef) Field(name string) (Value, bool) {
+	value, ok := f.compiledFieldValue(name, -1)
+	if !ok {
+		return Value{}, false
+	}
+	return cloneValue(value), true
+}
+
+func (f conditionFactRef) FieldPresence(field string) (FieldPresence, bool) {
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		return f.fieldSlots[slot].presence.fieldPresence(), true
+	}
+	return FieldPresence(""), false
+}
+
+func (f conditionFactRef) FieldPresenceMap() map[string]FieldPresence {
+	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+func (f conditionFactRef) snapshot() FactSnapshot {
+	return FactSnapshot{
+		id:          f.id,
+		name:        f.name,
+		templateKey: f.templateKey,
+		version:     f.version,
+		recency:     f.recency,
+		generation:  f.generation,
+		fields:      cloneFields(f.fields),
+		fieldSlots:  cloneFactSlots(f.fieldSlots),
+		fieldSpecs:  f.fieldSpecs,
+	}
+}
+
+func (f conditionFactRef) fieldSlot(name string) (int, bool) {
+	for i, spec := range f.fieldSpecs {
+		if spec.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+type workingFact struct {
+	id                   FactID
+	name                 string
+	templateKey          TemplateKey
+	version              FactVersion
+	recency              Recency
+	supportState         FactSupportState
+	fields               Fields
+	fieldSlots           []factSlot
+	fieldPresence        map[string]FieldPresence
+	dupIndex             duplicateIndexKey
+	targetIndexesSkipped bool
+}
+
+type duplicateIndexKind uint8
+
+const (
+	duplicateIndexString duplicateIndexKind = iota
+	duplicateIndexSingleInt
+	duplicateIndexDoubleInt
+	duplicateIndexSingleScalar
+	duplicateIndexDoubleScalar
+	duplicateIndexStructural
+)
+
+type duplicateScalarKind uint8
+
+const (
+	duplicateScalarNull duplicateScalarKind = iota
+	duplicateScalarBool
+	duplicateScalarInt
+	duplicateScalarFloat
+	duplicateScalarString
+)
+
+type duplicateScalarKey struct {
+	kind        duplicateScalarKind
+	bits        uint64
+	stringValue string
+}
+
+func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
+	switch value.Kind() {
+	case ValueNull:
+		return duplicateScalarKey{kind: duplicateScalarNull}, true
+	case ValueBool:
+		var bits uint64
+		if value.boolValue {
+			bits = 1
+		}
+		return duplicateScalarKey{kind: duplicateScalarBool, bits: bits}, true
+	case ValueInt:
+		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(value.intValue)}, true
+	case ValueFloat:
+		floating := value.floatValue
+		if math.IsNaN(floating) {
+			return duplicateScalarKey{}, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(int64(floating))}, true
+		}
+		return duplicateScalarKey{kind: duplicateScalarFloat, bits: math.Float64bits(floating)}, true
+	case ValueString:
+		return duplicateScalarKey{kind: duplicateScalarString, stringValue: value.stringValue}, true
+	default:
+		return duplicateScalarKey{}, false
+	}
+}
+
+func (k duplicateScalarKey) value() Value {
+	switch k.kind {
+	case duplicateScalarNull:
+		return NullValue()
+	case duplicateScalarBool:
+		return newBoolValue(k.bits != 0)
+	case duplicateScalarInt:
+		return newIntValue(int64(k.bits))
+	case duplicateScalarFloat:
+		return newFloatValue(math.Float64frombits(k.bits))
+	case duplicateScalarString:
+		return newStringValue(k.stringValue)
+	default:
+		return Value{}
+	}
+}
+
+type duplicateIndexKey struct {
+	kind        duplicateIndexKind
+	templateKey TemplateKey
+	firstInt    int64
+	secondInt   int64
+	first       duplicateScalarKey
+	second      duplicateScalarKey
+	stringKey   DuplicateKey
+	hash        uint64
+}
+
+type compiledGeneratedFactInsertPlan struct {
+	template              Template
+	name                  string
+	templateKey           TemplateKey
+	duplicatePolicy       DuplicatePolicy
+	duplicateIndexMode    duplicateIndexKind
+	duplicateKeySlots     []int
+	structuralHashPrefix  uint64
+	structuralScalarKinds []ValueKind
+	affectsRuleMatches    bool
+	affectsRete           bool
+}
+
+func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
+	plan := compiledGeneratedFactInsertPlan{
+		template:           template,
+		name:               template.Name(),
+		templateKey:        template.Key(),
+		duplicatePolicy:    template.duplicatePolicy,
+		duplicateIndexMode: template.duplicateIndexMode,
+		affectsRuleMatches: true,
+		affectsRete:        true,
+	}
+	if len(template.duplicateKeySlots) > 0 {
+		plan.duplicateKeySlots = slices.Clone(template.duplicateKeySlots)
+	}
+	if template.duplicatePolicy == DuplicateStructural && template.closed && len(template.fields) > 0 {
+		plan.structuralHashPrefix = structuralDuplicateHashString(structuralDuplicateHashOffset, template.key.String())
+		plan.structuralScalarKinds = compiledStructuralDuplicateScalarKinds(template)
+	}
+	return plan
+}
+
+func (p *compiledGeneratedFactInsertPlan) valid() bool {
+	return p != nil && p.templateKey != ""
+}
+
+func (p *compiledGeneratedFactInsertPlan) duplicateIndex(slots []factSlot) duplicateIndexKey {
+	switch p.duplicatePolicy {
+	case DuplicateAllow:
+		return duplicateIndexKey{}
+	case DuplicateUniqueKey:
+		if index, ok := p.typedDuplicateIndex(slots); ok {
+			return index
+		}
+	case DuplicateStructural:
+		if index, ok := p.structuralDuplicateIndex(slots); ok {
+			return index
+		}
+	}
+	return makeDuplicateIndexForValidatedFact(p.name, p.template, nil, slots)
+}
+
+func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) (duplicateIndexKey, bool) {
+	if p.duplicatePolicy != DuplicateUniqueKey {
+		return duplicateIndexKey{}, false
+	}
+	switch p.duplicateIndexMode {
+	case duplicateIndexSingleScalar:
+		if len(p.duplicateKeySlots) != 1 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if first.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexSingleInt,
+				templateKey: p.templateKey,
+				firstInt:    int64(first.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexSingleScalar,
+			templateKey: p.templateKey,
+			first:       first,
+		}, true
+	case duplicateIndexDoubleScalar:
+		if len(p.duplicateKeySlots) != 2 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if first.kind == duplicateScalarInt && second.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexDoubleInt,
+				templateKey: p.templateKey,
+				firstInt:    int64(first.bits),
+				secondInt:   int64(second.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexDoubleScalar,
+			templateKey: p.templateKey,
+			first:       first,
+			second:      second,
+		}, true
+	default:
+		return duplicateIndexKey{}, false
+	}
+}
+
+func duplicateScalarKeyFromFactSlot(slots []factSlot, slot int) (duplicateScalarKey, bool) {
+	if slot < 0 || slot >= len(slots) {
+		return duplicateScalarKey{}, false
+	}
+	current := slots[slot]
+	if !current.ok {
+		return duplicateScalarKey{}, false
+	}
+	return duplicateScalarKeyFromValue(current.value)
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factSlot) (duplicateIndexKey, bool) {
+	if p.duplicatePolicy != DuplicateStructural || p.structuralHashPrefix == 0 || len(slots) == 0 || len(p.template.fields) == 0 {
+		return duplicateIndexKey{}, false
+	}
+	hash, ok := p.structuralScalarDuplicateHash(slots)
+	if !ok {
+		hash, ok = structuralDuplicateSlotsHashWithPrefix(p.template, slots, p.structuralHashPrefix)
+	}
+	if !ok {
+		return duplicateIndexKey{}, false
+	}
+	return duplicateIndexKey{
+		kind:        duplicateIndexStructural,
+		templateKey: p.templateKey,
+		hash:        hash,
+	}, true
+}
+
+func compiledStructuralDuplicateScalarKinds(template Template) []ValueKind {
+	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(template.fields) == 0 {
+		return nil
+	}
+	kinds := make([]ValueKind, len(template.fields))
+	for i, field := range template.fields {
+		switch field.Kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+			kinds[i] = field.Kind
+		default:
+			return nil
+		}
+	}
+	return kinds
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateHash(slots []factSlot) (uint64, bool) {
+	if len(p.structuralScalarKinds) == 0 {
+		return 0, false
+	}
+	hash := p.structuralHashPrefix
+	for i := range p.structuralScalarKinds {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			hash = structuralDuplicateHashByte(hash, 0)
+			continue
+		}
+		var ok bool
+		hash, ok = structuralDuplicateHashKnownScalarValue(hash, p.structuralScalarKinds[i], slot.value)
+		if !ok {
+			return 0, false
+		}
+	}
+	return hash, true
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateSlotsEqual(left, right []factSlot) (bool, bool) {
+	if len(p.structuralScalarKinds) == 0 {
+		return false, false
+	}
+	for i, kind := range p.structuralScalarKinds {
+		var leftSlot, rightSlot factSlot
+		if i < len(left) {
+			leftSlot = left[i]
+		}
+		if i < len(right) {
+			rightSlot = right[i]
+		}
+		if leftSlot.ok != rightSlot.ok {
+			return false, true
+		}
+		if !leftSlot.ok {
+			continue
+		}
+		equal, ok := structuralDuplicateScalarValuesEqual(kind, leftSlot.value, rightSlot.value)
+		if !ok {
+			return false, false
+		}
+		if !equal {
+			return false, true
+		}
+	}
+	return true, true
+}
+
+func (k duplicateIndexKey) isZero() bool {
+	return k.kind == duplicateIndexString && k.templateKey == "" && k.stringKey == ""
+}
+
+func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) DuplicateKey {
+	switch k.kind {
+	case duplicateIndexSingleInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		return DuplicateKey(b.String())
+	case duplicateIndexDoubleInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[1], k.secondInt)
+		return DuplicateKey(b.String())
+	case duplicateIndexSingleScalar:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[0], k.first)
+		return DuplicateKey(b.String())
+	case duplicateIndexDoubleScalar:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[0], k.first)
+		writeDuplicateScalarKeyEntry(&b, template.duplicateKeyNames[1], k.second)
+		return DuplicateKey(b.String())
+	default:
+		return k.stringKey
+	}
+}
+
+func (k duplicateIndexKey) publicKeyCapacity(name string, template Template) int {
+	size := len("name:") + len(name) + len("|template:") + len(k.templateKey) + len("|fields:")
+	switch k.kind {
+	case duplicateIndexSingleInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+	case duplicateIndexDoubleInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+		size += len(template.duplicateKeyNames[1]) + 2 + len("number:") + int64Len(k.secondInt)
+	case duplicateIndexSingleScalar:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
+	case duplicateIndexDoubleScalar:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
+		size += len(template.duplicateKeyNames[1]) + 2 + duplicateScalarKeyValueCapacity(k.second)
+	}
+	return size
+}
+
+func writeDuplicateIntKeyEntry(b *strings.Builder, fieldName string, value int64) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	b.WriteString("number:")
+	var buf [20]byte
+	b.Write(strconv.AppendInt(buf[:0], value, 10))
+	b.WriteByte(';')
+}
+
+func writeDuplicateScalarKeyEntry(b *strings.Builder, fieldName string, value duplicateScalarKey) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	encodeDuplicateScalarKey(b, value)
+	b.WriteByte(';')
+}
+
+func encodeDuplicateScalarKey(b *strings.Builder, value duplicateScalarKey) {
+	switch value.kind {
+	case duplicateScalarNull:
+		b.WriteString("null")
+	case duplicateScalarBool:
+		b.WriteString("bool:")
+		if value.bits != 0 {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+	case duplicateScalarInt:
+		b.WriteString("number:")
+		var buf [20]byte
+		b.Write(strconv.AppendInt(buf[:0], int64(value.bits), 10))
+	case duplicateScalarFloat:
+		b.WriteString("number:")
+		floating := math.Float64frombits(value.bits)
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			var buf [20]byte
+			b.Write(strconv.AppendInt(buf[:0], int64(floating), 10))
+			return
+		}
+		var buf [32]byte
+		b.Write(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
+	case duplicateScalarString:
+		b.WriteString("string:")
+		b.WriteString(strconv.Quote(value.stringValue))
+	}
+}
+
+func duplicateScalarKeyValueCapacity(value duplicateScalarKey) int {
+	switch value.kind {
+	case duplicateScalarNull:
+		return len("null")
+	case duplicateScalarBool:
+		if value.bits != 0 {
+			return len("bool:true")
+		}
+		return len("bool:false")
+	case duplicateScalarInt:
+		return len("number:") + int64Len(int64(value.bits))
+	case duplicateScalarFloat:
+		floating := math.Float64frombits(value.bits)
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return len("number:") + int64Len(int64(floating))
+		}
+		var buf [32]byte
+		return len("number:") + len(strconv.AppendFloat(buf[:0], floating, 'g', -1, 64))
+	case duplicateScalarString:
+		return len("string:") + len(value.stringValue) + len(`""`) + len(`\u0000`)
+	default:
+		return len("any")
+	}
+}
+
+type factSlot struct {
+	value    Value
+	presence fieldPresenceCode
+	ok       bool
+}
+
+type fieldPresenceCode uint8
+
+const (
+	fieldPresenceOmitted fieldPresenceCode = iota
+	fieldPresenceDefault
+	fieldPresenceExplicit
+)
+
+func encodeFieldPresence(presence FieldPresence) fieldPresenceCode {
+	switch presence {
+	case FieldPresenceDefault:
+		return fieldPresenceDefault
+	case FieldPresenceExplicit:
+		return fieldPresenceExplicit
+	default:
+		return fieldPresenceOmitted
+	}
+}
+
+func (p fieldPresenceCode) fieldPresence() FieldPresence {
+	switch p {
+	case fieldPresenceDefault:
+		return FieldPresenceDefault
+	case fieldPresenceExplicit:
+		return FieldPresenceExplicit
+	default:
+		return FieldPresenceOmitted
+	}
+}
+
+func (f *workingFact) snapshot() FactSnapshot {
+	return f.snapshotForRevision(nil)
+}
+
+func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
+	return FactSnapshot{
+		id:            f.id,
+		name:          f.name,
+		templateKey:   f.templateKey,
+		version:       f.version,
+		recency:       f.recency,
+		generation:    f.id.Generation(),
+		fields:        cloneFields(f.fields),
+		fieldSlots:    f.fieldSlots,
+		fieldSpecs:    f.fieldSpecsForRevision(revision),
+		fieldPresence: cloneFieldPresence(f.fieldPresence),
+		support:       FactSupportProvenance{State: f.resolvedSupportState()},
+	}
+}
+
+func (f *workingFact) detachedSnapshot() FactSnapshot {
+	return f.detachedSnapshotForRevision(nil)
+}
+
+func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapshot {
+	return FactSnapshot{
+		id:            f.id,
+		name:          f.name,
+		templateKey:   f.templateKey,
+		version:       f.version,
+		recency:       f.recency,
+		generation:    f.id.Generation(),
+		fields:        f.fields,
+		fieldSlots:    f.fieldSlots,
+		fieldSpecs:    f.fieldSpecsForRevision(revision),
+		fieldPresence: f.fieldPresence,
+		support:       FactSupportProvenance{State: f.resolvedSupportState()},
+	}
+}
+
+func (f *workingFact) resolvedSupportState() FactSupportState {
+	if f == nil || f.supportState == "" {
+		return FactSupportStated
+	}
+	return f.supportState
+}
+
+func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
+	if f == nil || len(f.fieldSlots) == 0 || revision == nil {
+		return nil
+	}
+	template, ok := revision.templateByKey(f.templateKey)
+	if !ok {
+		return nil
+	}
+	return template.fields
+}
+
+func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
+	if f == nil || f.dupIndex.isZero() {
+		return ""
+	}
+	template := Template{key: f.templateKey}
+	if revision != nil {
+		if resolved, ok := revision.templateByKey(f.templateKey); ok {
+			template = resolved
+		}
+	}
+	if f.dupIndex.kind == duplicateIndexStructural {
+		return makeDuplicateKeyForTemplateWithSlots(f.name, template, nil, f.fieldSlots)
+	}
+	return f.dupIndex.publicKeyForTemplate(f.name, template)
+}
+
+func (f FactSnapshot) clone() FactSnapshot {
+	return FactSnapshot{
+		id:            f.id,
+		name:          f.name,
+		templateKey:   f.templateKey,
+		version:       f.version,
+		recency:       f.recency,
+		generation:    f.generation,
+		fields:        cloneFields(f.fields),
+		fieldSlots:    cloneFactSlots(f.fieldSlots),
+		fieldSpecs:    f.fieldSpecs,
+		fieldPresence: cloneFieldPresence(f.fieldPresence),
+		support:       f.support,
+	}
+}
+
+func (f FactSnapshot) String() string {
+	fields := f.Fields()
+	presence := f.FieldPresenceMap()
+
+	var b strings.Builder
+	b.WriteString("Fact{")
+	b.WriteString("id:")
+	b.WriteString(f.id.String())
+	b.WriteString(", name:")
+	b.WriteString(f.name)
+	b.WriteString(", template:")
+	b.WriteString(f.templateKey.String())
+	b.WriteString(", version:")
+	b.WriteString(strconv.FormatUint(uint64(f.version), 10))
+	b.WriteString(", recency:")
+	b.WriteString(strconv.FormatUint(uint64(f.recency), 10))
+	b.WriteString(", generation:")
+	b.WriteString(strconv.FormatUint(uint64(f.generation), 10))
+	b.WriteString(", fields:{")
+	emitOrderedFieldsString(&b, fields)
+	b.WriteString("}, presence:{")
+	emitOrderedPresenceString(&b, presence)
+	b.WriteString("}}")
+	return b.String()
+}
+
+func emitOrderedFieldsString(b *strings.Builder, fields Fields) {
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(fields[key].String())
+	}
+}
+
+func emitOrderedPresenceString(b *strings.Builder, presence map[string]FieldPresence) {
+	keys := make([]string, 0, len(presence))
+	for key := range presence {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(key)
+		b.WriteByte('=')
+		b.WriteString(string(presence[key]))
+	}
+}
+
+func makeDuplicateKey(name string, templateKey TemplateKey, fields Fields) DuplicateKey {
+	return makeDuplicateKeyForTemplate(name, Template{key: templateKey}, fields)
+}
+
+func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) DuplicateKey {
+	var b strings.Builder
+	b.WriteString("name:")
+	b.WriteString(name)
+	b.WriteString("|template:")
+	b.WriteString(template.key.String())
+	b.WriteString("|fields:")
+	emitDuplicateKeyFields(&b, template, fields, nil)
+	return DuplicateKey(b.String())
+}
+
+func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+	_, duplicateKey := makeDuplicateIdentityForValidatedFact(name, template, fields, slots)
+	return duplicateKey
+}
+
+func makeDuplicateIdentityForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, DuplicateKey) {
+	index := makeDuplicateIndexForValidatedFact(name, template, fields, slots)
+	return index, index.publicKeyForTemplate(name, template)
+}
+
+func makeDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) duplicateIndexKey {
+	if template.duplicatePolicy == DuplicateAllow {
+		return duplicateIndexKey{}
+	}
+
+	if index, ok := makeTypedDuplicateIndexForValidatedFact(name, template, fields, slots); ok {
+		return index
+	}
+
+	if index, ok := makeStructuralDuplicateIndexForValidatedFact(template, slots); ok {
+		return index
+	}
+
+	if len(slots) > 0 {
+		duplicateKey := makeDuplicateKeyForTemplateWithSlots(name, template, fields, slots)
+		return duplicateIndexKey{
+			kind:        duplicateIndexString,
+			templateKey: template.key,
+			stringKey:   duplicateKey,
+		}
+	}
+
+	duplicateKey := makeDuplicateKeyForTemplate(name, template, fields)
+	return duplicateIndexKey{
+		kind:        duplicateIndexString,
+		templateKey: template.key,
+		stringKey:   duplicateKey,
+	}
+}
+
+func makeStructuralDuplicateIndexForValidatedFact(template Template, slots []factSlot) (duplicateIndexKey, bool) {
+	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(slots) == 0 || len(template.fields) == 0 {
+		return duplicateIndexKey{}, false
+	}
+	hash, ok := structuralDuplicateSlotsHash(template, slots)
+	if !ok {
+		return duplicateIndexKey{}, false
+	}
+	return duplicateIndexKey{
+		kind:        duplicateIndexStructural,
+		templateKey: template.key,
+		hash:        hash,
+	}, true
+}
+
+func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+	var b strings.Builder
+	if len(slots) > 0 {
+		b.Grow(duplicateKeyCapacity(name, template, fields, slots))
+	}
+	b.WriteString("name:")
+	b.WriteString(name)
+	b.WriteString("|template:")
+	b.WriteString(template.key.String())
+	b.WriteString("|fields:")
+	emitDuplicateKeyFields(&b, template, fields, slots)
+	return DuplicateKey(b.String())
+}
+
+func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, bool) {
+	switch template.duplicateIndexMode {
+	case duplicateIndexSingleScalar:
+		fieldName := template.duplicateKeyNames[0]
+		value, ok := duplicateFieldValue(fieldName, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		scalar, ok := duplicateScalarKeyFromValue(value)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if scalar.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexSingleInt,
+				templateKey: template.key,
+				firstInt:    int64(scalar.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexSingleScalar,
+			templateKey: template.key,
+			first:       scalar,
+		}, true
+	case duplicateIndexDoubleScalar:
+		firstField := template.duplicateKeyNames[0]
+		secondField := template.duplicateKeyNames[1]
+		firstValue, ok := duplicateFieldValue(firstField, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondValue, ok := duplicateFieldValue(secondField, template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		firstScalar, ok := duplicateScalarKeyFromValue(firstValue)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondScalar, ok := duplicateScalarKeyFromValue(secondValue)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		if firstScalar.kind == duplicateScalarInt && secondScalar.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexDoubleInt,
+				templateKey: template.key,
+				firstInt:    int64(firstScalar.bits),
+				secondInt:   int64(secondScalar.bits),
+			}, true
+		}
+		return duplicateIndexKey{
+			kind:        duplicateIndexDoubleScalar,
+			templateKey: template.key,
+			first:       firstScalar,
+			second:      secondScalar,
+		}, true
+	default:
+		return duplicateIndexKey{}, false
+	}
+}
+
+const (
+	structuralDuplicateHashOffset = uint64(14695981039346656037)
+	structuralDuplicateHashPrime  = uint64(1099511628211)
+)
+
+func structuralDuplicateSlotsHash(template Template, slots []factSlot) (uint64, bool) {
+	hash := structuralDuplicateHashOffset
+	hash = structuralDuplicateHashString(hash, template.key.String())
+	return structuralDuplicateSlotsHashWithPrefix(template, slots, hash)
+}
+
+func structuralDuplicateSlotsHashWithPrefix(template Template, slots []factSlot, hash uint64) (uint64, bool) {
+	for i := range template.fields {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			hash = structuralDuplicateHashByte(hash, 0)
+			continue
+		}
+		var ok bool
+		hash, ok = structuralDuplicateHashValue(hash, slot.value)
+		if !ok {
+			return 0, false
+		}
+	}
+	return hash, true
+}
+
+func structuralDuplicateSlotsEqual(template Template, left, right []factSlot) bool {
+	for i := range template.fields {
+		var leftSlot, rightSlot factSlot
+		if i < len(left) {
+			leftSlot = left[i]
+		}
+		if i < len(right) {
+			rightSlot = right[i]
+		}
+		if leftSlot.ok != rightSlot.ok {
+			return false
+		}
+		if leftSlot.ok && !leftSlot.value.Equal(rightSlot.value) {
+			return false
+		}
+	}
+	return true
+}
+
+func structuralDuplicateHashValue(hash uint64, value Value) (uint64, bool) {
+	return structuralDuplicateHashScalarValue(hash, value)
+}
+
+func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool) {
+	switch value.Kind() {
+	case ValueNull:
+		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
+	case ValueBool:
+		if value.boolValue {
+			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
+	case ValueInt:
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+	case ValueFloat:
+		floating := value.floatValue
+		if math.IsNaN(floating) {
+			return 0, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(int64(floating)), ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
+	case ValueString:
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
+	case ValueList:
+		hash = structuralDuplicateHashByte(hash, 6)
+		values, ok := value.data.([]Value)
+		if !ok {
+			return 0, false
+		}
+		hash = structuralDuplicateHashUint64(hash, uint64(len(values)))
+		for _, item := range values {
+			var itemOK bool
+			hash, itemOK = structuralDuplicateHashValue(hash, item)
+			if !itemOK {
+				return 0, false
+			}
+		}
+		return hash, true
+	default:
+		return 0, false
+	}
+}
+
+func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value Value) (uint64, bool) {
+	switch kind {
+	case ValueNull:
+		if value.kind != "" && value.kind != ValueNull {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
+	case ValueBool:
+		if value.kind != ValueBool {
+			return 0, false
+		}
+		if value.boolValue {
+			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
+	case ValueInt:
+		if value.kind != ValueInt {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+	case ValueFloat:
+		if value.kind != ValueFloat {
+			return 0, false
+		}
+		floating := value.floatValue
+		if math.IsNaN(floating) {
+			return 0, false
+		}
+		if math.Trunc(floating) == floating &&
+			floating <= float64(maxExactFloatInt) &&
+			floating >= float64(-maxExactFloatInt) {
+			return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(int64(floating)), ""), true
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
+	case ValueString:
+		if value.kind != ValueString {
+			return 0, false
+		}
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
+	default:
+		return 0, false
+	}
+}
+
+func structuralDuplicateScalarValuesEqual(kind ValueKind, left, right Value) (bool, bool) {
+	switch kind {
+	case ValueNull:
+		leftNull := left.kind == "" || left.kind == ValueNull
+		rightNull := right.kind == "" || right.kind == ValueNull
+		return leftNull && rightNull, true
+	case ValueBool:
+		if left.kind != ValueBool || right.kind != ValueBool {
+			return false, false
+		}
+		return left.boolValue == right.boolValue, true
+	case ValueInt:
+		if left.kind != ValueInt || right.kind != ValueInt {
+			return false, false
+		}
+		return left.intValue == right.intValue, true
+	case ValueFloat:
+		if left.kind != ValueFloat || right.kind != ValueFloat {
+			return false, false
+		}
+		return left.floatValue == right.floatValue, true
+	case ValueString:
+		if left.kind != ValueString || right.kind != ValueString {
+			return false, false
+		}
+		return left.stringValue == right.stringValue, true
+	default:
+		return false, false
+	}
+}
+
+func structuralDuplicateHashScalar(hash uint64, kind duplicateScalarKind, bits uint64, stringValue string) uint64 {
+	hash = structuralDuplicateHashByte(hash, 1)
+	hash = structuralDuplicateHashByte(hash, byte(kind))
+	hash = structuralDuplicateHashUint64(hash, bits)
+	return structuralDuplicateHashString(hash, stringValue)
+}
+
+func structuralDuplicateHashString(hash uint64, value string) uint64 {
+	hash = structuralDuplicateHashUint64(hash, uint64(len(value)))
+	for i := range value {
+		hash = structuralDuplicateHashByte(hash, value[i])
+	}
+	return hash
+}
+
+func structuralDuplicateHashUint64(hash, value uint64) uint64 {
+	return structuralDuplicateHashAvalanche(hash ^ structuralDuplicateHashAvalanche(value+0x9e3779b97f4a7c15))
+}
+
+func structuralDuplicateHashAvalanche(value uint64) uint64 {
+	value ^= value >> 30
+	value *= 0xbf58476d1ce4e5b9
+	value ^= value >> 27
+	value *= 0x94d049bb133111eb
+	value ^= value >> 31
+	return value
+}
+
+func structuralDuplicateHashByte(hash uint64, value byte) uint64 {
+	hash ^= uint64(value)
+	hash *= structuralDuplicateHashPrime
+	return hash
+}
+
+func duplicateFields(values Fields, template Template) Fields {
+	if template.duplicatePolicy == DuplicateAllow {
+		return nil
+	}
+	if template.duplicatePolicy != DuplicateUniqueKey {
+		return values
+	}
+
+	out := make(Fields, len(template.duplicateKeyNames))
+	for _, fieldName := range template.duplicateKeyNames {
+		if value, ok := values[fieldName]; ok {
+			out[fieldName] = value
+		}
+	}
+	return out
+}
+
+func (f FactSnapshot) FieldPresence(field string) (FieldPresence, bool) {
+	if f.fieldPresence != nil {
+		presence, ok := f.fieldPresence[field]
+		if ok {
+			return presence, true
+		}
+	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
+		return f.fieldSlots[slot].presence.fieldPresence(), true
+	}
+	return FieldPresence(""), false
+}
+
+func (f FactSnapshot) FieldPresenceMap() map[string]FieldPresence {
+	if f.fieldPresence != nil {
+		return cloneFieldPresence(f.fieldPresence)
+	}
+	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
+}
+
+func cloneFieldPresence(in map[string]FieldPresence) map[string]FieldPresence {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]FieldPresence, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func (f FactSnapshot) fieldValue(name string) (Value, bool) {
+	if f.fields != nil {
+		value, ok := f.fields[name]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		if resolved.ok {
+			return resolved.value, true
+		}
+	}
+	return Value{}, false
+}
+
+func (f *workingFact) fieldValue(name string) (Value, bool) {
+	if f == nil {
+		return Value{}, false
+	}
+	if f.fields != nil {
+		value, ok := f.fields[name]
+		if ok {
+			return value, true
+		}
+	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.fieldSlots) {
+		resolved := f.fieldSlots[slot]
+		if resolved.ok {
+			return resolved.value, true
+		}
+	}
+	return Value{}, false
+}
+
+func (f FactSnapshot) fieldSlot(name string) (int, bool) {
+	for i, spec := range f.fieldSpecs {
+		if spec.Name == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (f *workingFact) fieldSlot(name string) (int, bool) {
+	return -1, false
+}
+
+func materializeFieldsFromSlots(slots []factSlot, specs []FieldSpec) Fields {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(Fields, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			continue
+		}
+		out[spec.Name] = cloneValue(slot.value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func materializePresenceFromSlots(slots []factSlot, specs []FieldSpec) map[string]FieldPresence {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(map[string]FieldPresence, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		out[spec.Name] = slots[i].presence.fieldPresence()
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneFactSlots(in []factSlot) []factSlot {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]factSlot, len(in))
+	for i, slot := range in {
+		out[i] = factSlot{
+			value:    cloneValue(slot.value),
+			presence: slot.presence,
+			ok:       slot.ok,
+		}
+	}
+	return out
+}
+
+func emitDuplicateKeyFields(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+	if template.duplicatePolicy == DuplicateAllow {
+		return
+	}
+
+	if template.duplicatePolicy == DuplicateUniqueKey {
+		emitDuplicateKeyFieldsByNames(b, template, fields, slots)
+		return
+	}
+
+	if len(slots) > 0 && len(template.fields) > 0 {
+		emitDuplicateKeyFieldsByTemplateOrder(b, template.fields, slots)
+		return
+	}
+
+	if fields == nil {
+		return
+	}
+	b.WriteString(fields.duplicateKey())
+}
+
+func emitDuplicateKeyFieldsByNames(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+	if len(template.duplicateKeyNames) == 0 {
+		return
+	}
+
+	if len(slots) > 0 && len(template.duplicateKeySlots) == len(template.duplicateKeyNames) {
+		for i, slot := range template.duplicateKeySlots {
+			if slot < 0 || slot >= len(slots) {
+				continue
+			}
+			resolved := slots[slot]
+			if resolved.ok {
+				writeDuplicateKeyEntry(b, template.duplicateKeyNames[i], resolved.value)
+			}
+		}
+		return
+	}
+
+	for _, fieldName := range template.duplicateKeyNames {
+		if value, ok := duplicateFieldValue(fieldName, template, fields, slots); ok {
+			writeDuplicateKeyEntry(b, fieldName, value)
+		}
+	}
+}
+
+func emitDuplicateKeyFieldsByTemplateOrder(b *strings.Builder, specs []FieldSpec, slots []factSlot) {
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		slot := slots[i]
+		if !slot.ok {
+			continue
+		}
+		writeDuplicateKeyEntry(b, spec.Name, slot.value)
+	}
+}
+
+func duplicateFieldValue(fieldName string, template Template, fields Fields, slots []factSlot) (Value, bool) {
+	if len(slots) > 0 {
+		if slot, ok := template.fieldSlot(fieldName); ok && slot >= 0 && slot < len(slots) {
+			resolved := slots[slot]
+			if resolved.ok {
+				return resolved.value, true
+			}
+			return Value{}, false
+		}
+	}
+	value, ok := fields[fieldName]
+	return value, ok
+}
+
+func writeDuplicateKeyEntry(b *strings.Builder, fieldName string, value Value) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	encodeValueForDuplicateKey(b, value)
+	b.WriteByte(';')
+}
+
+func duplicateKeyCapacity(name string, template Template, fields Fields, slots []factSlot) int {
+	size := len("name:") + len(name) + len("|template:") + len(template.key) + len("|fields:")
+	if template.duplicatePolicy == DuplicateAllow {
+		return size
+	}
+	if len(slots) > 0 {
+		if template.duplicatePolicy == DuplicateUniqueKey {
+			if len(template.duplicateKeySlots) == len(template.duplicateKeyNames) {
+				for i, slot := range template.duplicateKeySlots {
+					if slot < 0 || slot >= len(slots) {
+						continue
+					}
+					resolved := slots[slot]
+					if resolved.ok {
+						size += len(template.duplicateKeyNames[i]) + 2 + duplicateKeyValueCapacity(resolved.value)
+					}
+				}
+				return size
+			}
+		} else if len(template.fields) > 0 {
+			for i, spec := range template.fields {
+				if i >= len(slots) {
+					break
+				}
+				if !slots[i].ok {
+					continue
+				}
+				size += len(spec.Name) + 2 + duplicateKeyValueCapacity(slots[i].value)
+			}
+			return size
+		}
+	}
+	if template.duplicatePolicy == DuplicateUniqueKey {
+		for _, fieldName := range template.duplicateKeyNames {
+			if value, ok := fields[fieldName]; ok {
+				size += len(fieldName) + 2 + duplicateKeyValueCapacity(value)
+			}
+		}
+		return size
+	}
+	if fields == nil {
+		return size
+	}
+	for key, value := range fields {
+		size += len(key) + 2 + duplicateKeyValueCapacity(value)
+	}
+	return size
+}

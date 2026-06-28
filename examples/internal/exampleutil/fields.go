@@ -1,7 +1,7 @@
 package exampleutil
 
-import "github.com/cpcf/gess"
+import rules "github.com/cpcf/gess/rules"
 
-func Fields(pairs ...any) gess.Fields {
-	return gess.MustFields(pairs...)
+func Fields(pairs ...any) rules.Fields {
+	return rules.MustFields(pairs...)
 }

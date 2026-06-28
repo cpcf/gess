@@ -7,17 +7,18 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	intakeModule   = gess.ModuleName("intake")
-	responseModule = gess.ModuleName("response")
+	intakeModule   = rules.ModuleName("intake")
+	responseModule = rules.ModuleName("response")
 	eventTemplate  = "event"
 	readyTemplate  = "ready-event"
-	eventKey       = gess.TemplateKey("intake-event")
-	readyKey       = gess.TemplateKey("response-ready-event")
+	eventKey       = rules.TemplateKey("intake-event")
+	readyKey       = rules.TemplateKey("response-ready-event")
 )
 
 func main() {
@@ -34,7 +35,7 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
@@ -57,10 +58,10 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context, handled *[]string) (*gess.Ruleset, error) {
+func buildRuleset(ctx context.Context, handled *[]string) (*rules.Ruleset, error) {
 	autoFocus := false
-	workspace := gess.NewWorkspace()
-	for _, module := range []gess.ModuleSpec{
+	workspace := rules.NewWorkspace()
+	for _, module := range []rules.ModuleSpec{
 		{Name: intakeModule, AutoFocus: &autoFocus},
 		{Name: responseModule, AutoFocus: &autoFocus},
 	} {
@@ -68,26 +69,26 @@ func buildRuleset(ctx context.Context, handled *[]string) (*gess.Ruleset, error)
 			return nil, err
 		}
 	}
-	for _, spec := range []gess.TemplateSpec{
-		{Module: intakeModule, Name: eventTemplate, Key: eventKey, Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "kind", Kind: gess.ValueString, Required: true},
+	for _, spec := range []rules.TemplateSpec{
+		{Module: intakeModule, Name: eventTemplate, Key: eventKey, Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "kind", Kind: rules.ValueString, Required: true},
 		}},
-		{Module: responseModule, Name: readyTemplate, Key: readyKey, DuplicatePolicy: gess.DuplicateUniqueKey, DuplicateKeyNames: []string{"id"}, Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "kind", Kind: gess.ValueString, Required: true},
+		{Module: responseModule, Name: readyTemplate, Key: readyKey, DuplicatePolicy: rules.DuplicateUniqueKey, DuplicateKeyNames: []string{"id"}, Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "kind", Kind: rules.ValueString, Required: true},
 		}},
 	} {
 		if err := workspace.AddTemplate(spec); err != nil {
 			return nil, err
 		}
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "promote-event",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			id, _ := ctx.BindingScalarValue("event", "id")
 			kind, _ := ctx.BindingScalarValue("event", "kind")
-			if _, err := ctx.AssertTemplate(readyKey, gess.Fields{"id": id, "kind": kind}); err != nil {
+			if _, err := ctx.AssertTemplate(readyKey, rules.Fields{"id": id, "kind": kind}); err != nil {
 				return err
 			}
 			return ctx.PushFocus(responseModule)
@@ -95,9 +96,9 @@ func buildRuleset(ctx context.Context, handled *[]string) (*gess.Ruleset, error)
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "handle-event",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			id, _ := ctx.BindingScalarValue("ready", "id")
 			text, _ := id.AsString()
 			*handled = append(*handled, text)
@@ -107,35 +108,35 @@ func buildRuleset(ctx context.Context, handled *[]string) (*gess.Ruleset, error)
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name:   "validate-incident",
 		Module: intakeModule,
-		ConditionTree: gess.Match{
+		ConditionTree: rules.Match{
 			Binding: "event",
-			FieldConstraints: []gess.FieldConstraintSpec{
-				{Field: "kind", Operator: gess.FieldConstraintEqual, Value: "incident"},
+			FieldConstraints: []rules.FieldConstraintSpec{
+				{Field: "kind", Operator: rules.FieldConstraintEqual, Value: "incident"},
 			},
-			Target: gess.TemplateFactIn(intakeModule, eventTemplate),
+			Target: rules.TemplateFactIn(intakeModule, eventTemplate),
 		},
-		Actions: []gess.RuleActionSpec{{Name: "promote-event"}},
+		Actions: []rules.RuleActionSpec{{Name: "promote-event"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name:   "handle-ready-event",
 		Module: responseModule,
-		ConditionTree: gess.Match{
+		ConditionTree: rules.Match{
 			Binding: "ready",
-			Target:  gess.TemplateFactIn(responseModule, readyTemplate),
+			Target:  rules.TemplateFactIn(responseModule, readyTemplate),
 		},
-		Actions: []gess.RuleActionSpec{{Name: "handle-event"}},
+		Actions: []rules.RuleActionSpec{{Name: "handle-event"}},
 	}); err != nil {
 		return nil, err
 	}
 	return workspace.Compile(ctx)
 }
 
-func formatStack(stack []gess.ModuleName) string {
+func formatStack(stack []rules.ModuleName) string {
 	if len(stack) == 0 {
 		return "MAIN fallback"
 	}

@@ -6,14 +6,15 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	customerTemplate = gess.TemplateKey("customer")
-	holdTemplate     = gess.TemplateKey("compliance-hold")
-	eligibleTemplate = gess.TemplateKey("eligible-customer")
+	customerTemplate = rules.TemplateKey("customer")
+	holdTemplate     = rules.TemplateKey("compliance-hold")
+	eligibleTemplate = rules.TemplateKey("eligible-customer")
 )
 
 func main() {
@@ -29,15 +30,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	for _, fact := range []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{customerTemplate, exampleutil.Fields("id", "C-100", "status", "active")},
 		{customerTemplate, exampleutil.Fields("id", "C-200", "status", "active")},
@@ -61,68 +62,68 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	for _, spec := range []gess.TemplateSpec{
-		{Name: string(customerTemplate), Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "status", Kind: gess.ValueString, Required: true},
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	for _, spec := range []rules.TemplateSpec{
+		{Name: string(customerTemplate), Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "status", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(holdTemplate), Fields: []gess.FieldSpec{
-			{Name: "customer", Kind: gess.ValueString, Required: true},
-			{Name: "reason", Kind: gess.ValueString, Required: true},
+		{Name: string(holdTemplate), Fields: []rules.FieldSpec{
+			{Name: "customer", Kind: rules.ValueString, Required: true},
+			{Name: "reason", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(eligibleTemplate), DuplicatePolicy: gess.DuplicateUniqueKey, DuplicateKeyNames: []string{"customer"}, Fields: []gess.FieldSpec{
-			{Name: "customer", Kind: gess.ValueString, Required: true},
+		{Name: string(eligibleTemplate), DuplicatePolicy: rules.DuplicateUniqueKey, DuplicateKeyNames: []string{"customer"}, Fields: []rules.FieldSpec{
+			{Name: "customer", Kind: rules.ValueString, Required: true},
 		}},
 	} {
 		if err := workspace.AddTemplate(spec); err != nil {
 			return nil, err
 		}
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "assert-eligible",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			customer, _ := ctx.BindingScalarValue("customer", "id")
-			_, err := ctx.AssertTemplate(eligibleTemplate, gess.Fields{"customer": customer})
+			_, err := ctx.AssertTemplate(eligibleTemplate, rules.Fields{"customer": customer})
 			return err
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "active-customer-without-hold",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{
 				Binding: "customer",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "status", Operator: gess.FieldConstraintEqual, Value: "active"},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "status", Operator: rules.FieldConstraintEqual, Value: "active"},
 				},
-				Target: gess.TemplateKeyFact(customerTemplate),
+				Target: rules.TemplateKeyFact(customerTemplate),
 			},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "hold",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "customer", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "customer", Field: "id"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "customer", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "customer", Field: "id"}},
 				},
-				Target: gess.TemplateKeyFact(holdTemplate),
+				Target: rules.TemplateKeyFact(holdTemplate),
 			}},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-eligible"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-eligible"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name:          "eligible-customers",
-		ConditionTree: gess.Match{Binding: "eligible", Target: gess.TemplateKeyFact(eligibleTemplate)},
-		Returns:       []gess.QueryReturnSpec{gess.ReturnValue("customer", gess.BindingFieldExpr{Binding: "eligible", Field: "customer"})},
+		ConditionTree: rules.Match{Binding: "eligible", Target: rules.TemplateKeyFact(eligibleTemplate)},
+		Returns:       []rules.QueryReturnSpec{rules.ReturnValue("customer", rules.BindingFieldExpr{Binding: "eligible", Field: "customer"})},
 	}); err != nil {
 		return nil, err
 	}
 	return workspace.Compile(ctx)
 }
 
-func stringValue(row gess.QueryRow, alias string) string {
+func stringValue(row sess.QueryRow, alias string) string {
 	value, _ := row.Value(alias)
 	out, _ := value.AsString()
 	return out

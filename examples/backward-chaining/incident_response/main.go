@@ -6,14 +6,15 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	systemTemplate       = gess.TemplateKey("system")
-	connectionTemplate   = gess.TemplateKey("connection")
-	controlTemplate      = gess.TemplateKey("segmentation-control")
-	reachableTemplate    = gess.TemplateKey("reachable")
+	systemTemplate       = rules.TemplateKey("system")
+	connectionTemplate   = rules.TemplateKey("connection")
+	controlTemplate      = rules.TemplateKey("segmentation-control")
+	reachableTemplate    = rules.TemplateKey("reachable")
 	canReachQuery        = "can-reach"
 	assertDirectPath     = "assert-direct-path"
 	assertTransitivePath = "assert-transitive-path"
@@ -32,15 +33,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	for _, fact := range []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{systemTemplate, fields("id", "internet", "tier", "external")},
 		{systemTemplate, fields("id", "web", "tier", "edge")},
@@ -66,7 +67,7 @@ func run(out io.Writer) error {
 		{"internet", "admin"},
 		{"db", "internet"},
 	} {
-		rows, err := session.QueryAll(ctx, canReachQuery, gess.QueryArgs{"src": q.src, "dst": q.dst})
+		rows, err := session.QueryAll(ctx, canReachQuery, sess.QueryArgs{"src": q.src, "dst": q.dst})
 		if err != nil {
 			return err
 		}
@@ -79,154 +80,154 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(systemTemplate),
-		Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "tier", Kind: gess.ValueString, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "tier", Kind: rules.ValueString, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(connectionTemplate),
-		Fields: []gess.FieldSpec{
-			{Name: "src", Kind: gess.ValueString, Required: true},
-			{Name: "dst", Kind: gess.ValueString, Required: true},
-			{Name: "protocol", Kind: gess.ValueString, Required: true},
-			{Name: "open", Kind: gess.ValueBool, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "src", Kind: rules.ValueString, Required: true},
+			{Name: "dst", Kind: rules.ValueString, Required: true},
+			{Name: "protocol", Kind: rules.ValueString, Required: true},
+			{Name: "open", Kind: rules.ValueBool, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(controlTemplate),
-		Fields: []gess.FieldSpec{
-			{Name: "src", Kind: gess.ValueString, Required: true},
-			{Name: "dst", Kind: gess.ValueString, Required: true},
-			{Name: "reason", Kind: gess.ValueString, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "src", Kind: rules.ValueString, Required: true},
+			{Name: "dst", Kind: rules.ValueString, Required: true},
+			{Name: "reason", Kind: rules.ValueString, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name:              string(reachableTemplate),
 		BackchainReactive: true,
-		DuplicatePolicy:   gess.DuplicateUniqueKey,
+		DuplicatePolicy:   rules.DuplicateUniqueKey,
 		DuplicateKeyNames: []string{"src", "dst"},
-		Fields: []gess.FieldSpec{
-			{Name: "src", Kind: gess.ValueString, Required: true},
-			{Name: "dst", Kind: gess.ValueString, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "src", Kind: rules.ValueString, Required: true},
+			{Name: "dst", Kind: rules.ValueString, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: assertDirectPath,
-		AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+		AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 			TemplateKey: reachableTemplate,
-			Values: []gess.ExpressionSpec{
-				gess.BindingFieldExpr{Binding: "need", Field: "dst"},
-				gess.BindingFieldExpr{Binding: "need", Field: "src"},
+			Values: []rules.ExpressionSpec{
+				rules.BindingFieldExpr{Binding: "need", Field: "dst"},
+				rules.BindingFieldExpr{Binding: "need", Field: "src"},
 			},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: assertTransitivePath,
-		AssertTemplateValues: &gess.AssertTemplateValuesActionSpec{
+		AssertTemplateValues: &rules.AssertTemplateValuesActionSpec{
 			TemplateKey: reachableTemplate,
-			Values: []gess.ExpressionSpec{
-				gess.BindingFieldExpr{Binding: "need", Field: "dst"},
-				gess.BindingFieldExpr{Binding: "need", Field: "src"},
+			Values: []rules.ExpressionSpec{
+				rules.BindingFieldExpr{Binding: "need", Field: "dst"},
+				rules.BindingFieldExpr{Binding: "need", Field: "src"},
 			},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-direct-reachability",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-reachable"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-reachable"))},
+			rules.Match{
 				Binding: "connection",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "open", Operator: gess.FieldConstraintEqual, Value: true},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "open", Operator: rules.FieldConstraintEqual, Value: true},
 				},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(connectionTemplate),
+				Target: rules.TemplateKeyFact(connectionTemplate),
 			},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "control",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(controlTemplate),
+				Target: rules.TemplateKeyFact(controlTemplate),
 			}},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: assertDirectPath}},
+		Actions: []rules.RuleActionSpec{{Name: assertDirectPath}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "prove-transitive-reachability",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "need", Target: gess.TemplateKeyFact(gess.TemplateKey("need-reachable"))},
-			gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "need", Target: rules.TemplateKeyFact(rules.TemplateKey("need-reachable"))},
+			rules.Match{
 				Binding: "connection",
-				FieldConstraints: []gess.FieldConstraintSpec{
-					{Field: "open", Operator: gess.FieldConstraintEqual, Value: true},
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "open", Operator: rules.FieldConstraintEqual, Value: true},
 				},
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
 				},
-				Target: gess.TemplateKeyFact(connectionTemplate),
+				Target: rules.TemplateKeyFact(connectionTemplate),
 			},
-			gess.Match{
+			rules.Match{
 				Binding: "tail",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "connection", Field: "dst"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "connection", Field: "dst"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(reachableTemplate),
+				Target: rules.TemplateKeyFact(reachableTemplate),
 			},
-			gess.Not{Condition: gess.Match{
+			rules.Not{Condition: rules.Match{
 				Binding: "control",
-				JoinConstraints: []gess.JoinConstraintSpec{
-					{Field: "src", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "need", Field: "src"}},
-					{Field: "dst", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "connection", Field: "dst"}},
+				JoinConstraints: []rules.JoinConstraintSpec{
+					{Field: "src", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "connection", Field: "dst"}},
 				},
-				Target: gess.TemplateKeyFact(controlTemplate),
+				Target: rules.TemplateKeyFact(controlTemplate),
 			}},
 		}},
-		Actions: []gess.RuleActionSpec{{Name: assertTransitivePath}},
+		Actions: []rules.RuleActionSpec{{Name: assertTransitivePath}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name: canReachQuery,
-		Parameters: []gess.QueryParameterSpec{
-			{Name: "src", Kind: gess.ValueString},
-			{Name: "dst", Kind: gess.ValueString},
+		Parameters: []rules.QueryParameterSpec{
+			{Name: "src", Kind: rules.ValueString},
+			{Name: "dst", Kind: rules.ValueString},
 		},
-		ConditionTree: gess.Match{
+		ConditionTree: rules.Match{
 			Binding: "path",
-			Predicates: []gess.ExpressionSpec{
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "src"}, Right: gess.ParamExpr{Name: "src"}},
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "dst"}, Right: gess.ParamExpr{Name: "dst"}},
+			Predicates: []rules.ExpressionSpec{
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "src"}, Right: rules.ParamExpr{Name: "src"}},
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "dst"}, Right: rules.ParamExpr{Name: "dst"}},
 			},
-			Target: gess.TemplateKeyFact(reachableTemplate),
+			Target: rules.TemplateKeyFact(reachableTemplate),
 		},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("src", gess.BindingFieldExpr{Binding: "path", Field: "src"}),
-			gess.ReturnValue("dst", gess.BindingFieldExpr{Binding: "path", Field: "dst"}),
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("src", rules.BindingFieldExpr{Binding: "path", Field: "src"}),
+			rules.ReturnValue("dst", rules.BindingFieldExpr{Binding: "path", Field: "dst"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -234,6 +235,6 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func fields(pairs ...any) gess.Fields {
-	return gess.MustFields(pairs...)
+func fields(pairs ...any) rules.Fields {
+	return rules.MustFields(pairs...)
 }

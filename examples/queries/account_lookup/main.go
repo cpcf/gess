@@ -6,12 +6,13 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	accountTemplate = gess.TemplateKey("account")
+	accountTemplate = rules.TemplateKey("account")
 )
 
 func main() {
@@ -27,13 +28,13 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
-	for _, fact := range []gess.Fields{
+	for _, fact := range []rules.Fields{
 		exampleutil.Fields("id", "A-100", "region", "emea", "balance", 120000),
 		exampleutil.Fields("id", "A-200", "region", "emea", "balance", 9000),
 		exampleutil.Fields("id", "A-300", "region", "amer", "balance", 250000),
@@ -45,7 +46,7 @@ func run(out io.Writer) error {
 	if _, err := session.Run(ctx); err != nil {
 		return err
 	}
-	rows, err := session.QueryAll(ctx, "accounts-by-region", gess.QueryArgs{"region": "emea"})
+	rows, err := session.QueryAll(ctx, "accounts-by-region", sess.QueryArgs{"region": "emea"})
 	if err != nil {
 		return err
 	}
@@ -55,31 +56,31 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(accountTemplate),
-		Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "region", Kind: gess.ValueString, Required: true},
-			{Name: "balance", Kind: gess.ValueInt, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "region", Kind: rules.ValueString, Required: true},
+			{Name: "balance", Kind: rules.ValueInt, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name:       "accounts-by-region",
-		Parameters: []gess.QueryParameterSpec{{Name: "region", Kind: gess.ValueString}},
-		ConditionTree: gess.Match{
+		Parameters: []rules.QueryParameterSpec{{Name: "region", Kind: rules.ValueString}},
+		ConditionTree: rules.Match{
 			Binding: "account",
-			Predicates: []gess.ExpressionSpec{
-				gess.CompareExpr{Operator: gess.ExpressionCompareEqual, Left: gess.CurrentFieldExpr{Field: "region"}, Right: gess.ParamExpr{Name: "region"}},
+			Predicates: []rules.ExpressionSpec{
+				rules.CompareExpr{Operator: rules.ExpressionCompareEqual, Left: rules.CurrentFieldExpr{Field: "region"}, Right: rules.ParamExpr{Name: "region"}},
 			},
-			Target: gess.TemplateKeyFact(accountTemplate),
+			Target: rules.TemplateKeyFact(accountTemplate),
 		},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("id", gess.BindingFieldExpr{Binding: "account", Field: "id"}),
-			gess.ReturnValue("balance", gess.BindingFieldExpr{Binding: "account", Field: "balance"}),
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("id", rules.BindingFieldExpr{Binding: "account", Field: "id"}),
+			rules.ReturnValue("balance", rules.BindingFieldExpr{Binding: "account", Field: "balance"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -87,13 +88,13 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func stringValue(row gess.QueryRow, alias string) string {
+func stringValue(row sess.QueryRow, alias string) string {
 	value, _ := row.Value(alias)
 	out, _ := value.AsString()
 	return out
 }
 
-func intValue(row gess.QueryRow, alias string) int64 {
+func intValue(row sess.QueryRow, alias string) int64 {
 	value, _ := row.Value(alias)
 	out, _ := value.AsInt64()
 	return out

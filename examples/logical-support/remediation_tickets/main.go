@@ -6,11 +6,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
-const findingTemplate = gess.TemplateKey("finding")
+const findingTemplate = rules.TemplateKey("finding")
 
 func main() {
 	if err := run(os.Stdout); err != nil {
@@ -25,7 +26,7 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
@@ -57,39 +58,39 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	if err := workspace.AddTemplate(gess.TemplateSpec{
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(findingTemplate),
-		Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "system", Kind: gess.ValueString, Required: true},
-			{Name: "severity", Kind: gess.ValueString, Required: true},
+		Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "system", Kind: rules.ValueString, Required: true},
+			{Name: "severity", Kind: rules.ValueString, Required: true},
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "open-ticket",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			id, _ := ctx.BindingScalarValue("finding", "id")
 			system, _ := ctx.BindingScalarValue("finding", "system")
-			_, err := ctx.AssertLogical("remediation-ticket", gess.Fields{"finding": id, "system": system})
+			_, err := ctx.AssertLogical("remediation-ticket", rules.Fields{"finding": id, "system": system})
 			return err
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "critical-finding-opens-ticket",
-		ConditionTree: gess.Match{
+		ConditionTree: rules.Match{
 			Binding: "finding",
-			FieldConstraints: []gess.FieldConstraintSpec{
-				{Field: "severity", Operator: gess.FieldConstraintEqual, Value: "critical"},
+			FieldConstraints: []rules.FieldConstraintSpec{
+				{Field: "severity", Operator: rules.FieldConstraintEqual, Value: "critical"},
 			},
-			Target: gess.TemplateKeyFact(findingTemplate),
+			Target: rules.TemplateKeyFact(findingTemplate),
 		},
-		Actions: []gess.RuleActionSpec{{Name: "open-ticket"}},
+		Actions: []rules.RuleActionSpec{{Name: "open-ticket"}},
 	}); err != nil {
 		return nil, err
 	}

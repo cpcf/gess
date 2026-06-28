@@ -6,14 +6,15 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess"
 	"github.com/cpcf/gess/examples/internal/exampleutil"
+	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 const (
-	accountTemplate     = gess.TemplateKey("account")
-	transactionTemplate = gess.TemplateKey("transaction")
-	alertTemplate       = gess.TemplateKey("velocity-alert")
+	accountTemplate     = rules.TemplateKey("account")
+	transactionTemplate = rules.TemplateKey("transaction")
+	alertTemplate       = rules.TemplateKey("velocity-alert")
 )
 
 func main() {
@@ -29,15 +30,15 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := gess.NewSession(ruleset)
+	session, err := sess.New(ruleset)
 	if err != nil {
 		return err
 	}
 	defer session.Close()
 
 	for _, fact := range []struct {
-		template gess.TemplateKey
-		fields   gess.Fields
+		template rules.TemplateKey
+		fields   rules.Fields
 	}{
 		{accountTemplate, exampleutil.Fields("id", "A-100")},
 		{accountTemplate, exampleutil.Fields("id", "A-200")},
@@ -63,29 +64,29 @@ func run(out io.Writer) error {
 	return nil
 }
 
-func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
-	workspace := gess.NewWorkspace()
-	for _, spec := range []gess.TemplateSpec{
-		{Name: string(accountTemplate), Fields: []gess.FieldSpec{{Name: "id", Kind: gess.ValueString, Required: true}}},
-		{Name: string(transactionTemplate), DuplicatePolicy: gess.DuplicateAllow, Fields: []gess.FieldSpec{
-			{Name: "id", Kind: gess.ValueString, Required: true},
-			{Name: "account", Kind: gess.ValueString, Required: true},
-			{Name: "amount", Kind: gess.ValueInt, Required: true},
-			{Name: "window", Kind: gess.ValueString, Required: true},
+func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
+	workspace := rules.NewWorkspace()
+	for _, spec := range []rules.TemplateSpec{
+		{Name: string(accountTemplate), Fields: []rules.FieldSpec{{Name: "id", Kind: rules.ValueString, Required: true}}},
+		{Name: string(transactionTemplate), DuplicatePolicy: rules.DuplicateAllow, Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "account", Kind: rules.ValueString, Required: true},
+			{Name: "amount", Kind: rules.ValueInt, Required: true},
+			{Name: "window", Kind: rules.ValueString, Required: true},
 		}},
-		{Name: string(alertTemplate), DuplicatePolicy: gess.DuplicateUniqueKey, DuplicateKeyNames: []string{"account"}, Fields: []gess.FieldSpec{
-			{Name: "account", Kind: gess.ValueString, Required: true},
-			{Name: "count", Kind: gess.ValueInt, Required: true},
-			{Name: "total", Kind: gess.ValueInt, Required: true},
+		{Name: string(alertTemplate), DuplicatePolicy: rules.DuplicateUniqueKey, DuplicateKeyNames: []string{"account"}, Fields: []rules.FieldSpec{
+			{Name: "account", Kind: rules.ValueString, Required: true},
+			{Name: "count", Kind: rules.ValueInt, Required: true},
+			{Name: "total", Kind: rules.ValueInt, Required: true},
 		}},
 	} {
 		if err := workspace.AddTemplate(spec); err != nil {
 			return nil, err
 		}
 	}
-	if err := workspace.AddAction(gess.ActionSpec{
+	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "assert-alert",
-		Fn: func(ctx gess.ActionContext) error {
+		Fn: func(ctx rules.ActionContext) error {
 			account, _ := ctx.BindingScalarValue("account", "id")
 			count, _ := ctx.BindingValue("count")
 			total, _ := ctx.BindingValue("total")
@@ -94,42 +95,42 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 			if countValue < 3 || totalValue < 1000 {
 				return nil
 			}
-			_, err := ctx.AssertTemplate(alertTemplate, gess.Fields{"account": account, "count": count, "total": total})
+			_, err := ctx.AssertTemplate(alertTemplate, rules.Fields{"account": account, "count": count, "total": total})
 			return err
 		},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddRule(gess.RuleSpec{
+	if err := workspace.AddRule(rules.RuleSpec{
 		Name: "three-transactions-over-thousand",
-		ConditionTree: gess.And{Conditions: []gess.ConditionSpec{
-			gess.Match{Binding: "account", Target: gess.TemplateKeyFact(accountTemplate)},
-			gess.Accumulate(
-				gess.Match{
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{Binding: "account", Target: rules.TemplateKeyFact(accountTemplate)},
+			rules.Accumulate(
+				rules.Match{
 					Binding: "transaction",
-					FieldConstraints: []gess.FieldConstraintSpec{
-						{Field: "window", Operator: gess.FieldConstraintEqual, Value: "5m"},
+					FieldConstraints: []rules.FieldConstraintSpec{
+						{Field: "window", Operator: rules.FieldConstraintEqual, Value: "5m"},
 					},
-					JoinConstraints: []gess.JoinConstraintSpec{
-						{Field: "account", Operator: gess.FieldConstraintEqual, Ref: gess.FieldRef{Binding: "account", Field: "id"}},
+					JoinConstraints: []rules.JoinConstraintSpec{
+						{Field: "account", Operator: rules.FieldConstraintEqual, Ref: rules.FieldRef{Binding: "account", Field: "id"}},
 					},
-					Target: gess.TemplateKeyFact(transactionTemplate),
+					Target: rules.TemplateKeyFact(transactionTemplate),
 				},
-				gess.Count().As("count"),
-				gess.Sum(gess.BindingFieldExpr{Binding: "transaction", Field: "amount"}).As("total"),
+				rules.Count().As("count"),
+				rules.Sum(rules.BindingFieldExpr{Binding: "transaction", Field: "amount"}).As("total"),
 			),
 		}},
-		Actions: []gess.RuleActionSpec{{Name: "assert-alert"}},
+		Actions: []rules.RuleActionSpec{{Name: "assert-alert"}},
 	}); err != nil {
 		return nil, err
 	}
-	if err := workspace.AddQuery(gess.QuerySpec{
+	if err := workspace.AddQuery(rules.QuerySpec{
 		Name:          "velocity-alerts",
-		ConditionTree: gess.Match{Binding: "alert", Target: gess.TemplateKeyFact(alertTemplate)},
-		Returns: []gess.QueryReturnSpec{
-			gess.ReturnValue("account", gess.BindingFieldExpr{Binding: "alert", Field: "account"}),
-			gess.ReturnValue("count", gess.BindingFieldExpr{Binding: "alert", Field: "count"}),
-			gess.ReturnValue("total", gess.BindingFieldExpr{Binding: "alert", Field: "total"}),
+		ConditionTree: rules.Match{Binding: "alert", Target: rules.TemplateKeyFact(alertTemplate)},
+		Returns: []rules.QueryReturnSpec{
+			rules.ReturnValue("account", rules.BindingFieldExpr{Binding: "alert", Field: "account"}),
+			rules.ReturnValue("count", rules.BindingFieldExpr{Binding: "alert", Field: "count"}),
+			rules.ReturnValue("total", rules.BindingFieldExpr{Binding: "alert", Field: "total"}),
 		},
 	}); err != nil {
 		return nil, err
@@ -137,13 +138,13 @@ func buildRuleset(ctx context.Context) (*gess.Ruleset, error) {
 	return workspace.Compile(ctx)
 }
 
-func stringValue(row gess.QueryRow, alias string) string {
+func stringValue(row sess.QueryRow, alias string) string {
 	value, _ := row.Value(alias)
 	out, _ := value.AsString()
 	return out
 }
 
-func intValue(row gess.QueryRow, alias string) int64 {
+func intValue(row sess.QueryRow, alias string) int64 {
 	value, _ := row.Value(alias)
 	out, _ := value.AsInt64()
 	return out
