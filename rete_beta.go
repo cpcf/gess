@@ -127,6 +127,30 @@ func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditi
 	return a.addCompact(parent, tokenRowEntryForMatch(entry, match), match, recency, generation, len(entry.conditionPath))
 }
 
+func (a *tokenArena) addAlphaSource(entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
+	if a == nil {
+		return tokenRef{}
+	}
+	rowEntry := tokenRowEntry{
+		conditionID: entry.conditionID,
+		bindingSlot: entry.bindingSlot,
+		value:       match.value,
+		hasValue:    match.hasValue,
+	}
+	if rowEntry.conditionID == "" {
+		rowEntry.conditionID = match.conditionID
+	}
+	if match.hasValue {
+		rowEntry.binding = entry.binding
+	} else {
+		rowEntry.factID = match.fact.ID()
+		rowEntry.factVersion = match.fact.Version()
+	}
+	match.conditionID = rowEntry.conditionID
+	match.bindingSlot = rowEntry.bindingSlot
+	return a.addSourceCompact(rowEntry, match, recency, generation, len(entry.conditionPath))
+}
+
 func (a *tokenArena) addCompact(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
 	return a.addCompactInternal(parent, entry, match, recency, generation, pathStepLen)
 }
@@ -144,6 +168,43 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 		return tokenRef{}
 	}
 	return a.addCompactInternal(parent, entry, match, recency, generation, pathStepLen)
+}
+
+func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {
+	if a == nil {
+		return tokenRef{}
+	}
+	tokenGeneration := generation
+	if tokenGeneration == 0 {
+		tokenGeneration = a.generation
+	}
+	if !a.setGeneration(tokenGeneration) {
+		return tokenRef{}
+	}
+	chunkIndex := a.count / reteBetaMatchTokenChunkSize
+	for len(a.chunks) <= chunkIndex {
+		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
+	}
+	chunk := a.chunks[chunkIndex]
+	if len(chunk) < cap(chunk) {
+		chunk = chunk[:len(chunk)+1]
+	} else {
+		chunk = append(chunk, tokenRow{})
+	}
+	a.chunks[chunkIndex] = chunk
+	row := &a.chunks[chunkIndex][len(chunk)-1]
+	row.match = match
+	row.size = 1
+	row.pathLen = pathStepLen
+	row.maxRecency = recency
+	row.aggregateRecency = recency
+	row.factSpanStart = a.appendFactSpan(nil, match)
+	row.entry = entry
+	row.identityState = candidateIdentityHashTokenEntryStep(candidateIdentityHashStart(tokenGeneration), entry)
+	row.orderedSlots = entry.bindingSlot == 0
+
+	a.count++
+	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: a.epoch}}
 }
 
 func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation, pathStepLen int) tokenRef {

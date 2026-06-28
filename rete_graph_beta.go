@@ -1988,6 +1988,23 @@ func (m *reteGraphBetaMemory) appendAlphaFactRoute(routes []reteGraphAlphaNodeID
 	return append(routes, nodeID)
 }
 
+func (m *reteGraphBetaMemory) appendAlphaFactRouteOrdered(routes []reteGraphAlphaNodeID, nodeID reteGraphAlphaNodeID) ([]reteGraphAlphaNodeID, bool) {
+	if len(routes) == 0 {
+		return m.appendAlphaFactRoute(routes, nodeID), true
+	}
+	index, found := slices.BinarySearch(routes, nodeID)
+	if found {
+		return routes, false
+	}
+	if index == len(routes) {
+		return m.appendAlphaFactRoute(routes, nodeID), true
+	}
+	next := m.appendAlphaFactRoute(routes, nodeID)
+	copy(next[index+1:], next[index:len(next)-1])
+	next[index] = nodeID
+	return next, true
+}
+
 func (m *reteGraphBetaMemory) alphaFactRouteArenaStart(routes []reteGraphAlphaNodeID) (int, bool) {
 	if m == nil || len(routes) > len(m.alphaFactRouteStorage) {
 		return 0, false
@@ -3139,6 +3156,9 @@ func (m *reteGraphBetaMemory) newAlphaTokenRef(entry bindingTupleEntry, match co
 	if m == nil {
 		return tokenRef{}
 	}
+	if len(captures) == 0 {
+		return m.newAlphaSourceTokenRef(entry, match, span)
+	}
 	token := m.newTokenRef(tokenRef{}, entry, conditionMatchForEntry(match, entry), match.fact.Recency(), match.fact.Generation(), span)
 	if token.isZero() {
 		return tokenRef{}
@@ -3163,6 +3183,19 @@ func (m *reteGraphBetaMemory) newAlphaTokenRef(entry bindingTupleEntry, match co
 		}
 	}
 	return token
+}
+
+func (m *reteGraphBetaMemory) newAlphaSourceTokenRef(entry bindingTupleEntry, match conditionMatch, span *propagationCounterSpan) tokenRef {
+	if m == nil {
+		return tokenRef{}
+	}
+	if span != nil {
+		span.recordTokenCreated()
+	}
+	if m.arena == nil {
+		m.arena = newTokenArenaWithoutFactSpans()
+	}
+	return m.arena.addAlphaSource(entry, match, match.fact.Recency(), match.fact.Generation())
 }
 
 func (m *reteGraphBetaMemory) newAlphaTokenRefWithRetainedCaptures(entry bindingTupleEntry, match conditionMatch, retained tokenRef, span *propagationCounterSpan) tokenRef {
@@ -4905,9 +4938,8 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 	if len(routes) == 0 {
 		m.alphaFactRouteIDs = append(m.alphaFactRouteIDs, fact.ID())
 	}
-	if !slices.Contains(routes, nodeID) {
-		routes = m.appendAlphaFactRoute(routes, nodeID)
-		slices.Sort(routes)
+	if next, inserted := m.appendAlphaFactRouteOrdered(routes, nodeID); inserted {
+		routes = next
 		m.alphaFactRoutes[fact.ID()] = routes
 	}
 	if m.alphaFactCounts == nil {
