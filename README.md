@@ -45,21 +45,33 @@ go run ./cmd/gessc \
   examples/gess-files/order_routing/rules.gess
 ```
 
+Format `.gess` files with `gessfmt`:
+
+```sh
+go run ./cmd/gessfmt -w examples/gess-files/order_routing/rules.gess
+```
+
 ## `.gess` workflow
 
 A typical project keeps rules and templates in a source file:
 
 ```cl
 (deftemplate order
-  (slot id (type STRING) (required TRUE)))
+  (slot id (type STRING) (required TRUE))
+)
 
 (deftemplate routed-order
-  (slot order (type STRING) (required TRUE)))
+  (slot order (type STRING) (required TRUE))
+)
 
 (defrule route-order
   (order (id ?id))
   =>
-  (assert (routed-order (order ?id))))
+  (assert (routed-order
+    (order ?id)
+  )
+  )
+)
 ```
 
 Compile that file during generation:
@@ -92,6 +104,9 @@ _, err = session.Run(ctx)
 
 See `TUTORIAL.md` for a fuller walkthrough based on
 `examples/gess-files/order_routing`.
+
+For an interactive edit-and-run workshop, use `tutorial/README.md` or run
+`go run ./tutorial/cmd/gess-tutorial`.
 
 ## Packages
 

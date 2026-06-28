@@ -1,24 +1,26 @@
 (deftemplate order
   (slot id (type STRING) (required TRUE))
   (slot customer (type STRING) (required TRUE))
-  (slot sku (type STRING) (required TRUE)))
+  (slot sku (type STRING) (required TRUE))
+)
 
 (deftemplate customer
   (slot id (type STRING) (required TRUE))
-  (slot segment (type STRING) (required TRUE)))
+  (slot segment (type STRING) (required TRUE))
+)
 
 (deftemplate inventory
   (slot sku (type STRING) (required TRUE))
   (slot warehouse (type STRING) (required TRUE))
-  (slot available (type BOOLEAN) (required TRUE)))
+  (slot available (type BOOLEAN) (required TRUE))
+)
 
 (deftemplate fulfillment-route
-  (declare
-    (duplicate-policy unique-key)
-    (duplicate-key order))
+  (declare (duplicate-policy unique-key) (duplicate-key order))
   (slot order (type STRING) (required TRUE))
   (slot lane (type STRING) (required TRUE))
-  (slot warehouse (type STRING) (required TRUE)))
+  (slot warehouse (type STRING) (required TRUE))
+)
 
 (deffacts seed-orders
   (order (id "O-100") (customer "C-100") (sku "SKU-1"))
@@ -28,24 +30,31 @@
   (customer (id "C-200") (segment "standard"))
   (customer (id "C-300") (segment "vip"))
   (inventory (sku "SKU-1") (warehouse "W-1") (available TRUE))
-  (inventory (sku "SKU-2") (warehouse "W-2") (available FALSE)))
+  (inventory (sku "SKU-2") (warehouse "W-2") (available FALSE))
+)
 
-(defrule route-vip-order
-  ?order <- (order (customer ?customer) (sku ?sku))
+(defrule route-vip-order ?order <-
+  (order (customer ?customer) (sku ?sku))
   (customer (id ?customer) (segment "vip"))
   (inventory (sku ?sku) (available TRUE) (warehouse ?warehouse))
   =>
   (assert (fulfillment-route
     (order ?order:id)
     (lane "expedite")
-    (warehouse ?warehouse))))
+    (warehouse ?warehouse)
+  )
+  )
+)
 
 (defquery routes-by-lane
   (declare (variables ?lane))
   ?route <- (fulfillment-route
     (lane ?lane)
     (order ?order)
-    (warehouse ?warehouse))
+    (warehouse ?warehouse)
+  )
   (return
     (order ?order)
-    (warehouse ?warehouse)))
+    (warehouse ?warehouse)
+  )
+)

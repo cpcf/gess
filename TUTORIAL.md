@@ -36,24 +36,29 @@ and assert:
 (deftemplate order
   (slot id (type STRING) (required TRUE))
   (slot customer (type STRING) (required TRUE))
-  (slot sku (type STRING) (required TRUE)))
+  (slot sku (type STRING) (required TRUE))
+)
 
 (deftemplate customer
   (slot id (type STRING) (required TRUE))
-  (slot segment (type STRING) (required TRUE)))
+  (slot segment (type STRING) (required TRUE))
+)
 
 (deftemplate inventory
   (slot sku (type STRING) (required TRUE))
   (slot warehouse (type STRING) (required TRUE))
-  (slot available (type BOOLEAN) (required TRUE)))
+  (slot available (type BOOLEAN) (required TRUE))
+)
 
 (deftemplate fulfillment-route
   (declare
     (duplicate-policy unique-key)
-    (duplicate-key order))
+    (duplicate-key order)
+  )
   (slot order (type STRING) (required TRUE))
   (slot lane (type STRING) (required TRUE))
-  (slot warehouse (type STRING) (required TRUE)))
+  (slot warehouse (type STRING) (required TRUE))
+)
 ```
 
 The `duplicate-policy unique-key` declaration makes `fulfillment-route` facts
@@ -68,7 +73,8 @@ Seed facts can live in the same file:
   (order (id "O-200") (customer "C-200") (sku "SKU-1"))
   (customer (id "C-100") (segment "vip"))
   (customer (id "C-200") (segment "standard"))
-  (inventory (sku "SKU-1") (warehouse "W-1") (available TRUE)))
+  (inventory (sku "SKU-1") (warehouse "W-1") (available TRUE))
+)
 ```
 
 Then add rules. This rule matches an order, joins it to the customer and
@@ -83,7 +89,9 @@ inventory facts, and asserts a derived route:
   (assert (fulfillment-route
     (order ?order:id)
     (lane "expedite")
-    (warehouse ?warehouse))))
+    (warehouse ?warehouse))
+  )
+)
 ```
 
 Queries give Go code a stable way to read results:
@@ -97,11 +105,15 @@ Queries give Go code a stable way to read results:
     (warehouse ?warehouse))
   (return
     (order ?order)
-    (warehouse ?warehouse)))
+    (warehouse ?warehouse)
+  )
+)
 ```
 
 The complete file is
 `examples/gess-files/order_routing/rules.gess`.
+
+For a hands-on version with checkpoints, use `tutorial/README.md`.
 
 ## Compile with `gessc`
 
@@ -131,6 +143,12 @@ go run ./cmd/gessc \
   -func buildGeneratedRuleset \
   -o examples/gess-files/order_routing/rules_generated.go \
   examples/gess-files/order_routing/rules.gess
+```
+
+Format `.gess` source with `gessfmt`:
+
+```sh
+go run ./cmd/gessfmt -w examples/gess-files/order_routing/rules.gess
 ```
 
 `gessc` parses the `.gess` file and emits a Go function with this shape:
