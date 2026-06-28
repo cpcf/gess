@@ -185,6 +185,18 @@ func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
 	if id, ok := session.singleBackchainDemandSupportIDForRequest(first); ok {
 		t.Fatalf("single support id = %d, want owner path needed with ambiguous support fact bucket", id)
 	}
+	if _, ok := session.backchainDemandSupportRecordByID(firstID); ok {
+		t.Fatalf("first owner support id %d was stored in generic support records", firstID)
+	}
+	if _, ok := session.backchainDemandSupportRecordByID(secondID); ok {
+		t.Fatalf("second owner support id %d was stored in generic support records", secondID)
+	}
+	if _, ok := session.backchainDemandOwnerSupportRecordByID(firstID); !ok {
+		t.Fatalf("first owner support id %d missing compact owner record", firstID)
+	}
+	if _, ok := session.backchainDemandOwnerSupportRecordByID(secondID); !ok {
+		t.Fatalf("second owner support id %d missing compact owner record", secondID)
+	}
 
 	delta, err := session.removeBackchainDemandSupportForRequest(context.Background(), first, mutationOrigin{})
 	if err != nil {
@@ -193,10 +205,10 @@ func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
 	if !delta.supported {
 		t.Fatalf("delta.supported = false, want true")
 	}
-	if _, ok := session.backchainDemandSupportRecordByID(firstID); ok {
+	if _, ok := session.backchainDemandOwnerSupportRecordByID(firstID); ok {
 		t.Fatalf("first owner support id %d still present", firstID)
 	}
-	if _, ok := session.backchainDemandSupportRecordByID(secondID); !ok {
+	if _, ok := session.backchainDemandOwnerSupportRecordByID(secondID); !ok {
 		t.Fatalf("second owner support id %d was removed", secondID)
 	}
 	if id, ok := session.backchainDemandSupportByOwner(first.owner); ok {

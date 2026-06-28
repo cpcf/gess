@@ -139,6 +139,7 @@ type Session struct {
 	nextBackchainDemandSupportID  backchainDemandSupportID
 	backchainDemandSupports       backchainDemandSupportTable
 	backchainDemandSupportRecords []backchainDemandSupportRecord
+	backchainDemandOwnerRecords   []backchainDemandOwnerSupportRecord
 	backchainDemandInlineSupports backchainDemandInlineSupportIndex
 	backchainDemandSupportOwners  backchainDemandOwnerSupportIndex
 	backchainDemandByFact         backchainDemandFactSupportTable
