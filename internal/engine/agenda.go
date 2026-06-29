@@ -448,6 +448,7 @@ type agenda struct {
 	activations         map[activationFingerprint]activationBucket
 	activationRows      activationRows
 	pending             []activationKey
+	pendingActivation   []*activation
 	pendingHead         int
 	lazyDeactivated     int
 	byFactID            map[FactID]activationKeyBucket
@@ -511,8 +512,16 @@ func (a *agenda) normalizePendingKeys() []activationKey {
 	if a.pendingHead >= len(a.pending) {
 		clear(a.pending)
 		a.pending = a.pending[:0]
+		a.invalidatePendingActivationCache()
 		a.pendingHead = 0
 		return a.pending
+	}
+	if len(a.pendingActivation) == len(a.pending) {
+		copy(a.pendingActivation, a.pendingActivation[a.pendingHead:])
+		clear(a.pendingActivation[len(a.pendingActivation)-a.pendingHead:])
+		a.pendingActivation = a.pendingActivation[:len(a.pending)-a.pendingHead]
+	} else {
+		a.invalidatePendingActivationCache()
 	}
 	copy(a.pending, a.pending[a.pendingHead:])
 	clear(a.pending[len(a.pending)-a.pendingHead:])
@@ -527,7 +536,35 @@ func (a *agenda) resetPendingKeys() {
 	}
 	clear(a.pending)
 	a.pending = a.pending[:0]
+	a.invalidatePendingActivationCache()
 	a.pendingHead = 0
+}
+
+func (a *agenda) invalidatePendingActivationCache() {
+	if a == nil {
+		return
+	}
+	clear(a.pendingActivation)
+	a.pendingActivation = a.pendingActivation[:0]
+}
+
+func (a *agenda) rebuildPendingActivationCache() {
+	if a == nil {
+		return
+	}
+	if len(a.pending) == 0 {
+		a.invalidatePendingActivationCache()
+		return
+	}
+	if cap(a.pendingActivation) < len(a.pending) {
+		a.pendingActivation = make([]*activation, len(a.pending))
+	} else {
+		a.pendingActivation = a.pendingActivation[:len(a.pending)]
+	}
+	for i, key := range a.pending {
+		current, _ := a.activationByKeyPtr(key)
+		a.pendingActivation[i] = current
+	}
 }
 
 func (a *agenda) reset() {
@@ -653,6 +690,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	a.reconcileChanges = changes[:0]
 	a.reconcileActivated = activated[:0]
 	a.pending = nextPending
+	a.rebuildPendingActivationCache()
 	return append([]agendaChange(nil), changes...), nil
 }
 
@@ -706,6 +744,7 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		}
 		a.deltaNextPending = a.pending[:0]
 		a.pending = nextPending
+		a.invalidatePendingActivationCache()
 	}
 
 	activated := a.deltaActivated[:0]
@@ -917,6 +956,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		}
 		a.deltaNextPending = a.pending[:0]
 		a.pending = nextPending
+		a.invalidatePendingActivationCache()
 	}
 
 	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
@@ -1048,6 +1088,7 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 	}
 	if refreshPendingOrder {
 		a.sortActivationKeys(a.pending)
+		a.rebuildPendingActivationCache()
 	}
 	return nil
 }
@@ -1184,6 +1225,7 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 	a.reconcileSeen = seen
 	a.reconcileNextPending = a.pending[:0]
 	a.pending = nextPending
+	a.rebuildPendingActivationCache()
 	a.reconcileChanges = a.reconcileChanges[:0]
 	a.reconcileActivated = a.reconcileActivated[:0]
 	if collectChanges {
@@ -1315,6 +1357,7 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 	a.reconcileSeen = seen
 	a.reconcileNextPending = a.pending[:0]
 	a.pending = nextPending
+	a.rebuildPendingActivationCache()
 	if !collectChanges {
 		a.reconcileChanges = a.reconcileChanges[:0]
 		a.reconcileActivated = a.reconcileActivated[:0]
@@ -1543,6 +1586,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	}
 
 	a.pending = nextPending
+	a.rebuildPendingActivationCache()
 	a.purgeNextPending = oldPending[:0]
 	a.pruneEmptyIndexes()
 	out := append([]agendaChange(nil), changes...)
@@ -1577,12 +1621,24 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 	if a == nil {
 		return nil, activation{}, false
 	}
+	usePendingActivation := len(a.pendingActivation) == len(a.pending)
 	for a.pendingHead < len(a.pending) {
 		key := a.pending[a.pendingHead]
+		var current *activation
+		ok := false
+		if usePendingActivation {
+			current = a.pendingActivation[a.pendingHead]
+			ok = current != nil && current.key == key
+		}
+		if !ok {
+			current, ok = a.activationByKeyPtr(key)
+		}
 		a.pending[a.pendingHead] = activationKey{}
+		if usePendingActivation {
+			a.pendingActivation[a.pendingHead] = nil
+		}
 		a.pendingHead++
 
-		current, ok := a.activationByKeyPtr(key)
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
@@ -1603,6 +1659,7 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 		return current, out, true
 	}
 	a.pending = a.pending[:0]
+	a.invalidatePendingActivationCache()
 	a.pendingHead = 0
 	a.lazyDeactivated = 0
 	return nil, activation{}, false
@@ -1612,11 +1669,23 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 	if a == nil {
 		return nil, activation{}, false
 	}
+	usePendingActivation := len(a.pendingActivation) == len(a.pending)
 	for a.pendingHead < len(a.pending) {
 		key := a.pending[a.pendingHead]
-		current, ok := a.activationByKeyPtr(key)
+		var current *activation
+		ok := false
+		if usePendingActivation {
+			current = a.pendingActivation[a.pendingHead]
+			ok = current != nil && current.key == key
+		}
+		if !ok {
+			current, ok = a.activationByKeyPtr(key)
+		}
 		if !ok || current.status != activationStatusPending {
 			a.pending[a.pendingHead] = activationKey{}
+			if usePendingActivation {
+				a.pendingActivation[a.pendingHead] = nil
+			}
 			a.pendingHead++
 			continue
 		}
@@ -1624,6 +1693,9 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 			break
 		}
 		a.pending[a.pendingHead] = activationKey{}
+		if usePendingActivation {
+			a.pendingActivation[a.pendingHead] = nil
+		}
 		a.pendingHead++
 		current.status = activationStatusConsumed
 		out := *current
@@ -1643,6 +1715,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 	}
 	if a.pendingHead >= len(a.pending) {
 		a.pending = a.pending[:0]
+		a.invalidatePendingActivationCache()
 		a.pendingHead = 0
 		a.lazyDeactivated = 0
 		return nil, activation{}, false
@@ -1657,6 +1730,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		last := len(a.pending) - 1
 		a.pending[last] = activationKey{}
 		a.pending = a.pending[:last]
+		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
 		out := *current
 		if materializeID {
@@ -2015,9 +2089,11 @@ func (a *agenda) sortActivationKeys(keys []activationKey) {
 		entries[i] = activationSortEntry{}
 	}
 	a.sortEntries = entries[:0]
+	a.invalidatePendingActivationCache()
 }
 
 func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationKey, act *activation) []activationKey {
+	a.invalidatePendingActivationCache()
 	if a == nil || act == nil || len(keys) == 0 {
 		return append(keys, key)
 	}
@@ -2040,6 +2116,7 @@ func (a *agenda) reservePendingActivationKeys(additional int) {
 	}
 	a.normalizePendingKeys()
 	a.pending = slices.Grow(a.pending, additional)
+	a.pendingActivation = slices.Grow(a.pendingActivation, additional)
 }
 
 func sortActivations(activations []activation) {
@@ -2481,6 +2558,7 @@ func (a *agenda) compactLazyPending(force bool) {
 	}
 	a.deltaNextPending = a.pending[:0]
 	a.pending = next
+	a.rebuildPendingActivationCache()
 	a.lazyDeactivated = 0
 }
 
