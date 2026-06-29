@@ -50,6 +50,9 @@ type reteGraphBetaMemory struct {
 	removalTokenScratch      []tokenRef
 	rootToken                tokenRef
 	deferNegativeOutputs     bool
+	deferAggregateOutputs    bool
+	deferredAggregateOutputs map[deferredAggregateOutputKey]*reteGraphAggregateBucket
+	deferredAggregateOrder   []deferredAggregateOutputKey
 	suppressTerminalDeltas   bool
 	rightPredicateScratch    []conditionMatch
 	tokenRefreshCache        map[tokenHandle]tokenRef
@@ -109,9 +112,14 @@ type reteGraphAggregateCollectEntry struct {
 }
 
 type reteGraphAggregateMember struct {
-	match  conditionMatch
 	token  tokenRef
+	factID FactID
 	values []Value
+}
+
+type deferredAggregateOutputKey struct {
+	id     reteGraphAggregateNodeID
+	parent graphTokenIdentityKey
 }
 
 type reteGraphTerminalMemory struct {
@@ -629,21 +637,16 @@ func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount 
 	if revision == nil || graph == nil {
 		return nil
 	}
-	rowCapacity := graphBetaTokenMemoryCapacity(revision, factCount)
-	arenaCapacity := graphBetaTokenArenaCapacity(revision, factCount)
 	memory := &reteGraphBetaMemory{
-		revision:            revision,
-		graph:               graph,
-		nodes:               make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
-		aggregates:          make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
-		terminals:           make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
-		arena:               newTokenArenaWithoutFactSpans(),
-		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(factCount)),
+		revision:   revision,
+		graph:      graph,
+		nodes:      make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
+		aggregates: make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
+		terminals:  make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
+		arena:      newTokenArenaWithoutFactSpans(),
 	}
-	memory.arena.reserve(arenaCapacity)
-	memory.reserveMemories(rowCapacity, factCount)
 	memory.indexRuleTerminals()
-	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, factCount))
+	memory.reserveAlphaFacts(0)
 	return memory
 }
 
@@ -1958,29 +1961,35 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 	}
 	m.setFacts(facts)
 	m.deferNegativeOutputs = true
+	m.deferAggregateOutputs = true
 	m.suppressTerminalDeltas = true
+	defer func() {
+		m.deferNegativeOutputs = false
+		m.deferAggregateOutputs = false
+		m.suppressTerminalDeltas = false
+		m.clearDeferredAggregateOutputs()
+	}()
 	m.initializeAggregateOutputs()
 	if err := m.initializeRootStage(nil); err != nil {
-		m.deferNegativeOutputs = false
-		m.suppressTerminalDeltas = false
 		return combined, err
 	}
 	for _, fact := range facts {
 		delta, err := m.insertFactInternal(ctx, fact, nil, false)
 		if err != nil {
-			m.deferNegativeOutputs = false
-			m.suppressTerminalDeltas = false
 			return combined, err
 		}
 		combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
 	}
-	if err := m.finalizeDeferredNegativeOutputs(nil); err != nil {
-		m.deferNegativeOutputs = false
-		m.suppressTerminalDeltas = false
+	if err := m.finalizeDeferredAggregateOutputs(nil); err != nil {
 		return combined, err
 	}
 	m.deferNegativeOutputs = false
-	m.suppressTerminalDeltas = false
+	if err := m.finalizeDeferredNegativeOutputs(nil); err != nil {
+		return combined, err
+	}
+	if err := m.finalizeDeferredAggregateOutputs(nil); err != nil {
+		return combined, err
+	}
 	return combined, nil
 }
 
@@ -2027,9 +2036,6 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 		return
 	}
 	capacity := len(facts)
-	if m.revision != nil {
-		capacity = max(capacity, m.revision.estimatedRunFactCapacity(len(facts)))
-	}
 	if cap(m.facts) < capacity {
 		m.facts = make([]FactSnapshot, len(facts), capacity)
 	} else {
@@ -2145,6 +2151,7 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 	clear(m.terminalRemovedDeltas)
 	m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
+	m.clearDeferredAggregateOutputs()
 	m.clearBackchainDemandRequests()
 	m.rootToken = tokenRef{}
 }
@@ -2384,7 +2391,7 @@ func (m *reteGraphBetaMemory) initializeAggregateOutputs() {
 			continue
 		}
 		bucket := memory.bucketForParent(tokenRef{})
-		m.refreshAggregateOutputInternal(node.id, bucket, nil, nil, &delta)
+		m.refreshAggregateOutputDeferred(node.id, bucket, nil, nil, &delta)
 	}
 }
 
@@ -3539,16 +3546,23 @@ func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, toke
 	if node == nil {
 		return reteGraphAggregateMember{}, false
 	}
-	member := reteGraphAggregateMember{match: match, token: token}
+	bindings, ok := tokenConditionMatches(token)
+	if !ok {
+		return reteGraphAggregateMember{}, false
+	}
+	return m.aggregateMemberWithBindings(node, token, match, bindings)
+}
+
+func (m *reteGraphBetaMemory) aggregateMemberWithBindings(node *reteGraphAggregateNode, token tokenRef, match conditionMatch, bindings []conditionMatch) (reteGraphAggregateMember, bool) {
+	if node == nil {
+		return reteGraphAggregateMember{}, false
+	}
+	member := reteGraphAggregateMember{token: token, factID: match.fact.ID()}
 	if !aggregateSpecsNeedInputValues(node.specs) {
 		return member, true
 	}
 	if len(node.specs) > 0 {
 		member.values = make([]Value, len(node.specs))
-	}
-	bindings, ok := tokenConditionMatches(token)
-	if !ok {
-		return reteGraphAggregateMember{}, false
 	}
 	for i, spec := range node.specs {
 		if spec.kind == AggregateCount {
@@ -3599,6 +3613,94 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputWithCounters(id reteGraphAgg
 	for _, bucket := range memory.buckets {
 		m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
 	}
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateOutputDeferred(id reteGraphAggregateNodeID, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || delta == nil {
+		return
+	}
+	if !m.deferAggregateOutputs {
+		m.refreshAggregateOutputInternal(id, bucket, span, counters, delta)
+		return
+	}
+	if bucket == nil {
+		delta.supported = false
+		return
+	}
+	key := deferredAggregateOutputKey{
+		id:     id,
+		parent: tokenRefKey(bucket.parent),
+	}
+	if m.deferredAggregateOutputs == nil {
+		m.deferredAggregateOutputs = make(map[deferredAggregateOutputKey]*reteGraphAggregateBucket)
+	}
+	if _, exists := m.deferredAggregateOutputs[key]; !exists {
+		m.deferredAggregateOrder = append(m.deferredAggregateOrder, key)
+	}
+	m.deferredAggregateOutputs[key] = bucket
+}
+
+func (m *reteGraphBetaMemory) clearDeferredAggregateOutputs() {
+	if m == nil {
+		return
+	}
+	if m.deferredAggregateOutputs != nil {
+		clear(m.deferredAggregateOutputs)
+	}
+	clear(m.deferredAggregateOrder)
+	m.deferredAggregateOrder = m.deferredAggregateOrder[:0]
+}
+
+func (m *reteGraphBetaMemory) finalizeDeferredAggregateOutputs(span *propagationCounterSpan) error {
+	if m == nil || len(m.deferredAggregateOrder) == 0 {
+		return nil
+	}
+	order := make([]deferredAggregateOutputKey, 0, len(m.deferredAggregateOrder))
+	for _, key := range m.deferredAggregateOrder {
+		if _, ok := m.deferredAggregateOutputs[key]; ok {
+			order = append(order, key)
+		}
+	}
+	clear(m.deferredAggregateOutputs)
+	m.deferredAggregateOrder = m.deferredAggregateOrder[:0]
+	slices.SortFunc(order, func(left, right deferredAggregateOutputKey) int {
+		if left.id != right.id {
+			return int(left.id - right.id)
+		}
+		if left.parent.size != right.parent.size {
+			return left.parent.size - right.parent.size
+		}
+		if left.parent.generation != right.parent.generation {
+			if left.parent.generation < right.parent.generation {
+				return -1
+			}
+			return 1
+		}
+		if left.parent.identityState < right.parent.identityState {
+			return -1
+		}
+		if left.parent.identityState > right.parent.identityState {
+			return 1
+		}
+		return 0
+	})
+	delta := &reteAgendaDelta{supported: true}
+	for _, key := range order {
+		memory := m.aggregateMemory(key.id)
+		var bucket *reteGraphAggregateBucket
+		if memory != nil {
+			bucket = memory.buckets[key.parent]
+		}
+		if bucket == nil {
+			delta.supported = false
+			continue
+		}
+		m.refreshAggregateOutputInternal(key.id, bucket, span, nil, delta)
+	}
+	if !delta.supported {
+		return ErrUnsupportedRuntime
+	}
+	return nil
 }
 
 func (m *reteGraphBetaMemory) aggregateParentToken(node *reteGraphAggregateNode, token tokenRef) tokenRef {
@@ -4050,7 +4152,7 @@ func (m *reteGraphAggregateBucket) addCollect(index int, member reteGraphAggrega
 	m.ensureSpecState(index + 1)
 	entry := reteGraphAggregateCollectEntry{
 		key:    tokenRefKey(member.token),
-		factID: member.match.fact.ID(),
+		factID: member.factID,
 		value:  cloneValue(member.values[index]),
 	}
 	entries := m.collects[index]

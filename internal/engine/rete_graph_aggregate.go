@@ -59,7 +59,7 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 			return
 		}
 		if bucket.addCountOnlyMember(token) {
-			m.owner.refreshAggregateOutputInternal(m.id, bucket, span, nil, delta)
+			m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 		}
 		return
 	}
@@ -86,7 +86,7 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		delta.supported = false
 		return
 	}
-	m.owner.refreshAggregateOutputInternal(m.id, bucket, span, nil, delta)
+	m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 }
 
 func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -106,7 +106,7 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 	}
 	if !aggregateSpecsNeedInputValues(m.node.specs) {
 		if bucket.removeCountOnlyMember(token) {
-			m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, counters, delta)
+			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 		}
 		return
 	}
@@ -117,7 +117,7 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 	}
 	delete(bucket.members, memberKey)
 	bucket.removeMember(m.node, member)
-	m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, counters, delta)
+	m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 }
 
 func (m reteGraphAggregateMemory) openBucket(parent tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
@@ -139,7 +139,7 @@ func (m reteGraphAggregateMemory) openBucket(parent tokenRef, span *propagationC
 	if bucket.hasValue {
 		return
 	}
-	m.owner.refreshAggregateOutputInternal(m.id, bucket, span, nil, delta)
+	m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 }
 
 func (m reteGraphAggregateMemory) removeBucket(parent tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -227,7 +227,7 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 			}
 		}
 		if changed {
-			m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, counters, delta)
+			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 		}
 	}
 }
@@ -337,15 +337,18 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 					delta.supported = false
 					return false
 				}
+				nextMember, ok := m.owner.aggregateMember(m.node, next, nextMatch)
+				if !ok {
+					delta.supported = false
+					return false
+				}
 				delete(bucket.members, oldKey)
 				bucket.removeMemberWithCollectKey(m.node, member, oldKey)
-				member.token = next
-				member.match = nextMatch
 				if bucket.members == nil {
 					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
 				}
-				bucket.members[tokenRefKey(next)] = member
-				if err := bucket.addMember(m.node, member); err != nil {
+				bucket.members[tokenRefKey(next)] = nextMember
+				if err := bucket.addMember(m.node, nextMember); err != nil {
 					delta.supported = false
 					return false
 				}
@@ -353,7 +356,7 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 			}
 		}
 		if changed {
-			m.owner.refreshAggregateOutputInternal(m.id, bucket, nil, nil, delta)
+			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, nil, delta)
 		}
 	}
 	return delta.supported

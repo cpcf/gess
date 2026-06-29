@@ -3764,10 +3764,10 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := initialCounters.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained = %d, want %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.TokenMemories, 5; got != want {
-		t.Fatalf("graph token memories = %d, want join/filter beta memories plus terminal %d", got, want)
+	if got, want := initialCounters.GraphBetaMemory.TokenMemories, 1; got != want {
+		t.Fatalf("graph token memories = %d, want only initialized terminal memory %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.BetaTokenMemories, 4; got != want {
+	if got, want := initialCounters.GraphBetaMemory.BetaTokenMemories, 0; got != want {
 		t.Fatalf("graph beta token memories = %d, want %d", got, want)
 	}
 	if got, want := initialCounters.GraphBetaMemory.TerminalTokenMemories, 1; got != want {
@@ -3776,17 +3776,17 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := initialCounters.GraphBetaMemory.TokenRows, 0; got != want {
 		t.Fatalf("graph token rows = %d, want %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.TokenRowReserve, 40; got != want {
-		t.Fatalf("graph token row reserve = %d, want five memories reserved at %d", got, want)
+	if got, want := initialCounters.GraphBetaMemory.TokenRowReserve, 0; got != want {
+		t.Fatalf("graph token row reserve = %d, want lazy initial reserve %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.JoinIndexReserve, 32; got != want {
-		t.Fatalf("graph join index reserve = %d, want beta memories only reserved at %d", got, want)
+	if got, want := initialCounters.GraphBetaMemory.JoinIndexReserve, 0; got != want {
+		t.Fatalf("graph join index reserve = %d, want lazy initial reserve %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.IdentityIndexReserve, 40; got != want {
-		t.Fatalf("graph identity index reserve = %d, want five memories reserved at %d", got, want)
+	if got, want := initialCounters.GraphBetaMemory.IdentityIndexReserve, 0; got != want {
+		t.Fatalf("graph identity index reserve = %d, want lazy initial reserve %d", got, want)
 	}
-	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 64; got != want {
-		t.Fatalf("graph fact index reserve = %d, want five memories reserved at %d", got, want)
+	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 0; got != want {
+		t.Fatalf("graph fact index reserve = %d, want lazy initial reserve %d", got, want)
 	}
 
 	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
@@ -3885,7 +3885,7 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained after reset = %d, want %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexReserve, 64; got != want {
+	if got, want := snapshot.GraphBetaMemory.FactIndexReserve, 0; got != want {
 		t.Fatalf("graph fact index reserve after reset = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
