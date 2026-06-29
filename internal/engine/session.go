@@ -4210,21 +4210,22 @@ func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, factCoun
 		return
 	}
 	if factCount > 0 {
-		factCapacity := len(w.facts) + factCount
+		factCapacity := saturatingAddInt(len(w.facts), factCount)
 		if cap(w.facts) < factCapacity {
 			nextFacts := make([]workingFact, len(w.facts), factCapacity)
 			copy(nextFacts, w.facts)
 			w.facts = nextFacts
 		}
-		orderCapacity := len(w.insertionOrder) + factCount
+		orderCapacity := saturatingAddInt(len(w.insertionOrder), factCount)
 		if cap(w.insertionOrder) < orderCapacity {
 			nextOrder := make([]FactID, len(w.insertionOrder), orderCapacity)
 			copy(nextOrder, w.insertionOrder)
 			w.insertionOrder = nextOrder
 		}
+		w.reserveFactRowSequenceRows(factCount)
 	}
 	if slotCount > 0 {
-		w.reserveSlotStorage(len(w.slotStorage) + slotCount)
+		w.reserveSlotStorage(saturatingAddInt(len(w.slotStorage), slotCount))
 	}
 	w.reserveTemplateIndexes(revision)
 }
@@ -4249,10 +4250,43 @@ func (w *factWorkspace) reserveGeneratedFactInsert(revision *Ruleset, slotCount 
 			w.insertionOrder = nextOrder
 		}
 	}
+	w.reserveFactRowSequenceRows(1)
 	if slotCount > 0 && cap(w.slotStorage)-len(w.slotStorage) < slotCount {
 		nextCapacity := nextGeneratedSlotCapacity(len(w.slotStorage), cap(w.slotStorage), slotCount, revision)
 		w.reserveSlotStorage(nextCapacity)
 	}
+}
+
+func (w *factWorkspace) reserveFactRowSequenceRows(factCount int) {
+	if w == nil || factCount <= 0 {
+		return
+	}
+	target, ok := factRowSequenceReserveTarget(w.sequence, factCount)
+	if !ok || target <= len(w.factsBySequence) {
+		return
+	}
+	oldLen := len(w.factsBySequence)
+	if cap(w.factsBySequence) < target {
+		next := make([]int, target)
+		copy(next, w.factsBySequence)
+		w.factsBySequence = next
+	} else {
+		w.factsBySequence = w.factsBySequence[:target]
+	}
+	for i := oldLen; i < target; i++ {
+		w.factsBySequence[i] = -1
+	}
+}
+
+func factRowSequenceReserveTarget(sequence uint64, factCount int) (int, bool) {
+	if factCount <= 0 {
+		return 0, false
+	}
+	target := sequence + uint64(factCount)
+	if target < sequence || target > uint64(int(^uint(0)>>1)) {
+		return 0, false
+	}
+	return int(target), true
 }
 
 func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
@@ -4416,8 +4450,18 @@ func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
 	if id.generation == w.generation && id.sequence > 0 {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 {
-			for len(w.factsBySequence) <= index {
-				w.factsBySequence = append(w.factsBySequence, -1)
+			if len(w.factsBySequence) <= index {
+				oldLen := len(w.factsBySequence)
+				if cap(w.factsBySequence) <= index {
+					next := make([]int, index+1)
+					copy(next, w.factsBySequence)
+					w.factsBySequence = next
+				} else {
+					w.factsBySequence = w.factsBySequence[:index+1]
+				}
+				for i := oldLen; i <= index; i++ {
+					w.factsBySequence[i] = -1
+				}
 			}
 			w.factsBySequence[index] = row
 			return
@@ -5760,6 +5804,56 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.clearFactFieldEqualIndexes()
 	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
 	s.slotStorage, workspace.slotStorage = workspace.slotStorage, s.slotStorage
+}
+
+func (s *Session) reserveRunGeneratedFactStorage() {
+	if s == nil || s.revision == nil || s.agenda == nil {
+		return
+	}
+	stats := s.revision.generatedAssertReserveByRuleRevision()
+	if len(stats) == 0 {
+		return
+	}
+	var factCount, slotCount int
+	s.agenda.forEachPendingActivation(func(current *activation) bool {
+		if current == nil {
+			return true
+		}
+		stat := stats[current.ruleRevisionID]
+		if stat.facts == 0 {
+			return true
+		}
+		factCount = saturatingAddInt(factCount, stat.facts)
+		slotCount = saturatingAddInt(slotCount, stat.slots)
+		maximum := maxIntValue()
+		return factCount < maximum && slotCount < maximum
+	})
+	if factCount == 0 && slotCount == 0 {
+		return
+	}
+	state := s.activeFactWorkspace()
+	state.reserveGeneratedFactCapacity(s.revision, factCount, slotCount)
+	s.facts = state.facts
+	s.insertionOrder = state.insertionOrder
+	s.factsBySequence = state.factsBySequence
+	s.factsByTemplate = state.factsByTemplate
+	s.factsByName = state.factsByName
+	s.slotStorage = state.slotStorage
+}
+
+func saturatingAddInt(left, right int) int {
+	if right <= 0 {
+		return left
+	}
+	maximum := maxIntValue()
+	if left > maximum-right {
+		return maximum
+	}
+	return left + right
+}
+
+func maxIntValue() int {
+	return int(^uint(0) >> 1)
 }
 
 func (s *Session) resetWorkingMemory() {

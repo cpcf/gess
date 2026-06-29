@@ -95,6 +95,8 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 		}
 	}
 
+	s.reserveRunGeneratedFactStorage()
+
 	fired := 0
 	for {
 		if err := ctx.Err(); err != nil {

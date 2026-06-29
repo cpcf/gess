@@ -485,6 +485,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryConditionTemplateKeys: queryConditionTemplateKeys,
 		queryConditionNames:        queryConditionNames,
 		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
+		generatedAssertReserve:     generatedAssertReserveByRuleRevision(compiledRules),
 		hasEffectiveAutoFocus:      hasEffectiveAutoFocus,
 		allRulesInMainModule:       allRulesInMainModule,
 		generatedFactInsertPlans:   generatedFactInsertPlans,
@@ -514,10 +515,16 @@ type Ruleset struct {
 	queryConditionTemplateKeys map[TemplateKey]struct{}
 	queryConditionNames        map[string]struct{}
 	assertTemplateActionCount  int
+	generatedAssertReserve     map[RuleRevisionID]generatedAssertReserve
 	hasEffectiveAutoFocus      bool
 	allRulesInMainModule       bool
 	generatedFactInsertPlans   map[TemplateKey]*compiledGeneratedFactInsertPlan
 	graph                      *reteGraph
+}
+
+type generatedAssertReserve struct {
+	facts int
+	slots int
 }
 
 func (r *Ruleset) hasAutoFocusRules() bool {
@@ -550,6 +557,37 @@ func countAssertTemplateActions(rules []compiledRule) int {
 		}
 	}
 	return count
+}
+
+func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevisionID]generatedAssertReserve {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make(map[RuleRevisionID]generatedAssertReserve, len(rules))
+	for _, rule := range rules {
+		var reserve generatedAssertReserve
+		for _, action := range rule.actionExecutions {
+			if action.kind != compiledRuleActionAssertTemplateValues {
+				continue
+			}
+			reserve.facts++
+			reserve.slots += len(action.assertTemplateValues.template.fields)
+		}
+		if reserve.facts != 0 {
+			out[rule.revisionID] = reserve
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID]generatedAssertReserve {
+	if r == nil {
+		return nil
+	}
+	return r.generatedAssertReserve
 }
 
 func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
