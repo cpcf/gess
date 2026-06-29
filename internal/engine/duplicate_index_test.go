@@ -48,6 +48,40 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			wantIndex: duplicateIndexDoubleInt,
 		},
 		{
+			name: "int-string",
+			spec: TemplateSpec{
+				Name:              "derived",
+				DuplicatePolicy:   DuplicateUniqueKey,
+				DuplicateKeyNames: []string{"id", "rule"},
+				Fields: []FieldSpec{
+					{Name: "id", Kind: ValueInt, Required: true},
+					{Name: "rule", Kind: ValueString, Required: true},
+				},
+			},
+			fields: map[string]any{
+				"id":   7,
+				"rule": "route-0001",
+			},
+			wantIndex: duplicateIndexIntString,
+		},
+		{
+			name: "string-int",
+			spec: TemplateSpec{
+				Name:              "derived",
+				DuplicatePolicy:   DuplicateUniqueKey,
+				DuplicateKeyNames: []string{"rule", "zid"},
+				Fields: []FieldSpec{
+					{Name: "rule", Kind: ValueString, Required: true},
+					{Name: "zid", Kind: ValueInt, Required: true},
+				},
+			},
+			fields: map[string]any{
+				"rule": "route-0001",
+				"zid":  7,
+			},
+			wantIndex: duplicateIndexStringInt,
+		},
+		{
 			name: "declared-non-scalar-string-index",
 			spec: TemplateSpec{
 				Name:              "payload",

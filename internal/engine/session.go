@@ -3563,6 +3563,18 @@ type duplicateDoubleIntIndexKey struct {
 	second      int64
 }
 
+type duplicateIntStringIndexKey struct {
+	templateKey TemplateKey
+	intValue    int64
+	stringValue string
+}
+
+type duplicateStringIntIndexKey struct {
+	templateKey TemplateKey
+	stringValue string
+	intValue    int64
+}
+
 type duplicateStructuralIndexKey struct {
 	templateKey TemplateKey
 	hash        uint64
@@ -3572,6 +3584,8 @@ type duplicateIndexes struct {
 	strings    map[DuplicateKey]FactID
 	singleInt  map[duplicateSingleIntIndexKey]FactID
 	doubleInt  map[duplicateDoubleIntIndexKey]FactID
+	intString  map[duplicateIntStringIndexKey]FactID
+	stringInt  map[duplicateStringIntIndexKey]FactID
 	scalars    map[duplicateIndexKey]FactID
 	structural duplicateStructuralIndexTable
 }
@@ -3585,6 +3599,12 @@ func (i *duplicateIndexes) reset(initialCapacity int) {
 	}
 	if i.doubleInt != nil {
 		clear(i.doubleInt)
+	}
+	if i.intString != nil {
+		clear(i.intString)
+	}
+	if i.stringInt != nil {
+		clear(i.stringInt)
 	}
 	if i.scalars != nil {
 		clear(i.scalars)
@@ -3607,7 +3627,7 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 		return
 	}
 	perTemplate := max(1, (factCapacity+templateCount-1)/templateCount)
-	var stringsCapacity, singleIntCapacity, doubleIntCapacity, scalarCapacity, structuralCapacity int
+	var stringsCapacity, singleIntCapacity, doubleIntCapacity, intStringCapacity, stringIntCapacity, scalarCapacity, structuralCapacity int
 	for _, name := range revision.templateOrder {
 		template := revision.templates[name]
 		if template.duplicatePolicy == DuplicateAllow {
@@ -3618,6 +3638,10 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 			singleIntCapacity += perTemplate
 		case duplicateIndexDoubleInt:
 			doubleIntCapacity += perTemplate
+		case duplicateIndexIntString:
+			intStringCapacity += perTemplate
+		case duplicateIndexStringInt:
+			stringIntCapacity += perTemplate
 		case duplicateIndexSingleScalar, duplicateIndexDoubleScalar:
 			scalarCapacity += perTemplate
 		case duplicateIndexStructural:
@@ -3634,6 +3658,12 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 	}
 	if doubleIntCapacity > 0 && i.doubleInt == nil {
 		i.doubleInt = make(map[duplicateDoubleIntIndexKey]FactID, doubleIntCapacity)
+	}
+	if intStringCapacity > 0 && i.intString == nil {
+		i.intString = make(map[duplicateIntStringIndexKey]FactID, intStringCapacity)
+	}
+	if stringIntCapacity > 0 && i.stringInt == nil {
+		i.stringInt = make(map[duplicateStringIntIndexKey]FactID, stringIntCapacity)
 	}
 	if scalarCapacity > 0 && i.scalars == nil {
 		i.scalars = make(map[duplicateIndexKey]FactID, scalarCapacity)
@@ -3661,6 +3691,16 @@ func duplicateReserveKind(template Template) duplicateIndexKind {
 			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueInt {
 			return duplicateIndexDoubleInt
 		}
+		if len(template.duplicateKeySlots) == 2 &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[0]) == ValueInt &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueString {
+			return duplicateIndexIntString
+		}
+		if len(template.duplicateKeySlots) == 2 &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[0]) == ValueString &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueInt {
+			return duplicateIndexStringInt
+		}
 	}
 	return template.duplicateIndexMode
 }
@@ -3682,6 +3722,12 @@ func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
 		return factID, ok
 	case duplicateIndexDoubleInt:
 		factID, ok := i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}]
+		return factID, ok
+	case duplicateIndexIntString:
+		factID, ok := i.intString[duplicateIntStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue}]
+		return factID, ok
+	case duplicateIndexStringInt:
+		factID, ok := i.stringInt[duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt}]
 		return factID, ok
 	case duplicateIndexStructural:
 		return i.structural.get(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
@@ -3711,6 +3757,16 @@ func (i *duplicateIndexes) set(key duplicateIndexKey, factID FactID) {
 			i.doubleInt = make(map[duplicateDoubleIntIndexKey]FactID)
 		}
 		i.doubleInt[duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt}] = factID
+	case duplicateIndexIntString:
+		if i.intString == nil {
+			i.intString = make(map[duplicateIntStringIndexKey]FactID)
+		}
+		i.intString[duplicateIntStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue}] = factID
+	case duplicateIndexStringInt:
+		if i.stringInt == nil {
+			i.stringInt = make(map[duplicateStringIntIndexKey]FactID)
+		}
+		i.stringInt[duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt}] = factID
 	case duplicateIndexStructural:
 		i.structural.set(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, factID)
 	default:
@@ -3732,6 +3788,10 @@ func (i *duplicateIndexes) delete(key duplicateIndexKey) {
 		delete(i.singleInt, duplicateSingleIntIndexKey{templateKey: key.templateKey, value: key.firstInt})
 	case duplicateIndexDoubleInt:
 		delete(i.doubleInt, duplicateDoubleIntIndexKey{templateKey: key.templateKey, first: key.firstInt, second: key.secondInt})
+	case duplicateIndexIntString:
+		delete(i.intString, duplicateIntStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue})
+	case duplicateIndexStringInt:
+		delete(i.stringInt, duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt})
 	case duplicateIndexStructural:
 		i.structural.delete(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
@@ -3760,7 +3820,7 @@ func (i duplicateIndexes) forEachStructuralFactID(key duplicateIndexKey, fn func
 }
 
 func (i duplicateIndexes) len() int {
-	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.scalars) + i.structural.len()
+	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.intString) + len(i.stringInt) + len(i.scalars) + i.structural.len()
 }
 
 type duplicateStructuralIndexEntry struct {
@@ -5775,6 +5835,8 @@ func cloneDuplicateIndexes(in duplicateIndexes) duplicateIndexes {
 		strings:    cloneDuplicateKeyFactIDMap(in.strings),
 		singleInt:  cloneSingleIntFactIDMap(in.singleInt),
 		doubleInt:  cloneDoubleIntFactIDMap(in.doubleInt),
+		intString:  cloneIntStringFactIDMap(in.intString),
+		stringInt:  cloneStringIntFactIDMap(in.stringInt),
 		scalars:    cloneDuplicateIndexFactIDMap(in.scalars),
 		structural: cloneDuplicateStructuralIndexTable(in.structural),
 	}
@@ -5803,6 +5865,24 @@ func cloneDoubleIntFactIDMap(in map[duplicateDoubleIntIndexKey]FactID) map[dupli
 		return nil
 	}
 	out := make(map[duplicateDoubleIntIndexKey]FactID, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func cloneIntStringFactIDMap(in map[duplicateIntStringIndexKey]FactID) map[duplicateIntStringIndexKey]FactID {
+	if in == nil {
+		return nil
+	}
+	out := make(map[duplicateIntStringIndexKey]FactID, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
+func cloneStringIntFactIDMap(in map[duplicateStringIntIndexKey]FactID) map[duplicateStringIntIndexKey]FactID {
+	if in == nil {
+		return nil
+	}
+	out := make(map[duplicateStringIntIndexKey]FactID, len(in))
 	maps.Copy(out, in)
 	return out
 }

@@ -262,6 +262,8 @@ const (
 	duplicateIndexDoubleInt
 	duplicateIndexSingleScalar
 	duplicateIndexDoubleScalar
+	duplicateIndexIntString
+	duplicateIndexStringInt
 	duplicateIndexStructural
 )
 
@@ -335,6 +337,7 @@ type duplicateIndexKey struct {
 	secondInt   int64
 	first       duplicateScalarKey
 	second      duplicateScalarKey
+	stringValue string
 	stringKey   DuplicateKey
 	hash        uint64
 }
@@ -435,6 +438,22 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 				templateKey: p.templateKey,
 				firstInt:    int64(first.bits),
 				secondInt:   int64(second.bits),
+			}, true
+		}
+		if first.kind == duplicateScalarInt && second.kind == duplicateScalarString {
+			return duplicateIndexKey{
+				kind:        duplicateIndexIntString,
+				templateKey: p.templateKey,
+				firstInt:    int64(first.bits),
+				stringValue: second.stringValue,
+			}, true
+		}
+		if first.kind == duplicateScalarString && second.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexStringInt,
+				templateKey: p.templateKey,
+				firstInt:    int64(second.bits),
+				stringValue: first.stringValue,
 			}, true
 		}
 		return duplicateIndexKey{
@@ -572,6 +591,28 @@ func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) 
 		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
 		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[1], k.secondInt)
 		return DuplicateKey(b.String())
+	case duplicateIndexIntString:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[1], k.stringValue)
+		return DuplicateKey(b.String())
+	case duplicateIndexStringInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[0], k.stringValue)
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[1], k.firstInt)
+		return DuplicateKey(b.String())
 	case duplicateIndexSingleScalar:
 		var b strings.Builder
 		b.Grow(k.publicKeyCapacity(name, template))
@@ -606,6 +647,12 @@ func (k duplicateIndexKey) publicKeyCapacity(name string, template Template) int
 	case duplicateIndexDoubleInt:
 		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
 		size += len(template.duplicateKeyNames[1]) + 2 + len("number:") + int64Len(k.secondInt)
+	case duplicateIndexIntString:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+		size += len(template.duplicateKeyNames[1]) + 2 + duplicateStringKeyValueCapacity(k.stringValue)
+	case duplicateIndexStringInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateStringKeyValueCapacity(k.stringValue)
+		size += len(template.duplicateKeyNames[1]) + 2 + len("number:") + int64Len(k.firstInt)
 	case duplicateIndexSingleScalar:
 		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
 	case duplicateIndexDoubleScalar:
@@ -621,6 +668,14 @@ func writeDuplicateIntKeyEntry(b *strings.Builder, fieldName string, value int64
 	b.WriteString("number:")
 	var buf [20]byte
 	b.Write(strconv.AppendInt(buf[:0], value, 10))
+	b.WriteByte(';')
+}
+
+func writeDuplicateStringKeyEntry(b *strings.Builder, fieldName string, value string) {
+	b.WriteString(fieldName)
+	b.WriteByte('=')
+	b.WriteString("string:")
+	b.WriteString(strconv.Quote(value))
 	b.WriteByte(';')
 }
 
@@ -689,6 +744,10 @@ func duplicateScalarKeyValueCapacity(value duplicateScalarKey) int {
 	default:
 		return len("any")
 	}
+}
+
+func duplicateStringKeyValueCapacity(value string) int {
+	return len("string:") + len(value) + len(`""`) + len(`\u0000`)
 }
 
 type factSlot struct {
@@ -1009,6 +1068,22 @@ func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fie
 				templateKey: template.key,
 				firstInt:    int64(firstScalar.bits),
 				secondInt:   int64(secondScalar.bits),
+			}, true
+		}
+		if firstScalar.kind == duplicateScalarInt && secondScalar.kind == duplicateScalarString {
+			return duplicateIndexKey{
+				kind:        duplicateIndexIntString,
+				templateKey: template.key,
+				firstInt:    int64(firstScalar.bits),
+				stringValue: secondScalar.stringValue,
+			}, true
+		}
+		if firstScalar.kind == duplicateScalarString && secondScalar.kind == duplicateScalarInt {
+			return duplicateIndexKey{
+				kind:        duplicateIndexStringInt,
+				templateKey: template.key,
+				firstInt:    int64(secondScalar.bits),
+				stringValue: firstScalar.stringValue,
 			}, true
 		}
 		return duplicateIndexKey{
