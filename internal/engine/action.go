@@ -1253,6 +1253,14 @@ func serializeExpressionSpec(spec ExpressionSpec) string {
 }
 
 func (s *Session) executeActivationActions(ctx context.Context, runID RunID, activation activation) (err error) {
+	return s.executeActivationActionsInternal(ctx, runID, activation, false)
+}
+
+func (s *Session) executeTrustedActivationActions(ctx context.Context, runID RunID, activation activation) (err error) {
+	return s.executeActivationActionsInternal(ctx, runID, activation, true)
+}
+
+func (s *Session) executeActivationActionsInternal(ctx context.Context, runID RunID, activation activation, trustTokenActivation bool) (err error) {
 	if s == nil {
 		return ErrClosedSession
 	}
@@ -1297,7 +1305,7 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 		switch actionSpec.kind {
 		case compiledRuleActionFunction:
 			if !actionCtxReady {
-				actionCtx, err = s.actionContextForActivationWithScratch(ctx, activation, skipBindingFreeze)
+				actionCtx, err = s.actionContextForActivationWithScratchTrusted(ctx, activation, skipBindingFreeze, trustTokenActivation)
 				if err != nil {
 					return err
 				}
@@ -1311,7 +1319,7 @@ func (s *Session) executeActivationActions(ctx context.Context, runID RunID, act
 			}
 		case compiledRuleActionAssertTemplateValues:
 			if !activationValidated {
-				if err := s.validateActivationTokenFacts(rule, activation); err != nil {
+				if err := s.validateActivationTokenFacts(rule, activation, trustTokenActivation); err != nil {
 					return err
 				}
 				activationValidated = true
@@ -1619,6 +1627,10 @@ func (s *Session) actionContextForActivation(ctx context.Context, activation act
 }
 
 func (s *Session) actionContextForActivationWithScratch(ctx context.Context, activation activation, useScratch bool) (ActionContext, error) {
+	return s.actionContextForActivationWithScratchTrusted(ctx, activation, useScratch, false)
+}
+
+func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Context, activation activation, useScratch bool, trustTokenActivation bool) (ActionContext, error) {
 	if s == nil {
 		return ActionContext{}, ErrClosedSession
 	}
@@ -1641,7 +1653,7 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
-		if err := s.validateActivationTokenFacts(rule, activation); err != nil {
+		if err := s.validateActivationTokenFacts(rule, activation, trustTokenActivation); err != nil {
 			return ActionContext{}, err
 		}
 		if useScratch {
@@ -1671,39 +1683,48 @@ func (s *Session) actionContextForActivationWithScratch(ctx context.Context, act
 	return newActionContext(ctx, s, activation, entries), nil
 }
 
-func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation) error {
-	if s.activationTerminalTokenRetained(activation) {
+func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation, trustTokenActivation bool) error {
+	if !activation.token.isZero() {
+		if trustTokenActivation {
+			return nil
+		}
+		for i := range rule.conditions {
+			match, ok := tokenRefAtSlot(activation.token, i)
+			if !ok {
+				return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
+			}
+			if match.hasValue {
+				continue
+			}
+			factID := match.fact.ID()
+			if factID.IsZero() || factID.Sequence() == 0 {
+				continue
+			}
+			fact, ok := s.workingFactByID(factID)
+			if !ok {
+				return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+			}
+			if fact.id.Generation() != activation.generation || fact.version != match.fact.Version() {
+				return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+			}
+		}
 		return nil
 	}
-	for i := range rule.conditions {
-		match, ok := tokenRefAtSlot(activation.token, i)
-		if !ok {
-			return fmt.Errorf("%w: malformed token activation for rule %q", ErrMatcher, rule.name)
-		}
-		if match.hasValue {
+	entries := activation.bindings
+	if len(entries) == 0 {
+		entries = activationBindingTupleEntriesForActivation(rule, &activation, false)
+	}
+	for _, entry := range entries {
+		if entry.hasValue || entry.factID.IsZero() {
 			continue
 		}
-		factID := match.fact.ID()
-		if factID.IsZero() || factID.Sequence() == 0 {
-			continue
-		}
-		fact, ok := s.workingFactByID(factID)
+		fact, ok := s.workingFactByID(entry.factID)
 		if !ok {
-			return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+			return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
-		if fact.id.Generation() != activation.generation || fact.version != match.fact.Version() {
-			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
+		if fact.id.Generation() != activation.generation || fact.version != entry.factVersion {
+			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
 	}
 	return nil
-}
-
-func (s *Session) activationTerminalTokenRetained(activation activation) bool {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil || activation.token.isZero() {
-		return false
-	}
-	if s.rete.graphBeta.retainsTerminalActivation(activation.ruleRevisionID, activation.terminalID, activation.terminalRow, activation.token) {
-		return true
-	}
-	return s.rete.graphBeta.retainsTerminalToken(activation.ruleRevisionID, activation.token)
 }

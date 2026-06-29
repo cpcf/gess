@@ -1899,8 +1899,18 @@ func (a *agenda) forEachPendingActivation(fn func(*activation) bool) {
 	if a == nil || fn == nil || len(a.pending) == 0 {
 		return
 	}
+	usePendingActivation := len(a.pendingActivation) == len(a.pending)
 	for i := a.pendingHead; i < len(a.pending); i++ {
-		current, ok := a.activationByKeyPtr(a.pending[i])
+		key := a.pending[i]
+		var current *activation
+		ok := false
+		if usePendingActivation {
+			current = a.pendingActivation[i]
+			ok = current != nil && current.key == key
+		}
+		if !ok {
+			current, ok = a.activationByKeyPtr(key)
+		}
 		if !ok || current.status != activationStatusPending {
 			continue
 		}

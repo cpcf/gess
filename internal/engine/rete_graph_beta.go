@@ -6458,45 +6458,6 @@ func (m *reteGraphBetaMemory) removeTerminalTokenByHandle(terminalID reteGraphTe
 	return true
 }
 
-func (m *reteGraphBetaMemory) retainsTerminalToken(ruleRevisionID RuleRevisionID, token tokenRef) bool {
-	if m == nil || m.graph == nil || token.isZero() {
-		return false
-	}
-	if len(m.terminalsByRule) > 0 {
-		for _, terminal := range m.terminalsByRule[ruleRevisionID] {
-			if terminal != nil && terminal.rows.containsExactToken(token) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, terminalNode := range m.graph.terminalNodes {
-		if terminalNode.ruleRevisionID != ruleRevisionID {
-			continue
-		}
-		terminal := m.terminalAt(terminalNode.id)
-		if terminal != nil && terminal.rows.containsExactToken(token) {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *reteGraphBetaMemory) retainsTerminalActivation(ruleRevisionID RuleRevisionID, terminalID reteGraphTerminalNodeID, rowHandle graphTokenRowHandle, token tokenRef) bool {
-	if m == nil || terminalID <= 0 || rowHandle.isZero() || token.isZero() {
-		return false
-	}
-	terminal := m.terminalAt(terminalID)
-	if terminal == nil || terminal.ruleRevisionID != ruleRevisionID {
-		return false
-	}
-	row := terminal.rows.rowByHandle(rowHandle)
-	if row == nil || row.token.isZero() || !row.isTerminal() {
-		return false
-	}
-	return tokenRefEqual(row.token, token)
-}
-
 func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
 	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {

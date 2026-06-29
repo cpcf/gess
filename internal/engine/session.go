@@ -1083,7 +1083,10 @@ func (p preparedTemplateValueInserter) setPreparedSlot(slots []factSlot, index i
 			Reason:       "value not in allowed set",
 		}
 	}
-	slots[index].value = cloneValue(value)
+	if value.kind == ValueList || value.kind == ValueMap {
+		value = cloneValue(value)
+	}
+	slots[index].value = value
 	slots[index].ok = true
 	slots[index].presence = fieldPresenceExplicit
 	return nil

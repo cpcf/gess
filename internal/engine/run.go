@@ -126,7 +126,7 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 		s.emitRuleFiredEvent(ctx, runID, activation)
 
 		s.runActivation.Store(currentActivation)
-		err := s.executeActivationActions(ctx, runID, activation)
+		err := s.executeTrustedActivationActions(ctx, runID, activation)
 		s.runActivation.Store(nil)
 		if err != nil {
 			s.abandonRunAgendaDelta()
