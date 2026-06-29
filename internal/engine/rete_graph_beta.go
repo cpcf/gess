@@ -36,6 +36,8 @@ type reteGraphBetaMemory struct {
 	arena                    *tokenArena
 	terminalTokenDeltas      []reteTerminalTokenDelta
 	terminalRemovedDeltas    []reteTerminalTokenDelta
+	initialAgenda            *agenda
+	initialAgendaErr         error
 	backchainDemandRecords   []backchainDemandRecord
 	backchainDemandSlots     []factSlot
 	backchainDemandSupport   []backchainDemandSupportFact
@@ -594,11 +596,35 @@ func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset,
 }
 
 func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, reteAgendaDelta, error) {
-	if revision == nil || graph == nil {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts))
+	if memory == nil {
 		return nil, reteAgendaDelta{supported: true}, nil
 	}
-	rowCapacity := graphBetaTokenMemoryCapacity(revision, len(facts))
-	arenaCapacity := graphBetaTokenArenaCapacity(revision, len(facts))
+	delta, err := memory.resetFactsForGenerationWithDelta(ctx, facts, generation)
+	if err != nil {
+		return nil, delta, err
+	}
+	return memory, delta, nil
+}
+
+func newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation, agenda *agenda) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts))
+	if memory == nil {
+		return nil, reteAgendaDelta{supported: true}, nil
+	}
+	delta, err := memory.resetFactsForGenerationWithInitialAgenda(ctx, facts, generation, agenda)
+	if err != nil {
+		return nil, delta, err
+	}
+	return memory, delta, nil
+}
+
+func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount int) *reteGraphBetaMemory {
+	if revision == nil || graph == nil {
+		return nil
+	}
+	rowCapacity := graphBetaTokenMemoryCapacity(revision, factCount)
+	arenaCapacity := graphBetaTokenArenaCapacity(revision, factCount)
 	memory := &reteGraphBetaMemory{
 		revision:            revision,
 		graph:               graph,
@@ -606,17 +632,13 @@ func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision 
 		aggregates:          make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
 		terminals:           make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
 		arena:               newTokenArenaWithoutFactSpans(),
-		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(len(facts))),
+		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(factCount)),
 	}
 	memory.arena.reserve(arenaCapacity)
 	memory.reserveMemories(rowCapacity)
 	memory.indexRuleTerminals()
-	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, len(facts)))
-	delta, err := memory.resetFactsForGenerationWithDelta(ctx, facts, generation)
-	if err != nil {
-		return nil, delta, err
-	}
-	return memory, delta, nil
+	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, factCount))
+	return memory
 }
 
 func (m *reteGraphBetaMemory) pushEvalContext(ctx context.Context) func() {
@@ -1920,6 +1942,27 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 	m.deferNegativeOutputs = false
 	m.suppressTerminalDeltas = false
 	return combined, nil
+}
+
+func (m *reteGraphBetaMemory) resetFactsForGenerationWithInitialAgenda(ctx context.Context, facts []FactSnapshot, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
+	if m == nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	previousAgenda := m.initialAgenda
+	previousErr := m.initialAgendaErr
+	m.initialAgenda = agenda
+	m.initialAgendaErr = nil
+	delta, err := m.resetFactsForGenerationWithDelta(ctx, facts, generation)
+	initialErr := m.initialAgendaErr
+	m.initialAgenda = previousAgenda
+	m.initialAgendaErr = previousErr
+	if err != nil {
+		return delta, err
+	}
+	if initialErr != nil {
+		return delta, initialErr
+	}
+	return delta, nil
 }
 
 func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) error {
@@ -6245,16 +6288,29 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			span.recordTerminalDeltaEmittedForBranch(branchKey)
 		}
 	}
-	if !ruleTerminal || m.suppressTerminalDeltas {
+	if !ruleTerminal {
 		return handle, true
 	}
-	delta.added = append(delta.added, reteTerminalTokenDelta{
+	added := reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
 		identity:       identity,
 		terminalID:     terminalID,
 		terminalRow:    handle,
-	})
+	}
+	if m.initialAgenda != nil && m.initialAgendaErr == nil {
+		activation, err := m.initialAgenda.addInitialTerminalActivation(m.context(), m.revision, added)
+		if err != nil {
+			m.initialAgendaErr = err
+			delta.supported = false
+		} else if row := terminal.rows.rowByHandle(handle); row != nil {
+			row.activation = activation
+		}
+	}
+	if m.suppressTerminalDeltas {
+		return handle, true
+	}
+	delta.added = append(delta.added, added)
 	return handle, true
 }
 

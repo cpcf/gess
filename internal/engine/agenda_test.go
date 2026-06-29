@@ -1792,6 +1792,12 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	}
 	session.attachPropagationCounters()
 
+	if session.agendaDirty || !session.agendaReady {
+		t.Fatalf("initial agenda state = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		t.Fatalf("initial pending activations = %d, want %d", got, want)
+	}
 	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
 	if err != nil {
 		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
@@ -1799,7 +1805,7 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	if !ok {
 		t.Fatal("initial graph terminal reconcile unavailable")
 	}
-	if got, want := len(changes), 1; got != want {
+	if got, want := len(changes), 0; got != want {
 		t.Fatalf("initial changes = %d, want %d", got, want)
 	}
 	beforeCounters := session.propagationCounterSnapshot().Totals

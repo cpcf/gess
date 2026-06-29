@@ -325,6 +325,44 @@ func (r *reteRuntime) resetGraphBetaForGenerationWithDelta(ctx context.Context, 
 	return r.graphBeta.resetFactsForGenerationWithDelta(ctx, facts, generation)
 }
 
+func (r *reteRuntime) resetGraphBetaForGenerationWithInitialAgenda(ctx context.Context, facts []FactSnapshot, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
+	if r == nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	r.mode = r.determineMode()
+	if !r.usesGraphBeta() {
+		r.graphBeta = nil
+		if len(r.plan.rules) == 0 {
+			return reteAgendaDelta{supported: true}, nil
+		}
+		return reteAgendaDelta{}, r.unsupportedRuntimeError()
+	}
+	if r.graphBeta == nil {
+		memory, delta, err := newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda)
+		if err != nil {
+			return delta, err
+		}
+		r.graphBeta = memory
+		return delta, nil
+	}
+	return r.graphBeta.resetFactsForGenerationWithInitialAgenda(ctx, facts, generation, agenda)
+}
+
+func (r *reteRuntime) supportsInitialAgendaReset() bool {
+	if r == nil || r.revision == nil || r.graph == nil || r.revision.hasAutoFocusRules() {
+		return false
+	}
+	if len(r.graph.aggregateNodes) != 0 {
+		return false
+	}
+	for _, node := range r.graph.betaNodes {
+		if node.kind == reteGraphBetaNodeNot {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *reteRuntime) clearMemories() {
 	if r == nil {
 		return

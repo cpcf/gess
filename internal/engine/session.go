@@ -194,12 +194,19 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := rete.resetGraphBetaForGeneration(context.Background(), state.detachedFactsByInsertionOrder(revision), state.generation); err != nil {
-		return nil, err
-	}
-
 	agenda := newAgenda()
 	agenda.reserveActivationRows(revision.estimatedRunFactCapacity(len(compiledInitials)))
+	initialFacts := state.detachedFactsByInsertionOrder(revision)
+	useInitialAgenda := len(listeners) == 0 && rete.supportsInitialAgendaReset()
+	var initialDelta reteAgendaDelta
+	if useInitialAgenda {
+		initialDelta, err = rete.resetGraphBetaForGenerationWithInitialAgenda(context.Background(), initialFacts, state.generation, agenda)
+	} else {
+		err = rete.resetGraphBetaForGeneration(context.Background(), initialFacts, state.generation)
+	}
+	if err != nil {
+		return nil, err
+	}
 	session := &Session{
 		id:                  cfg.id,
 		revision:            revision,
@@ -231,6 +238,11 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		facts:                  state.facts,
 		insertionOrder:         state.factsByInsertionOrder(),
 		slotStorage:            state.slotStorage,
+	}
+	if useInitialAgenda && len(session.agenda.pending) != 0 && initialDelta.supported && len(initialDelta.removed) == 0 && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
+		session.agenda.finishInitialTerminalActivations()
+		session.agendaReady = true
+		session.agendaDirty = false
 	}
 	session.syncPropagationCounters()
 	return session, nil

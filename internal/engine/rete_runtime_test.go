@@ -750,12 +750,12 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
 	initials := loanUnderwritingTemplateInitialFacts(t)
 
-	terminalSession, err := NewSession(revision, WithInitialFacts(initials...))
+	terminalSession, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession(terminal): %v", err)
 	}
 	terminalSession.attachPropagationCounters()
-	snapshotSession, err := NewSession(revision, WithInitialFacts(initials...))
+	snapshotSession, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(initials...))
 	if err != nil {
 		t.Fatalf("NewSession(snapshot): %v", err)
 	}
@@ -799,7 +799,7 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 func TestSessionReconcileAgendaWithoutSnapshotUsesGraphTerminalRowsWhenTerminalDeltasUnavailable(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
-	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
+	session, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

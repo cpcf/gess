@@ -812,6 +812,59 @@ func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, rev
 	return err
 }
 
+func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Ruleset, delta reteTerminalTokenDelta) (activationHandle, error) {
+	if a == nil || revision == nil {
+		return activationHandle{}, ErrInvalidRuleset
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return activationHandle{}, err
+	}
+	if delta.token.isZero() {
+		return activationHandle{}, nil
+	}
+	a.revision = revision
+	rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+	if !ok {
+		return activationHandle{}, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+	}
+	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		existing.terminalID = delta.terminalID
+		existing.terminalRow = delta.terminalRow
+		if existing.status == activationStatusDeactivated {
+			existing.status = activationStatusPending
+		}
+		return a.handleForActivationKey(key), nil
+	}
+	rowMark := a.activationRows.count
+	created := a.activationRows.addEmpty()
+	if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
+		a.activationRows.truncate(rowMark)
+		return activationHandle{}, err
+	}
+	created.terminalID = delta.terminalID
+	created.terminalRow = delta.terminalRow
+	key := a.storePreparedActivation(created)
+	a.pending = append(a.pending, key)
+	return a.handleForActivationKey(key), nil
+}
+
+func (a *agenda) finishInitialTerminalActivations() {
+	if a == nil {
+		return
+	}
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
+	a.sortActivationKeys(a.pending)
+	a.pendingHead = 0
+	a.lazyDeactivated = 0
+	a.rebuildPendingActivationCache()
+}
+
 func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) (activationHandle, error) {
 	if a == nil || revision == nil {
 		return activationHandle{}, ErrInvalidRuleset
