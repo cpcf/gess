@@ -6396,6 +6396,21 @@ func (m *reteGraphBetaMemory) retainsTerminalToken(ruleRevisionID RuleRevisionID
 	return false
 }
 
+func (m *reteGraphBetaMemory) retainsTerminalActivation(ruleRevisionID RuleRevisionID, terminalID reteGraphTerminalNodeID, rowHandle graphTokenRowHandle, token tokenRef) bool {
+	if m == nil || terminalID <= 0 || rowHandle.isZero() || token.isZero() {
+		return false
+	}
+	terminal := m.terminalAt(terminalID)
+	if terminal == nil || terminal.ruleRevisionID != ruleRevisionID {
+		return false
+	}
+	row := terminal.rows.rowByHandle(rowHandle)
+	if row == nil || row.token.isZero() || !row.isTerminal() {
+		return false
+	}
+	return tokenRefEqual(row.token, token)
+}
+
 func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
 	defer m.pushEvalContext(ctx)()
 	if m == nil || m.graph == nil {

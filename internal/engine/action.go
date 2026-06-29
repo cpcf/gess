@@ -1702,5 +1702,8 @@ func (s *Session) activationTerminalTokenRetained(activation activation) bool {
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil || activation.token.isZero() {
 		return false
 	}
+	if s.rete.graphBeta.retainsTerminalActivation(activation.ruleRevisionID, activation.terminalID, activation.terminalRow, activation.token) {
+		return true
+	}
 	return s.rete.graphBeta.retainsTerminalToken(activation.ruleRevisionID, activation.token)
 }

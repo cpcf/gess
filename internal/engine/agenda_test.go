@@ -321,6 +321,9 @@ func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
 		if !ok || activation.status != activationStatusPending {
 			t.Fatalf("attachment %d activation = %#v, ok=%v, want pending", i, activation, ok)
 		}
+		if activation.terminalID != attachment.delta.terminalID || activation.terminalRow != attachment.delta.terminalRow {
+			t.Fatalf("attachment %d activation terminal ownership = (%d, %#v), want (%d, %#v)", i, activation.terminalID, activation.terminalRow, attachment.delta.terminalID, attachment.delta.terminalRow)
+		}
 	}
 
 	removed := make([]reteTerminalTokenDelta, len(attached))

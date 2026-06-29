@@ -196,6 +196,8 @@ type activation struct {
 	factIDs          []FactID
 	factVersions     []FactVersion
 	token            tokenRef
+	terminalID       reteGraphTerminalNodeID
+	terminalRow      graphTokenRowHandle
 	path             []int
 	salience         int
 	maxRecency       Recency
@@ -284,6 +286,8 @@ func (a *agenda) publicActivation(act *activation) activation {
 	out.factIDs = cloneActivationFactIDs(act)
 	out.factVersions = cloneActivationFactVersions(act)
 	out.token = tokenRef{}
+	out.terminalID = 0
+	out.terminalRow = graphTokenRowHandle{}
 	if a == nil || a.revision == nil || len(out.factIDs) == 0 {
 		out.bindings = nil
 		out.path = nil
@@ -314,6 +318,16 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 	out.bindings = nil
 	out.factIDs = cloneActivationFactIDs(act)
 	out.factVersions = nil
+	if a != nil && a.revision != nil && !act.token.isZero() {
+		if rule, ok := a.revision.rulesByRevisionID[out.ruleRevisionID]; ok {
+			if factIDs, _, ok := terminalTokenFactTuple(rule, act.token); ok {
+				out.factIDs = factIDs
+			}
+		}
+	}
+	out.token = tokenRef{}
+	out.terminalID = 0
+	out.terminalRow = graphTokenRowHandle{}
 	out.path = nil
 	return out
 }
@@ -846,6 +860,8 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		existing.terminalID = delta.terminalID
+		existing.terminalRow = delta.terminalRow
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 			pending := activationKeyPending(a.pending, key)
@@ -865,6 +881,8 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		a.activationRows.truncate(rowMark)
 		return activationHandle{}, err
 	}
+	created.terminalID = delta.terminalID
+	created.terminalRow = delta.terminalRow
 	key := a.storePreparedActivation(created)
 	a.pending = a.insertActivationKeySorted(a.pending, key, created)
 	return a.handleForActivationKey(key), nil
@@ -991,6 +1009,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		havePrevious = true
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+			existing.terminalID = delta.terminalID
+			existing.terminalRow = delta.terminalRow
 			if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
 				pending := activationKeyPending(a.pending, key)
@@ -1018,6 +1038,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			a.activationRows.truncate(rowMark)
 			return nil, err
 		}
+		created.terminalID = delta.terminalID
+		created.terminalRow = delta.terminalRow
 		key := a.storePreparedActivation(created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, created)
 		if attachActivation != nil {
@@ -1155,6 +1177,8 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				identity = candidateIdentityForTerminalToken(rule, row.token)
 			}
 			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, row.token, identity); ok {
+				existing.terminalID = terminalNode.id
+				existing.terminalRow = row.handle
 				if existing.status == activationStatusPending {
 					if _, seenBefore := seen[key]; !seenBefore {
 						seen[key] = struct{}{}
@@ -1182,6 +1206,8 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				a.activationRows.truncate(rowMark)
 				return nil, true, err
 			}
+			created.terminalID = terminalNode.id
+			created.terminalRow = row.handle
 			key := a.storePreparedActivation(created)
 			if _, seenBefore := seen[key]; !seenBefore {
 				seen[key] = struct{}{}
@@ -1288,6 +1314,8 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity)
 		if ok {
+			existing.terminalID = delta.terminalID
+			existing.terminalRow = delta.terminalRow
 			if existing.status == activationStatusPending {
 				if _, seenBefore := seen[key]; !seenBefore {
 					seen[key] = struct{}{}
@@ -1315,6 +1343,8 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 			a.activationRows.truncate(rowMark)
 			return nil, err
 		}
+		created.terminalID = delta.terminalID
+		created.terminalRow = delta.terminalRow
 		key = a.storePreparedActivation(created)
 		if _, seenBefore := seen[key]; !seenBefore {
 			seen[key] = struct{}{}
