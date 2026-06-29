@@ -327,6 +327,9 @@ func (s *Session) nextFocusedActivation() (*activation, activation, bool) {
 	}
 	for {
 		module := s.currentFocusInternal()
+		if module == MainModule && s.revision != nil && s.revision.allRulesInMainModule {
+			return s.agenda.nextInternalPtr()
+		}
 		current, selected, ok := s.agenda.nextInternalPtrForModule(module)
 		if ok {
 			return current, selected, true

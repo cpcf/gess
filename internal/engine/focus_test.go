@@ -127,6 +127,45 @@ func TestRunDrainsFocusedModuleBeforeMain(t *testing.T) {
 	}
 }
 
+func TestRunPopsEmptyFocusBeforeAllMainFastPath(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask"})
+	mainEvent := mustAddTemplate(t, workspace, TemplateSpec{Name: "main-event"})
+	fired := 0
+	mustAddAction(t, workspace, ActionSpec{Name: "main-fired", Fn: func(ActionContext) error {
+		fired++
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "main-rule",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(mainEvent.Key())}},
+		Actions:    []RuleActionSpec{{Name: "main-fired"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	if !revision.allRulesInMainModule {
+		t.Fatal("allRulesInMainModule = false, want true")
+	}
+	session := mustSession(t, revision, "empty-focus-main-run-session")
+	if _, err := session.AssertTemplate(ctx, mainEvent.Key(), nil); err != nil {
+		t.Fatalf("AssertTemplate main: %v", err)
+	}
+	if err := session.PushFocus(ctx, "ask"); err != nil {
+		t.Fatalf("PushFocus ask: %v", err)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || fired != 1 {
+		t.Fatalf("run fired = (%d result, %d action), want 1", result.Fired, fired)
+	}
+	if got, want := session.FocusStack(), []ModuleName{MainModule}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("focus stack = %#v, want %#v", got, want)
+	}
+}
+
 func TestRunLeavesUnfocusedNonMainActivationsPending(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

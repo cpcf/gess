@@ -391,6 +391,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	rulesByRevisionID := make(map[RuleRevisionID]compiledRule, len(w.rules))
 	ruleOrder := make([]string, 0, len(w.rules))
 	hasEffectiveAutoFocus := false
+	allRulesInMainModule := true
 	conditionTemplateKeys := make(map[TemplateKey]struct{})
 	conditionNames := make(map[string]struct{})
 	queryConditionTemplateKeys := make(map[TemplateKey]struct{})
@@ -427,6 +428,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		if rule.effectiveAutoFocus {
 			hasEffectiveAutoFocus = true
+		}
+		if rule.module != MainModule {
+			allRulesInMainModule = false
 		}
 		rulesByName[rule.name] = rule
 		rulesByID[rule.id] = rule
@@ -482,6 +486,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		queryConditionNames:        queryConditionNames,
 		assertTemplateActionCount:  countAssertTemplateActions(compiledRules),
 		hasEffectiveAutoFocus:      hasEffectiveAutoFocus,
+		allRulesInMainModule:       allRulesInMainModule,
 		generatedFactInsertPlans:   generatedFactInsertPlans,
 		graph:                      compileReteGraph(compiledRules, compiledQueries, templatesByKey),
 	}, nil
@@ -510,6 +515,7 @@ type Ruleset struct {
 	queryConditionNames        map[string]struct{}
 	assertTemplateActionCount  int
 	hasEffectiveAutoFocus      bool
+	allRulesInMainModule       bool
 	generatedFactInsertPlans   map[TemplateKey]*compiledGeneratedFactInsertPlan
 	graph                      *reteGraph
 }
