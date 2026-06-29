@@ -188,8 +188,8 @@ func TestTokenHashMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	if moved == nil {
 		t.Fatal("moved row handle did not resolve")
 	}
-	if got, want := moved.id, graphTokenRowID(0); got != want {
-		t.Fatalf("moved row id = %d, want %d", got, want)
+	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(0) {
+		t.Fatalf("moved row id = %d, ok=%v, want 0 and true", got, ok)
 	}
 	if !tokenRefEqual(moved.token, secondToken) {
 		t.Fatal("moved row handle resolved the wrong token")
@@ -239,8 +239,8 @@ func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
 	if moved == nil {
 		t.Fatal("moved terminal row handle did not resolve")
 	}
-	if got, want := moved.id, graphTokenRowID(0); got != want {
-		t.Fatalf("moved terminal row id = %d, want %d", got, want)
+	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(0) {
+		t.Fatalf("moved terminal row id = %d, ok=%v, want 0 and true", got, ok)
 	}
 	if !memory.containsExactToken(secondToken) {
 		t.Fatal("moved terminal row is missing from identity index")

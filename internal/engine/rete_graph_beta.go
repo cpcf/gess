@@ -263,7 +263,6 @@ type graphTokenRowHandleEntry struct {
 }
 
 type graphTokenRow struct {
-	id               graphTokenRowID
 	handle           graphTokenRowHandle
 	token            tokenRef
 	joinKey          betaJoinKey
@@ -1291,7 +1290,6 @@ func (m *tokenHashMemory) insertRowWithNegativeBlockerCount(token tokenRef, join
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	m.rows[rowID] = graphTokenRow{
-		id:           rowID,
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
@@ -1314,7 +1312,6 @@ func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	m.rows[rowID] = graphTokenRow{
-		id:           rowID,
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
@@ -1342,7 +1339,6 @@ func (m *tokenHashMemory) insertFreshTerminalRow(token tokenRef, terminalIdentit
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	row := graphTokenRow{
-		id:               rowID,
 		handle:           handle,
 		token:            token,
 		identity:         identity,
@@ -1383,7 +1379,6 @@ func (m *tokenHashMemory) insertTerminalRow(token tokenRef, terminalIdentity can
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	row := graphTokenRow{
-		id:               rowID,
 		handle:           handle,
 		token:            token,
 		identity:         identity,
@@ -1715,7 +1710,6 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	last := len(m.rows) - 1
 	if index != last {
 		moved := m.rows[last]
-		moved.id = rowID
 		m.rows[index] = moved
 		m.moveRowHandle(moved.handle, rowID)
 		if counters != nil {
@@ -1768,7 +1762,6 @@ func (m *tokenHashMemory) removeTerminalRow(rowID graphTokenRowID, counters *pro
 	last := len(m.rows) - 1
 	if index != last {
 		moved := m.rows[last]
-		moved.id = rowID
 		m.rows[index] = moved
 		m.moveRowHandle(moved.handle, rowID)
 		if counters != nil {
