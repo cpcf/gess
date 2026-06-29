@@ -605,7 +605,7 @@ func compileParamExpression(spec ParamExpr, ruleName string, conditionIndex, pre
 	if !ok {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "unknown query parameter", ErrQueryValidation)
 	}
-	if kind == "" {
+	if kind == valueKindUnknown {
 		kind = ValueAny
 	}
 	return compiledExpression{
@@ -746,12 +746,12 @@ func compileBooleanExpression(
 func compileExpressionPathRef(ruleName string, conditionIndex, predicateIndex int, template *Template, path PathSpec) (compiledPathAccess, ValueKind, error) {
 	if template != nil && template.closed && path.root() != "" {
 		if _, ok := template.fieldSlot(path.root()); !ok {
-			return compiledPathAccess{}, "", expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "unknown field", nil)
+			return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "unknown field", nil)
 		}
 	}
 	access, kind, err := compilePathAccess(path, template)
 	if err != nil {
-		return compiledPathAccess{}, "", expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "invalid path", err)
+		return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "invalid path", err)
 	}
 	return access, kind, nil
 }
@@ -801,7 +801,7 @@ func expressionKindsNumeric(left, right ValueKind) bool {
 }
 
 func expressionKindAssignable(want, got ValueKind) bool {
-	if want == "" || want == ValueAny || got == ValueAny {
+	if want == valueKindUnknown || want == ValueAny || got == ValueAny {
 		return true
 	}
 	if want == got {
@@ -833,19 +833,19 @@ func (p compiledExpressionPredicate) graphExecutable() bool {
 func (e compiledExpression) graphExecutable() bool {
 	switch e.kind {
 	case expressionNodeConst:
-		return e.resultKind != ""
+		return e.resultKind != valueKindUnknown
 	case expressionNodeCurrentField:
-		return e.access.root != "" && e.resultKind != ""
+		return e.access.root != "" && e.resultKind != valueKindUnknown
 	case expressionNodeBindingField:
-		return e.binding != "" && e.access.root != "" && e.bindingSlot >= 0 && e.resultKind != ""
+		return e.binding != "" && e.access.root != "" && e.bindingSlot >= 0 && e.resultKind != valueKindUnknown
 	case expressionNodeBindingValue:
-		return e.binding != "" && e.bindingSlot >= 0 && e.resultKind != ""
+		return e.binding != "" && e.bindingSlot >= 0 && e.resultKind != valueKindUnknown
 	case expressionNodeHasPath:
 		return e.access.root != "" && e.resultKind == ValueBool
 	case expressionNodeParam:
-		return e.paramName != "" && e.resultKind != ""
+		return e.paramName != "" && e.resultKind != valueKindUnknown
 	case expressionNodeCall:
-		if e.function.name == "" || !e.function.hasImplementation() || e.resultKind == "" || len(e.operands) != len(e.function.args) {
+		if e.function.name == "" || !e.function.hasImplementation() || e.resultKind == valueKindUnknown || len(e.operands) != len(e.function.args) {
 			return false
 		}
 		for i, operand := range e.operands {
@@ -1318,7 +1318,7 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
 	}
 	value = cloneValue(value)
-	if value.Kind() == "" {
+	if value.kind == valueKindUnknown {
 		value = NullValue()
 	}
 	if !expressionKindAssignable(e.function.ret, value.Kind()) {

@@ -30,12 +30,12 @@ type PureFunctionSpec struct {
 func (s PureFunctionSpec) clone() PureFunctionSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
-	if out.Return == "" {
+	if out.Return == valueKindUnknown {
 		out.Return = ValueAny
 	}
 	out.Args = append([]ValueKind(nil), s.Args...)
 	for i, kind := range out.Args {
-		if kind == "" {
+		if kind == valueKindUnknown {
 			out.Args[i] = ValueAny
 		}
 	}

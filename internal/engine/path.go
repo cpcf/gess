@@ -155,7 +155,7 @@ func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, V
 		normalized.Segments[0].Key = strings.TrimSpace(normalized.Segments[0].Key)
 	}
 	if err := normalized.validate(); err != nil {
-		return compiledPathAccess{}, "", err
+		return compiledPathAccess{}, valueKindUnknown, err
 	}
 	root := normalized.root()
 	access := compiledPathAccess{
@@ -169,7 +169,7 @@ func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, V
 	}
 	slot, ok := template.fieldSlot(root)
 	if !ok {
-		return compiledPathAccess{}, "", fmt.Errorf("%w: unknown root field %q", ErrInvalidPath, root)
+		return compiledPathAccess{}, valueKindUnknown, fmt.Errorf("%w: unknown root field %q", ErrInvalidPath, root)
 	}
 	access.rootSlot = slot
 	if spec, ok := template.fieldsByName[root]; ok {
@@ -180,18 +180,18 @@ func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, V
 		switch kind {
 		case ValueMap:
 			if normalized.Segments[1].Kind != PathSegmentMap {
-				return compiledPathAccess{}, "", fmt.Errorf("%w: map root %q cannot be traversed by %s", ErrInvalidPath, root, normalized.Segments[1].Kind)
+				return compiledPathAccess{}, valueKindUnknown, fmt.Errorf("%w: map root %q cannot be traversed by %s", ErrInvalidPath, root, normalized.Segments[1].Kind)
 			}
 			kind = ValueAny
 		case ValueList:
 			if normalized.Segments[1].Kind != PathSegmentIndex {
-				return compiledPathAccess{}, "", fmt.Errorf("%w: list root %q cannot be traversed by %s", ErrInvalidPath, root, normalized.Segments[1].Kind)
+				return compiledPathAccess{}, valueKindUnknown, fmt.Errorf("%w: list root %q cannot be traversed by %s", ErrInvalidPath, root, normalized.Segments[1].Kind)
 			}
 			kind = ValueAny
 		case ValueAny:
 			kind = ValueAny
 		default:
-			return compiledPathAccess{}, "", fmt.Errorf("%w: scalar root %q cannot be traversed", ErrInvalidPath, root)
+			return compiledPathAccess{}, valueKindUnknown, fmt.Errorf("%w: scalar root %q cannot be traversed", ErrInvalidPath, root)
 		}
 	}
 	return access, kind, nil

@@ -568,7 +568,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			}
 		}
 
-		if field.Kind == "" {
+		if field.Kind == valueKindUnknown {
 			field.Kind = ValueAny
 		}
 		if !isSupportedKind(field.Kind) {

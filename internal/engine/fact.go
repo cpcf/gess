@@ -1197,7 +1197,7 @@ func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool)
 func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value Value) (uint64, bool) {
 	switch kind {
 	case ValueNull:
-		if value.kind != "" && value.kind != ValueNull {
+		if value.kind != valueKindUnknown && value.kind != ValueNull {
 			return 0, false
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
@@ -1241,8 +1241,8 @@ func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value 
 func structuralDuplicateScalarValuesEqual(kind ValueKind, left, right Value) (bool, bool) {
 	switch kind {
 	case ValueNull:
-		leftNull := left.kind == "" || left.kind == ValueNull
-		rightNull := right.kind == "" || right.kind == ValueNull
+		leftNull := left.kind == valueKindUnknown || left.kind == ValueNull
+		rightNull := right.kind == valueKindUnknown || right.kind == ValueNull
 		return leftNull && rightNull, true
 	case ValueBool:
 		if left.kind != ValueBool || right.kind != ValueBool {

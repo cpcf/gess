@@ -440,7 +440,7 @@ func renderFieldSpecs(fields []FieldSpec) string {
 			b.WriteString(", ")
 		}
 		fmt.Fprintf(&b, "{Name: %s", strconv.Quote(field.Name))
-		if field.Kind != "" {
+		if field.Kind != valueKindUnknown {
 			fmt.Fprintf(&b, ", Kind: %s", renderValueKind(field.Kind))
 		}
 		if field.Required {
@@ -1026,7 +1026,7 @@ func renderValueKind(kind ValueKind) string {
 	case ValueMap:
 		return "gessrules.ValueMap"
 	default:
-		return "gessrules.ValueKind(" + strconv.Quote(string(kind)) + ")"
+		return fmt.Sprintf("gessrules.ValueKind(%d)", kind)
 	}
 }
 

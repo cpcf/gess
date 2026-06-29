@@ -1092,7 +1092,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 	for _, function := range functions {
 		sum.Write(fmt.Appendf(nil, "function:%s:%d:%s:", function.name, function.order, function.ret))
 		for _, arg := range function.args {
-			sum.Write([]byte(arg))
+			sum.Write([]byte(arg.String()))
 			sum.Write([]byte(","))
 		}
 		sum.Write([]byte("\n"))

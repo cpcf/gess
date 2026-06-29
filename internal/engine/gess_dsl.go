@@ -1144,7 +1144,7 @@ func gessValueKind(kind string) ValueKind {
 	case "ANY":
 		return ValueAny
 	default:
-		return ValueKind(strings.ToLower(kind))
+		return parseValueKind(kind)
 	}
 }
 

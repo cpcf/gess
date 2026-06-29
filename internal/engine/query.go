@@ -18,7 +18,7 @@ type QueryParameterSpec struct {
 
 func (s QueryParameterSpec) clone() QueryParameterSpec {
 	s.Name = strings.TrimSpace(s.Name)
-	if s.Kind == "" {
+	if s.Kind == valueKindUnknown {
 		s.Kind = ValueAny
 	}
 	return s

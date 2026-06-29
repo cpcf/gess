@@ -11,18 +11,66 @@ import (
 	"strings"
 )
 
-type ValueKind string
+type ValueKind uint8
 
 const (
-	ValueAny    ValueKind = "any"
-	ValueNull   ValueKind = "null"
-	ValueBool   ValueKind = "bool"
-	ValueInt    ValueKind = "int"
-	ValueFloat  ValueKind = "float"
-	ValueString ValueKind = "string"
-	ValueList   ValueKind = "list"
-	ValueMap    ValueKind = "map"
+	valueKindUnknown ValueKind = iota
+	ValueAny
+	ValueNull
+	ValueBool
+	ValueInt
+	ValueFloat
+	ValueString
+	ValueList
+	ValueMap
+	valueKindInvalid ValueKind = 255
 )
+
+func (k ValueKind) String() string {
+	switch k {
+	case ValueAny:
+		return "any"
+	case ValueNull:
+		return "null"
+	case ValueBool:
+		return "bool"
+	case ValueInt:
+		return "int"
+	case ValueFloat:
+		return "float"
+	case ValueString:
+		return "string"
+	case ValueList:
+		return "list"
+	case ValueMap:
+		return "map"
+	default:
+		return "invalid"
+	}
+}
+
+func parseValueKind(kind string) ValueKind {
+	switch strings.ToLower(kind) {
+	case "any":
+		return ValueAny
+	case "null":
+		return ValueNull
+	case "bool", "boolean":
+		return ValueBool
+	case "int", "integer", "number":
+		return ValueInt
+	case "float":
+		return ValueFloat
+	case "string", "symbol":
+		return ValueString
+	case "list":
+		return ValueList
+	case "map":
+		return ValueMap
+	default:
+		return valueKindInvalid
+	}
+}
 
 type Value struct {
 	kind        ValueKind
@@ -58,7 +106,7 @@ func newStringValue(value string) Value {
 }
 
 func (v Value) Kind() ValueKind {
-	if v.kind == "" {
+	if v.kind == valueKindUnknown {
 		return ValueNull
 	}
 	return v.kind

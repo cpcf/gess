@@ -1565,7 +1565,7 @@ func evaluateTokenActionStringCall2(ctx context.Context, value compiledTokenActi
 	if err := ctx.Err(); err != nil {
 		return Value{}, functionEvaluationError(nil, value.function.name, err)
 	}
-	if out.Kind() == "" {
+	if out.kind == valueKindUnknown {
 		out = NullValue()
 	}
 	if !expressionKindAssignable(value.function.ret, out.Kind()) {
