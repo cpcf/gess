@@ -550,6 +550,7 @@ public final class ExtremeScaleJessRunner {
     engine.batch(script);
     long loadElapsed = System.nanoTime() - start;
     System.out.println("load: duration=" + loadElapsed + "ns");
+    writeMemory("after-load");
 
     if (!run) {
       return;
@@ -560,6 +561,7 @@ public final class ExtremeScaleJessRunner {
     int fired = engine.run();
     long runElapsed = System.nanoTime() - start;
     System.out.println("run: fired=" + fired + " duration=" + runElapsed + "ns");
+    writeMemory("after-run");
 
     for (int i = 0; i < querySamples; i++) {
       int bucket = i % buckets;
@@ -577,6 +579,7 @@ public final class ExtremeScaleJessRunner {
       long queryElapsed = System.nanoTime() - start;
       System.out.println("query: name=" + queryName(i) + " bucket=" + bucket + " rows=" + rows + " duration=" + queryElapsed + "ns");
     }
+    writeMemory("after-query");
   }
 
   private static String queryName(int i) {
@@ -587,6 +590,21 @@ public final class ExtremeScaleJessRunner {
     }
     out.append(raw);
     return out.toString();
+  }
+
+  private static void writeMemory(String label) {
+    Runtime runtime = Runtime.getRuntime();
+    runtime.gc();
+    long used = runtime.totalMemory() - runtime.freeMemory();
+    long committed = runtime.totalMemory();
+    long max = runtime.maxMemory();
+    System.out.println(
+      "memory: label=" + label +
+      " used=" + used / 1024 / 1024 + "MB" +
+      " committed=" + committed / 1024 / 1024 + "MB" +
+      " max=" + max / 1024 / 1024 + "MB" +
+      " gc=true"
+    );
   }
 }
 `

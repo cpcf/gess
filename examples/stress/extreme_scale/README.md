@@ -26,6 +26,10 @@ go run ./examples/stress/extreme_scale
 It prints source generation, parse, load, compile, session, run, query, and
 memory measurements.
 
+Gess memory lines use Go `runtime.MemStats`. Jess memory lines report Java heap
+`used`, `committed`, and `max` after an explicit `Runtime.gc()` at the measured
+phase. Use Java GC logs or JFR when you need peak-before-GC numbers.
+
 ## Generate huge rules files
 
 Use `-write-only` for million-scale source generation. This streams directly to

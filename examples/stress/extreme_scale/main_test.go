@@ -75,6 +75,10 @@ func TestJessSourceAndDriverGeneration(t *testing.T) {
 	for _, want := range []string{
 		"Rete engine = new Rete();",
 		"engine.batch(script);",
+		"writeMemory(\"after-load\");",
+		"writeMemory(\"after-run\");",
+		"writeMemory(\"after-query\");",
+		"used=\" + used / 1024 / 1024 + \"MB\"",
 		"QueryResult result = engine.runQueryStar(queryName(i), arguments);",
 	} {
 		if !strings.Contains(string(driverSource), want) {
