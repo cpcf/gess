@@ -82,6 +82,27 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			wantIndex: duplicateIndexStringInt,
 		},
 		{
+			name: "int-string-string",
+			spec: TemplateSpec{
+				Name:              "response",
+				DuplicatePolicy:   DuplicateUniqueKey,
+				DuplicateKeyNames: []string{"target", "rule", "lane"},
+				Fields: []FieldSpec{
+					{Name: "target", Kind: ValueInt, Required: true},
+					{Name: "rule", Kind: ValueString, Required: true},
+					{Name: "lane", Kind: ValueString, Required: true},
+					{Name: "priority", Kind: ValueInt},
+				},
+			},
+			fields: map[string]any{
+				"target":   17,
+				"rule":     "query-rule-0001",
+				"lane":     "triage",
+				"priority": 9,
+			},
+			wantIndex: duplicateIndexStringStringInt,
+		},
+		{
 			name: "declared-non-scalar-string-index",
 			spec: TemplateSpec{
 				Name:              "payload",
@@ -244,6 +265,45 @@ func TestDuplicateStructuralIndexTableRetainsHashCollisionsAndDeletesFacts(t *te
 	table.clear()
 	if got, ok := table.get(secondKey); ok {
 		t.Fatalf("second key after clear = (%q, %t), want missing", got, ok)
+	}
+}
+
+func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testing.T) {
+	requestedKey := duplicateIndexKey{
+		kind:         duplicateIndexStringStringInt,
+		templateKey:  "response",
+		stringValue:  "lane-a",
+		stringValue2: "rule-a",
+		firstInt:     7,
+	}
+	otherKey := duplicateIndexKey{
+		kind:         duplicateIndexStringStringInt,
+		templateKey:  "response",
+		stringValue:  "lane-b",
+		stringValue2: "rule-b",
+		firstInt:     8,
+	}
+	requestedID := newFactID(1, 1)
+	otherID := newFactID(1, 2)
+
+	workspace := newFactWorkspace(1, 2)
+	workspace.storeFact(workingFact{id: otherID, name: "response", templateKey: "response", dupIndex: otherKey})
+	workspace.factsByDuplicate.string2Int.setHash(hashDuplicateStringStringIntIndexKey(requestedKey), otherID)
+
+	if got, ok := workspace.duplicateFactID(requestedKey); ok {
+		t.Fatalf("lookup with hash collision = (%q, %t), want missing", got, ok)
+	}
+
+	workspace.storeFact(workingFact{id: requestedID, name: "response", templateKey: "response", dupIndex: requestedKey})
+	workspace.factsByDuplicate.set(requestedKey, requestedID)
+
+	if got, ok := workspace.duplicateFactID(requestedKey); !ok || got != requestedID {
+		t.Fatalf("lookup after exact insert = (%q, %t), want (%q, true)", got, ok, requestedID)
+	}
+
+	workspace.factsByDuplicate.deleteFact(requestedKey, requestedID)
+	if got, ok := workspace.duplicateFactID(requestedKey); ok {
+		t.Fatalf("lookup after deleting exact fact = (%q, %t), want missing", got, ok)
 	}
 }
 

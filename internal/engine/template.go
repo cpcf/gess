@@ -819,23 +819,38 @@ func duplicateIndexKeyMode(closed bool, policy DuplicatePolicy, fields []FieldSp
 		if isScalarDuplicateFieldKind(fields, duplicateKeyNames[0]) && isScalarDuplicateFieldKind(fields, duplicateKeyNames[1]) {
 			return duplicateIndexDoubleScalar
 		}
+	case 3:
+		if duplicateFieldKind(fields, duplicateKeyNames[0]) == ValueInt &&
+			duplicateFieldKind(fields, duplicateKeyNames[1]) == ValueString &&
+			duplicateFieldKind(fields, duplicateKeyNames[2]) == ValueString {
+			return duplicateIndexIntStringString
+		}
+		if duplicateFieldKind(fields, duplicateKeyNames[0]) == ValueString &&
+			duplicateFieldKind(fields, duplicateKeyNames[1]) == ValueString &&
+			duplicateFieldKind(fields, duplicateKeyNames[2]) == ValueInt {
+			return duplicateIndexStringStringInt
+		}
 	}
 	return duplicateIndexString
 }
 
 func isScalarDuplicateFieldKind(fields []FieldSpec, name string) bool {
+	switch duplicateFieldKind(fields, name) {
+	case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+		return true
+	default:
+		return false
+	}
+}
+
+func duplicateFieldKind(fields []FieldSpec, name string) ValueKind {
 	for _, field := range fields {
 		if field.Name != name {
 			continue
 		}
-		switch field.Kind {
-		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
-			return true
-		default:
-			return false
-		}
+		return field.Kind
 	}
-	return false
+	return ValueAny
 }
 
 func normalizeTemplateDuplicateFields(raw []string, fieldsByName map[string]FieldSpec) ([]string, error) {

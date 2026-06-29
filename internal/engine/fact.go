@@ -264,6 +264,8 @@ const (
 	duplicateIndexDoubleScalar
 	duplicateIndexIntString
 	duplicateIndexStringInt
+	duplicateIndexIntStringString
+	duplicateIndexStringStringInt
 	duplicateIndexStructural
 )
 
@@ -331,15 +333,16 @@ func (k duplicateScalarKey) value() Value {
 }
 
 type duplicateIndexKey struct {
-	kind        duplicateIndexKind
-	templateKey TemplateKey
-	firstInt    int64
-	secondInt   int64
-	first       duplicateScalarKey
-	second      duplicateScalarKey
-	stringValue string
-	stringKey   DuplicateKey
-	hash        uint64
+	kind         duplicateIndexKind
+	templateKey  TemplateKey
+	firstInt     int64
+	secondInt    int64
+	first        duplicateScalarKey
+	second       duplicateScalarKey
+	stringValue  string
+	stringValue2 string
+	stringKey    DuplicateKey
+	hash         uint64
 }
 
 type compiledGeneratedFactInsertPlan struct {
@@ -461,6 +464,52 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 			templateKey: p.templateKey,
 			first:       first,
 			second:      second,
+		}, true
+	case duplicateIndexIntStringString:
+		if len(p.duplicateKeySlots) != 3 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok || first.kind != duplicateScalarInt {
+			return duplicateIndexKey{}, false
+		}
+		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		if !ok || second.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		third, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[2])
+		if !ok || third.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		return duplicateIndexKey{
+			kind:         duplicateIndexIntStringString,
+			templateKey:  p.templateKey,
+			firstInt:     int64(first.bits),
+			stringValue:  second.stringValue,
+			stringValue2: third.stringValue,
+		}, true
+	case duplicateIndexStringStringInt:
+		if len(p.duplicateKeySlots) != 3 {
+			return duplicateIndexKey{}, false
+		}
+		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		if !ok || first.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		if !ok || second.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		third, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[2])
+		if !ok || third.kind != duplicateScalarInt {
+			return duplicateIndexKey{}, false
+		}
+		return duplicateIndexKey{
+			kind:         duplicateIndexStringStringInt,
+			templateKey:  p.templateKey,
+			firstInt:     int64(third.bits),
+			stringValue:  first.stringValue,
+			stringValue2: second.stringValue,
 		}, true
 	default:
 		return duplicateIndexKey{}, false
@@ -613,6 +662,30 @@ func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) 
 		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[0], k.stringValue)
 		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[1], k.firstInt)
 		return DuplicateKey(b.String())
+	case duplicateIndexIntStringString:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[0], k.firstInt)
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[1], k.stringValue)
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[2], k.stringValue2)
+		return DuplicateKey(b.String())
+	case duplicateIndexStringStringInt:
+		var b strings.Builder
+		b.Grow(k.publicKeyCapacity(name, template))
+		b.WriteString("name:")
+		b.WriteString(name)
+		b.WriteString("|template:")
+		b.WriteString(k.templateKey.String())
+		b.WriteString("|fields:")
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[0], k.stringValue)
+		writeDuplicateStringKeyEntry(&b, template.duplicateKeyNames[1], k.stringValue2)
+		writeDuplicateIntKeyEntry(&b, template.duplicateKeyNames[2], k.firstInt)
+		return DuplicateKey(b.String())
 	case duplicateIndexSingleScalar:
 		var b strings.Builder
 		b.Grow(k.publicKeyCapacity(name, template))
@@ -653,6 +726,14 @@ func (k duplicateIndexKey) publicKeyCapacity(name string, template Template) int
 	case duplicateIndexStringInt:
 		size += len(template.duplicateKeyNames[0]) + 2 + duplicateStringKeyValueCapacity(k.stringValue)
 		size += len(template.duplicateKeyNames[1]) + 2 + len("number:") + int64Len(k.firstInt)
+	case duplicateIndexIntStringString:
+		size += len(template.duplicateKeyNames[0]) + 2 + len("number:") + int64Len(k.firstInt)
+		size += len(template.duplicateKeyNames[1]) + 2 + duplicateStringKeyValueCapacity(k.stringValue)
+		size += len(template.duplicateKeyNames[2]) + 2 + duplicateStringKeyValueCapacity(k.stringValue2)
+	case duplicateIndexStringStringInt:
+		size += len(template.duplicateKeyNames[0]) + 2 + duplicateStringKeyValueCapacity(k.stringValue)
+		size += len(template.duplicateKeyNames[1]) + 2 + duplicateStringKeyValueCapacity(k.stringValue2)
+		size += len(template.duplicateKeyNames[2]) + 2 + len("number:") + int64Len(k.firstInt)
 	case duplicateIndexSingleScalar:
 		size += len(template.duplicateKeyNames[0]) + 2 + duplicateScalarKeyValueCapacity(k.first)
 	case duplicateIndexDoubleScalar:
@@ -1091,6 +1172,70 @@ func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fie
 			templateKey: template.key,
 			first:       firstScalar,
 			second:      secondScalar,
+		}, true
+	case duplicateIndexIntStringString:
+		firstValue, ok := duplicateFieldValue(template.duplicateKeyNames[0], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondValue, ok := duplicateFieldValue(template.duplicateKeyNames[1], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		thirdValue, ok := duplicateFieldValue(template.duplicateKeyNames[2], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		firstScalar, ok := duplicateScalarKeyFromValue(firstValue)
+		if !ok || firstScalar.kind != duplicateScalarInt {
+			return duplicateIndexKey{}, false
+		}
+		secondScalar, ok := duplicateScalarKeyFromValue(secondValue)
+		if !ok || secondScalar.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		thirdScalar, ok := duplicateScalarKeyFromValue(thirdValue)
+		if !ok || thirdScalar.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		return duplicateIndexKey{
+			kind:         duplicateIndexIntStringString,
+			templateKey:  template.key,
+			firstInt:     int64(firstScalar.bits),
+			stringValue:  secondScalar.stringValue,
+			stringValue2: thirdScalar.stringValue,
+		}, true
+	case duplicateIndexStringStringInt:
+		firstValue, ok := duplicateFieldValue(template.duplicateKeyNames[0], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		secondValue, ok := duplicateFieldValue(template.duplicateKeyNames[1], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		thirdValue, ok := duplicateFieldValue(template.duplicateKeyNames[2], template, fields, slots)
+		if !ok {
+			return duplicateIndexKey{}, false
+		}
+		firstScalar, ok := duplicateScalarKeyFromValue(firstValue)
+		if !ok || firstScalar.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		secondScalar, ok := duplicateScalarKeyFromValue(secondValue)
+		if !ok || secondScalar.kind != duplicateScalarString {
+			return duplicateIndexKey{}, false
+		}
+		thirdScalar, ok := duplicateScalarKeyFromValue(thirdValue)
+		if !ok || thirdScalar.kind != duplicateScalarInt {
+			return duplicateIndexKey{}, false
+		}
+		return duplicateIndexKey{
+			kind:         duplicateIndexStringStringInt,
+			templateKey:  template.key,
+			firstInt:     int64(thirdScalar.bits),
+			stringValue:  firstScalar.stringValue,
+			stringValue2: secondScalar.stringValue,
 		}, true
 	default:
 		return duplicateIndexKey{}, false

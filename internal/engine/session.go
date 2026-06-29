@@ -2985,7 +2985,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			if duplicate {
 				return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 			}
-		} else if existingID, ok := state.factsByDuplicate.get(newDupIndex); ok && existingID != fact.id {
+		} else if existingID, ok := state.duplicateFactID(newDupIndex); ok && existingID != fact.id {
 			return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 		}
 	}
@@ -3590,6 +3590,13 @@ type duplicateStringIntIndexKey struct {
 	intValue    int64
 }
 
+type duplicateIntStringStringIndexKey struct {
+	templateKey  TemplateKey
+	intValue     int64
+	stringValue  string
+	stringValue2 string
+}
+
 type duplicateStructuralIndexKey struct {
 	templateKey TemplateKey
 	hash        uint64
@@ -3601,6 +3608,8 @@ type duplicateIndexes struct {
 	doubleInt  map[duplicateDoubleIntIndexKey]FactID
 	intString  map[duplicateIntStringIndexKey]FactID
 	stringInt  map[duplicateStringIntIndexKey]FactID
+	intString2 map[duplicateIntStringStringIndexKey]FactID
+	string2Int duplicateStringStringIntIndexTable
 	scalars    map[duplicateIndexKey]FactID
 	structural duplicateStructuralIndexTable
 }
@@ -3621,6 +3630,10 @@ func (i *duplicateIndexes) reset(initialCapacity int) {
 	if i.stringInt != nil {
 		clear(i.stringInt)
 	}
+	if i.intString2 != nil {
+		clear(i.intString2)
+	}
+	i.string2Int.clear()
 	if i.scalars != nil {
 		clear(i.scalars)
 	}
@@ -3642,7 +3655,7 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 		return
 	}
 	perTemplate := max(1, (factCapacity+templateCount-1)/templateCount)
-	var stringsCapacity, singleIntCapacity, doubleIntCapacity, intStringCapacity, stringIntCapacity, scalarCapacity, structuralCapacity int
+	var stringsCapacity, singleIntCapacity, doubleIntCapacity, intStringCapacity, stringIntCapacity, intString2Capacity, string2IntCapacity, scalarCapacity, structuralCapacity int
 	for _, name := range revision.templateOrder {
 		template := revision.templates[name]
 		if template.duplicatePolicy == DuplicateAllow {
@@ -3657,6 +3670,10 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 			intStringCapacity += perTemplate
 		case duplicateIndexStringInt:
 			stringIntCapacity += perTemplate
+		case duplicateIndexIntStringString:
+			intString2Capacity += perTemplate
+		case duplicateIndexStringStringInt:
+			string2IntCapacity += perTemplate
 		case duplicateIndexSingleScalar, duplicateIndexDoubleScalar:
 			scalarCapacity += perTemplate
 		case duplicateIndexStructural:
@@ -3679,6 +3696,12 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 	}
 	if stringIntCapacity > 0 && i.stringInt == nil {
 		i.stringInt = make(map[duplicateStringIntIndexKey]FactID, stringIntCapacity)
+	}
+	if intString2Capacity > 0 && i.intString2 == nil {
+		i.intString2 = make(map[duplicateIntStringStringIndexKey]FactID, intString2Capacity)
+	}
+	if string2IntCapacity > 0 {
+		i.string2Int.reserve(string2IntCapacity)
 	}
 	if scalarCapacity > 0 && i.scalars == nil {
 		i.scalars = make(map[duplicateIndexKey]FactID, scalarCapacity)
@@ -3716,6 +3739,16 @@ func duplicateReserveKind(template Template) duplicateIndexKind {
 			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueInt {
 			return duplicateIndexStringInt
 		}
+		if len(template.duplicateKeySlots) == 3 &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[0]) == ValueInt &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[1]) == ValueString &&
+			duplicateTemplateSlotKind(template, template.duplicateKeySlots[2]) == ValueString {
+			return duplicateIndexIntStringString
+		}
+	case duplicateIndexIntStringString:
+		return duplicateIndexIntStringString
+	case duplicateIndexStringStringInt:
+		return duplicateIndexStringStringInt
 	}
 	return template.duplicateIndexMode
 }
@@ -3744,6 +3777,11 @@ func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
 	case duplicateIndexStringInt:
 		factID, ok := i.stringInt[duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt}]
 		return factID, ok
+	case duplicateIndexIntStringString:
+		factID, ok := i.intString2[duplicateIntStringStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue, stringValue2: key.stringValue2}]
+		return factID, ok
+	case duplicateIndexStringStringInt:
+		return FactID{}, false
 	case duplicateIndexStructural:
 		return i.structural.get(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
@@ -3782,6 +3820,13 @@ func (i *duplicateIndexes) set(key duplicateIndexKey, factID FactID) {
 			i.stringInt = make(map[duplicateStringIntIndexKey]FactID)
 		}
 		i.stringInt[duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt}] = factID
+	case duplicateIndexIntStringString:
+		if i.intString2 == nil {
+			i.intString2 = make(map[duplicateIntStringStringIndexKey]FactID)
+		}
+		i.intString2[duplicateIntStringStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue, stringValue2: key.stringValue2}] = factID
+	case duplicateIndexStringStringInt:
+		i.string2Int.set(key, factID)
 	case duplicateIndexStructural:
 		i.structural.set(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, factID)
 	default:
@@ -3807,6 +3852,10 @@ func (i *duplicateIndexes) delete(key duplicateIndexKey) {
 		delete(i.intString, duplicateIntStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue})
 	case duplicateIndexStringInt:
 		delete(i.stringInt, duplicateStringIntIndexKey{templateKey: key.templateKey, stringValue: key.stringValue, intValue: key.firstInt})
+	case duplicateIndexIntStringString:
+		delete(i.intString2, duplicateIntStringStringIndexKey{templateKey: key.templateKey, intValue: key.firstInt, stringValue: key.stringValue, stringValue2: key.stringValue2})
+	case duplicateIndexStringStringInt:
+		i.string2Int.delete(key)
 	case duplicateIndexStructural:
 		i.structural.delete(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash})
 	default:
@@ -3818,6 +3867,10 @@ func (i *duplicateIndexes) deleteFact(key duplicateIndexKey, factID FactID) {
 	if key.isZero() {
 		return
 	}
+	if key.kind == duplicateIndexStringStringInt {
+		i.string2Int.deleteFact(key, factID)
+		return
+	}
 	if key.kind != duplicateIndexStructural {
 		if existingID, ok := i.get(key); ok && existingID == factID {
 			i.delete(key)
@@ -3825,6 +3878,13 @@ func (i *duplicateIndexes) deleteFact(key duplicateIndexKey, factID FactID) {
 		return
 	}
 	i.structural.deleteFact(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, factID)
+}
+
+func (i duplicateIndexes) forEachStringStringIntFactID(key duplicateIndexKey, fn func(FactID) bool) {
+	if key.kind != duplicateIndexStringStringInt || fn == nil {
+		return
+	}
+	i.string2Int.forEachFactID(key, fn)
 }
 
 func (i duplicateIndexes) forEachStructuralFactID(key duplicateIndexKey, fn func(FactID) bool) {
@@ -3835,7 +3895,7 @@ func (i duplicateIndexes) forEachStructuralFactID(key duplicateIndexKey, fn func
 }
 
 func (i duplicateIndexes) len() int {
-	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.intString) + len(i.stringInt) + len(i.scalars) + i.structural.len()
+	return len(i.strings) + len(i.singleInt) + len(i.doubleInt) + len(i.intString) + len(i.stringInt) + len(i.intString2) + i.string2Int.len() + len(i.scalars) + i.structural.len()
 }
 
 type duplicateStructuralIndexEntry struct {
@@ -3843,6 +3903,290 @@ type duplicateStructuralIndexEntry struct {
 	first FactID
 	rest  []FactID
 	state uint8
+}
+
+type duplicateStringStringIntIndexEntry struct {
+	hash     uint64
+	first    FactID
+	overflow int32
+	state    uint8
+}
+
+type duplicateStringStringIntOverflowEntry struct {
+	factID FactID
+	next   int32
+}
+
+type duplicateStringStringIntIndexTable struct {
+	entries  []duplicateStringStringIntIndexEntry
+	overflow []duplicateStringStringIntOverflowEntry
+	touched  []int
+	count    int
+	used     int
+}
+
+func (t *duplicateStringStringIntIndexTable) reserve(capacity int) {
+	if capacity <= 0 {
+		return
+	}
+	t.rehash(duplicateStringStringIntSlotCapacity(capacity))
+}
+
+func (t *duplicateStringStringIntIndexTable) clear() {
+	if t == nil || len(t.entries) == 0 {
+		return
+	}
+	for _, index := range t.touched {
+		if index < 0 || index >= len(t.entries) {
+			continue
+		}
+		t.entries[index] = duplicateStringStringIntIndexEntry{}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+}
+
+func (t duplicateStringStringIntIndexTable) len() int {
+	return t.count
+}
+
+func (t *duplicateStringStringIntIndexTable) set(key duplicateIndexKey, factID FactID) {
+	if t == nil || factID.IsZero() {
+		return
+	}
+	hash := hashDuplicateStringStringIntIndexKey(key)
+	if duplicateStringStringIntNeedsGrow(t.used+1, len(t.entries)) {
+		t.rehash(duplicateStringStringIntGrowCapacity(len(t.entries), t.used+1))
+	}
+	index, ok := t.findInsert(hash)
+	if ok {
+		t.addToEntry(index, factID)
+		return
+	}
+	if t.entries[index].state == graphTokenBucketEmpty {
+		t.touched = append(t.touched, index)
+		t.used++
+	}
+	t.entries[index] = duplicateStringStringIntIndexEntry{hash: hash, first: factID, overflow: -1, state: graphTokenBucketFull}
+	t.count++
+}
+
+func (t *duplicateStringStringIntIndexTable) delete(key duplicateIndexKey) {
+	if t == nil || t.count == 0 {
+		return
+	}
+	index, ok := t.find(hashDuplicateStringStringIntIndexKey(key))
+	if !ok {
+		return
+	}
+	if t.entries[index].overflow >= 0 {
+		return
+	}
+	t.entries[index] = duplicateStringStringIntIndexEntry{overflow: -1, state: graphTokenBucketDeleted}
+	t.count--
+}
+
+func (t *duplicateStringStringIntIndexTable) deleteFact(key duplicateIndexKey, factID FactID) {
+	if t == nil || t.count == 0 || factID.IsZero() {
+		return
+	}
+	index, ok := t.find(hashDuplicateStringStringIntIndexKey(key))
+	if !ok {
+		return
+	}
+	entry := &t.entries[index]
+	if entry.first == factID {
+		if entry.overflow >= 0 {
+			overflowIndex := entry.overflow
+			overflow := t.overflow[overflowIndex]
+			entry.first = overflow.factID
+			entry.overflow = overflow.next
+			t.overflow[overflowIndex] = duplicateStringStringIntOverflowEntry{}
+		} else {
+			t.entries[index] = duplicateStringStringIntIndexEntry{overflow: -1, state: graphTokenBucketDeleted}
+		}
+		t.count--
+		return
+	}
+	previous := int32(-1)
+	for overflowIndex := entry.overflow; overflowIndex >= 0; {
+		overflow := t.overflow[overflowIndex]
+		if overflow.factID == factID {
+			if previous >= 0 {
+				t.overflow[previous].next = overflow.next
+			} else {
+				entry.overflow = overflow.next
+			}
+			t.overflow[overflowIndex] = duplicateStringStringIntOverflowEntry{}
+			t.count--
+			return
+		}
+		previous = overflowIndex
+		overflowIndex = overflow.next
+	}
+}
+
+func (t duplicateStringStringIntIndexTable) forEachFactID(key duplicateIndexKey, fn func(FactID) bool) {
+	if t.count == 0 || len(t.entries) == 0 || fn == nil {
+		return
+	}
+	index, ok := t.find(hashDuplicateStringStringIntIndexKey(key))
+	if !ok {
+		return
+	}
+	entry := t.entries[index]
+	if !entry.first.IsZero() && !fn(entry.first) {
+		return
+	}
+	for overflowIndex := entry.overflow; overflowIndex >= 0; {
+		overflow := t.overflow[overflowIndex]
+		if !overflow.factID.IsZero() && !fn(overflow.factID) {
+			return
+		}
+		overflowIndex = overflow.next
+	}
+}
+
+func (t *duplicateStringStringIntIndexTable) addToEntry(index int, factID FactID) {
+	entry := &t.entries[index]
+	if entry.first.IsZero() {
+		entry.first = factID
+		t.count++
+		return
+	}
+	if entry.first == factID {
+		return
+	}
+	for overflowIndex := entry.overflow; overflowIndex >= 0; {
+		overflow := t.overflow[overflowIndex]
+		if overflow.factID == factID {
+			return
+		}
+		overflowIndex = overflow.next
+	}
+	if len(t.overflow) == int(^uint32(0)>>1) {
+		return
+	}
+	t.overflow = append(t.overflow, duplicateStringStringIntOverflowEntry{factID: factID, next: entry.overflow})
+	entry.overflow = int32(len(t.overflow) - 1)
+	t.count++
+}
+
+func (t *duplicateStringStringIntIndexTable) find(hash uint64) (int, bool) {
+	index := int(hash % uint64(len(t.entries)))
+	for {
+		entry := t.entries[index]
+		if entry.state == graphTokenBucketEmpty {
+			return 0, false
+		}
+		if entry.state == graphTokenBucketFull && entry.hash == hash {
+			return index, true
+		}
+		index++
+		if index == len(t.entries) {
+			index = 0
+		}
+	}
+}
+
+func (t *duplicateStringStringIntIndexTable) findInsert(hash uint64) (int, bool) {
+	index := int(hash % uint64(len(t.entries)))
+	firstDeleted := -1
+	for {
+		entry := t.entries[index]
+		switch entry.state {
+		case graphTokenBucketEmpty:
+			if firstDeleted >= 0 {
+				return firstDeleted, false
+			}
+			return index, false
+		case graphTokenBucketDeleted:
+			if firstDeleted < 0 {
+				firstDeleted = index
+			}
+		case graphTokenBucketFull:
+			if entry.hash == hash {
+				return index, true
+			}
+		}
+		index++
+		if index == len(t.entries) {
+			index = 0
+		}
+	}
+}
+
+func (t *duplicateStringStringIntIndexTable) rehash(slotCapacity int) {
+	slotCapacity = max(8, slotCapacity)
+	if slotCapacity <= len(t.entries) && t.used == t.count {
+		return
+	}
+	old := t.entries
+	oldOverflow := t.overflow
+	t.entries = make([]duplicateStringStringIntIndexEntry, slotCapacity)
+	t.overflow = t.overflow[:0]
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+	for i := range old {
+		if old[i].state != graphTokenBucketFull {
+			continue
+		}
+		t.setHash(old[i].hash, old[i].first)
+		for overflowIndex := old[i].overflow; overflowIndex >= 0; {
+			overflow := oldOverflow[overflowIndex]
+			t.setHash(old[i].hash, overflow.factID)
+			overflowIndex = overflow.next
+		}
+	}
+}
+
+func (t *duplicateStringStringIntIndexTable) setHash(hash uint64, factID FactID) {
+	if t == nil || factID.IsZero() {
+		return
+	}
+	if duplicateStringStringIntNeedsGrow(t.used+1, len(t.entries)) {
+		t.rehash(duplicateStringStringIntGrowCapacity(len(t.entries), t.used+1))
+	}
+	index, ok := t.findInsert(hash)
+	if ok {
+		t.addToEntry(index, factID)
+		return
+	}
+	if t.entries[index].state == graphTokenBucketEmpty {
+		t.touched = append(t.touched, index)
+		t.used++
+	}
+	t.entries[index] = duplicateStringStringIntIndexEntry{hash: hash, first: factID, overflow: -1, state: graphTokenBucketFull}
+	t.count++
+}
+
+func hashDuplicateStringStringIntIndexKey(key duplicateIndexKey) uint64 {
+	hash := graphTokenBucketMixString(0, key.templateKey.String())
+	hash = graphTokenBucketMixString(hash, key.stringValue)
+	hash = graphTokenBucketMixString(hash, key.stringValue2)
+	return graphTokenBucketMixAdd(hash, uint64(key.firstInt))
+}
+
+func duplicateStringStringIntSlotCapacity(capacity int) int {
+	if capacity <= 0 {
+		return 0
+	}
+	return max(8, capacity+(capacity+2)/3)
+}
+
+func duplicateStringStringIntNeedsGrow(used, slots int) bool {
+	return slots == 0 || used*4 >= slots*3
+}
+
+func duplicateStringStringIntGrowCapacity(current, needed int) int {
+	next := max(8, current*2)
+	minimum := duplicateStringStringIntSlotCapacity(needed)
+	if next < minimum {
+		next = minimum
+	}
+	return next
 }
 
 type duplicateStructuralIndexTable struct {
@@ -4513,6 +4857,44 @@ func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factS
 	return nil, false
 }
 
+func (w *factWorkspace) duplicateFactID(key duplicateIndexKey) (FactID, bool) {
+	if w == nil || key.isZero() {
+		return FactID{}, false
+	}
+	if key.kind == duplicateIndexStringStringInt {
+		var stale []FactID
+		var found FactID
+		w.factsByDuplicate.forEachStringStringIntFactID(key, func(id FactID) bool {
+			existing, ok := w.workingFactByID(id)
+			if !ok {
+				stale = append(stale, id)
+				return true
+			}
+			if existing.dupIndex == key {
+				found = id
+				return false
+			}
+			return true
+		})
+		for _, id := range stale {
+			w.factsByDuplicate.deleteFact(key, id)
+		}
+		if !found.IsZero() {
+			return found, true
+		}
+		return FactID{}, false
+	}
+	id, ok := w.factsByDuplicate.get(key)
+	if !ok {
+		return FactID{}, false
+	}
+	if _, exists := w.workingFactByID(id); exists {
+		return id, true
+	}
+	w.factsByDuplicate.delete(key)
+	return FactID{}, false
+}
+
 func (w *factWorkspace) structuralDuplicateFactWithPlan(plan *compiledGeneratedFactInsertPlan, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
 	if w == nil || plan == nil || key.kind != duplicateIndexStructural {
 		return nil, false
@@ -4644,13 +5026,13 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 				return existing, existing.publicDuplicateKey(revision), false, nil
 			}
 		} else {
-			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			existingID, ok := w.duplicateFactID(duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
 					return existing, existing.publicDuplicateKey(revision), false, nil
 				}
-				w.factsByDuplicate.delete(duplicateIndex)
+				w.factsByDuplicate.deleteFact(duplicateIndex, existingID)
 			}
 		}
 	}
@@ -4703,7 +5085,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 				return existing, "", false, nil
 			}
 		} else {
-			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			existingID, ok := w.duplicateFactID(duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
@@ -4712,7 +5094,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 					}
 					return existing, "", false, nil
 				}
-				w.factsByDuplicate.delete(duplicateIndex)
+				w.factsByDuplicate.deleteFact(duplicateIndex, existingID)
 			}
 		}
 	}
@@ -4794,14 +5176,14 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 				return existing, "", false, nil
 			}
 		} else {
-			existingID, ok := w.factsByDuplicate.get(duplicateIndex)
+			existingID, ok := w.duplicateFactID(duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
 					w.rollbackGeneratedFactSlots(slotMark)
 					return existing, "", false, nil
 				}
-				w.factsByDuplicate.delete(duplicateIndex)
+				w.factsByDuplicate.deleteFact(duplicateIndex, existingID)
 			}
 		}
 	}
@@ -5946,6 +6328,8 @@ func cloneDuplicateIndexes(in duplicateIndexes) duplicateIndexes {
 		doubleInt:  cloneDoubleIntFactIDMap(in.doubleInt),
 		intString:  cloneIntStringFactIDMap(in.intString),
 		stringInt:  cloneStringIntFactIDMap(in.stringInt),
+		intString2: cloneIntStringStringFactIDMap(in.intString2),
+		string2Int: cloneStringStringIntIndexTable(in.string2Int),
 		scalars:    cloneDuplicateIndexFactIDMap(in.scalars),
 		structural: cloneDuplicateStructuralIndexTable(in.structural),
 	}
@@ -5996,6 +6380,15 @@ func cloneStringIntFactIDMap(in map[duplicateStringIntIndexKey]FactID) map[dupli
 	return out
 }
 
+func cloneIntStringStringFactIDMap(in map[duplicateIntStringStringIndexKey]FactID) map[duplicateIntStringStringIndexKey]FactID {
+	if in == nil {
+		return nil
+	}
+	out := make(map[duplicateIntStringStringIndexKey]FactID, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
 func cloneDuplicateIndexFactIDMap(in map[duplicateIndexKey]FactID) map[duplicateIndexKey]FactID {
 	if in == nil {
 		return nil
@@ -6019,6 +6412,27 @@ func cloneDuplicateStructuralIndexTable(in duplicateStructuralIndexTable) duplic
 		out.set(entry.key, entry.first)
 		for _, id := range entry.rest {
 			out.set(entry.key, id)
+		}
+	}
+	return out
+}
+
+func cloneStringStringIntIndexTable(in duplicateStringStringIntIndexTable) duplicateStringStringIntIndexTable {
+	if in.count == 0 || len(in.entries) == 0 {
+		return duplicateStringStringIntIndexTable{}
+	}
+	out := duplicateStringStringIntIndexTable{}
+	out.reserve(in.count)
+	for i := range in.entries {
+		entry := in.entries[i]
+		if entry.state != graphTokenBucketFull {
+			continue
+		}
+		out.setHash(entry.hash, entry.first)
+		for overflowIndex := entry.overflow; overflowIndex >= 0; {
+			overflow := in.overflow[overflowIndex]
+			out.setHash(entry.hash, overflow.factID)
+			overflowIndex = overflow.next
 		}
 	}
 	return out

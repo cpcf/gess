@@ -2328,10 +2328,10 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 		t.Fatal("expected pending activation after initial reconcile")
 	}
 	before := pending[0]
-	beforeBindings := cloneBindingTupleEntries(before.bindings)
-	beforeFactIDs := cloneFactIDs(before.factIDs)
-	beforeVersions := cloneFactVersions(before.factVersions)
-	beforePath := cloneIntPath(before.path)
+	beforeBindings := cloneBindingTupleEntries(before.bindings())
+	beforeFactIDs := cloneFactIDs(before.factIDs())
+	beforeVersions := cloneFactVersions(before.factVersions())
+	beforePath := cloneIntPath(before.path())
 
 	if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": 99})); err != nil {
 		t.Fatalf("AssertTemplate noise: %v", err)
@@ -2343,17 +2343,17 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	if !ok {
 		t.Fatalf("activation %v disappeared after second reconcile", before.key)
 	}
-	if !reflect.DeepEqual(after.bindings, beforeBindings) {
-		t.Fatalf("activation bindings changed after candidate scratch reuse: got %#v want %#v", after.bindings, beforeBindings)
+	if !reflect.DeepEqual(after.bindings(), beforeBindings) {
+		t.Fatalf("activation bindings changed after candidate scratch reuse: got %#v want %#v", after.bindings(), beforeBindings)
 	}
-	if !reflect.DeepEqual(after.factIDs, beforeFactIDs) {
-		t.Fatalf("activation fact IDs changed after candidate scratch reuse: got %#v want %#v", after.factIDs, beforeFactIDs)
+	if !reflect.DeepEqual(after.factIDs(), beforeFactIDs) {
+		t.Fatalf("activation fact IDs changed after candidate scratch reuse: got %#v want %#v", after.factIDs(), beforeFactIDs)
 	}
-	if !reflect.DeepEqual(after.factVersions, beforeVersions) {
-		t.Fatalf("activation fact versions changed after candidate scratch reuse: got %#v want %#v", after.factVersions, beforeVersions)
+	if !reflect.DeepEqual(after.factVersions(), beforeVersions) {
+		t.Fatalf("activation fact versions changed after candidate scratch reuse: got %#v want %#v", after.factVersions(), beforeVersions)
 	}
-	if !reflect.DeepEqual(after.path, beforePath) {
-		t.Fatalf("activation path changed after candidate scratch reuse: got %#v want %#v", after.path, beforePath)
+	if !reflect.DeepEqual(after.path(), beforePath) {
+		t.Fatalf("activation path changed after candidate scratch reuse: got %#v want %#v", after.path(), beforePath)
 	}
 }
 
@@ -3623,7 +3623,7 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	if !ok {
 		t.Fatalf("consumed activation %v missing after next", consumed.key)
 	}
-	consumedFactIDs := cloneFactIDs(storedConsumed.factIDs)
+	consumedFactIDs := cloneFactIDs(storedConsumed.factIDs())
 	pending := session.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after consume = %d, want %d", got, want)
@@ -3646,8 +3646,8 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	if stored.status != activationStatusConsumed {
 		t.Fatalf("consumed activation status = %v, want %v", stored.status, activationStatusConsumed)
 	}
-	if !reflect.DeepEqual(stored.factIDs, consumedFactIDs) {
-		t.Fatalf("consumed activation facts = %#v, want %#v", stored.factIDs, consumedFactIDs)
+	if !reflect.DeepEqual(stored.factIDs(), consumedFactIDs) {
+		t.Fatalf("consumed activation facts = %#v, want %#v", stored.factIDs(), consumedFactIDs)
 	}
 	snapshot := session.propagationCounterSnapshot()
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -3995,7 +3995,7 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	}
 	firstActivation := singlePendingActivation(t, session)
 	firstIdentity := firstActivation.identity
-	firstFactIDs := cloneFactIDs(firstActivation.factIDs)
+	firstFactIDs := cloneFactIDs(firstActivation.factIDs())
 	if firstIdentity.isZero() {
 		t.Fatal("first identity is zero")
 	}
@@ -4018,8 +4018,8 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	if secondActivation.identity == firstIdentity {
 		t.Fatalf("reasserted activation reused identity %#v", secondActivation.identity)
 	}
-	if reflect.DeepEqual(secondActivation.factIDs, firstFactIDs) {
-		t.Fatalf("reasserted activation facts = %#v, want new fact IDs", secondActivation.factIDs)
+	if reflect.DeepEqual(secondActivation.factIDs(), firstFactIDs) {
+		t.Fatalf("reasserted activation facts = %#v, want new fact IDs", secondActivation.factIDs())
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
@@ -4124,7 +4124,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	var keptActivationKey activationKey
 	var keptActivationFound bool
 	for _, activation := range session.agenda.pendingActivations() {
-		if reflect.DeepEqual(activation.factIDs, keptFacts) {
+		if reflect.DeepEqual(cloneActivationFactIDs(&activation), keptFacts) {
 			keptActivationKey = activation.key
 			keptActivationFound = true
 			break
@@ -4148,8 +4148,8 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	if keptActivation.status != activationStatusPending {
 		t.Fatalf("kept activation status = %v, want pending", keptActivation.status)
 	}
-	if !reflect.DeepEqual(keptActivation.factIDs, keptFacts) {
-		t.Fatalf("kept activation fact IDs = %#v, want %#v", keptActivation.factIDs, keptFacts)
+	if !reflect.DeepEqual(keptActivation.factIDs(), keptFacts) {
+		t.Fatalf("kept activation fact IDs = %#v, want %#v", keptActivation.factIDs(), keptFacts)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
@@ -4622,7 +4622,7 @@ func activationFactIDForTemplate(t *testing.T, session *Session, activation acti
 	if session == nil {
 		t.Fatal("missing session")
 	}
-	for _, id := range activation.factIDs {
+	for _, id := range activation.factIDs() {
 		fact, ok := session.factByID(id)
 		if ok && fact.TemplateKey() == templateKey {
 			return id
@@ -4946,10 +4946,10 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 			ruleRevisionID:   activation.ruleRevisionID,
 			generation:       activation.generation,
 			identity:         activation.identity,
-			bindings:         activation.bindings,
-			factIDs:          activation.factIDs,
-			factVersions:     activation.factVersions,
-			path:             activation.path,
+			bindings:         activation.bindings(),
+			factIDs:          activation.factIDs(),
+			factVersions:     activation.factVersions(),
+			path:             activation.path(),
 			maxRecency:       activation.maxRecency,
 			aggregateRecency: activation.aggregateRecency,
 			declarationOrder: activation.declarationOrder,
@@ -5115,10 +5115,10 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 			ruleRevisionID:   activation.ruleRevisionID,
 			generation:       activation.generation,
 			identity:         activation.identity,
-			bindings:         activation.bindings,
-			factIDs:          activation.factIDs,
-			factVersions:     activation.factVersions,
-			path:             activation.path,
+			bindings:         activation.bindings(),
+			factIDs:          activation.factIDs(),
+			factVersions:     activation.factVersions(),
+			path:             activation.path(),
 			maxRecency:       activation.maxRecency,
 			aggregateRecency: activation.aggregateRecency,
 			declarationOrder: activation.declarationOrder,

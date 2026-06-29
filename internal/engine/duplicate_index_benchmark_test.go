@@ -153,7 +153,7 @@ func benchmarkDuplicateIndexLookupInsert(b *testing.B, spec TemplateSpec, rawFie
 		if firstKey != secondKey {
 			b.Fatalf("duplicate keys differ: %q != %q", firstKey, secondKey)
 		}
-		if got, ok := factSpace.factsByDuplicate.get(first.dupIndex); !ok || got != first.id {
+		if got, ok := factSpace.duplicateFactID(first.dupIndex); !ok || got != first.id {
 			b.Fatalf("duplicate index lookup = (%q, %t), want (%q, true)", got, ok, first.id)
 		}
 		benchmarkDuplicateKey = secondKey

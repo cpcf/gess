@@ -430,13 +430,13 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if got, want := keptAfterApply.id, kept.id; got != want {
 		t.Fatalf("unchanged activation ID after unrelated change = %q, want %q", got, want)
 	}
-	if got, want := keptAfterApply.factIDs, []FactID{inserted.Fact.ID()}; !reflect.DeepEqual(got, want) {
+	if got, want := keptAfterApply.factIDs(), []FactID{inserted.Fact.ID()}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unchanged activation fact IDs after unrelated change = %#v, want %#v", got, want)
 	}
-	if got, want := keptAfterApply.path, []int{0}; !reflect.DeepEqual(got, want) {
+	if got, want := keptAfterApply.path(), []int{0}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unchanged activation path after unrelated change = %#v, want %#v", got, want)
 	}
-	if got := keptAfterApply.bindings; len(got) != 1 || got[0].binding != "person" || got[0].factID != inserted.Fact.ID() || got[0].conditionPath[0] != 0 {
+	if got := keptAfterApply.bindings(); len(got) != 1 || got[0].binding != "person" || got[0].factID != inserted.Fact.ID() || got[0].conditionPath[0] != 0 {
 		t.Fatalf("unchanged activation binding after unrelated change = %#v", got)
 	}
 	if got := session.agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 {

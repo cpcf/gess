@@ -77,10 +77,12 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	}
 
 	stale := *activation
-	stale.factIDs = cloneActivationFactIDs(&stale)
-	stale.factVersions = cloneActivationFactVersions(&stale)
+	stale.payload = nil
+	stale.setFactIDs(cloneActivationFactIDs(&stale))
+	staleVersions := cloneActivationFactVersions(&stale)
 	stale.token = tokenRef{}
-	stale.factVersions[0]++
+	staleVersions[0]++
+	stale.setFactVersions(staleVersions)
 	if _, err := session.actionMatchesForActivation(stale, rule); !errors.Is(err, ErrMatcher) {
 		t.Fatalf("stale actionMatchesForActivation error = %v, want ErrMatcher", err)
 	}
@@ -460,7 +462,7 @@ func TestCoverageAgendaActivationFromCandidateAndTerminalToken(t *testing.T) {
 		aggregateRecency: fact.Recency(),
 	}
 	candidateActivation := activationFromCandidate(rule, candidate)
-	if candidateActivation.identity != activation.identity || candidateActivation.factIDs[0] != fact.ID() {
+	if candidateActivation.identity != activation.identity || candidateActivation.factIDs()[0] != fact.ID() {
 		t.Fatalf("candidate activation = %#v, want identity/fact from terminal activation %#v", candidateActivation, activation)
 	}
 

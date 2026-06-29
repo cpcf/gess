@@ -109,17 +109,25 @@ func TestAgendaReconcileCopiesCandidateSlices(t *testing.T) {
 	candidate.path[0] = 42
 
 	after := agenda.pendingActivations()[0]
-	if after.bindings[0].binding != before.bindings[0].binding {
-		t.Fatalf("activation binding tuple binding changed: got %q want %q", after.bindings[0].binding, before.bindings[0].binding)
+	afterBindings := after.bindings()
+	beforeBindings := before.bindings()
+	if afterBindings[0].binding != beforeBindings[0].binding {
+		t.Fatalf("activation binding tuple binding changed: got %q want %q", afterBindings[0].binding, beforeBindings[0].binding)
 	}
-	if after.factIDs[0] != before.factIDs[0] {
-		t.Fatalf("activation fact ID changed: got %q want %q", after.factIDs[0], before.factIDs[0])
+	afterFactIDs := after.factIDs()
+	beforeFactIDs := before.factIDs()
+	if afterFactIDs[0] != beforeFactIDs[0] {
+		t.Fatalf("activation fact ID changed: got %q want %q", afterFactIDs[0], beforeFactIDs[0])
 	}
-	if after.factVersions[0] != before.factVersions[0] {
-		t.Fatalf("activation fact version changed: got %d want %d", after.factVersions[0], before.factVersions[0])
+	afterFactVersions := after.factVersions()
+	beforeFactVersions := before.factVersions()
+	if afterFactVersions[0] != beforeFactVersions[0] {
+		t.Fatalf("activation fact version changed: got %d want %d", afterFactVersions[0], beforeFactVersions[0])
 	}
-	if len(after.path) != len(before.path) || after.path[0] != before.path[0] {
-		t.Fatalf("activation path changed: got %#v want %#v", after.path, before.path)
+	afterPath := after.path()
+	beforePath := before.path()
+	if len(afterPath) != len(beforePath) || afterPath[0] != beforePath[0] {
+		t.Fatalf("activation path changed: got %#v want %#v", afterPath, beforePath)
 	}
 }
 
@@ -172,7 +180,7 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	if activated.activation.activationID() == initial.id {
 		t.Fatalf("activation ID did not change after fact version changed: %q", activated.activation.activationID())
 	}
-	if len(activated.activation.factVersions) != 0 || activated.activation.bindings != nil || activated.activation.path != nil {
+	if len(activated.activation.bindings()) != 0 || len(activated.activation.path()) != 0 || len(activated.activation.factVersions()) != 0 {
 		t.Fatalf("activated change should stay compact: %#v", activated.activation)
 	}
 	if deactivated.activation.activationID() != initial.id {
@@ -181,7 +189,7 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	if deactivated.activation.status != activationStatusDeactivated {
 		t.Fatalf("deactivated status = %v, want deactivated", deactivated.activation.status)
 	}
-	if len(deactivated.activation.factVersions) != 0 || deactivated.activation.bindings != nil || deactivated.activation.path != nil {
+	if len(deactivated.activation.bindings()) != 0 || len(deactivated.activation.path()) != 0 || len(deactivated.activation.factVersions()) != 0 {
 		t.Fatalf("deactivated change should stay compact: %#v", deactivated.activation)
 	}
 	if got := agenda.pendingActivations(); len(got) != 1 || got[0].id == initial.id {
@@ -365,8 +373,9 @@ func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	if got, want := len(activations), 1; got != want {
 		t.Fatalf("activationsByFactID = %d, want %d", got, want)
 	}
-	if activations[0].factIDs[0] != inserted.Fact.ID() {
-		t.Fatalf("activation fact ID = %q, want %q", activations[0].factIDs[0], inserted.Fact.ID())
+	activationFactIDs := activations[0].factIDs()
+	if activationFactIDs[0] != inserted.Fact.ID() {
+		t.Fatalf("activation fact ID = %q, want %q", activationFactIDs[0], inserted.Fact.ID())
 	}
 	if agenda.tokenFactIndexDirty {
 		t.Fatal("token fact index should be clean after fact lookup")
@@ -625,7 +634,8 @@ func TestAgendaTerminalTokenReconcilePreservesConsumedAndDeactivatesMissingPendi
 		t.Fatalf("remaining pending activations = %d, want %d", got, want)
 	}
 
-	if _, err := session.Retract(ctx, remaining[0].factIDs[0]); err != nil {
+	remainingFactIDs := remaining[0].factIDs()
+	if _, err := session.Retract(ctx, remainingFactIDs[0]); err != nil {
 		t.Fatalf("Retract: %v", err)
 	}
 	tokens, ok, err = session.rete.currentTerminalTokenDeltas(ctx)
@@ -647,7 +657,7 @@ func TestAgendaTerminalTokenReconcilePreservesConsumedAndDeactivatesMissingPendi
 		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
 	}
 	changeActivation := agenda.publicActivation(&changes[0].activation)
-	if got, want := changeActivation.factIDs[0], remaining[0].factIDs[0]; got != want {
+	if got, want := changeActivation.factIDs()[0], remainingFactIDs[0]; got != want {
 		t.Fatalf("deactivated fact ID = %q, want %q", got, want)
 	}
 	if got := agenda.pendingActivations(); len(got) != 0 {
@@ -910,10 +920,10 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 				hash:      2,
 			},
 		},
-		factIDs:      []FactID{factID, factID},
-		factVersions: []FactVersion{1, 1},
-		status:       activationStatusPending,
+		status: activationStatusPending,
 	}
+	activation.setFactIDs([]FactID{factID, factID})
+	activation.setFactVersions([]FactVersion{1, 1})
 
 	agenda.storeActivation(&activation)
 
@@ -1112,10 +1122,10 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 				hash:      42,
 			},
 		},
-		factIDs:      []FactID{removedFactID},
-		factVersions: []FactVersion{1},
-		status:       activationStatusPending,
+		status: activationStatusPending,
 	}
+	removed.setFactIDs([]FactID{removedFactID})
+	removed.setFactVersions([]FactVersion{1})
 	kept := activation{
 		ruleRevisionID: RuleRevisionID("kept"),
 		identity: candidateIdentity{
@@ -1126,10 +1136,10 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 				hash:      42,
 			},
 		},
-		factIDs:      []FactID{keptFactID},
-		factVersions: []FactVersion{1},
-		status:       activationStatusPending,
+		status: activationStatusPending,
 	}
+	kept.setFactIDs([]FactID{keptFactID})
+	kept.setFactVersions([]FactVersion{1})
 
 	removedKey := agenda.storeActivation(&removed)
 	keptKey := agenda.storeActivation(&kept)
@@ -1524,15 +1534,16 @@ func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
 }
 
 func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
+	activation := activation{
+		id:             ActivationID("activation"),
+		ruleID:         RuleID("rule"),
+		ruleRevisionID: RuleRevisionID("revision"),
+		generation:     1,
+	}
+	activation.setFactIDs([]FactID{newFactID(1, 2)})
 	change := agendaChange{
-		kind: agendaChangeActivated,
-		activation: activation{
-			id:             ActivationID("activation"),
-			ruleID:         RuleID("rule"),
-			ruleRevisionID: RuleRevisionID("revision"),
-			generation:     1,
-			factIDs:        []FactID{newFactID(1, 2)},
-		},
+		kind:       agendaChangeActivated,
+		activation: activation,
 	}
 
 	event := change.event(SessionID("session"), RulesetID("ruleset"), 3, time.Unix(2, 0).UTC())
@@ -1859,7 +1870,7 @@ func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testin
 		t.Fatalf("initial changes = %d, want %d", got, want)
 	}
 	initialID := changes[0].activation.activationID()
-	if got, want := len(changes[0].activation.factIDs), 2; got != want {
+	if got, want := len(changes[0].activation.factIDs()), 2; got != want {
 		t.Fatalf("initial activation fact IDs = %d, want joined token width %d", got, want)
 	}
 	beforeCounters := session.propagationCounterSnapshot().Totals
@@ -1874,7 +1885,7 @@ func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testin
 	if pending[0].id == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
-	if got, want := len(pending[0].factIDs), 2; got != want {
+	if got, want := len(pending[0].factIDs()), 2; got != want {
 		t.Fatalf("post-reset activation fact IDs = %d, want joined token width %d", got, want)
 	}
 
@@ -2050,18 +2061,17 @@ func compactAgendaChangeActivationForCompare(owner *agenda, act *activation) act
 	if owner != nil {
 		public := owner.publicActivation(act)
 		out.id = public.id
-		out.factIDs = public.factIDs
-		out.factVersions = public.factVersions
-		out.bindings = public.bindings
-		out.path = public.path
+		out.payload = nil
+		out.setFactIDs(cloneFactIDs(public.factIDs()))
+		out.setFactVersions(cloneFactVersions(public.factVersions()))
+		out.setBindings(cloneBindingTupleEntries(public.bindings()))
+		out.setPath(cloneIntPath(public.path()))
 	} else {
 		out.id = act.activationID()
-		out.factIDs = cloneActivationFactIDs(act)
+		out.setFactIDs(cloneActivationFactIDs(act))
 	}
-	out.bindings = nil
-	out.factVersions = nil
+	out.payload = nil
 	out.token = tokenRef{}
-	out.path = nil
 	return out
 }
 

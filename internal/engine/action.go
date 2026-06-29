@@ -1649,7 +1649,7 @@ func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Conte
 		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
 	factCount := activationFactCount(&activation)
-	if activation.token.isZero() && len(activation.bindings) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
+	if activation.token.isZero() && len(activation.bindings()) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
 	}
 	if !activation.token.isZero() {
@@ -1662,7 +1662,7 @@ func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Conte
 		return newTokenActionContext(ctx, s, activation, rule), nil
 	}
 
-	entries := cloneBindingTupleEntries(activation.bindings)
+	entries := cloneBindingTupleEntries(activation.bindings())
 	if len(entries) == 0 {
 		entries = activationBindingTupleEntriesForActivation(rule, &activation, false)
 	}
@@ -1710,7 +1710,7 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 		}
 		return nil
 	}
-	entries := activation.bindings
+	entries := activation.bindings()
 	if len(entries) == 0 {
 		entries = activationBindingTupleEntriesForActivation(rule, &activation, false)
 	}

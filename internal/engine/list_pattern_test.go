@@ -389,7 +389,7 @@ func listPatternValidationWorkspace(t testing.TB) (*Workspace, Template) {
 func activationForFactID(t testing.TB, activations []activation, id FactID) activation {
 	t.Helper()
 	for _, activation := range activations {
-		if slices.Contains(activation.factIDs, id) {
+		if slices.Contains(activation.factIDs(), id) {
 			return activation
 		}
 	}

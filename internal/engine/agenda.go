@@ -192,18 +192,22 @@ type activation struct {
 	module           ModuleName
 	generation       Generation
 	identity         candidateIdentity
-	bindings         []bindingTupleEntry
-	factIDs          []FactID
-	factVersions     []FactVersion
 	token            tokenRef
 	terminalID       reteGraphTerminalNodeID
 	terminalRow      graphTokenRowHandle
-	path             []int
 	salience         int
 	maxRecency       Recency
 	aggregateRecency Recency
 	declarationOrder int
 	status           activationStatus
+	payload          *activationPayload
+}
+
+type activationPayload struct {
+	bindings     []bindingTupleEntry
+	path         []int
+	factIDs      []FactID
+	factVersions []FactVersion
 }
 
 func (a activation) mutationOrigin() mutationOrigin {
@@ -236,12 +240,116 @@ func (a *activation) ensureActivationID() ActivationID {
 func (a activation) clone() activation {
 	out := a
 	out.id = a.activationID()
-	out.bindings = cloneBindingTupleEntries(a.bindings)
-	out.factIDs = cloneActivationFactIDs(&a)
-	out.factVersions = cloneActivationFactVersions(&a)
+	out.payload = nil
+	out.setBindings(cloneBindingTupleEntries(a.bindings()))
+	out.setFactIDs(cloneActivationFactIDs(&a))
+	out.setFactVersions(cloneActivationFactVersions(&a))
 	out.token = tokenRef{}
-	out.path = cloneIntPath(a.path)
+	out.setPath(cloneIntPath(a.path()))
 	return out
+}
+
+func (a *activation) bindings() []bindingTupleEntry {
+	if a == nil || a.payload == nil {
+		return nil
+	}
+	return a.payload.bindings
+}
+
+func (a *activation) setBindings(bindings []bindingTupleEntry) {
+	if a == nil {
+		return
+	}
+	if len(bindings) == 0 {
+		if a.payload != nil {
+			a.payload.bindings = nil
+			if a.payload.empty() {
+				a.payload = nil
+			}
+		}
+		return
+	}
+	a.ensurePayload().bindings = bindings
+}
+
+func (a *activation) path() []int {
+	if a == nil || a.payload == nil {
+		return nil
+	}
+	return a.payload.path
+}
+
+func (a *activation) setPath(path []int) {
+	if a == nil {
+		return
+	}
+	if len(path) == 0 {
+		if a.payload != nil {
+			a.payload.path = nil
+			if a.payload.empty() {
+				a.payload = nil
+			}
+		}
+		return
+	}
+	a.ensurePayload().path = path
+}
+
+func (a *activation) factIDs() []FactID {
+	if a == nil || a.payload == nil {
+		return nil
+	}
+	return a.payload.factIDs
+}
+
+func (a *activation) setFactIDs(factIDs []FactID) {
+	if a == nil {
+		return
+	}
+	if len(factIDs) == 0 {
+		if a.payload != nil {
+			a.payload.factIDs = nil
+			if a.payload.empty() {
+				a.payload = nil
+			}
+		}
+		return
+	}
+	a.ensurePayload().factIDs = factIDs
+}
+
+func (a *activation) factVersions() []FactVersion {
+	if a == nil || a.payload == nil {
+		return nil
+	}
+	return a.payload.factVersions
+}
+
+func (a *activation) setFactVersions(factVersions []FactVersion) {
+	if a == nil {
+		return
+	}
+	if len(factVersions) == 0 {
+		if a.payload != nil {
+			a.payload.factVersions = nil
+			if a.payload.empty() {
+				a.payload = nil
+			}
+		}
+		return
+	}
+	a.ensurePayload().factVersions = factVersions
+}
+
+func (a *activation) ensurePayload() *activationPayload {
+	if a.payload == nil {
+		a.payload = &activationPayload{}
+	}
+	return a.payload
+}
+
+func (p *activationPayload) empty() bool {
+	return p == nil || len(p.bindings) == 0 && len(p.path) == 0 && len(p.factIDs) == 0 && len(p.factVersions) == 0
 }
 
 type agendaChangeKind uint8
@@ -283,30 +391,31 @@ func (a *agenda) publicActivation(act *activation) activation {
 	}
 	out := *act
 	out.id = act.ensureActivationID()
-	out.factIDs = cloneActivationFactIDs(act)
-	out.factVersions = cloneActivationFactVersions(act)
+	out.payload = nil
+	out.setFactIDs(cloneActivationFactIDs(act))
+	out.setFactVersions(cloneActivationFactVersions(act))
 	out.token = tokenRef{}
 	out.terminalID = 0
 	out.terminalRow = graphTokenRowHandle{}
-	if a == nil || a.revision == nil || len(out.factIDs) == 0 {
-		out.bindings = nil
-		out.path = nil
+	outFactIDs := out.factIDs()
+	outFactVersions := out.factVersions()
+	if a == nil || a.revision == nil || len(outFactIDs) == 0 {
 		return out
 	}
 	rule, ok := a.revision.rulesByRevisionID[out.ruleRevisionID]
 	if !ok {
-		out.bindings = nil
-		out.path = nil
 		return out
 	}
 	if !act.token.isZero() {
 		if factIDs, factVersions, ok := terminalTokenFactTuple(rule, act.token); ok {
-			out.factIDs = factIDs
-			out.factVersions = factVersions
+			out.setFactIDs(factIDs)
+			out.setFactVersions(factVersions)
+			outFactIDs = factIDs
+			outFactVersions = factVersions
 		}
 	}
-	out.bindings = activationBindingTupleEntries(rule, out.factIDs, out.factVersions, true)
-	out.path = activationPathForRule(rule)
+	out.setBindings(activationBindingTupleEntries(rule, outFactIDs, outFactVersions, true))
+	out.setPath(activationPathForRule(rule))
 	return out
 }
 
@@ -315,20 +424,18 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
-	out.bindings = nil
-	out.factIDs = cloneActivationFactIDs(act)
-	out.factVersions = nil
+	out.payload = nil
+	out.setFactIDs(cloneActivationFactIDs(act))
 	if a != nil && a.revision != nil && !act.token.isZero() {
 		if rule, ok := a.revision.rulesByRevisionID[out.ruleRevisionID]; ok {
 			if factIDs, _, ok := terminalTokenFactTuple(rule, act.token); ok {
-				out.factIDs = factIDs
+				out.setFactIDs(factIDs)
 			}
 		}
 	}
 	out.token = tokenRef{}
 	out.terminalID = 0
 	out.terminalRow = graphTokenRowHandle{}
-	out.path = nil
 	return out
 }
 
@@ -377,6 +484,8 @@ func activationBindingTupleEntriesForActivation(rule compiledRule, act *activati
 			return entries
 		}
 	}
+	factIDs := act.factIDs()
+	factVersions := act.factVersions()
 	for i := range n {
 		condition := rule.conditions[i]
 		plan, ok := rule.conditionPlanForBindingSlot(i)
@@ -388,8 +497,8 @@ func activationBindingTupleEntriesForActivation(rule compiledRule, act *activati
 			bindingSlot:    i,
 			conditionOrder: condition.order,
 			conditionID:    condition.id,
-			factID:         act.factIDs[i],
-			factVersion:    act.factVersions[i],
+			factID:         factIDs[i],
+			factVersion:    factVersions[i],
 		}
 		if includePath {
 			entries[i].conditionPath = cloneIntPath(plan.path)
@@ -1788,11 +1897,12 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 	}
 	if current.token.isZero() {
 		out := *current
+		out.payload = nil
 		if materializeID {
 			out.id = current.ensureActivationID()
 		}
-		out.factIDs = cloneFactIDs(current.factIDs)
-		out.factVersions = cloneFactVersions(current.factVersions)
+		out.setFactIDs(cloneFactIDs(current.factIDs()))
+		out.setFactVersions(cloneFactVersions(current.factVersions()))
 		return out
 	}
 	id := current.id
@@ -1850,7 +1960,7 @@ func (a *agenda) materializePendingTokenFacts(revision *Ruleset) {
 		if !ok || current.status != activationStatusPending || current.token.isZero() {
 			continue
 		}
-		if len(current.factIDs) > 0 && len(current.factVersions) > 0 {
+		if len(current.factIDs()) > 0 && len(current.factVersions()) > 0 {
 			continue
 		}
 		rule, ok := revision.rulesByRevisionID[current.ruleRevisionID]
@@ -1861,8 +1971,8 @@ func (a *agenda) materializePendingTokenFacts(revision *Ruleset) {
 		if !ok {
 			continue
 		}
-		current.factIDs = cloneFactIDs(factIDs)
-		current.factVersions = cloneFactVersions(factVersions)
+		current.setFactIDs(cloneFactIDs(factIDs))
+		current.setFactVersions(cloneFactVersions(factVersions))
 	}
 }
 
@@ -2096,8 +2206,9 @@ func (a *agenda) indexActivationFacts(act *activation, includeTokenFacts bool) {
 		a.tokenFactIndexDirty = true
 		return
 	}
-	for i, factID := range act.factIDs {
-		if factIDSeenBefore(act.factIDs[:i], factID) {
+	factIDs := act.factIDs()
+	for i, factID := range factIDs {
+		if factIDSeenBefore(factIDs[:i], factID) {
 			continue
 		}
 		factBucket := a.byFactID[factID]
@@ -2371,7 +2482,7 @@ func activationMatchesCandidate(current *activation, candidate matchCandidate) b
 	if !current.token.isZero() {
 		return matchTokenFactsEqualSlices(current.token, candidate.factIDs, candidate.factVersions)
 	}
-	return candidateIdentityEqual(current.identity, current.factIDs, current.factVersions, candidate.identity, candidate.factIDs, candidate.factVersions)
+	return candidateIdentityEqual(current.identity, current.factIDs(), current.factVersions(), candidate.identity, candidate.factIDs, candidate.factVersions)
 }
 
 func activationMatchesTerminalToken(current *activation, rule compiledRule, identity candidateIdentity, token tokenRef) bool {
@@ -2387,7 +2498,7 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 	if !current.token.isZero() {
 		return terminalTokenFactVersionsEqual(current.token, token)
 	}
-	return matchTokenFactsEqualSlices(token, current.factIDs, current.factVersions)
+	return matchTokenFactsEqualSlices(token, current.factIDs(), current.factVersions())
 }
 
 func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule, identity candidateIdentity, delta reteTerminalTokenDelta) bool {
@@ -2404,18 +2515,18 @@ func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule,
 		if matchTokenFactsEqualSlices(current.token, delta.factIDs, delta.factVersions) {
 			return true
 		}
-		if len(current.factIDs) > 0 || len(current.factVersions) > 0 {
-			return factVersionSlicesEqual(current.factIDs, current.factVersions, delta.factIDs, delta.factVersions)
+		if len(current.factIDs()) > 0 || len(current.factVersions()) > 0 {
+			return factVersionSlicesEqual(current.factIDs(), current.factVersions(), delta.factIDs, delta.factVersions)
 		}
 		return false
 	}
 	if len(delta.factIDs) > 0 || len(delta.factVersions) > 0 {
-		return factVersionSlicesEqual(current.factIDs, current.factVersions, delta.factIDs, delta.factVersions)
+		return factVersionSlicesEqual(current.factIDs(), current.factVersions(), delta.factIDs, delta.factVersions)
 	}
 	if !current.token.isZero() {
 		return terminalTokenFactVersionsEqual(current.token, delta.token)
 	}
-	return matchTokenFactsEqualSlices(delta.token, current.factIDs, current.factVersions)
+	return matchTokenFactsEqualSlices(delta.token, current.factIDs(), current.factVersions())
 }
 
 func factVersionSlicesEqual(leftIDs []FactID, leftVersions []FactVersion, rightIDs []FactID, rightVersions []FactVersion) bool {
@@ -2682,11 +2793,11 @@ func cloneActivationFactIDs(act *activation) []FactID {
 	if act == nil {
 		return nil
 	}
-	if len(act.factIDs) > 0 {
-		return cloneFactIDs(act.factIDs)
+	if factIDs := act.factIDs(); len(factIDs) > 0 {
+		return cloneFactIDs(factIDs)
 	}
 	if act.token.isZero() {
-		return cloneFactIDs(act.factIDs)
+		return cloneFactIDs(act.factIDs())
 	}
 	factIDs, ok := act.token.factIDs()
 	if !ok {
@@ -2703,11 +2814,11 @@ func cloneActivationFactVersions(act *activation) []FactVersion {
 	if act == nil {
 		return nil
 	}
-	if len(act.factVersions) > 0 {
-		return cloneFactVersions(act.factVersions)
+	if factVersions := act.factVersions(); len(factVersions) > 0 {
+		return cloneFactVersions(factVersions)
 	}
 	if act.token.isZero() {
-		return cloneFactVersions(act.factVersions)
+		return cloneFactVersions(act.factVersions())
 	}
 	factVersions, ok := act.token.factVersions()
 	if !ok {
@@ -2727,7 +2838,7 @@ func activationFactCount(act *activation) int {
 	if !act.token.isZero() {
 		return tokenRefSize(act.token)
 	}
-	return len(act.factIDs)
+	return len(act.factIDs())
 }
 
 func activationFactVersionCount(act *activation) int {
@@ -2737,7 +2848,7 @@ func activationFactVersionCount(act *activation) int {
 	if !act.token.isZero() {
 		return tokenRefSize(act.token)
 	}
-	return len(act.factVersions)
+	return len(act.factVersions())
 }
 
 func fillTokenRefFactIDs(factIDs []FactID, index int, token tokenRef) int {
@@ -2789,9 +2900,10 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.module = rule.module
 	dst.generation = candidate.generation
 	dst.identity = candidate.identity
-	dst.bindings = cloneBindingTupleEntries(candidate.bindingTuple)
-	dst.factIDs = cloneFactIDs(candidate.factIDs)
-	dst.factVersions = cloneFactVersions(candidate.factVersions)
+	dst.payload = nil
+	dst.setBindings(cloneBindingTupleEntries(candidate.bindingTuple))
+	dst.setFactIDs(cloneFactIDs(candidate.factIDs))
+	dst.setFactVersions(cloneFactVersions(candidate.factVersions))
 	dst.salience = rule.salience
 	dst.maxRecency = candidate.maxRecency
 	dst.aggregateRecency = candidate.aggregateRecency
@@ -2904,7 +3016,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 		if !ok {
 			return candidateIdentity{}, false
 		}
-		slot := row.entry.bindingSlot
+		slot := row.bindingSlot
 		if slot < 0 {
 			continue
 		}
@@ -2915,12 +3027,12 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 		if seen&mask != 0 {
 			return candidateIdentity{}, false
 		}
-		if row.entry.hasValue {
-			valueEntries[slot] = row.entry
+		if row.hasValue {
+			valueEntries[slot] = row.tokenRowEntry()
 			values |= mask
 		} else {
-			factIDs[slot] = row.entry.factID
-			factVersions[slot] = row.entry.factVersion
+			factIDs[slot] = row.fact.ID()
+			factVersions[slot] = row.fact.Version()
 		}
 		seen |= mask
 	}

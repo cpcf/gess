@@ -43,8 +43,8 @@ func TestTokenArenaCopiedRowsOwnCopiedMatchUntilRefresh(t *testing.T) {
 	if !ok {
 		t.Fatal("copied token did not resolve")
 	}
-	if copiedRow.match.fact.ID() != fact.ID() {
-		t.Fatal("copied token row did not own copied match")
+	if copiedRow.fact.ID() != fact.ID() {
+		t.Fatal("copied token row did not own copied fact")
 	}
 	copiedMatch, ok := tokenRefAtSlot(copied, 0)
 	if !ok {
@@ -66,8 +66,8 @@ func TestTokenArenaCopiedRowsOwnCopiedMatchUntilRefresh(t *testing.T) {
 	if !ok {
 		t.Fatal("refreshed token did not resolve")
 	}
-	if refreshedRow.match.fact.Version() != after.Version() {
-		t.Fatal("refreshed token row did not update owned match")
+	if refreshedRow.fact.Version() != after.Version() {
+		t.Fatal("refreshed token row did not update owned fact")
 	}
 	refreshedMatch, ok := tokenRefAtSlot(refreshed, 0)
 	if !ok {
