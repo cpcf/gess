@@ -256,7 +256,7 @@ type graphTokenRow struct {
 	activation       activationHandle
 	supportCount     int
 	branchSupport    terminalBranchSupport
-	branchOverflow   []terminalBranchSupport
+	branchOverflow   *terminalBranchSupportOverflow
 	branchCount      int
 }
 
@@ -311,6 +311,17 @@ type terminalBranchSupport struct {
 	count    int
 }
 
+type terminalBranchSupportOverflow struct {
+	items []terminalBranchSupport
+}
+
+func (r graphTokenRow) terminalBranchOverflowItems() []terminalBranchSupport {
+	if r.branchOverflow == nil {
+		return nil
+	}
+	return r.branchOverflow.items
+}
+
 func (r *graphTokenRow) addTerminalBranchSupport(branchID int) {
 	if r == nil || branchID < 0 {
 		return
@@ -324,13 +335,17 @@ func (r *graphTokenRow) addTerminalBranchSupport(branchID int) {
 		r.branchSupport.count++
 		return
 	}
-	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
-		if r.branchOverflow[i].branchID == branchID {
-			r.branchOverflow[i].count++
+	overflow := r.terminalBranchOverflowItems()
+	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+		if overflow[i].branchID == branchID {
+			overflow[i].count++
 			return
 		}
 	}
-	r.branchOverflow = append(r.branchOverflow, terminalBranchSupport{branchID: branchID, count: 1})
+	if r.branchOverflow == nil {
+		r.branchOverflow = &terminalBranchSupportOverflow{}
+	}
+	r.branchOverflow.items = append(r.branchOverflow.items, terminalBranchSupport{branchID: branchID, count: 1})
 	r.branchCount++
 }
 
@@ -341,8 +356,9 @@ func (r graphTokenRow) hasTerminalBranchSupport(branchID int) bool {
 	if r.branchSupport.branchID == branchID && r.branchSupport.count > 0 {
 		return true
 	}
-	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
-		support := r.branchOverflow[i]
+	overflow := r.terminalBranchOverflowItems()
+	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+		support := overflow[i]
 		if support.branchID == branchID && support.count > 0 {
 			return true
 		}
@@ -362,12 +378,13 @@ func (r *graphTokenRow) removeTerminalBranchSupport(branchID int) {
 		r.removeTerminalBranchSupportAt(0)
 		return
 	}
-	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
-		if r.branchOverflow[i].branchID != branchID {
+	overflow := r.terminalBranchOverflowItems()
+	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+		if overflow[i].branchID != branchID {
 			continue
 		}
-		r.branchOverflow[i].count--
-		if r.branchOverflow[i].count > 0 {
+		overflow[i].count--
+		if overflow[i].count > 0 {
 			return
 		}
 		r.removeTerminalBranchSupportAt(i + 1)
@@ -379,26 +396,32 @@ func (r *graphTokenRow) removeTerminalBranchSupportAt(index int) {
 	if r == nil || index < 0 || index >= r.branchCount {
 		return
 	}
-	overflowCount := min(r.branchCount-1, len(r.branchOverflow))
+	overflow := r.terminalBranchOverflowItems()
+	overflowCount := min(r.branchCount-1, len(overflow))
 	if r.branchCount == 1 || overflowCount == 0 {
 		r.branchSupport = terminalBranchSupport{}
 		r.branchCount = 0
-		r.branchOverflow = r.branchOverflow[:0]
+		r.branchOverflow = nil
 		return
 	}
 	if index > overflowCount {
 		return
 	}
 	lastOverflow := overflowCount - 1
-	last := r.branchOverflow[lastOverflow]
-	r.branchOverflow[lastOverflow] = terminalBranchSupport{}
-	r.branchOverflow = r.branchOverflow[:lastOverflow]
+	last := overflow[lastOverflow]
+	overflow[lastOverflow] = terminalBranchSupport{}
+	overflow = overflow[:lastOverflow]
 	if index == 0 {
 		r.branchSupport = last
-	} else if index-1 < len(r.branchOverflow) {
-		r.branchOverflow[index-1] = last
+	} else if index-1 < len(overflow) {
+		overflow[index-1] = last
 	}
 	r.branchCount = overflowCount
+	if len(overflow) == 0 {
+		r.branchOverflow = nil
+	} else {
+		r.branchOverflow.items = overflow
+	}
 }
 
 func (r graphTokenRow) terminalBranchIDs() []int {
@@ -420,8 +443,9 @@ func (r graphTokenRow) forEachTerminalBranchSupport(fn func(terminalBranchSuppor
 		return
 	}
 	fn(r.branchSupport)
-	for i := 0; i < r.branchCount-1 && i < len(r.branchOverflow); i++ {
-		fn(r.branchOverflow[i])
+	overflow := r.terminalBranchOverflowItems()
+	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+		fn(overflow[i])
 	}
 }
 
@@ -5129,12 +5153,15 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
 				counters.recordTerminalRowRemoved()
-				for _, branchID := range row.terminalBranchIDs() {
-					if key, ok := m.terminalBranchKey(terminalNode.id, branchID); ok {
+				row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+					if support.count <= 0 {
+						return
+					}
+					if key, ok := m.terminalBranchKey(terminalNode.id, support.branchID); ok {
 						counters.recordTerminalDeltaRemovedForBranch(key)
 						counters.recordTerminalRowRemovedForBranch(key)
 					}
-				}
+				})
 			}
 		})
 		terminal.rows.removeContainingFact(id, counters)
@@ -6257,14 +6284,17 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 			if ruleTerminal {
 				counters.recordTerminalDeltaRemoved()
 			}
-			for _, branchID := range row.terminalBranchIDs() {
-				if key, ok := m.terminalBranchKey(terminalID, branchID); ok {
+			row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+				if support.count <= 0 {
+					return
+				}
+				if key, ok := m.terminalBranchKey(terminalID, support.branchID); ok {
 					counters.recordTerminalRowRemovedForBranch(key)
 					if ruleTerminal {
 						counters.recordTerminalDeltaRemovedForBranch(key)
 					}
 				}
-			}
+			})
 		}
 	})
 }
