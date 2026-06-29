@@ -3031,6 +3031,9 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 			valueEntries[slot] = row.tokenRowEntry()
 			values |= mask
 		} else {
+			if row.fact == nil {
+				return candidateIdentity{}, false
+			}
 			factIDs[slot] = row.fact.ID()
 			factVersions[slot] = row.fact.Version()
 		}

@@ -47,7 +47,7 @@ type tokenRow struct {
 	conditionID      ConditionID
 	binding          string
 	bindingSlot      int
-	fact             conditionFactRef
+	fact             *conditionFactRef
 	value            Value
 	hasValue         bool
 	size             int
@@ -61,6 +61,8 @@ type tokenRow struct {
 
 type tokenArena struct {
 	chunks        [][]tokenRow
+	factRefs      []conditionFactRef
+	factRefIndex  map[tokenFactRefKey]int
 	factIDs       []FactID
 	factVersions  []FactVersion
 	count         int
@@ -70,6 +72,12 @@ type tokenArena struct {
 }
 
 type tokenArenaRowID uint32
+
+type tokenFactRefKey struct {
+	id      FactID
+	version FactVersion
+	recency Recency
+}
 
 func newTokenArena() *tokenArena {
 	return &tokenArena{epoch: 1, keepFactSpans: true}
@@ -112,6 +120,13 @@ func (a *tokenArena) reset() {
 			chunk[i] = tokenRow{}
 		}
 		a.chunks[chunkIndex] = chunk[:0]
+	}
+	for i := range a.factRefs {
+		a.factRefs[i] = conditionFactRef{}
+	}
+	a.factRefs = a.factRefs[:0]
+	if a.factRefIndex != nil {
+		clear(a.factRefIndex)
 	}
 	for i := range a.factIDs {
 		a.factIDs[i] = FactID{}
@@ -199,7 +214,7 @@ func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch,
 	}
 	a.chunks[chunkIndex] = chunk
 	row := &a.chunks[chunkIndex][len(chunk)-1]
-	row.fact = match.fact
+	row.fact = a.internFactRef(match.fact, match.hasValue)
 	row.size = 1
 	row.pathLen = pathStepLen
 	row.maxRecency = recency
@@ -250,7 +265,7 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 	}
 	a.chunks[chunkIndex] = chunk
 	row := &a.chunks[chunkIndex][len(chunk)-1]
-	row.fact = match.fact
+	row.fact = a.internFactRef(match.fact, match.hasValue)
 
 	if parentRow != nil {
 		row.parent = tokenParentHandle{rowID: parent.handle.rowID}
@@ -288,6 +303,35 @@ func (a *tokenArena) nextRowID() (tokenArenaRowID, int) {
 	return tokenArenaRowID(rowNumber), a.count / reteBetaMatchTokenChunkSize
 }
 
+func (a *tokenArena) internFactRef(fact conditionFactRef, hasValue bool) *conditionFactRef {
+	if a == nil || hasValue || fact.ID().IsZero() {
+		return nil
+	}
+	if fact.ID().sequence > transientFactSequenceThreshold {
+		return a.appendFactRef(fact)
+	}
+	key := tokenFactRefKey{id: fact.ID(), version: fact.Version(), recency: fact.Recency()}
+	if a.factRefIndex != nil {
+		if index, ok := a.factRefIndex[key]; ok && index >= 0 && index < len(a.factRefs) {
+			return &a.factRefs[index]
+		}
+	} else {
+		a.factRefIndex = make(map[tokenFactRefKey]int)
+	}
+	ref := a.appendFactRef(fact)
+	index := len(a.factRefs) - 1
+	a.factRefIndex[key] = index
+	return ref
+}
+
+func (a *tokenArena) appendFactRef(fact conditionFactRef) *conditionFactRef {
+	if a == nil {
+		return nil
+	}
+	a.factRefs = append(a.factRefs, fact)
+	return &a.factRefs[len(a.factRefs)-1]
+}
+
 func (a *tokenArena) setGeneration(generation Generation) bool {
 	if a == nil {
 		return false
@@ -303,10 +347,14 @@ func (r *tokenRow) conditionMatch() (conditionMatch, bool) {
 	if r == nil {
 		return conditionMatch{}, false
 	}
+	var fact conditionFactRef
+	if r.fact != nil {
+		fact = *r.fact
+	}
 	return conditionMatch{
 		conditionID: r.conditionID,
 		bindingSlot: r.bindingSlot,
-		fact:        r.fact,
+		fact:        fact,
 		value:       r.value,
 		hasValue:    r.hasValue,
 	}, true
@@ -334,7 +382,7 @@ func (r *tokenRow) tokenRowEntry() tokenRowEntry {
 		value:       r.value,
 		hasValue:    r.hasValue,
 	}
-	if !r.hasValue {
+	if !r.hasValue && r.fact != nil {
 		out.factID = r.fact.ID()
 		out.factVersion = r.fact.Version()
 	}
@@ -694,6 +742,7 @@ type betaJoinKey struct {
 
 const reteBetaMatchTokenChunkSize = 64
 const reteBetaMatchTokenChunkReserve = 2
+const transientFactSequenceThreshold = ^uint64(0) >> 1
 
 func tokenRefEqual(left, right tokenRef) bool {
 	if left.isZero() || right.isZero() {

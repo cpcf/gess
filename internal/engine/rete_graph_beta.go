@@ -6156,7 +6156,7 @@ func (m *reteGraphBetaMemory) refreshTokenFactRefInPlaceRow(token tokenRef, id F
 		match.fact = after
 		recency = after.Recency()
 	}
-	row.fact = match.fact
+	row.fact = token.handle.arena.internFactRef(match.fact, match.hasValue)
 	row.refreshFactSpan(token.handle.arena, parentRow, match)
 	if haveParent {
 		row.maxRecency = max(recency, parentRow.maxRecency)
@@ -7047,6 +7047,9 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (ca
 			valueEntries[slot] = row.tokenRowEntry()
 			values |= mask
 		} else {
+			if row.fact == nil {
+				return candidateIdentity{}, false
+			}
 			factIDs[slot] = row.fact.ID()
 			factVersions[slot] = row.fact.Version()
 		}
