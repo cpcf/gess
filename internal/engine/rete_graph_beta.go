@@ -121,6 +121,12 @@ type reteGraphTerminalMemory struct {
 	ruleOK                bool
 	ruleConditionCount    int
 	ruleIdentityScopeHash uint64
+	branchCount           int
+	singleBranchID        int
+}
+
+func (m *reteGraphTerminalMemory) singleBranch() bool {
+	return m != nil && m.branchCount == 1
 }
 
 type reteGraphAlphaFactSet struct {
@@ -635,7 +641,7 @@ func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount 
 		terminalTokenDeltas: make([]reteTerminalTokenDelta, 0, revision.estimatedRunFactCapacity(factCount)),
 	}
 	memory.arena.reserve(arenaCapacity)
-	memory.reserveMemories(rowCapacity)
+	memory.reserveMemories(rowCapacity, factCount)
 	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(graphBetaAlphaFactCapacity(revision, graph, factCount))
 	return memory
@@ -689,7 +695,7 @@ func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFact
 	return max(max(1, perAlpha), runFactReservePerRule*2)
 }
 
-func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
+func (m *reteGraphBetaMemory) reserveMemories(rowCapacity, factCount int) {
 	if m == nil || m.graph == nil || rowCapacity <= 0 {
 		return
 	}
@@ -706,6 +712,7 @@ func (m *reteGraphBetaMemory) reserveMemories(rowCapacity int) {
 		terminal := m.terminal(terminalNode.id)
 		terminalRowCapacity := graphBetaTerminalTokenMemoryCapacity(rowCapacity)
 		terminal.rows.reserveTerminal(terminalRowCapacity, graphBetaFactIndexReserve(terminalRowCapacity, m.graph.stageTokenWidth(terminalNode.input)))
+		terminal.rows.reserveIndexes(0, graphBetaTerminalIdentityIndexCapacity(rowCapacity, factCount), 0)
 	}
 }
 
@@ -737,6 +744,8 @@ func (m *reteGraphBetaMemory) initializeTerminalMemory(id reteGraphTerminalNodeI
 		return
 	}
 	terminal.ruleRevisionID = node.ruleRevisionID
+	terminal.branchCount = node.branchCount
+	terminal.singleBranchID = node.singleBranchID
 	if node.kind != reteGraphTerminalRule || node.ruleRevisionID == "" || m.revision == nil {
 		return
 	}
@@ -768,6 +777,13 @@ func graphBetaTerminalTokenMemoryCapacity(rowCapacity int) int {
 		return 0
 	}
 	return min(rowCapacity, 8)
+}
+
+func graphBetaTerminalIdentityIndexCapacity(rowCapacity, factCount int) int {
+	if rowCapacity <= 0 || factCount <= 0 {
+		return 0
+	}
+	return min(rowCapacity, max(8, factCount/2))
 }
 
 func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
@@ -1311,6 +1327,30 @@ func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 func (m *tokenHashMemory) insertTerminal(token tokenRef, terminalIdentity candidateIdentity, branchID int) bool {
 	_, inserted := m.insertTerminalRow(token, terminalIdentity, branchID)
 	return inserted
+}
+
+func (m *tokenHashMemory) insertFreshTerminalRow(token tokenRef, terminalIdentity candidateIdentity, branchID int) graphTokenRowHandle {
+	if m == nil || token.isZero() {
+		return graphTokenRowHandle{}
+	}
+	identity := tokenRefKey(token)
+	rowID := graphTokenRowID(len(m.rows))
+	m.ensureRowCapacity(int(rowID) + 1)
+	m.rows = m.rows[:int(rowID)+1]
+	handle := m.allocateRowHandle(rowID)
+	row := graphTokenRow{
+		id:               rowID,
+		handle:           handle,
+		token:            token,
+		identity:         identity,
+		terminalIdentity: terminalIdentity,
+		supportCount:     1,
+	}
+	row.addTerminalBranchSupport(branchID)
+	m.rows[rowID] = row
+	m.appendIdentityIndexRow(identity, rowID)
+	m.markFactRowsDirty()
+	return handle
 }
 
 func (m *tokenHashMemory) insertTerminalRow(token tokenRef, terminalIdentity candidateIdentity, branchID int) (graphTokenRowHandle, bool) {
@@ -6266,7 +6306,14 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	ruleTerminal := ruleRevisionID != ""
 	identity := terminal.terminalTokenIdentity(token)
 	branchKey, haveBranchKey := m.terminalBranchKey(terminalID, branchID)
-	handle, inserted := terminal.rows.insertTerminalRow(token, identity, branchID)
+	handle := graphTokenRowHandle{}
+	inserted := false
+	if m.initialAgenda != nil && terminal.singleBranch() {
+		handle = terminal.rows.insertFreshTerminalRow(token, identity, branchID)
+		inserted = !handle.isZero()
+	} else {
+		handle, inserted = terminal.rows.insertTerminalRow(token, identity, branchID)
+	}
 	if !inserted {
 		if span != nil {
 			span.recordTerminalRowDeduped()

@@ -181,6 +181,8 @@ type reteGraphTerminalNode struct {
 	ruleRevisionID RuleRevisionID
 	queryName      string
 	input          reteGraphStageRef
+	branchCount    int
+	singleBranchID int
 }
 
 type reteGraphRuleBranchPlan struct {
@@ -1452,6 +1454,15 @@ func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor ret
 func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphTerminalRoute) {
 	if g == nil || source.kind == reteGraphStageUnknown || terminal.terminalID <= 0 {
 		return
+	}
+	if index := int(terminal.terminalID) - 1; index >= 0 && index < len(g.terminalNodes) {
+		node := &g.terminalNodes[index]
+		if node.branchCount == 0 {
+			node.branchCount = 1
+			node.singleBranchID = terminal.branchID
+		} else if node.singleBranchID != terminal.branchID {
+			node.branchCount++
+		}
 	}
 	g.terminalsByStage[source] = append(g.terminalsByStage[source], terminal)
 	edges := g.stageEdges(source)
