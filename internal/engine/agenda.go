@@ -1663,30 +1663,13 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 		if !ok {
 			current, ok = a.activationByKeyPtr(key)
 		}
-		a.pending[a.pendingHead] = activationKey{}
-		if usePendingActivation {
-			a.pendingActivation[a.pendingHead] = nil
-		}
 		a.pendingHead++
 
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
 		current.status = activationStatusConsumed
-		out := *current
-		if materializeID {
-			out.id = current.ensureActivationID()
-		}
-		if current.token.isZero() {
-			out.factIDs = cloneFactIDs(current.factIDs)
-			out.factVersions = cloneFactVersions(current.factVersions)
-		} else {
-			out.factIDs = nil
-			out.factVersions = nil
-			out.bindings = nil
-			out.path = nil
-		}
-		return current, out, true
+		return current, activationRunSnapshot(current, materializeID), true
 	}
 	a.pending = a.pending[:0]
 	a.invalidatePendingActivationCache()
@@ -1712,36 +1695,15 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 			current, ok = a.activationByKeyPtr(key)
 		}
 		if !ok || current.status != activationStatusPending {
-			a.pending[a.pendingHead] = activationKey{}
-			if usePendingActivation {
-				a.pendingActivation[a.pendingHead] = nil
-			}
 			a.pendingHead++
 			continue
 		}
 		if current.module != module {
 			break
 		}
-		a.pending[a.pendingHead] = activationKey{}
-		if usePendingActivation {
-			a.pendingActivation[a.pendingHead] = nil
-		}
 		a.pendingHead++
 		current.status = activationStatusConsumed
-		out := *current
-		if materializeID {
-			out.id = current.ensureActivationID()
-		}
-		if current.token.isZero() {
-			out.factIDs = cloneFactIDs(current.factIDs)
-			out.factVersions = cloneFactVersions(current.factVersions)
-		} else {
-			out.factIDs = nil
-			out.factVersions = nil
-			out.bindings = nil
-			out.path = nil
-		}
-		return current, out, true
+		return current, activationRunSnapshot(current, materializeID), true
 	}
 	if a.pendingHead >= len(a.pending) {
 		a.pending = a.pending[:0]
@@ -1762,22 +1724,46 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		a.pending = a.pending[:last]
 		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
+		return current, activationRunSnapshot(current, materializeID), true
+	}
+	return nil, activation{}, false
+}
+
+func activationRunSnapshot(current *activation, materializeID bool) activation {
+	if current == nil {
+		return activation{}
+	}
+	if current.token.isZero() {
 		out := *current
 		if materializeID {
 			out.id = current.ensureActivationID()
 		}
-		if current.token.isZero() {
-			out.factIDs = cloneFactIDs(current.factIDs)
-			out.factVersions = cloneFactVersions(current.factVersions)
-		} else {
-			out.factIDs = nil
-			out.factVersions = nil
-			out.bindings = nil
-			out.path = nil
-		}
-		return current, out, true
+		out.factIDs = cloneFactIDs(current.factIDs)
+		out.factVersions = cloneFactVersions(current.factVersions)
+		return out
 	}
-	return nil, activation{}, false
+	id := current.id
+	if materializeID {
+		id = current.ensureActivationID()
+	}
+	return activation{
+		id:               id,
+		key:              current.key,
+		publicOrdinal:    current.publicOrdinal,
+		ruleID:           current.ruleID,
+		ruleRevisionID:   current.ruleRevisionID,
+		module:           current.module,
+		generation:       current.generation,
+		identity:         current.identity,
+		token:            current.token,
+		terminalID:       current.terminalID,
+		terminalRow:      current.terminalRow,
+		salience:         current.salience,
+		maxRecency:       current.maxRecency,
+		aggregateRecency: current.aggregateRecency,
+		declarationOrder: current.declarationOrder,
+		status:           current.status,
+	}
 }
 
 func (a *agenda) clear() []agendaChange {
