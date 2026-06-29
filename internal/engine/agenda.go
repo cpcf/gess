@@ -1061,6 +1061,137 @@ func (a *agenda) reconcileTerminalTokensWithoutChanges(ctx context.Context, revi
 	return err
 }
 
+func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Ruleset, memory *reteGraphBetaMemory, collectChanges bool) ([]agendaChange, bool, error) {
+	if a == nil || revision == nil {
+		return nil, true, ErrInvalidRuleset
+	}
+	if memory == nil || memory.graph == nil {
+		return nil, false, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	a.revision = revision
+	a.normalizePendingKeys()
+
+	seen := a.reconcileSeen
+	if seen == nil {
+		seen = make(map[activationKey]struct{}, len(a.pending))
+	} else {
+		clear(seen)
+	}
+	nextPending := a.reconcileNextPending[:0]
+	var changes []agendaChange
+	var activated []agendaChange
+	if collectChanges {
+		changes = a.reconcileChanges[:0]
+		activated = a.reconcileActivated[:0]
+	}
+	for _, terminalNode := range memory.graph.terminalNodes {
+		if terminalNode.kind != reteGraphTerminalRule {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, true, err
+		}
+		rule, ok := revision.rulesByRevisionID[terminalNode.ruleRevisionID]
+		if !ok {
+			return nil, true, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, terminalNode.ruleRevisionID)
+		}
+		terminal := memory.terminalAt(terminalNode.id)
+		if terminal == nil {
+			continue
+		}
+		for _, row := range terminal.rows.rows {
+			if row.token.isZero() {
+				continue
+			}
+			identity := row.terminalIdentity
+			if identity.isZero() {
+				identity = candidateIdentityForTerminalToken(rule, row.token)
+			}
+			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, row.token, identity); ok {
+				if existing.status == activationStatusPending {
+					if _, seenBefore := seen[key]; !seenBefore {
+						seen[key] = struct{}{}
+						nextPending = append(nextPending, key)
+					}
+				} else if existing.status == activationStatusDeactivated {
+					existing.status = activationStatusPending
+					if _, seenBefore := seen[key]; !seenBefore {
+						seen[key] = struct{}{}
+						nextPending = append(nextPending, key)
+					}
+					if collectChanges {
+						activated = append(activated, agendaChange{
+							kind:       agendaChangeActivated,
+							activation: a.compactChangeActivation(existing),
+						})
+					}
+				}
+				memory.setTerminalActivationHandle(terminalNode.id, row.handle, a.handleForActivationKey(key))
+				continue
+			}
+			rowMark := a.activationRows.count
+			created := a.activationRows.addEmpty()
+			if err := fillActivationFromTerminalTokenWithIdentity(created, rule, row.token, identity); err != nil {
+				a.activationRows.truncate(rowMark)
+				return nil, true, err
+			}
+			key := a.storePreparedActivation(created)
+			if _, seenBefore := seen[key]; !seenBefore {
+				seen[key] = struct{}{}
+				nextPending = append(nextPending, key)
+			}
+			if collectChanges {
+				activated = append(activated, agendaChange{
+					kind:       agendaChangeActivated,
+					activation: a.compactChangeActivation(created),
+				})
+			}
+			memory.setTerminalActivationHandle(terminalNode.id, row.handle, a.handleForActivationKey(key))
+		}
+	}
+
+	for _, key := range a.pending {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		existing, ok := a.activationByKeyPtr(key)
+		if !ok || existing.status != activationStatusPending {
+			continue
+		}
+		existing.status = activationStatusDeactivated
+		if collectChanges {
+			changes = append(changes, agendaChange{
+				kind:       agendaChangeDeactivated,
+				activation: a.compactChangeActivation(existing),
+			})
+		}
+	}
+
+	if collectChanges {
+		changes = append(changes, activated...)
+	}
+
+	if a.propagationCounters != nil {
+		a.propagationCounters.recordAgendaSort()
+	}
+	a.sortActivationKeys(nextPending)
+	a.reconcileSeen = seen
+	a.reconcileNextPending = a.pending[:0]
+	a.pending = nextPending
+	a.reconcileChanges = a.reconcileChanges[:0]
+	a.reconcileActivated = a.reconcileActivated[:0]
+	if collectChanges {
+		return append([]agendaChange(nil), changes...), true, nil
+	}
+	return nil, true, nil
+}
+
 func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {
 	if a == nil || revision == nil {
 		return nil, ErrInvalidRuleset

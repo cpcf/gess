@@ -2407,6 +2407,27 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 		return nil, false, nil
 	}
 
+	if s.rete.graphBeta != nil {
+		changes, ok, err := s.agenda.reconcileGraphTerminalRows(ctx, s.revision, s.rete.graphBeta, collectChanges)
+		if err != nil {
+			return nil, true, err
+		}
+		if ok {
+			phase := s.propagationCounterPhase()
+			if s.propagationCounters != nil {
+				s.propagationCounters.recordWholeTerminalScan(phase)
+			}
+			s.agendaReady = true
+			s.agendaDirty = false
+			if collectChanges {
+				s.applyAutoFocus(changes)
+				s.emitAgendaEvents(ctx, changes)
+			}
+			return changes, true, nil
+		}
+		return nil, true, fmt.Errorf("%w: direct graph terminal agenda build is unsupported for this graph shape", ErrUnsupportedRuntime)
+	}
+
 	tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
 	if err != nil {
 		return nil, true, err

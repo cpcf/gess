@@ -718,10 +718,10 @@ func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
 }
 
 func graphBetaTerminalTokenMemoryCapacity(rowCapacity int) int {
-	if rowCapacity <= 8 {
-		return rowCapacity
+	if rowCapacity <= 0 {
+		return 0
 	}
-	return max(8, rowCapacity/2)
+	return min(rowCapacity, 8)
 }
 
 func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {

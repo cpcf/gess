@@ -796,7 +796,7 @@ func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *
 	}
 }
 
-func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTerminalDeltasUnavailable(t *testing.T) {
+func TestSessionReconcileAgendaWithoutSnapshotUsesGraphTerminalRowsWhenTerminalDeltasUnavailable(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
 	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
@@ -813,35 +813,30 @@ func TestSessionReconcileAgendaWithoutSnapshotDoesNotMaterializeCandidatesWhenTe
 	if err != nil {
 		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)
 	}
-	if ok {
-		t.Fatalf("reconcileAgendaWithoutSnapshot = (%#v, true), want unavailable", changes)
-	}
-
-	changes, err = session.reconcileAgendaInternal(ctx)
-	if err != nil {
-		t.Fatalf("reconcileAgendaInternal: %v", err)
+	if !ok {
+		t.Fatalf("reconcileAgendaWithoutSnapshot unavailable, want graph terminal row reconcile")
 	}
 	if len(changes) == 0 {
-		t.Fatal("snapshot fallback produced no agenda changes")
+		t.Fatal("graph terminal row reconcile produced no agenda changes")
 	}
 	if !session.agendaReady || session.agendaDirty {
 		t.Fatalf("agenda state = ready %t dirty %t, want ready and clean", session.agendaReady, session.agendaDirty)
 	}
 
 	counters := session.propagationCounterSnapshot().Totals
-	if got, want := counters.FullAgendaReconciles, 1; got != want {
+	if got, want := counters.FullAgendaReconciles, 0; got != want {
 		t.Fatalf("full agenda reconciles = %d, want %d", got, want)
 	}
-	if got, want := counters.InitialAgendaReconciles, 1; got != want {
+	if got, want := counters.InitialAgendaReconciles, 0; got != want {
 		t.Fatalf("initial agenda reconciles = %d, want %d", got, want)
 	}
 	if got := counters.SteadyStateAgendaReconciles; got != 0 {
 		t.Fatalf("steady-state agenda reconciles = %d, want 0", got)
 	}
-	if got, want := counters.OracleStyleMatchRequests, 1; got != want {
+	if got, want := counters.OracleStyleMatchRequests, 0; got != want {
 		t.Fatalf("oracle-style match requests = %d, want %d", got, want)
 	}
-	if got, want := counters.InitialOracleStyleMatchRequests, 1; got != want {
+	if got, want := counters.InitialOracleStyleMatchRequests, 0; got != want {
 		t.Fatalf("initial oracle-style match requests = %d, want %d", got, want)
 	}
 	if got, want := counters.WholeTerminalScans, 1; got != want {
