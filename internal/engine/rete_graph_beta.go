@@ -225,7 +225,7 @@ type tokenHashMemory struct {
 	rows                 []graphTokenRow
 	rowHandles           []graphTokenRowHandleEntry
 	indexes              betaJoinTokenBucketTable
-	identityRows         graphTokenIdentityBucketTable
+	identityRows         tokenIdentityBucketTable
 	factRows             factTokenBucketTable
 	rowReserve           int
 	joinIndexReserve     int
@@ -1102,19 +1102,9 @@ func (m *tokenHashMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id g
 	if m == nil {
 		return
 	}
-	if graphTokenBucketNeedsGrow(m.identityRows.used+1, len(m.identityRows.entries)) {
-		m.identityRows.rehash(max(8, len(m.identityRows.entries)*2))
-	}
-	index, ok := m.identityRows.findInsert(key)
-	if !ok {
-		if m.identityRows.entries[index].state == graphTokenBucketEmpty {
-			m.identityRows.touched = append(m.identityRows.touched, index)
-			m.identityRows.used++
-		}
-		m.identityRows.entries[index] = graphTokenIdentityBucketEntry{key: key, state: graphTokenBucketFull}
-		m.identityRows.count++
-	}
-	m.appendBucketRow(&m.identityRows.entries[index].bucket, id)
+	bucket, _ := m.identityRows.get(key)
+	m.appendBucketRow(&bucket, id)
+	m.identityRows.set(key, bucket)
 }
 
 func (m *tokenHashMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {

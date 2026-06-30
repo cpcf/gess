@@ -483,7 +483,7 @@ func betaTokenMemoryRetainedBytes(memory tokenHashMemory) uint64 {
 	bytes += sliceBytes[graphTokenRowHandleEntry](cap(memory.rowHandles))
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinBucketTableBytes(memory.indexes)
-	bytes += graphTokenIdentityBucketTableBytes(memory.identityRows)
+	bytes += tokenIdentityBucketTableBytes(memory.identityRows)
 	bytes += factTokenBucketTableBytes(memory.factRows)
 	bytes += bucketRestFreeBytes(memory.bucketRestFree)
 	return bytes
@@ -501,9 +501,9 @@ func betaJoinBucketTableBytes(table betaJoinTokenBucketTable) uint64 {
 	return bytes
 }
 
-func graphTokenIdentityBucketTableBytes(table graphTokenIdentityBucketTable) uint64 {
+func tokenIdentityBucketTableBytes(table tokenIdentityBucketTable) uint64 {
 	var bytes uint64
-	bytes += sliceBytes[graphTokenIdentityBucketEntry](cap(table.entries))
+	bytes += sliceBytes[tokenIdentityBucketEntry](cap(table.entries))
 	bytes += sliceBytes[int](cap(table.touched))
 	for i := range table.entries {
 		if table.entries[i].state == graphTokenBucketFull {

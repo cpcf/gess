@@ -166,6 +166,166 @@ func (t *betaJoinTokenBucketTable) rehash(slotCapacity int) {
 	}
 }
 
+type tokenIdentityBucketEntry struct {
+	hash   uint64
+	bucket graphTokenRowIDBucket
+	state  uint8
+}
+
+type tokenIdentityBucketTable struct {
+	entries []tokenIdentityBucketEntry
+	touched []int
+	count   int
+	used    int
+}
+
+func (t *tokenIdentityBucketTable) reserve(capacity int) {
+	if capacity <= 0 {
+		return
+	}
+	t.rehash(graphTokenBucketSlotCapacity(capacity))
+}
+
+func (t *tokenIdentityBucketTable) isEmpty() bool {
+	return t == nil || t.count == 0
+}
+
+func (t *tokenIdentityBucketTable) keyCount() int {
+	if t == nil {
+		return 0
+	}
+	return t.count
+}
+
+func (t *tokenIdentityBucketTable) get(key tokenIdentityKey) (graphTokenRowIDBucket, bool) {
+	if t == nil || t.count == 0 || len(t.entries) == 0 {
+		return graphTokenRowIDBucket{}, false
+	}
+	index, ok := t.find(hashTokenIdentityBucketKey(key))
+	if !ok {
+		return graphTokenRowIDBucket{}, false
+	}
+	return t.entries[index].bucket, true
+}
+
+func (t *tokenIdentityBucketTable) set(key tokenIdentityKey, bucket graphTokenRowIDBucket) {
+	if t == nil {
+		return
+	}
+	if graphTokenBucketNeedsGrow(t.used+1, len(t.entries)) {
+		t.rehash(max(8, len(t.entries)*2))
+	}
+	hash := hashTokenIdentityBucketKey(key)
+	index, ok := t.findInsert(hash)
+	if ok {
+		t.entries[index].bucket = bucket
+		return
+	}
+	if t.entries[index].state == graphTokenBucketEmpty {
+		t.touched = append(t.touched, index)
+		t.used++
+	}
+	t.entries[index] = tokenIdentityBucketEntry{hash: hash, bucket: bucket, state: graphTokenBucketFull}
+	t.count++
+}
+
+func (t *tokenIdentityBucketTable) delete(key tokenIdentityKey) {
+	if t == nil || t.count == 0 {
+		return
+	}
+	index, ok := t.find(hashTokenIdentityBucketKey(key))
+	if !ok {
+		return
+	}
+	t.entries[index] = tokenIdentityBucketEntry{state: graphTokenBucketDeleted}
+	t.count--
+}
+
+func (t *tokenIdentityBucketTable) clear(recycle func([]graphTokenRowID)) {
+	if t == nil || len(t.entries) == 0 {
+		return
+	}
+	for _, index := range t.touched {
+		if index < 0 || index >= len(t.entries) {
+			continue
+		}
+		if t.entries[index].state == graphTokenBucketFull && recycle != nil {
+			recycle(t.entries[index].bucket.rest)
+		}
+		t.entries[index] = tokenIdentityBucketEntry{}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+}
+
+func (t *tokenIdentityBucketTable) find(hash uint64) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hash & mask)
+	for {
+		entry := t.entries[index]
+		if entry.state == graphTokenBucketEmpty {
+			return 0, false
+		}
+		if entry.state == graphTokenBucketFull && entry.hash == hash {
+			return index, true
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *tokenIdentityBucketTable) findInsert(hash uint64) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hash & mask)
+	firstDeleted := -1
+	for {
+		entry := t.entries[index]
+		switch entry.state {
+		case graphTokenBucketEmpty:
+			if firstDeleted >= 0 {
+				return firstDeleted, false
+			}
+			return index, false
+		case graphTokenBucketDeleted:
+			if firstDeleted < 0 {
+				firstDeleted = index
+			}
+		case graphTokenBucketFull:
+			if entry.hash == hash {
+				return index, true
+			}
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *tokenIdentityBucketTable) rehash(slotCapacity int) {
+	slotCapacity = graphTokenBucketPowerOfTwo(max(8, slotCapacity))
+	if slotCapacity <= len(t.entries) && t.used == t.count {
+		return
+	}
+	old := t.entries
+	t.entries = make([]tokenIdentityBucketEntry, slotCapacity)
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+	for i := range old {
+		if old[i].state == graphTokenBucketFull {
+			index, ok := t.findInsert(old[i].hash)
+			if ok {
+				t.entries[index].bucket = old[i].bucket
+				continue
+			}
+			if t.entries[index].state == graphTokenBucketEmpty {
+				t.touched = append(t.touched, index)
+				t.used++
+			}
+			t.entries[index] = old[i]
+			t.count++
+		}
+	}
+}
+
 type graphTokenIdentityBucketEntry struct {
 	key    graphTokenIdentityKey
 	bucket graphTokenRowIDBucket
@@ -486,12 +646,16 @@ func graphTokenBucketPowerOfTwo(value int) int {
 	return out
 }
 
-func hashGraphTokenIdentityBucketKey(key graphTokenIdentityKey) uint64 {
+func hashTokenIdentityBucketKey(key tokenIdentityKey) uint64 {
 	hash := uint64(0x9e3779b97f4a7c15)
 	hash = graphTokenBucketMixAdd(hash, uint64(key.size))
 	hash = graphTokenBucketMixAdd(hash, uint64(key.generation))
 	hash = graphTokenBucketMixAdd(hash, key.identityState)
 	return hash
+}
+
+func hashGraphTokenIdentityBucketKey(key graphTokenIdentityKey) uint64 {
+	return hashTokenIdentityBucketKey(key)
 }
 
 func hashFactTokenBucketKey(key FactID) uint64 {
