@@ -216,6 +216,8 @@ func (m *reteGraphBetaMemory) terminalMemoryOwnerDiagnostics() []RuntimeMemoryOw
 		ownerName := runtimeMemoryOwnerRuleTerminal
 		if node.kind == reteGraphTerminalQuery {
 			ownerName = runtimeMemoryOwnerQueryTerminal
+			addTerminalMemoryOwnerDiagnostics(owners[ownerName], terminal.queryRows)
+			continue
 		}
 		addTerminalMemoryOwnerDiagnostics(owners[ownerName], terminal.rows)
 	}
