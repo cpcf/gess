@@ -14,15 +14,19 @@ type terminalTokenMemory struct {
 }
 
 type terminalTokenRow struct {
-	handle         graphTokenRowHandle
-	token          tokenRef
-	identityHash   uint64
-	identityNext   graphTokenRowID
-	activation     activationHandle
-	supportCount   int
-	branchSupport  terminalBranchSupport
-	branchOverflow *terminalBranchSupportOverflow
-	branchCount    int
+	handle       graphTokenRowHandle
+	token        tokenRef
+	identityHash uint64
+	identityNext graphTokenRowID
+	activation   activationHandle
+	supportCount int
+	branches     *terminalBranchSupportState
+}
+
+type terminalBranchSupportState struct {
+	primary  terminalBranchSupport
+	overflow *terminalBranchSupportOverflow
+	count    int
 }
 
 type queryTerminalMemory struct {
@@ -44,16 +48,19 @@ type queryTerminalRow struct {
 }
 
 func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
-	return graphTokenRow{
-		handle:         r.handle,
-		token:          r.token,
-		identity:       r.token.identityKey(),
-		activation:     r.activation,
-		supportCount:   r.supportCount,
-		branchSupport:  r.branchSupport,
-		branchOverflow: r.branchOverflow,
-		branchCount:    r.branchCount,
+	row := graphTokenRow{
+		handle:       r.handle,
+		token:        r.token,
+		identity:     r.token.identityKey(),
+		activation:   r.activation,
+		supportCount: r.supportCount,
 	}
+	if r.branches != nil {
+		row.branchSupport = r.branches.primary
+		row.branchOverflow = r.branches.overflow
+		row.branchCount = r.branches.count
+	}
+	return row
 }
 
 func (r terminalTokenRow) isTerminal() bool {
@@ -61,48 +68,51 @@ func (r terminalTokenRow) isTerminal() bool {
 }
 
 func (r terminalTokenRow) terminalBranchOverflowItems() []terminalBranchSupport {
-	if r.branchOverflow == nil {
+	if r.branches == nil || r.branches.overflow == nil {
 		return nil
 	}
-	return r.branchOverflow.items
+	return r.branches.overflow.items
 }
 
 func (r *terminalTokenRow) addTerminalBranchSupport(branchID int) {
 	if r == nil || branchID < 0 {
 		return
 	}
-	if r.branchCount == 0 {
-		r.branchSupport = terminalBranchSupport{branchID: branchID, count: 1}
-		r.branchCount = 1
+	if r.branches == nil {
+		r.branches = &terminalBranchSupportState{}
+	}
+	if r.branches.count == 0 {
+		r.branches.primary = terminalBranchSupport{branchID: branchID, count: 1}
+		r.branches.count = 1
 		return
 	}
-	if r.branchSupport.branchID == branchID {
-		r.branchSupport.count++
+	if r.branches.primary.branchID == branchID {
+		r.branches.primary.count++
 		return
 	}
 	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
 		if overflow[i].branchID == branchID {
 			overflow[i].count++
 			return
 		}
 	}
-	if r.branchOverflow == nil {
-		r.branchOverflow = &terminalBranchSupportOverflow{}
+	if r.branches.overflow == nil {
+		r.branches.overflow = &terminalBranchSupportOverflow{}
 	}
-	r.branchOverflow.items = append(r.branchOverflow.items, terminalBranchSupport{branchID: branchID, count: 1})
-	r.branchCount++
+	r.branches.overflow.items = append(r.branches.overflow.items, terminalBranchSupport{branchID: branchID, count: 1})
+	r.branches.count++
 }
 
 func (r terminalTokenRow) hasTerminalBranchSupport(branchID int) bool {
-	if branchID < 0 || r.branchCount == 0 {
+	if branchID < 0 || r.branches == nil || r.branches.count == 0 {
 		return false
 	}
-	if r.branchSupport.branchID == branchID && r.branchSupport.count > 0 {
+	if r.branches.primary.branchID == branchID && r.branches.primary.count > 0 {
 		return true
 	}
 	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
 		support := overflow[i]
 		if support.branchID == branchID && support.count > 0 {
 			return true
@@ -112,19 +122,19 @@ func (r terminalTokenRow) hasTerminalBranchSupport(branchID int) bool {
 }
 
 func (r *terminalTokenRow) removeTerminalBranchSupport(branchID int) {
-	if r == nil || branchID < 0 || r.branchCount == 0 {
+	if r == nil || branchID < 0 || r.branches == nil || r.branches.count == 0 {
 		return
 	}
-	if r.branchSupport.branchID == branchID {
-		r.branchSupport.count--
-		if r.branchSupport.count > 0 {
+	if r.branches.primary.branchID == branchID {
+		r.branches.primary.count--
+		if r.branches.primary.count > 0 {
 			return
 		}
 		r.removeTerminalBranchSupportAt(0)
 		return
 	}
 	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
 		if overflow[i].branchID != branchID {
 			continue
 		}
@@ -138,15 +148,13 @@ func (r *terminalTokenRow) removeTerminalBranchSupport(branchID int) {
 }
 
 func (r *terminalTokenRow) removeTerminalBranchSupportAt(index int) {
-	if r == nil || index < 0 || index >= r.branchCount {
+	if r == nil || r.branches == nil || index < 0 || index >= r.branches.count {
 		return
 	}
 	overflow := r.terminalBranchOverflowItems()
-	overflowCount := min(r.branchCount-1, len(overflow))
-	if r.branchCount == 1 || overflowCount == 0 {
-		r.branchSupport = terminalBranchSupport{}
-		r.branchCount = 0
-		r.branchOverflow = nil
+	overflowCount := min(r.branches.count-1, len(overflow))
+	if r.branches.count == 1 || overflowCount == 0 {
+		r.branches = nil
 		return
 	}
 	if index > overflowCount {
@@ -157,23 +165,23 @@ func (r *terminalTokenRow) removeTerminalBranchSupportAt(index int) {
 	overflow[lastOverflow] = terminalBranchSupport{}
 	overflow = overflow[:lastOverflow]
 	if index == 0 {
-		r.branchSupport = last
+		r.branches.primary = last
 	} else if index-1 < len(overflow) {
 		overflow[index-1] = last
 	}
-	r.branchCount = overflowCount
+	r.branches.count = overflowCount
 	if len(overflow) == 0 {
-		r.branchOverflow = nil
+		r.branches.overflow = nil
 	} else {
-		r.branchOverflow.items = overflow
+		r.branches.overflow.items = overflow
 	}
 }
 
 func (r terminalTokenRow) terminalBranchIDs() []int {
-	if r.branchCount == 0 {
+	if r.branches == nil || r.branches.count == 0 {
 		return nil
 	}
-	out := make([]int, 0, r.branchCount)
+	out := make([]int, 0, r.branches.count)
 	r.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
 		if support.count <= 0 {
 			return
@@ -184,12 +192,12 @@ func (r terminalTokenRow) terminalBranchIDs() []int {
 }
 
 func (r terminalTokenRow) forEachTerminalBranchSupport(fn func(terminalBranchSupport)) {
-	if r.branchCount == 0 || fn == nil {
+	if r.branches == nil || r.branches.count == 0 || fn == nil {
 		return
 	}
-	fn(r.branchSupport)
+	fn(r.branches.primary)
 	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branchCount-1 && i < len(overflow); i++ {
+	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
 		fn(overflow[i])
 	}
 }

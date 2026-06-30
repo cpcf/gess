@@ -145,6 +145,10 @@ func (m *reteGraphTerminalMemory) singleBranch() bool {
 	return m != nil && m.branchCount == 1
 }
 
+func (m *reteGraphTerminalMemory) needsBranchSupport() bool {
+	return m != nil && m.branchCount > 1
+}
+
 type reteGraphAlphaFactSet struct {
 	inline   [4]FactID
 	overflow []FactID
@@ -5470,6 +5474,31 @@ func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactS
 	return delta, nil
 }
 
+func (m *reteGraphBetaMemory) recordRemovedTerminalRowBranches(counters *propagationCounterLedger, terminalID reteGraphTerminalNodeID, terminal *reteGraphTerminalMemory, row graphTokenRow) {
+	if counters == nil || terminal == nil {
+		return
+	}
+	if terminal.needsBranchSupport() {
+		row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+			if support.count <= 0 {
+				return
+			}
+			if key, ok := m.terminalBranchKey(terminalID, support.branchID); ok {
+				counters.recordTerminalDeltaRemovedForBranch(key)
+				counters.recordTerminalRowRemovedForBranch(key)
+			}
+		})
+		return
+	}
+	if !terminal.singleBranch() {
+		return
+	}
+	if key, ok := m.terminalBranchKey(terminalID, terminal.singleBranchID); ok {
+		counters.recordTerminalDeltaRemovedForBranch(key)
+		counters.recordTerminalRowRemovedForBranch(key)
+	}
+}
+
 func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagationCounterLedger) reteAgendaDelta {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}
@@ -5497,15 +5526,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
 				counters.recordTerminalRowRemoved()
-				row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
-					if support.count <= 0 {
-						return
-					}
-					if key, ok := m.terminalBranchKey(terminalNode.id, support.branchID); ok {
-						counters.recordTerminalDeltaRemovedForBranch(key)
-						counters.recordTerminalRowRemovedForBranch(key)
-					}
-				})
+				m.recordRemovedTerminalRowBranches(counters, terminalNode.id, terminal, row)
 			}
 		})
 		terminal.rows.removeContainingFact(id, counters)
@@ -6590,11 +6611,15 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	}
 	handle := graphTokenRowHandle{}
 	inserted := false
+	rowBranchID := branchID
+	if !terminal.needsBranchSupport() {
+		rowBranchID = -1
+	}
 	if m.initialAgenda != nil && terminal.singleBranch() {
-		handle = terminal.rows.insertFreshTerminalRow(token, branchID)
+		handle = terminal.rows.insertFreshTerminalRow(token, rowBranchID)
 		inserted = !handle.isZero()
 	} else {
-		handle, inserted = terminal.rows.insertTerminalRow(token, branchID)
+		handle, inserted = terminal.rows.insertTerminalRow(token, rowBranchID)
 	}
 	if !inserted {
 		if span != nil {
@@ -6675,15 +6700,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		if counters != nil {
 			counters.recordTerminalRowRemoved()
 			counters.recordTerminalDeltaRemoved()
-			row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
-				if support.count <= 0 {
-					return
-				}
-				if key, ok := m.terminalBranchKey(terminalID, support.branchID); ok {
-					counters.recordTerminalRowRemovedForBranch(key)
-					counters.recordTerminalDeltaRemovedForBranch(key)
-				}
-			})
+			m.recordRemovedTerminalRowBranches(counters, terminalID, terminal, row)
 		}
 	})
 }
@@ -6705,8 +6722,9 @@ func (m *reteGraphBetaMemory) removeTerminalTokenContainingFact(terminalID reteG
 			tokens = append(tokens, token)
 		})
 	} else {
+		needsBranchSupport := terminal.needsBranchSupport()
 		terminal.rows.forEachTokenContainingFact(id, nil, func(row graphTokenRow) {
-			if row.token.isZero() || !row.hasTerminalBranchSupport(branchID) {
+			if row.token.isZero() || (needsBranchSupport && !row.hasTerminalBranchSupport(branchID)) {
 				return
 			}
 			tokens = append(tokens, row.token)
@@ -7843,6 +7861,12 @@ func (m *reteGraphBetaMemory) terminalRowsRetainedByBranch() map[propagationBran
 		if terminal == nil {
 			continue
 		}
+		if terminal.singleBranch() {
+			if key, ok := m.terminalBranchKey(terminalNode.id, terminal.singleBranchID); ok {
+				retained[key] += terminal.rows.len()
+			}
+			continue
+		}
 		for _, row := range terminal.rows.rows {
 			if row.token.isZero() {
 				continue
@@ -7955,16 +7979,20 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 				diag.Rows = terminal.queryRows.len()
 			} else {
 				diag.Rows = terminal.rows.len()
-				for _, row := range terminal.rows.rows {
-					if row.token.isZero() {
-						continue
-					}
-					row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
-						if support.count <= 0 {
-							return
+				if terminal.singleBranch() {
+					diag.BranchRows[terminal.singleBranchID] = terminal.rows.len()
+				} else {
+					for _, row := range terminal.rows.rows {
+						if row.token.isZero() {
+							continue
 						}
-						diag.BranchRows[support.branchID]++
-					})
+						row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+							if support.count <= 0 {
+								return
+							}
+							diag.BranchRows[support.branchID]++
+						})
+					}
 				}
 			}
 		}
