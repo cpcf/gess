@@ -3919,11 +3919,9 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 		t.Fatalf("terminal memory = %#v, want one row", terminal)
 	}
 	row := terminal.rows.rows[0]
-	if row.terminalIdentity.isZero() {
-		t.Fatal("terminal row identity is zero")
-	}
-	if row.terminalIdentity != terminal.terminalTokenIdentity(row.token) {
-		t.Fatalf("terminal row identity = %#v, want token identity", row.terminalIdentity)
+	identity := terminal.terminalTokenIdentity(row.token)
+	if identity.isZero() {
+		t.Fatal("terminal token identity is zero")
 	}
 
 	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
@@ -3933,8 +3931,8 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if !ok || len(tokens) != 1 {
 		t.Fatalf("terminal tokens = %#v, ok=%v, want one", tokens, ok)
 	}
-	if tokens[0].identity != row.terminalIdentity {
-		t.Fatalf("terminal delta identity = %#v, want %#v", tokens[0].identity, row.terminalIdentity)
+	if tokens[0].identity != identity {
+		t.Fatalf("terminal delta identity = %#v, want %#v", tokens[0].identity, identity)
 	}
 
 	if got, want := len(session.agenda.pending), 1; got != want {
@@ -3944,8 +3942,8 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if !ok {
 		t.Fatal("pending activation not found")
 	}
-	if stored.identity != row.terminalIdentity {
-		t.Fatalf("activation identity = %#v, want terminal row identity %#v", stored.identity, row.terminalIdentity)
+	if stored.identity != identity {
+		t.Fatalf("activation identity = %#v, want terminal token identity %#v", stored.identity, identity)
 	}
 	if !stored.id.IsZero() {
 		t.Fatalf("stored activation ID = %q, want lazy zero ID", stored.id)

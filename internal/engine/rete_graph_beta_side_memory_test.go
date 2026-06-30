@@ -266,12 +266,11 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	}
 
 	var memory terminalTokenMemory
-	identity := candidateIdentity{generation: 1, count: 1}
-	firstHandle, inserted := memory.insertTerminalRow(firstToken, identity, 10)
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 10)
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	secondHandle, inserted := memory.insertTerminalRow(secondToken, identity, 20)
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 20)
 	if inserted {
 		t.Fatal("insertTerminalRow(equivalent second) returned true, want duplicate support")
 	}
@@ -331,11 +330,10 @@ func TestTerminalTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 
 	var memory terminalTokenMemory
-	identity := candidateIdentity{generation: 1, count: 1}
-	if _, inserted := memory.insertTerminalRow(firstToken, identity, 0); !inserted {
+	if _, inserted := memory.insertTerminalRow(firstToken, 0); !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	if _, inserted := memory.insertTerminalRow(secondToken, identity, 0); !inserted {
+	if _, inserted := memory.insertTerminalRow(secondToken, 0); !inserted {
 		t.Fatal("insertTerminalRow(colliding second) returned false")
 	}
 	if got, want := len(memory.rows), 2; got != want {
@@ -356,7 +354,7 @@ func TestTerminalTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
 
 	var memory terminalTokenMemory
-	handle, inserted := memory.insertTerminalRow(token, candidateIdentity{generation: 1, count: 1}, 0)
+	handle, inserted := memory.insertTerminalRow(token, 0)
 	if !inserted {
 		t.Fatal("insertTerminalRow returned false")
 	}
@@ -470,11 +468,11 @@ func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
 	var memory terminalTokenMemory
-	firstHandle, inserted := memory.insertTerminalRow(firstToken, candidateIdentity{generation: 1, count: 1}, 0)
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0)
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	secondHandle, inserted := memory.insertTerminalRow(secondToken, candidateIdentity{generation: 1, count: 1}, 0)
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0)
 	if !inserted {
 		t.Fatal("insertTerminalRow(second) returned false")
 	}

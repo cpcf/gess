@@ -282,17 +282,16 @@ type betaFactLinkRow struct {
 }
 
 type graphTokenRow struct {
-	handle           graphTokenRowHandle
-	token            tokenRef
-	joinKey          betaJoinKey
-	identity         graphTokenIdentityKey
-	identityNext     graphTokenRowID
-	terminalIdentity candidateIdentity
-	activation       activationHandle
-	supportCount     int
-	branchSupport    terminalBranchSupport
-	branchOverflow   *terminalBranchSupportOverflow
-	branchCount      int
+	handle         graphTokenRowHandle
+	token          tokenRef
+	joinKey        betaJoinKey
+	identity       graphTokenIdentityKey
+	identityNext   graphTokenRowID
+	activation     activationHandle
+	supportCount   int
+	branchSupport  terminalBranchSupport
+	branchOverflow *terminalBranchSupportOverflow
+	branchCount    int
 }
 
 type betaTokenRow struct {
@@ -325,14 +324,9 @@ type alphaFactOwnershipRow struct {
 	betaRows     []generatedBetaRowHandle
 }
 
-// Negative beta rows reuse supportCount for their blocker count; terminal rows
-// are distinguished by terminalIdentity and use supportCount for duplicate support.
+// Negative beta rows reuse supportCount for their blocker count.
 func (r graphTokenRow) negativeBlockerCount() int {
 	return r.supportCount
-}
-
-func (r graphTokenRow) isTerminal() bool {
-	return r.terminalIdentity.count > 0
 }
 
 func (r *graphTokenRow) incrementNegativeBlockerCount() int {
@@ -5484,7 +5478,7 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			m.appendRemovedTerminalDelta(&delta, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
-				identity:       row.terminalIdentity,
+				identity:       terminal.terminalTokenIdentity(row.token),
 				terminalID:     terminalNode.id,
 				terminalRow:    row.handle,
 				activation:     row.activation,
@@ -5888,7 +5882,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, e
 			terminalNode := m.terminalNode(terminal.terminalID)
 			collectUpdates := terminalNode != nil && terminalNode.kind == reteGraphTerminalRule
 			start := len(delta.updated)
-			delta.updated = terminalMemory.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, func(row graphTokenRow) (tokenRef, bool) {
+			delta.updated = terminalMemory.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, terminalMemory.terminalTokenIdentity, func(row graphTokenRow) (tokenRef, bool) {
 				return m.refreshTokenFactRefInPlaceCached(row.token, before.ID(), match.fact, cache)
 			})
 			if !collectUpdates {
@@ -6115,7 +6109,7 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, eve
 		}
 		collectUpdates := terminalNode.kind == reteGraphTerminalRule
 		start := len(delta.updated)
-		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, refresh)
+		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, terminal.terminalTokenIdentity, refresh)
 		if !collectUpdates {
 			continue
 		}
@@ -6243,7 +6237,7 @@ func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, event 
 		}
 		collectUpdates := terminalNode.kind == reteGraphTerminalRule
 		start := len(delta.updated)
-		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, refresh)
+		delta.updated = terminal.rows.refreshTerminalTokensContainingFact(before.ID(), delta.updated, collectUpdates, terminal.terminalTokenIdentity, refresh)
 		if !collectUpdates {
 			continue
 		}
@@ -6554,15 +6548,14 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	}
 	ruleRevisionID := terminal.ruleRevisionID
 	ruleTerminal := ruleRevisionID != ""
-	identity := terminal.terminalTokenIdentity(token)
 	branchKey, haveBranchKey := m.terminalBranchKey(terminalID, branchID)
 	handle := graphTokenRowHandle{}
 	inserted := false
 	if m.initialAgenda != nil && terminal.singleBranch() {
-		handle = terminal.rows.insertFreshTerminalRow(token, identity, branchID)
+		handle = terminal.rows.insertFreshTerminalRow(token, branchID)
 		inserted = !handle.isZero()
 	} else {
-		handle, inserted = terminal.rows.insertTerminalRow(token, identity, branchID)
+		handle, inserted = terminal.rows.insertTerminalRow(token, branchID)
 	}
 	if !inserted {
 		if span != nil {
@@ -6588,6 +6581,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	if !ruleTerminal {
 		return handle, true
 	}
+	identity := terminal.terminalTokenIdentity(token)
 	added := reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
@@ -6626,7 +6620,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 			m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 				ruleRevisionID: ruleRevisionID,
 				token:          row.token,
-				identity:       row.terminalIdentity,
+				identity:       terminal.terminalTokenIdentity(row.token),
 				terminalID:     terminalID,
 				terminalRow:    row.handle,
 				activation:     row.activation,
@@ -6691,7 +6685,7 @@ func (m *reteGraphBetaMemory) removeTerminalToken(terminalID reteGraphTerminalNo
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
-			identity:       removed.terminalIdentity,
+			identity:       terminal.terminalTokenIdentity(removed.token),
 			terminalID:     terminalID,
 			terminalRow:    removed.handle,
 			activation:     removed.activation,
@@ -6733,7 +6727,7 @@ func (m *reteGraphBetaMemory) removeTerminalTokenByHandle(terminalID reteGraphTe
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
-			identity:       removed.terminalIdentity,
+			identity:       terminal.terminalTokenIdentity(removed.token),
 			terminalID:     terminalID,
 			terminalRow:    removed.handle,
 			activation:     removed.activation,
@@ -6785,7 +6779,7 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
-				identity:       row.terminalIdentity,
+				identity:       terminal.terminalTokenIdentity(row.token),
 				terminalID:     terminalNode.id,
 				terminalRow:    row.handle,
 				activation:     row.activation,
