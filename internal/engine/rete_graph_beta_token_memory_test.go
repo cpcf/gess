@@ -457,7 +457,7 @@ func TestTokenHashMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
+func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -466,7 +466,7 @@ func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory tokenHashMemory
+	var memory terminalTokenMemory
 	firstHandle, inserted := memory.insertTerminalRow(firstToken, candidateIdentity{generation: 1, count: 1}, 0)
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
@@ -474,9 +474,6 @@ func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
 	secondHandle, inserted := memory.insertTerminalRow(secondToken, candidateIdentity{generation: 1, count: 1}, 0)
 	if !inserted {
 		t.Fatal("insertTerminalRow(second) returned false")
-	}
-	if got := memory.indexes.keyCount(); got != 0 {
-		t.Fatalf("terminal memory join index keys = %d, want 0", got)
 	}
 	memory.ensureFactRows()
 
@@ -498,11 +495,8 @@ func TestTokenHashMemoryTerminalHandleRemovalRepairsMovedRow(t *testing.T) {
 	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(0) {
 		t.Fatalf("moved terminal row id = %d, ok=%v, want 0 and true", got, ok)
 	}
-	if !memory.containsExactToken(secondToken) {
-		t.Fatal("moved terminal row is missing from identity index")
-	}
-	if got := memory.indexes.keyCount(); got != 0 {
-		t.Fatalf("terminal memory join index keys after removal = %d, want 0", got)
+	if removed, ok := memory.removeToken(secondToken, nil, 0); !ok || !tokenRefEqual(removed.token, secondToken) {
+		t.Fatalf("moved terminal row removal = (%#v, %v), want second token", removed, ok)
 	}
 	snapshot := counters.snapshot()
 	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
