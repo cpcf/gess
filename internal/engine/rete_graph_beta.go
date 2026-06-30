@@ -7809,7 +7809,7 @@ func (m *reteGraphBetaMemory) rowCount() int {
 	}
 	for _, terminal := range m.terminals {
 		if terminal != nil {
-			total += len(terminal.rows.rows)
+			total += terminal.rows.len()
 			total += terminal.queryRows.len()
 		}
 	}
@@ -7823,7 +7823,7 @@ func (m *reteGraphBetaMemory) terminalRowCount() int {
 	total := 0
 	for _, terminal := range m.terminals {
 		if terminal != nil {
-			total += len(terminal.rows.rows)
+			total += terminal.rows.len()
 			total += terminal.queryRows.len()
 		}
 	}
@@ -7954,7 +7954,7 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 			if node.kind == reteGraphTerminalQuery {
 				diag.Rows = terminal.queryRows.len()
 			} else {
-				diag.Rows = len(terminal.rows.rows)
+				diag.Rows = terminal.rows.len()
 				for _, row := range terminal.rows.rows {
 					if row.token.isZero() {
 						continue
@@ -7986,7 +7986,7 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaSideMemory) {
 		return
 	}
 	s.TokenMemories++
-	rowCount := len(memory.rows)
+	rowCount := memory.len()
 	rowCapacity := cap(memory.rows)
 	s.TokenRows += rowCount
 	s.TokenRowCapacity += rowCapacity
@@ -8018,7 +8018,7 @@ func (s *reteGraphBetaMemoryStats) addTerminalTokenMemory(memory terminalTokenMe
 		return
 	}
 	s.TokenMemories++
-	rowCount := len(memory.rows)
+	rowCount := memory.len()
 	rowCapacity := cap(memory.rows)
 	s.TokenRows += rowCount
 	s.TokenRowCapacity += rowCapacity

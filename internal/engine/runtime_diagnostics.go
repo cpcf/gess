@@ -547,7 +547,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 		return 0
 	}
 	highWater := 0
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree", "factLinks", "freeFactLinks"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree", "factLinks", "freeFactLinks"} {
 		highWater += reflectSliceCap(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
@@ -580,7 +580,7 @@ func reflectTokenMemoryRetainedBytes(memory any) uint64 {
 		return 0
 	}
 	var bytes uint64
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree", "factLinks", "freeFactLinks"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree", "factLinks", "freeFactLinks"} {
 		bytes += reflectSliceBytes(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {

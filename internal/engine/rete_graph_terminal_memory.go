@@ -2,15 +2,15 @@ package engine
 
 type terminalTokenMemory struct {
 	rows                 []terminalTokenRow
-	rowHandles           []graphTokenRowHandleEntry
 	identityRows         tokenIdentityHeadTable
 	factRows             factTokenBucketTable
+	freeRowIDs           []graphTokenRowID
+	liveRows             int
 	rowReserve           int
 	identityIndexReserve int
 	factIndexReserve     int
 	factRowsDirty        bool
 	bucketRestFree       [][]graphTokenRowID
-	freeRowHandles       []graphTokenRowHandleID
 }
 
 type terminalTokenRow struct {
@@ -209,7 +209,6 @@ func (m *terminalTokenMemory) reserveRows(rowCapacity int) {
 	rows := make([]terminalTokenRow, len(m.rows), rowCapacity)
 	copy(rows, m.rows)
 	m.rows = rows
-	m.reserveRowHandles(rowCapacity)
 	m.rowReserve = max(m.rowReserve, rowCapacity)
 }
 
@@ -224,24 +223,7 @@ func (m *terminalTokenMemory) ensureRowCapacity(rowCapacity int) {
 	rows := make([]terminalTokenRow, len(m.rows), nextCapacity)
 	copy(rows, m.rows)
 	m.rows = rows
-	m.reserveRowHandles(nextCapacity)
 	m.rowReserve = max(m.rowReserve, nextCapacity)
-}
-
-func (m *terminalTokenMemory) reserveRowHandles(rowCapacity int) {
-	if m == nil {
-		return
-	}
-	if rowCapacity > cap(m.rowHandles) {
-		handles := make([]graphTokenRowHandleEntry, len(m.rowHandles), rowCapacity)
-		copy(handles, m.rowHandles)
-		m.rowHandles = handles
-	}
-	if rowCapacity > cap(m.freeRowHandles) {
-		free := make([]graphTokenRowHandleID, len(m.freeRowHandles), rowCapacity)
-		copy(free, m.freeRowHandles)
-		m.freeRowHandles = free
-	}
 }
 
 func (m *terminalTokenMemory) reserveIndexes(_ int, identityCapacity int, factCapacity int) {
@@ -264,44 +246,53 @@ func (m *terminalTokenMemory) clear() {
 	if m == nil {
 		return
 	}
-	m.invalidateRowHandles()
+	m.freeRowIDs = m.freeRowIDs[:0]
 	for i := range m.rows {
-		m.rows[i] = terminalTokenRow{}
+		m.clearRowForReuse(graphTokenRowID(i))
 	}
-	m.rows = m.rows[:0]
+	m.liveRows = 0
 	m.identityRows.clear()
 	m.factRows.clear(m.recycleBucketRest)
 	m.factRowsDirty = false
 }
 
 func (m *terminalTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRowHandle {
-	if m == nil || rowID < 0 {
+	if m == nil || rowID < 0 || int(rowID) >= len(m.rows) {
 		return graphTokenRowHandle{}
 	}
-	if len(m.freeRowHandles) > 0 {
-		last := len(m.freeRowHandles) - 1
-		id := m.freeRowHandles[last]
-		m.freeRowHandles[last] = 0
-		m.freeRowHandles = m.freeRowHandles[:last]
-		index := int(id - 1)
-		if id != 0 && index >= 0 && index < len(m.rowHandles) {
-			entry := &m.rowHandles[index]
-			if entry.generation == 0 {
-				entry.generation = 1
-			}
-			entry.rowID = rowID
-			entry.live = true
-			return graphTokenRowHandle{id: id, generation: entry.generation}
+	if uint64(rowID) >= uint64(^uint32(0)) {
+		return graphTokenRowHandle{}
+	}
+	row := &m.rows[int(rowID)]
+	if row.handle.generation == 0 {
+		row.handle.generation = 1
+	}
+	row.handle.id = graphTokenRowHandleID(uint32(rowID) + 1)
+	m.liveRows++
+	return row.handle
+}
+
+func (m *terminalTokenMemory) allocateRowID() graphTokenRowID {
+	if m == nil {
+		return -1
+	}
+	for len(m.freeRowIDs) > 0 {
+		last := len(m.freeRowIDs) - 1
+		rowID := m.freeRowIDs[last]
+		m.freeRowIDs[last] = 0
+		m.freeRowIDs = m.freeRowIDs[:last]
+		if rowID < 0 || int(rowID) >= len(m.rows) {
+			continue
 		}
+		if !m.rows[int(rowID)].token.isZero() {
+			continue
+		}
+		return rowID
 	}
-	id := graphTokenRowHandleID(len(m.rowHandles) + 1)
-	entry := graphTokenRowHandleEntry{
-		rowID:      rowID,
-		generation: 1,
-		live:       true,
-	}
-	m.rowHandles = append(m.rowHandles, entry)
-	return graphTokenRowHandle{id: id, generation: entry.generation}
+	rowID := graphTokenRowID(len(m.rows))
+	m.ensureRowCapacity(int(rowID) + 1)
+	m.rows = m.rows[:int(rowID)+1]
+	return rowID
 }
 
 func (m *terminalTokenMemory) rowByHandle(handle graphTokenRowHandle) *terminalTokenRow {
@@ -317,69 +308,27 @@ func (m *terminalTokenMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTo
 		return 0, false
 	}
 	index := handle.index()
-	if index < 0 || index >= len(m.rowHandles) {
+	if index < 0 || index >= len(m.rows) {
 		return 0, false
 	}
-	entry := m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation || entry.rowID < 0 {
+	row := &m.rows[index]
+	if row.token.isZero() || row.handle != handle {
 		return 0, false
 	}
-	return entry.rowID, true
+	return graphTokenRowID(index), true
 }
 
-func (m *terminalTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
-	if m == nil || handle.isZero() || rowID < 0 {
+func (m *terminalTokenMemory) clearRowForReuse(rowID graphTokenRowID) {
+	if m == nil || rowID < 0 || int(rowID) >= len(m.rows) {
 		return
 	}
-	index := handle.index()
-	if index < 0 || index >= len(m.rowHandles) {
-		return
+	row := &m.rows[int(rowID)]
+	generation := row.handle.generation + 1
+	if generation == 0 {
+		generation = 1
 	}
-	entry := &m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation {
-		return
-	}
-	entry.rowID = rowID
-}
-
-func (m *terminalTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
-	if m == nil || handle.isZero() {
-		return
-	}
-	index := handle.index()
-	if index < 0 || index >= len(m.rowHandles) {
-		return
-	}
-	entry := &m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation {
-		return
-	}
-	entry.live = false
-	entry.rowID = -1
-	entry.generation++
-	if entry.generation == 0 {
-		entry.generation = 1
-	}
-	m.freeRowHandles = append(m.freeRowHandles, handle.id)
-}
-
-func (m *terminalTokenMemory) invalidateRowHandles() {
-	if m == nil || len(m.rowHandles) == 0 {
-		return
-	}
-	m.freeRowHandles = m.freeRowHandles[:0]
-	for index := range m.rowHandles {
-		entry := &m.rowHandles[index]
-		if entry.live {
-			entry.generation++
-			if entry.generation == 0 {
-				entry.generation = 1
-			}
-		}
-		entry.live = false
-		entry.rowID = -1
-		m.freeRowHandles = append(m.freeRowHandles, graphTokenRowHandleID(index+1))
-	}
+	*row = terminalTokenRow{handle: graphTokenRowHandle{id: graphTokenRowHandleID(uint32(rowID) + 1), generation: generation}}
+	m.freeRowIDs = append(m.freeRowIDs, rowID)
 }
 
 func (m *terminalTokenMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id graphTokenRowID) {
@@ -462,7 +411,7 @@ func (m *terminalTokenMemory) len() int {
 	if m == nil {
 		return 0
 	}
-	return len(m.rows)
+	return m.liveRows
 }
 
 func (m *terminalTokenMemory) row(rowID graphTokenRowID) *terminalTokenRow {
@@ -481,10 +430,11 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 		return graphTokenRowHandle{}
 	}
 	identity := tokenRefKey(token)
-	rowID := graphTokenRowID(len(m.rows))
-	m.ensureRowCapacity(int(rowID) + 1)
+	rowID := m.allocateRowID()
+	if rowID < 0 {
+		return graphTokenRowHandle{}
+	}
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
-	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
 		handle:       handle,
@@ -527,10 +477,11 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int) (g
 		return row.handle, false
 	}
 
-	rowID := graphTokenRowID(len(m.rows))
-	m.ensureRowCapacity(int(rowID) + 1)
+	rowID := m.allocateRowID()
+	if rowID < 0 {
+		return graphTokenRowHandle{}, false
+	}
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
-	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
 		handle:       handle,
@@ -788,22 +739,10 @@ func (m *terminalTokenMemory) removeRow(rowID graphTokenRowID, counters *propaga
 	if !m.factRowsDirty {
 		m.removeTokenFacts(removed.token, rowID)
 	}
-	last := len(m.rows) - 1
-	if index != last {
-		moved := m.rows[last]
-		m.rows[index] = moved
-		m.moveRowHandle(moved.handle, rowID)
-		if counters != nil {
-			counters.recordRemovalRowMoved()
-		}
-		m.replaceIdentityHashIndexRow(moved.identityHash, graphTokenRowID(last), rowID)
-		if !m.factRowsDirty {
-			m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
-		}
+	m.clearRowForReuse(rowID)
+	if m.liveRows > 0 {
+		m.liveRows--
 	}
-	m.releaseRowHandle(removed.handle)
-	m.rows[last] = terminalTokenRow{}
-	m.rows = m.rows[:last]
 	if counters != nil {
 		counters.recordRemovalRowRemoved()
 	}

@@ -458,14 +458,17 @@ func TestBetaSideMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	}
 }
 
-func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
+func TestTerminalTokenMemoryHandlesUseRowGenerationWithoutMove(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	thirdFact := FactSnapshot{id: newFactID(1, 3), version: 1, recency: 3, generation: 1}
 	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
 	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	thirdEntry := bindingTupleEntry{bindingSlot: 0, factID: thirdFact.ID(), factVersion: thirdFact.Version()}
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+	thirdToken := arena.add(tokenRef{}, thirdEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(thirdFact)}, thirdFact.Recency(), thirdFact.Generation())
 
 	var memory terminalTokenMemory
 	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0)
@@ -489,21 +492,34 @@ func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
 	if row := memory.rowByHandle(firstHandle); row != nil {
 		t.Fatalf("removed terminal handle resolved to %#v", row)
 	}
-	moved := memory.rowByHandle(secondHandle)
-	if moved == nil {
-		t.Fatal("moved terminal row handle did not resolve")
+	remaining := memory.rowByHandle(secondHandle)
+	if remaining == nil {
+		t.Fatal("remaining terminal row handle did not resolve")
 	}
-	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(0) {
-		t.Fatalf("moved terminal row id = %d, ok=%v, want 0 and true", got, ok)
+	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(1) {
+		t.Fatalf("remaining terminal row id = %d, ok=%v, want 1 and true", got, ok)
+	}
+	thirdHandle, inserted := memory.insertTerminalRow(thirdToken, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow(third) returned false")
+	}
+	if thirdHandle.id != firstHandle.id || thirdHandle.generation == firstHandle.generation {
+		t.Fatalf("reused handle = %#v after removed handle %#v, want same id and new generation", thirdHandle, firstHandle)
+	}
+	if row := memory.rowByHandle(firstHandle); row != nil {
+		t.Fatalf("stale removed terminal handle resolved after reuse to %#v", row)
+	}
+	if row := memory.rowByHandle(thirdHandle); row == nil || !tokenRefEqual(row.token, thirdToken) {
+		t.Fatalf("reused terminal handle resolved to %#v, want third token", row)
 	}
 	if removed, ok := memory.removeToken(secondToken, nil, 0); !ok || !tokenRefEqual(removed.token, secondToken) {
-		t.Fatalf("moved terminal row removal = (%#v, %v), want second token", removed, ok)
+		t.Fatalf("remaining terminal row removal = (%#v, %v), want second token", removed, ok)
 	}
 	snapshot := counters.snapshot()
 	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsMoved, 0; got != want {
 		t.Fatalf("removal rows moved = %d, want %d", got, want)
 	}
 }
