@@ -365,14 +365,14 @@ func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, b
 		return Value{}, false
 	}
 	slot, ok := template.fieldSlot(field)
-	if !ok || slot < 0 || slot >= len(fact.fieldSlots) {
+	if !ok || slot < 0 {
 		return Value{}, false
 	}
-	resolved := fact.fieldSlots[slot]
-	if !resolved.ok || !valueShareable(resolved.value) {
+	value, ok := fact.compiledFieldValue(field, slot)
+	if !ok || !valueShareable(value) {
 		return Value{}, false
 	}
-	return resolved.value, true
+	return value, true
 }
 
 func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value, bool) {
@@ -387,14 +387,14 @@ func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value
 	if !ok || fact == nil {
 		return Value{}, false
 	}
-	if fact.id.Generation() != c.generation || fact.version != entry.factVersion || fieldSlot >= len(fact.fieldSlots) {
+	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return Value{}, false
 	}
-	resolved := fact.fieldSlots[fieldSlot]
-	if !resolved.ok || !valueShareable(resolved.value) {
+	value, ok := fact.compiledFieldValue("", fieldSlot)
+	if !ok || !valueShareable(value) {
 		return Value{}, false
 	}
-	return resolved.value, true
+	return value, true
 }
 
 func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) {
@@ -1394,6 +1394,61 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
+	if action.insertPlan.compactSlots {
+		slots, slotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(action.template.fields))
+		inserter := preparedTemplateValueInserter{template: action.template}
+
+		if !activation.token.isZero() {
+			for i, valueSpec := range action.tokenValues {
+				value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token)
+				if err != nil {
+					state.rollbackGeneratedCompactFactSlots(slotMark)
+					return err
+				}
+				if err := inserter.setPreparedCompactSlot(slots, i, value); err != nil {
+					state.rollbackGeneratedCompactFactSlots(slotMark)
+					return err
+				}
+			}
+		} else {
+			matches, err := s.actionMatchesForActivation(activation, rule)
+			if err != nil {
+				state.rollbackGeneratedCompactFactSlots(slotMark)
+				return err
+			}
+			for i, expression := range action.values {
+				value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+				if evalErr != nil {
+					state.rollbackGeneratedCompactFactSlots(slotMark)
+					return evalErr
+				}
+				if !ok {
+					state.rollbackGeneratedCompactFactSlots(slotMark)
+					return fmt.Errorf("%w: native assert value %d is unavailable", ErrMatcher, i)
+				}
+				if err := inserter.setPreparedCompactSlot(slots, i, value); err != nil {
+					state.rollbackGeneratedCompactFactSlots(slotMark)
+					return err
+				}
+			}
+		}
+
+		inserted, agendaDelta, err := s.insertRuleActionGeneratedCompactFactSlotsImmediate(ctx, &state, &action.insertPlan, slots, mark, slotMark, origin)
+		if err != nil {
+			return err
+		}
+		if inserted && action.insertPlan.affectsRete {
+			if !s.canMutateDuringRun(origin) {
+				_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
+				return err
+			}
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(action.template.fields))
 	inserter := preparedTemplateValueInserter{template: action.template}
 

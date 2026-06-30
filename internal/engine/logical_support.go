@@ -246,15 +246,15 @@ func (s *Session) updateFactSupportState(fact *workingFact) {
 	switch {
 	case before == FactSupportStated || before == FactSupportStatedAndLogical:
 		if logical {
-			fact.supportState = FactSupportStatedAndLogical
+			fact.setSupportState(FactSupportStatedAndLogical)
 		} else {
-			fact.supportState = FactSupportStated
+			fact.setSupportState(FactSupportStated)
 		}
 	default:
 		if logical {
-			fact.supportState = FactSupportLogical
+			fact.setSupportState(FactSupportLogical)
 		} else {
-			fact.supportState = FactSupportLogical
+			fact.setSupportState(FactSupportLogical)
 		}
 	}
 	if before != fact.resolvedSupportState() {
@@ -264,7 +264,7 @@ func (s *Session) updateFactSupportState(fact *workingFact) {
 
 func (s *Session) makeFactLogicalOnly(fact *workingFact) {
 	if fact != nil {
-		fact.supportState = FactSupportLogical
+		fact.setSupportState(FactSupportLogical)
 	}
 }
 
@@ -272,7 +272,7 @@ func (s *Session) addStatedSupportToFact(fact *workingFact) bool {
 	if s == nil || fact == nil || fact.resolvedSupportState() != FactSupportLogical {
 		return false
 	}
-	fact.supportState = FactSupportStatedAndLogical
+	fact.setSupportState(FactSupportStatedAndLogical)
 	s.logicalSupportCounters.MetadataOnlyTransitions++
 	return true
 }
@@ -281,7 +281,7 @@ func (s *Session) removeStatedSupportFromFact(fact *workingFact) bool {
 	if s == nil || fact == nil || fact.resolvedSupportState() != FactSupportStatedAndLogical {
 		return false
 	}
-	fact.supportState = FactSupportLogical
+	fact.setSupportState(FactSupportLogical)
 	s.logicalSupportCounters.MetadataOnlyTransitions++
 	return true
 }
@@ -396,7 +396,7 @@ func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources [
 					nextSources = append(nextSources, logicalSupportSourceFromActivation(activation))
 				}
 			} else if fact.resolvedSupportState() == FactSupportStatedAndLogical && !s.factHasLogicalSupport(factID) {
-				fact.supportState = FactSupportStated
+				fact.setSupportState(FactSupportStated)
 				s.logicalSupportCounters.MetadataOnlyTransitions++
 			}
 		}

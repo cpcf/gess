@@ -4952,7 +4952,6 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 			path:             activation.path(),
 			maxRecency:       activation.maxRecency,
 			aggregateRecency: activation.aggregateRecency,
-			declarationOrder: activation.declarationOrder,
 			salience:         activation.salience,
 		}
 	}
@@ -5121,7 +5120,6 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 			path:             activation.path(),
 			maxRecency:       activation.maxRecency,
 			aggregateRecency: activation.aggregateRecency,
-			declarationOrder: activation.declarationOrder,
 			salience:         activation.salience,
 		}
 	}

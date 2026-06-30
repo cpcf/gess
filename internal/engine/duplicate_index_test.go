@@ -154,7 +154,7 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			if internal == nil {
 				t.Fatal("missing stored fact")
 			}
-			if got := internal.dupIndex.kind; got != tc.wantIndex {
+			if got := internal.duplicateIndex().kind; got != tc.wantIndex {
 				t.Fatalf("duplicate index kind = %v, want %v", got, tc.wantIndex)
 			}
 
@@ -202,7 +202,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	if internal == nil {
 		t.Fatal("missing stored fact")
 	}
-	if got := internal.dupIndex.kind; got != duplicateIndexString {
+	if got := internal.duplicateIndex().kind; got != duplicateIndexString {
 		t.Fatalf("NaN duplicate index kind = %v, want %v", got, duplicateIndexString)
 	}
 
@@ -287,14 +287,14 @@ func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testin
 	otherID := newFactID(1, 2)
 
 	workspace := newFactWorkspace(1, 2)
-	workspace.storeFact(workingFact{id: otherID, name: "response", templateKey: "response", dupIndex: otherKey})
+	workspace.storeFact(workingFact{id: otherID, name: "response", templateKey: "response", dupIndex: workingFactDuplicateIndex(otherKey)})
 	workspace.factsByDuplicate.string2Int.setHash(hashDuplicateStringStringIntIndexKey(requestedKey), otherID)
 
 	if got, ok := workspace.duplicateFactID(requestedKey); ok {
 		t.Fatalf("lookup with hash collision = (%q, %t), want missing", got, ok)
 	}
 
-	workspace.storeFact(workingFact{id: requestedID, name: "response", templateKey: "response", dupIndex: requestedKey})
+	workspace.storeFact(workingFact{id: requestedID, name: "response", templateKey: "response", dupIndex: workingFactDuplicateIndex(requestedKey)})
 	workspace.factsByDuplicate.set(requestedKey, requestedID)
 
 	if got, ok := workspace.duplicateFactID(requestedKey); !ok || got != requestedID {

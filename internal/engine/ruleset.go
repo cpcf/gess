@@ -523,8 +523,9 @@ type Ruleset struct {
 }
 
 type generatedAssertReserve struct {
-	facts int
-	slots int
+	facts        int
+	slots        int
+	compactSlots int
 }
 
 func (r *Ruleset) hasAutoFocusRules() bool {
@@ -571,7 +572,12 @@ func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevision
 				continue
 			}
 			reserve.facts++
-			reserve.slots += len(action.assertTemplateValues.template.fields)
+			fields := len(action.assertTemplateValues.template.fields)
+			if templateSupportsCompactGeneratedSlots(action.assertTemplateValues.template) {
+				reserve.compactSlots += fields
+			} else {
+				reserve.slots += fields
+			}
 		}
 		if reserve.facts != 0 {
 			out[rule.revisionID] = reserve
@@ -581,6 +587,20 @@ func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevision
 		return nil
 	}
 	return out
+}
+
+func templateSupportsCompactGeneratedSlots(template Template) bool {
+	if !template.closed || len(template.fields) == 0 {
+		return false
+	}
+	for _, field := range template.fields {
+		switch field.Kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID]generatedAssertReserve {
@@ -600,6 +620,9 @@ func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, co
 		if !plan.valid() {
 			continue
 		}
+		_, ruleNameTargeted := conditionNames[plan.name]
+		_, queryNameTargeted := queryConditionNames[plan.name]
+		plan.storeName = ruleNameTargeted || queryNameTargeted
 		plan.affectsRuleMatches = targetMayAffectConditions(plan.name, plan.templateKey, conditionTemplateKeys, conditionNames)
 		plan.affectsRete = plan.affectsRuleMatches || targetMayAffectConditions(plan.name, plan.templateKey, queryConditionTemplateKeys, queryConditionNames)
 		out[key] = &plan
@@ -625,6 +648,7 @@ func annotateGeneratedFactInsertPlansOnRules(rules []compiledRule, byName map[st
 			}
 			action.assertTemplateValues.insertPlan.affectsRuleMatches = plan.affectsRuleMatches
 			action.assertTemplateValues.insertPlan.affectsRete = plan.affectsRete
+			action.assertTemplateValues.insertPlan.storeName = plan.storeName
 			changed = true
 		}
 		if !changed {

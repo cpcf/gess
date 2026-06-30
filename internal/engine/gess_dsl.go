@@ -190,7 +190,7 @@ func (l *gessLoader) loadTemplate(form gessSExpr) error {
 		return l.err(form.Span, "deftemplate requires a template name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	spec := TemplateSpec{Name: name, Module: module}
+	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow}
 	for _, item := range form.List[2:] {
 		switch item.Head() {
 		case "declare":

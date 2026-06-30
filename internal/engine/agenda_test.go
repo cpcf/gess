@@ -1415,42 +1415,37 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 	}
 }
 
-func TestActivationLessOrdersBySalienceRecencyDeclarationAndID(t *testing.T) {
+func TestActivationLessOrdersBySalienceRecencyAndID(t *testing.T) {
 	acts := []activation{
 		{
 			id:               ActivationID("z"),
 			salience:         20,
 			maxRecency:       1,
 			aggregateRecency: 1,
-			declarationOrder: 0,
 		},
 		{
 			id:               ActivationID("y"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 9,
-			declarationOrder: 0,
 		},
 		{
 			id:               ActivationID("x"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			declarationOrder: 0,
 		},
 		{
 			id:               ActivationID("b"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			declarationOrder: 1,
 		},
 		{
 			id:               ActivationID("a"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			declarationOrder: 1,
 		},
 	}
 
@@ -1459,7 +1454,7 @@ func TestActivationLessOrdersBySalienceRecencyDeclarationAndID(t *testing.T) {
 	})
 
 	got := []ActivationID{acts[0].id, acts[1].id, acts[2].id, acts[3].id, acts[4].id}
-	want := []ActivationID{"z", "y", "x", "a", "b"}
+	want := []ActivationID{"z", "y", "a", "b", "x"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("sorted activation %d = %q, want %q", i, got[i], want[i])
@@ -1472,7 +1467,6 @@ func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
 		salience:         10,
 		maxRecency:       9,
 		aggregateRecency: 8,
-		declarationOrder: 1,
 	}
 	tests := []struct {
 		name  string

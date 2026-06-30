@@ -30,8 +30,8 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.dupIndex.kind != duplicateIndexSingleScalar {
-		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndex().kind != duplicateIndexSingleScalar {
+		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndex().kind, duplicateIndexSingleScalar)
 	}
 	if got, want := len(mustSnapshot(t, context.Background(), session).Facts()), 1; got != want {
 		t.Fatalf("snapshot length = %d, want %d", got, want)
@@ -767,8 +767,8 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	}
 
 	firstFact := resetFact("settings-1")
-	if firstFact.dupIndex.kind != duplicateIndexSingleScalar {
-		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.dupIndex.kind, duplicateIndexSingleScalar)
+	if firstFact.duplicateIndex().kind != duplicateIndexSingleScalar {
+		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.duplicateIndex().kind, duplicateIndexSingleScalar)
 	}
 	labelsSlot := -1
 	metaSlot := -1

@@ -32,15 +32,16 @@ type FactSnapshot struct {
 }
 
 type conditionFactRef struct {
-	id          FactID
-	name        string
-	templateKey TemplateKey
-	version     FactVersion
-	recency     Recency
-	generation  Generation
-	fields      Fields
-	fieldSlots  []factSlot
-	fieldSpecs  []FieldSpec
+	id                FactID
+	name              string
+	templateKey       TemplateKey
+	version           FactVersion
+	recency           Recency
+	generation        Generation
+	fields            Fields
+	fieldSlots        []factSlot
+	compactFieldSlots []compactFactSlot
+	fieldSpecs        []FieldSpec
 }
 
 func (f FactSnapshot) ID() FactID {
@@ -113,6 +114,9 @@ func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
 		resolved := f.fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
+	if slot >= 0 && slot < len(f.compactFieldSlots) {
+		return f.compactFieldSlots[slot].value()
+	}
 	return f.fieldValue(field)
 }
 
@@ -139,13 +143,14 @@ func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
 		return conditionFactRef{}
 	}
 	return conditionFactRef{
-		id:          fact.id,
-		name:        fact.name,
-		templateKey: fact.templateKey,
-		version:     fact.version,
-		recency:     fact.recency,
-		generation:  fact.id.Generation(),
-		fieldSlots:  fact.fieldSlots,
+		id:                fact.id,
+		name:              fact.name,
+		templateKey:       fact.templateKey,
+		version:           fact.version,
+		recency:           fact.recency,
+		generation:        fact.id.Generation(),
+		fieldSlots:        fact.fieldSlots,
+		compactFieldSlots: fact.compactFieldSlots,
 	}
 }
 
@@ -178,6 +183,9 @@ func (f conditionFactRef) compiledFieldValue(field string, slot int) (Value, boo
 		resolved := f.fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
+	if slot >= 0 && slot < len(f.compactFieldSlots) {
+		return f.compactFieldSlots[slot].value()
+	}
 	if f.fields != nil {
 		value, ok := f.fields[field]
 		if ok {
@@ -188,12 +196,18 @@ func (f conditionFactRef) compiledFieldValue(field string, slot int) (Value, boo
 		resolved := f.fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.compactFieldSlots) {
+		return f.compactFieldSlots[slot].value()
+	}
 	return Value{}, false
 }
 
 func (f conditionFactRef) Fields() Fields {
 	if f.fields != nil {
 		return cloneFields(f.fields)
+	}
+	if len(f.compactFieldSlots) > 0 {
+		return materializeFieldsFromCompactSlots(f.compactFieldSlots, f.fieldSpecs)
 	}
 	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
 }
@@ -210,10 +224,16 @@ func (f conditionFactRef) FieldPresence(field string) (FieldPresence, bool) {
 	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
 		return f.fieldSlots[slot].presence.fieldPresence(), true
 	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.compactFieldSlots) {
+		return f.compactFieldSlots[slot].presence.fieldPresence(), true
+	}
 	return FieldPresence(""), false
 }
 
 func (f conditionFactRef) FieldPresenceMap() map[string]FieldPresence {
+	if len(f.compactFieldSlots) > 0 {
+		return materializePresenceFromCompactSlots(f.compactFieldSlots, f.fieldSpecs)
+	}
 	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
 }
 
@@ -226,9 +246,16 @@ func (f conditionFactRef) snapshot() FactSnapshot {
 		recency:     f.recency,
 		generation:  f.generation,
 		fields:      cloneFields(f.fields),
-		fieldSlots:  cloneFactSlots(f.fieldSlots),
+		fieldSlots:  cloneFactSlots(f.materializeFieldSlots()),
 		fieldSpecs:  f.fieldSpecs,
 	}
+}
+
+func (f conditionFactRef) materializeFieldSlots() []factSlot {
+	if len(f.fieldSlots) > 0 {
+		return f.fieldSlots
+	}
+	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots)
 }
 
 func (f conditionFactRef) fieldSlot(name string) (int, bool) {
@@ -246,12 +273,71 @@ type workingFact struct {
 	templateKey          TemplateKey
 	version              FactVersion
 	recency              Recency
-	supportState         FactSupportState
+	supportState         factSupportCode
 	fields               Fields
 	fieldSlots           []factSlot
+	compactFieldSlots    []compactFactSlot
 	fieldPresence        map[string]FieldPresence
-	dupIndex             duplicateIndexKey
+	dupIndex             *duplicateIndexKey
 	targetIndexesSkipped bool
+}
+
+type factSupportCode uint8
+
+const (
+	factSupportStated factSupportCode = iota
+	factSupportLogical
+	factSupportStatedAndLogical
+)
+
+func workingFactDuplicateIndex(key duplicateIndexKey) *duplicateIndexKey {
+	if key.isZero() {
+		return nil
+	}
+	return &key
+}
+
+func (f *workingFact) duplicateIndex() duplicateIndexKey {
+	if f == nil || f.dupIndex == nil {
+		return duplicateIndexKey{}
+	}
+	return *f.dupIndex
+}
+
+func (f *workingFact) setDuplicateIndex(key duplicateIndexKey) {
+	if f == nil {
+		return
+	}
+	f.dupIndex = workingFactDuplicateIndex(key)
+}
+
+func factSupportCodeFromState(state FactSupportState) factSupportCode {
+	switch state {
+	case FactSupportLogical:
+		return factSupportLogical
+	case FactSupportStatedAndLogical:
+		return factSupportStatedAndLogical
+	default:
+		return factSupportStated
+	}
+}
+
+func (c factSupportCode) state() FactSupportState {
+	switch c {
+	case factSupportLogical:
+		return FactSupportLogical
+	case factSupportStatedAndLogical:
+		return FactSupportStatedAndLogical
+	default:
+		return FactSupportStated
+	}
+}
+
+func (f *workingFact) setSupportState(state FactSupportState) {
+	if f == nil {
+		return
+	}
+	f.supportState = factSupportCodeFromState(state)
 }
 
 type duplicateIndexKind uint8
@@ -354,6 +440,8 @@ type compiledGeneratedFactInsertPlan struct {
 	duplicateKeySlots     []int
 	structuralHashPrefix  uint64
 	structuralScalarKinds []ValueKind
+	compactSlots          bool
+	storeName             bool
 	affectsRuleMatches    bool
 	affectsRete           bool
 }
@@ -365,6 +453,7 @@ func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFact
 		templateKey:        template.Key(),
 		duplicatePolicy:    template.duplicatePolicy,
 		duplicateIndexMode: template.duplicateIndexMode,
+		compactSlots:       templateSupportsCompactGeneratedSlots(template),
 		affectsRuleMatches: true,
 		affectsRete:        true,
 	}
@@ -402,12 +491,27 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 	if p.duplicatePolicy != DuplicateUniqueKey {
 		return duplicateIndexKey{}, false
 	}
+	return p.typedDuplicateIndexFromScalar(func(slot int) (duplicateScalarKey, bool) {
+		return duplicateScalarKeyFromFactSlot(slots, slot)
+	})
+}
+
+func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndexFromCompact(slots []compactFactSlot) (duplicateIndexKey, bool) {
+	if p.duplicatePolicy != DuplicateUniqueKey {
+		return duplicateIndexKey{}, false
+	}
+	return p.typedDuplicateIndexFromScalar(func(slot int) (duplicateScalarKey, bool) {
+		return duplicateScalarKeyFromCompactFactSlot(slots, slot)
+	})
+}
+
+func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndexFromScalar(slotValue func(int) (duplicateScalarKey, bool)) (duplicateIndexKey, bool) {
 	switch p.duplicateIndexMode {
 	case duplicateIndexSingleScalar:
 		if len(p.duplicateKeySlots) != 1 {
 			return duplicateIndexKey{}, false
 		}
-		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		first, ok := slotValue(p.duplicateKeySlots[0])
 		if !ok {
 			return duplicateIndexKey{}, false
 		}
@@ -427,11 +531,11 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 		if len(p.duplicateKeySlots) != 2 {
 			return duplicateIndexKey{}, false
 		}
-		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		first, ok := slotValue(p.duplicateKeySlots[0])
 		if !ok {
 			return duplicateIndexKey{}, false
 		}
-		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		second, ok := slotValue(p.duplicateKeySlots[1])
 		if !ok {
 			return duplicateIndexKey{}, false
 		}
@@ -469,15 +573,15 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 		if len(p.duplicateKeySlots) != 3 {
 			return duplicateIndexKey{}, false
 		}
-		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		first, ok := slotValue(p.duplicateKeySlots[0])
 		if !ok || first.kind != duplicateScalarInt {
 			return duplicateIndexKey{}, false
 		}
-		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		second, ok := slotValue(p.duplicateKeySlots[1])
 		if !ok || second.kind != duplicateScalarString {
 			return duplicateIndexKey{}, false
 		}
-		third, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[2])
+		third, ok := slotValue(p.duplicateKeySlots[2])
 		if !ok || third.kind != duplicateScalarString {
 			return duplicateIndexKey{}, false
 		}
@@ -492,15 +596,15 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 		if len(p.duplicateKeySlots) != 3 {
 			return duplicateIndexKey{}, false
 		}
-		first, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[0])
+		first, ok := slotValue(p.duplicateKeySlots[0])
 		if !ok || first.kind != duplicateScalarString {
 			return duplicateIndexKey{}, false
 		}
-		second, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[1])
+		second, ok := slotValue(p.duplicateKeySlots[1])
 		if !ok || second.kind != duplicateScalarString {
 			return duplicateIndexKey{}, false
 		}
-		third, ok := duplicateScalarKeyFromFactSlot(slots, p.duplicateKeySlots[2])
+		third, ok := slotValue(p.duplicateKeySlots[2])
 		if !ok || third.kind != duplicateScalarInt {
 			return duplicateIndexKey{}, false
 		}
@@ -516,6 +620,24 @@ func (p *compiledGeneratedFactInsertPlan) typedDuplicateIndex(slots []factSlot) 
 	}
 }
 
+func (p *compiledGeneratedFactInsertPlan) duplicateIndexFromCompact(slots []compactFactSlot) duplicateIndexKey {
+	switch p.duplicatePolicy {
+	case DuplicateAllow:
+		return duplicateIndexKey{}
+	case DuplicateUniqueKey:
+		if index, ok := p.typedDuplicateIndexFromCompact(slots); ok {
+			return index
+		}
+	case DuplicateStructural:
+		materialized := materializeFactSlotsFromCompactSlots(slots)
+		if index, ok := p.structuralDuplicateIndex(materialized); ok {
+			return index
+		}
+		return makeDuplicateIndexForValidatedFact(p.name, p.template, nil, materialized)
+	}
+	return makeDuplicateIndexForValidatedFact(p.name, p.template, nil, materializeFactSlotsFromCompactSlots(slots))
+}
+
 func duplicateScalarKeyFromFactSlot(slots []factSlot, slot int) (duplicateScalarKey, bool) {
 	if slot < 0 || slot >= len(slots) {
 		return duplicateScalarKey{}, false
@@ -525,6 +647,21 @@ func duplicateScalarKeyFromFactSlot(slots []factSlot, slot int) (duplicateScalar
 		return duplicateScalarKey{}, false
 	}
 	return duplicateScalarKeyFromValue(current.value)
+}
+
+func duplicateScalarKeyFromCompactFactSlot(slots []compactFactSlot, slot int) (duplicateScalarKey, bool) {
+	if slot < 0 || slot >= len(slots) {
+		return duplicateScalarKey{}, false
+	}
+	current := slots[slot]
+	if !current.ok {
+		return duplicateScalarKey{}, false
+	}
+	return duplicateScalarKey{
+		kind:        current.kind,
+		bits:        current.bits,
+		stringValue: current.stringValue,
+	}, true
 }
 
 func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factSlot) (duplicateIndexKey, bool) {
@@ -603,6 +740,46 @@ func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateSlotsEqual(le
 			continue
 		}
 		equal, ok := structuralDuplicateScalarValuesEqual(kind, leftSlot.value, rightSlot.value)
+		if !ok {
+			return false, false
+		}
+		if !equal {
+			return false, true
+		}
+	}
+	return true, true
+}
+
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateWorkingFactEqual(left []factSlot, right *workingFact) (bool, bool) {
+	if right == nil {
+		return false, true
+	}
+	if len(right.compactFieldSlots) == 0 {
+		return p.structuralScalarDuplicateSlotsEqual(left, right.fieldSlots)
+	}
+	if len(p.structuralScalarKinds) == 0 {
+		return false, false
+	}
+	for i, kind := range p.structuralScalarKinds {
+		var leftSlot factSlot
+		if i < len(left) {
+			leftSlot = left[i]
+		}
+		var rightSlot compactFactSlot
+		if i < len(right.compactFieldSlots) {
+			rightSlot = right.compactFieldSlots[i]
+		}
+		if leftSlot.ok != rightSlot.ok {
+			return false, true
+		}
+		if !leftSlot.ok {
+			continue
+		}
+		rightValue, ok := rightSlot.value()
+		if !ok {
+			return false, false
+		}
+		equal, ok := structuralDuplicateScalarValuesEqual(kind, leftSlot.value, rightValue)
 		if !ok {
 			return false, false
 		}
@@ -837,6 +1014,56 @@ type factSlot struct {
 	ok       bool
 }
 
+type compactFactSlot struct {
+	stringValue string
+	bits        uint64
+	kind        duplicateScalarKind
+	presence    fieldPresenceCode
+	ok          bool
+}
+
+func compactFactSlotFromFactSlot(slot factSlot) (compactFactSlot, bool) {
+	out := compactFactSlot{presence: slot.presence, ok: slot.ok}
+	if !slot.ok {
+		return out, true
+	}
+	return compactFactSlotFromValue(slot.value, slot.presence)
+}
+
+func compactFactSlotFromValue(value Value, presence fieldPresenceCode) (compactFactSlot, bool) {
+	key, ok := duplicateScalarKeyFromValue(value)
+	if !ok {
+		return compactFactSlot{}, false
+	}
+	return compactFactSlot{
+		stringValue: key.stringValue,
+		bits:        key.bits,
+		kind:        key.kind,
+		presence:    presence,
+		ok:          true,
+	}, true
+}
+
+func (s compactFactSlot) value() (Value, bool) {
+	if !s.ok {
+		return Value{}, false
+	}
+	switch s.kind {
+	case duplicateScalarNull:
+		return NullValue(), true
+	case duplicateScalarBool:
+		return newBoolValue(s.bits != 0), true
+	case duplicateScalarInt:
+		return newIntValue(int64(s.bits)), true
+	case duplicateScalarFloat:
+		return newFloatValue(math.Float64frombits(s.bits)), true
+	case duplicateScalarString:
+		return newStringValue(s.stringValue), true
+	default:
+		return Value{}, false
+	}
+}
+
 type fieldPresenceCode uint8
 
 const (
@@ -874,13 +1101,13 @@ func (f *workingFact) snapshot() FactSnapshot {
 func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
-		name:          f.name,
+		name:          f.nameForRevision(revision),
 		templateKey:   f.templateKey,
 		version:       f.version,
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        cloneFields(f.fields),
-		fieldSlots:    f.fieldSlots,
+		fieldSlots:    f.materializeFieldSlots(),
 		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
@@ -894,13 +1121,13 @@ func (f *workingFact) detachedSnapshot() FactSnapshot {
 func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
-		name:          f.name,
+		name:          f.nameForRevision(revision),
 		templateKey:   f.templateKey,
 		version:       f.version,
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        f.fields,
-		fieldSlots:    f.fieldSlots,
+		fieldSlots:    f.materializeFieldSlots(),
 		fieldSpecs:    f.fieldSpecsForRevision(revision),
 		fieldPresence: f.fieldPresence,
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
@@ -908,14 +1135,29 @@ func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapsho
 }
 
 func (f *workingFact) resolvedSupportState() FactSupportState {
-	if f == nil || f.supportState == "" {
+	if f == nil {
 		return FactSupportStated
 	}
-	return f.supportState
+	return f.supportState.state()
+}
+
+func (f *workingFact) nameForRevision(revision *Ruleset) string {
+	if f == nil {
+		return ""
+	}
+	if f.name != "" {
+		return f.name
+	}
+	if revision != nil && f.templateKey != "" {
+		if template, ok := revision.templateByKey(f.templateKey); ok {
+			return template.Name()
+		}
+	}
+	return ""
 }
 
 func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
-	if f == nil || len(f.fieldSlots) == 0 || revision == nil {
+	if f == nil || f.fieldSlotCount() == 0 || revision == nil {
 		return nil
 	}
 	template, ok := revision.templateByKey(f.templateKey)
@@ -926,19 +1168,41 @@ func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
 }
 
 func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
-	if f == nil || f.dupIndex.isZero() {
+	duplicateIndex := f.duplicateIndex()
+	if f == nil || duplicateIndex.isZero() {
 		return ""
 	}
 	template := Template{key: f.templateKey}
+	name := f.nameForRevision(revision)
 	if revision != nil {
 		if resolved, ok := revision.templateByKey(f.templateKey); ok {
 			template = resolved
 		}
 	}
-	if f.dupIndex.kind == duplicateIndexStructural {
-		return makeDuplicateKeyForTemplateWithSlots(f.name, template, nil, f.fieldSlots)
+	if duplicateIndex.kind == duplicateIndexStructural {
+		return makeDuplicateKeyForTemplateWithSlots(name, template, nil, f.materializeFieldSlots())
 	}
-	return f.dupIndex.publicKeyForTemplate(f.name, template)
+	return duplicateIndex.publicKeyForTemplate(name, template)
+}
+
+func (f *workingFact) fieldSlotCount() int {
+	if f == nil {
+		return 0
+	}
+	if len(f.fieldSlots) > 0 {
+		return len(f.fieldSlots)
+	}
+	return len(f.compactFieldSlots)
+}
+
+func (f *workingFact) materializeFieldSlots() []factSlot {
+	if f == nil {
+		return nil
+	}
+	if len(f.fieldSlots) > 0 {
+		return f.fieldSlots
+	}
+	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots)
 }
 
 func (f FactSnapshot) clone() FactSnapshot {
@@ -1465,6 +1729,36 @@ func duplicateFields(values Fields, template Template) Fields {
 	return out
 }
 
+func workingFactStructuralDuplicateSlotsEqual(template Template, slots []factSlot, fact *workingFact) bool {
+	if fact == nil {
+		return false
+	}
+	if len(fact.compactFieldSlots) == 0 {
+		return structuralDuplicateSlotsEqual(template, slots, fact.fieldSlots)
+	}
+	if len(slots) != len(fact.compactFieldSlots) {
+		return false
+	}
+	for i := range slots {
+		left := slots[i]
+		right := fact.compactFieldSlots[i]
+		if left.ok != right.ok {
+			return false
+		}
+		if left.presence != right.presence {
+			return false
+		}
+		if !left.ok {
+			continue
+		}
+		rightValue, ok := right.value()
+		if !ok || !left.value.Equal(rightValue) {
+			return false
+		}
+	}
+	return true
+}
+
 func (f FactSnapshot) FieldPresence(field string) (FieldPresence, bool) {
 	if f.fieldPresence != nil {
 		presence, ok := f.fieldPresence[field]
@@ -1526,6 +1820,9 @@ func (f *workingFact) fieldValue(name string) (Value, bool) {
 			return resolved.value, true
 		}
 	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.compactFieldSlots) {
+		return f.compactFieldSlots[slot].value()
+	}
 	return Value{}, false
 }
 
@@ -1564,6 +1861,28 @@ func materializeFieldsFromSlots(slots []factSlot, specs []FieldSpec) Fields {
 	return out
 }
 
+func materializeFieldsFromCompactSlots(slots []compactFactSlot, specs []FieldSpec) Fields {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(Fields, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		value, ok := slots[i].value()
+		if !ok {
+			continue
+		}
+		out[spec.Name] = cloneValue(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func materializePresenceFromSlots(slots []factSlot, specs []FieldSpec) map[string]FieldPresence {
 	if len(slots) == 0 || len(specs) == 0 {
 		return nil
@@ -1582,6 +1901,40 @@ func materializePresenceFromSlots(slots []factSlot, specs []FieldSpec) map[strin
 	return out
 }
 
+func materializePresenceFromCompactSlots(slots []compactFactSlot, specs []FieldSpec) map[string]FieldPresence {
+	if len(slots) == 0 || len(specs) == 0 {
+		return nil
+	}
+
+	out := make(map[string]FieldPresence, len(specs))
+	for i, spec := range specs {
+		if i >= len(slots) {
+			break
+		}
+		out[spec.Name] = slots[i].presence.fieldPresence()
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func materializeFactSlotsFromCompactSlots(slots []compactFactSlot) []factSlot {
+	if len(slots) == 0 {
+		return nil
+	}
+	out := make([]factSlot, len(slots))
+	for i, slot := range slots {
+		value, ok := slot.value()
+		out[i] = factSlot{
+			value:    value,
+			presence: slot.presence,
+			ok:       ok,
+		}
+	}
+	return out
+}
+
 func cloneFactSlots(in []factSlot) []factSlot {
 	if len(in) == 0 {
 		return nil
@@ -1594,6 +1947,15 @@ func cloneFactSlots(in []factSlot) []factSlot {
 			ok:       slot.ok,
 		}
 	}
+	return out
+}
+
+func cloneCompactFactSlots(in []compactFactSlot) []compactFactSlot {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compactFactSlot, len(in))
+	copy(out, in)
 	return out
 }
 

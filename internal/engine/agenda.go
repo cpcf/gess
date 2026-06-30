@@ -189,7 +189,6 @@ type activation struct {
 	publicOrdinal    uint64
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
-	module           ModuleName
 	generation       Generation
 	identity         candidateIdentity
 	token            tokenRef
@@ -198,7 +197,6 @@ type activation struct {
 	salience         int
 	maxRecency       Recency
 	aggregateRecency Recency
-	declarationOrder int
 	status           activationStatus
 	payload          *activationPayload
 }
@@ -1860,7 +1858,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 			a.pendingHead++
 			continue
 		}
-		if current.module != module {
+		if a.activationModule(current) != module {
 			break
 		}
 		a.pendingHead++
@@ -1877,7 +1875,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 	a.normalizePendingKeys()
 	for i, key := range a.pending {
 		current, ok := a.activationByKeyPtr(key)
-		if !ok || current.status != activationStatusPending || current.module != module {
+		if !ok || current.status != activationStatusPending || a.activationModule(current) != module {
 			continue
 		}
 		copy(a.pending[i:], a.pending[i+1:])
@@ -1889,6 +1887,17 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		return current, activationRunSnapshot(current, materializeID), true
 	}
 	return nil, activation{}, false
+}
+
+func (a *agenda) activationModule(act *activation) ModuleName {
+	if a == nil || a.revision == nil || act == nil {
+		return ""
+	}
+	rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]
+	if !ok {
+		return ""
+	}
+	return rule.module
 }
 
 func activationRunSnapshot(current *activation, materializeID bool) activation {
@@ -1915,7 +1924,6 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 		publicOrdinal:    current.publicOrdinal,
 		ruleID:           current.ruleID,
 		ruleRevisionID:   current.ruleRevisionID,
-		module:           current.module,
 		generation:       current.generation,
 		identity:         current.identity,
 		token:            current.token,
@@ -1924,7 +1932,6 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 		salience:         current.salience,
 		maxRecency:       current.maxRecency,
 		aggregateRecency: current.aggregateRecency,
-		declarationOrder: current.declarationOrder,
 		status:           current.status,
 	}
 }
@@ -2287,7 +2294,7 @@ func (a *agenda) sortActivationKeys(keys []activationKey) {
 		entries[i] = activationSortEntry{key: key, act: act}
 	}
 	slices.SortStableFunc(entries, func(left, right activationSortEntry) int {
-		return activationCompare(left.act, right.act)
+		return a.activationCompare(left.act, right.act)
 	})
 	for i, entry := range entries {
 		keys[i] = entry.key
@@ -2302,12 +2309,12 @@ func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationK
 	if a == nil || act == nil || len(keys) == 0 {
 		return append(keys, key)
 	}
-	if last, ok := a.activationByKeyPtr(keys[len(keys)-1]); ok && !activationLess(act, last) {
+	if last, ok := a.activationByKeyPtr(keys[len(keys)-1]); ok && !a.activationLess(act, last) {
 		return append(keys, key)
 	}
 	index := sort.Search(len(keys), func(i int) bool {
 		existing, _ := a.activationByKeyPtr(keys[i])
-		return activationLess(act, existing)
+		return a.activationLess(act, existing)
 	})
 	keys = append(keys, activationKey{})
 	copy(keys[index+1:], keys[index:])
@@ -2334,6 +2341,10 @@ func activationCompare(left, right *activation) int {
 	return compareLess(activationLess(left, right), activationLess(right, left))
 }
 
+func (a *agenda) activationCompare(left, right *activation) int {
+	return compareLess(a.activationLess(left, right), a.activationLess(right, left))
+}
+
 func activationLess(left, right *activation) bool {
 	if left == nil || right == nil {
 		return right != nil
@@ -2347,8 +2358,49 @@ func activationLess(left, right *activation) bool {
 	if left.aggregateRecency != right.aggregateRecency {
 		return left.aggregateRecency > right.aggregateRecency
 	}
-	if left.declarationOrder != right.declarationOrder {
-		return left.declarationOrder < right.declarationOrder
+	if !left.id.IsZero() || !right.id.IsZero() {
+		return left.activationID() < right.activationID()
+	}
+	if activationIDSegmentLess(left.identity.key.scopeHash, right.identity.key.scopeHash) {
+		return true
+	}
+	if left.identity.key.scopeHash != right.identity.key.scopeHash {
+		return false
+	}
+	if activationIDSegmentLess(left.identity.key.hash, right.identity.key.hash) {
+		return true
+	}
+	if left.identity.key.hash != right.identity.key.hash {
+		return false
+	}
+	if activationIDFinalSegmentLess(left.publicOrdinal, right.publicOrdinal) {
+		return true
+	}
+	if left.publicOrdinal != right.publicOrdinal {
+		return false
+	}
+	return false
+}
+
+func (a *agenda) activationLess(left, right *activation) bool {
+	if left == nil || right == nil {
+		return right != nil
+	}
+	if left.salience != right.salience {
+		return left.salience > right.salience
+	}
+	if left.maxRecency != right.maxRecency {
+		return left.maxRecency > right.maxRecency
+	}
+	if left.aggregateRecency != right.aggregateRecency {
+		return left.aggregateRecency > right.aggregateRecency
+	}
+	if a != nil && a.revision != nil && left.ruleRevisionID != right.ruleRevisionID {
+		leftRule, leftOK := a.revision.rulesByRevisionID[left.ruleRevisionID]
+		rightRule, rightOK := a.revision.rulesByRevisionID[right.ruleRevisionID]
+		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
+			return leftRule.declarationOrder < rightRule.declarationOrder
+		}
 	}
 	if !left.id.IsZero() || !right.id.IsZero() {
 		return left.activationID() < right.activationID()
@@ -2897,7 +2949,6 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	}
 	dst.ruleID = candidate.ruleID
 	dst.ruleRevisionID = candidate.ruleRevisionID
-	dst.module = rule.module
 	dst.generation = candidate.generation
 	dst.identity = candidate.identity
 	dst.payload = nil
@@ -2907,7 +2958,6 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.salience = rule.salience
 	dst.maxRecency = candidate.maxRecency
 	dst.aggregateRecency = candidate.aggregateRecency
-	dst.declarationOrder = rule.declarationOrder
 	dst.status = activationStatusPending
 }
 
@@ -2942,14 +2992,12 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	}
 	dst.ruleID = rule.id
 	dst.ruleRevisionID = rule.revisionID
-	dst.module = rule.module
 	dst.generation = token.generation()
 	dst.identity = identity
 	dst.token = token
 	dst.salience = rule.salience
 	dst.maxRecency = row.maxRecency
 	dst.aggregateRecency = row.aggregateRecency
-	dst.declarationOrder = rule.declarationOrder
 	dst.status = activationStatusPending
 	return nil
 }

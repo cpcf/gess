@@ -487,8 +487,8 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fields != nil || len(internal.fieldSlots) == 0 {
 		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fields, len(internal.fieldSlots))
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.dupIndex.kind != duplicateIndexSingleScalar {
-		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndex().kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.duplicateIndex().kind, duplicateIndexSingleScalar)
 	}
 
 	result, err := session.Modify(context.Background(), first.Fact.ID(), FactPatch{
@@ -506,8 +506,8 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fields != nil {
 		t.Fatal("slot-backed fact should remain slot-backed after modify")
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.dupIndex.kind != duplicateIndexSingleScalar {
-		t.Fatalf("slot-backed duplicate index kind after modify = %v, want %v", internal.dupIndex.kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndex().kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind after modify = %v, want %v", internal.duplicateIndex().kind, duplicateIndexSingleScalar)
 	}
 
 	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{
