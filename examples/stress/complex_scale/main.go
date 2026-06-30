@@ -1189,11 +1189,12 @@ func writeRuntimeDiagnostics(ctx context.Context, w io.Writer, session *sess.Ses
 	for _, owner := range diagnostics.MemoryOwners {
 		fmt.Fprintf(
 			w,
-			"rete-memory: owner=%s rows=%d buckets=%d indexes=%d bytes=%d highWater=%d\n",
+			"rete-memory: owner=%s rows=%d buckets=%d indexes=%d tombstones=%d bytes=%d highWater=%d\n",
 			owner.Owner,
 			owner.Rows,
 			owner.Buckets,
 			owner.Indexes,
+			owner.Tombstones,
 			owner.Bytes,
 			owner.HighWater,
 		)

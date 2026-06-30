@@ -10,6 +10,7 @@ const runtimeMemoryOwnerAlpha = "alpha"
 const runtimeMemoryOwnerBeta = "beta"
 const runtimeMemoryOwnerRuleTerminal = "rule-terminal"
 const runtimeMemoryOwnerQueryTerminal = "query-terminal"
+const runtimeMemoryOwnerAgenda = "agenda"
 
 // RuntimeDiagnostics reports retained runtime memory owners for diagnostics.
 type RuntimeDiagnostics struct {
@@ -18,12 +19,13 @@ type RuntimeDiagnostics struct {
 
 // RuntimeMemoryOwnerDiagnostics summarizes one Rete/runtime memory owner.
 type RuntimeMemoryOwnerDiagnostics struct {
-	Owner     string
-	Rows      uint64
-	Buckets   uint64
-	Indexes   uint64
-	Bytes     uint64
-	HighWater uint64
+	Owner      string
+	Rows       uint64
+	Buckets    uint64
+	Indexes    uint64
+	Tombstones uint64
+	Bytes      uint64
+	HighWater  uint64
 }
 
 // RuntimeDiagnostics returns a point-in-time diagnostic snapshot of retained runtime memory owners.
@@ -63,6 +65,9 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 		if owner.Owner != "" {
 			owners = append(owners, owner)
 		}
+	}
+	if owner := s.agenda.agendaMemoryOwnerDiagnostics(); owner.Owner != "" {
+		owners = append(owners, owner)
 	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
 }
@@ -163,6 +168,129 @@ func addTerminalMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memor
 	out.Indexes += uint64(stats.FactIndexKeys)
 	out.HighWater += uint64(reflectTokenMemoryHighWater(memory))
 	out.Bytes += reflectTokenMemoryRetainedBytes(memory)
+}
+
+func (a *agenda) agendaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
+	if a == nil {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerAgenda}
+	out.Rows = uint64(a.activationRows.count)
+	out.Buckets = uint64(len(a.activations))
+	out.Indexes = uint64(len(a.byFactID) + len(a.byRevision))
+	out.Tombstones = uint64(a.consumedActivationRows())
+	out.HighWater = uint64(agendaMemoryHighWater(a))
+	out.Bytes = agendaMemoryRetainedBytes(a)
+	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Tombstones == 0 && out.Bytes == 0 && out.HighWater == 0 {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	return out
+}
+
+func (a *agenda) consumedActivationRows() int {
+	if a == nil {
+		return 0
+	}
+	consumed := 0
+	for _, chunk := range a.activationRows.chunks {
+		for i := range chunk {
+			if chunk[i].status == activationStatusConsumed {
+				consumed++
+			}
+		}
+	}
+	return consumed
+}
+
+func agendaMemoryHighWater(a *agenda) int {
+	if a == nil {
+		return 0
+	}
+	highWater := cap(a.activationRows.chunks)
+	for _, chunk := range a.activationRows.chunks {
+		highWater += cap(chunk)
+	}
+	highWater += cap(a.pending)
+	highWater += cap(a.pendingActivation)
+	highWater += cap(a.reconcileNextPending)
+	highWater += cap(a.reconcileChanges)
+	highWater += cap(a.reconcileActivated)
+	highWater += cap(a.deltaNextPending)
+	highWater += cap(a.deltaChanges)
+	highWater += cap(a.deltaActivated)
+	highWater += cap(a.purgeNextPending)
+	highWater += cap(a.purgeChanges)
+	highWater += cap(a.sortEntries)
+	for _, bucket := range a.activations {
+		highWater += cap(bucket.overflow)
+	}
+	for _, bucket := range a.byFactID {
+		highWater += cap(bucket.overflow)
+	}
+	for _, bucket := range a.byRevision {
+		highWater += cap(bucket.overflow)
+	}
+	for _, bucket := range a.purgeActivations {
+		highWater += cap(bucket.overflow)
+	}
+	return highWater
+}
+
+func agendaMemoryRetainedBytes(a *agenda) uint64 {
+	if a == nil {
+		return 0
+	}
+	var bytes uint64
+	bytes += sliceBytes[[]activation](cap(a.activationRows.chunks))
+	for _, chunk := range a.activationRows.chunks {
+		bytes += sliceBytes[activation](cap(chunk))
+		for i := range chunk {
+			bytes += activationPayloadBytes(chunk[i].payload)
+		}
+	}
+	bytes += mapEntryBytes[activationFingerprint, activationBucket](len(a.activations))
+	for _, bucket := range a.activations {
+		bytes += sliceBytes[*activation](cap(bucket.overflow))
+	}
+	bytes += sliceBytes[activationKey](cap(a.pending))
+	bytes += sliceBytes[*activation](cap(a.pendingActivation))
+	bytes += mapEntryBytes[FactID, activationKeyBucket](len(a.byFactID))
+	for _, bucket := range a.byFactID {
+		bytes += sliceBytes[activationKey](cap(bucket.overflow))
+	}
+	bytes += mapEntryBytes[RuleRevisionID, activationKeyBucket](len(a.byRevision))
+	for _, bucket := range a.byRevision {
+		bytes += sliceBytes[activationKey](cap(bucket.overflow))
+	}
+	bytes += mapEntryBytes[activationKey, struct{}](len(a.reconcileSeen))
+	bytes += sliceBytes[activationKey](cap(a.reconcileNextPending))
+	bytes += sliceBytes[agendaChange](cap(a.reconcileChanges))
+	bytes += sliceBytes[agendaChange](cap(a.reconcileActivated))
+	bytes += mapEntryBytes[activationKey, struct{}](len(a.deltaRemovedKeys))
+	bytes += sliceBytes[activationKey](cap(a.deltaNextPending))
+	bytes += sliceBytes[agendaChange](cap(a.deltaChanges))
+	bytes += sliceBytes[agendaChange](cap(a.deltaActivated))
+	bytes += mapEntryBytes[activationFingerprint, activationBucket](len(a.purgeActivations))
+	for _, bucket := range a.purgeActivations {
+		bytes += sliceBytes[*activation](cap(bucket.overflow))
+	}
+	bytes += sliceBytes[activationKey](cap(a.purgeNextPending))
+	bytes += sliceBytes[agendaChange](cap(a.purgeChanges))
+	bytes += sliceBytes[activationSortEntry](cap(a.sortEntries))
+	return bytes
+}
+
+func activationPayloadBytes(payload *activationPayload) uint64 {
+	if payload == nil {
+		return 0
+	}
+	var bytes uint64
+	bytes += uint64(unsafe.Sizeof(*payload))
+	bytes += sliceBytes[bindingTupleEntry](cap(payload.bindings))
+	bytes += sliceBytes[int](cap(payload.path))
+	bytes += sliceBytes[FactID](cap(payload.factIDs))
+	bytes += sliceBytes[FactVersion](cap(payload.factVersions))
+	return bytes
 }
 
 func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory tokenHashMemory) {

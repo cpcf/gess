@@ -96,6 +96,50 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	}
 }
 
+func TestSessionRuntimeDiagnosticsReportsAgendaEntriesAndTombstones(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustRuntimeGuardRuleset(t)
+	session := mustSession(t, revision, "agenda-memory-diagnostics-session")
+
+	if _, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+		"age":    42,
+		"dept":   "Engineering",
+		"id":     "ada",
+		"note":   "ready",
+		"status": "active",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(person): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got, want := result.Fired, 1; got != want {
+		t.Fatalf("fired = %d, want %d", got, want)
+	}
+
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	agenda := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerAgenda)
+	if agenda.Owner == "" {
+		t.Fatalf("runtime diagnostics missing agenda owner: %#v", diagnostics.MemoryOwners)
+	}
+	if agenda.Rows == 0 {
+		t.Fatalf("agenda rows = 0, want retained activation entries: %#v", agenda)
+	}
+	if agenda.Tombstones == 0 {
+		t.Fatalf("agenda tombstones = 0, want consumed activation tombstones: %#v", agenda)
+	}
+	if agenda.Bytes == 0 {
+		t.Fatalf("agenda bytes = 0, want retained byte estimate: %#v", agenda)
+	}
+	if agenda.HighWater == 0 {
+		t.Fatalf("agenda high water = 0, want capacity estimate: %#v", agenda)
+	}
+}
+
 func runtimeDiagnosticOwner(diagnostics RuntimeDiagnostics, ownerName string) RuntimeMemoryOwnerDiagnostics {
 	for _, owner := range diagnostics.MemoryOwners {
 		if owner.Owner == ownerName {
