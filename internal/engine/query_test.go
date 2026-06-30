@@ -218,6 +218,61 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	}
 }
 
+func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustQueryRevision(t)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32})},
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p2", "dept": "sales", "age": 41})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	query, ok := revision.query("adults-by-dept")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	engineeringArgs, err := query.compileArgs(QueryArgs{"dept": "engineering"})
+	if err != nil {
+		t.Fatalf("compileArgs engineering: %v", err)
+	}
+	engineeringTrigger := session.queryTriggerFact(query, &engineeringArgs)
+	memory := session.rete.graphBeta
+	if _, err := memory.insertFactInternal(ctx, engineeringTrigger, nil, false); err != nil {
+		t.Fatalf("insert engineering query trigger: %v", err)
+	}
+	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
+		t.Fatalf("query terminal rows after trigger = %d, want 1", got)
+	}
+
+	terminalIDs := revision.graph.queryTerminalIDs[query.name]
+	wrongTriggerID := newFactID(session.Generation()+1, ^uint64(0))
+	wrongRows, err := memory.materializeQueryTerminalRows(ctx, query, &engineeringArgs, Snapshot{revision: revision}, terminalIDs, wrongTriggerID)
+	if err != nil {
+		t.Fatalf("materialize wrong-trigger rows: %v", err)
+	}
+	if len(wrongRows) != 0 {
+		t.Fatalf("wrong-trigger rows = %d, want 0", len(wrongRows))
+	}
+
+	engineeringRows, err := memory.materializeQueryTerminalRows(ctx, query, &engineeringArgs, Snapshot{revision: revision}, terminalIDs, engineeringTrigger.ID())
+	if err != nil {
+		t.Fatalf("materialize engineering rows: %v", err)
+	}
+	if len(engineeringRows) != 1 {
+		t.Fatalf("engineering rows = %d, want 1", len(engineeringRows))
+	}
+	assertQueryRowStringValue(t, engineeringRows[0], "id", "p1")
+	assertQueryRowStringValue(t, engineeringRows[0], "requested_dept", "engineering")
+
+	if _, err := memory.removeFactInternal(ctx, engineeringTrigger, nil, false); err != nil {
+		t.Fatalf("remove engineering query trigger: %v", err)
+	}
+	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
+		t.Fatalf("query terminal rows after cleanup = %d, want 0", got)
+	}
+}
+
 func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -648,6 +703,75 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	}
 	assertQueryRowStringValue(t, rows[0], "id", "p-000")
 	assertQueryRowStringValue(t, again[0], "id", "p-000")
+}
+
+func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "person",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "dept", Kind: ValueString, Required: true},
+			{Name: "age", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "people-values",
+		ConditionTree: Match{
+			Binding: "p", Target: TemplateKeyFact(person.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "p", Field: "id"}),
+			ReturnValue("dept", BindingFieldExpr{Binding: "p", Field: "dept"}),
+			ReturnValue("age", BindingFieldExpr{Binding: "p", Field: "age"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: person.Key(), Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32})},
+		SessionInitialFact{TemplateKey: person.Key(), Fields: mustFields(t, map[string]any{"id": "p2", "dept": "sales", "age": 41})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	query, ok := revision.query("people-values")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	compiledArgs, err := query.compileArgs(nil)
+	if err != nil {
+		t.Fatalf("compileArgs: %v", err)
+	}
+	trigger := session.queryTriggerFact(query, &compiledArgs)
+	memory := session.rete.graphBeta
+	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("insert query trigger: %v", err)
+	}
+	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	if err != nil {
+		t.Fatalf("materializeQueryTerminalRows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
+		t.Fatalf("row storage = items %d valueItems %d, want value-only projected storage", len(rows[0].items), len(rows[0].valueItems))
+	}
+	if _, ok := rows[0].Fact("id"); ok {
+		t.Fatal("value return resolved as fact")
+	}
+	assertQueryRowStringValue(t, rows[0], "id", "p1")
+	assertQueryRowStringValue(t, rows[1], "id", "p2")
+
+	if _, err := memory.removeFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("remove query trigger: %v", err)
+	}
+	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
+		t.Fatalf("query terminal rows after cleanup = %d, want 0", got)
+	}
 }
 
 func TestQueryAggregateReturnsParameterizedValuesAndTracksUpdates(t *testing.T) {
