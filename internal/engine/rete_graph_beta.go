@@ -224,7 +224,7 @@ type reteGraphTokenMemoryDiagnostics struct {
 type betaTokenMemory struct {
 	rows                 []betaTokenRow
 	rowHandles           []graphTokenRowHandleEntry
-	indexes              betaJoinTokenBucketTable
+	indexes              betaJoinHeadTable
 	identityRows         tokenIdentityHeadTable
 	factRows             factTokenBucketTable
 	rowReserve           int
@@ -280,6 +280,7 @@ type betaTokenRow struct {
 	handle       graphTokenRowHandle
 	token        tokenRef
 	joinKey      betaJoinKey
+	joinNext     graphTokenRowID
 	identity     graphTokenIdentityKey
 	identityNext graphTokenRowID
 	blockerCount int
@@ -954,7 +955,9 @@ func (m *betaTokenMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 		return
 	}
 	if joinCapacity > 0 {
-		m.indexes.reserve(joinCapacity)
+		if m.indexes.reserve(joinCapacity) {
+			m.rebuildJoinRows()
+		}
 		m.joinIndexReserve = max(m.joinIndexReserve, joinCapacity)
 	}
 	if identityCapacity > 0 {
@@ -978,7 +981,7 @@ func (m *betaTokenMemory) clear() {
 		m.rows[i] = betaTokenRow{}
 	}
 	m.rows = m.rows[:0]
-	m.indexes.clear(m.recycleBucketRest)
+	m.indexes.clear()
 	m.identityRows.clear()
 	m.factRows.clear(m.recycleBucketRest)
 	m.factRowsDirty = false
@@ -1117,19 +1120,26 @@ func (m *betaTokenMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID
 	if m == nil {
 		return
 	}
-	if graphTokenBucketNeedsGrow(m.indexes.used+1, len(m.indexes.entries)) {
-		m.indexes.rehash(max(8, len(m.indexes.entries)*2))
+	row := m.row(id)
+	if row == nil {
+		return
 	}
-	index, ok := m.indexes.findInsert(key)
-	if !ok {
-		if m.indexes.entries[index].state == graphTokenBucketEmpty {
-			m.indexes.touched = append(m.indexes.touched, index)
-			m.indexes.used++
-		}
-		m.indexes.entries[index] = betaJoinTokenBucketEntry{key: key, state: graphTokenBucketFull}
-		m.indexes.count++
+	row.joinNext = 0
+	ref := graphTokenRowIDRef(id)
+	tailRef := m.indexes.tail(key)
+	if tailRef == 0 {
+		m.indexes.setHead(key, ref)
+		m.indexes.setTail(key, ref)
+		return
 	}
-	m.appendBucketRow(&m.indexes.entries[index].bucket, id)
+	tail := m.row(graphTokenRowRefID(tailRef))
+	if tail == nil {
+		m.indexes.setHead(key, ref)
+		m.indexes.setTail(key, ref)
+		return
+	}
+	tail.joinNext = ref
+	m.indexes.setTail(key, ref)
 }
 
 func (m *betaTokenMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
@@ -1264,14 +1274,6 @@ func (s *reteGraphAlphaFactSet) clear() {
 	clear(s.overflow)
 }
 
-func (m *betaTokenMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
-	if m == nil || m.indexes.isEmpty() {
-		return graphTokenRowIDBucket{}
-	}
-	bucket, _ := m.indexes.get(key)
-	return bucket
-}
-
 func (m *betaTokenMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	if m == nil || rowID < 0 {
 		return nil
@@ -1281,6 +1283,36 @@ func (m *betaTokenMemory) row(rowID graphTokenRowID) *betaTokenRow {
 		return nil
 	}
 	return &m.rows[index]
+}
+
+func (m *betaTokenMemory) joinRowCount(key betaJoinKey) int {
+	count := 0
+	m.forEachJoinRow(key, func(graphTokenRowID, *betaTokenRow) bool {
+		count++
+		return true
+	})
+	return count
+}
+
+func (m *betaTokenMemory) forEachJoinRow(key betaJoinKey, fn func(graphTokenRowID, *betaTokenRow) bool) {
+	if m == nil || fn == nil || m.indexes.isEmpty() {
+		return
+	}
+	for ref := m.indexes.head(key); ref != 0; {
+		rowID := graphTokenRowRefID(ref)
+		row := m.row(rowID)
+		if row != nil {
+			ref = row.joinNext
+		} else {
+			ref = 0
+		}
+		if row == nil || row.joinKey != key {
+			continue
+		}
+		if !fn(rowID, row) {
+			return
+		}
+	}
 }
 
 func (m *betaTokenMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
@@ -1321,6 +1353,7 @@ func (m *betaTokenMemory) insertRowWithNegativeBlockerCount(token tokenRef, join
 
 	rowID := graphTokenRowID(len(m.rows))
 	m.ensureRowCapacity(int(rowID) + 1)
+	m.ensureJoinRowsCapacity(int(rowID) + 1)
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
@@ -1344,6 +1377,7 @@ func (m *betaTokenMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 	identity := tokenRefKey(token)
 	rowID := graphTokenRowID(len(m.rows))
 	m.ensureRowCapacity(int(rowID) + 1)
+	m.ensureJoinRowsCapacity(int(rowID) + 1)
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
@@ -1591,16 +1625,7 @@ func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		return
 	}
 	removed := m.rows[index]
-	if bucket, ok := m.indexes.get(removed.joinKey); ok {
-		if bucket.remove(rowID) {
-			if bucket.len() == 0 {
-				m.recycleBucketRest(bucket.rest)
-				m.indexes.delete(removed.joinKey)
-			} else {
-				m.indexes.set(removed.joinKey, bucket)
-			}
-		}
-	}
+	m.removeJoinIndexRow(removed.joinKey, rowID)
 	m.removeIdentityIndexRow(removed.identity, rowID)
 	if !m.factRowsDirty {
 		m.removeTokenFacts(removed.token, rowID)
@@ -1613,11 +1638,7 @@ func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		if counters != nil {
 			counters.recordRemovalRowMoved()
 		}
-		if bucket, ok := m.indexes.get(moved.joinKey); ok {
-			if bucket.replace(graphTokenRowID(last), rowID) {
-				m.indexes.set(moved.joinKey, bucket)
-			}
-		}
+		m.replaceJoinIndexRow(moved.joinKey, graphTokenRowID(last), rowID)
 		m.replaceIdentityIndexRow(moved.identity, graphTokenRowID(last), rowID)
 		if !m.factRowsDirty {
 			m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
@@ -1629,6 +1650,100 @@ func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	if counters != nil {
 		counters.recordRemovalRowRemoved()
 	}
+}
+
+func (m *betaTokenMemory) ensureJoinRowsCapacity(rowCapacity int) {
+	if m == nil {
+		return
+	}
+	if m.indexes.reserve(max(8, rowCapacity)) {
+		m.rebuildJoinRows()
+	}
+}
+
+func (m *betaTokenMemory) rebuildJoinRows() {
+	if m == nil {
+		return
+	}
+	m.indexes.clear()
+	for index := range m.rows {
+		m.rows[index].joinNext = 0
+	}
+	for index := range m.rows {
+		row := &m.rows[index]
+		if row.token.isZero() {
+			continue
+		}
+		m.appendJoinIndexRow(row.joinKey, graphTokenRowID(index))
+	}
+}
+
+func (m *betaTokenMemory) removeJoinIndexRow(key betaJoinKey, rowID graphTokenRowID) bool {
+	if m == nil || len(m.indexes.heads) == 0 {
+		return false
+	}
+	var previous *betaTokenRow
+	var previousID graphTokenRowID
+	rowRef := graphTokenRowIDRef(rowID)
+	for ref := m.indexes.head(key); ref != 0; {
+		currentID := graphTokenRowRefID(ref)
+		current := m.row(currentID)
+		if current == nil {
+			break
+		}
+		next := current.joinNext
+		if currentID == rowID {
+			if previous == nil {
+				m.indexes.setHead(key, next)
+			} else {
+				previous.joinNext = next
+			}
+			if m.indexes.tail(key) == rowRef {
+				if previous == nil {
+					m.indexes.setTail(key, next)
+				} else {
+					m.indexes.setTail(key, graphTokenRowIDRef(previousID))
+				}
+			}
+			current.joinNext = 0
+			return true
+		}
+		previous = current
+		previousID = currentID
+		ref = next
+	}
+	return false
+}
+
+func (m *betaTokenMemory) replaceJoinIndexRow(key betaJoinKey, oldID, newID graphTokenRowID) bool {
+	if m == nil || len(m.indexes.heads) == 0 || oldID == newID {
+		return false
+	}
+	oldRef := graphTokenRowIDRef(oldID)
+	newRef := graphTokenRowIDRef(newID)
+	for ref := m.indexes.head(key); ref != 0; {
+		currentID := graphTokenRowRefID(ref)
+		current := m.row(currentID)
+		if current == nil {
+			break
+		}
+		if ref == oldRef {
+			m.indexes.setHead(key, newRef)
+			if m.indexes.tail(key) == oldRef {
+				m.indexes.setTail(key, newRef)
+			}
+			return true
+		}
+		if current.joinNext == oldRef {
+			current.joinNext = newRef
+			if m.indexes.tail(key) == oldRef {
+				m.indexes.setTail(key, newRef)
+			}
+			return true
+		}
+		ref = current.joinNext
+	}
+	return false
 }
 
 func (m *betaTokenMemory) ensureIdentityRowsCapacity(rowCapacity int) {
@@ -4359,42 +4474,47 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 	}
 	switch side {
 	case reteGraphBetaInputLeft:
-		bucket := nodeMemory.right.bucketForKey(joinKey)
+		depth := nodeMemory.right.joinRowCount(joinKey)
 		if span != nil {
-			span.recordBetaBucketProbe(bucket.len())
+			span.recordBetaBucketProbe(depth)
 		}
 		matched := false
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
+		var joinErr error
+		nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 			if span != nil {
 				span.recordBetaCandidateRowScanned()
 			}
-			rightRow := nodeMemory.right.row(rowID)
 			if rightRow == nil || rightRow.token.isZero() {
-				continue
+				return true
 			}
 			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 			if !ok {
-				continue
+				return true
 			}
 			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
-				return false, err
+				joinErr = err
+				return false
 			} else if !ok {
-				continue
+				return true
 			}
 			matched = true
 			m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, token, delta)
 			m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, rightRow.token, delta)
 			output := m.appendTokenRows(token, rightRow.token, span)
 			if output.isZero() {
-				continue
+				return true
 			}
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
 			if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-				return false, err
+				joinErr = err
+				return false
 			}
+			return true
+		})
+		if joinErr != nil {
+			return false, joinErr
 		}
 		if !matched {
 			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputRight, token, delta)
@@ -4404,38 +4524,43 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		if !ok {
 			return false, nil
 		}
-		bucket := nodeMemory.left.bucketForKey(joinKey)
+		depth := nodeMemory.left.joinRowCount(joinKey)
 		if span != nil {
-			span.recordBetaBucketProbe(bucket.len())
+			span.recordBetaBucketProbe(depth)
 		}
 		matched := false
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
+		var joinErr error
+		nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 			if span != nil {
 				span.recordBetaCandidateRowScanned()
 			}
-			leftRow := nodeMemory.left.row(rowID)
 			if leftRow == nil || leftRow.token.isZero() {
-				continue
+				return true
 			}
 			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
-				return false, err
+				joinErr = err
+				return false
 			} else if !ok {
-				continue
+				return true
 			}
 			matched = true
 			m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, leftRow.token, delta)
 			m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, token, delta)
 			output := m.appendTokenRows(leftRow.token, token, span)
 			if output.isZero() {
-				continue
+				return true
 			}
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
 			if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-				return false, err
+				joinErr = err
+				return false
 			}
+			return true
+		})
+		if joinErr != nil {
+			return false, joinErr
 		}
 		if !matched {
 			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
@@ -4472,38 +4597,43 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 	if span != nil {
 		span.recordBetaInputInsert(reteGraphBetaInputRight)
 	}
-	bucket := nodeMemory.left.bucketForKey(joinKey)
+	depth := nodeMemory.left.joinRowCount(joinKey)
 	if span != nil {
-		span.recordBetaBucketProbe(bucket.len())
+		span.recordBetaBucketProbe(depth)
 	}
 	matched := false
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
+	var joinErr error
+	nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
-		leftRow := nodeMemory.left.row(rowID)
 		if leftRow == nil || leftRow.token.isZero() {
-			continue
+			return true
 		}
 		if ok, err := m.residualJoinsMatch(node, match.fact, leftRow.token, span); err != nil {
-			return false, graphTokenRowHandle{}, err
+			joinErr = err
+			return false
 		} else if !ok {
-			continue
+			return true
 		}
 		matched = true
 		m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, leftRow.token, delta)
 		m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, token, delta)
 		output := m.appendTokenRows(leftRow.token, token, span)
 		if output.isZero() {
-			continue
+			return true
 		}
 		if span != nil {
 			span.recordBetaJoinedTokenProduced()
 		}
 		if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-			return false, graphTokenRowHandle{}, err
+			joinErr = err
+			return false
 		}
+		return true
+	})
+	if joinErr != nil {
+		return false, graphTokenRowHandle{}, joinErr
 	}
 	if !matched {
 		m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputLeft, token, delta)
@@ -4539,42 +4669,47 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 	if span != nil {
 		span.recordBetaInputInsert(reteGraphBetaInputLeft)
 	}
-	bucket := nodeMemory.right.bucketForKey(joinKey)
+	depth := nodeMemory.right.joinRowCount(joinKey)
 	if span != nil {
-		span.recordBetaBucketProbe(bucket.len())
+		span.recordBetaBucketProbe(depth)
 	}
 	matched := false
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
+	var joinErr error
+	nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
-		rightRow := nodeMemory.right.row(rowID)
 		if rightRow == nil || rightRow.token.isZero() {
-			continue
+			return true
 		}
 		rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 		if !ok {
-			continue
+			return true
 		}
 		if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
-			return false, graphTokenRowHandle{}, err
+			joinErr = err
+			return false
 		} else if !ok {
-			continue
+			return true
 		}
 		matched = true
 		m.appendBackchainDemandResolutions(node, reteGraphBetaInputRight, token, delta)
 		m.appendBackchainDemandResolutions(node, reteGraphBetaInputLeft, rightRow.token, delta)
 		output := m.appendTokenRows(token, rightRow.token, span)
 		if output.isZero() {
-			continue
+			return true
 		}
 		if span != nil {
 			span.recordBetaJoinedTokenProduced()
 		}
 		if err := m.propagateFromBetaNode(node, output, span, delta); err != nil {
-			return false, graphTokenRowHandle{}, err
+			joinErr = err
+			return false
 		}
+		return true
+	})
+	if joinErr != nil {
+		return false, graphTokenRowHandle{}, joinErr
 	}
 	if !matched {
 		m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputRight, token, delta)
@@ -4948,26 +5083,23 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	switch side {
 	case reteGraphBetaInputLeft:
-		bucket := nodeMemory.right.bucketForKey(joinKey)
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			rightRow := nodeMemory.right.row(rowID)
+		nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 			if rightRow == nil || rightRow.token.isZero() {
-				continue
+				return true
 			}
 			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 			if !ok {
-				continue
+				return true
 			}
 			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, nil); err != nil {
 				delta.supported = false
 			} else if !ok {
-				continue
+				return true
 			}
 			output := m.newTokenRef(token, node.entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation(), nil)
 			if output.isZero() {
 				delta.supported = false
-				continue
+				return true
 			}
 			m.propagateRemoveFromStage(source, output, counters, delta)
 			if ok, supported := m.rightTokenHasLeftMatch(node, nodeMemory, joinKey, rightRow.token); !supported {
@@ -4975,29 +5107,27 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 			} else if !ok {
 				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputLeft, rightRow.token, delta)
 			}
-		}
+			return true
+		})
 	case reteGraphBetaInputRight:
 		currentMatch, ok := tokenLastMatch(token)
 		if !ok {
 			delta.supported = false
 			return
 		}
-		bucket := nodeMemory.left.bucketForKey(joinKey)
-		for i := 0; i < bucket.len(); i++ {
-			rowID, _ := bucket.at(i)
-			leftRow := nodeMemory.left.row(rowID)
+		nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 			if leftRow == nil || leftRow.token.isZero() {
-				continue
+				return true
 			}
 			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
 				delta.supported = false
 			} else if !ok {
-				continue
+				return true
 			}
 			output := m.newTokenRef(leftRow.token, node.entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation(), nil)
 			if output.isZero() {
 				delta.supported = false
-				continue
+				return true
 			}
 			m.propagateRemoveFromStage(source, output, counters, delta)
 			if ok, supported := m.leftTokenHasRightMatch(node, nodeMemory, joinKey, leftRow.token); !supported {
@@ -5005,7 +5135,8 @@ func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID
 			} else if !ok {
 				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputRight, leftRow.token, delta)
 			}
-		}
+			return true
+		})
 	default:
 		delta.supported = false
 	}
@@ -5019,48 +5150,53 @@ func (m *reteGraphBetaMemory) rightTokenHasLeftMatch(node *reteGraphBetaNode, no
 	if !ok {
 		return false, false
 	}
-	bucket := nodeMemory.left.bucketForKey(joinKey)
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
-		leftRow := nodeMemory.left.row(rowID)
+	matched := false
+	supported := true
+	nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 		if leftRow == nil || leftRow.token.isZero() {
-			continue
+			return true
 		}
 		ok, err := m.residualJoinsMatch(node, rightMatch.fact, leftRow.token, nil)
 		if err != nil {
-			return false, false
+			supported = false
+			return false
 		}
 		if ok {
-			return true, true
+			matched = true
+			return false
 		}
-	}
-	return false, true
+		return true
+	})
+	return matched, supported
 }
 
 func (m *reteGraphBetaMemory) leftTokenHasRightMatch(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef) (bool, bool) {
 	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
 		return false, false
 	}
-	bucket := nodeMemory.right.bucketForKey(joinKey)
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
-		rightRow := nodeMemory.right.row(rowID)
+	matched := false
+	supported := true
+	nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 		if rightRow == nil || rightRow.token.isZero() {
-			continue
+			return true
 		}
 		rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
 		if !ok {
-			return false, false
+			supported = false
+			return false
 		}
 		ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, nil)
 		if err != nil {
-			return false, false
+			supported = false
+			return false
 		}
 		if ok {
-			return true, true
+			matched = true
+			return false
 		}
-	}
-	return false, true
+		return true
+	})
+	return matched, supported
 }
 
 func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
@@ -7737,11 +7873,19 @@ func (m betaTokenMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 		IdentityIndexKeys: m.identityRows.keyCount(),
 		FactIndexKeys:     m.factIndexKeyCount(),
 	}
-	m.indexes.forEachBucket(func(bucket graphTokenRowIDBucket) {
-		depth := bucket.len()
+	seen := make(map[betaJoinKey]struct{}, m.indexes.keyCount())
+	for _, row := range m.rows {
+		if row.token.isZero() {
+			continue
+		}
+		if _, ok := seen[row.joinKey]; ok {
+			continue
+		}
+		seen[row.joinKey] = struct{}{}
+		depth := m.joinRowCount(row.joinKey)
 		diag.JoinBucketDepthTotal += depth
 		diag.JoinBucketDepthMax = max(diag.JoinBucketDepthMax, depth)
-	})
+	}
 	return diag
 }
 

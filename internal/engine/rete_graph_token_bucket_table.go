@@ -6,164 +6,98 @@ const (
 	graphTokenBucketDeleted
 )
 
-type betaJoinTokenBucketEntry struct {
-	key    betaJoinKey
-	bucket graphTokenRowIDBucket
-	state  uint8
-}
-
-type betaJoinTokenBucketTable struct {
-	entries []betaJoinTokenBucketEntry
+type betaJoinHeadTable struct {
+	heads   []graphTokenRowID
+	tails   []graphTokenRowID
 	touched []int
 	count   int
-	used    int
 }
 
-func (t *betaJoinTokenBucketTable) reserve(capacity int) {
+func (t *betaJoinHeadTable) reserve(capacity int) bool {
 	if capacity <= 0 {
+		return false
+	}
+	slotCapacity := graphTokenBucketSlotCapacity(capacity)
+	if slotCapacity <= len(t.heads) {
+		return false
+	}
+	headCapacity := graphTokenBucketPowerOfTwo(max(8, slotCapacity))
+	t.heads = make([]graphTokenRowID, headCapacity)
+	t.tails = make([]graphTokenRowID, headCapacity)
+	t.touched = t.touched[:0]
+	t.count = 0
+	return true
+}
+
+func (t *betaJoinHeadTable) clear() {
+	if t == nil || len(t.heads) == 0 {
 		return
 	}
-	t.rehash(graphTokenBucketSlotCapacity(capacity))
+	for _, index := range t.touched {
+		if index >= 0 && index < len(t.heads) {
+			t.heads[index] = 0
+			t.tails[index] = 0
+		}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
 }
 
-func (t *betaJoinTokenBucketTable) isEmpty() bool {
+func (t *betaJoinHeadTable) isEmpty() bool {
 	return t == nil || t.count == 0
 }
 
-func (t *betaJoinTokenBucketTable) keyCount() int {
+func (t *betaJoinHeadTable) keyCount() int {
 	if t == nil {
 		return 0
 	}
 	return t.count
 }
 
-func (t *betaJoinTokenBucketTable) get(key betaJoinKey) (graphTokenRowIDBucket, bool) {
-	if t == nil || t.count == 0 || len(t.entries) == 0 {
-		return graphTokenRowIDBucket{}, false
+func (t *betaJoinHeadTable) head(key betaJoinKey) graphTokenRowID {
+	if t == nil || len(t.heads) == 0 {
+		return 0
 	}
-	index, ok := t.find(key)
-	if !ok {
-		return graphTokenRowIDBucket{}, false
-	}
-	return t.entries[index].bucket, true
+	return t.heads[t.slot(key)]
 }
 
-func (t *betaJoinTokenBucketTable) set(key betaJoinKey, bucket graphTokenRowIDBucket) {
-	if t == nil {
+func (t *betaJoinHeadTable) tail(key betaJoinKey) graphTokenRowID {
+	if t == nil || len(t.tails) == 0 {
+		return 0
+	}
+	return t.tails[t.slot(key)]
+}
+
+func (t *betaJoinHeadTable) setHead(key betaJoinKey, head graphTokenRowID) {
+	if t == nil || len(t.heads) == 0 {
 		return
 	}
-	if graphTokenBucketNeedsGrow(t.used+1, len(t.entries)) {
-		t.rehash(max(8, len(t.entries)*2))
-	}
-	index, ok := t.findInsert(key)
-	if ok {
-		t.entries[index].bucket = bucket
+	index := t.slot(key)
+	t.setHeadAt(index, head)
+}
+
+func (t *betaJoinHeadTable) setTail(key betaJoinKey, tail graphTokenRowID) {
+	if t == nil || len(t.tails) == 0 {
 		return
 	}
-	if t.entries[index].state == graphTokenBucketEmpty {
+	t.tails[t.slot(key)] = tail
+}
+
+func (t *betaJoinHeadTable) setHeadAt(index int, head graphTokenRowID) {
+	if t.heads[index] == 0 && head != 0 {
 		t.touched = append(t.touched, index)
-		t.used++
+		t.count++
+	} else if t.heads[index] != 0 && head == 0 {
+		t.count--
 	}
-	t.entries[index] = betaJoinTokenBucketEntry{key: key, bucket: bucket, state: graphTokenBucketFull}
-	t.count++
-}
-
-func (t *betaJoinTokenBucketTable) delete(key betaJoinKey) {
-	if t == nil || t.count == 0 {
-		return
-	}
-	index, ok := t.find(key)
-	if !ok {
-		return
-	}
-	t.entries[index] = betaJoinTokenBucketEntry{state: graphTokenBucketDeleted}
-	t.count--
-}
-
-func (t *betaJoinTokenBucketTable) clear(recycle func([]graphTokenRowID)) {
-	if t == nil || len(t.entries) == 0 {
-		return
-	}
-	for _, index := range t.touched {
-		if index < 0 || index >= len(t.entries) {
-			continue
-		}
-		if t.entries[index].state == graphTokenBucketFull && recycle != nil {
-			recycle(t.entries[index].bucket.rest)
-		}
-		t.entries[index] = betaJoinTokenBucketEntry{}
-	}
-	t.touched = t.touched[:0]
-	t.count = 0
-	t.used = 0
-}
-
-func (t *betaJoinTokenBucketTable) forEachBucket(fn func(graphTokenRowIDBucket)) {
-	if t == nil || fn == nil {
-		return
-	}
-	for i := range t.entries {
-		if t.entries[i].state == graphTokenBucketFull {
-			fn(t.entries[i].bucket)
-		}
+	t.heads[index] = head
+	if head == 0 {
+		t.tails[index] = 0
 	}
 }
 
-func (t *betaJoinTokenBucketTable) find(key betaJoinKey) (int, bool) {
-	mask := uint64(len(t.entries) - 1)
-	index := int(hashBetaJoinTokenBucketKey(key) & mask)
-	for {
-		entry := t.entries[index]
-		if entry.state == graphTokenBucketEmpty {
-			return 0, false
-		}
-		if entry.state == graphTokenBucketFull && entry.key == key {
-			return index, true
-		}
-		index = (index + 1) & int(mask)
-	}
-}
-
-func (t *betaJoinTokenBucketTable) findInsert(key betaJoinKey) (int, bool) {
-	mask := uint64(len(t.entries) - 1)
-	index := int(hashBetaJoinTokenBucketKey(key) & mask)
-	firstDeleted := -1
-	for {
-		entry := t.entries[index]
-		switch entry.state {
-		case graphTokenBucketEmpty:
-			if firstDeleted >= 0 {
-				return firstDeleted, false
-			}
-			return index, false
-		case graphTokenBucketDeleted:
-			if firstDeleted < 0 {
-				firstDeleted = index
-			}
-		case graphTokenBucketFull:
-			if entry.key == key {
-				return index, true
-			}
-		}
-		index = (index + 1) & int(mask)
-	}
-}
-
-func (t *betaJoinTokenBucketTable) rehash(slotCapacity int) {
-	slotCapacity = graphTokenBucketPowerOfTwo(max(8, slotCapacity))
-	if slotCapacity <= len(t.entries) && t.used == t.count {
-		return
-	}
-	old := t.entries
-	t.entries = make([]betaJoinTokenBucketEntry, slotCapacity)
-	t.touched = t.touched[:0]
-	t.count = 0
-	t.used = 0
-	for i := range old {
-		if old[i].state == graphTokenBucketFull {
-			t.set(old[i].key, old[i].bucket)
-		}
-	}
+func (t *betaJoinHeadTable) slot(key betaJoinKey) int {
+	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.heads)-1))
 }
 
 type tokenIdentityHeadTable struct {

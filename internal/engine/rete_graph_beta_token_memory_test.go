@@ -545,12 +545,12 @@ func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 func TestBetaTokenMemoryReusesBucketRestStorage(t *testing.T) {
 	var memory betaTokenMemory
 
-	key := betaJoinKey{}
-	bucket, _ := memory.indexes.get(key)
+	key := newFactID(1, 1)
+	bucket, _ := memory.factRows.get(key)
 	for id := graphTokenRowID(1); id <= 5; id++ {
 		memory.appendBucketRow(&bucket, id)
 	}
-	memory.indexes.set(key, bucket)
+	memory.factRows.set(key, bucket)
 	if got := bucket.len(); got != 5 {
 		t.Fatalf("bucket length = %d, want 5", got)
 	}

@@ -66,38 +66,43 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 			return false, nil
 		}
 	}
-	bucket := m.memory.left.bucketForKey(joinKey)
+	depth := m.memory.left.joinRowCount(joinKey)
 	if span != nil {
-		span.recordBetaBucketProbe(bucket.len())
+		span.recordBetaBucketProbe(depth)
 	}
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
+	var joinErr error
+	m.memory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
-		leftRow := m.memory.left.row(rowID)
 		if leftRow == nil || leftRow.token.isZero() {
-			continue
+			return true
 		}
 		if m.node.rightHasLeftPrefix && !tokenRefHasPrefix(token, leftRow.token) {
-			continue
+			return true
 		}
 		if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 {
 			if ok, err := m.owner.residualJoinsMatch(m.node, currentMatch.fact, leftRow.token, span); err != nil {
-				return false, err
+				joinErr = err
+				return false
 			} else if !ok {
-				continue
+				return true
 			}
 		}
 		if ok, err := m.owner.rightPredicatesMatch(m.node, currentMatch, leftRow.token, span); err != nil {
-			return false, err
+			joinErr = err
+			return false
 		} else if !ok {
-			continue
+			return true
 		}
 		if leftRow.incrementNegativeBlockerCount() == 1 && !deferOutputs {
 			m.owner.propagateRemoveFromStage(source, leftRow.token, nil, delta)
 		}
+		return true
+	})
+	if joinErr != nil {
+		return false, joinErr
 	}
 	return true, nil
 }
@@ -140,39 +145,37 @@ func (m reteGraphNegativeBetaMemory) removeRight(joinKey betaJoinKey, token toke
 			return false
 		}
 	}
-	bucket := m.memory.left.bucketForKey(joinKey)
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
-		leftRow := m.memory.left.row(rowID)
+	m.memory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
 		if leftRow == nil || leftRow.token.isZero() {
-			continue
+			return true
 		}
 		if m.node.rightHasLeftPrefix && !tokenRefHasPrefix(removedRow.token, leftRow.token) {
-			continue
+			return true
 		}
 		if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 {
 			if ok, err := m.owner.residualJoinsMatch(m.node, currentMatch.fact, leftRow.token, nil); err != nil {
 				delta.supported = false
 			} else if !ok {
-				continue
+				return true
 			}
 		}
 		if ok, err := m.owner.rightPredicatesMatch(m.node, currentMatch, leftRow.token, nil); err != nil {
 			delta.supported = false
 		} else if !ok {
-			continue
+			return true
 		}
 		if leftRow.negativeBlockerCount() <= 0 {
 			delta.supported = false
-			continue
+			return true
 		}
 		if leftRow.decrementNegativeBlockerCount() == 0 {
 			if err := m.owner.propagateFromStage(source, leftRow.token, nil, delta); err != nil {
 				delta.supported = false
 			}
 		}
-	}
+		return true
+	})
 	return true
 }
 
@@ -253,46 +256,49 @@ func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, le
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
 		return 0, false
 	}
-	bucket := m.memory.right.bucketForKey(joinKey)
+	depth := m.memory.right.joinRowCount(joinKey)
 	if span != nil {
-		span.recordBetaBucketProbe(bucket.len())
+		span.recordBetaBucketProbe(depth)
 	}
 	count := 0
-	for i := 0; i < bucket.len(); i++ {
-		rowID, _ := bucket.at(i)
+	supported := true
+	m.memory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
-		rightRow := m.memory.right.row(rowID)
 		if rightRow == nil || rightRow.token.isZero() {
-			continue
+			return true
 		}
 		if m.node.rightHasLeftPrefix && !tokenRefHasPrefix(rightRow.token, left) {
-			continue
+			return true
 		}
 		if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 || len(m.node.rightPredicates) != 0 {
 			rightMatch, ok := tokenLastMatch(rightRow.token)
 			if !ok {
-				return count, false
+				supported = false
+				return false
 			}
 			if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 {
 				ok, err := m.owner.residualJoinsMatch(m.node, rightMatch.fact, left, span)
 				if err != nil {
-					return count, false
+					supported = false
+					return false
 				}
 				if !ok {
-					continue
+					return true
 				}
 			}
 			ok, err := m.owner.rightPredicatesMatch(m.node, rightMatch, left, span)
 			if err != nil {
-				return count, false
+				supported = false
+				return false
 			}
 			if !ok {
-				continue
+				return true
 			}
 		}
 		count++
-	}
-	return count, true
+		return true
+	})
+	return count, supported
 }

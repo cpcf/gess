@@ -464,7 +464,8 @@ func betaTokenMemoryHighWater(memory betaTokenMemory) int {
 	highWater := cap(memory.rows)
 	highWater += cap(memory.rowHandles)
 	highWater += cap(memory.freeRowHandles)
-	highWater += cap(memory.indexes.entries)
+	highWater += cap(memory.indexes.heads)
+	highWater += cap(memory.indexes.tails)
 	highWater += cap(memory.indexes.touched)
 	highWater += cap(memory.identityRows.heads)
 	highWater += cap(memory.identityRows.touched)
@@ -482,22 +483,18 @@ func betaTokenMemoryRetainedBytes(memory betaTokenMemory) uint64 {
 	bytes += sliceBytes[betaTokenRow](cap(memory.rows))
 	bytes += sliceBytes[graphTokenRowHandleEntry](cap(memory.rowHandles))
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
-	bytes += betaJoinBucketTableBytes(memory.indexes)
+	bytes += betaJoinHeadTableBytes(memory.indexes)
 	bytes += tokenIdentityHeadTableBytes(memory.identityRows)
 	bytes += factTokenBucketTableBytes(memory.factRows)
 	bytes += bucketRestFreeBytes(memory.bucketRestFree)
 	return bytes
 }
 
-func betaJoinBucketTableBytes(table betaJoinTokenBucketTable) uint64 {
+func betaJoinHeadTableBytes(table betaJoinHeadTable) uint64 {
 	var bytes uint64
-	bytes += sliceBytes[betaJoinTokenBucketEntry](cap(table.entries))
+	bytes += sliceBytes[graphTokenRowID](cap(table.heads))
+	bytes += sliceBytes[graphTokenRowID](cap(table.tails))
 	bytes += sliceBytes[int](cap(table.touched))
-	for i := range table.entries {
-		if table.entries[i].state == graphTokenBucketFull {
-			bytes += sliceBytes[graphTokenRowID](cap(table.entries[i].bucket.rest))
-		}
-	}
 	return bytes
 }
 
