@@ -5754,7 +5754,7 @@ func (s *Session) canMutateDuringRun(origin mutationOrigin) bool {
 		return false
 	}
 	activation := s.runActivation.Load()
-	return activation != nil && activation.mutationOrigin() == origin
+	return origin.matchesActivation(activation)
 }
 
 func (s *Session) shouldQueueMutationDuringRun(origin mutationOrigin) bool {

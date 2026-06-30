@@ -556,6 +556,9 @@ func (a *agenda) publicActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
+	if out.ruleID.IsZero() {
+		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
+	}
 	out.id = act.activationID()
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
@@ -590,6 +593,9 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
+	if out.ruleID.IsZero() {
+		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
+	}
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
 	if a != nil && a.revision != nil && !act.token.isZero() {
@@ -1984,7 +1990,7 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 			continue
 		}
 		current.status = activationStatusConsumed
-		selected := activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current, materializeID)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -2020,7 +2026,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		}
 		a.pendingHead++
 		current.status = activationStatusConsumed
-		selected := activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current, materializeID)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -2043,7 +2049,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		a.pending = a.pending[:last]
 		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
-		selected := activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current, materializeID)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -2060,6 +2066,14 @@ func compactConsumedTokenActivation(current *activation) {
 	current.terminalRow = graphTokenRowHandle{}
 }
 
+func (a *agenda) activationRunSnapshot(current *activation, materializeID bool) activation {
+	out := activationRunSnapshot(current, materializeID)
+	if out.ruleID.IsZero() {
+		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
+	}
+	return out
+}
+
 func (a *agenda) activationModule(act *activation) ModuleName {
 	if a == nil || a.revision == nil || act == nil {
 		return ""
@@ -2069,6 +2083,17 @@ func (a *agenda) activationModule(act *activation) ModuleName {
 		return ""
 	}
 	return rule.module
+}
+
+func (a *agenda) ruleIDForRevision(id RuleRevisionID) RuleID {
+	if a == nil || a.revision == nil || id.IsZero() {
+		return ""
+	}
+	rule, ok := a.revision.rulesByRevisionID[id]
+	if !ok {
+		return ""
+	}
+	return rule.id
 }
 
 func activationRunSnapshot(current *activation, materializeID bool) activation {
@@ -2696,7 +2721,10 @@ func activationMatchesCandidate(current *activation, candidate matchCandidate) b
 	if current == nil {
 		return false
 	}
-	if current.ruleID != candidate.ruleID || current.ruleRevisionID != candidate.ruleRevisionID {
+	if current.ruleRevisionID != candidate.ruleRevisionID {
+		return false
+	}
+	if !current.ruleID.IsZero() && current.ruleID != candidate.ruleID {
 		return false
 	}
 	if current.identity.key != candidate.identity.key || current.identity.generation != candidate.identity.generation || current.identity.count != candidate.identity.count {
@@ -2712,7 +2740,7 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 	if current == nil {
 		return false
 	}
-	if current.ruleID != rule.id || current.ruleRevisionID != rule.revisionID {
+	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
 	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
@@ -2728,7 +2756,7 @@ func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule,
 	if current == nil {
 		return false
 	}
-	if current.ruleID != rule.id || current.ruleRevisionID != rule.revisionID {
+	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
 	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
@@ -3149,6 +3177,7 @@ func newActivationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRe
 	if err := fillActivationFromTerminalTokenWithIdentity(out, rule, token, identity); err != nil {
 		return nil, err
 	}
+	out.ruleID = ""
 	return out, nil
 }
 

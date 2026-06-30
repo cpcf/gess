@@ -132,6 +132,19 @@ func (o mutationOrigin) activationID() ActivationID {
 	return activationIDForIdentityKey(o.activationIdentityKey, o.activationOrdinal)
 }
 
+func (o mutationOrigin) matchesActivation(act *activation) bool {
+	if o.isZero() || act == nil {
+		return false
+	}
+	if o.RuleRevisionID != act.ruleRevisionID {
+		return false
+	}
+	if !o.RuleID.IsZero() && !act.ruleID.IsZero() && o.RuleID != act.ruleID {
+		return false
+	}
+	return o.activationID() == act.activationID()
+}
+
 type MutationDelta struct {
 	Kind           MutationKind
 	Generation     Generation

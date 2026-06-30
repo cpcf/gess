@@ -511,6 +511,8 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 		t.Fatal("stored pending activation missing")
 	} else if !stored.id.IsZero() {
 		t.Fatalf("stored pending activation cached ID = %q, want derived only", stored.id)
+	} else if !stored.ruleID.IsZero() {
+		t.Fatalf("stored pending activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
 
 	selected, ok := agenda.next()
@@ -519,6 +521,10 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 	if selected.id.IsZero() {
 		t.Fatal("selected public activation ID is zero")
+	}
+	rule := revision.rulesByRevisionID[selected.ruleRevisionID]
+	if selected.ruleID != rule.id {
+		t.Fatalf("selected rule ID = %q, want %q", selected.ruleID, rule.id)
 	}
 	stored, ok := agenda.activationByKeyPtr(selected.key)
 	if !ok {
@@ -529,6 +535,9 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 	if !stored.id.IsZero() {
 		t.Fatalf("stored consumed activation cached ID = %q, want derived only", stored.id)
+	}
+	if !stored.ruleID.IsZero() {
+		t.Fatalf("stored consumed activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
 	if stored.payload != nil {
 		t.Fatalf("stored consumed activation payload = %#v, want nil", stored.payload)
@@ -546,6 +555,9 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	origin := actionCtx.mutationOrigin()
 	if !origin.ActivationID.IsZero() {
 		t.Fatalf("action mutation origin cached ID = %q, want compact derived identity", origin.ActivationID)
+	}
+	if origin.RuleID != selected.ruleID {
+		t.Fatalf("action mutation origin rule ID = %q, want %q", origin.RuleID, selected.ruleID)
 	}
 	if got := origin.activationID(); got != selected.id {
 		t.Fatalf("action mutation origin activation ID = %q, want %q", got, selected.id)
