@@ -123,7 +123,7 @@ type deferredAggregateOutputKey struct {
 }
 
 type reteGraphTerminalMemory struct {
-	rows                  tokenHashMemory
+	rows                  terminalTokenMemory
 	ruleRevisionID        RuleRevisionID
 	rule                  compiledRule
 	ruleOK                bool
@@ -7634,7 +7634,7 @@ func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {
 		if terminal == nil {
 			continue
 		}
-		stats.addTokenMemory(terminal.rows)
+		stats.addTerminalTokenMemory(terminal.rows)
 		stats.TerminalTokenMemories++
 	}
 	return stats
@@ -7742,6 +7742,32 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
 	s.JoinIndexReserve += memory.joinIndexReserve
 	s.JoinIndexKeysMax = max(s.JoinIndexKeysMax, joinKeys)
 	s.JoinIndexReserveMax = max(s.JoinIndexReserveMax, memory.joinIndexReserve)
+
+	identityKeys := memory.identityRows.keyCount()
+	s.IdentityIndexKeys += identityKeys
+	s.IdentityIndexReserve += memory.identityIndexReserve
+	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
+	s.IdentityIndexReserveMax = max(s.IdentityIndexReserveMax, memory.identityIndexReserve)
+
+	factKeys := memory.factIndexKeyCount()
+	s.FactIndexKeys += factKeys
+	s.FactIndexReserve += memory.factIndexReserve
+	s.FactIndexKeysMax = max(s.FactIndexKeysMax, factKeys)
+	s.FactIndexReserveMax = max(s.FactIndexReserveMax, memory.factIndexReserve)
+}
+
+func (s *reteGraphBetaMemoryStats) addTerminalTokenMemory(memory terminalTokenMemory) {
+	if s == nil {
+		return
+	}
+	s.TokenMemories++
+	rowCount := len(memory.rows)
+	rowCapacity := cap(memory.rows)
+	s.TokenRows += rowCount
+	s.TokenRowCapacity += rowCapacity
+	s.TokenRowReserve += memory.rowReserve
+	s.TokenRowCapacityMax = max(s.TokenRowCapacityMax, rowCapacity)
+	s.TokenRowReserveMax = max(s.TokenRowReserveMax, memory.rowReserve)
 
 	identityKeys := memory.identityRows.keyCount()
 	s.IdentityIndexKeys += identityKeys

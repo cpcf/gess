@@ -183,7 +183,7 @@ func (t *tokenIdentityBucketTable) reserve(capacity int) {
 	if capacity <= 0 {
 		return
 	}
-	t.rehash(graphTokenBucketSlotCapacity(capacity))
+	t.rehash(tokenIdentityBucketSlotCapacity(capacity))
 }
 
 func (t *tokenIdentityBucketTable) isEmpty() bool {
@@ -198,10 +198,14 @@ func (t *tokenIdentityBucketTable) keyCount() int {
 }
 
 func (t *tokenIdentityBucketTable) get(key tokenIdentityKey) (graphTokenRowIDBucket, bool) {
+	return t.getHash(hashTokenIdentityBucketKey(key))
+}
+
+func (t *tokenIdentityBucketTable) getHash(hash uint64) (graphTokenRowIDBucket, bool) {
 	if t == nil || t.count == 0 || len(t.entries) == 0 {
 		return graphTokenRowIDBucket{}, false
 	}
-	index, ok := t.find(hashTokenIdentityBucketKey(key))
+	index, ok := t.find(hash)
 	if !ok {
 		return graphTokenRowIDBucket{}, false
 	}
@@ -209,13 +213,16 @@ func (t *tokenIdentityBucketTable) get(key tokenIdentityKey) (graphTokenRowIDBuc
 }
 
 func (t *tokenIdentityBucketTable) set(key tokenIdentityKey, bucket graphTokenRowIDBucket) {
+	t.setHash(hashTokenIdentityBucketKey(key), bucket)
+}
+
+func (t *tokenIdentityBucketTable) setHash(hash uint64, bucket graphTokenRowIDBucket) {
 	if t == nil {
 		return
 	}
-	if graphTokenBucketNeedsGrow(t.used+1, len(t.entries)) {
+	if tokenIdentityBucketNeedsGrow(t.used+1, len(t.entries)) {
 		t.rehash(max(8, len(t.entries)*2))
 	}
-	hash := hashTokenIdentityBucketKey(key)
 	index, ok := t.findInsert(hash)
 	if ok {
 		t.entries[index].bucket = bucket
@@ -230,10 +237,14 @@ func (t *tokenIdentityBucketTable) set(key tokenIdentityKey, bucket graphTokenRo
 }
 
 func (t *tokenIdentityBucketTable) delete(key tokenIdentityKey) {
+	t.deleteHash(hashTokenIdentityBucketKey(key))
+}
+
+func (t *tokenIdentityBucketTable) deleteHash(hash uint64) {
 	if t == nil || t.count == 0 {
 		return
 	}
-	index, ok := t.find(hashTokenIdentityBucketKey(key))
+	index, ok := t.find(hash)
 	if !ok {
 		return
 	}
@@ -629,6 +640,17 @@ func graphTokenBucketSlotCapacity(capacity int) int {
 		return 0
 	}
 	return graphTokenBucketPowerOfTwo(max(8, capacity*2))
+}
+
+func tokenIdentityBucketSlotCapacity(capacity int) int {
+	if capacity <= 0 {
+		return 0
+	}
+	return graphTokenBucketPowerOfTwo(max(8, (capacity*10+8)/9))
+}
+
+func tokenIdentityBucketNeedsGrow(used, slots int) bool {
+	return slots == 0 || used*10 >= slots*9
 }
 
 func graphTokenBucketNeedsGrow(used, slots int) bool {

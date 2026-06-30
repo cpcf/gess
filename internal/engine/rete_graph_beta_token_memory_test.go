@@ -252,6 +252,126 @@ func TestTokenHashMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	}
 }
 
+func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testing.T) {
+	arena := newTokenArena()
+	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
+	firstToken := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	secondToken := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	if firstToken.handle == secondToken.handle {
+		t.Fatal("test requires distinct token handles")
+	}
+
+	var memory terminalTokenMemory
+	identity := candidateIdentity{generation: 1, count: 1}
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, identity, 10)
+	if !inserted {
+		t.Fatal("insertTerminalRow(first) returned false")
+	}
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, identity, 20)
+	if inserted {
+		t.Fatal("insertTerminalRow(equivalent second) returned true, want duplicate support")
+	}
+	if firstHandle != secondHandle {
+		t.Fatalf("equivalent terminal handle = %#v, want %#v", secondHandle, firstHandle)
+	}
+	if got, want := len(memory.rows), 1; got != want {
+		t.Fatalf("terminal rows = %d, want %d", got, want)
+	}
+	row := memory.rowByHandle(firstHandle)
+	if row == nil {
+		t.Fatal("terminal row missing")
+	}
+	if got, want := row.supportCount, 2; got != want {
+		t.Fatalf("support count = %d, want %d", got, want)
+	}
+	if !row.hasTerminalBranchSupport(10) || !row.hasTerminalBranchSupport(20) {
+		t.Fatalf("branch support missing after duplicate insert: %#v", row.terminalBranchIDs())
+	}
+	if removed, deleted, consumed := memory.removeTokenByHandle(firstHandle, nil, 20); !consumed || deleted || !removed.token.isZero() {
+		t.Fatalf("remove duplicate support = removed=%#v deleted=%v consumed=%v, want support decrement", removed, deleted, consumed)
+	}
+	row = memory.rowByHandle(firstHandle)
+	if row == nil {
+		t.Fatal("terminal row missing after support decrement")
+	}
+	if got, want := row.supportCount, 1; got != want {
+		t.Fatalf("support count after decrement = %d, want %d", got, want)
+	}
+	if row.hasTerminalBranchSupport(20) {
+		t.Fatalf("branch 20 still supported after decrement: %#v", row.terminalBranchIDs())
+	}
+	if removed, ok := memory.removeToken(firstToken, nil, 10); !ok || !tokenRefEqual(removed.token, firstToken) {
+		t.Fatalf("remove final support = (%#v, %v), want first token", removed, ok)
+	}
+}
+
+func TestTerminalTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+	firstRow, ok := firstToken.resolve()
+	if !ok {
+		t.Fatal("first token did not resolve")
+	}
+	secondRow, ok := secondToken.resolve()
+	if !ok {
+		t.Fatal("second token did not resolve")
+	}
+	secondRow.identityState = firstRow.identityState
+	if tokenRefEqual(firstToken, secondToken) {
+		t.Fatal("tokens with colliding identity key but different facts compared equal")
+	}
+
+	var memory terminalTokenMemory
+	identity := candidateIdentity{generation: 1, count: 1}
+	if _, inserted := memory.insertTerminalRow(firstToken, identity, 0); !inserted {
+		t.Fatal("insertTerminalRow(first) returned false")
+	}
+	if _, inserted := memory.insertTerminalRow(secondToken, identity, 0); !inserted {
+		t.Fatal("insertTerminalRow(colliding second) returned false")
+	}
+	if got, want := len(memory.rows), 2; got != want {
+		t.Fatalf("terminal rows = %d, want %d", got, want)
+	}
+	if removed, ok := memory.removeToken(secondToken, nil, 0); !ok || !tokenRefEqual(removed.token, secondToken) {
+		t.Fatalf("remove colliding second = (%#v, %v), want second token", removed, ok)
+	}
+	if removed, ok := memory.removeToken(firstToken, nil, 0); !ok || !tokenRefEqual(removed.token, firstToken) {
+		t.Fatalf("remove first after collision = (%#v, %v), want first token", removed, ok)
+	}
+}
+
+func TestTerminalTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
+	arena := newTokenArena()
+	before := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	entry := bindingTupleEntry{bindingSlot: 0, factID: before.ID(), factVersion: before.Version()}
+	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
+
+	var memory terminalTokenMemory
+	handle, inserted := memory.insertTerminalRow(token, candidateIdentity{generation: 1, count: 1}, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow returned false")
+	}
+	after := FactSnapshot{id: before.ID(), version: 2, recency: 2, generation: 1}
+	owner := &reteGraphBetaMemory{arena: arena}
+	if _, ok := owner.refreshTokenFactRefInPlace(token, before.ID(), newConditionFactRefFromSnapshot(after)); !ok {
+		t.Fatal("refreshTokenFactRefInPlace returned false")
+	}
+	memory.replaceRowToken(0, token)
+	if row := memory.rowByHandle(handle); row == nil || row.identityHash != hashTokenIdentityBucketKey(token.identityKey()) {
+		t.Fatalf("refreshed terminal row = %#v, want updated identity hash", row)
+	}
+	updated := arena.add(tokenRef{}, bindingTupleEntry{bindingSlot: 0, factID: after.ID(), factVersion: after.Version()}, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(after)}, after.Recency(), after.Generation())
+	if removed, ok := memory.removeToken(updated, nil, 0); !ok || !tokenRefEqual(removed.token, updated) {
+		t.Fatalf("remove equivalent refreshed terminal token = (%#v, %v), want refreshed token", removed, ok)
+	}
+}
+
 func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
