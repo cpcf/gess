@@ -556,7 +556,7 @@ func (a *agenda) publicActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
-	out.id = act.ensureActivationID()
+	out.id = act.activationID()
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
 	out.setFactVersions(cloneActivationFactVersions(act))
@@ -2063,7 +2063,7 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 		out := *current
 		out.payload = nil
 		if materializeID {
-			out.id = current.ensureActivationID()
+			out.id = current.activationID()
 		}
 		out.setFactIDs(cloneFactIDs(current.factIDs()))
 		out.setFactVersions(cloneFactVersions(current.factVersions()))
@@ -2071,7 +2071,7 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 	}
 	id := current.id
 	if materializeID {
-		id = current.ensureActivationID()
+		id = current.activationID()
 	}
 	return activation{
 		id:               id,

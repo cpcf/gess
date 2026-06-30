@@ -292,7 +292,6 @@ func (c ActionContext) supportingFactIDs() []FactID {
 
 func (c ActionContext) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
-		ActivationID:          c.activationID,
 		RuleID:                c.ruleID,
 		RuleRevisionID:        c.ruleRevisionID,
 		activationIdentityKey: c.activationKey,

@@ -484,6 +484,71 @@ func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
 	}
 }
 
+func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-token-compact-tombstone-session")
+
+	_, delta, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{})
+	if err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+
+	agenda := newAgenda()
+	if _, err := agenda.applyTerminalTokenDeltas(ctx, revision, nil, cloneTerminalTokenDeltas(delta.added)); err != nil {
+		t.Fatalf("applyTerminalTokenDeltas: %v", err)
+	}
+	pending := agenda.pendingActivations()
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations = %d, want %d", got, want)
+	}
+	if pending[0].id.IsZero() {
+		t.Fatal("public pending activation ID is zero")
+	}
+	if stored, ok := agenda.activationByKeyPtr(pending[0].key); !ok {
+		t.Fatal("stored pending activation missing")
+	} else if !stored.id.IsZero() {
+		t.Fatalf("stored pending activation cached ID = %q, want derived only", stored.id)
+	}
+
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if selected.id.IsZero() {
+		t.Fatal("selected public activation ID is zero")
+	}
+	stored, ok := agenda.activationByKeyPtr(selected.key)
+	if !ok {
+		t.Fatal("stored consumed activation missing")
+	}
+	if stored.status != activationStatusConsumed {
+		t.Fatalf("stored activation status = %v, want consumed", stored.status)
+	}
+	if !stored.id.IsZero() {
+		t.Fatalf("stored consumed activation cached ID = %q, want derived only", stored.id)
+	}
+	if stored.payload != nil {
+		t.Fatalf("stored consumed activation payload = %#v, want nil", stored.payload)
+	}
+	if stored.token.isZero() {
+		t.Fatal("stored consumed activation lost token ref")
+	}
+	if got := stored.mutationOrigin().activationID(); got != selected.id {
+		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.id)
+	}
+	actionCtx := newActionContext(ctx, nil, selected, nil)
+	origin := actionCtx.mutationOrigin()
+	if !origin.ActivationID.IsZero() {
+		t.Fatalf("action mutation origin cached ID = %q, want compact derived identity", origin.ActivationID)
+	}
+	if got := origin.activationID(); got != selected.id {
+		t.Fatalf("action mutation origin activation ID = %q, want %q", got, selected.id)
+	}
+}
+
 func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-fact-index-session")
