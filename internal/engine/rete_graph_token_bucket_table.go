@@ -328,6 +328,156 @@ type factTokenBucketEntry struct {
 	state  uint8
 }
 
+type betaFactHeadEntry struct {
+	key   FactID
+	head  betaFactLinkID
+	state uint8
+}
+
+type betaFactHeadTable struct {
+	entries []betaFactHeadEntry
+	touched []int
+	count   int
+	used    int
+}
+
+func (t *betaFactHeadTable) reserve(capacity int) {
+	if capacity <= 0 {
+		return
+	}
+	t.rehash(graphTokenBucketSlotCapacity(capacity))
+}
+
+func (t *betaFactHeadTable) isEmpty() bool {
+	return t == nil || t.count == 0
+}
+
+func (t *betaFactHeadTable) keyCount() int {
+	if t == nil {
+		return 0
+	}
+	return t.count
+}
+
+func (t *betaFactHeadTable) head(key FactID) betaFactLinkID {
+	if t == nil || t.count == 0 || len(t.entries) == 0 {
+		return 0
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return 0
+	}
+	return t.entries[index].head
+}
+
+func (t *betaFactHeadTable) setHead(key FactID, head betaFactLinkID) {
+	if t == nil {
+		return
+	}
+	if head == 0 {
+		t.delete(key)
+		return
+	}
+	if graphTokenBucketNeedsGrow(t.used+1, len(t.entries)) {
+		t.rehash(max(8, len(t.entries)*2))
+	}
+	index, ok := t.findInsert(key)
+	if ok {
+		t.entries[index].head = head
+		return
+	}
+	if t.entries[index].state == graphTokenBucketEmpty {
+		t.touched = append(t.touched, index)
+		t.used++
+	}
+	t.entries[index] = betaFactHeadEntry{key: key, head: head, state: graphTokenBucketFull}
+	t.count++
+}
+
+func (t *betaFactHeadTable) delete(key FactID) {
+	if t == nil || t.count == 0 {
+		return
+	}
+	index, ok := t.find(key)
+	if !ok {
+		return
+	}
+	t.entries[index] = betaFactHeadEntry{state: graphTokenBucketDeleted}
+	t.count--
+}
+
+func (t *betaFactHeadTable) clear() {
+	if t == nil || len(t.entries) == 0 {
+		return
+	}
+	for _, index := range t.touched {
+		if index < 0 || index >= len(t.entries) {
+			continue
+		}
+		t.entries[index] = betaFactHeadEntry{}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+}
+
+func (t *betaFactHeadTable) find(key FactID) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hashFactTokenBucketKey(key) & mask)
+	for {
+		entry := t.entries[index]
+		if entry.state == graphTokenBucketEmpty {
+			return 0, false
+		}
+		if entry.state == graphTokenBucketFull && entry.key == key {
+			return index, true
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *betaFactHeadTable) findInsert(key FactID) (int, bool) {
+	mask := uint64(len(t.entries) - 1)
+	index := int(hashFactTokenBucketKey(key) & mask)
+	firstDeleted := -1
+	for {
+		entry := t.entries[index]
+		switch entry.state {
+		case graphTokenBucketEmpty:
+			if firstDeleted >= 0 {
+				return firstDeleted, false
+			}
+			return index, false
+		case graphTokenBucketDeleted:
+			if firstDeleted < 0 {
+				firstDeleted = index
+			}
+		case graphTokenBucketFull:
+			if entry.key == key {
+				return index, true
+			}
+		}
+		index = (index + 1) & int(mask)
+	}
+}
+
+func (t *betaFactHeadTable) rehash(slotCapacity int) {
+	slotCapacity = graphTokenBucketPowerOfTwo(max(8, slotCapacity))
+	if slotCapacity <= len(t.entries) && t.used == t.count {
+		return
+	}
+	old := t.entries
+	t.entries = make([]betaFactHeadEntry, slotCapacity)
+	t.touched = t.touched[:0]
+	t.count = 0
+	t.used = 0
+	for i := range old {
+		if old[i].state == graphTokenBucketFull {
+			t.setHead(old[i].key, old[i].head)
+		}
+	}
+}
+
 type factTokenBucketTable struct {
 	entries []factTokenBucketEntry
 	touched []int

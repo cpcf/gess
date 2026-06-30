@@ -551,48 +551,63 @@ func TestBetaTokenMemoryRowHandleEntryIsCompact(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryReusesBucketRestStorage(t *testing.T) {
+func TestBetaTokenMemoryReusesFactLinkStorage(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+
 	var memory betaTokenMemory
-
-	key := newFactID(1, 1)
-	bucket, _ := memory.factRows.get(key)
-	for id := graphTokenRowID(1); id <= 5; id++ {
-		memory.appendBucketRow(&bucket, id)
+	if !memory.insert(firstToken, betaJoinKey{}) {
+		t.Fatal("insert(first) returned false")
 	}
-	memory.factRows.set(key, bucket)
-	if got := bucket.len(); got != 5 {
-		t.Fatalf("bucket length = %d, want 5", got)
+	memory.ensureFactRows()
+	if got := len(memory.factLinks); got != 1 {
+		t.Fatalf("fact link rows = %d, want 1", got)
 	}
-	recycledCap := cap(bucket.rest)
-	if recycledCap == 0 {
-		t.Fatal("bucket rest capacity = 0, want overflow storage")
+	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
+		t.Fatalf("removed rows = %d, want 1", removed)
 	}
-
-	memory.clear()
-	if got := len(memory.bucketRestFree); got != 1 {
-		t.Fatalf("free bucket rests after clear = %d, want 1", got)
-	}
-	if got := cap(memory.bucketRestFree[0]); got != recycledCap {
-		t.Fatalf("free bucket rest capacity = %d, want %d", got, recycledCap)
+	if got := len(memory.freeFactLinks); got != 1 {
+		t.Fatalf("free fact links = %d, want 1", got)
 	}
 
-	reused := graphTokenRowIDBucket{}
-	for id := graphTokenRowID(10); id <= 12; id++ {
-		memory.appendBucketRow(&reused, id)
+	if !memory.insert(secondToken, betaJoinKey{}) {
+		t.Fatal("insert(second) returned false")
 	}
-	if got := len(memory.bucketRestFree); got != 0 {
-		t.Fatalf("free bucket rests after reuse = %d, want 0", got)
+	memory.ensureFactRows()
+	if got := len(memory.factLinks); got != 1 {
+		t.Fatalf("fact link rows after reuse = %d, want 1", got)
 	}
-	if got := cap(reused.rest); got != recycledCap {
-		t.Fatalf("reused bucket rest capacity = %d, want %d", got, recycledCap)
+	if got := len(memory.freeFactLinks); got != 0 {
+		t.Fatalf("free fact links after reuse = %d, want 0", got)
 	}
-	for i, want := range []graphTokenRowID{10, 11, 12} {
-		got, ok := reused.at(i)
-		if !ok {
-			t.Fatalf("reused bucket row %d missing", i)
-		}
-		if got != want {
-			t.Fatalf("reused bucket row %d = %d, want %d", i, got, want)
-		}
+}
+
+func TestBetaTokenMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
+	arena := newTokenArena()
+	parentFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	childFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	parentEntry := bindingTupleEntry{bindingSlot: 0, factID: parentFact.ID(), factVersion: parentFact.Version()}
+	childEntry := bindingTupleEntry{bindingSlot: 1, factID: childFact.ID(), factVersion: childFact.Version()}
+	parent := arena.add(tokenRef{}, parentEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(parentFact)}, parentFact.Recency(), parentFact.Generation())
+	child := arena.add(parent, childEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(childFact)}, childFact.Recency(), childFact.Generation())
+
+	var memory betaTokenMemory
+	if !memory.insert(child, betaJoinKey{}) {
+		t.Fatal("insert(child) returned false")
+	}
+	memory.ensureFactRows()
+	if got := memory.factRowCount(parentFact.ID()); got != 1 {
+		t.Fatalf("parent fact reverse rows = %d, want 1", got)
+	}
+	if got := memory.factRowCount(childFact.ID()); got != 1 {
+		t.Fatalf("child fact reverse rows = %d, want 1", got)
+	}
+	if removed := memory.removeContainingFact(parentFact.ID(), nil); removed != 1 {
+		t.Fatalf("removed rows for parent fact = %d, want 1", removed)
 	}
 }

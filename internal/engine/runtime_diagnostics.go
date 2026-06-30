@@ -471,10 +471,8 @@ func betaTokenMemoryHighWater(memory betaTokenMemory) int {
 	highWater += cap(memory.identityRows.touched)
 	highWater += cap(memory.factRows.entries)
 	highWater += cap(memory.factRows.touched)
-	highWater += cap(memory.bucketRestFree)
-	for _, rest := range memory.bucketRestFree {
-		highWater += cap(rest)
-	}
+	highWater += cap(memory.factLinks)
+	highWater += cap(memory.freeFactLinks)
 	return highWater
 }
 
@@ -485,8 +483,9 @@ func betaTokenMemoryRetainedBytes(memory betaTokenMemory) uint64 {
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinHeadTableBytes(memory.indexes)
 	bytes += tokenIdentityHeadTableBytes(memory.identityRows)
-	bytes += factTokenBucketTableBytes(memory.factRows)
-	bytes += bucketRestFreeBytes(memory.bucketRestFree)
+	bytes += betaFactHeadTableBytes(memory.factRows)
+	bytes += sliceBytes[betaFactLinkRow](cap(memory.factLinks))
+	bytes += sliceBytes[betaFactLinkID](cap(memory.freeFactLinks))
 	return bytes
 }
 
@@ -517,6 +516,13 @@ func factTokenBucketTableBytes(table factTokenBucketTable) uint64 {
 	return bytes
 }
 
+func betaFactHeadTableBytes(table betaFactHeadTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[betaFactHeadEntry](cap(table.entries))
+	bytes += sliceBytes[int](cap(table.touched))
+	return bytes
+}
+
 func bucketRestFreeBytes(rests [][]graphTokenRowID) uint64 {
 	bytes := sliceBytes[[]graphTokenRowID](cap(rests))
 	for _, rest := range rests {
@@ -539,7 +545,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 		return 0
 	}
 	highWater := 0
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree", "factLinks", "freeFactLinks"} {
 		highWater += reflectSliceCap(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
@@ -572,7 +578,7 @@ func reflectTokenMemoryRetainedBytes(memory any) uint64 {
 		return 0
 	}
 	var bytes uint64
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree", "factLinks", "freeFactLinks"} {
 		bytes += reflectSliceBytes(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
