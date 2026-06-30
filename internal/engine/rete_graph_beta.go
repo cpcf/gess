@@ -223,7 +223,7 @@ type reteGraphTokenMemoryDiagnostics struct {
 
 type betaTokenMemory struct {
 	rows                 []betaTokenRow
-	rowHandles           []graphTokenRowHandleEntry
+	rowHandles           []betaTokenRowHandleEntry
 	indexes              betaJoinHeadTable
 	identityRows         tokenIdentityHeadTable
 	factRows             factTokenBucketTable
@@ -260,6 +260,11 @@ type graphTokenRowHandleEntry struct {
 	rowID      graphTokenRowID
 	generation uint32
 	live       bool
+}
+
+type betaTokenRowHandleEntry struct {
+	rowRef     uint32
+	generation uint32
 }
 
 type graphTokenRow struct {
@@ -939,7 +944,7 @@ func (m *betaTokenMemory) reserveRowHandles(rowCapacity int) {
 		return
 	}
 	if rowCapacity > cap(m.rowHandles) {
-		handles := make([]graphTokenRowHandleEntry, len(m.rowHandles), rowCapacity)
+		handles := make([]betaTokenRowHandleEntry, len(m.rowHandles), rowCapacity)
 		copy(handles, m.rowHandles)
 		m.rowHandles = handles
 	}
@@ -991,6 +996,10 @@ func (m *betaTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRow
 	if m == nil || rowID < 0 {
 		return graphTokenRowHandle{}
 	}
+	rowRef, ok := betaTokenRowRef(rowID)
+	if !ok {
+		return graphTokenRowHandle{}
+	}
 	if len(m.freeRowHandles) > 0 {
 		last := len(m.freeRowHandles) - 1
 		id := m.freeRowHandles[last]
@@ -1002,16 +1011,17 @@ func (m *betaTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRow
 			if entry.generation == 0 {
 				entry.generation = 1
 			}
-			entry.rowID = rowID
-			entry.live = true
+			entry.rowRef = rowRef
 			return graphTokenRowHandle{id: id, generation: entry.generation}
 		}
 	}
+	if uint64(len(m.rowHandles)) >= uint64(^uint32(0)) {
+		return graphTokenRowHandle{}
+	}
 	id := graphTokenRowHandleID(len(m.rowHandles) + 1)
-	entry := graphTokenRowHandleEntry{
-		rowID:      rowID,
+	entry := betaTokenRowHandleEntry{
+		rowRef:     rowRef,
 		generation: 1,
-		live:       true,
 	}
 	m.rowHandles = append(m.rowHandles, entry)
 	return graphTokenRowHandle{id: id, generation: entry.generation}
@@ -1034,14 +1044,18 @@ func (m *betaTokenMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenR
 		return 0, false
 	}
 	entry := m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation || entry.rowID < 0 {
+	if entry.generation != handle.generation {
 		return 0, false
 	}
-	return entry.rowID, true
+	return betaTokenRowIDFromRef(entry.rowRef)
 }
 
 func (m *betaTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
 	if m == nil || handle.isZero() || rowID < 0 {
+		return
+	}
+	rowRef, ok := betaTokenRowRef(rowID)
+	if !ok {
 		return
 	}
 	index := handle.index()
@@ -1049,10 +1063,10 @@ func (m *betaTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphT
 		return
 	}
 	entry := &m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation {
+	if entry.rowRef == 0 || entry.generation != handle.generation {
 		return
 	}
-	entry.rowID = rowID
+	entry.rowRef = rowRef
 }
 
 func (m *betaTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
@@ -1064,11 +1078,10 @@ func (m *betaTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
 		return
 	}
 	entry := &m.rowHandles[index]
-	if !entry.live || entry.generation != handle.generation {
+	if entry.rowRef == 0 || entry.generation != handle.generation {
 		return
 	}
-	entry.live = false
-	entry.rowID = -1
+	entry.rowRef = 0
 	entry.generation++
 	if entry.generation == 0 {
 		entry.generation = 1
@@ -1083,16 +1096,29 @@ func (m *betaTokenMemory) invalidateRowHandles() {
 	m.freeRowHandles = m.freeRowHandles[:0]
 	for index := range m.rowHandles {
 		entry := &m.rowHandles[index]
-		if entry.live {
+		if entry.rowRef != 0 {
 			entry.generation++
 			if entry.generation == 0 {
 				entry.generation = 1
 			}
 		}
-		entry.live = false
-		entry.rowID = -1
+		entry.rowRef = 0
 		m.freeRowHandles = append(m.freeRowHandles, graphTokenRowHandleID(index+1))
 	}
+}
+
+func betaTokenRowRef(rowID graphTokenRowID) (uint32, bool) {
+	if rowID < 0 || uint64(rowID) >= uint64(^uint32(0)) {
+		return 0, false
+	}
+	return uint32(rowID) + 1, true
+}
+
+func betaTokenRowIDFromRef(ref uint32) (graphTokenRowID, bool) {
+	if ref == 0 {
+		return 0, false
+	}
+	return graphTokenRowID(ref - 1), true
 }
 
 func (m *betaTokenMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id graphTokenRowID) {

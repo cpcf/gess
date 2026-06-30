@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+)
 
 func TestBetaTokenMemoryStoresNegativeBlockerCount(t *testing.T) {
 	arena := newTokenArena()
@@ -539,6 +542,12 @@ func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	}
 	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(row.token, secondToken) {
 		t.Fatalf("fresh row handle resolved to %#v, want second token", row)
+	}
+}
+
+func TestBetaTokenMemoryRowHandleEntryIsCompact(t *testing.T) {
+	if got, want := unsafe.Sizeof(betaTokenRowHandleEntry{}), uintptr(8); got != want {
+		t.Fatalf("beta row handle entry size = %d, want %d", got, want)
 	}
 }
 
