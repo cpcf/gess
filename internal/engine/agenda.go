@@ -113,6 +113,174 @@ func (r *activationRows) truncate(count int) {
 	}
 }
 
+type compactAgendaEntryID uint32
+
+type compactAgendaEntryHandle struct {
+	id         compactAgendaEntryID
+	generation uint32
+}
+
+func (h compactAgendaEntryHandle) isZero() bool {
+	return h.id == 0 || h.generation == 0
+}
+
+func (h compactAgendaEntryHandle) index() int {
+	if h.id == 0 {
+		return -1
+	}
+	return int(h.id - 1)
+}
+
+type compactAgendaEntry struct {
+	key              activationKey
+	publicOrdinal    uint64
+	ruleRevisionID   RuleRevisionID
+	generation       Generation
+	identity         candidateIdentity
+	token            tokenRef
+	terminalID       reteGraphTerminalNodeID
+	terminalRow      graphTokenRowHandle
+	salience         int
+	maxRecency       Recency
+	aggregateRecency Recency
+	status           activationStatus
+}
+
+type compactAgendaEntryRow struct {
+	entry      compactAgendaEntry
+	generation uint32
+	live       bool
+}
+
+type compactAgendaEntryArena struct {
+	rows []compactAgendaEntryRow
+	free []compactAgendaEntryID
+	live int
+}
+
+func (a *compactAgendaEntryArena) reserve(capacity int) {
+	if a == nil || capacity <= cap(a.rows) {
+		return
+	}
+	rows := make([]compactAgendaEntryRow, len(a.rows), capacity)
+	copy(rows, a.rows)
+	a.rows = rows
+	if capacity > cap(a.free) {
+		free := make([]compactAgendaEntryID, len(a.free), capacity)
+		copy(free, a.free)
+		a.free = free
+	}
+}
+
+func (a *compactAgendaEntryArena) reset() {
+	if a == nil {
+		return
+	}
+	a.free = a.free[:0]
+	for index := range a.rows {
+		row := &a.rows[index]
+		if row.live {
+			row.generation++
+			if row.generation == 0 {
+				row.generation = 1
+			}
+		}
+		row.entry = compactAgendaEntry{}
+		row.live = false
+		a.free = append(a.free, compactAgendaEntryID(index+1))
+	}
+	a.live = 0
+}
+
+func (a *compactAgendaEntryArena) add(entry compactAgendaEntry) (compactAgendaEntryHandle, *compactAgendaEntry) {
+	if a == nil {
+		return compactAgendaEntryHandle{}, nil
+	}
+	rowID := a.allocateRowID()
+	if rowID == 0 {
+		return compactAgendaEntryHandle{}, nil
+	}
+	row := &a.rows[int(rowID)-1]
+	if row.generation == 0 {
+		row.generation = 1
+	}
+	row.entry = entry
+	row.live = true
+	a.live++
+	handle := compactAgendaEntryHandle{id: rowID, generation: row.generation}
+	return handle, &row.entry
+}
+
+func (a *compactAgendaEntryArena) allocateRowID() compactAgendaEntryID {
+	if a == nil {
+		return 0
+	}
+	for len(a.free) > 0 {
+		last := len(a.free) - 1
+		id := a.free[last]
+		a.free[last] = 0
+		a.free = a.free[:last]
+		index := int(id) - 1
+		if id == 0 || index < 0 || index >= len(a.rows) || a.rows[index].live {
+			continue
+		}
+		return id
+	}
+	if uint64(len(a.rows)) >= uint64(^uint32(0)) {
+		return 0
+	}
+	id := compactAgendaEntryID(len(a.rows) + 1)
+	a.rows = append(a.rows, compactAgendaEntryRow{generation: 1})
+	return id
+}
+
+func (a *compactAgendaEntryArena) get(handle compactAgendaEntryHandle) (*compactAgendaEntry, bool) {
+	if a == nil || handle.isZero() {
+		return nil, false
+	}
+	index := handle.index()
+	if index < 0 || index >= len(a.rows) {
+		return nil, false
+	}
+	row := &a.rows[index]
+	if !row.live || row.generation != handle.generation {
+		return nil, false
+	}
+	return &row.entry, true
+}
+
+func (a *compactAgendaEntryArena) remove(handle compactAgendaEntryHandle) bool {
+	if a == nil || handle.isZero() {
+		return false
+	}
+	index := handle.index()
+	if index < 0 || index >= len(a.rows) {
+		return false
+	}
+	row := &a.rows[index]
+	if !row.live || row.generation != handle.generation {
+		return false
+	}
+	row.entry = compactAgendaEntry{}
+	row.live = false
+	row.generation++
+	if row.generation == 0 {
+		row.generation = 1
+	}
+	a.free = append(a.free, handle.id)
+	if a.live > 0 {
+		a.live--
+	}
+	return true
+}
+
+func (a *compactAgendaEntryArena) len() int {
+	if a == nil {
+		return 0
+	}
+	return a.live
+}
+
 type activationKeyBucket struct {
 	first    activationKey
 	second   activationKey

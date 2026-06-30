@@ -277,6 +277,94 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
+func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T) {
+	var arena compactAgendaEntryArena
+	arena.reserve(2)
+	if cap(arena.rows) < 2 {
+		t.Fatalf("arena row capacity = %d, want at least 2", cap(arena.rows))
+	}
+	first := compactAgendaEntry{
+		key:              activationKey{fingerprint: 10, ordinal: 1},
+		publicOrdinal:    3,
+		ruleRevisionID:   "rule-1@1",
+		generation:       4,
+		identity:         candidateIdentity{key: candidateIdentityKey{scopeHash: 5, hash: 6}},
+		terminalID:       7,
+		terminalRow:      graphTokenRowHandle{id: 8, generation: 9},
+		salience:         11,
+		maxRecency:       12,
+		aggregateRecency: 13,
+		status:           activationStatusPending,
+	}
+	firstHandle, stored := arena.add(first)
+	if firstHandle.isZero() {
+		t.Fatal("first compact handle is zero")
+	}
+	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.terminalRow != first.terminalRow {
+		t.Fatalf("stored first entry = %#v, want %#v", stored, first)
+	}
+	if got := arena.len(); got != 1 {
+		t.Fatalf("arena len after first add = %d, want 1", got)
+	}
+	if !arena.remove(firstHandle) {
+		t.Fatal("remove first compact handle returned false")
+	}
+	if got := arena.len(); got != 0 {
+		t.Fatalf("arena len after remove = %d, want 0", got)
+	}
+	if entry, ok := arena.get(firstHandle); ok || entry != nil {
+		t.Fatalf("stale first compact handle resolved to %#v", entry)
+	}
+
+	second := first
+	second.key = activationKey{fingerprint: 20, ordinal: 2}
+	second.ruleRevisionID = "rule-2@1"
+	second.status = activationStatusDeactivated
+	secondHandle, stored := arena.add(second)
+	if secondHandle.id != firstHandle.id || secondHandle.generation == firstHandle.generation {
+		t.Fatalf("second compact handle = %#v after first %#v, want reused id and new generation", secondHandle, firstHandle)
+	}
+	if stored == nil || stored.key != second.key || stored.status != activationStatusDeactivated {
+		t.Fatalf("stored second entry = %#v, want %#v", stored, second)
+	}
+	if entry, ok := arena.get(secondHandle); !ok || entry.ruleRevisionID != second.ruleRevisionID {
+		t.Fatalf("second compact handle resolved to %#v, ok=%v", entry, ok)
+	}
+	if entry, ok := arena.get(firstHandle); ok || entry != nil {
+		t.Fatalf("stale reused compact handle resolved to %#v", entry)
+	}
+}
+
+func TestCompactAgendaEntryArenaResetInvalidatesHandles(t *testing.T) {
+	var arena compactAgendaEntryArena
+	handle, _ := arena.add(compactAgendaEntry{
+		key:            activationKey{fingerprint: 1, ordinal: 1},
+		ruleRevisionID: "rule@1",
+		status:         activationStatusPending,
+	})
+	if handle.isZero() {
+		t.Fatal("compact handle is zero")
+	}
+	arena.reset()
+	if got := arena.len(); got != 0 {
+		t.Fatalf("arena len after reset = %d, want 0", got)
+	}
+	if entry, ok := arena.get(handle); ok || entry != nil {
+		t.Fatalf("reset compact handle resolved to %#v", entry)
+	}
+	nextHandle, entry := arena.add(compactAgendaEntry{
+		key:            activationKey{fingerprint: 2, ordinal: 1},
+		ruleRevisionID: "rule@2",
+		status:         activationStatusPending,
+	})
+	if nextHandle.id != handle.id || nextHandle.generation == handle.generation {
+		t.Fatalf("compact handle after reset = %#v after %#v, want same id and new generation", nextHandle, handle)
+	}
+	if entry == nil || entry.ruleRevisionID != "rule@2" {
+		t.Fatalf("compact entry after reset = %#v", entry)
+	}
+}
+
 func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)
