@@ -167,15 +167,15 @@ func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDi
 	alphaOverflowBuckets := alphaFactSetOverflowBuckets(m.alpha.facts)
 	out.Buckets += uint64(alphaOverflowBuckets)
 	out.Buckets += uint64(len(m.alpha.factCounts))
-	out.Buckets += uint64(len(m.factsByName))
-	out.Buckets += uint64(len(m.factsByTemplate))
-	out.Buckets += uint64(len(m.factFieldEqualIndexes))
+	out.Buckets += uint64(len(m.factRefsByName))
+	out.Buckets += uint64(len(m.factRefsByTemplate))
+	out.Buckets += uint64(len(m.factFieldEqualRefs))
 
 	out.Indexes += uint64(alphaConditionIndexCount(m.alpha.conditions))
 	out.Indexes += uint64(len(m.alpha.factCounts))
-	out.Indexes += uint64(len(m.factsByName))
-	out.Indexes += uint64(len(m.factsByTemplate))
-	out.Indexes += uint64(len(m.factFieldEqualIndexes))
+	out.Indexes += uint64(len(m.factRefsByName))
+	out.Indexes += uint64(len(m.factRefsByTemplate))
+	out.Indexes += uint64(len(m.factFieldEqualRefs))
 
 	out.HighWater = uint64(alphaMemoryHighWater(m))
 	out.Bytes = alphaMemoryRetainedBytes(m)
@@ -877,14 +877,14 @@ func alphaMemoryHighWater(m *reteGraphBetaMemory) int {
 	highWater += cap(m.alpha.factRouteStorage)
 	highWater += cap(m.alpha.factTerminalStorage)
 	highWater += cap(m.alpha.factBetaStorage)
-	for _, facts := range m.factsByName {
-		highWater += cap(facts)
+	for _, refs := range m.factRefsByName {
+		highWater += cap(refs)
 	}
-	for _, facts := range m.factsByTemplate {
-		highWater += cap(facts)
+	for _, refs := range m.factRefsByTemplate {
+		highWater += cap(refs)
 	}
-	for _, facts := range m.factFieldEqualIndexes {
-		highWater += cap(facts)
+	for _, refs := range m.factFieldEqualRefs {
+		highWater += cap(refs)
 	}
 	return highWater
 }
@@ -909,18 +909,18 @@ func alphaMemoryRetainedBytes(m *reteGraphBetaMemory) uint64 {
 	for i := range m.alpha.facts {
 		bytes += sliceBytes[FactID](cap(m.alpha.facts[i].overflow))
 	}
-	bytes += snapshotIndexMapBytes[string](m.factsByName)
-	bytes += snapshotIndexMapBytes[TemplateKey](m.factsByTemplate)
-	bytes += snapshotIndexMapBytes[factFieldEqualKey](m.factFieldEqualIndexes)
+	bytes += factRefIndexMapBytes[string](m.factRefsByName)
+	bytes += factRefIndexMapBytes[TemplateKey](m.factRefsByTemplate)
+	bytes += factRefIndexMapBytes[factFieldEqualKey](m.factFieldEqualRefs)
 	bytes += mapEntryBytes[FactID, int](len(m.factNameIndexes))
 	bytes += mapEntryBytes[FactID, int](len(m.factTemplateIndexes))
 	return bytes
 }
 
-func snapshotIndexMapBytes[K comparable](values map[K][]FactSnapshot) uint64 {
-	bytes := mapEntryBytes[K, []FactSnapshot](len(values))
-	for _, facts := range values {
-		bytes += sliceBytes[FactSnapshot](cap(facts))
+func factRefIndexMapBytes[K comparable](values map[K][]factIndexRef) uint64 {
+	bytes := mapEntryBytes[K, []factIndexRef](len(values))
+	for _, refs := range values {
+		bytes += sliceBytes[factIndexRef](cap(refs))
 	}
 	return bytes
 }

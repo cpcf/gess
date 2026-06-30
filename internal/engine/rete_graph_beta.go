@@ -7,6 +7,8 @@ import (
 	"sort"
 )
 
+type factIndexRef int
+
 type reteGraphBetaMemory struct {
 	revision                 *Ruleset
 	graph                    *reteGraph
@@ -19,11 +21,11 @@ type reteGraphBetaMemory struct {
 	facts                    []FactSnapshot
 	factIndexes              map[FactID]int
 	factIndexReserve         int
-	factsByName              map[string][]FactSnapshot
-	factsByTemplate          map[TemplateKey][]FactSnapshot
+	factRefsByName           map[string][]factIndexRef
+	factRefsByTemplate       map[TemplateKey][]factIndexRef
 	factNameIndexes          map[FactID]int
 	factTemplateIndexes      map[FactID]int
-	factFieldEqualIndexes    map[factFieldEqualKey][]FactSnapshot
+	factFieldEqualRefs       map[factFieldEqualKey][]factIndexRef
 	factTargetIndexesDirty   bool
 	factFieldIndexesDirty    bool
 	arena                    *tokenArena
@@ -2188,15 +2190,15 @@ func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
 	if m == nil {
 		return
 	}
-	if m.factsByName == nil {
-		m.factsByName = make(map[string][]FactSnapshot)
+	if m.factRefsByName == nil {
+		m.factRefsByName = make(map[string][]factIndexRef)
 	} else {
-		clear(m.factsByName)
+		clear(m.factRefsByName)
 	}
-	if m.factsByTemplate == nil {
-		m.factsByTemplate = make(map[TemplateKey][]FactSnapshot)
+	if m.factRefsByTemplate == nil {
+		m.factRefsByTemplate = make(map[TemplateKey][]factIndexRef)
 	} else {
-		clear(m.factsByTemplate)
+		clear(m.factRefsByTemplate)
 	}
 	if m.factNameIndexes == nil {
 		m.factNameIndexes = make(map[FactID]int, len(m.facts))
@@ -2208,21 +2210,21 @@ func (m *reteGraphBetaMemory) rebuildFactTargetIndexes() {
 	} else {
 		clear(m.factTemplateIndexes)
 	}
-	if m.factFieldEqualIndexes == nil {
-		m.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	if m.factFieldEqualRefs == nil {
+		m.factFieldEqualRefs = make(map[factFieldEqualKey][]factIndexRef)
 	} else {
-		clear(m.factFieldEqualIndexes)
+		clear(m.factFieldEqualRefs)
 	}
 	m.initializeFactFieldEqualIndexKeys()
-	for _, fact := range m.facts {
-		m.addFactTargetIndexes(fact)
+	for index, fact := range m.facts {
+		m.addFactTargetIndexes(factIndexRef(index), fact)
 	}
 	m.factTargetIndexesDirty = false
 	m.factFieldIndexesDirty = false
 }
 
 func (m *reteGraphBetaMemory) initializeFactFieldEqualIndexKeys() {
-	if m == nil || m.graph == nil || m.factFieldEqualIndexes == nil {
+	if m == nil || m.graph == nil || m.factFieldEqualRefs == nil {
 		return
 	}
 	for templateKey, table := range m.graph.alphaRouteTables {
@@ -2232,8 +2234,8 @@ func (m *reteGraphBetaMemory) initializeFactFieldEqualIndexKeys() {
 		target := conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}
 		for routeKey := range table.indexed {
 			key := newFactFieldEqualKey(target, routeKey.fieldSlot, routeKey.value)
-			if _, ok := m.factFieldEqualIndexes[key]; !ok {
-				m.factFieldEqualIndexes[key] = nil
+			if _, ok := m.factFieldEqualRefs[key]; !ok {
+				m.factFieldEqualRefs[key] = nil
 			}
 		}
 	}
@@ -2699,41 +2701,41 @@ func (m *reteGraphBetaMemory) markFactTargetIndexesDirty() {
 }
 
 func (m *reteGraphBetaMemory) clearFactFieldEqualIndexes() {
-	if m == nil || len(m.factFieldEqualIndexes) == 0 {
+	if m == nil || len(m.factFieldEqualRefs) == 0 {
 		return
 	}
-	clear(m.factFieldEqualIndexes)
+	clear(m.factFieldEqualRefs)
 }
 
-func (m *reteGraphBetaMemory) addFactTargetIndexes(fact FactSnapshot) {
+func (m *reteGraphBetaMemory) addFactTargetIndexes(ref factIndexRef, fact FactSnapshot) {
 	if m == nil || fact.ID().IsZero() {
 		return
 	}
 	if fact.Name() != "" {
-		if m.factsByName == nil {
-			m.factsByName = make(map[string][]FactSnapshot)
+		if m.factRefsByName == nil {
+			m.factRefsByName = make(map[string][]factIndexRef)
 		}
 		if m.factNameIndexes == nil {
 			m.factNameIndexes = make(map[FactID]int)
 		}
-		m.factNameIndexes[fact.ID()] = len(m.factsByName[fact.Name()])
-		m.factsByName[fact.Name()] = append(m.factsByName[fact.Name()], fact)
+		m.factNameIndexes[fact.ID()] = len(m.factRefsByName[fact.Name()])
+		m.factRefsByName[fact.Name()] = append(m.factRefsByName[fact.Name()], ref)
 	}
 	if fact.TemplateKey() != "" {
-		if m.factsByTemplate == nil {
-			m.factsByTemplate = make(map[TemplateKey][]FactSnapshot)
+		if m.factRefsByTemplate == nil {
+			m.factRefsByTemplate = make(map[TemplateKey][]factIndexRef)
 		}
 		if m.factTemplateIndexes == nil {
 			m.factTemplateIndexes = make(map[FactID]int)
 		}
-		m.factTemplateIndexes[fact.ID()] = len(m.factsByTemplate[fact.TemplateKey()])
-		m.factsByTemplate[fact.TemplateKey()] = append(m.factsByTemplate[fact.TemplateKey()], fact)
+		m.factTemplateIndexes[fact.ID()] = len(m.factRefsByTemplate[fact.TemplateKey()])
+		m.factRefsByTemplate[fact.TemplateKey()] = append(m.factRefsByTemplate[fact.TemplateKey()], ref)
 	}
-	m.addFactFieldEqualIndexes(fact)
+	m.addFactFieldEqualIndexes(ref, fact)
 }
 
-func (m *reteGraphBetaMemory) addFactFieldEqualIndexes(fact FactSnapshot) {
-	if m == nil || m.graph == nil || fact.ID().IsZero() || fact.TemplateKey() == "" || m.factFieldEqualIndexes == nil {
+func (m *reteGraphBetaMemory) addFactFieldEqualIndexes(ref factIndexRef, fact FactSnapshot) {
+	if m == nil || m.graph == nil || fact.ID().IsZero() || fact.TemplateKey() == "" || m.factFieldEqualRefs == nil {
 		return
 	}
 	table := m.graph.alphaRouteTables[fact.TemplateKey()]
@@ -2746,7 +2748,7 @@ func (m *reteGraphBetaMemory) addFactFieldEqualIndexes(fact FactSnapshot) {
 			continue
 		}
 		key := newFactFieldEqualKey(target, routeKey.fieldSlot, routeKey.value)
-		m.factFieldEqualIndexes[key] = append(m.factFieldEqualIndexes[key], fact)
+		m.factFieldEqualRefs[key] = append(m.factFieldEqualRefs[key], ref)
 	}
 }
 
@@ -2754,40 +2756,42 @@ func (m *reteGraphBetaMemory) removeFactTargetIndexes(fact FactSnapshot) {
 	if m == nil || fact.ID().IsZero() {
 		return
 	}
-	if fact.Name() != "" && m.factsByName != nil && m.factNameIndexes != nil {
+	if fact.Name() != "" && m.factRefsByName != nil && m.factNameIndexes != nil {
 		index, ok := m.factNameIndexes[fact.ID()]
-		facts := m.factsByName[fact.Name()]
-		if ok && index >= 0 && index < len(facts) {
-			last := len(facts) - 1
+		refs := m.factRefsByName[fact.Name()]
+		if ok && index >= 0 && index < len(refs) {
+			last := len(refs) - 1
 			if index != last {
-				facts[index] = facts[last]
-				m.factNameIndexes[facts[index].ID()] = index
+				refs[index] = refs[last]
+				if moved, ok := m.factSnapshotForIndexRef(refs[index]); ok {
+					m.factNameIndexes[moved.ID()] = index
+				}
 			}
-			facts[last] = FactSnapshot{}
-			facts = facts[:last]
-			if len(facts) == 0 {
-				delete(m.factsByName, fact.Name())
+			refs = refs[:last]
+			if len(refs) == 0 {
+				delete(m.factRefsByName, fact.Name())
 			} else {
-				m.factsByName[fact.Name()] = facts
+				m.factRefsByName[fact.Name()] = refs
 			}
 		}
 		delete(m.factNameIndexes, fact.ID())
 	}
-	if fact.TemplateKey() != "" && m.factsByTemplate != nil && m.factTemplateIndexes != nil {
+	if fact.TemplateKey() != "" && m.factRefsByTemplate != nil && m.factTemplateIndexes != nil {
 		index, ok := m.factTemplateIndexes[fact.ID()]
-		facts := m.factsByTemplate[fact.TemplateKey()]
-		if ok && index >= 0 && index < len(facts) {
-			last := len(facts) - 1
+		refs := m.factRefsByTemplate[fact.TemplateKey()]
+		if ok && index >= 0 && index < len(refs) {
+			last := len(refs) - 1
 			if index != last {
-				facts[index] = facts[last]
-				m.factTemplateIndexes[facts[index].ID()] = index
+				refs[index] = refs[last]
+				if moved, ok := m.factSnapshotForIndexRef(refs[index]); ok {
+					m.factTemplateIndexes[moved.ID()] = index
+				}
 			}
-			facts[last] = FactSnapshot{}
-			facts = facts[:last]
-			if len(facts) == 0 {
-				delete(m.factsByTemplate, fact.TemplateKey())
+			refs = refs[:last]
+			if len(refs) == 0 {
+				delete(m.factRefsByTemplate, fact.TemplateKey())
 			} else {
-				m.factsByTemplate[fact.TemplateKey()] = facts
+				m.factRefsByTemplate[fact.TemplateKey()] = refs
 			}
 		}
 		delete(m.factTemplateIndexes, fact.ID())
@@ -8083,18 +8087,56 @@ func (m *reteGraphBetaMemory) sourceGeneration() Generation {
 }
 
 func (m *reteGraphBetaMemory) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) {
+	refs, ok := m.factRefsForTarget(target)
+	if !ok {
+		return nil, false
+	}
+	return m.snapshotsForFactIndexRefs(refs), true
+}
+
+func (m *reteGraphBetaMemory) factRefsForTarget(target conditionTarget) ([]factIndexRef, bool) {
 	if m == nil {
 		return nil, false
 	}
 	m.ensureFactTargetIndexes()
 	switch target.kind {
 	case conditionTargetName:
-		return m.factsByName[target.name], true
+		return m.factRefsByName[target.name], true
 	case conditionTargetTemplateKey:
-		return m.factsByTemplate[target.templateKey], true
+		return m.factRefsByTemplate[target.templateKey], true
 	default:
 		return nil, false
 	}
+}
+
+func (m *reteGraphBetaMemory) factSnapshotForIndexRef(ref factIndexRef) (FactSnapshot, bool) {
+	if m == nil || ref < 0 {
+		return FactSnapshot{}, false
+	}
+	index := int(ref)
+	if index < 0 || index >= len(m.facts) {
+		return FactSnapshot{}, false
+	}
+	fact := m.facts[index]
+	if fact.ID().IsZero() {
+		return FactSnapshot{}, false
+	}
+	return fact, true
+}
+
+func (m *reteGraphBetaMemory) snapshotsForFactIndexRefs(refs []factIndexRef) []FactSnapshot {
+	if m == nil || len(refs) == 0 {
+		return nil
+	}
+	facts := make([]FactSnapshot, 0, len(refs))
+	for _, ref := range refs {
+		fact, ok := m.factSnapshotForIndexRef(ref)
+		if !ok {
+			continue
+		}
+		facts = append(facts, fact)
+	}
+	return facts
 }
 
 func (m *reteGraphBetaMemory) factsForTargetFieldEqual(target conditionTarget, fieldSlot int, value reteGraphAlphaRouteValue) ([]FactSnapshot, bool) {
@@ -8104,42 +8146,46 @@ func (m *reteGraphBetaMemory) factsForTargetFieldEqual(target conditionTarget, f
 	key := newFactFieldEqualKey(target, fieldSlot, value)
 	if target.kind == conditionTargetTemplateKey {
 		m.ensureFactFieldEqualIndexes()
-		if indexed, ok := m.factFieldEqualIndexes[key]; ok {
-			return indexed, true
+		if indexed, ok := m.factFieldEqualRefs[key]; ok {
+			return m.snapshotsForFactIndexRefs(indexed), true
 		}
 	}
-	facts, ok := m.factsForTarget(target)
+	refs, ok := m.factRefsForTarget(target)
 	if !ok {
 		return nil, false
 	}
-	if indexed, ok := m.factFieldEqualIndexes[key]; ok {
-		return indexed, true
+	if indexed, ok := m.factFieldEqualRefs[key]; ok {
+		return m.snapshotsForFactIndexRefs(indexed), true
 	}
-	indexed := make([]FactSnapshot, 0)
-	for _, fact := range facts {
+	indexed := make([]factIndexRef, 0)
+	for _, ref := range refs {
+		fact, ok := m.factSnapshotForIndexRef(ref)
+		if !ok {
+			continue
+		}
 		if factSnapshotMatchesFieldEqualIndex(fact, fieldSlot, value) {
-			indexed = append(indexed, fact)
+			indexed = append(indexed, ref)
 		}
 	}
-	if m.factFieldEqualIndexes == nil {
-		m.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	if m.factFieldEqualRefs == nil {
+		m.factFieldEqualRefs = make(map[factFieldEqualKey][]factIndexRef)
 	}
-	m.factFieldEqualIndexes[key] = indexed
-	return indexed, true
+	m.factFieldEqualRefs[key] = indexed
+	return m.snapshotsForFactIndexRefs(indexed), true
 }
 
 func (m *reteGraphBetaMemory) ensureFactFieldEqualIndexes() {
-	if m == nil || (!m.factFieldIndexesDirty && m.factFieldEqualIndexes != nil) {
+	if m == nil || (!m.factFieldIndexesDirty && m.factFieldEqualRefs != nil) {
 		return
 	}
-	if m.factFieldEqualIndexes == nil {
-		m.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	if m.factFieldEqualRefs == nil {
+		m.factFieldEqualRefs = make(map[factFieldEqualKey][]factIndexRef)
 	} else {
-		clear(m.factFieldEqualIndexes)
+		clear(m.factFieldEqualRefs)
 	}
 	m.initializeFactFieldEqualIndexKeys()
-	for _, fact := range m.facts {
-		m.addFactFieldEqualIndexes(fact)
+	for index, fact := range m.facts {
+		m.addFactFieldEqualIndexes(factIndexRef(index), fact)
 	}
 	m.factFieldIndexesDirty = false
 }

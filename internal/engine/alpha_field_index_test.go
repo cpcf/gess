@@ -275,14 +275,18 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 		t.Fatalf("factsForTargetFieldEqual facts = %d, want %d", got, want)
 	}
 	key := newFactFieldEqualKey(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}, fieldSlot, value)
-	facts, ok := runtime.graphBeta.factFieldEqualIndexes[key]
+	refs, ok := runtime.graphBeta.factFieldEqualRefs[key]
 	if !ok {
 		t.Fatalf("graph field equality index missing key %#v", key)
 	}
-	if got, want := len(facts), 1; got != want {
+	if got, want := len(refs), 1; got != want {
 		t.Fatalf("indexed facts = %d, want %d", got, want)
 	}
-	category, ok := facts[0].Field("category")
+	fact, ok := runtime.graphBeta.factSnapshotForIndexRef(refs[0])
+	if !ok {
+		t.Fatalf("indexed fact ref = %#v, want materialized fact", refs[0])
+	}
+	category, ok := fact.Field("category")
 	if !ok || category.Kind() != ValueString || category.stringValue != "hot" {
 		t.Fatalf("indexed fact category = %#v, want hot", category)
 	}
