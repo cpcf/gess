@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -289,6 +290,103 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 	category, ok := fact.Field("category")
 	if !ok || category.Kind() != ValueString || category.stringValue != "hot" {
 		t.Fatalf("indexed fact category = %#v, want hot", category)
+	}
+}
+
+func TestGraphBetaAlphaRouteIDsAreSortedAndStableAcrossIndexes(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "category", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueInt, Required: true},
+			{Name: "priority", Kind: ValueString, Required: true},
+			{Name: "region", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "event-name",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: DynamicFact(event.Name())}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+	}{
+		{name: "event-category", field: "category", value: "hot"},
+		{name: "event-score", field: "score", value: 2},
+		{name: "event-priority", field: "priority", value: "high"},
+		{name: "event-region", field: "region", value: "emea"},
+	} {
+		mustAddRule(t, workspace, RuleSpec{
+			Name: tc.name,
+			Conditions: []RuleConditionSpec{{
+				Binding: "event",
+				FieldConstraints: []FieldConstraintSpec{{
+					Field:    tc.field,
+					Operator: FieldConstraintEqual,
+					Value:    tc.value,
+				}},
+				Target: TemplateKeyFact(event.Key()),
+			}},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "alpha-route-order-session")
+	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+		"category": "hot",
+		"score":    2,
+		"priority": "high",
+		"region":   "emea",
+	}))
+	if err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	fact, ok := snapshot.Fact(inserted.Fact.ID())
+	if !ok {
+		t.Fatalf("snapshot fact %s not found", inserted.Fact.ID())
+	}
+	runtime, err := newReteRuntime(revision)
+	if err != nil {
+		t.Fatalf("newReteRuntime: %v", err)
+	}
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta: %v", err)
+	}
+	if runtime.graphBeta == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+
+	want := append([]reteGraphAlphaNodeID(nil), runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact, nil)...)
+	if got, wantLen := len(want), 5; got != wantLen {
+		t.Fatalf("alpha route IDs = %d, want %d: %#v", got, wantLen, want)
+	}
+	if !slices.IsSorted(want) {
+		t.Fatalf("alpha route IDs are not sorted: %#v", want)
+	}
+	for i := range 5 {
+		got := append([]reteGraphAlphaNodeID(nil), runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact, nil)...)
+		if !slices.Equal(got, want) {
+			t.Fatalf("alpha route IDs call %d = %#v, want %#v", i+1, got, want)
+		}
+	}
+	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
+		t.Fatalf("resetGraphBeta again: %v", err)
+	}
+	got := append([]reteGraphAlphaNodeID(nil), runtime.graphBeta.snapshotAlphaRouteIDsForFact(fact)...)
+	if !slices.Equal(got, want) {
+		t.Fatalf("alpha route IDs after reset = %#v, want %#v", got, want)
 	}
 }
 
