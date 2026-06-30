@@ -524,6 +524,42 @@ func TestTerminalTokenMemoryHandlesUseRowGenerationWithoutMove(t *testing.T) {
 	}
 }
 
+func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+
+	var memory terminalTokenMemory
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow(first) returned false")
+	}
+	memory.clear()
+	if got := memory.len(); got != 0 {
+		t.Fatalf("terminal rows after clear = %d, want 0", got)
+	}
+	if row := memory.rowByHandle(firstHandle); row != nil {
+		t.Fatalf("cleared terminal handle resolved to %#v", row)
+	}
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0)
+	if !inserted {
+		t.Fatal("insertTerminalRow(second) returned false")
+	}
+	if secondHandle.id != firstHandle.id || secondHandle.generation == firstHandle.generation {
+		t.Fatalf("reused handle after clear = %#v after %#v, want same id and new generation", secondHandle, firstHandle)
+	}
+	if row := memory.rowByHandle(firstHandle); row != nil {
+		t.Fatalf("stale cleared terminal handle resolved after reuse to %#v", row)
+	}
+	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(row.token, secondToken) {
+		t.Fatalf("reused terminal handle resolved to %#v, want second token", row)
+	}
+}
+
 func TestBetaSideMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
