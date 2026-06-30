@@ -143,7 +143,7 @@ func (m *reteGraphTerminalMemory) singleBranch() bool {
 
 type reteGraphAlphaFactSet struct {
 	inline   [4]FactID
-	overflow map[FactID]struct{}
+	overflow []FactID
 }
 
 type reteGraphBetaMemoryStats struct {
@@ -1269,10 +1269,7 @@ func (s *reteGraphAlphaFactSet) insert(id FactID) bool {
 			return true
 		}
 	}
-	if s.overflow == nil {
-		s.overflow = make(map[FactID]struct{}, 8)
-	}
-	s.overflow[id] = struct{}{}
+	s.overflow = append(s.overflow, id)
 	return true
 }
 
@@ -1285,21 +1282,28 @@ func (s *reteGraphAlphaFactSet) remove(id FactID) bool {
 			continue
 		}
 		s.inline[i] = FactID{}
-		for overflowID := range s.overflow {
-			s.inline[i] = overflowID
-			delete(s.overflow, overflowID)
-			break
+		if len(s.overflow) > 0 {
+			last := len(s.overflow) - 1
+			s.inline[i] = s.overflow[last]
+			s.overflow[last] = FactID{}
+			s.overflow = s.overflow[:last]
 		}
 		return true
 	}
 	if s.overflow == nil {
 		return false
 	}
-	if _, ok := s.overflow[id]; !ok {
-		return false
+	for i, existing := range s.overflow {
+		if existing != id {
+			continue
+		}
+		last := len(s.overflow) - 1
+		s.overflow[i] = s.overflow[last]
+		s.overflow[last] = FactID{}
+		s.overflow = s.overflow[:last]
+		return true
 	}
-	delete(s.overflow, id)
-	return true
+	return false
 }
 
 func (s *reteGraphAlphaFactSet) contains(id FactID) bool {
@@ -1314,8 +1318,7 @@ func (s *reteGraphAlphaFactSet) contains(id FactID) bool {
 	if s.overflow == nil {
 		return false
 	}
-	_, ok := s.overflow[id]
-	return ok
+	return slices.Contains(s.overflow, id)
 }
 
 func (s *reteGraphAlphaFactSet) clear() {
@@ -1324,6 +1327,7 @@ func (s *reteGraphAlphaFactSet) clear() {
 	}
 	s.inline = [4]FactID{}
 	clear(s.overflow)
+	s.overflow = s.overflow[:0]
 }
 
 func (m *betaSideMemory) row(rowID graphTokenRowID) *betaTokenRow {

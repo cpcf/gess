@@ -907,7 +907,7 @@ func alphaMemoryRetainedBytes(m *reteGraphBetaMemory) uint64 {
 	bytes += mapEntryBytes[ConditionID, int](len(m.alpha.factCounts))
 
 	for i := range m.alpha.facts {
-		bytes += mapEntryBytes[FactID, struct{}](len(m.alpha.facts[i].overflow))
+		bytes += sliceBytes[FactID](cap(m.alpha.facts[i].overflow))
 	}
 	bytes += snapshotIndexMapBytes[string](m.factsByName)
 	bytes += snapshotIndexMapBytes[TemplateKey](m.factsByTemplate)
