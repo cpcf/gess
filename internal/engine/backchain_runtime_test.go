@@ -129,7 +129,7 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatal("session runtime is not graph beta-backed")
 	}
-	terminalRows := session.rete.graphBeta.alphaFactOwnership[demandID].terminalRows
+	terminalRows := session.rete.graphBeta.alpha.factOwnership[demandID].terminalRows
 	if len(terminalRows) != 1 {
 		t.Fatalf("generated demand terminal row handles = %d, want 1", len(terminalRows))
 	}
@@ -147,7 +147,7 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if consumed != 1 {
 		t.Fatalf("consume action fired %d times, want 1", consumed)
 	}
-	if rows := session.rete.graphBeta.alphaFactOwnership[demandID].terminalRows; len(rows) != 0 {
+	if rows := session.rete.graphBeta.alpha.factOwnership[demandID].terminalRows; len(rows) != 0 {
 		t.Fatalf("generated demand terminal row handles after run = %d, want 0", len(rows))
 	}
 	snapshot := mustSnapshot(t, ctx, session)

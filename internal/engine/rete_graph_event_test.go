@@ -225,7 +225,7 @@ func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
 	if got := memory.memoryStats().TokenRows; got != 0 {
 		t.Fatalf("token rows after clear = %d, want 0", got)
 	}
-	if got := len(memory.alphaFactCounts); got != 0 {
+	if got := len(memory.alpha.factCounts); got != 0 {
 		t.Fatalf("alpha fact counts after clear = %d, want 0", got)
 	}
 	if !memory.rootToken.isZero() {

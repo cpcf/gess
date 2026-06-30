@@ -158,21 +158,21 @@ func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDi
 	var out RuntimeMemoryOwnerDiagnostics
 	out.Owner = runtimeMemoryOwnerAlpha
 
-	out.Rows += uint64(alphaFactSetRows(m.alphaFacts))
-	out.Rows += uint64(len(m.alphaFactOwnership))
-	out.Rows += uint64(len(m.alphaFactRouteStorage))
-	out.Rows += uint64(len(m.alphaFactTerminalStorage))
-	out.Rows += uint64(len(m.alphaFactBetaStorage))
+	out.Rows += uint64(alphaFactSetRows(m.alpha.facts))
+	out.Rows += uint64(len(m.alpha.factOwnership))
+	out.Rows += uint64(len(m.alpha.factRouteStorage))
+	out.Rows += uint64(len(m.alpha.factTerminalStorage))
+	out.Rows += uint64(len(m.alpha.factBetaStorage))
 
-	alphaOverflowBuckets := alphaFactSetOverflowBuckets(m.alphaFacts)
+	alphaOverflowBuckets := alphaFactSetOverflowBuckets(m.alpha.facts)
 	out.Buckets += uint64(alphaOverflowBuckets)
-	out.Buckets += uint64(len(m.alphaFactCounts))
+	out.Buckets += uint64(len(m.alpha.factCounts))
 	out.Buckets += uint64(len(m.factsByName))
 	out.Buckets += uint64(len(m.factsByTemplate))
 	out.Buckets += uint64(len(m.factFieldEqualIndexes))
 
-	out.Indexes += uint64(alphaConditionIndexCount(m.alphaConditions))
-	out.Indexes += uint64(len(m.alphaFactCounts))
+	out.Indexes += uint64(alphaConditionIndexCount(m.alpha.conditions))
+	out.Indexes += uint64(len(m.alpha.factCounts))
 	out.Indexes += uint64(len(m.factsByName))
 	out.Indexes += uint64(len(m.factsByTemplate))
 	out.Indexes += uint64(len(m.factFieldEqualIndexes))
@@ -871,12 +871,12 @@ func alphaMemoryHighWater(m *reteGraphBetaMemory) int {
 	if m == nil {
 		return 0
 	}
-	highWater := cap(m.alphaFacts)
-	highWater += cap(m.alphaConditions)
-	highWater += cap(m.alphaFactOwnershipIDs)
-	highWater += cap(m.alphaFactRouteStorage)
-	highWater += cap(m.alphaFactTerminalStorage)
-	highWater += cap(m.alphaFactBetaStorage)
+	highWater := cap(m.alpha.facts)
+	highWater += cap(m.alpha.conditions)
+	highWater += cap(m.alpha.factOwnershipIDs)
+	highWater += cap(m.alpha.factRouteStorage)
+	highWater += cap(m.alpha.factTerminalStorage)
+	highWater += cap(m.alpha.factBetaStorage)
 	for _, facts := range m.factsByName {
 		highWater += cap(facts)
 	}
@@ -894,20 +894,20 @@ func alphaMemoryRetainedBytes(m *reteGraphBetaMemory) uint64 {
 		return 0
 	}
 	var bytes uint64
-	bytes += sliceBytes[reteGraphAlphaFactSet](cap(m.alphaFacts))
-	bytes += sliceBytes[[]ConditionID](cap(m.alphaConditions))
-	for _, conditionIDs := range m.alphaConditions {
+	bytes += sliceBytes[reteGraphAlphaFactSet](cap(m.alpha.facts))
+	bytes += sliceBytes[[]ConditionID](cap(m.alpha.conditions))
+	for _, conditionIDs := range m.alpha.conditions {
 		bytes += sliceBytes[ConditionID](cap(conditionIDs))
 	}
-	bytes += mapEntryBytes[FactID, alphaFactOwnershipRow](len(m.alphaFactOwnership))
-	bytes += sliceBytes[FactID](cap(m.alphaFactOwnershipIDs))
-	bytes += sliceBytes[reteGraphAlphaNodeID](cap(m.alphaFactRouteStorage))
-	bytes += sliceBytes[generatedTerminalRowHandle](cap(m.alphaFactTerminalStorage))
-	bytes += sliceBytes[generatedBetaRowHandle](cap(m.alphaFactBetaStorage))
-	bytes += mapEntryBytes[ConditionID, int](len(m.alphaFactCounts))
+	bytes += mapEntryBytes[FactID, alphaFactOwnershipRow](len(m.alpha.factOwnership))
+	bytes += sliceBytes[FactID](cap(m.alpha.factOwnershipIDs))
+	bytes += sliceBytes[reteGraphAlphaNodeID](cap(m.alpha.factRouteStorage))
+	bytes += sliceBytes[generatedTerminalRowHandle](cap(m.alpha.factTerminalStorage))
+	bytes += sliceBytes[generatedBetaRowHandle](cap(m.alpha.factBetaStorage))
+	bytes += mapEntryBytes[ConditionID, int](len(m.alpha.factCounts))
 
-	for i := range m.alphaFacts {
-		bytes += mapEntryBytes[FactID, struct{}](len(m.alphaFacts[i].overflow))
+	for i := range m.alpha.facts {
+		bytes += mapEntryBytes[FactID, struct{}](len(m.alpha.facts[i].overflow))
 	}
 	bytes += snapshotIndexMapBytes[string](m.factsByName)
 	bytes += snapshotIndexMapBytes[TemplateKey](m.factsByTemplate)
