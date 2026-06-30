@@ -163,6 +163,64 @@ func TestSessionRuntimeDiagnosticsReportsAlphaMemoryOwner(t *testing.T) {
 	}
 }
 
+func TestGraphBetaAlphaMemoryDiagnosticsIncludeRouteIndexes(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-memory-index-diagnostics-session")
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("AssertTemplate(cold): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+	memory := session.rete.graphBeta
+	if memory == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+	rule := revision.rules[ruleName]
+	fieldSlot, value, ok := rule.conditionPlans[0].literalEqualityFieldIndex()
+	if !ok {
+		t.Fatal("literal equality field index was not planned")
+	}
+	target := conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}
+	if _, ok := memory.factsForTarget(target); !ok {
+		t.Fatal("factsForTarget returned !ok")
+	}
+	if _, ok := memory.factsForTargetFieldEqual(target, fieldSlot, value); !ok {
+		t.Fatal("factsForTargetFieldEqual returned !ok")
+	}
+	if len(memory.factRefsByTemplate) == 0 {
+		t.Fatal("factRefsByTemplate was not built")
+	}
+	if len(memory.factFieldEqualRefs) == 0 {
+		t.Fatal("factFieldEqualRefs was not built")
+	}
+	if len(memory.alpha.factRouteStorage) == 0 {
+		t.Fatal("alpha fact route storage was not built")
+	}
+
+	alpha := memory.alphaMemoryOwnerDiagnostics()
+	indexBuckets := len(memory.factRefsByName) + len(memory.factRefsByTemplate) + len(memory.factFieldEqualRefs)
+	if alpha.Buckets < uint64(indexBuckets) {
+		t.Fatalf("alpha buckets = %d, want at least compact index buckets %d: %#v", alpha.Buckets, indexBuckets, alpha)
+	}
+	if alpha.Indexes < uint64(indexBuckets) {
+		t.Fatalf("alpha indexes = %d, want at least compact index buckets %d: %#v", alpha.Indexes, indexBuckets, alpha)
+	}
+	indexBytes := factRefIndexMapBytes[string](memory.factRefsByName)
+	indexBytes += factRefIndexMapBytes[TemplateKey](memory.factRefsByTemplate)
+	indexBytes += factRefIndexMapBytes[factFieldEqualKey](memory.factFieldEqualRefs)
+	if indexBytes == 0 {
+		t.Fatal("compact alpha index bytes = 0, want retained byte accounting")
+	}
+	if alpha.Bytes < indexBytes {
+		t.Fatalf("alpha bytes = %d, want at least compact index bytes %d: %#v", alpha.Bytes, indexBytes, alpha)
+	}
+	if alpha.Rows < uint64(len(memory.alpha.factRouteStorage)) {
+		t.Fatalf("alpha rows = %d, want at least route storage rows %d: %#v", alpha.Rows, len(memory.alpha.factRouteStorage), alpha)
+	}
+}
+
 func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
