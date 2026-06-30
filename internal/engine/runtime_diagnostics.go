@@ -6,6 +6,7 @@ import (
 )
 
 const runtimeMemoryOwnerAlpha = "alpha"
+const runtimeMemoryOwnerBeta = "beta"
 
 // RuntimeDiagnostics reports retained runtime memory owners for diagnostics.
 type RuntimeDiagnostics struct {
@@ -52,6 +53,9 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	if owner := s.rete.graphBeta.alphaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
+	if owner := s.rete.graphBeta.betaMemoryOwnerDiagnostics(); owner.Owner != "" {
+		owners = append(owners, owner)
+	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
 }
 
@@ -84,6 +88,112 @@ func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDi
 	out.HighWater = uint64(alphaMemoryHighWater(m))
 	out.Bytes = alphaMemoryRetainedBytes(m)
 	return out
+}
+
+func (m *reteGraphBetaMemory) betaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
+	if m == nil {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerBeta}
+	for _, node := range m.nodes {
+		if node == nil {
+			continue
+		}
+		addBetaTokenMemoryOwnerDiagnostics(&out, node.left)
+		addBetaTokenMemoryOwnerDiagnostics(&out, node.right)
+	}
+	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Bytes == 0 && out.HighWater == 0 {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	return out
+}
+
+func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory tokenHashMemory) {
+	if out == nil {
+		return
+	}
+	joinBuckets := memory.indexes.keyCount()
+	identityBuckets := memory.identityRows.keyCount()
+	factIndexes := memory.factIndexKeyCount()
+
+	out.Rows += uint64(len(memory.rows))
+	out.Buckets += uint64(joinBuckets + identityBuckets)
+	out.Indexes += uint64(factIndexes)
+	out.HighWater += uint64(betaTokenMemoryHighWater(memory))
+	out.Bytes += betaTokenMemoryRetainedBytes(memory)
+}
+
+func betaTokenMemoryHighWater(memory tokenHashMemory) int {
+	highWater := cap(memory.rows)
+	highWater += cap(memory.rowHandles)
+	highWater += cap(memory.freeRowHandles)
+	highWater += cap(memory.indexes.entries)
+	highWater += cap(memory.indexes.touched)
+	highWater += cap(memory.identityRows.entries)
+	highWater += cap(memory.identityRows.touched)
+	highWater += cap(memory.factRows.entries)
+	highWater += cap(memory.factRows.touched)
+	highWater += cap(memory.bucketRestFree)
+	for _, rest := range memory.bucketRestFree {
+		highWater += cap(rest)
+	}
+	return highWater
+}
+
+func betaTokenMemoryRetainedBytes(memory tokenHashMemory) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[graphTokenRow](cap(memory.rows))
+	bytes += sliceBytes[graphTokenRowHandleEntry](cap(memory.rowHandles))
+	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
+	bytes += betaJoinBucketTableBytes(memory.indexes)
+	bytes += graphTokenIdentityBucketTableBytes(memory.identityRows)
+	bytes += factTokenBucketTableBytes(memory.factRows)
+	bytes += bucketRestFreeBytes(memory.bucketRestFree)
+	return bytes
+}
+
+func betaJoinBucketTableBytes(table betaJoinTokenBucketTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[betaJoinTokenBucketEntry](cap(table.entries))
+	bytes += sliceBytes[int](cap(table.touched))
+	for i := range table.entries {
+		if table.entries[i].state == graphTokenBucketFull {
+			bytes += sliceBytes[graphTokenRowID](cap(table.entries[i].bucket.rest))
+		}
+	}
+	return bytes
+}
+
+func graphTokenIdentityBucketTableBytes(table graphTokenIdentityBucketTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[graphTokenIdentityBucketEntry](cap(table.entries))
+	bytes += sliceBytes[int](cap(table.touched))
+	for i := range table.entries {
+		if table.entries[i].state == graphTokenBucketFull {
+			bytes += sliceBytes[graphTokenRowID](cap(table.entries[i].bucket.rest))
+		}
+	}
+	return bytes
+}
+
+func factTokenBucketTableBytes(table factTokenBucketTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[factTokenBucketEntry](cap(table.entries))
+	bytes += sliceBytes[int](cap(table.touched))
+	for i := range table.entries {
+		if table.entries[i].state == graphTokenBucketFull {
+			bytes += sliceBytes[graphTokenRowID](cap(table.entries[i].bucket.rest))
+		}
+	}
+	return bytes
+}
+
+func bucketRestFreeBytes(rests [][]graphTokenRowID) uint64 {
+	bytes := sliceBytes[[]graphTokenRowID](cap(rests))
+	for _, rest := range rests {
+		bytes += sliceBytes[graphTokenRowID](cap(rest))
+	}
+	return bytes
 }
 
 func alphaFactSetRows(sets []reteGraphAlphaFactSet) int {
