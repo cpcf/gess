@@ -68,8 +68,8 @@ type reteModifyRouteScope struct {
 }
 
 type reteGraphBetaNodeMemory struct {
-	left  tokenHashMemory
-	right tokenHashMemory
+	left  betaTokenMemory
+	right betaTokenMemory
 }
 
 type reteGraphAggregateNodeMemory struct {
@@ -221,7 +221,7 @@ type reteGraphTokenMemoryDiagnostics struct {
 	FactIndexKeys        int
 }
 
-type tokenHashMemory struct {
+type betaTokenMemory struct {
 	rows                 []betaTokenRow
 	rowHandles           []graphTokenRowHandleEntry
 	indexes              betaJoinTokenBucketTable
@@ -899,7 +899,7 @@ func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID Condit
 	m.alphaConditions[index] = append(m.alphaConditions[index], conditionID)
 }
 
-func (m *tokenHashMemory) reserveBeta(rowCapacity, factCapacity int) {
+func (m *betaTokenMemory) reserveBeta(rowCapacity, factCapacity int) {
 	if m == nil || rowCapacity <= 0 {
 		return
 	}
@@ -907,7 +907,7 @@ func (m *tokenHashMemory) reserveBeta(rowCapacity, factCapacity int) {
 	m.reserveIndexes(rowCapacity, rowCapacity, factCapacity)
 }
 
-func (m *tokenHashMemory) reserveRows(rowCapacity int) {
+func (m *betaTokenMemory) reserveRows(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
 	}
@@ -918,7 +918,7 @@ func (m *tokenHashMemory) reserveRows(rowCapacity int) {
 	m.rowReserve = max(m.rowReserve, rowCapacity)
 }
 
-func (m *tokenHashMemory) ensureRowCapacity(rowCapacity int) {
+func (m *betaTokenMemory) ensureRowCapacity(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
 	}
@@ -933,7 +933,7 @@ func (m *tokenHashMemory) ensureRowCapacity(rowCapacity int) {
 	m.rowReserve = max(m.rowReserve, nextCapacity)
 }
 
-func (m *tokenHashMemory) reserveRowHandles(rowCapacity int) {
+func (m *betaTokenMemory) reserveRowHandles(rowCapacity int) {
 	if m == nil {
 		return
 	}
@@ -949,7 +949,7 @@ func (m *tokenHashMemory) reserveRowHandles(rowCapacity int) {
 	}
 }
 
-func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
+func (m *betaTokenMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
 	if m == nil {
 		return
 	}
@@ -969,7 +969,7 @@ func (m *tokenHashMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 	}
 }
 
-func (m *tokenHashMemory) clear() {
+func (m *betaTokenMemory) clear() {
 	if m == nil {
 		return
 	}
@@ -984,7 +984,7 @@ func (m *tokenHashMemory) clear() {
 	m.factRowsDirty = false
 }
 
-func (m *tokenHashMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRowHandle {
+func (m *betaTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRowHandle {
 	if m == nil || rowID < 0 {
 		return graphTokenRowHandle{}
 	}
@@ -1014,7 +1014,7 @@ func (m *tokenHashMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRow
 	return graphTokenRowHandle{id: id, generation: entry.generation}
 }
 
-func (m *tokenHashMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow {
+func (m *betaTokenMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow {
 	rowID, ok := m.rowIDByHandle(handle)
 	if !ok {
 		return nil
@@ -1022,7 +1022,7 @@ func (m *tokenHashMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow 
 	return m.row(rowID)
 }
 
-func (m *tokenHashMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenRowID, bool) {
+func (m *betaTokenMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenRowID, bool) {
 	if m == nil || handle.isZero() {
 		return 0, false
 	}
@@ -1037,7 +1037,7 @@ func (m *tokenHashMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenR
 	return entry.rowID, true
 }
 
-func (m *tokenHashMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
+func (m *betaTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
 	if m == nil || handle.isZero() || rowID < 0 {
 		return
 	}
@@ -1052,7 +1052,7 @@ func (m *tokenHashMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphT
 	entry.rowID = rowID
 }
 
-func (m *tokenHashMemory) releaseRowHandle(handle graphTokenRowHandle) {
+func (m *betaTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
 	if m == nil || handle.isZero() {
 		return
 	}
@@ -1073,7 +1073,7 @@ func (m *tokenHashMemory) releaseRowHandle(handle graphTokenRowHandle) {
 	m.freeRowHandles = append(m.freeRowHandles, handle.id)
 }
 
-func (m *tokenHashMemory) invalidateRowHandles() {
+func (m *betaTokenMemory) invalidateRowHandles() {
 	if m == nil || len(m.rowHandles) == 0 {
 		return
 	}
@@ -1092,7 +1092,7 @@ func (m *tokenHashMemory) invalidateRowHandles() {
 	}
 }
 
-func (m *tokenHashMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id graphTokenRowID) {
+func (m *betaTokenMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id graphTokenRowID) {
 	if m == nil || bucket == nil {
 		return
 	}
@@ -1113,7 +1113,7 @@ func (m *tokenHashMemory) appendBucketRow(bucket *graphTokenRowIDBucket, id grap
 	bucket.count++
 }
 
-func (m *tokenHashMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID) {
+func (m *betaTokenMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1132,7 +1132,7 @@ func (m *tokenHashMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID
 	m.appendBucketRow(&m.indexes.entries[index].bucket, id)
 }
 
-func (m *tokenHashMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
+func (m *betaTokenMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1146,7 +1146,7 @@ func (m *tokenHashMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id g
 	m.identityRows.setHeadHash(hash, graphTokenRowIDRef(id))
 }
 
-func (m *tokenHashMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
+func (m *betaTokenMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1165,7 +1165,7 @@ func (m *tokenHashMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
 	m.appendBucketRow(&m.factRows.entries[index].bucket, id)
 }
 
-func (m *tokenHashMemory) takeBucketRest() []graphTokenRowID {
+func (m *betaTokenMemory) takeBucketRest() []graphTokenRowID {
 	if m == nil || len(m.bucketRestFree) == 0 {
 		return make([]graphTokenRowID, 0, 8)
 	}
@@ -1176,7 +1176,7 @@ func (m *tokenHashMemory) takeBucketRest() []graphTokenRowID {
 	return rest[:0]
 }
 
-func (m *tokenHashMemory) recycleBucketRest(rest []graphTokenRowID) {
+func (m *betaTokenMemory) recycleBucketRest(rest []graphTokenRowID) {
 	if m == nil || cap(rest) == 0 {
 		return
 	}
@@ -1184,7 +1184,7 @@ func (m *tokenHashMemory) recycleBucketRest(rest []graphTokenRowID) {
 	m.bucketRestFree = append(m.bucketRestFree, rest[:0])
 }
 
-func (m *tokenHashMemory) len() int {
+func (m *betaTokenMemory) len() int {
 	if m == nil {
 		return 0
 	}
@@ -1264,7 +1264,7 @@ func (s *reteGraphAlphaFactSet) clear() {
 	clear(s.overflow)
 }
 
-func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
+func (m *betaTokenMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
 	if m == nil || m.indexes.isEmpty() {
 		return graphTokenRowIDBucket{}
 	}
@@ -1272,7 +1272,7 @@ func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
 	return bucket
 }
 
-func (m *tokenHashMemory) row(rowID graphTokenRowID) *betaTokenRow {
+func (m *betaTokenMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	if m == nil || rowID < 0 {
 		return nil
 	}
@@ -1283,24 +1283,24 @@ func (m *tokenHashMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	return &m.rows[index]
 }
 
-func (m *tokenHashMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
+func (m *betaTokenMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	return m.insertWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *tokenHashMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
+func (m *betaTokenMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
 	_, inserted := m.insertRowWithNegativeBlockerCount(token, joinKey, negativeBlockerCount)
 	return inserted
 }
 
-func (m *tokenHashMemory) insertRow(token tokenRef, joinKey betaJoinKey) (graphTokenRowHandle, bool) {
+func (m *betaTokenMemory) insertRow(token tokenRef, joinKey betaJoinKey) (graphTokenRowHandle, bool) {
 	return m.insertRowWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *tokenHashMemory) insertFreshRow(token tokenRef, joinKey betaJoinKey) graphTokenRowHandle {
+func (m *betaTokenMemory) insertFreshRow(token tokenRef, joinKey betaJoinKey) graphTokenRowHandle {
 	return m.insertFreshRowWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *tokenHashMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) (graphTokenRowHandle, bool) {
+func (m *betaTokenMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) (graphTokenRowHandle, bool) {
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}, false
 	}
@@ -1337,7 +1337,7 @@ func (m *tokenHashMemory) insertRowWithNegativeBlockerCount(token tokenRef, join
 	return handle, true
 }
 
-func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) graphTokenRowHandle {
+func (m *betaTokenMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) graphTokenRowHandle {
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}
 	}
@@ -1360,7 +1360,7 @@ func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 	return handle
 }
 
-func (m *tokenHashMemory) containsExactToken(token tokenRef) bool {
+func (m *betaTokenMemory) containsExactToken(token tokenRef) bool {
 	if m == nil || token.isZero() || m.identityRows.keyCount() == 0 {
 		return false
 	}
@@ -1384,7 +1384,7 @@ func (m *tokenHashMemory) containsExactToken(token tokenRef) bool {
 	return false
 }
 
-func (m *tokenHashMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
+func (m *betaTokenMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
 	if m == nil || id.IsZero() || refresh == nil {
 		return true
 	}
@@ -1419,7 +1419,7 @@ func (m *tokenHashMemory) refreshTokensContainingFact(id FactID, refresh func(gr
 	return true
 }
 
-func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
+func (m *betaTokenMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
 	if m == nil || rowID < 0 || token.isZero() {
 		return
 	}
@@ -1438,7 +1438,7 @@ func (m *tokenHashMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 	m.markFactRowsDirty()
 }
 
-func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
+func (m *betaTokenMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1464,7 +1464,7 @@ func (m *tokenHashMemory) removeContainingFact(id FactID, counters *propagationC
 	}
 }
 
-func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
+func (m *betaTokenMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1494,7 +1494,7 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 	}
 }
 
-func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
+func (m *betaTokenMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
 	if m == nil || token.isZero() {
 		return graphTokenRow{}, false
 	}
@@ -1530,7 +1530,7 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 	return graphTokenRow{}, false
 }
 
-func (m *tokenHashMemory) removeTokenByHandle(handle graphTokenRowHandle, counters *propagationCounterLedger, branchID int) (graphTokenRow, bool, bool) {
+func (m *betaTokenMemory) removeTokenByHandle(handle graphTokenRowHandle, counters *propagationCounterLedger, branchID int) (graphTokenRow, bool, bool) {
 	if m == nil || handle.isZero() {
 		return graphTokenRow{}, false, false
 	}
@@ -1550,7 +1550,7 @@ func (m *tokenHashMemory) removeTokenByHandle(handle graphTokenRowHandle, counte
 	return removed, true, true
 }
 
-func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
+func (m *betaTokenMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
 	if m == nil || id.IsZero() {
 		return
 	}
@@ -1582,7 +1582,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propag
 	}
 }
 
-func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
+func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
 	if m == nil || rowID < 0 {
 		return
 	}
@@ -1631,7 +1631,7 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	}
 }
 
-func (m *tokenHashMemory) ensureIdentityRowsCapacity(rowCapacity int) {
+func (m *betaTokenMemory) ensureIdentityRowsCapacity(rowCapacity int) {
 	if m == nil {
 		return
 	}
@@ -1640,7 +1640,7 @@ func (m *tokenHashMemory) ensureIdentityRowsCapacity(rowCapacity int) {
 	}
 }
 
-func (m *tokenHashMemory) rebuildIdentityRows() {
+func (m *betaTokenMemory) rebuildIdentityRows() {
 	if m == nil {
 		return
 	}
@@ -1657,7 +1657,7 @@ func (m *tokenHashMemory) rebuildIdentityRows() {
 	}
 }
 
-func (m *tokenHashMemory) removeIdentityIndexRow(identity graphTokenIdentityKey, rowID graphTokenRowID) bool {
+func (m *betaTokenMemory) removeIdentityIndexRow(identity graphTokenIdentityKey, rowID graphTokenRowID) bool {
 	if m == nil || len(m.identityRows.heads) == 0 {
 		return false
 	}
@@ -1685,7 +1685,7 @@ func (m *tokenHashMemory) removeIdentityIndexRow(identity graphTokenIdentityKey,
 	return false
 }
 
-func (m *tokenHashMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey, oldID, newID graphTokenRowID) bool {
+func (m *betaTokenMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey, oldID, newID graphTokenRowID) bool {
 	if m == nil || len(m.identityRows.heads) == 0 || oldID == newID {
 		return false
 	}
@@ -1711,21 +1711,21 @@ func (m *tokenHashMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey
 	return false
 }
 
-func (m *tokenHashMemory) markFactRowsDirty() {
+func (m *betaTokenMemory) markFactRowsDirty() {
 	if m == nil {
 		return
 	}
 	m.factRowsDirty = true
 }
 
-func (m *tokenHashMemory) ensureFactRows() {
+func (m *betaTokenMemory) ensureFactRows() {
 	if m == nil || !m.factRowsDirty {
 		return
 	}
 	m.rebuildFactRows()
 }
 
-func (m *tokenHashMemory) rebuildFactRows() {
+func (m *betaTokenMemory) rebuildFactRows() {
 	if m == nil {
 		return
 	}
@@ -1740,7 +1740,7 @@ func (m *tokenHashMemory) rebuildFactRows() {
 	m.factRowsDirty = false
 }
 
-func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
+func (m *betaTokenMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
 	if m == nil || token.isZero() {
 		return
 	}
@@ -1770,7 +1770,7 @@ func (m *tokenHashMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 	}
 }
 
-func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID) {
+func (m *betaTokenMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID) {
 	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
@@ -1818,7 +1818,7 @@ func (m *tokenHashMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 	}
 }
 
-func (m *tokenHashMemory) replaceTokenFactRows(token tokenRef, oldID, newID graphTokenRowID) {
+func (m *betaTokenMemory) replaceTokenFactRows(token tokenRef, oldID, newID graphTokenRowID) {
 	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
@@ -7661,7 +7661,7 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 	return out
 }
 
-func (s *reteGraphBetaMemoryStats) addTokenMemory(memory tokenHashMemory) {
+func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaTokenMemory) {
 	if s == nil {
 		return
 	}
@@ -7730,7 +7730,7 @@ func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGrap
 	return m.nodes[index]
 }
 
-func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
+func (m betaTokenMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	diag := reteGraphTokenMemoryDiagnostics{
 		Rows:              len(m.rows),
 		JoinIndexKeys:     m.indexes.keyCount(),
@@ -7745,7 +7745,7 @@ func (m tokenHashMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	return diag
 }
 
-func (m tokenHashMemory) factIndexKeyCount() int {
+func (m betaTokenMemory) factIndexKeyCount() int {
 	if !m.factRowsDirty {
 		return m.factRows.keyCount()
 	}

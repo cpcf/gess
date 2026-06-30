@@ -2,13 +2,13 @@ package engine
 
 import "testing"
 
-func TestTokenHashMemoryStoresNegativeBlockerCount(t *testing.T) {
+func TestBetaTokenMemoryStoresNegativeBlockerCount(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insertWithNegativeBlockerCount(token, betaJoinKey{}, 2) {
 		t.Fatal("insertWithNegativeBlockerCount returned false")
 	}
@@ -150,7 +150,7 @@ func TestTokenRefIdentityKeyUsesArenaMetadata(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
+func TestBetaTokenMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
@@ -166,7 +166,7 @@ func TestTokenHashMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 		t.Fatal("equivalent reconstructed tokens should compare equal")
 	}
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -181,7 +181,7 @@ func TestTokenHashMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
+func TestBetaTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -205,7 +205,7 @@ func TestTokenHashMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 		t.Fatal("tokens with colliding identity key but different facts compared equal")
 	}
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -223,13 +223,13 @@ func TestTokenHashMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
+func TestBetaTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	arena := newTokenArena()
 	before := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: before.ID(), factVersion: before.Version()}
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(token, betaJoinKey{}) {
 		t.Fatal("insert returned false")
 	}
@@ -372,7 +372,7 @@ func TestTerminalTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
+func TestBetaTokenMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -381,7 +381,7 @@ func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -412,7 +412,7 @@ func TestTokenHashMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
+func TestBetaTokenMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -421,7 +421,7 @@ func TestTokenHashMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -507,7 +507,7 @@ func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryRowHandlesReuseWithGeneration(t *testing.T) {
+func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -516,7 +516,7 @@ func TestTokenHashMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory tokenHashMemory
+	var memory betaTokenMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -542,8 +542,8 @@ func TestTokenHashMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	}
 }
 
-func TestTokenHashMemoryReusesBucketRestStorage(t *testing.T) {
-	var memory tokenHashMemory
+func TestBetaTokenMemoryReusesBucketRestStorage(t *testing.T) {
+	var memory betaTokenMemory
 
 	key := betaJoinKey{}
 	bucket, _ := memory.indexes.get(key)

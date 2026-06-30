@@ -445,7 +445,7 @@ func activationPayloadBytes(payload *activationPayload) uint64 {
 	return bytes
 }
 
-func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory tokenHashMemory) {
+func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory betaTokenMemory) {
 	if out == nil {
 		return
 	}
@@ -460,7 +460,7 @@ func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memo
 	out.Bytes += betaTokenMemoryRetainedBytes(memory)
 }
 
-func betaTokenMemoryHighWater(memory tokenHashMemory) int {
+func betaTokenMemoryHighWater(memory betaTokenMemory) int {
 	highWater := cap(memory.rows)
 	highWater += cap(memory.rowHandles)
 	highWater += cap(memory.freeRowHandles)
@@ -477,7 +477,7 @@ func betaTokenMemoryHighWater(memory tokenHashMemory) int {
 	return highWater
 }
 
-func betaTokenMemoryRetainedBytes(memory tokenHashMemory) uint64 {
+func betaTokenMemoryRetainedBytes(memory betaTokenMemory) uint64 {
 	var bytes uint64
 	bytes += sliceBytes[betaTokenRow](cap(memory.rows))
 	bytes += sliceBytes[graphTokenRowHandleEntry](cap(memory.rowHandles))
