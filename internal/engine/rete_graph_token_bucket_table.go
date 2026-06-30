@@ -337,6 +337,79 @@ func (t *tokenIdentityBucketTable) rehash(slotCapacity int) {
 	}
 }
 
+type tokenIdentityHeadTable struct {
+	heads   []graphTokenRowID
+	touched []int
+	count   int
+}
+
+func graphTokenRowIDRef(id graphTokenRowID) graphTokenRowID {
+	return id + 1
+}
+
+func graphTokenRowRefID(ref graphTokenRowID) graphTokenRowID {
+	return ref - 1
+}
+
+func (t *tokenIdentityHeadTable) reserve(capacity int) bool {
+	if capacity <= 0 {
+		return false
+	}
+	slotCapacity := tokenIdentityBucketSlotCapacity(capacity)
+	if slotCapacity <= len(t.heads) {
+		return false
+	}
+	t.heads = make([]graphTokenRowID, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
+	t.touched = t.touched[:0]
+	t.count = 0
+	return true
+}
+
+func (t *tokenIdentityHeadTable) clear() {
+	if t == nil || len(t.heads) == 0 {
+		return
+	}
+	for _, index := range t.touched {
+		if index >= 0 && index < len(t.heads) {
+			t.heads[index] = 0
+		}
+	}
+	t.touched = t.touched[:0]
+	t.count = 0
+}
+
+func (t *tokenIdentityHeadTable) keyCount() int {
+	if t == nil {
+		return 0
+	}
+	return t.count
+}
+
+func (t *tokenIdentityHeadTable) headHash(hash uint64) graphTokenRowID {
+	if t == nil || len(t.heads) == 0 {
+		return 0
+	}
+	return t.heads[t.slot(hash)]
+}
+
+func (t *tokenIdentityHeadTable) setHeadHash(hash uint64, head graphTokenRowID) {
+	if t == nil || len(t.heads) == 0 {
+		return
+	}
+	index := t.slot(hash)
+	if t.heads[index] == 0 && head != 0 {
+		t.touched = append(t.touched, index)
+		t.count++
+	} else if t.heads[index] != 0 && head == 0 {
+		t.count--
+	}
+	t.heads[index] = head
+}
+
+func (t *tokenIdentityHeadTable) slot(hash uint64) int {
+	return int(hash & uint64(len(t.heads)-1))
+}
+
 type graphTokenIdentityBucketEntry struct {
 	key    graphTokenIdentityKey
 	bucket graphTokenRowIDBucket

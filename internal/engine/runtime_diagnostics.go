@@ -556,6 +556,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 			continue
 		}
 		highWater += reflectSliceCap(table.FieldByName("entries"))
+		highWater += reflectSliceCap(table.FieldByName("heads"))
 		highWater += reflectSliceCap(table.FieldByName("touched"))
 	}
 	rests := value.FieldByName("bucketRestFree")
@@ -610,6 +611,7 @@ func reflectBucketTableBytes(table reflect.Value) uint64 {
 	var bytes uint64
 	entries := table.FieldByName("entries")
 	bytes += reflectSliceBytes(entries)
+	bytes += reflectSliceBytes(table.FieldByName("heads"))
 	bytes += reflectSliceBytes(table.FieldByName("touched"))
 	if !entries.IsValid() || entries.Kind() != reflect.Slice {
 		return bytes
