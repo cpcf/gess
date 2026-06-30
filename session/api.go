@@ -61,6 +61,11 @@ type (
 	SupportGraph               = engine.SupportGraph
 )
 
+type (
+	RuntimeDiagnostics            = engine.RuntimeDiagnostics
+	RuntimeMemoryOwnerDiagnostics = engine.RuntimeMemoryOwnerDiagnostics
+)
+
 const (
 	EventFactAsserted             = engine.EventFactAsserted
 	EventFactModified             = engine.EventFactModified

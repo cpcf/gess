@@ -122,6 +122,46 @@ func TestGraphBetaAlphaFactRoutesClearTouchedKeysOnReset(t *testing.T) {
 	}
 }
 
+func TestSessionRuntimeDiagnosticsReportsAlphaMemoryOwner(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-memory-diagnostics-session")
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("AssertTemplate(cold): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	var alpha RuntimeMemoryOwnerDiagnostics
+	for _, owner := range diagnostics.MemoryOwners {
+		if owner.Owner == runtimeMemoryOwnerAlpha {
+			alpha = owner
+			break
+		}
+	}
+	if alpha.Owner == "" {
+		t.Fatalf("runtime diagnostics missing alpha owner: %#v", diagnostics.MemoryOwners)
+	}
+	if alpha.Rows == 0 {
+		t.Fatalf("alpha rows = 0, want retained alpha rows: %#v", alpha)
+	}
+	if alpha.Indexes == 0 {
+		t.Fatalf("alpha indexes = 0, want retained alpha indexes: %#v", alpha)
+	}
+	if alpha.Bytes == 0 {
+		t.Fatalf("alpha bytes = 0, want retained byte estimate: %#v", alpha)
+	}
+	if alpha.HighWater == 0 {
+		t.Fatalf("alpha high water = 0, want capacity estimate: %#v", alpha)
+	}
+}
+
 func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)

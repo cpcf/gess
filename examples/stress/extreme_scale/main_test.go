@@ -40,6 +40,7 @@ func TestRunSmoke(t *testing.T) {
 		"shape: engine=gess rules=6 facts=24 queries=3 buckets=4 run=true",
 		"compile:",
 		"run: fired=",
+		"rete-memory: owner=alpha",
 		"query: name=inputs-by-bucket-0000000",
 	} {
 		if !strings.Contains(out.String(), want) {

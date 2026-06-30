@@ -151,6 +151,9 @@ func run(ctx context.Context, out io.Writer, cfg config) error {
 	}
 	fmt.Fprintf(out, "run: fired=%d duration=%s\n", result.Fired, time.Since(start))
 	writeMemory(out, "after-run")
+	if err := writeRuntimeDiagnostics(ctx, out, session); err != nil {
+		return err
+	}
 	if err := writeHeapProfile(cfg.RunHeapProfile); err != nil {
 		return err
 	}
@@ -201,6 +204,26 @@ func writeHeapProfile(path string) error {
 		return err
 	}
 	return file.Close()
+}
+
+func writeRuntimeDiagnostics(ctx context.Context, w io.Writer, session *sess.Session) error {
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		return err
+	}
+	for _, owner := range diagnostics.MemoryOwners {
+		fmt.Fprintf(
+			w,
+			"rete-memory: owner=%s rows=%d buckets=%d indexes=%d bytes=%d highWater=%d\n",
+			owner.Owner,
+			owner.Rows,
+			owner.Buckets,
+			owner.Indexes,
+			owner.Bytes,
+			owner.HighWater,
+		)
+	}
+	return nil
 }
 
 func validateConfig(cfg config) error {

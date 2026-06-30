@@ -192,6 +192,9 @@ func runShape(ctx context.Context, out io.Writer, cfg config) error {
 	}
 	fmt.Fprintf(out, "run: fired=%d duration=%s\n", result.Fired, time.Since(start))
 	writeMemory(out, "after-run", &memoryMark)
+	if err := writeRuntimeDiagnostics(ctx, out, session); err != nil {
+		return err
+	}
 	if err := writeHeapProfile(cfg.RunHeapProfile); err != nil {
 		return err
 	}
@@ -1176,6 +1179,26 @@ func writeMemory(w io.Writer, label string, previous *memoryMark) {
 		mallocsDelta,
 		stats.NumGC,
 	)
+}
+
+func writeRuntimeDiagnostics(ctx context.Context, w io.Writer, session *sess.Session) error {
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		return err
+	}
+	for _, owner := range diagnostics.MemoryOwners {
+		fmt.Fprintf(
+			w,
+			"rete-memory: owner=%s rows=%d buckets=%d indexes=%d bytes=%d highWater=%d\n",
+			owner.Owner,
+			owner.Rows,
+			owner.Buckets,
+			owner.Indexes,
+			owner.Bytes,
+			owner.HighWater,
+		)
+	}
+	return nil
 }
 
 func supportingAssetCount(cfg config) int {
