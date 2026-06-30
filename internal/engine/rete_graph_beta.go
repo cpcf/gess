@@ -222,7 +222,7 @@ type reteGraphTokenMemoryDiagnostics struct {
 }
 
 type tokenHashMemory struct {
-	rows                 []graphTokenRow
+	rows                 []betaTokenRow
 	rowHandles           []graphTokenRowHandleEntry
 	indexes              betaJoinTokenBucketTable
 	identityRows         tokenIdentityHeadTable
@@ -276,6 +276,15 @@ type graphTokenRow struct {
 	branchCount      int
 }
 
+type betaTokenRow struct {
+	handle       graphTokenRowHandle
+	token        tokenRef
+	joinKey      betaJoinKey
+	identity     graphTokenIdentityKey
+	identityNext graphTokenRowID
+	blockerCount int
+}
+
 type generatedTerminalRowHandle struct {
 	alphaNodeID reteGraphAlphaNodeID
 	terminalID  reteGraphTerminalNodeID
@@ -320,6 +329,36 @@ func (r *graphTokenRow) decrementNegativeBlockerCount() int {
 	}
 	r.supportCount--
 	return r.supportCount
+}
+
+func (r betaTokenRow) toGraphTokenRow() graphTokenRow {
+	return graphTokenRow{
+		handle:       r.handle,
+		token:        r.token,
+		joinKey:      r.joinKey,
+		identity:     r.identity,
+		supportCount: r.blockerCount,
+	}
+}
+
+func (r betaTokenRow) negativeBlockerCount() int {
+	return r.blockerCount
+}
+
+func (r *betaTokenRow) incrementNegativeBlockerCount() int {
+	if r == nil {
+		return 0
+	}
+	r.blockerCount++
+	return r.blockerCount
+}
+
+func (r *betaTokenRow) decrementNegativeBlockerCount() int {
+	if r == nil || r.blockerCount <= 0 {
+		return 0
+	}
+	r.blockerCount--
+	return r.blockerCount
 }
 
 type terminalBranchSupport struct {
@@ -872,7 +911,7 @@ func (m *tokenHashMemory) reserveRows(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
 	}
-	rows := make([]graphTokenRow, len(m.rows), rowCapacity)
+	rows := make([]betaTokenRow, len(m.rows), rowCapacity)
 	copy(rows, m.rows)
 	m.rows = rows
 	m.reserveRowHandles(rowCapacity)
@@ -887,7 +926,7 @@ func (m *tokenHashMemory) ensureRowCapacity(rowCapacity int) {
 	for nextCapacity < rowCapacity {
 		nextCapacity *= 2
 	}
-	rows := make([]graphTokenRow, len(m.rows), nextCapacity)
+	rows := make([]betaTokenRow, len(m.rows), nextCapacity)
 	copy(rows, m.rows)
 	m.rows = rows
 	m.reserveRowHandles(nextCapacity)
@@ -936,7 +975,7 @@ func (m *tokenHashMemory) clear() {
 	}
 	m.invalidateRowHandles()
 	for i := range m.rows {
-		m.rows[i] = graphTokenRow{}
+		m.rows[i] = betaTokenRow{}
 	}
 	m.rows = m.rows[:0]
 	m.indexes.clear(m.recycleBucketRest)
@@ -975,7 +1014,7 @@ func (m *tokenHashMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRow
 	return graphTokenRowHandle{id: id, generation: entry.generation}
 }
 
-func (m *tokenHashMemory) rowByHandle(handle graphTokenRowHandle) *graphTokenRow {
+func (m *tokenHashMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow {
 	rowID, ok := m.rowIDByHandle(handle)
 	if !ok {
 		return nil
@@ -1233,7 +1272,7 @@ func (m *tokenHashMemory) bucketForKey(key betaJoinKey) graphTokenRowIDBucket {
 	return bucket
 }
 
-func (m *tokenHashMemory) row(rowID graphTokenRowID) *graphTokenRow {
+func (m *tokenHashMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	if m == nil || rowID < 0 {
 		return nil
 	}
@@ -1285,12 +1324,12 @@ func (m *tokenHashMemory) insertRowWithNegativeBlockerCount(token tokenRef, join
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
-	m.rows[rowID] = graphTokenRow{
+	m.rows[rowID] = betaTokenRow{
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
 		identity:     identity,
-		supportCount: negativeBlockerCount,
+		blockerCount: negativeBlockerCount,
 	}
 	m.appendJoinIndexRow(joinKey, rowID)
 	m.appendIdentityIndexRow(identity, rowID)
@@ -1308,12 +1347,12 @@ func (m *tokenHashMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
-	m.rows[rowID] = graphTokenRow{
+	m.rows[rowID] = betaTokenRow{
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
 		identity:     identity,
-		supportCount: negativeBlockerCount,
+		blockerCount: negativeBlockerCount,
 	}
 	m.appendJoinIndexRow(joinKey, rowID)
 	m.appendIdentityIndexRow(identity, rowID)
@@ -1371,7 +1410,7 @@ func (m *tokenHashMemory) refreshTokensContainingFact(id FactID, refresh func(gr
 		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
 			continue
 		}
-		next, ok := refresh(*row)
+		next, ok := refresh(row.toGraphTokenRow())
 		if !ok || next.isZero() {
 			return false
 		}
@@ -1448,7 +1487,7 @@ func (m *tokenHashMemory) removeTokensContainingFact(id FactID, counters *propag
 		}
 		row := m.row(rowID)
 		if row != nil && !row.token.isZero() && row.token.containsFact(id) {
-			fn(*row)
+			fn(row.toGraphTokenRow())
 		}
 		m.removeRow(rowID, counters)
 		removed++
@@ -1484,7 +1523,7 @@ func (m *tokenHashMemory) removeToken(token tokenRef, counters *propagationCount
 		if !tokenRefEqual(row.token, token) {
 			continue
 		}
-		removed := *row
+		removed := row.toGraphTokenRow()
 		m.removeRow(rowID, counters)
 		return removed, true
 	}
@@ -1506,7 +1545,7 @@ func (m *tokenHashMemory) removeTokenByHandle(handle graphTokenRowHandle, counte
 	if row == nil || row.token.isZero() {
 		return graphTokenRow{}, false, false
 	}
-	removed := *row
+	removed := row.toGraphTokenRow()
 	m.removeRow(rowID, counters)
 	return removed, true, true
 }
@@ -1539,7 +1578,7 @@ func (m *tokenHashMemory) forEachTokenContainingFact(id FactID, counters *propag
 		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
 			continue
 		}
-		fn(*row)
+		fn(row.toGraphTokenRow())
 	}
 }
 
@@ -1585,7 +1624,7 @@ func (m *tokenHashMemory) removeRow(rowID graphTokenRowID, counters *propagation
 		}
 	}
 	m.releaseRowHandle(removed.handle)
-	m.rows[last] = graphTokenRow{}
+	m.rows[last] = betaTokenRow{}
 	m.rows = m.rows[:last]
 	if counters != nil {
 		counters.recordRemovalRowRemoved()
@@ -1623,7 +1662,7 @@ func (m *tokenHashMemory) removeIdentityIndexRow(identity graphTokenIdentityKey,
 		return false
 	}
 	hash := hashTokenIdentityBucketKey(identity)
-	var previous *graphTokenRow
+	var previous *betaTokenRow
 	for ref := m.identityRows.headHash(hash); ref != 0; {
 		currentID := graphTokenRowRefID(ref)
 		current := m.row(currentID)

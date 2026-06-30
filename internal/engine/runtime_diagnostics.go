@@ -479,7 +479,7 @@ func betaTokenMemoryHighWater(memory tokenHashMemory) int {
 
 func betaTokenMemoryRetainedBytes(memory tokenHashMemory) uint64 {
 	var bytes uint64
-	bytes += sliceBytes[graphTokenRow](cap(memory.rows))
+	bytes += sliceBytes[betaTokenRow](cap(memory.rows))
 	bytes += sliceBytes[graphTokenRowHandleEntry](cap(memory.rowHandles))
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinBucketTableBytes(memory.indexes)
