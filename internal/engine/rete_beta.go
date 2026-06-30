@@ -59,6 +59,8 @@ type tokenRow struct {
 	orderedSlots     bool
 }
 
+type tokenIdentityKey = graphTokenIdentityKey
+
 type tokenArena struct {
 	chunks        [][]tokenRow
 	factRefs      []conditionFactRef
@@ -607,6 +609,19 @@ func (r tokenRef) identityState() uint64 {
 	return row.identityState
 }
 
+func (r tokenRef) identityKey() tokenIdentityKey {
+	if row, ok := r.resolve(); ok {
+		return tokenIdentityKey{
+			size:          row.size,
+			generation:    r.handle.arena.generation,
+			identityState: row.identityState,
+		}
+	}
+	return tokenIdentityKey{
+		identityState: candidateIdentityHashStart(0),
+	}
+}
+
 func (r tokenRef) orderedSlots() bool {
 	row, ok := r.resolve()
 	return ok && row.orderedSlots
@@ -933,11 +948,12 @@ func betaJoinKeyForTokenIdentity(token tokenRef) (betaJoinKey, bool) {
 	if token.isZero() {
 		return betaJoinKey{}, false
 	}
+	identity := token.identityKey()
 	return betaJoinKey{
 		kind:            betaJoinKeyTokenIdentity,
-		intValue:        int64(token.size()),
-		floatBits:       uint64(token.generation()),
-		secondFloatBits: token.identityState(),
+		intValue:        int64(identity.size),
+		floatBits:       uint64(identity.generation),
+		secondFloatBits: identity.identityState,
 	}, true
 }
 
