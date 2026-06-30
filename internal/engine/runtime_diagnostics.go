@@ -2,11 +2,14 @@ package engine
 
 import (
 	"context"
+	"reflect"
 	"unsafe"
 )
 
 const runtimeMemoryOwnerAlpha = "alpha"
 const runtimeMemoryOwnerBeta = "beta"
+const runtimeMemoryOwnerRuleTerminal = "rule-terminal"
+const runtimeMemoryOwnerQueryTerminal = "query-terminal"
 
 // RuntimeDiagnostics reports retained runtime memory owners for diagnostics.
 type RuntimeDiagnostics struct {
@@ -55,6 +58,11 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	}
 	if owner := s.rete.graphBeta.betaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
+	}
+	for _, owner := range s.rete.graphBeta.terminalMemoryOwnerDiagnostics() {
+		if owner.Owner != "" {
+			owners = append(owners, owner)
+		}
 	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
 }
@@ -106,6 +114,55 @@ func (m *reteGraphBetaMemory) betaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDia
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
 	return out
+}
+
+func (m *reteGraphBetaMemory) terminalMemoryOwnerDiagnostics() []RuntimeMemoryOwnerDiagnostics {
+	if m == nil || m.graph == nil {
+		return nil
+	}
+	owners := map[string]*RuntimeMemoryOwnerDiagnostics{
+		runtimeMemoryOwnerRuleTerminal:  {Owner: runtimeMemoryOwnerRuleTerminal},
+		runtimeMemoryOwnerQueryTerminal: {Owner: runtimeMemoryOwnerQueryTerminal},
+	}
+	for _, node := range m.graph.terminalNodes {
+		terminal := m.terminalAt(node.id)
+		if terminal == nil {
+			continue
+		}
+		ownerName := runtimeMemoryOwnerRuleTerminal
+		if node.kind == reteGraphTerminalQuery {
+			ownerName = runtimeMemoryOwnerQueryTerminal
+		}
+		addTerminalMemoryOwnerDiagnostics(owners[ownerName], terminal.rows)
+	}
+	out := make([]RuntimeMemoryOwnerDiagnostics, 0, len(owners))
+	for _, ownerName := range []string{runtimeMemoryOwnerRuleTerminal, runtimeMemoryOwnerQueryTerminal} {
+		owner := owners[ownerName]
+		if owner == nil || (owner.Rows == 0 && owner.Buckets == 0 && owner.Indexes == 0 && owner.Bytes == 0 && owner.HighWater == 0) {
+			continue
+		}
+		out = append(out, *owner)
+	}
+	return out
+}
+
+func addTerminalMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory any) {
+	if out == nil {
+		return
+	}
+	type tokenMemoryDiagnostics interface {
+		diagnostics() reteGraphTokenMemoryDiagnostics
+	}
+	diagnostics, ok := memory.(tokenMemoryDiagnostics)
+	if !ok {
+		return
+	}
+	stats := diagnostics.diagnostics()
+	out.Rows += uint64(stats.Rows)
+	out.Buckets += uint64(stats.IdentityIndexKeys)
+	out.Indexes += uint64(stats.FactIndexKeys)
+	out.HighWater += uint64(reflectTokenMemoryHighWater(memory))
+	out.Bytes += reflectTokenMemoryRetainedBytes(memory)
 }
 
 func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory tokenHashMemory) {
@@ -194,6 +251,133 @@ func bucketRestFreeBytes(rests [][]graphTokenRowID) uint64 {
 		bytes += sliceBytes[graphTokenRowID](cap(rest))
 	}
 	return bytes
+}
+
+// Terminal memory is mid-rewrite in active worktrees, so byte estimates inspect
+// the shared field names instead of depending on one concrete row type.
+func reflectTokenMemoryHighWater(memory any) int {
+	value := reflect.ValueOf(memory)
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return 0
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return 0
+	}
+	highWater := 0
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree"} {
+		highWater += reflectSliceCap(value.FieldByName(name))
+	}
+	for _, name := range []string{"indexes", "identityRows", "factRows"} {
+		table := value.FieldByName(name)
+		if !table.IsValid() {
+			continue
+		}
+		highWater += reflectSliceCap(table.FieldByName("entries"))
+		highWater += reflectSliceCap(table.FieldByName("touched"))
+	}
+	rests := value.FieldByName("bucketRestFree")
+	if rests.IsValid() && rests.Kind() == reflect.Slice {
+		for i := 0; i < rests.Len(); i++ {
+			highWater += reflectSliceCap(rests.Index(i))
+		}
+	}
+	return highWater
+}
+
+func reflectTokenMemoryRetainedBytes(memory any) uint64 {
+	value := reflect.ValueOf(memory)
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return 0
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return 0
+	}
+	var bytes uint64
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "bucketRestFree"} {
+		bytes += reflectSliceBytes(value.FieldByName(name))
+	}
+	for _, name := range []string{"indexes", "identityRows", "factRows"} {
+		bytes += reflectBucketTableBytes(value.FieldByName(name))
+	}
+	rests := value.FieldByName("bucketRestFree")
+	if rests.IsValid() && rests.Kind() == reflect.Slice {
+		for i := 0; i < rests.Len(); i++ {
+			bytes += reflectSliceBytes(rests.Index(i))
+		}
+	}
+	return bytes
+}
+
+func reflectBucketTableBytes(table reflect.Value) uint64 {
+	if !table.IsValid() {
+		return 0
+	}
+	if table.Kind() == reflect.Pointer {
+		if table.IsNil() {
+			return 0
+		}
+		table = table.Elem()
+	}
+	if table.Kind() != reflect.Struct {
+		return 0
+	}
+	var bytes uint64
+	entries := table.FieldByName("entries")
+	bytes += reflectSliceBytes(entries)
+	bytes += reflectSliceBytes(table.FieldByName("touched"))
+	if !entries.IsValid() || entries.Kind() != reflect.Slice {
+		return bytes
+	}
+	for i := 0; i < entries.Len(); i++ {
+		entry := entries.Index(i)
+		if !reflectBucketEntryFull(entry) {
+			continue
+		}
+		bucket := entry.FieldByName("bucket")
+		if !bucket.IsValid() || bucket.Kind() != reflect.Struct {
+			continue
+		}
+		bytes += reflectSliceBytes(bucket.FieldByName("rest"))
+	}
+	return bytes
+}
+
+func reflectBucketEntryFull(entry reflect.Value) bool {
+	if !entry.IsValid() || entry.Kind() != reflect.Struct {
+		return false
+	}
+	state := entry.FieldByName("state")
+	if !state.IsValid() {
+		return false
+	}
+	switch state.Kind() {
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return state.Uint() == uint64(graphTokenBucketFull)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return state.Int() == int64(graphTokenBucketFull)
+	default:
+		return false
+	}
+}
+
+func reflectSliceCap(value reflect.Value) int {
+	if !value.IsValid() || value.Kind() != reflect.Slice {
+		return 0
+	}
+	return value.Cap()
+}
+
+func reflectSliceBytes(value reflect.Value) uint64 {
+	if !value.IsValid() || value.Kind() != reflect.Slice {
+		return 0
+	}
+	return uint64(value.Cap()) * uint64(value.Type().Elem().Size())
 }
 
 func alphaFactSetRows(sets []reteGraphAlphaFactSet) int {
