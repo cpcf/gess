@@ -67,6 +67,21 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	} else if got, want := len(rows), 1; got != want {
 		t.Fatalf("query rows = %d, want %d", got, want)
 	}
+	query, ok := revision.query("adults-by-dept")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	compiledArgs, err := query.compileArgs(QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("compileArgs: %v", err)
+	}
+	trigger := session.queryTriggerFact(query, &compiledArgs)
+	if _, err := session.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("insert query trigger: %v", err)
+	}
+	defer func() {
+		_, _ = session.rete.graphBeta.removeFactInternal(context.Background(), trigger, nil, false)
+	}()
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)
 	if err != nil {
@@ -76,8 +91,8 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	if rule.Owner == "" {
 		t.Fatalf("runtime diagnostics missing rule terminal owner: %#v", diagnostics.MemoryOwners)
 	}
-	query := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerQueryTerminal)
-	if query.Owner == "" {
+	queryOwner := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerQueryTerminal)
+	if queryOwner.Owner == "" {
 		t.Fatalf("runtime diagnostics missing query terminal owner: %#v", diagnostics.MemoryOwners)
 	}
 	if rule.Rows == 0 {
@@ -86,7 +101,19 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	if rule.Buckets == 0 {
 		t.Fatalf("rule terminal buckets = 0, want retained identity buckets: %#v", rule)
 	}
-	for _, owner := range []RuntimeMemoryOwnerDiagnostics{rule, query} {
+	if rule.Indexes == 0 {
+		t.Fatalf("rule terminal indexes = 0, want retained fact reverse indexes: %#v", rule)
+	}
+	if queryOwner.Rows == 0 {
+		t.Fatalf("query terminal rows = 0, want retained query terminal rows: %#v", queryOwner)
+	}
+	if queryOwner.Buckets == 0 {
+		t.Fatalf("query terminal buckets = 0, want retained identity buckets: %#v", queryOwner)
+	}
+	if queryOwner.Indexes == 0 {
+		t.Fatalf("query terminal indexes = 0, want retained fact reverse indexes: %#v", queryOwner)
+	}
+	for _, owner := range []RuntimeMemoryOwnerDiagnostics{rule, queryOwner} {
 		if owner.Bytes == 0 {
 			t.Fatalf("%s bytes = 0, want retained byte estimate: %#v", owner.Owner, owner)
 		}
