@@ -293,6 +293,66 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestGraphBetaAlphaLiteralEqualityIndexRebuildsAfterFactTableSwap(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
+	session := mustSession(t, revision, "alpha-field-index-fact-table-swap-session")
+	cold, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(cold): %v", err)
+	}
+	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(hot): %v", err)
+	}
+	memory := session.rete.graphBeta
+	if memory == nil {
+		t.Fatal("graph beta memory is nil")
+	}
+	rule := revision.rules[ruleName]
+	fieldSlot, value, ok := rule.conditionPlans[0].literalEqualityFieldIndex()
+	if !ok {
+		t.Fatal("literal equality field index was not planned")
+	}
+	target := conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey}
+	facts, ok := memory.factsForTargetFieldEqual(target, fieldSlot, value)
+	if !ok {
+		t.Fatal("factsForTargetFieldEqual returned !ok before retract")
+	}
+	if got, want := len(facts), 1; got != want {
+		t.Fatalf("facts before retract = %d, want %d", got, want)
+	}
+	if facts[0].ID() != hot.Fact.ID() {
+		t.Fatalf("indexed fact before retract = %s, want %s", facts[0].ID(), hot.Fact.ID())
+	}
+
+	if _, err := session.Retract(ctx, cold.Fact.ID()); err != nil {
+		t.Fatalf("Retract(cold): %v", err)
+	}
+	facts, ok = memory.factsForTargetFieldEqual(target, fieldSlot, value)
+	if !ok {
+		t.Fatal("factsForTargetFieldEqual returned !ok after retract")
+	}
+	if got, want := len(facts), 1; got != want {
+		t.Fatalf("facts after retract = %d, want %d", got, want)
+	}
+	if facts[0].ID() != hot.Fact.ID() {
+		t.Fatalf("indexed fact after retract = %s, want %s", facts[0].ID(), hot.Fact.ID())
+	}
+	key := newFactFieldEqualKey(target, fieldSlot, value)
+	refs := memory.factFieldEqualRefs[key]
+	if got, want := len(refs), 1; got != want {
+		t.Fatalf("field equality refs after retract = %d, want %d", got, want)
+	}
+	refFact, ok := memory.factSnapshotForIndexRef(refs[0])
+	if !ok {
+		t.Fatalf("field equality ref after retract = %#v, want materialized fact", refs[0])
+	}
+	if refFact.ID() != hot.Fact.ID() {
+		t.Fatalf("field equality ref fact after retract = %s, want %s", refFact.ID(), hot.Fact.ID())
+	}
+}
+
 func TestGraphBetaAlphaRouteIDsAreSortedAndStableAcrossIndexes(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
