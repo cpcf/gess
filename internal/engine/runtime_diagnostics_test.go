@@ -194,6 +194,63 @@ func TestSessionRuntimeDiagnosticsReportsAggregateMemoryOwner(t *testing.T) {
 	}
 }
 
+func TestSessionRuntimeDiagnosticsReportsFactMemoryOwner(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "item",
+		DuplicatePolicy:   DuplicateUniqueKey,
+		DuplicateKeyNames: []string{"id"},
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "state", Kind: ValueString, Required: true},
+		},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "fact-memory-diagnostics-session")
+
+	first, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "state": "ready"}))
+	if err != nil {
+		t.Fatalf("AssertTemplate(a): %v", err)
+	}
+	if first.DuplicateKey == "" {
+		t.Fatalf("duplicate key is empty")
+	}
+	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "state": "ready"})); err != nil {
+		t.Fatalf("AssertTemplate(b): %v", err)
+	}
+	if _, err := session.Assert(ctx, "dynamic", mustFields(t, map[string]any{
+		"id":      "dynamic-1",
+		"payload": map[string]any{"risk": 95},
+	})); err != nil {
+		t.Fatalf("Assert(dynamic): %v", err)
+	}
+
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	fact := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerFact)
+	if fact.Owner == "" {
+		t.Fatalf("runtime diagnostics missing fact owner: %#v", diagnostics.MemoryOwners)
+	}
+	if got, want := fact.Rows, uint64(3); got != want {
+		t.Fatalf("fact rows = %d, want %d: %#v", got, want, fact)
+	}
+	if fact.Buckets == 0 {
+		t.Fatalf("fact buckets = 0, want retained fact-base map buckets: %#v", fact)
+	}
+	if fact.Indexes == 0 {
+		t.Fatalf("fact indexes = 0, want fact-base and duplicate index entries: %#v", fact)
+	}
+	if fact.Bytes == 0 {
+		t.Fatalf("fact bytes = 0, want retained byte estimate: %#v", fact)
+	}
+	if fact.HighWater == 0 {
+		t.Fatalf("fact high water = 0, want capacity estimate: %#v", fact)
+	}
+}
+
 func runtimeDiagnosticOwner(diagnostics RuntimeDiagnostics, ownerName string) RuntimeMemoryOwnerDiagnostics {
 	for _, owner := range diagnostics.MemoryOwners {
 		if owner.Owner == ownerName {

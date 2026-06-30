@@ -8,6 +8,7 @@ import (
 
 const runtimeMemoryOwnerAlpha = "alpha"
 const runtimeMemoryOwnerBeta = "beta"
+const runtimeMemoryOwnerFact = "fact"
 const runtimeMemoryOwnerRuleTerminal = "rule-terminal"
 const runtimeMemoryOwnerQueryTerminal = "query-terminal"
 const runtimeMemoryOwnerAgenda = "agenda"
@@ -55,7 +56,10 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
 		return RuntimeDiagnostics{}
 	}
-	owners := make([]RuntimeMemoryOwnerDiagnostics, 0, 1)
+	owners := make([]RuntimeMemoryOwnerDiagnostics, 0, 7)
+	if owner := factWorkspaceMemoryOwnerDiagnostics(s.activeFactWorkspace()); owner.Owner != "" {
+		owners = append(owners, owner)
+	}
 	if owner := s.rete.graphBeta.alphaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
@@ -74,6 +78,77 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 		owners = append(owners, owner)
 	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
+}
+
+func factWorkspaceMemoryOwnerDiagnostics(workspace any) RuntimeMemoryOwnerDiagnostics {
+	value := reflectDerefValue(reflect.ValueOf(workspace))
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerFact}
+
+	facts := value.FieldByName("facts")
+	if facts.IsValid() && facts.Kind() == reflect.Slice {
+		out.Rows += uint64(facts.Len())
+		out.HighWater += uint64(facts.Cap())
+		out.Bytes += reflectSliceBytes(facts)
+		for i := 0; i < facts.Len(); i++ {
+			addWorkingFactDynamicOwnerDiagnostics(&out, facts.Index(i))
+		}
+	}
+
+	for _, name := range []string{"insertionOrder", "factsBySequence", "slotStorage", "compactSlotStorage"} {
+		slice := value.FieldByName(name)
+		out.HighWater += uint64(reflectSliceCap(slice))
+		out.Bytes += reflectSliceBytes(slice)
+	}
+	out.Indexes += uint64(reflectSliceLen(value.FieldByName("factsBySequence")))
+
+	for _, name := range []string{"factsByID", "factsByTemplate", "factsByName"} {
+		addFactMapOwnerDiagnostics(&out, value.FieldByName(name))
+	}
+
+	duplicates := value.FieldByName("factsByDuplicate")
+	out.Indexes += uint64(reflectContainerEntryCount(duplicates, 0))
+	out.HighWater += uint64(reflectContainerHighWater(duplicates, 0))
+	out.Bytes += reflectContainerRetainedBytes(duplicates, 0)
+
+	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Bytes == 0 && out.HighWater == 0 {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	return out
+}
+
+func addFactMapOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, value reflect.Value) {
+	if out == nil || !value.IsValid() || value.Kind() != reflect.Map {
+		return
+	}
+	out.Buckets += uint64(value.Len())
+	out.Indexes += uint64(reflectMapIndexEntries(value))
+	out.HighWater += uint64(reflectMapHighWater(value))
+	out.Bytes += reflectMapRetainedBytes(value)
+}
+
+func addWorkingFactDynamicOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, fact reflect.Value) {
+	if out == nil {
+		return
+	}
+	fact = reflectDerefValue(fact)
+	if !fact.IsValid() || fact.Kind() != reflect.Struct {
+		return
+	}
+	for _, name := range []string{"fields", "fieldPresence"} {
+		field := fact.FieldByName(name)
+		if !field.IsValid() || field.Kind() != reflect.Map {
+			continue
+		}
+		out.HighWater += uint64(reflectMapHighWater(field))
+		out.Bytes += reflectMapRetainedBytes(field)
+	}
+	if duplicate := fact.FieldByName("dupIndex"); duplicate.IsValid() && duplicate.Kind() == reflect.Pointer && !duplicate.IsNil() {
+		out.HighWater++
+		out.Bytes += uint64(duplicate.Type().Elem().Size())
+	}
 }
 
 func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
@@ -578,11 +653,184 @@ func reflectSliceCap(value reflect.Value) int {
 	return value.Cap()
 }
 
+func reflectSliceLen(value reflect.Value) int {
+	if !value.IsValid() || value.Kind() != reflect.Slice {
+		return 0
+	}
+	return value.Len()
+}
+
 func reflectSliceBytes(value reflect.Value) uint64 {
 	if !value.IsValid() || value.Kind() != reflect.Slice {
 		return 0
 	}
 	return uint64(value.Cap()) * uint64(value.Type().Elem().Size())
+}
+
+func reflectDerefValue(value reflect.Value) reflect.Value {
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+		value = value.Elem()
+	}
+	return value
+}
+
+func reflectMapIndexEntries(value reflect.Value) int {
+	if !value.IsValid() || value.Kind() != reflect.Map {
+		return 0
+	}
+	entries := value.Len()
+	iter := value.MapRange()
+	for iter.Next() {
+		mapValue := iter.Value()
+		if mapValue.Kind() == reflect.Slice {
+			entries += mapValue.Len()
+		}
+	}
+	return entries
+}
+
+func reflectMapHighWater(value reflect.Value) int {
+	if !value.IsValid() || value.Kind() != reflect.Map {
+		return 0
+	}
+	highWater := value.Len()
+	iter := value.MapRange()
+	for iter.Next() {
+		mapValue := iter.Value()
+		if mapValue.Kind() == reflect.Slice {
+			highWater += mapValue.Cap()
+		}
+	}
+	return highWater
+}
+
+func reflectMapRetainedBytes(value reflect.Value) uint64 {
+	if !value.IsValid() || value.Kind() != reflect.Map {
+		return 0
+	}
+	bytes := uint64(value.Len()) * uint64(value.Type().Key().Size()+value.Type().Elem().Size())
+	iter := value.MapRange()
+	for iter.Next() {
+		mapValue := iter.Value()
+		if mapValue.Kind() == reflect.Slice {
+			bytes += reflectSliceBytes(mapValue)
+		}
+	}
+	return bytes
+}
+
+func reflectContainerEntryCount(value reflect.Value, depth int) int {
+	if depth > 4 {
+		return 0
+	}
+	value = reflectDerefValue(value)
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		entries := value.Len()
+		iter := value.MapRange()
+		for iter.Next() {
+			entries += reflectContainerEntryCount(iter.Value(), depth+1)
+		}
+		return entries
+	case reflect.Slice, reflect.Array:
+		entries := value.Len()
+		for i := 0; i < value.Len(); i++ {
+			entries += reflectContainerEntryCount(value.Index(i), depth+1)
+		}
+		return entries
+	case reflect.Struct:
+		entries := 0
+		for _, field := range value.Fields() {
+			entries += reflectContainerEntryCount(field, depth+1)
+		}
+		return entries
+	default:
+		return 0
+	}
+}
+
+func reflectContainerHighWater(value reflect.Value, depth int) int {
+	if depth > 4 {
+		return 0
+	}
+	value = reflectDerefValue(value)
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		highWater := value.Len()
+		iter := value.MapRange()
+		for iter.Next() {
+			highWater += reflectContainerHighWater(iter.Value(), depth+1)
+		}
+		return highWater
+	case reflect.Slice:
+		highWater := value.Cap()
+		for i := 0; i < value.Len(); i++ {
+			highWater += reflectContainerHighWater(value.Index(i), depth+1)
+		}
+		return highWater
+	case reflect.Array:
+		highWater := value.Len()
+		for i := 0; i < value.Len(); i++ {
+			highWater += reflectContainerHighWater(value.Index(i), depth+1)
+		}
+		return highWater
+	case reflect.Struct:
+		highWater := 0
+		for _, field := range value.Fields() {
+			highWater += reflectContainerHighWater(field, depth+1)
+		}
+		return highWater
+	default:
+		return 0
+	}
+}
+
+func reflectContainerRetainedBytes(value reflect.Value, depth int) uint64 {
+	if depth > 4 {
+		return 0
+	}
+	value = reflectDerefValue(value)
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		bytes := reflectMapRetainedBytes(value)
+		iter := value.MapRange()
+		for iter.Next() {
+			bytes += reflectContainerRetainedBytes(iter.Value(), depth+1)
+		}
+		return bytes
+	case reflect.Slice:
+		bytes := reflectSliceBytes(value)
+		for i := 0; i < value.Len(); i++ {
+			bytes += reflectContainerRetainedBytes(value.Index(i), depth+1)
+		}
+		return bytes
+	case reflect.Array:
+		var bytes uint64
+		for i := 0; i < value.Len(); i++ {
+			bytes += reflectContainerRetainedBytes(value.Index(i), depth+1)
+		}
+		return bytes
+	case reflect.Struct:
+		var bytes uint64
+		for _, field := range value.Fields() {
+			bytes += reflectContainerRetainedBytes(field, depth+1)
+		}
+		return bytes
+	default:
+		return 0
+	}
 }
 
 func alphaFactSetRows(sets []reteGraphAlphaFactSet) int {
