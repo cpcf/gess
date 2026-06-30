@@ -191,8 +191,8 @@ func (m *reteGraphBetaMemory) betaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDia
 		if node == nil {
 			continue
 		}
-		addBetaTokenMemoryOwnerDiagnostics(&out, node.left)
-		addBetaTokenMemoryOwnerDiagnostics(&out, node.right)
+		addBetaSideMemoryOwnerDiagnostics(&out, node.left)
+		addBetaSideMemoryOwnerDiagnostics(&out, node.right)
 	}
 	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Bytes == 0 && out.HighWater == 0 {
 		return RuntimeMemoryOwnerDiagnostics{}
@@ -445,7 +445,7 @@ func activationPayloadBytes(payload *activationPayload) uint64 {
 	return bytes
 }
 
-func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory betaTokenMemory) {
+func addBetaSideMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory betaSideMemory) {
 	if out == nil {
 		return
 	}
@@ -456,11 +456,11 @@ func addBetaTokenMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memo
 	out.Rows += uint64(len(memory.rows))
 	out.Buckets += uint64(joinBuckets + identityBuckets)
 	out.Indexes += uint64(factIndexes)
-	out.HighWater += uint64(betaTokenMemoryHighWater(memory))
-	out.Bytes += betaTokenMemoryRetainedBytes(memory)
+	out.HighWater += uint64(betaSideMemoryHighWater(memory))
+	out.Bytes += betaSideMemoryRetainedBytes(memory)
 }
 
-func betaTokenMemoryHighWater(memory betaTokenMemory) int {
+func betaSideMemoryHighWater(memory betaSideMemory) int {
 	highWater := cap(memory.rows)
 	highWater += cap(memory.rowHandles)
 	highWater += cap(memory.freeRowHandles)
@@ -476,7 +476,7 @@ func betaTokenMemoryHighWater(memory betaTokenMemory) int {
 	return highWater
 }
 
-func betaTokenMemoryRetainedBytes(memory betaTokenMemory) uint64 {
+func betaSideMemoryRetainedBytes(memory betaSideMemory) uint64 {
 	var bytes uint64
 	bytes += sliceBytes[betaTokenRow](cap(memory.rows))
 	bytes += sliceBytes[betaTokenRowHandleEntry](cap(memory.rowHandles))

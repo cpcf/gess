@@ -5,13 +5,13 @@ import (
 	"unsafe"
 )
 
-func TestBetaTokenMemoryStoresNegativeBlockerCount(t *testing.T) {
+func TestBetaSideMemoryStoresNegativeBlockerCount(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insertWithNegativeBlockerCount(token, betaJoinKey{}, 2) {
 		t.Fatal("insertWithNegativeBlockerCount returned false")
 	}
@@ -153,7 +153,7 @@ func TestTokenRefIdentityKeyUsesArenaMetadata(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
+func TestBetaSideMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
@@ -169,7 +169,7 @@ func TestBetaTokenMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 		t.Fatal("equivalent reconstructed tokens should compare equal")
 	}
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -184,7 +184,7 @@ func TestBetaTokenMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
+func TestBetaSideMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -208,7 +208,7 @@ func TestBetaTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 		t.Fatal("tokens with colliding identity key but different facts compared equal")
 	}
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -226,13 +226,13 @@ func TestBetaTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
+func TestBetaSideMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	arena := newTokenArena()
 	before := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: before.ID(), factVersion: before.Version()}
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(token, betaJoinKey{}) {
 		t.Fatal("insert returned false")
 	}
@@ -375,7 +375,7 @@ func TestTerminalTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
+func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -384,7 +384,7 @@ func TestBetaTokenMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -415,7 +415,7 @@ func TestBetaTokenMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
+func TestBetaSideMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -424,7 +424,7 @@ func TestBetaTokenMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -510,7 +510,7 @@ func TestTerminalTokenMemoryHandleRemovalRepairsMovedRow(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
+func TestBetaSideMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -519,7 +519,7 @@ func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -545,13 +545,13 @@ func TestBetaTokenMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryRowHandleEntryIsCompact(t *testing.T) {
+func TestBetaSideMemoryRowHandleEntryIsCompact(t *testing.T) {
 	if got, want := unsafe.Sizeof(betaTokenRowHandleEntry{}), uintptr(8); got != want {
 		t.Fatalf("beta row handle entry size = %d, want %d", got, want)
 	}
 }
 
-func TestBetaTokenMemoryReusesFactLinkStorage(t *testing.T) {
+func TestBetaSideMemoryReusesFactLinkStorage(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -560,7 +560,7 @@ func TestBetaTokenMemoryReusesFactLinkStorage(t *testing.T) {
 	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
@@ -587,7 +587,7 @@ func TestBetaTokenMemoryReusesFactLinkStorage(t *testing.T) {
 	}
 }
 
-func TestBetaTokenMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
+func TestBetaSideMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
 	arena := newTokenArena()
 	parentFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	childFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -596,7 +596,7 @@ func TestBetaTokenMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
 	parent := arena.add(tokenRef{}, parentEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(parentFact)}, parentFact.Recency(), parentFact.Generation())
 	child := arena.add(parent, childEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(childFact)}, childFact.Recency(), childFact.Generation())
 
-	var memory betaTokenMemory
+	var memory betaSideMemory
 	if !memory.insert(child, betaJoinKey{}) {
 		t.Fatal("insert(child) returned false")
 	}

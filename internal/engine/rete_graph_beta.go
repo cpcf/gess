@@ -68,8 +68,8 @@ type reteModifyRouteScope struct {
 }
 
 type reteGraphBetaNodeMemory struct {
-	left  betaTokenMemory
-	right betaTokenMemory
+	left  betaSideMemory
+	right betaSideMemory
 }
 
 type reteGraphAggregateNodeMemory struct {
@@ -221,7 +221,7 @@ type reteGraphTokenMemoryDiagnostics struct {
 	FactIndexKeys        int
 }
 
-type betaTokenMemory struct {
+type betaSideMemory struct {
 	rows                 []betaTokenRow
 	rowHandles           []betaTokenRowHandleEntry
 	indexes              betaJoinHeadTable
@@ -724,7 +724,7 @@ func (m *reteGraphBetaMemory) context() context.Context {
 	return context.Background()
 }
 
-func graphBetaTokenMemoryCapacity(revision *Ruleset, initialFacts int) int {
+func graphBetaSideMemoryCapacity(revision *Ruleset, initialFacts int) int {
 	capacity := max(8, initialFacts)
 	if revision != nil {
 		capacity = max(capacity, len(revision.ruleOrder)*2)
@@ -913,7 +913,7 @@ func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID Condit
 	m.alphaConditions[index] = append(m.alphaConditions[index], conditionID)
 }
 
-func (m *betaTokenMemory) reserveBeta(rowCapacity, factCapacity int) {
+func (m *betaSideMemory) reserveBeta(rowCapacity, factCapacity int) {
 	if m == nil || rowCapacity <= 0 {
 		return
 	}
@@ -921,7 +921,7 @@ func (m *betaTokenMemory) reserveBeta(rowCapacity, factCapacity int) {
 	m.reserveIndexes(rowCapacity, rowCapacity, factCapacity)
 }
 
-func (m *betaTokenMemory) reserveRows(rowCapacity int) {
+func (m *betaSideMemory) reserveRows(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
 	}
@@ -932,7 +932,7 @@ func (m *betaTokenMemory) reserveRows(rowCapacity int) {
 	m.rowReserve = max(m.rowReserve, rowCapacity)
 }
 
-func (m *betaTokenMemory) ensureRowCapacity(rowCapacity int) {
+func (m *betaSideMemory) ensureRowCapacity(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
 	}
@@ -947,7 +947,7 @@ func (m *betaTokenMemory) ensureRowCapacity(rowCapacity int) {
 	m.rowReserve = max(m.rowReserve, nextCapacity)
 }
 
-func (m *betaTokenMemory) reserveRowHandles(rowCapacity int) {
+func (m *betaSideMemory) reserveRowHandles(rowCapacity int) {
 	if m == nil {
 		return
 	}
@@ -963,7 +963,7 @@ func (m *betaTokenMemory) reserveRowHandles(rowCapacity int) {
 	}
 }
 
-func (m *betaTokenMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
+func (m *betaSideMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
 	if m == nil {
 		return
 	}
@@ -990,7 +990,7 @@ func (m *betaTokenMemory) reserveIndexes(joinCapacity, identityCapacity, factCap
 	}
 }
 
-func (m *betaTokenMemory) clear() {
+func (m *betaSideMemory) clear() {
 	if m == nil {
 		return
 	}
@@ -1008,7 +1008,7 @@ func (m *betaTokenMemory) clear() {
 	m.factRowsDirty = false
 }
 
-func (m *betaTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRowHandle {
+func (m *betaSideMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRowHandle {
 	if m == nil || rowID < 0 {
 		return graphTokenRowHandle{}
 	}
@@ -1043,7 +1043,7 @@ func (m *betaTokenMemory) allocateRowHandle(rowID graphTokenRowID) graphTokenRow
 	return graphTokenRowHandle{id: id, generation: entry.generation}
 }
 
-func (m *betaTokenMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow {
+func (m *betaSideMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow {
 	rowID, ok := m.rowIDByHandle(handle)
 	if !ok {
 		return nil
@@ -1051,7 +1051,7 @@ func (m *betaTokenMemory) rowByHandle(handle graphTokenRowHandle) *betaTokenRow 
 	return m.row(rowID)
 }
 
-func (m *betaTokenMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenRowID, bool) {
+func (m *betaSideMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenRowID, bool) {
 	if m == nil || handle.isZero() {
 		return 0, false
 	}
@@ -1066,7 +1066,7 @@ func (m *betaTokenMemory) rowIDByHandle(handle graphTokenRowHandle) (graphTokenR
 	return betaTokenRowIDFromRef(entry.rowRef)
 }
 
-func (m *betaTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
+func (m *betaSideMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphTokenRowID) {
 	if m == nil || handle.isZero() || rowID < 0 {
 		return
 	}
@@ -1085,7 +1085,7 @@ func (m *betaTokenMemory) moveRowHandle(handle graphTokenRowHandle, rowID graphT
 	entry.rowRef = rowRef
 }
 
-func (m *betaTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
+func (m *betaSideMemory) releaseRowHandle(handle graphTokenRowHandle) {
 	if m == nil || handle.isZero() {
 		return
 	}
@@ -1105,7 +1105,7 @@ func (m *betaTokenMemory) releaseRowHandle(handle graphTokenRowHandle) {
 	m.freeRowHandles = append(m.freeRowHandles, handle.id)
 }
 
-func (m *betaTokenMemory) invalidateRowHandles() {
+func (m *betaSideMemory) invalidateRowHandles() {
 	if m == nil || len(m.rowHandles) == 0 {
 		return
 	}
@@ -1137,7 +1137,7 @@ func betaTokenRowIDFromRef(ref uint32) (graphTokenRowID, bool) {
 	return graphTokenRowID(ref - 1), true
 }
 
-func (m *betaTokenMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID) {
+func (m *betaSideMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1163,7 +1163,7 @@ func (m *betaTokenMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID
 	m.indexes.setTail(key, ref)
 }
 
-func (m *betaTokenMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
+func (m *betaSideMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1177,7 +1177,7 @@ func (m *betaTokenMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id g
 	m.identityRows.setHeadHash(hash, graphTokenRowIDRef(id))
 }
 
-func (m *betaTokenMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
+func (m *betaSideMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
 	if m == nil {
 		return
 	}
@@ -1192,7 +1192,7 @@ func (m *betaTokenMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
 	m.factRows.setHead(key, link)
 }
 
-func (m *betaTokenMemory) allocateFactLink(rowID graphTokenRowID, next betaFactLinkID) betaFactLinkID {
+func (m *betaSideMemory) allocateFactLink(rowID graphTokenRowID, next betaFactLinkID) betaFactLinkID {
 	if m == nil || rowID < 0 {
 		return 0
 	}
@@ -1211,7 +1211,7 @@ func (m *betaTokenMemory) allocateFactLink(rowID graphTokenRowID, next betaFactL
 	return betaFactLinkRef(betaFactLinkID(len(m.factLinks) - 1))
 }
 
-func (m *betaTokenMemory) releaseFactLink(ref betaFactLinkID) {
+func (m *betaSideMemory) releaseFactLink(ref betaFactLinkID) {
 	if m == nil || ref == 0 {
 		return
 	}
@@ -1223,7 +1223,7 @@ func (m *betaTokenMemory) releaseFactLink(ref betaFactLinkID) {
 	m.freeFactLinks = append(m.freeFactLinks, ref)
 }
 
-func (m *betaTokenMemory) factLink(ref betaFactLinkID) *betaFactLinkRow {
+func (m *betaSideMemory) factLink(ref betaFactLinkID) *betaFactLinkRow {
 	if m == nil || ref == 0 {
 		return nil
 	}
@@ -1242,7 +1242,7 @@ func betaFactLinkIndex(ref betaFactLinkID) int {
 	return int(ref - 1)
 }
 
-func (m *betaTokenMemory) len() int {
+func (m *betaSideMemory) len() int {
 	if m == nil {
 		return 0
 	}
@@ -1322,7 +1322,7 @@ func (s *reteGraphAlphaFactSet) clear() {
 	clear(s.overflow)
 }
 
-func (m *betaTokenMemory) row(rowID graphTokenRowID) *betaTokenRow {
+func (m *betaSideMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	if m == nil || rowID < 0 {
 		return nil
 	}
@@ -1333,7 +1333,7 @@ func (m *betaTokenMemory) row(rowID graphTokenRowID) *betaTokenRow {
 	return &m.rows[index]
 }
 
-func (m *betaTokenMemory) joinRowCount(key betaJoinKey) int {
+func (m *betaSideMemory) joinRowCount(key betaJoinKey) int {
 	count := 0
 	m.forEachJoinRow(key, func(graphTokenRowID, *betaTokenRow) bool {
 		count++
@@ -1342,7 +1342,7 @@ func (m *betaTokenMemory) joinRowCount(key betaJoinKey) int {
 	return count
 }
 
-func (m *betaTokenMemory) forEachJoinRow(key betaJoinKey, fn func(graphTokenRowID, *betaTokenRow) bool) {
+func (m *betaSideMemory) forEachJoinRow(key betaJoinKey, fn func(graphTokenRowID, *betaTokenRow) bool) {
 	if m == nil || fn == nil || m.indexes.isEmpty() {
 		return
 	}
@@ -1363,24 +1363,24 @@ func (m *betaTokenMemory) forEachJoinRow(key betaJoinKey, fn func(graphTokenRowI
 	}
 }
 
-func (m *betaTokenMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
+func (m *betaSideMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	return m.insertWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *betaTokenMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
+func (m *betaSideMemory) insertWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) bool {
 	_, inserted := m.insertRowWithNegativeBlockerCount(token, joinKey, negativeBlockerCount)
 	return inserted
 }
 
-func (m *betaTokenMemory) insertRow(token tokenRef, joinKey betaJoinKey) (graphTokenRowHandle, bool) {
+func (m *betaSideMemory) insertRow(token tokenRef, joinKey betaJoinKey) (graphTokenRowHandle, bool) {
 	return m.insertRowWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *betaTokenMemory) insertFreshRow(token tokenRef, joinKey betaJoinKey) graphTokenRowHandle {
+func (m *betaSideMemory) insertFreshRow(token tokenRef, joinKey betaJoinKey) graphTokenRowHandle {
 	return m.insertFreshRowWithNegativeBlockerCount(token, joinKey, 0)
 }
 
-func (m *betaTokenMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) (graphTokenRowHandle, bool) {
+func (m *betaSideMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) (graphTokenRowHandle, bool) {
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}, false
 	}
@@ -1418,7 +1418,7 @@ func (m *betaTokenMemory) insertRowWithNegativeBlockerCount(token tokenRef, join
 	return handle, true
 }
 
-func (m *betaTokenMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) graphTokenRowHandle {
+func (m *betaSideMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, joinKey betaJoinKey, negativeBlockerCount int) graphTokenRowHandle {
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}
 	}
@@ -1442,7 +1442,7 @@ func (m *betaTokenMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef,
 	return handle
 }
 
-func (m *betaTokenMemory) containsExactToken(token tokenRef) bool {
+func (m *betaSideMemory) containsExactToken(token tokenRef) bool {
 	if m == nil || token.isZero() || m.identityRows.keyCount() == 0 {
 		return false
 	}
@@ -1466,7 +1466,7 @@ func (m *betaTokenMemory) containsExactToken(token tokenRef) bool {
 	return false
 }
 
-func (m *betaTokenMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
+func (m *betaSideMemory) refreshTokensContainingFact(id FactID, refresh func(graphTokenRow) (tokenRef, bool)) bool {
 	if m == nil || id.IsZero() || refresh == nil {
 		return true
 	}
@@ -1499,7 +1499,7 @@ func (m *betaTokenMemory) refreshTokensContainingFact(id FactID, refresh func(gr
 	return true
 }
 
-func (m *betaTokenMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
+func (m *betaSideMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
 	if m == nil || rowID < 0 || token.isZero() {
 		return
 	}
@@ -1518,7 +1518,7 @@ func (m *betaTokenMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef)
 	m.markFactRowsDirty()
 }
 
-func (m *betaTokenMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
+func (m *betaSideMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1540,7 +1540,7 @@ func (m *betaTokenMemory) removeContainingFact(id FactID, counters *propagationC
 	}
 }
 
-func (m *betaTokenMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
+func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1566,7 +1566,7 @@ func (m *betaTokenMemory) removeTokensContainingFact(id FactID, counters *propag
 	}
 }
 
-func (m *betaTokenMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
+func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
 	if m == nil || token.isZero() {
 		return graphTokenRow{}, false
 	}
@@ -1602,7 +1602,7 @@ func (m *betaTokenMemory) removeToken(token tokenRef, counters *propagationCount
 	return graphTokenRow{}, false
 }
 
-func (m *betaTokenMemory) removeTokenByHandle(handle graphTokenRowHandle, counters *propagationCounterLedger, branchID int) (graphTokenRow, bool, bool) {
+func (m *betaSideMemory) removeTokenByHandle(handle graphTokenRowHandle, counters *propagationCounterLedger, branchID int) (graphTokenRow, bool, bool) {
 	if m == nil || handle.isZero() {
 		return graphTokenRow{}, false, false
 	}
@@ -1622,7 +1622,7 @@ func (m *betaTokenMemory) removeTokenByHandle(handle graphTokenRowHandle, counte
 	return removed, true, true
 }
 
-func (m *betaTokenMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
+func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
 	if m == nil || id.IsZero() {
 		return
 	}
@@ -1652,7 +1652,7 @@ func (m *betaTokenMemory) forEachTokenContainingFact(id FactID, counters *propag
 	}
 }
 
-func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
+func (m *betaSideMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {
 	if m == nil || rowID < 0 {
 		return
 	}
@@ -1688,7 +1688,7 @@ func (m *betaTokenMemory) removeRow(rowID graphTokenRowID, counters *propagation
 	}
 }
 
-func (m *betaTokenMemory) ensureJoinRowsCapacity(rowCapacity int) {
+func (m *betaSideMemory) ensureJoinRowsCapacity(rowCapacity int) {
 	if m == nil {
 		return
 	}
@@ -1697,7 +1697,7 @@ func (m *betaTokenMemory) ensureJoinRowsCapacity(rowCapacity int) {
 	}
 }
 
-func (m *betaTokenMemory) rebuildJoinRows() {
+func (m *betaSideMemory) rebuildJoinRows() {
 	if m == nil {
 		return
 	}
@@ -1714,7 +1714,7 @@ func (m *betaTokenMemory) rebuildJoinRows() {
 	}
 }
 
-func (m *betaTokenMemory) removeJoinIndexRow(key betaJoinKey, rowID graphTokenRowID) bool {
+func (m *betaSideMemory) removeJoinIndexRow(key betaJoinKey, rowID graphTokenRowID) bool {
 	if m == nil || len(m.indexes.heads) == 0 {
 		return false
 	}
@@ -1751,7 +1751,7 @@ func (m *betaTokenMemory) removeJoinIndexRow(key betaJoinKey, rowID graphTokenRo
 	return false
 }
 
-func (m *betaTokenMemory) replaceJoinIndexRow(key betaJoinKey, oldID, newID graphTokenRowID) bool {
+func (m *betaSideMemory) replaceJoinIndexRow(key betaJoinKey, oldID, newID graphTokenRowID) bool {
 	if m == nil || len(m.indexes.heads) == 0 || oldID == newID {
 		return false
 	}
@@ -1782,7 +1782,7 @@ func (m *betaTokenMemory) replaceJoinIndexRow(key betaJoinKey, oldID, newID grap
 	return false
 }
 
-func (m *betaTokenMemory) ensureIdentityRowsCapacity(rowCapacity int) {
+func (m *betaSideMemory) ensureIdentityRowsCapacity(rowCapacity int) {
 	if m == nil {
 		return
 	}
@@ -1791,7 +1791,7 @@ func (m *betaTokenMemory) ensureIdentityRowsCapacity(rowCapacity int) {
 	}
 }
 
-func (m *betaTokenMemory) rebuildIdentityRows() {
+func (m *betaSideMemory) rebuildIdentityRows() {
 	if m == nil {
 		return
 	}
@@ -1808,7 +1808,7 @@ func (m *betaTokenMemory) rebuildIdentityRows() {
 	}
 }
 
-func (m *betaTokenMemory) removeIdentityIndexRow(identity graphTokenIdentityKey, rowID graphTokenRowID) bool {
+func (m *betaSideMemory) removeIdentityIndexRow(identity graphTokenIdentityKey, rowID graphTokenRowID) bool {
 	if m == nil || len(m.identityRows.heads) == 0 {
 		return false
 	}
@@ -1836,7 +1836,7 @@ func (m *betaTokenMemory) removeIdentityIndexRow(identity graphTokenIdentityKey,
 	return false
 }
 
-func (m *betaTokenMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey, oldID, newID graphTokenRowID) bool {
+func (m *betaSideMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey, oldID, newID graphTokenRowID) bool {
 	if m == nil || len(m.identityRows.heads) == 0 || oldID == newID {
 		return false
 	}
@@ -1862,21 +1862,21 @@ func (m *betaTokenMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey
 	return false
 }
 
-func (m *betaTokenMemory) markFactRowsDirty() {
+func (m *betaSideMemory) markFactRowsDirty() {
 	if m == nil {
 		return
 	}
 	m.factRowsDirty = true
 }
 
-func (m *betaTokenMemory) ensureFactRows() {
+func (m *betaSideMemory) ensureFactRows() {
 	if m == nil || !m.factRowsDirty {
 		return
 	}
 	m.rebuildFactRows()
 }
 
-func (m *betaTokenMemory) rebuildFactRows() {
+func (m *betaSideMemory) rebuildFactRows() {
 	if m == nil {
 		return
 	}
@@ -1894,7 +1894,7 @@ func (m *betaTokenMemory) rebuildFactRows() {
 	m.factRowsDirty = false
 }
 
-func (m *betaTokenMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
+func (m *betaSideMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID) {
 	if m == nil || token.isZero() {
 		return
 	}
@@ -1924,7 +1924,7 @@ func (m *betaTokenMemory) indexTokenFacts(token tokenRef, rowID graphTokenRowID)
 	}
 }
 
-func (m *betaTokenMemory) firstFactRowID(id FactID) (graphTokenRowID, bool) {
+func (m *betaSideMemory) firstFactRowID(id FactID) (graphTokenRowID, bool) {
 	if m == nil || id.IsZero() {
 		return 0, false
 	}
@@ -1935,7 +1935,7 @@ func (m *betaTokenMemory) firstFactRowID(id FactID) (graphTokenRowID, bool) {
 	return link.rowID, true
 }
 
-func (m *betaTokenMemory) factRowCount(id FactID) int {
+func (m *betaSideMemory) factRowCount(id FactID) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1951,7 +1951,7 @@ func (m *betaTokenMemory) factRowCount(id FactID) int {
 	return count
 }
 
-func (m *betaTokenMemory) removeFactIndexRow(id FactID, rowID graphTokenRowID) bool {
+func (m *betaSideMemory) removeFactIndexRow(id FactID, rowID graphTokenRowID) bool {
 	if m == nil || id.IsZero() || rowID < 0 {
 		return false
 	}
@@ -1977,7 +1977,7 @@ func (m *betaTokenMemory) removeFactIndexRow(id FactID, rowID graphTokenRowID) b
 	return false
 }
 
-func (m *betaTokenMemory) replaceFactIndexRow(id FactID, oldID, newID graphTokenRowID) bool {
+func (m *betaSideMemory) replaceFactIndexRow(id FactID, oldID, newID graphTokenRowID) bool {
 	if m == nil || id.IsZero() || oldID == newID {
 		return false
 	}
@@ -1995,7 +1995,7 @@ func (m *betaTokenMemory) replaceFactIndexRow(id FactID, oldID, newID graphToken
 	return false
 }
 
-func (m *betaTokenMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID) {
+func (m *betaSideMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID) {
 	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
@@ -2025,7 +2025,7 @@ func (m *betaTokenMemory) removeTokenFacts(token tokenRef, rowID graphTokenRowID
 	}
 }
 
-func (m *betaTokenMemory) replaceTokenFactRows(token tokenRef, oldID, newID graphTokenRowID) {
+func (m *betaSideMemory) replaceTokenFactRows(token tokenRef, oldID, newID graphTokenRowID) {
 	if m == nil || m.factRows.isEmpty() || token.isZero() {
 		return
 	}
@@ -7883,7 +7883,7 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 	return out
 }
 
-func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaTokenMemory) {
+func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaSideMemory) {
 	if s == nil {
 		return
 	}
@@ -7952,7 +7952,7 @@ func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGrap
 	return m.nodes[index]
 }
 
-func (m betaTokenMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
+func (m betaSideMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	diag := reteGraphTokenMemoryDiagnostics{
 		Rows:              len(m.rows),
 		JoinIndexKeys:     m.indexes.keyCount(),
@@ -7975,7 +7975,7 @@ func (m betaTokenMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	return diag
 }
 
-func (m betaTokenMemory) factIndexKeyCount() int {
+func (m betaSideMemory) factIndexKeyCount() int {
 	if !m.factRowsDirty {
 		return m.factRows.keyCount()
 	}
