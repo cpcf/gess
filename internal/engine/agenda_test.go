@@ -435,6 +435,55 @@ func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
 	}
 }
 
+func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-token-no-row-arena-session")
+
+	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{}); err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+	if got := session.agenda.activationRows.count; got != 0 {
+		t.Fatalf("session terminal delta activationRows.count = %d, want 0", got)
+	}
+
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok || len(tokens) != 1 {
+		t.Fatalf("terminal token deltas = %#v, ok=%v, want one", tokens, ok)
+	}
+
+	deltaAgenda := newAgenda()
+	if _, err := deltaAgenda.applyTerminalTokenDeltas(ctx, revision, nil, cloneTerminalTokenDeltas(tokens)); err != nil {
+		t.Fatalf("applyTerminalTokenDeltas: %v", err)
+	}
+	if got := deltaAgenda.activationRows.count; got != 0 {
+		t.Fatalf("terminal delta activationRows.count = %d, want 0", got)
+	}
+
+	reconcileAgenda := newAgenda()
+	if _, err := reconcileAgenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens)); err != nil {
+		t.Fatalf("reconcileTerminalTokens: %v", err)
+	}
+	if got := reconcileAgenda.activationRows.count; got != 0 {
+		t.Fatalf("terminal reconcile activationRows.count = %d, want 0", got)
+	}
+
+	graphAgenda := newAgenda()
+	if _, ok, err := graphAgenda.reconcileGraphTerminalRows(ctx, revision, session.rete.graphBeta, true); err != nil {
+		t.Fatalf("reconcileGraphTerminalRows: %v", err)
+	} else if !ok {
+		t.Fatal("reconcileGraphTerminalRows unavailable")
+	}
+	if got := graphAgenda.activationRows.count; got != 0 {
+		t.Fatalf("graph terminal row reconcile activationRows.count = %d, want 0", got)
+	}
+}
+
 func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-fact-index-session")

@@ -1114,10 +1114,8 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 		}
 		return a.handleForActivationKey(key), nil
 	}
-	rowMark := a.activationRows.count
-	created := a.activationRows.addEmpty()
-	if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
-		a.activationRows.truncate(rowMark)
+	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+	if err != nil {
 		return activationHandle{}, err
 	}
 	created.terminalID = delta.terminalID
@@ -1203,10 +1201,8 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return a.handleForActivationKey(key), nil
 	}
 	a.reservePendingActivationKeys(1)
-	rowMark := a.activationRows.count
-	created := a.activationRows.addEmpty()
-	if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
-		a.activationRows.truncate(rowMark)
+	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+	if err != nil {
 		return activationHandle{}, err
 	}
 	created.terminalID = delta.terminalID
@@ -1360,10 +1356,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			}
 			continue
 		}
-		rowMark := a.activationRows.count
-		created := a.activationRows.addEmpty()
-		if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
-			a.activationRows.truncate(rowMark)
+		created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+		if err != nil {
 			return nil, err
 		}
 		created.terminalID = delta.terminalID
@@ -1525,10 +1519,8 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				memory.setTerminalActivationHandle(terminalNode.id, row.handle, a.handleForActivationKey(key))
 				continue
 			}
-			rowMark := a.activationRows.count
-			created := a.activationRows.addEmpty()
-			if err := fillActivationFromTerminalTokenWithIdentity(created, rule, row.token, identity); err != nil {
-				a.activationRows.truncate(rowMark)
+			created, err := newActivationFromTerminalTokenWithIdentity(rule, row.token, identity)
+			if err != nil {
 				return nil, true, err
 			}
 			created.terminalID = terminalNode.id
@@ -1662,10 +1654,8 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 			continue
 		}
 
-		rowMark := a.activationRows.count
-		created := a.activationRows.addEmpty()
-		if err := fillActivationFromTerminalTokenWithIdentity(created, rule, delta.token, identity); err != nil {
-			a.activationRows.truncate(rowMark)
+		created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+		if err != nil {
 			return nil, err
 		}
 		created.terminalID = delta.terminalID
@@ -3134,6 +3124,14 @@ func activationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, 
 	var out activation
 	if err := fillActivationFromTerminalTokenWithIdentity(&out, rule, token, identity); err != nil {
 		return activation{}, err
+	}
+	return out, nil
+}
+
+func newActivationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (*activation, error) {
+	out := new(activation)
+	if err := fillActivationFromTerminalTokenWithIdentity(out, rule, token, identity); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

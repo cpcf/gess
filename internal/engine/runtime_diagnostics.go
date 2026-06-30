@@ -256,7 +256,7 @@ func (a *agenda) agendaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
 	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerAgenda}
-	out.Rows = uint64(a.activationRows.count)
+	out.Rows = uint64(a.agendaActivationEntryCount())
 	out.Buckets = uint64(len(a.activations))
 	out.Indexes = uint64(len(a.byFactID) + len(a.byRevision))
 	out.Tombstones = uint64(a.consumedActivationRows())
@@ -346,14 +346,56 @@ func (a *agenda) consumedActivationRows() int {
 		return 0
 	}
 	consumed := 0
-	for _, chunk := range a.activationRows.chunks {
-		for i := range chunk {
-			if chunk[i].status == activationStatusConsumed {
-				consumed++
+	forEachAgendaActivation(a.activations, func(current *activation) {
+		if current.status == activationStatusConsumed {
+			consumed++
+		}
+	})
+	return consumed
+}
+
+func (a *agenda) agendaActivationEntryCount() int {
+	if a == nil {
+		return 0
+	}
+	count := 0
+	forEachAgendaActivation(a.activations, func(*activation) {
+		count++
+	})
+	return count
+}
+
+func forEachAgendaActivation(buckets map[activationFingerprint]activationBucket, fn func(*activation)) {
+	if fn == nil {
+		return
+	}
+	for _, bucket := range buckets {
+		if bucket.first != nil {
+			fn(bucket.first)
+		}
+		if bucket.second != nil {
+			fn(bucket.second)
+		}
+		for _, current := range bucket.overflow {
+			if current != nil {
+				fn(current)
 			}
 		}
 	}
-	return consumed
+}
+
+func (a *agenda) activationStoredInRows(act *activation) bool {
+	if a == nil || act == nil {
+		return false
+	}
+	for _, chunk := range a.activationRows.chunks {
+		for i := range chunk {
+			if &chunk[i] == act {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func agendaMemoryHighWater(a *agenda) int {
@@ -402,6 +444,13 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 			bytes += activationPayloadBytes(chunk[i].payload)
 		}
 	}
+	forEachAgendaActivation(a.activations, func(current *activation) {
+		if current == nil || a.activationStoredInRows(current) {
+			return
+		}
+		bytes += uint64(unsafe.Sizeof(*current))
+		bytes += activationPayloadBytes(current.payload)
+	})
 	bytes += mapEntryBytes[activationFingerprint, activationBucket](len(a.activations))
 	for _, bucket := range a.activations {
 		bytes += sliceBytes[*activation](cap(bucket.overflow))
