@@ -1984,7 +1984,9 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 			continue
 		}
 		current.status = activationStatusConsumed
-		return current, activationRunSnapshot(current, materializeID), true
+		selected := activationRunSnapshot(current, materializeID)
+		compactConsumedTokenActivation(current)
+		return current, selected, true
 	}
 	a.pending = a.pending[:0]
 	a.invalidatePendingActivationCache()
@@ -2018,7 +2020,9 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		}
 		a.pendingHead++
 		current.status = activationStatusConsumed
-		return current, activationRunSnapshot(current, materializeID), true
+		selected := activationRunSnapshot(current, materializeID)
+		compactConsumedTokenActivation(current)
+		return current, selected, true
 	}
 	if a.pendingHead >= len(a.pending) {
 		a.pending = a.pending[:0]
@@ -2039,9 +2043,21 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		a.pending = a.pending[:last]
 		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
-		return current, activationRunSnapshot(current, materializeID), true
+		selected := activationRunSnapshot(current, materializeID)
+		compactConsumedTokenActivation(current)
+		return current, selected, true
 	}
 	return nil, activation{}, false
+}
+
+func compactConsumedTokenActivation(current *activation) {
+	if current == nil || current.status != activationStatusConsumed || current.token.isZero() {
+		return
+	}
+	current.id = ""
+	current.payload = nil
+	current.terminalID = 0
+	current.terminalRow = graphTokenRowHandle{}
 }
 
 func (a *agenda) activationModule(act *activation) ModuleName {

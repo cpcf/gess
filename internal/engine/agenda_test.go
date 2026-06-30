@@ -536,6 +536,9 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if stored.token.isZero() {
 		t.Fatal("stored consumed activation lost token ref")
 	}
+	if stored.terminalID != 0 || !stored.terminalRow.isZero() {
+		t.Fatalf("stored consumed terminal ownership = (%d, %#v), want cleared", stored.terminalID, stored.terminalRow)
+	}
 	if got := stored.mutationOrigin().activationID(); got != selected.id {
 		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.id)
 	}
