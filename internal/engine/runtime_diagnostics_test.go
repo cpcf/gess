@@ -140,6 +140,60 @@ func TestSessionRuntimeDiagnosticsReportsAgendaEntriesAndTombstones(t *testing.T
 	}
 }
 
+func TestSessionRuntimeDiagnosticsReportsAggregateMemoryOwner(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "item-count",
+		ConditionTree: Accumulate(
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
+			Count().As("count"),
+		),
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "aggregate-memory-diagnostics-session")
+
+	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("AssertTemplate(a): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("AssertTemplate(b): %v", err)
+	}
+
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	aggregate := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerAggregate)
+	if aggregate.Owner == "" {
+		t.Fatalf("runtime diagnostics missing aggregate owner: %#v", diagnostics.MemoryOwners)
+	}
+	if aggregate.Rows == 0 {
+		t.Fatalf("aggregate rows = 0, want buckets, members, or result tokens: %#v", aggregate)
+	}
+	if aggregate.Buckets == 0 {
+		t.Fatalf("aggregate buckets = 0, want retained aggregate buckets: %#v", aggregate)
+	}
+	if aggregate.Bytes == 0 {
+		t.Fatalf("aggregate bytes = 0, want retained byte estimate: %#v", aggregate)
+	}
+	if aggregate.HighWater == 0 {
+		t.Fatalf("aggregate high water = 0, want capacity estimate: %#v", aggregate)
+	}
+}
+
 func runtimeDiagnosticOwner(diagnostics RuntimeDiagnostics, ownerName string) RuntimeMemoryOwnerDiagnostics {
 	for _, owner := range diagnostics.MemoryOwners {
 		if owner.Owner == ownerName {

@@ -11,6 +11,7 @@ const runtimeMemoryOwnerBeta = "beta"
 const runtimeMemoryOwnerRuleTerminal = "rule-terminal"
 const runtimeMemoryOwnerQueryTerminal = "query-terminal"
 const runtimeMemoryOwnerAgenda = "agenda"
+const runtimeMemoryOwnerAggregate = "aggregate"
 
 // RuntimeDiagnostics reports retained runtime memory owners for diagnostics.
 type RuntimeDiagnostics struct {
@@ -67,6 +68,9 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 		}
 	}
 	if owner := s.agenda.agendaMemoryOwnerDiagnostics(); owner.Owner != "" {
+		owners = append(owners, owner)
+	}
+	if owner := s.rete.graphBeta.aggregateMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
@@ -185,6 +189,79 @@ func (a *agenda) agendaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
 	return out
+}
+
+func (m *reteGraphBetaMemory) aggregateMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
+	if m == nil {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerAggregate}
+	for _, memory := range m.aggregates {
+		if memory == nil {
+			continue
+		}
+		addAggregateNodeMemoryOwnerDiagnostics(&out, memory)
+	}
+	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Tombstones == 0 && out.Bytes == 0 && out.HighWater == 0 {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	return out
+}
+
+func addAggregateNodeMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory *reteGraphAggregateNodeMemory) {
+	if out == nil || memory == nil {
+		return
+	}
+	out.Buckets += uint64(len(memory.buckets))
+	out.HighWater += uint64(len(memory.buckets) + cap(memory.freeBuckets))
+	out.Bytes += mapEntryBytes[graphTokenIdentityKey, *reteGraphAggregateBucket](len(memory.buckets))
+	out.Bytes += sliceBytes[*reteGraphAggregateBucket](cap(memory.freeBuckets))
+	for _, bucket := range memory.buckets {
+		addAggregateBucketOwnerDiagnostics(out, bucket)
+	}
+	for _, bucket := range memory.freeBuckets {
+		addAggregateBucketOwnerDiagnostics(out, bucket)
+	}
+}
+
+func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, bucket *reteGraphAggregateBucket) {
+	if out == nil || bucket == nil {
+		return
+	}
+	members := len(bucket.members) + bucket.countOnlyMemberCount()
+	resultTokens := 0
+	if !bucket.token.isZero() {
+		resultTokens = 1
+	}
+	out.Rows += uint64(1 + members + resultTokens)
+	out.Indexes += uint64(len(bucket.members))
+	out.HighWater += uint64(1 + members + resultTokens)
+	out.HighWater += uint64(cap(bucket.countOnlyRest))
+	out.HighWater += uint64(cap(bucket.intSums))
+	out.HighWater += uint64(cap(bucket.floatSums))
+	out.HighWater += uint64(cap(bucket.floaty))
+	out.HighWater += uint64(cap(bucket.extrema))
+	out.HighWater += uint64(cap(bucket.collects))
+	out.HighWater += uint64(cap(bucket.values))
+	out.Bytes += uint64(unsafe.Sizeof(*bucket))
+	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
+	for _, member := range bucket.members {
+		out.Bytes += sliceBytes[Value](cap(member.values))
+	}
+	out.Bytes += sliceBytes[tokenRef](cap(bucket.countOnlyRest))
+	out.Bytes += sliceBytes[int64](cap(bucket.intSums))
+	out.Bytes += sliceBytes[float64](cap(bucket.floatSums))
+	out.Bytes += sliceBytes[bool](cap(bucket.floaty))
+	out.Bytes += sliceBytes[reteGraphAggregateExtremum](cap(bucket.extrema))
+	for _, extremum := range bucket.extrema {
+		out.Bytes += mapEntryBytes[string, reteGraphAggregateExtremumValue](len(extremum.values))
+	}
+	out.Bytes += sliceBytes[[]reteGraphAggregateCollectEntry](cap(bucket.collects))
+	for _, collect := range bucket.collects {
+		out.HighWater += uint64(cap(collect))
+		out.Bytes += sliceBytes[reteGraphAggregateCollectEntry](cap(collect))
+	}
+	out.Bytes += sliceBytes[Value](cap(bucket.values))
 }
 
 func (a *agenda) consumedActivationRows() int {
