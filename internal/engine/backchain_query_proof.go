@@ -173,7 +173,7 @@ func (p *backchainQueryProofContext) cleanup(ctx context.Context) (reteAgendaDel
 	}
 	for i := len(p.facts) - 1; i >= 0; i-- {
 		fact := &p.facts[i]
-		delta, err := p.session.rete.graphBeta.removeFactGenerated(ctx, fact, p.session.propagationCounters)
+		delta, err := p.session.rete.graphBeta.removeGeneratedWorkingFact(ctx, fact, p.session.propagationCounters)
 		if err != nil {
 			return combined, err
 		}

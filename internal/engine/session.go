@@ -2168,7 +2168,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	factTemplateKey := fact.templateKeyForRevision(s.revision)
 	factName := fact.nameForRevision(s.revision)
 
-	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
+	agendaDelta, err := s.updateReteAlphaAfterRetractWorkingFact(ctx, fact, origin)
 	if err != nil {
 		s.restoreReteAfterPropagationFailure()
 		return RetractResult{Status: RetractValidationFailure, Fact: before}, agendaDelta, err
@@ -2238,7 +2238,7 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	factTemplateKey := fact.templateKeyForRevision(s.revision)
 	factName := fact.nameForRevision(s.revision)
 
-	agendaDelta, err := s.updateReteAlphaAfterRetractGenerated(ctx, fact, origin)
+	agendaDelta, err := s.updateReteAlphaAfterRetractGeneratedWorkingFact(ctx, fact, origin)
 	if err != nil {
 		s.restoreReteAfterPropagationFailure()
 		return agendaDelta, err
@@ -2983,7 +2983,7 @@ func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnap
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
-func (s *Session) updateReteAlphaAfterRetractGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterRetractWorkingFact(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
@@ -2991,7 +2991,20 @@ func (s *Session) updateReteAlphaAfterRetractGenerated(ctx context.Context, fact
 		if s.rete.graphBeta != nil {
 			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
 		}
-		return s.rete.removeBetaFactGenerated(ctx, fact, origin, s.propagationCounters)
+		return s.rete.removeBetaWorkingFact(ctx, fact, origin, s.propagationCounters)
+	}
+	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+}
+
+func (s *Session) updateReteAlphaAfterRetractGeneratedWorkingFact(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || s.rete == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	if s.rete.usesGraphBeta() {
+		if s.rete.graphBeta != nil {
+			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
+		}
+		return s.rete.removeBetaGeneratedWorkingFact(ctx, fact, origin, s.propagationCounters)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }

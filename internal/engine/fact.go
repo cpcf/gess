@@ -163,6 +163,7 @@ func newConditionFactRefFromWorkingFactForTarget(fact *workingFact, target condi
 		version:           fact.version,
 		recency:           fact.recency,
 		generation:        fact.id.Generation(),
+		fields:            fact.fieldsMap(),
 		fieldSlots:        fact.fieldSlotSlice(),
 		compactFieldSlots: fact.compactFieldSlots(compactSlotStore),
 	}
