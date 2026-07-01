@@ -1932,7 +1932,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	if err != nil {
 		return result, agendaDelta, err
 	}
-	return result, mergeReteAgendaDelta(agendaDelta, cascadeDelta), nil
+	return result, coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(agendaDelta, cascadeDelta)), nil
 }
 
 func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mutationOrigin, cascade bool) (RetractResult, reteAgendaDelta, error) {

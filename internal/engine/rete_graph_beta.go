@@ -6874,7 +6874,7 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 	for _, add := range added {
 		match := -1
 		for i, remove := range removed {
-			if terminalTokenDeltasEqual(revision, add, remove) {
+			if terminalTokenDeltasCoalesceEqual(revision, add, remove) {
 				match = i
 				break
 			}
@@ -6888,6 +6888,16 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 		removed = removed[:len(removed)-1]
 	}
 	return keptAdded, removed
+}
+
+func terminalTokenDeltasCoalesceEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
+	if terminalTokenDeltasEqual(revision, left, right) {
+		return true
+	}
+	if left.ruleRevisionID != right.ruleRevisionID || left.terminalID != right.terminalID {
+		return false
+	}
+	return left.token == right.token
 }
 
 func (m *reteGraphBetaMemory) beginTerminalTokenDelta() reteAgendaDelta {

@@ -559,6 +559,13 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	return left
 }
 
+func coalesceReteAgendaDelta(revision *Ruleset, delta reteAgendaDelta) reteAgendaDelta {
+	if len(delta.added) != 0 && len(delta.removed) != 0 {
+		delta.added, delta.removed = coalesceTerminalTokenDeltas(revision, delta.added, delta.removed)
+	}
+	return delta
+}
+
 func mergeReteAgendaDeltaSlice[T any](left, right []T) []T {
 	if len(right) == 0 {
 		return left
