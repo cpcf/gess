@@ -129,6 +129,57 @@ func TestLogicalSupportModifyCascadeUsesGraphDeltas(t *testing.T) {
 	assertLogicalSupportGraphDeltaCounters(t, session)
 }
 
+func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
+	session := mustSession(t, revision, "logical-compact-source-identity-session")
+
+	if _, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{
+		"id":    "s-1",
+		"group": "shared",
+	})); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	edges := mustSnapshot(t, ctx, session).SupportGraph().Edges
+	if got, want := len(edges), 1; got != want {
+		t.Fatalf("support edges = %d, want %d", got, want)
+	}
+	rule, ok := revision.Rule("derive")
+	if !ok {
+		t.Fatal("derive rule missing")
+	}
+	stored := consumedActivationForRuleRevision(t, session.agenda, rule.RevisionID())
+	if !stored.id.IsZero() || !stored.ruleID.IsZero() || stored.payload != nil || stored.terminalID != 0 || !stored.terminalRow.isZero() {
+		t.Fatalf("stored consumed activation kept public fields: %#v", stored)
+	}
+	if stored.token.isZero() {
+		t.Fatal("stored consumed activation lost token ref")
+	}
+
+	source := logicalSupportSourceFromActivation(*stored)
+	if source.generation != edges[0].Generation || source.ruleRevisionID != edges[0].RuleRevisionID || source.activationID != edges[0].ActivationID {
+		t.Fatalf("source key = %#v, edge = %#v", source, edges[0])
+	}
+	if got := logicalSupportID(source, edges[0].FactID); got != edges[0].SupportID {
+		t.Fatalf("support ID from compact source = %q, want %q", got, edges[0].SupportID)
+	}
+
+	if _, err := session.removeLogicalSupportsForSources(ctx, []logicalSupportSourceKey{source}, mutationOrigin{}); err != nil {
+		t.Fatalf("removeLogicalSupportsForSources: %v", err)
+	}
+	after := mustSnapshot(t, ctx, session)
+	if got := after.SupportGraph().Edges; len(got) != 0 {
+		t.Fatalf("support edges after compact-source removal = %#v, want none", got)
+	}
+	if got := after.FactsByName("derived"); len(got) != 0 {
+		t.Fatalf("derived facts after compact-source removal = %#v, want none", got)
+	}
+}
+
 func TestLogicalSupportDuplicateAssertionsShareFactUntilLastSupportRemoved(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-duplicate-session")
@@ -386,6 +437,27 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 		t.Fatalf("Compile: %v", err)
 	}
 	return revision, source.Key(), derived.Key(), child.Key()
+}
+
+func consumedActivationForRuleRevision(t testing.TB, agenda *agenda, revisionID RuleRevisionID) *activation {
+	t.Helper()
+	if agenda == nil {
+		t.Fatal("agenda is nil")
+	}
+	for _, bucket := range agenda.activations {
+		for _, current := range []*activation{bucket.first, bucket.second} {
+			if current != nil && current.ruleRevisionID == revisionID && current.status == activationStatusConsumed {
+				return current
+			}
+		}
+		for _, current := range bucket.overflow {
+			if current != nil && current.ruleRevisionID == revisionID && current.status == activationStatusConsumed {
+				return current
+			}
+		}
+	}
+	t.Fatalf("consumed activation for rule revision %q not found", revisionID)
+	return nil
 }
 
 func assertLogicalSupportGraphDeltaCounters(t testing.TB, session *Session) {
