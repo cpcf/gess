@@ -541,6 +541,39 @@ type generatedAssertReserve struct {
 	compactSlots int
 }
 
+// GeneratedFactObservabilityKind classifies whether generated facts must enter
+// working memory for downstream rule/query visibility.
+type GeneratedFactObservabilityKind string
+
+const (
+	// GeneratedFactReactiveWorkingMemory means generated facts can affect rule
+	// matching and must retain working-memory identity.
+	GeneratedFactReactiveWorkingMemory GeneratedFactObservabilityKind = "reactive-working-memory"
+	// GeneratedFactQueryVisible means generated facts are not rule-reactive but
+	// can be returned by compiled queries.
+	GeneratedFactQueryVisible GeneratedFactObservabilityKind = "query-visible"
+	// GeneratedFactOutputOnly means no compiled rule or query condition observes
+	// the generated template.
+	GeneratedFactOutputOnly GeneratedFactObservabilityKind = "output-only"
+)
+
+// GeneratedFactObservability describes the compiler proof for a generated
+// template's downstream visibility.
+type GeneratedFactObservability struct {
+	TemplateKey       TemplateKey
+	TemplateName      string
+	Kind              GeneratedFactObservabilityKind
+	RuleMatchVisible  bool
+	QueryVisible      bool
+	StoresName        bool
+	DiagnosticReasons []string
+}
+
+func (o GeneratedFactObservability) clone() GeneratedFactObservability {
+	o.DiagnosticReasons = append([]string(nil), o.DiagnosticReasons...)
+	return o
+}
+
 func (r *Ruleset) hasAutoFocusRules() bool {
 	return r != nil && r.hasEffectiveAutoFocus
 }
@@ -657,7 +690,8 @@ func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, te
 		_, queryNameTargeted := queryConditionNames[plan.name]
 		plan.storeName = ruleNameTargeted || queryNameTargeted
 		plan.affectsRuleMatches = targetMayAffectConditions(plan.name, plan.templateKey, conditionTemplateKeys, conditionNames)
-		plan.affectsRete = plan.affectsRuleMatches || targetMayAffectConditions(plan.name, plan.templateKey, queryConditionTemplateKeys, queryConditionNames)
+		plan.queryVisible = targetMayAffectConditions(plan.name, plan.templateKey, queryConditionTemplateKeys, queryConditionNames)
+		plan.affectsRete = plan.affectsRuleMatches || plan.queryVisible
 		out[key] = &plan
 	}
 	return out
@@ -680,6 +714,7 @@ func annotateGeneratedFactInsertPlansOnRules(rules []compiledRule, byName map[st
 				continue
 			}
 			action.assertTemplateValues.insertPlan.affectsRuleMatches = plan.affectsRuleMatches
+			action.assertTemplateValues.insertPlan.queryVisible = plan.queryVisible
 			action.assertTemplateValues.insertPlan.affectsRete = plan.affectsRete
 			action.assertTemplateValues.insertPlan.storeName = plan.storeName
 			changed = true
@@ -707,6 +742,34 @@ func targetMayAffectConditions(name string, templateKey TemplateKey, conditionTe
 		}
 	}
 	return false
+}
+
+func (p *compiledGeneratedFactInsertPlan) generatedFactObservability() GeneratedFactObservability {
+	if p == nil {
+		return GeneratedFactObservability{}
+	}
+	out := GeneratedFactObservability{
+		TemplateKey:      p.templateKey,
+		TemplateName:     p.name,
+		RuleMatchVisible: p.affectsRuleMatches,
+		QueryVisible:     p.queryVisible,
+		StoresName:       p.storeName,
+	}
+	switch {
+	case p.affectsRuleMatches:
+		out.Kind = GeneratedFactReactiveWorkingMemory
+		out.DiagnosticReasons = append(out.DiagnosticReasons, "generated template is targeted by a rule condition")
+	case p.queryVisible:
+		out.Kind = GeneratedFactQueryVisible
+		out.DiagnosticReasons = append(out.DiagnosticReasons, "generated template is targeted by a query condition")
+	default:
+		out.Kind = GeneratedFactOutputOnly
+		out.DiagnosticReasons = append(out.DiagnosticReasons, "no rule or query condition targets the generated template name or key")
+	}
+	if p.storeName {
+		out.DiagnosticReasons = append(out.DiagnosticReasons, "a name-targeted condition requires retaining the generated fact name")
+	}
+	return out
 }
 
 func (r *Ruleset) generatedFactInsertPlan(templateKey TemplateKey) (*compiledGeneratedFactInsertPlan, bool) {
@@ -999,6 +1062,57 @@ func (r *Ruleset) Queries() []Query {
 	out := make([]Query, 0, len(r.queryOrder))
 	for _, name := range r.queryOrder {
 		out = append(out, r.queries[name].inspect())
+	}
+	return out
+}
+
+// GeneratedFactObservability returns the compiler visibility proof for a
+// generated template.
+func (r *Ruleset) GeneratedFactObservability(templateKey TemplateKey) (GeneratedFactObservability, bool) {
+	plan, ok := r.generatedFactInsertPlan(templateKey)
+	if !ok {
+		return GeneratedFactObservability{}, false
+	}
+	return plan.generatedFactObservability().clone(), true
+}
+
+// GeneratedFactObservabilityDiagnostics returns compiler visibility proofs for
+// all generated template insert plans.
+func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObservability {
+	if r == nil || len(r.generatedFactInsertPlans) == 0 {
+		return nil
+	}
+	out := make([]GeneratedFactObservability, 0, len(r.generatedFactInsertPlans))
+	seen := make(map[TemplateKey]struct{}, len(r.generatedFactInsertPlans))
+	for _, name := range r.templateOrder {
+		template := r.templates[name]
+		plan, ok := r.generatedFactInsertPlan(template.Key())
+		if !ok {
+			continue
+		}
+		out = append(out, plan.generatedFactObservability().clone())
+		seen[template.Key()] = struct{}{}
+	}
+	if len(seen) == len(r.generatedFactInsertPlans) {
+		return out
+	}
+	keys := make([]string, 0, len(r.generatedFactInsertPlans)-len(seen))
+	byKey := make(map[string]TemplateKey, len(r.generatedFactInsertPlans)-len(seen))
+	for key := range r.generatedFactInsertPlans {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		stringKey := key.String()
+		keys = append(keys, stringKey)
+		byKey[stringKey] = key
+	}
+	sort.Strings(keys)
+	for _, stringKey := range keys {
+		plan, ok := r.generatedFactInsertPlan(byKey[stringKey])
+		if !ok {
+			continue
+		}
+		out = append(out, plan.generatedFactObservability().clone())
 	}
 	return out
 }

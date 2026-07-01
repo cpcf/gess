@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -146,6 +147,116 @@ func TestGeneratedFactInsertPlansCarryTemplateIDs(t *testing.T) {
 	if actionPlan.templateID != templateID {
 		t.Fatalf("rule action plan template id = %d, want %d", actionPlan.templateID, templateID)
 	}
+}
+
+func TestGeneratedFactObservabilityDiagnosticsExplainCompilerProof(t *testing.T) {
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	outputOnly := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "output",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	queryVisible := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "query-output",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	reactive := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "reactive-output",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	for _, spec := range []struct {
+		name string
+		key  TemplateKey
+	}{
+		{name: "emit-output", key: outputOnly.Key()},
+		{name: "emit-query-output", key: queryVisible.Key()},
+		{name: "emit-reactive-output", key: reactive.Key()},
+	} {
+		mustAddInternalAction(t, workspace, ActionSpec{
+			Name: spec.name,
+			AssertTemplateValues: &AssertTemplateValuesActionSpec{
+				TemplateKey: spec.key,
+				Values:      []ExpressionSpec{ConstExpr{Value: "g1"}},
+			},
+		})
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name:          "generate",
+		ConditionTree: Match{Binding: "source", Target: TemplateKeyFact(source.Key())},
+		Actions: []RuleActionSpec{
+			{Name: "emit-output"},
+			{Name: "emit-query-output"},
+			{Name: "emit-reactive-output"},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:          "consume-reactive",
+		ConditionTree: Match{Binding: "generated", Target: TemplateKeyFact(reactive.Key())},
+		Actions:       []RuleActionSpec{{Name: "noop"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "query-generated",
+		ConditionTree: Match{
+			Binding: "generated", Target: TemplateKeyFact(queryVisible.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("id", BindingFieldExpr{Binding: "generated", Field: "id"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	outputDiag := mustGeneratedFactObservability(t, revision, outputOnly.Key())
+	if outputDiag.Kind != GeneratedFactOutputOnly || outputDiag.RuleMatchVisible || outputDiag.QueryVisible {
+		t.Fatalf("output diag = %#v, want output-only without rule/query visibility", outputDiag)
+	}
+	if !generatedFactDiagnosticHasReason(outputDiag, "no rule or query condition targets the generated template name or key") {
+		t.Fatalf("output diag reasons = %#v, want output-only reason", outputDiag.DiagnosticReasons)
+	}
+	queryDiag := mustGeneratedFactObservability(t, revision, queryVisible.Key())
+	if queryDiag.Kind != GeneratedFactQueryVisible || queryDiag.RuleMatchVisible || !queryDiag.QueryVisible {
+		t.Fatalf("query diag = %#v, want query-visible only", queryDiag)
+	}
+	reactiveDiag := mustGeneratedFactObservability(t, revision, reactive.Key())
+	if reactiveDiag.Kind != GeneratedFactReactiveWorkingMemory || !reactiveDiag.RuleMatchVisible {
+		t.Fatalf("reactive diag = %#v, want reactive working-memory", reactiveDiag)
+	}
+
+	diagnostics := revision.GeneratedFactObservabilityDiagnostics()
+	if len(diagnostics) == 0 {
+		t.Fatal("GeneratedFactObservabilityDiagnostics returned no rows")
+	}
+	diagnostics[0].DiagnosticReasons[0] = "mutated"
+	again := mustGeneratedFactObservability(t, revision, diagnostics[0].TemplateKey)
+	if generatedFactDiagnosticHasReason(again, "mutated") {
+		t.Fatalf("diagnostic reasons alias compiler state: %#v", again.DiagnosticReasons)
+	}
+}
+
+func mustGeneratedFactObservability(t testing.TB, revision *Ruleset, key TemplateKey) GeneratedFactObservability {
+	t.Helper()
+	diagnostic, ok := revision.GeneratedFactObservability(key)
+	if !ok {
+		t.Fatalf("missing generated fact observability for %q", key)
+	}
+	return diagnostic
+}
+
+func generatedFactDiagnosticHasReason(diagnostic GeneratedFactObservability, reason string) bool {
+	return slices.Contains(diagnostic.DiagnosticReasons, reason)
 }
 
 func TestWorkspaceCompilesImplicitMainModule(t *testing.T) {

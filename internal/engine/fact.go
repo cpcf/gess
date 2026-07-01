@@ -1101,6 +1101,7 @@ type compiledGeneratedFactInsertPlan struct {
 	compactSlots          bool
 	storeName             bool
 	affectsRuleMatches    bool
+	queryVisible          bool
 	affectsRete           bool
 }
 
