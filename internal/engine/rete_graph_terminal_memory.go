@@ -202,24 +202,6 @@ func (r terminalTokenRow) forEachTerminalBranchSupport(fn func(terminalBranchSup
 	}
 }
 
-func (m *terminalTokenMemory) reserveTerminal(rowCapacity, factCapacity int) {
-	if m == nil || rowCapacity <= 0 {
-		return
-	}
-	m.reserveRows(rowCapacity)
-	m.reserveIndexes(0, rowCapacity, factCapacity)
-}
-
-func (m *terminalTokenMemory) reserveRows(rowCapacity int) {
-	if m == nil || rowCapacity <= cap(m.rows) {
-		return
-	}
-	rows := make([]terminalTokenRow, len(m.rows), rowCapacity)
-	copy(rows, m.rows)
-	m.rows = rows
-	m.rowReserve = max(m.rowReserve, rowCapacity)
-}
-
 func (m *terminalTokenMemory) ensureRowCapacity(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
@@ -232,22 +214,6 @@ func (m *terminalTokenMemory) ensureRowCapacity(rowCapacity int) {
 	copy(rows, m.rows)
 	m.rows = rows
 	m.rowReserve = max(m.rowReserve, nextCapacity)
-}
-
-func (m *terminalTokenMemory) reserveIndexes(_ int, identityCapacity int, factCapacity int) {
-	if m == nil {
-		return
-	}
-	if identityCapacity > 0 {
-		if m.identityRows.reserve(identityCapacity) {
-			m.rebuildIdentityRows()
-		}
-		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
-	}
-	if factCapacity > 0 {
-		m.factRows.reserve(factCapacity)
-		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
-	}
 }
 
 func (m *terminalTokenMemory) clear() {
@@ -1022,24 +988,6 @@ func (m terminalTokenMemory) factIndexKeyCount() int {
 	return len(seen)
 }
 
-func (m *queryTerminalMemory) reserveQuery(rowCapacity, factCapacity int) {
-	if m == nil || rowCapacity <= 0 {
-		return
-	}
-	m.reserveRows(rowCapacity)
-	m.reserveIndexes(rowCapacity, factCapacity)
-}
-
-func (m *queryTerminalMemory) reserveRows(rowCapacity int) {
-	if m == nil || rowCapacity <= cap(m.rows) {
-		return
-	}
-	rows := make([]queryTerminalRow, len(m.rows), rowCapacity)
-	copy(rows, m.rows)
-	m.rows = rows
-	m.rowReserve = max(m.rowReserve, rowCapacity)
-}
-
 func (m *queryTerminalMemory) ensureRowCapacity(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
@@ -1052,22 +1000,6 @@ func (m *queryTerminalMemory) ensureRowCapacity(rowCapacity int) {
 	copy(rows, m.rows)
 	m.rows = rows
 	m.rowReserve = max(m.rowReserve, nextCapacity)
-}
-
-func (m *queryTerminalMemory) reserveIndexes(identityCapacity int, factCapacity int) {
-	if m == nil {
-		return
-	}
-	if identityCapacity > 0 {
-		if m.identityRows.reserve(identityCapacity) {
-			m.rebuildIdentityRows()
-		}
-		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
-	}
-	if factCapacity > 0 {
-		m.factRows.reserve(factCapacity)
-		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
-	}
 }
 
 func (m *queryTerminalMemory) clear() {

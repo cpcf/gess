@@ -795,34 +795,6 @@ func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFact
 	return max(max(1, perAlpha), runFactReservePerRule*2)
 }
 
-func (m *reteGraphBetaMemory) reserveMemories(rowCapacity, factCount int) {
-	if m == nil || m.graph == nil || rowCapacity <= 0 {
-		return
-	}
-	for _, graphNode := range m.graph.betaNodes {
-		node := m.nodeMemory(graphNode.id)
-		nodeRowCapacity := rowCapacity
-		if graphNode.rightHasLeftPrefix {
-			nodeRowCapacity = max(8, rowCapacity/4)
-		}
-		node.left.reserveBeta(nodeRowCapacity, graphBetaFactIndexReserve(nodeRowCapacity, m.graph.stageTokenWidth(graphNode.left)))
-		node.right.reserveBeta(nodeRowCapacity, graphBetaFactIndexReserve(nodeRowCapacity, m.graph.stageTokenWidth(graphNode.right)))
-	}
-	for _, terminalNode := range m.graph.terminalNodes {
-		terminal := m.terminal(terminalNode.id)
-		terminalRowCapacity := graphBetaTerminalTokenMemoryCapacity(rowCapacity)
-		factIndexReserve := graphBetaFactIndexReserve(terminalRowCapacity, m.graph.stageTokenWidth(terminalNode.input))
-		identityReserve := graphBetaTerminalIdentityIndexCapacity(rowCapacity, factCount)
-		if terminalNode.kind == reteGraphTerminalQuery {
-			terminal.queryRows.reserveQuery(terminalRowCapacity, factIndexReserve)
-			terminal.queryRows.reserveIndexes(identityReserve, 0)
-			continue
-		}
-		terminal.rows.reserveTerminal(terminalRowCapacity, factIndexReserve)
-		terminal.rows.reserveIndexes(0, identityReserve, 0)
-	}
-}
-
 func (m *reteGraphBetaMemory) indexRuleTerminals() {
 	if m == nil || m.graph == nil {
 		return
@@ -868,30 +840,6 @@ func (m *reteGraphBetaMemory) initializeTerminalMemory(id reteGraphTerminalNodeI
 	if terminal.ruleIdentityScopeHash == 0 {
 		terminal.ruleIdentityScopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
 	}
-}
-
-func graphBetaFactIndexReserve(rowCapacity, tokenWidth int) int {
-	if rowCapacity <= 0 {
-		return 0
-	}
-	if tokenWidth == 1 {
-		return rowCapacity
-	}
-	return rowCapacity * 2
-}
-
-func graphBetaTerminalTokenMemoryCapacity(rowCapacity int) int {
-	if rowCapacity <= 0 {
-		return 0
-	}
-	return min(rowCapacity, 8)
-}
-
-func graphBetaTerminalIdentityIndexCapacity(rowCapacity, factCount int) int {
-	if rowCapacity <= 0 || factCount <= 0 {
-		return 0
-	}
-	return min(rowCapacity, max(8, factCount/2))
 }
 
 func (m *reteGraphBetaMemory) reserveAlphaFacts(factCapacity int) {
