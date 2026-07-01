@@ -1783,7 +1783,7 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyFullFields(t *testing
 		DuplicatePolicy: DuplicateAllow,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
-			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "tags", Kind: ValueList, Required: true},
 		},
 	})
 	mustAddInternalAction(t, workspace, ActionSpec{
@@ -1792,7 +1792,7 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyFullFields(t *testing
 			TemplateKey: generated.Key(),
 			Values: []ExpressionSpec{
 				BindingFieldExpr{Binding: "source", Field: "id"},
-				ConstExpr{Value: "native"},
+				ConstExpr{Value: []string{"native"}},
 			},
 		},
 	})
@@ -1822,6 +1822,81 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyFullFields(t *testing
 	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 }
 
+func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyWideSlotsWithoutFactEvents(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:            "generated",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "payload", Kind: ValueMap, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "generate",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "source", Field: "id"},
+				ConstExpr{Value: map[string]any{"kind": "native"}},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "generate",
+		Conditions: []RuleConditionSpec{
+			{Binding: "source", Target: TemplateKeyFact(source.Key())},
+		},
+		Actions: []RuleActionSpec{{Name: "generate"}},
+	})
+
+	collector := &testEventCollector{}
+	revision := mustCompileWorkspace(t, workspace)
+	compiled := revision.rules["generate"].actionExecutions[0].assertTemplateValues
+	if compiled.insertPlan.compactSlots {
+		t.Fatal("generated wide/map insert plan unexpectedly uses compact slots")
+	}
+	if !compiled.insertPlan.outputOnlyNoRetainEligible() {
+		t.Fatal("generated wide/map insert plan should be no-retain eligible")
+	}
+	session, err := NewSession(revision, WithSessionID("native-assert-wide-output-discard-session"), WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, "s-1")}); err != nil {
+		t.Fatalf("AssertTemplate(source): %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
+	events := collector.Events()
+	if got, want := len(events), 3; got != want {
+		t.Fatalf("events = %d, want %d: %#v", got, want, events)
+	}
+	if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventRuleFired {
+		t.Fatalf("event types = %q, %q, %q; want assert, activate, fired", events[0].Type, events[1].Type, events[2].Type)
+	}
+	if got, want := session.nextFactSequence, uint64(1); got != want {
+		t.Fatalf("next fact sequence = %d, want %d", got, want)
+	}
+	if got, want := session.nextRecency, Recency(1); got != want {
+		t.Fatalf("next recency = %d, want %d", got, want)
+	}
+}
+
 func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -1836,7 +1911,7 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 		DuplicatePolicy: DuplicateAllow,
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
-			{Name: "kind", Kind: ValueString, Default: "effect", HasDefault: true},
+			{Name: "tags", Kind: ValueList, Default: []string{"effect"}, HasDefault: true},
 		},
 	})
 	mustAddInternalAction(t, workspace, ActionSpec{

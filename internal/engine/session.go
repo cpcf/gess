@@ -1710,6 +1710,10 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 			Reason: "generated fact insert plan is missing",
 		}
 	}
+	if plan.outputOnlyNoRetainEligible() {
+		s.discardGeneratedOutputFactSlots(state, slotMark)
+		return true, reteAgendaDelta{}, nil
+	}
 	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
@@ -1837,6 +1841,14 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
 
 	return true, agendaDelta, nil
+}
+
+func (s *Session) discardGeneratedOutputFactSlots(state *factWorkspace, slotMark int) {
+	if s == nil || state == nil {
+		return
+	}
+	state.rollbackGeneratedFactSlots(slotMark)
+	s.commitFactWorkspace(*state)
 }
 
 func (s *Session) discardGeneratedOutputCompactSlots(state *factWorkspace, compactSlotMark int) {

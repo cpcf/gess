@@ -1132,7 +1132,7 @@ func (p *compiledGeneratedFactInsertPlan) valid() bool {
 }
 
 func (p *compiledGeneratedFactInsertPlan) outputOnlyNoRetainEligible() bool {
-	return p.valid() && p.compactSlots && !p.affectsRete
+	return p.valid() && !p.affectsRete
 }
 
 func (p *compiledGeneratedFactInsertPlan) duplicateIndex(slots []factSlot) duplicateIndexKey {

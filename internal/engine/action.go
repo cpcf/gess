@@ -1365,13 +1365,35 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 	if action.insertPlan.outputOnlyNoRetainEligible() {
 		state := s.activeFactWorkspace()
 		mark := state.markGeneratedFactInsert()
-		compactSlots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(action.template.fields))
-		compactSlots, err := action.template.buildValidatedCompactFieldSlotsFromValuesInto(compactSlots, values)
+		if action.insertPlan.compactSlots {
+			compactSlots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(action.template.fields))
+			compactSlots, err := action.template.buildValidatedCompactFieldSlotsFromValuesInto(compactSlots, values)
+			if err != nil {
+				state.rollbackGeneratedCompactFactSlots(compactSlotMark)
+				return err
+			}
+			inserted, agendaDelta, err := s.insertRuleActionGeneratedCompactFactSlotsImmediate(ctx, &state, &action.insertPlan, compactSlots, mark, compactSlotMark, origin)
+			if err != nil {
+				return err
+			}
+			if inserted && action.insertPlan.affectsRete {
+				if !s.canMutateDuringRun(origin) {
+					_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
+					return err
+				}
+				if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		fieldSlots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(action.template.fields))
+		fieldSlots, err := action.template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 		if err != nil {
-			state.rollbackGeneratedCompactFactSlots(compactSlotMark)
+			state.rollbackGeneratedFactSlots(slotMark)
 			return err
 		}
-		inserted, agendaDelta, err := s.insertRuleActionGeneratedCompactFactSlotsImmediate(ctx, &state, &action.insertPlan, compactSlots, mark, compactSlotMark, origin)
+		inserted, agendaDelta, err := s.insertRuleActionGeneratedFactSlotsImmediate(ctx, &state, &action.insertPlan, fieldSlots, mark, slotMark, origin)
 		if err != nil {
 			return err
 		}
