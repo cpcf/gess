@@ -125,7 +125,7 @@ func (p *backchainQueryProofContext) findDemandFact(plan *compiledGeneratedFactI
 		if fact.templateKey != plan.templateKey || fact.duplicateIndex() != duplicateIndex {
 			continue
 		}
-		if duplicateIndex.kind == duplicateIndexStructural && !structuralDuplicateSlotsEqual(plan.template, slots, fact.fieldSlots) {
+		if duplicateIndex.kind == duplicateIndexStructural && !structuralDuplicateSlotsEqual(plan.template, slots, fact.fieldSlotSlice()) {
 			continue
 		}
 		return fact
@@ -138,17 +138,18 @@ func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactIn
 	sequence := ^uint64(p.nextSequence)
 	recency := p.nextRecency
 	p.nextRecency++
-	return workingFact{
+	fact := workingFact{
 		id:                   newFactID(p.session.generation, sequence),
 		name:                 plan.name,
 		templateKey:          plan.templateKey,
 		version:              1,
 		recency:              recency,
 		supportState:         factSupportCodeFromState(FactSupportLogical),
-		fieldSlots:           slots,
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: true,
 	}
+	fact.setFieldSlots(slots)
+	return fact
 }
 
 func (p *backchainQueryProofContext) workingFactByID(id FactID) (*workingFact, bool) {

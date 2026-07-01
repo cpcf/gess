@@ -143,13 +143,21 @@ func addWorkingFactDynamicOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, f
 	if !fact.IsValid() || fact.Kind() != reflect.Struct {
 		return
 	}
-	for _, name := range []string{"fields", "fieldPresence"} {
-		field := fact.FieldByName(name)
-		if !field.IsValid() || field.Kind() != reflect.Map {
-			continue
+	if payload := fact.FieldByName("payload"); payload.IsValid() && payload.Kind() == reflect.Pointer && !payload.IsNil() {
+		out.HighWater++
+		out.Bytes += uint64(payload.Type().Elem().Size())
+		payloadValue := reflectDerefValue(payload)
+		for _, name := range []string{"fields", "fieldPresence"} {
+			field := payloadValue.FieldByName(name)
+			if !field.IsValid() || field.Kind() != reflect.Map {
+				continue
+			}
+			out.HighWater += uint64(reflectMapHighWater(field))
+			out.Bytes += reflectMapRetainedBytes(field)
 		}
-		out.HighWater += uint64(reflectMapHighWater(field))
-		out.Bytes += reflectMapRetainedBytes(field)
+		fieldSlots := payloadValue.FieldByName("fieldSlots")
+		out.HighWater += uint64(reflectSliceCap(fieldSlots))
+		out.Bytes += reflectSliceBytes(fieldSlots)
 	}
 	if duplicate := fact.FieldByName("dupIndex"); duplicate.IsValid() && duplicate.Kind() == reflect.Pointer && !duplicate.IsNil() {
 		out.HighWater++

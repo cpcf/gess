@@ -35,10 +35,10 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	if dynamic.Delta == nil || dynamic.Delta.Kind != MutationAssert {
 		t.Fatalf("dynamic assert missing mutation delta")
 	}
-	if got := len(mustWorkingFactByID(t, session, dynamic.Fact.ID()).fieldSlots); got != 0 {
+	if got := len(mustWorkingFactByID(t, session, dynamic.Fact.ID()).fieldSlotSlice()); got != 0 {
 		t.Fatalf("dynamic field slots = %d, want zero", got)
 	}
-	if mustWorkingFactByID(t, session, dynamic.Fact.ID()).fields == nil {
+	if mustWorkingFactByID(t, session, dynamic.Fact.ID()).fieldsMap() == nil {
 		t.Fatal("dynamic fact should remain map-backed")
 	}
 
@@ -170,13 +170,13 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 	}
 
 	internal := mustWorkingFactByID(t, session, inserted.Fact.ID())
-	if internal.fields != nil {
+	if internal.fieldsMap() != nil {
 		t.Fatal("targeted closed fact should not keep canonical fields")
 	}
-	if got := len(internal.fieldSlots); got == 0 {
+	if got := len(internal.fieldSlotSlice()); got == 0 {
 		t.Fatal("targeted closed fact should have slot storage")
 	}
-	if internal.fieldPresence != nil {
+	if internal.fieldPresenceMap() != nil {
 		t.Fatal("targeted closed fact should store presence in slots")
 	}
 
@@ -451,7 +451,7 @@ func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate targeted: %v", err)
 	}
-	if got := len(mustWorkingFactByID(t, session, targetedResult.Fact.ID()).fieldSlots); got == 0 {
+	if got := len(mustWorkingFactByID(t, session, targetedResult.Fact.ID()).fieldSlotSlice()); got == 0 {
 		t.Fatalf("targeted field slots = %d, want non-zero", got)
 	}
 
@@ -459,10 +459,10 @@ func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate untargeted: %v", err)
 	}
-	if got := len(mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldSlots); got != 0 {
+	if got := len(mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldSlotSlice()); got != 0 {
 		t.Fatalf("untargeted field slots = %d, want zero", got)
 	}
-	if mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldPresence == nil {
+	if mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldPresenceMap() == nil {
 		t.Fatal("untargeted fact should remain map-backed for presence")
 	}
 }

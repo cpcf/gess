@@ -484,8 +484,8 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fields != nil || len(internal.fieldSlots) == 0 {
-		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fields, len(internal.fieldSlots))
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fieldsMap() != nil || len(internal.fieldSlotSlice()) == 0 {
+		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fieldsMap(), len(internal.fieldSlotSlice()))
 	}
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndex().kind != duplicateIndexSingleScalar {
 		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.duplicateIndex().kind, duplicateIndexSingleScalar)
@@ -503,7 +503,7 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if got, ok := result.Fact.Field("status"); !ok || !got.Equal(mustValue(t, "paused")) {
 		t.Fatalf("status after set = (%v, %v), want paused", got, ok)
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fields != nil {
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fieldsMap() != nil {
 		t.Fatal("slot-backed fact should remain slot-backed after modify")
 	}
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndex().kind != duplicateIndexSingleScalar {
@@ -577,7 +577,7 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if result.Status != ModifyDuplicate {
 		t.Fatalf("duplicate collision status = %v, want %v", result.Status, ModifyDuplicate)
 	}
-	if got, ok := session.factIDForDuplicateKey(makeDuplicateKeyForTemplateWithSlots("event", template, second.Fact.Fields(), mustWorkingFactByID(t, session, second.Fact.ID()).fieldSlots)); !ok || got != second.Fact.ID() {
+	if got, ok := session.factIDForDuplicateKey(makeDuplicateKeyForTemplateWithSlots("event", template, second.Fact.Fields(), mustWorkingFactByID(t, session, second.Fact.ID()).fieldSlotSlice())); !ok || got != second.Fact.ID() {
 		t.Fatalf("duplicate index changed after failed modify: (%q, %t)", got, ok)
 	}
 }

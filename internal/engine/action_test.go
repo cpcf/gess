@@ -1406,10 +1406,10 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	}
 
 	internal := mustWorkingFactByID(t, session, firstResult.Fact.ID())
-	if internal.fields != nil {
+	if internal.fieldsMap() != nil {
 		t.Fatal("slot-backed action fact should not retain canonical fields")
 	}
-	if got := len(internal.fieldSlots); got == 0 {
+	if got := len(internal.fieldSlotSlice()); got == 0 {
 		t.Fatal("slot-backed action fact should have slot storage")
 	}
 
@@ -1957,7 +1957,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 		t.Fatalf("generated fact count = %d, want 1", got)
 	}
 	generatedFact := mustWorkingFactByID(t, session, generatedIDs[0])
-	if got := len(generatedFact.fieldSlots); got != 0 {
+	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
 	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {
@@ -2094,7 +2094,7 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 		t.Fatalf("generated fact count = %d, want 1", got)
 	}
 	generatedFact := mustWorkingFactByID(t, session, generatedIDs[0])
-	if got := len(generatedFact.fieldSlots); got != 0 {
+	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
 	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {

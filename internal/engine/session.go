@@ -2787,37 +2787,37 @@ func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
 		fact := &s.facts[i]
 		template, ok := revision.templateByKey(fact.templateKey)
 		if !ok {
-			if fact.fields == nil {
-				fact.fields = materializeFieldsFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous))
+			if fact.fieldsMap() == nil {
+				fact.setFields(materializeFieldsFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous)))
 			}
-			if fact.fieldPresence == nil {
-				fact.fieldPresence = materializePresenceFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous))
+			if fact.fieldPresenceMap() == nil {
+				fact.setFieldPresence(materializePresenceFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous)))
 			}
-			fact.fieldSlots = nil
+			fact.clearFieldSlots()
 			fact.compactSlots = factCompactSlotRef{}
 			continue
 		}
-		fields := fact.fields
+		fields := fact.fieldsMap()
 		if fields == nil {
 			fields = materializeFieldsFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous))
 		}
-		presence := fact.fieldPresence
+		presence := fact.fieldPresenceMap()
 		if presence == nil {
 			presence = materializePresenceFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous))
 		}
 		fieldSlots := revision.buildFieldSlots(template, fields, presence)
 		if len(fieldSlots) > 0 {
-			fact.fields = nil
-			fact.fieldSlots = fieldSlots
+			fact.clearFields()
+			fact.setFieldSlots(fieldSlots)
 			fact.compactSlots = factCompactSlotRef{}
-			fact.fieldPresence = nil
+			fact.clearFieldPresence()
 		} else {
-			fact.fieldSlots = nil
+			fact.clearFieldSlots()
 			fact.compactSlots = factCompactSlotRef{}
 			if fields != nil {
-				fact.fields = fields
+				fact.setFields(fields)
 			}
-			fact.fieldPresence = cloneFieldPresence(presence)
+			fact.setFieldPresence(cloneFieldPresence(presence))
 		}
 	}
 }
@@ -3127,15 +3127,15 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.version++
 	fact.recency = state.recency
 	if len(proposedFieldSlots) > 0 {
-		fact.fields = nil
-		fact.fieldSlots = proposedFieldSlots
+		fact.clearFields()
+		fact.setFieldSlots(proposedFieldSlots)
 		fact.compactSlots = factCompactSlotRef{}
-		fact.fieldPresence = nil
+		fact.clearFieldPresence()
 	} else {
-		fact.fields = proposedFields
-		fact.fieldSlots = nil
+		fact.setFields(proposedFields)
+		fact.clearFieldSlots()
 		fact.compactSlots = factCompactSlotRef{}
-		fact.fieldPresence = proposedPresence
+		fact.setFieldPresence(proposedPresence)
 	}
 	fact.setDuplicateIndex(newDupIndex)
 
@@ -4926,6 +4926,7 @@ func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex 
 		fact:                   *fact,
 		restoreDuplicateIndex:  restoreDuplicateIndex,
 	}
+	mark.fact.payload = cloneWorkingFactPayload(fact.payload)
 	if restoreDuplicateIndex {
 		mark.factsByDuplicate = cloneDuplicateIndexes(w.factsByDuplicate)
 	}
@@ -5237,20 +5238,20 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 
 	fact := workingFact{
-		id:            id,
-		name:          name,
-		templateKey:   templateKey,
-		version:       1,
-		recency:       w.recency,
-		fields:        canonical,
-		fieldSlots:    fieldSlots,
-		fieldPresence: presence,
-		dupIndex:      workingFactDuplicateIndex(duplicateIndex),
+		id:          id,
+		name:        name,
+		templateKey: templateKey,
+		version:     1,
+		recency:     w.recency,
+		dupIndex:    workingFactDuplicateIndex(duplicateIndex),
 	}
+	fact.setFields(canonical)
+	fact.setFieldSlots(fieldSlots)
+	fact.setFieldPresence(presence)
 
 	if len(fieldSlots) > 0 {
-		fact.fields = nil
-		fact.fieldPresence = nil
+		fact.clearFields()
+		fact.clearFieldPresence()
 	}
 
 	stored := w.storeFact(fact)
@@ -5317,10 +5318,10 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 		templateKey:  templateKey,
 		version:      1,
 		recency:      w.recency,
-		fieldSlots:   storedSlots,
 		compactSlots: compactSlots,
 		dupIndex:     workingFactDuplicateIndex(duplicateIndex),
 	}
+	fact.setFieldSlots(storedSlots)
 
 	stored := w.storeFact(fact)
 	if template.duplicatePolicy != DuplicateAllow {
@@ -5409,11 +5410,11 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 		templateKey:          templateKey,
 		version:              1,
 		recency:              w.recency,
-		fieldSlots:           fieldSlots,
 		compactSlots:         compactSlots,
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
+	fact.setFieldSlots(fieldSlots)
 
 	stored := w.storeFact(fact)
 	if plan.duplicatePolicy != DuplicateAllow {
@@ -5703,20 +5704,20 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 		dupIndex:    workingFactDuplicateIndex(initial.duplicateIndex),
 	}
 	if initial.shareFields {
-		fact.fields = initial.fields
+		fact.setFields(initial.fields)
 	} else {
-		fact.fields = cloneFields(initial.fields)
+		fact.setFields(cloneFields(initial.fields))
 	}
 	if initial.shareSlots {
-		fact.fieldSlots = initial.fieldSlots
+		fact.setFieldSlots(initial.fieldSlots)
 	} else {
-		fact.fieldSlots = cloneFactSlots(initial.fieldSlots)
+		fact.setFieldSlots(cloneFactSlots(initial.fieldSlots))
 	}
-	fact.fieldPresence = cloneFieldPresence(initial.fieldPresence)
+	fact.setFieldPresence(cloneFieldPresence(initial.fieldPresence))
 
-	if len(fact.fieldSlots) > 0 {
-		fact.fields = nil
-		fact.fieldPresence = nil
+	if len(fact.fieldSlotSlice()) > 0 {
+		fact.clearFields()
+		fact.clearFieldPresence()
 	}
 
 	stored := w.storeFact(fact)
@@ -6550,12 +6551,10 @@ func cloneWorkingFacts(in []workingFact, compactSlotStore *factCompactSlotStore)
 	out := make([]workingFact, len(in), cap(in))
 	copy(out, in)
 	for i := range out {
-		out[i].fields = cloneFields(out[i].fields)
-		out[i].fieldSlots = cloneFactSlots(out[i].fieldSlots)
+		out[i].payload = cloneWorkingFactPayload(out[i].payload)
 		if out[i].compactSlots.count > 0 {
 			out[i].compactSlots.store = compactSlotStore
 		}
-		out[i].fieldPresence = cloneFieldPresence(out[i].fieldPresence)
 	}
 	return out
 }

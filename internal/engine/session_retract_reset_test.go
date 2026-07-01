@@ -596,20 +596,20 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	if len(firstStorage) == 0 {
 		t.Fatal("session fact storage missing after reset")
 	}
-	resetLabels := resetFact.fields["labels"].data.([]Value)
+	resetLabels := resetFact.fieldsMap()["labels"].data.([]Value)
 	resetLabels[0] = mustValue(t, "mutated")
-	resetMeta := resetFact.fields["meta"].data.(map[string]Value)
+	resetMeta := resetFact.fieldsMap()["meta"].data.(map[string]Value)
 	resetMeta["tier"] = mustValue(t, "mutated")
 
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("second Reset: %v", err)
 	}
 	nextFact := mustOnlyFact(t, session)
-	nextLabels := nextFact.fields["labels"].data.([]Value)
+	nextLabels := nextFact.fieldsMap()["labels"].data.([]Value)
 	if got, want := nextLabels[0].stringValue, "stable"; got != want {
 		t.Fatalf("compiled list initial aliased reset fact = %q, want %q", got, want)
 	}
-	nextMeta := nextFact.fields["meta"].data.(map[string]Value)
+	nextMeta := nextFact.fieldsMap()["meta"].data.(map[string]Value)
 	if got, want := nextMeta["tier"].stringValue, "gold"; got != want {
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
@@ -783,8 +783,9 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	if labelsSlot < 0 || metaSlot < 0 {
 		t.Fatalf("missing labels/meta slots: labels=%d meta=%d", labelsSlot, metaSlot)
 	}
-	firstFact.fieldSlots[labelsSlot].value.data.([]Value)[0] = mustValue(t, "mutated")
-	firstFact.fieldSlots[metaSlot].value.data.(map[string]Value)["tier"] = mustValue(t, "mutated")
+	firstSlots := firstFact.fieldSlotSlice()
+	firstSlots[labelsSlot].value.data.([]Value)[0] = mustValue(t, "mutated")
+	firstSlots[metaSlot].value.data.(map[string]Value)["tier"] = mustValue(t, "mutated")
 
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset after mutation: %v", err)
@@ -891,8 +892,8 @@ func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.
 		t.Fatalf("Reset: %v", err)
 	}
 	fact := mustOnlyFact(t, session)
-	if len(fact.fieldSlots) != 0 {
-		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlots)
+	if len(fact.fieldSlotSlice()) != 0 {
+		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlotSlice())
 	}
 	if got, ok := fact.snapshotForRevision(session.revision).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("default status = (%v, %v), want active", got, ok)
