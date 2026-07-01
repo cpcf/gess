@@ -4767,7 +4767,7 @@ func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
 	if templateCount == 0 {
 		return
 	}
-	perTemplate := max((cap(w.facts)+templateCount-1)/templateCount+runFactReservePerRule, 1)
+	perTemplate := max((len(w.facts)+templateCount-1)/templateCount+runFactReservePerRule, 1)
 	for _, name := range revision.templateOrder {
 		template := revision.templates[name]
 		if template.key != "" {
