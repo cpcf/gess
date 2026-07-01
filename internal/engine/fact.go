@@ -1131,6 +1131,10 @@ func (p *compiledGeneratedFactInsertPlan) valid() bool {
 	return p != nil && p.templateKey != ""
 }
 
+func (p *compiledGeneratedFactInsertPlan) outputOnlyStorageEligible() bool {
+	return p.valid() && p.compactSlots && !p.affectsRete && p.duplicatePolicy == DuplicateAllow
+}
+
 func (p *compiledGeneratedFactInsertPlan) duplicateIndex(slots []factSlot) duplicateIndexKey {
 	switch p.duplicatePolicy {
 	case DuplicateAllow:
