@@ -26,6 +26,7 @@ type FactSnapshot struct {
 	generation    Generation
 	fields        Fields
 	fieldSlots    []factSlot
+	compactSlots  []compactFactSlot
 	fieldSpecs    []FieldSpec
 	fieldPresence map[string]FieldPresence
 	support       FactSupportProvenance
@@ -73,6 +74,9 @@ func (f FactSnapshot) Fields() Fields {
 	if f.fields != nil {
 		return cloneFields(f.fields)
 	}
+	if len(f.compactSlots) > 0 {
+		return materializeFieldsFromCompactSlots(f.compactSlots, f.fieldSpecs)
+	}
 	return materializeFieldsFromSlots(f.fieldSlots, f.fieldSpecs)
 }
 
@@ -102,6 +106,9 @@ func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
 		resolved := f.fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
+	if slot >= 0 && slot < len(f.compactSlots) {
+		return f.compactSlots[slot].value()
+	}
 
 	return f.fieldValue(field)
 }
@@ -128,15 +135,16 @@ func (f FactSnapshot) Support() FactSupportProvenance {
 
 func newConditionFactRefFromSnapshot(snapshot FactSnapshot) conditionFactRef {
 	return conditionFactRef{
-		id:          snapshot.id,
-		name:        snapshot.name,
-		templateKey: snapshot.templateKey,
-		version:     snapshot.version,
-		recency:     snapshot.recency,
-		generation:  snapshot.generation,
-		fields:      snapshot.fields,
-		fieldSlots:  snapshot.fieldSlots,
-		fieldSpecs:  snapshot.fieldSpecs,
+		id:                snapshot.id,
+		name:              snapshot.name,
+		templateKey:       snapshot.templateKey,
+		version:           snapshot.version,
+		recency:           snapshot.recency,
+		generation:        snapshot.generation,
+		fields:            snapshot.fields,
+		fieldSlots:        snapshot.fieldSlots,
+		compactFieldSlots: snapshot.compactSlots,
+		fieldSpecs:        snapshot.fieldSpecs,
 	}
 }
 
@@ -1758,7 +1766,8 @@ func (f *workingFact) snapshotForRevision(revision *Ruleset, compactSlotStore *f
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        cloneFields(f.fieldsMap()),
-		fieldSlots:    f.materializeFieldSlots(compactSlotStore),
+		fieldSlots:    cloneFactSlots(f.fieldSlotSlice()),
+		compactSlots:  f.snapshotCompactFieldSlots(compactSlotStore),
 		fieldSpecs:    f.fieldSpecsForRevision(revision, compactSlotStore),
 		fieldPresence: cloneFieldPresence(f.fieldPresenceMap()),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
@@ -1778,7 +1787,8 @@ func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset, compactSlot
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        f.fieldsMap(),
-		fieldSlots:    f.materializeFieldSlots(compactSlotStore),
+		fieldSlots:    f.fieldSlotSlice(),
+		compactSlots:  f.snapshotCompactFieldSlots(compactSlotStore),
 		fieldSpecs:    f.fieldSpecsForRevision(revision, compactSlotStore),
 		fieldPresence: f.fieldPresenceMap(),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
@@ -1909,10 +1919,11 @@ func (f *workingFact) fieldSlotCount(compactSlotStore *factCompactSlotStore) int
 		return 0
 	}
 	fieldSlots := f.fieldSlotSlice()
+	compactSlots := f.compactFieldSlots(compactSlotStore)
 	if len(fieldSlots) > 0 {
 		return len(fieldSlots)
 	}
-	return len(f.compactFieldSlots(compactSlotStore))
+	return len(compactSlots)
 }
 
 func (f *workingFact) materializeFieldSlots(compactSlotStore *factCompactSlotStore) []factSlot {
@@ -1926,6 +1937,13 @@ func (f *workingFact) materializeFieldSlots(compactSlotStore *factCompactSlotSto
 	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots(compactSlotStore))
 }
 
+func (f *workingFact) snapshotCompactFieldSlots(compactSlotStore *factCompactSlotStore) []compactFactSlot {
+	if f == nil || len(f.fieldSlotSlice()) > 0 {
+		return nil
+	}
+	return cloneCompactFactSlots(f.compactFieldSlots(compactSlotStore))
+}
+
 func (f FactSnapshot) clone() FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
@@ -1936,6 +1954,7 @@ func (f FactSnapshot) clone() FactSnapshot {
 		generation:    f.generation,
 		fields:        cloneFields(f.fields),
 		fieldSlots:    cloneFactSlots(f.fieldSlots),
+		compactSlots:  cloneCompactFactSlots(f.compactSlots),
 		fieldSpecs:    f.fieldSpecs,
 		fieldPresence: cloneFieldPresence(f.fieldPresence),
 		support:       f.support,
@@ -2491,12 +2510,18 @@ func (f FactSnapshot) FieldPresence(field string) (FieldPresence, bool) {
 	if slot, ok := f.fieldSlot(field); ok && slot < len(f.fieldSlots) {
 		return f.fieldSlots[slot].presence.fieldPresence(), true
 	}
+	if slot, ok := f.fieldSlot(field); ok && slot < len(f.compactSlots) {
+		return f.compactSlots[slot].presence.fieldPresence(), true
+	}
 	return FieldPresence(""), false
 }
 
 func (f FactSnapshot) FieldPresenceMap() map[string]FieldPresence {
 	if f.fieldPresence != nil {
 		return cloneFieldPresence(f.fieldPresence)
+	}
+	if len(f.compactSlots) > 0 {
+		return materializePresenceFromCompactSlots(f.compactSlots, f.fieldSpecs)
 	}
 	return materializePresenceFromSlots(f.fieldSlots, f.fieldSpecs)
 }
@@ -2522,6 +2547,9 @@ func (f FactSnapshot) fieldValue(name string) (Value, bool) {
 		if resolved.ok {
 			return resolved.value, true
 		}
+	}
+	if slot, ok := f.fieldSlot(name); ok && slot < len(f.compactSlots) {
+		return f.compactSlots[slot].value()
 	}
 	return Value{}, false
 }

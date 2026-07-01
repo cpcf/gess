@@ -135,6 +135,66 @@ func TestSnapshotRemainsUnchangedAfterReset(t *testing.T) {
 	}
 }
 
+func TestSnapshotReconstructsPublicFactsFromCompactSlots(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name: "device",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "status", Kind: ValueString, Default: "active"},
+		},
+	})
+	template, ok := revision.Template("device")
+	if !ok {
+		t.Fatal("missing device template")
+	}
+	session, err := NewSession(
+		revision,
+		WithSessionID("snapshot-compact-materialization-session"),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: template.Key(),
+			Fields: mustFields(t, map[string]any{
+				"id": "api",
+			}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+
+	snapshot := session.snapshotLocked()
+	if got, want := snapshot.Len(), 1; got != want {
+		t.Fatalf("snapshot length = %d, want %d", got, want)
+	}
+	stored := snapshot.facts[0]
+	if len(stored.fieldSlots) != 0 {
+		t.Fatalf("snapshot materialized broad field slots = %d, want zero", len(stored.fieldSlots))
+	}
+	if got, want := len(stored.compactSlots), len(template.fields); got != want {
+		t.Fatalf("snapshot compact slots = %d, want %d", got, want)
+	}
+	if got, ok := stored.Field("id"); !ok || !got.Equal(mustValue(t, "api")) {
+		t.Fatalf("id field = (%v, %v), want api", got, ok)
+	}
+	if got, ok := stored.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("status field = (%v, %v), want active", got, ok)
+	}
+	if got, ok := stored.FieldPresence("status"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("status presence = (%v, %v), want default", got, ok)
+	}
+	if got := stored.Fields()["id"]; !got.Equal(mustValue(t, "api")) {
+		t.Fatalf("materialized fields id = %v, want api", got)
+	}
+
+	if _, err := session.Modify(context.Background(), stored.ID(), FactPatch{
+		Set: mustFields(t, map[string]any{"status": "inactive"}),
+	}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+	if got, ok := stored.Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+		t.Fatalf("compact snapshot changed after modify = (%v, %v), want active", got, ok)
+	}
+}
+
 func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
 	session, err := NewSession(
 		mustCompile(t),

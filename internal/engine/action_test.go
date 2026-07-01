@@ -1472,8 +1472,8 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	}
 
 	fact := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
-	if got, want := fact.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
-		t.Fatalf("generated default kind = %v, want %v", got, want)
+	if got, ok := fact.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("generated default kind = (%v, %v), want effect", got, ok)
 	}
 	internal := mustWorkingFactByID(t, session, fact.ID())
 	if internal == nil {
@@ -1831,17 +1831,17 @@ func TestNativeAssertTemplateValuesActionRetainsStoredSlotBackingsAcrossFullFiel
 
 	first := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
 	second := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 8)
-	if got, want := first.fieldSlots[0].value, mustValue(t, 7); !got.Equal(want) {
-		t.Fatalf("first generated id = %v, want %v", got, want)
+	if got, ok := first.Field("id"); !ok || !got.Equal(mustValue(t, 7)) {
+		t.Fatalf("first generated id = (%v, %v), want 7", got, ok)
 	}
-	if got, want := second.fieldSlots[0].value, mustValue(t, 8); !got.Equal(want) {
-		t.Fatalf("second generated id = %v, want %v", got, want)
+	if got, ok := second.Field("id"); !ok || !got.Equal(mustValue(t, 8)) {
+		t.Fatalf("second generated id = (%v, %v), want 8", got, ok)
 	}
-	if got, want := first.fieldSlots[1].value, mustValue(t, "native"); !got.Equal(want) {
-		t.Fatalf("first generated kind = %v, want %v", got, want)
+	if got, ok := first.Field("kind"); !ok || !got.Equal(mustValue(t, "native")) {
+		t.Fatalf("first generated kind = (%v, %v), want native", got, ok)
 	}
-	if got, want := second.fieldSlots[1].value, mustValue(t, "native"); !got.Equal(want) {
-		t.Fatalf("second generated kind = %v, want %v", got, want)
+	if got, ok := second.Field("kind"); !ok || !got.Equal(mustValue(t, "native")) {
+		t.Fatalf("second generated kind = (%v, %v), want native", got, ok)
 	}
 }
 
@@ -1892,11 +1892,11 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 	}
 
 	generatedFact := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
-	if got, want := generatedFact.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
-		t.Fatalf("generated default kind = %v, want %v", got, want)
+	if got, ok := generatedFact.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("generated default kind = (%v, %v), want effect", got, ok)
 	}
-	if got, want := generatedFact.fieldSlots[1].presence.fieldPresence(), FieldPresenceDefault; got != want {
-		t.Fatalf("generated kind presence = %v, want %v", got, want)
+	if got, ok := generatedFact.FieldPresence("kind"); !ok || got != FieldPresenceDefault {
+		t.Fatalf("generated kind presence = (%v, %v), want default", got, ok)
 	}
 }
 
@@ -2026,17 +2026,17 @@ func TestActionContextAssertTemplateValuesRetainsStoredSlotBackingsAcrossScratch
 
 	first := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
 	second := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 8)
-	if got, want := first.fieldSlots[0].value, mustValue(t, 7); !got.Equal(want) {
-		t.Fatalf("first generated id = %v, want %v", got, want)
+	if got, ok := first.Field("id"); !ok || !got.Equal(mustValue(t, 7)) {
+		t.Fatalf("first generated id = (%v, %v), want 7", got, ok)
 	}
-	if got, want := second.fieldSlots[0].value, mustValue(t, 8); !got.Equal(want) {
-		t.Fatalf("second generated id = %v, want %v", got, want)
+	if got, ok := second.Field("id"); !ok || !got.Equal(mustValue(t, 8)) {
+		t.Fatalf("second generated id = (%v, %v), want 8", got, ok)
 	}
-	if got, want := first.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
-		t.Fatalf("first generated default kind = %v, want %v", got, want)
+	if got, ok := first.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("first generated default kind = (%v, %v), want effect", got, ok)
 	}
-	if got, want := second.fieldSlots[1].value, mustValue(t, "effect"); !got.Equal(want) {
-		t.Fatalf("second generated default kind = %v, want %v", got, want)
+	if got, ok := second.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("second generated default kind = (%v, %v), want effect", got, ok)
 	}
 }
 
