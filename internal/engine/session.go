@@ -132,7 +132,6 @@ type Session struct {
 	insertionOrder                []FactID
 	slotStorage                   []factSlot
 	compactSlotStore              *factCompactSlotStore
-	generatedOutputs              generatedOutputStore
 	resetWorkspace                factWorkspace
 	logicalSupportEdges           map[SupportID]logicalSupportEdgeRecord
 	logicalSupportBySource        map[logicalSupportSourceKey]map[SupportID]struct{}
@@ -155,32 +154,6 @@ type queuedMutation struct {
 	ctx    context.Context
 	apply  func(context.Context) (any, reteAgendaDelta, error)
 	result chan queuedMutationResult
-}
-
-type generatedOutputStore struct {
-	templateIDs  []templateID
-	slotStarts   []uint32
-	slotCounts   []uint32
-	compactSlots []compactFactSlot
-}
-
-func (s *generatedOutputStore) addCompact(templateID templateID, slots []compactFactSlot) {
-	if s == nil {
-		return
-	}
-	start := uint32(len(s.compactSlots))
-	count := uint32(len(slots))
-	s.templateIDs = append(s.templateIDs, templateID)
-	s.slotStarts = append(s.slotStarts, start)
-	s.slotCounts = append(s.slotCounts, count)
-	s.compactSlots = append(s.compactSlots, slots...)
-}
-
-func (s *generatedOutputStore) len() int {
-	if s == nil {
-		return 0
-	}
-	return len(s.templateIDs)
 }
 
 type queuedMutationResult struct {
@@ -1605,8 +1578,8 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 			Reason: "generated fact insert plan is missing",
 		}
 	}
-	if !origin.isZero() && plan.outputOnlyStorageEligible() {
-		s.storeGeneratedOutputCompactSlots(&state, plan, compactSlots, compactSlotMark)
+	if !origin.isZero() && plan.outputOnlyNoRetainEligible() {
+		s.discardGeneratedOutputCompactSlots(&state, compactSlotMark)
 		return nil, true, reteAgendaDelta{}, nil
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
@@ -1808,8 +1781,8 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 			Reason: "generated fact insert plan is missing",
 		}
 	}
-	if plan.outputOnlyStorageEligible() {
-		s.storeGeneratedOutputCompactSlots(state, plan, compactSlots, compactSlotMark)
+	if plan.outputOnlyNoRetainEligible() {
+		s.discardGeneratedOutputCompactSlots(state, compactSlotMark)
 		return true, reteAgendaDelta{}, nil
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
@@ -1870,11 +1843,10 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 	return true, agendaDelta, nil
 }
 
-func (s *Session) storeGeneratedOutputCompactSlots(state *factWorkspace, plan *compiledGeneratedFactInsertPlan, compactSlots []compactFactSlot, compactSlotMark int) {
-	if s == nil || state == nil || plan == nil {
+func (s *Session) discardGeneratedOutputCompactSlots(state *factWorkspace, compactSlotMark int) {
+	if s == nil || state == nil {
 		return
 	}
-	s.generatedOutputs.addCompact(plan.templateID, compactSlots)
 	state.rollbackGeneratedCompactFactSlots(compactSlotMark)
 	s.commitFactWorkspace(*state)
 }
@@ -6996,7 +6968,6 @@ func (s *Session) resetWorkingMemory() {
 	s.insertionOrder = nil
 	s.slotStorage = nil
 	s.compactSlotStore = nil
-	s.generatedOutputs = generatedOutputStore{}
 }
 
 func cloneWorkingFacts(in []workingFact) []workingFact {

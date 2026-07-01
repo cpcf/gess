@@ -1131,7 +1131,7 @@ func (p *compiledGeneratedFactInsertPlan) valid() bool {
 	return p != nil && p.templateKey != ""
 }
 
-func (p *compiledGeneratedFactInsertPlan) outputOnlyStorageEligible() bool {
+func (p *compiledGeneratedFactInsertPlan) outputOnlyNoRetainEligible() bool {
 	return p.valid() && p.compactSlots && !p.affectsRete && p.duplicatePolicy == DuplicateAllow
 }
 

@@ -1633,7 +1633,7 @@ func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing
 	}
 }
 
-func TestNativeAssertTemplateValuesActionUsesOutputStoreForUntargetedTokenFastPath(t *testing.T) {
+func TestNativeAssertTemplateValuesActionDiscardsUntargetedTokenFastPath(t *testing.T) {
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "source",
@@ -1681,8 +1681,8 @@ func TestNativeAssertTemplateValuesActionUsesOutputStoreForUntargetedTokenFastPa
 	if compiled.insertPlan.affectsRuleMatches || compiled.insertPlan.affectsRete {
 		t.Fatalf("untargeted generated insert plan affects rule=%v rete=%v, want false/false", compiled.insertPlan.affectsRuleMatches, compiled.insertPlan.affectsRete)
 	}
-	if !compiled.insertPlan.outputOnlyStorageEligible() {
-		t.Fatal("untargeted generated insert plan should be output-store eligible")
+	if !compiled.insertPlan.outputOnlyNoRetainEligible() {
+		t.Fatal("untargeted generated insert plan should be no-retain eligible")
 	}
 
 	session := mustSession(t, revision, "native-assert-action-token-fast-path-session")
@@ -1697,11 +1697,7 @@ func TestNativeAssertTemplateValuesActionUsesOutputStoreForUntargetedTokenFastPa
 	if result.Status != RunCompleted || result.Fired != 1 {
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
-	snapshot := mustSnapshot(t, context.Background(), session)
-	if got := len(snapshot.FactsByTemplateKey(generated.Key())); got != 0 {
-		t.Fatalf("generated working-memory facts = %d, want 0", got)
-	}
-	assertGeneratedOutputRecord(t, session, 0, generated, []Value{mustValue(t, "hit-s-1")})
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 	counters := session.propagationCounterSnapshot()
 	if got := counters.Totals.RHSAsserts; got != 0 {
 		t.Fatalf("RHS assert counter = %d, want 0 for untargeted generated fact", got)
@@ -1773,14 +1769,10 @@ func TestNativeAssertTemplateValuesActionUsesAggregateValueTokenFastPath(t *test
 	if result.Status != RunCompleted || result.Fired != 1 {
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
-	snapshot := mustSnapshot(t, context.Background(), session)
-	if got := len(snapshot.FactsByTemplateKey(summary.Key())); got != 0 {
-		t.Fatalf("summary working-memory facts = %d, want 0", got)
-	}
-	assertGeneratedOutputRecord(t, session, 0, summary, []Value{mustValue(t, 7)})
+	assertNoGeneratedWorkingMemoryFacts(t, session, summary.Key())
 }
 
-func TestNativeAssertTemplateValuesActionStoresOutputRecordsAcrossFullFields(t *testing.T) {
+func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyFullFields(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1830,12 +1822,7 @@ func TestNativeAssertTemplateValuesActionStoresOutputRecordsAcrossFullFields(t *
 		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
 	}
 
-	snapshot := mustSnapshot(t, ctx, session)
-	if got := len(snapshot.FactsByTemplateKey(generated.Key())); got != 0 {
-		t.Fatalf("generated working-memory facts = %d, want 0", got)
-	}
-	assertGeneratedOutputRecordPresent(t, session, generated, []Value{mustValue(t, 7), mustValue(t, "native")})
-	assertGeneratedOutputRecordPresent(t, session, generated, []Value{mustValue(t, 8), mustValue(t, "native")})
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 }
 
 func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
@@ -1884,11 +1871,7 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
 
-	snapshot := mustSnapshot(t, ctx, session)
-	if got := len(snapshot.FactsByTemplateKey(generated.Key())); got != 0 {
-		t.Fatalf("generated working-memory facts = %d, want 0", got)
-	}
-	assertGeneratedOutputRecord(t, session, 0, generated, []Value{mustValue(t, 7), mustValue(t, "effect")})
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 }
 
 func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *testing.T) {
@@ -1968,7 +1951,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 	}
 }
 
-func TestActionContextAssertTemplateValuesStoresOutputRecordsAcrossScratchReuse(t *testing.T) {
+func TestActionContextAssertTemplateValuesDiscardsOutputOnlyScratchValues(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
@@ -2015,58 +1998,18 @@ func TestActionContextAssertTemplateValuesStoresOutputRecordsAcrossScratchReuse(
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
 
-	snapshot := mustSnapshot(t, ctx, session)
-	if got := len(snapshot.FactsByTemplateKey(generated.Key())); got != 0 {
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
+}
+
+func assertNoGeneratedWorkingMemoryFacts(t testing.TB, session *Session, templateKey TemplateKey) {
+	t.Helper()
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := len(snapshot.FactsByTemplateKey(templateKey)); got != 0 {
 		t.Fatalf("generated working-memory facts = %d, want 0", got)
 	}
-	assertGeneratedOutputRecordPresent(t, session, generated, []Value{mustValue(t, 7), mustValue(t, "effect")})
-	assertGeneratedOutputRecordPresent(t, session, generated, []Value{mustValue(t, 8), mustValue(t, "effect")})
-}
-
-func assertGeneratedOutputRecordPresent(t testing.TB, session *Session, template Template, values []Value) {
-	t.Helper()
-	for i := 0; i < session.generatedOutputs.len(); i++ {
-		if generatedOutputRecordMatches(session, i, template, values) {
-			return
-		}
-	}
-	t.Fatalf("generated output record for template %q values %v not found", template.Key(), values)
-}
-
-func assertGeneratedOutputRecord(t testing.TB, session *Session, index int, template Template, values []Value) {
-	t.Helper()
-	if !generatedOutputRecordMatches(session, index, template, values) {
-		t.Fatalf("generated output record %d did not match template %q values %v", index, template.Key(), values)
-	}
-}
-
-func generatedOutputRecordMatches(session *Session, index int, template Template, values []Value) bool {
-	if session == nil {
-		return false
-	}
-	if got := session.generatedOutputs.len(); got <= index {
-		return false
-	}
-	wantTemplateID, ok := session.revision.templateIDByKey(template.Key())
-	if !ok {
-		return false
-	}
-	if got := session.generatedOutputs.templateIDs[index]; got != wantTemplateID {
-		return false
-	}
-	start := int(session.generatedOutputs.slotStarts[index])
-	count := int(session.generatedOutputs.slotCounts[index])
-	if count != len(values) {
-		return false
-	}
-	slots := session.generatedOutputs.compactSlots[start : start+count]
-	for i, want := range values {
-		got, ok := slots[i].value()
-		if !ok || !got.Equal(want) {
-			return false
-		}
-	}
-	return true
 }
 
 func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *testing.T) {
