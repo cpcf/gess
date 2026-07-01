@@ -433,6 +433,7 @@ type duplicateIndexKey struct {
 
 type compiledGeneratedFactInsertPlan struct {
 	template              Template
+	templateID            templateID
 	name                  string
 	templateKey           TemplateKey
 	duplicatePolicy       DuplicatePolicy
@@ -449,6 +450,7 @@ type compiledGeneratedFactInsertPlan struct {
 func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
 	plan := compiledGeneratedFactInsertPlan{
 		template:           template,
+		templateID:         template.id,
 		name:               template.Name(),
 		templateKey:        template.Key(),
 		duplicatePolicy:    template.duplicatePolicy,

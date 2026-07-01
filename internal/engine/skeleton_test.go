@@ -73,6 +73,81 @@ func TestWorkspaceCompilesTemplatesIntoImmutableRevision(t *testing.T) {
 	}
 }
 
+func TestWorkspaceCompilesDeterministicTemplateIDs(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddTemplate(t, workspace, TemplateSpec{Name: "zeta", Fields: []FieldSpec{{Name: "id", Kind: ValueString}}})
+	mustAddTemplate(t, workspace, TemplateSpec{Name: "alpha", Key: "alpha-key", Fields: []FieldSpec{{Name: "id", Kind: ValueString}}})
+
+	revision := mustCompileWorkspace(t, workspace)
+	alphaID, ok := revision.templateIDByKey("alpha-key")
+	if !ok {
+		t.Fatal("missing alpha template id by key")
+	}
+	zetaID, ok := revision.templateIDByName("zeta")
+	if !ok {
+		t.Fatal("missing zeta template id by name")
+	}
+	if alphaID == 0 || zetaID == 0 || alphaID == zetaID {
+		t.Fatalf("template ids = alpha:%d zeta:%d, want distinct non-zero ids", alphaID, zetaID)
+	}
+	if alphaID >= zetaID {
+		t.Fatalf("template ids = alpha:%d zeta:%d, want sorted name order", alphaID, zetaID)
+	}
+	template, ok := revision.templateByID(alphaID)
+	if !ok || template.Key() != "alpha-key" || template.Name() != "alpha" {
+		t.Fatalf("templateByID(alpha) = (%#v, %t), want alpha template", template, ok)
+	}
+	if _, ok := revision.templateByID(templateID(len(revision.templatesByID) + 1)); ok {
+		t.Fatal("templateByID returned a template for an out-of-range id")
+	}
+}
+
+func TestGeneratedFactInsertPlansCarryTemplateIDs(t *testing.T) {
+	workspace := NewWorkspace()
+	source := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	generated := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "generated",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "record",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: generated.Key(),
+			Values:      []ExpressionSpec{ConstExpr{Value: "g1"}},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:          "generate",
+		ConditionTree: Match{Binding: "source", Target: TemplateKeyFact(source.Key())},
+		Actions:       []RuleActionSpec{{Name: "record"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	plan, ok := revision.generatedFactInsertPlan(generated.Key())
+	if !ok {
+		t.Fatal("missing generated fact insert plan")
+	}
+	templateID, ok := revision.templateIDByKey(generated.Key())
+	if !ok {
+		t.Fatal("missing generated template id")
+	}
+	if plan.templateID != templateID {
+		t.Fatalf("plan template id = %d, want %d", plan.templateID, templateID)
+	}
+	rule := revision.rules["generate"]
+	actionPlan := rule.actionExecutions[0].assertTemplateValues.insertPlan
+	if actionPlan.templateID != templateID {
+		t.Fatalf("rule action plan template id = %d, want %d", actionPlan.templateID, templateID)
+	}
+}
+
 func TestWorkspaceCompilesImplicitMainModule(t *testing.T) {
 	revision := mustCompile(t)
 

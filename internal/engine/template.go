@@ -47,6 +47,7 @@ type Template struct {
 	name               string
 	module             ModuleName
 	key                TemplateKey
+	id                 templateID
 	compatibilityKey   TemplateKey
 	fields             []FieldSpec
 	fieldsByName       map[string]FieldSpec
@@ -64,6 +65,8 @@ type Template struct {
 	backchainSourceKey TemplateKey
 	closed             bool
 }
+
+type templateID uint32
 
 type fieldValidationSpec struct {
 	kind          ValueKind

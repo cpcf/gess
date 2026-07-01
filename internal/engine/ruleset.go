@@ -321,8 +321,11 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	templates := make(map[string]Template, len(compiledTemplates))
 	templatesByKey := make(map[TemplateKey]Template, len(compiledTemplates))
 	templatesByQualifiedName := make(map[QualifiedName]Template, len(compiledTemplates))
+	templatesByID := make([]Template, 0, len(compiledTemplates))
+	templateIDsByName := make(map[string]templateID, len(compiledTemplates))
+	templateIDsByKey := make(map[TemplateKey]templateID, len(compiledTemplates))
 	templateOrder := make([]string, 0, len(compiledTemplates))
-	for _, template := range compiledTemplates {
+	for i, template := range compiledTemplates {
 		if _, exists := templates[template.name]; exists {
 			return nil, &ValidationError{
 				TemplateName: template.name,
@@ -335,9 +338,13 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 				Reason:       "duplicate template key",
 			}
 		}
+		template.id = templateID(i + 1)
 		templates[template.name] = template.clone()
 		templatesByKey[template.key] = template.clone()
 		templatesByQualifiedName[template.QualifiedName()] = template.clone()
+		templatesByID = append(templatesByID, template.clone())
+		templateIDsByName[template.name] = template.id
+		templateIDsByKey[template.key] = template.id
 		templateOrder = append(templateOrder, template.name)
 	}
 	templateResolver := newTemplateResolver(templatesByKey, templatesByQualifiedName)
@@ -460,7 +467,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		indexQueryConditionDependencies(query, queryConditionTemplateKeys, queryConditionNames)
 	}
 
-	generatedFactInsertPlans := compileGeneratedFactInsertPlans(templatesByKey, conditionTemplateKeys, conditionNames, queryConditionTemplateKeys, queryConditionNames)
+	generatedFactInsertPlans := compileGeneratedFactInsertPlans(templatesByKey, templateIDsByKey, conditionTemplateKeys, conditionNames, queryConditionTemplateKeys, queryConditionNames)
 	compiledRules = annotateGeneratedFactInsertPlansOnRules(compiledRules, rulesByName, rulesByID, rulesByRevisionID, generatedFactInsertPlans)
 
 	return &Ruleset{
@@ -469,6 +476,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		moduleOrder:                moduleOrder,
 		templates:                  templates,
 		templatesByKey:             templatesByKey,
+		templatesByID:              templatesByID,
+		templateIDsByName:          templateIDsByName,
+		templateIDsByKey:           templateIDsByKey,
 		templateOrder:              templateOrder,
 		actions:                    actionsByName,
 		actionOrder:                actionOrder,
@@ -499,6 +509,9 @@ type Ruleset struct {
 	moduleOrder                []ModuleName
 	templates                  map[string]Template
 	templatesByKey             map[TemplateKey]Template
+	templatesByID              []Template
+	templateIDsByName          map[string]templateID
+	templateIDsByKey           map[TemplateKey]templateID
 	templateOrder              []string
 	actions                    map[string]compiledAction
 	actionOrder                []string
@@ -610,7 +623,7 @@ func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID]gene
 	return r.generatedAssertReserve
 }
 
-func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
+func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, templateIDsByKey map[TemplateKey]templateID, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
 	if len(templatesByKey) == 0 {
 		return nil
 	}
@@ -619,6 +632,9 @@ func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, co
 		plan := newCompiledGeneratedFactInsertPlan(template)
 		if !plan.valid() {
 			continue
+		}
+		if templateID, ok := templateIDsByKey[key]; ok {
+			plan.templateID = templateID
 		}
 		_, ruleNameTargeted := conditionNames[plan.name]
 		_, queryNameTargeted := queryConditionNames[plan.name]
@@ -682,6 +698,33 @@ func (r *Ruleset) generatedFactInsertPlan(templateKey TemplateKey) (*compiledGen
 	}
 	plan, ok := r.generatedFactInsertPlans[templateKey]
 	return plan, ok && plan != nil
+}
+
+func (r *Ruleset) templateIDByKey(key TemplateKey) (templateID, bool) {
+	if r == nil || key == "" || r.templateIDsByKey == nil {
+		return 0, false
+	}
+	id, ok := r.templateIDsByKey[key]
+	return id, ok && id != 0
+}
+
+func (r *Ruleset) templateIDByName(name string) (templateID, bool) {
+	if r == nil || name == "" || r.templateIDsByName == nil {
+		return 0, false
+	}
+	id, ok := r.templateIDsByName[name]
+	return id, ok && id != 0
+}
+
+func (r *Ruleset) templateByID(id templateID) (Template, bool) {
+	if r == nil || id == 0 {
+		return Template{}, false
+	}
+	index := int(id) - 1
+	if index < 0 || index >= len(r.templatesByID) {
+		return Template{}, false
+	}
+	return r.templatesByID[index], true
 }
 
 func (r *Ruleset) estimatedRunSlotCapacity(factCapacity int) int {
