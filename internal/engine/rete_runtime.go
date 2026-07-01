@@ -325,6 +325,29 @@ func (r *reteRuntime) resetGraphBetaForGenerationWithDelta(ctx context.Context, 
 	return r.graphBeta.resetFactsForGenerationWithDelta(ctx, facts, generation)
 }
 
+func (r *reteRuntime) resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx context.Context, facts *factWorkspace, generation Generation) (reteAgendaDelta, error) {
+	if r == nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	r.mode = r.determineMode()
+	if !r.usesGraphBeta() {
+		r.graphBeta = nil
+		if len(r.plan.rules) == 0 {
+			return reteAgendaDelta{supported: true}, nil
+		}
+		return reteAgendaDelta{}, r.unsupportedRuntimeError()
+	}
+	if r.graphBeta == nil {
+		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithDelta(ctx, r.revision, r.graph, facts, generation)
+		if err != nil {
+			return delta, err
+		}
+		r.graphBeta = memory
+		return delta, nil
+	}
+	return r.graphBeta.resetFactWorkspaceForGenerationWithDelta(ctx, facts, generation)
+}
+
 func (r *reteRuntime) resetGraphBetaForGenerationWithInitialAgenda(ctx context.Context, facts []FactSnapshot, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{supported: true}, nil
@@ -346,6 +369,29 @@ func (r *reteRuntime) resetGraphBetaForGenerationWithInitialAgenda(ctx context.C
 		return delta, nil
 	}
 	return r.graphBeta.resetFactsForGenerationWithInitialAgenda(ctx, facts, generation, agenda)
+}
+
+func (r *reteRuntime) resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(ctx context.Context, facts *factWorkspace, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
+	if r == nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	r.mode = r.determineMode()
+	if !r.usesGraphBeta() {
+		r.graphBeta = nil
+		if len(r.plan.rules) == 0 {
+			return reteAgendaDelta{supported: true}, nil
+		}
+		return reteAgendaDelta{}, r.unsupportedRuntimeError()
+	}
+	if r.graphBeta == nil {
+		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda)
+		if err != nil {
+			return delta, err
+		}
+		r.graphBeta = memory
+		return delta, nil
+	}
+	return r.graphBeta.resetFactWorkspaceForGenerationWithInitialAgenda(ctx, facts, generation, agenda)
 }
 
 func (r *reteRuntime) supportsInitialAgendaReset() bool {

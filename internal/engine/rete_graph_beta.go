@@ -706,6 +706,30 @@ func newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx context.Context, r
 	return memory, delta, nil
 }
 
+func newReteGraphBetaMemoryForWorkspaceWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount())
+	if memory == nil {
+		return nil, reteAgendaDelta{supported: true}, nil
+	}
+	delta, err := memory.resetFactWorkspaceForGenerationWithDelta(ctx, facts, generation)
+	if err != nil {
+		return nil, delta, err
+	}
+	return memory, delta, nil
+}
+
+func newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation, agenda *agenda) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount())
+	if memory == nil {
+		return nil, reteAgendaDelta{supported: true}, nil
+	}
+	delta, err := memory.resetFactWorkspaceForGenerationWithInitialAgenda(ctx, facts, generation, agenda)
+	if err != nil {
+		return nil, delta, err
+	}
+	return memory, delta, nil
+}
+
 func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount int) *reteGraphBetaMemory {
 	if revision == nil || graph == nil {
 		return nil
@@ -2146,6 +2170,64 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 	return combined, nil
 }
 
+func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx context.Context, facts *factWorkspace, generation Generation) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if m == nil || m.graph == nil {
+		return combined, nil
+	}
+	factCount := facts.factCount()
+	if len(m.alpha.facts) != len(m.graph.alphaNodes)+1 || len(m.alpha.conditions) != len(m.graph.alphaNodes)+1 {
+		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, factCount))
+	}
+	if m.arena == nil {
+		m.arena = newTokenArenaWithoutFactSpans()
+	} else {
+		m.arena.reset()
+	}
+	if _, err := m.propagateEvent(ctx, newReteGraphClearEvent(generation, mutationOrigin{}, nil)); err != nil {
+		return combined, err
+	}
+	if facts != nil {
+		m.compactSlotStore = facts.compactSlotStore
+	}
+	m.setFactsFromWorkspace(facts)
+	m.deferNegativeOutputs = true
+	m.deferAggregateOutputs = true
+	m.suppressTerminalDeltas = true
+	defer func() {
+		m.deferNegativeOutputs = false
+		m.deferAggregateOutputs = false
+		m.suppressTerminalDeltas = false
+		m.clearDeferredAggregateOutputs()
+	}()
+	m.initializeAggregateOutputs()
+	if err := m.initializeRootStage(nil); err != nil {
+		return combined, err
+	}
+	for _, snapshot := range m.facts {
+		fact, ok := facts.workingFactByID(snapshot.ID())
+		if !ok {
+			continue
+		}
+		delta, err := m.insertWorkingFactInternal(ctx, fact, snapshot, nil, false)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
+	}
+	if err := m.finalizeDeferredAggregateOutputs(nil); err != nil {
+		return combined, err
+	}
+	m.deferNegativeOutputs = false
+	if err := m.finalizeDeferredNegativeOutputs(nil); err != nil {
+		return combined, err
+	}
+	if err := m.finalizeDeferredAggregateOutputs(nil); err != nil {
+		return combined, err
+	}
+	return combined, nil
+}
+
 func (m *reteGraphBetaMemory) resetFactsForGenerationWithInitialAgenda(ctx context.Context, facts []FactSnapshot, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
 	if m == nil {
 		return reteAgendaDelta{supported: true}, nil
@@ -2155,6 +2237,27 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithInitialAgenda(ctx conte
 	m.initialAgenda = agenda
 	m.initialAgendaErr = nil
 	delta, err := m.resetFactsForGenerationWithDelta(ctx, facts, generation)
+	initialErr := m.initialAgendaErr
+	m.initialAgenda = previousAgenda
+	m.initialAgendaErr = previousErr
+	if err != nil {
+		return delta, err
+	}
+	if initialErr != nil {
+		return delta, initialErr
+	}
+	return delta, nil
+}
+
+func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithInitialAgenda(ctx context.Context, facts *factWorkspace, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
+	if m == nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
+	previousAgenda := m.initialAgenda
+	previousErr := m.initialAgendaErr
+	m.initialAgenda = agenda
+	m.initialAgendaErr = nil
+	delta, err := m.resetFactWorkspaceForGenerationWithDelta(ctx, facts, generation)
 	initialErr := m.initialAgendaErr
 	m.initialAgenda = previousAgenda
 	m.initialAgendaErr = previousErr
@@ -2204,6 +2307,37 @@ func (m *reteGraphBetaMemory) setFacts(facts []FactSnapshot) {
 	}
 	for i, fact := range m.facts {
 		m.factIndexes[fact.ID()] = i
+	}
+	m.markFactTargetIndexesDirty()
+}
+
+func (m *reteGraphBetaMemory) setFactsFromWorkspace(facts *factWorkspace) {
+	if m == nil {
+		return
+	}
+	capacity := facts.factCount()
+	if cap(m.facts) < capacity {
+		m.facts = make([]FactSnapshot, 0, capacity)
+	} else {
+		clear(m.facts)
+		m.facts = m.facts[:0]
+	}
+	if m.factIndexes == nil || capacity > m.factIndexReserve {
+		m.factIndexes = make(map[FactID]int, capacity)
+		m.factIndexReserve = capacity
+	} else {
+		clear(m.factIndexes)
+	}
+	if facts != nil {
+		for _, id := range facts.insertionOrder {
+			fact, ok := facts.workingFactByID(id)
+			if !ok {
+				continue
+			}
+			snapshot := fact.detachedSnapshotForRevision(m.revision, facts.compactSlotStore)
+			m.factIndexes[snapshot.ID()] = len(m.facts)
+			m.facts = append(m.facts, snapshot)
+		}
 	}
 	m.markFactTargetIndexesDirty()
 }
@@ -6349,7 +6483,17 @@ func (m *reteGraphBetaMemory) workingFactMatchesAlphaNode(ctx context.Context, f
 
 func (m *reteGraphBetaMemory) workingFactRefForAlphaNode(fact *workingFact, snapshot FactSnapshot, node *reteGraphAlphaNode) conditionFactRef {
 	if m != nil && node != nil && canUseWorkingFactForAlphaTarget(fact, node.target) {
-		return newConditionFactRefFromWorkingFactForTarget(fact, node.target, m.compactSlotStore)
+		ref := newConditionFactRefFromWorkingFactForTarget(fact, node.target, m.compactSlotStore)
+		if ref.name == "" {
+			ref.name = snapshot.Name()
+		}
+		if ref.templateKey == "" {
+			ref.templateKey = snapshot.TemplateKey()
+		}
+		if len(ref.fieldSpecs) == 0 {
+			ref.fieldSpecs = snapshot.fieldSpecs
+		}
+		return ref
 	}
 	return newConditionFactRefFromSnapshot(snapshot)
 }

@@ -133,7 +133,6 @@ type Session struct {
 	slotStorage                   []factSlot
 	compactSlotStore              *factCompactSlotStore
 	resetWorkspace                factWorkspace
-	resetFactsScratch             []FactSnapshot
 	logicalSupportEdges           map[SupportID]logicalSupportEdgeRecord
 	logicalSupportBySource        map[logicalSupportSourceKey]map[SupportID]struct{}
 	logicalSupportByFact          map[FactID]map[SupportID]struct{}
@@ -218,13 +217,12 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 	agenda := newAgenda()
 	agenda.reserveActivationRows(revision.estimatedRunFactCapacity(len(compiledInitials)))
-	initialFacts := state.detachedFactsByInsertionOrder(revision)
 	useInitialAgenda := len(listeners) == 0 && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
-		initialDelta, err = rete.resetGraphBetaForGenerationWithInitialAgenda(context.Background(), initialFacts, state.generation, agenda)
+		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(context.Background(), state, state.generation, agenda)
 	} else {
-		err = rete.resetGraphBetaForGeneration(context.Background(), initialFacts, state.generation)
+		_, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), state, state.generation)
 	}
 	if err != nil {
 		return nil, err
@@ -2365,8 +2363,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if len(compiledInitials) > 0 {
 		next.reserveDuplicateIndexes(s.revision)
 	}
-	facts := next.applyCompiledInitialFactsInto(compiledInitials, s.resetFactsScratch[:0], s.revision)
-	s.resetFactsScratch = facts
+	next.applyCompiledInitialFacts(compiledInitials)
 
 	rete := s.rete
 	if rete == nil {
@@ -2392,14 +2389,11 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			resetAgendaWithDeltas = true
 		}
 	}
-	resetDemandDelta, err := rete.resetGraphBetaForGenerationWithDelta(ctx, facts, next.generation)
+	resetDemandDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
 	if err != nil {
 		if s.rete != nil {
-			rollbackFacts := before.facts
-			if !s.resetBeforeSnapshot {
-				rollbackFacts = s.detachedFactsByInsertionOrder()
-			}
-			_ = s.rete.resetGraphBetaForGeneration(context.Background(), rollbackFacts, s.generation)
+			rollbackState := s.activeFactWorkspace()
+			_, _ = s.rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
@@ -2589,7 +2583,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	phase := propagationCounterPhaseInitial
-	if err := rete.resetGraphBetaForGeneration(ctx, snapshot.facts, s.generation); err != nil {
+	state := s.activeFactWorkspace()
+	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, s.generation); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
@@ -2911,7 +2906,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	return changes, true, nil
 }
 
-func (s *Session) rebuildReteRuntime(ctx context.Context, revision *Ruleset, facts []FactSnapshot) error {
+func (s *Session) rebuildReteRuntimeFromWorkspace(ctx context.Context, revision *Ruleset, facts *factWorkspace, generation Generation) error {
 	if s == nil || revision == nil {
 		return nil
 	}
@@ -2920,7 +2915,7 @@ func (s *Session) rebuildReteRuntime(ctx context.Context, revision *Ruleset, fac
 		s.rete = nil
 		return err
 	}
-	if err := rete.resetGraphBeta(ctx, facts); err != nil {
+	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, facts, generation); err != nil {
 		return err
 	}
 	s.rete = rete
@@ -2935,7 +2930,8 @@ func (s *Session) restoreReteAfterPropagationFailure() {
 	if s == nil || s.revision == nil {
 		return
 	}
-	_ = s.rebuildReteRuntime(context.Background(), s.revision, s.detachedFactsByInsertionOrder())
+	state := s.activeFactWorkspace()
+	_ = s.rebuildReteRuntimeFromWorkspace(context.Background(), s.revision, &state, s.generation)
 }
 
 func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
@@ -2946,7 +2942,8 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete == nil {
-		return reteAgendaDelta{}, s.rebuildReteRuntime(ctx, s.revision, s.detachedFactsByInsertionOrder())
+		state := s.activeFactWorkspace()
+		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.generation)
 	}
 	if s.rete.usesGraphBeta() {
 		return s.rete.insertBetaFactWithOrigin(ctx, fact, origin, span)
@@ -2962,7 +2959,8 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete == nil {
-		return reteAgendaDelta{}, s.rebuildReteRuntime(ctx, s.revision, s.detachedFactsByInsertionOrder())
+		state := s.activeFactWorkspace()
+		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.generation)
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
@@ -3847,21 +3845,6 @@ func (s *Session) indexedSnapshotLocked() Snapshot {
 
 func (s *Session) detachedSnapshotLocked() Snapshot {
 	return s.snapshotLockedWithOptions(false, false)
-}
-
-func (s *Session) detachedFactsByInsertionOrder() []FactSnapshot {
-	if s == nil || len(s.insertionOrder) == 0 {
-		return nil
-	}
-	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
-	for _, id := range s.insertionOrder {
-		fact, ok := s.workingFactByID(id)
-		if !ok {
-			continue
-		}
-		facts = append(facts, fact.detachedSnapshotForRevision(s.revision, s.compactSlotStore))
-	}
-	return facts
 }
 
 func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFacts bool) Snapshot {
@@ -5483,29 +5466,6 @@ func (w *factWorkspace) factsByInsertionOrder() []FactID {
 		return nil
 	}
 	return w.insertionOrder
-}
-
-func (w *factWorkspace) detachedFactsByInsertionOrder(revision *Ruleset) []FactSnapshot {
-	return w.detachedFactsByInsertionOrderInto(nil, revision)
-}
-
-func (w *factWorkspace) detachedFactsByInsertionOrderInto(dst []FactSnapshot, revision *Ruleset) []FactSnapshot {
-	if w == nil || w.insertionOrder == nil || len(w.insertionOrder) == 0 {
-		return dst[:0]
-	}
-	if cap(dst) < len(w.insertionOrder) {
-		dst = make([]FactSnapshot, 0, len(w.insertionOrder))
-	} else {
-		dst = dst[:0]
-	}
-	for _, id := range w.insertionOrder {
-		fact, ok := w.workingFactByID(id)
-		if !ok {
-			continue
-		}
-		dst = append(dst, fact.detachedSnapshotForRevision(revision, w.compactSlotStore))
-	}
-	return dst
 }
 
 func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, name string, templateKey TemplateKey, fields Fields) (*workingFact, DuplicateKey, bool, error) {
