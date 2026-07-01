@@ -106,8 +106,14 @@ func factWorkspaceMemoryOwnerDiagnostics(workspace any) RuntimeMemoryOwnerDiagno
 			out.HighWater += uint64(reflectSliceCap(slice))
 			out.Bytes += reflectSliceBytes(slice)
 		}
-		for _, name := range []string{"names", "templateKeys"} {
+		for _, name := range []string{"payloads", "names", "templateKeys"} {
 			addFactMapOwnerDiagnostics(&out, compactFacts.FieldByName(name))
+		}
+		payloads := compactFacts.FieldByName("payloads")
+		if payloads.IsValid() && payloads.Kind() == reflect.Map {
+			for _, key := range payloads.MapKeys() {
+				addWorkingFactPayloadOwnerDiagnostics(&out, payloads.MapIndex(key))
+			}
 		}
 	}
 
@@ -158,21 +164,31 @@ func addWorkingFactDynamicOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, f
 		return
 	}
 	if payload := fact.FieldByName("payload"); payload.IsValid() && payload.Kind() == reflect.Pointer && !payload.IsNil() {
-		out.HighWater++
-		out.Bytes += uint64(payload.Type().Elem().Size())
-		payloadValue := reflectDerefValue(payload)
-		for _, name := range []string{"fields", "fieldPresence"} {
-			field := payloadValue.FieldByName(name)
-			if !field.IsValid() || field.Kind() != reflect.Map {
-				continue
-			}
-			out.HighWater += uint64(reflectMapHighWater(field))
-			out.Bytes += reflectMapRetainedBytes(field)
-		}
-		fieldSlots := payloadValue.FieldByName("fieldSlots")
-		out.HighWater += uint64(reflectSliceCap(fieldSlots))
-		out.Bytes += reflectSliceBytes(fieldSlots)
+		addWorkingFactPayloadOwnerDiagnostics(out, payload)
 	}
+}
+
+func addWorkingFactPayloadOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, payload reflect.Value) {
+	if out == nil {
+		return
+	}
+	payload = reflectDerefValue(payload)
+	if !payload.IsValid() || payload.Kind() != reflect.Struct {
+		return
+	}
+	out.HighWater++
+	out.Bytes += uint64(payload.Type().Size())
+	for _, name := range []string{"fields", "fieldPresence"} {
+		field := payload.FieldByName(name)
+		if !field.IsValid() || field.Kind() != reflect.Map {
+			continue
+		}
+		out.HighWater += uint64(reflectMapHighWater(field))
+		out.Bytes += reflectMapRetainedBytes(field)
+	}
+	fieldSlots := payload.FieldByName("fieldSlots")
+	out.HighWater += uint64(reflectSliceCap(fieldSlots))
+	out.Bytes += reflectSliceBytes(fieldSlots)
 }
 
 func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {

@@ -592,14 +592,19 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 		t.Fatalf("Reset: %v", err)
 	}
 	resetFact := mustOnlyFact(t, session)
-	firstStorage := session.facts
-	if len(firstStorage) == 0 {
-		t.Fatal("session fact storage missing after reset")
+	if got := len(session.facts); got != 0 {
+		t.Fatalf("broad fact storage after reset = %d, want zero", got)
+	}
+	if got := session.compactFacts.len(); got != 1 {
+		t.Fatalf("compact fact storage after reset = %d, want 1", got)
 	}
 	resetLabels := resetFact.fieldsMap()["labels"].data.([]Value)
 	resetLabels[0] = mustValue(t, "mutated")
 	resetMeta := resetFact.fieldsMap()["meta"].data.(map[string]Value)
 	resetMeta["tier"] = mustValue(t, "mutated")
+	state := session.activeFactWorkspace()
+	state.replaceWorkingFact(resetFact)
+	session.commitFactWorkspace(state)
 
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("second Reset: %v", err)
@@ -613,10 +618,8 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	if got, want := nextMeta["tier"].stringValue, "gold"; got != want {
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
-	if got := session.resetWorkspace.facts; len(got) == 0 {
-		t.Fatal("reset workspace did not retain previous live fact storage")
-	} else if &firstStorage[0] != &got[0] {
-		t.Fatal("previous live fact storage was not returned to reset workspace")
+	if got := session.resetWorkspace.compactFacts.len(); got == 0 {
+		t.Fatal("reset workspace did not retain previous compact fact storage")
 	}
 
 	snapshotFact := firstSnapshot.Facts()[0]
@@ -756,8 +759,11 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 
 	resetFact := func(id string) *workingFact {
 		t.Helper()
-		for i := range session.facts {
-			fact := &session.facts[i]
+		for _, factID := range session.insertionOrder {
+			fact, ok := session.workingFactByID(factID)
+			if !ok {
+				continue
+			}
 			if value, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("id"); ok && value.stringValue == id {
 				return fact
 			}
@@ -786,6 +792,9 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	firstSlots := firstFact.fieldSlotSlice()
 	firstSlots[labelsSlot].value.data.([]Value)[0] = mustValue(t, "mutated")
 	firstSlots[metaSlot].value.data.(map[string]Value)["tier"] = mustValue(t, "mutated")
+	state := session.activeFactWorkspace()
+	state.replaceWorkingFact(firstFact)
+	session.commitFactWorkspace(state)
 
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset after mutation: %v", err)

@@ -71,7 +71,7 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	}
 }
 
-func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testing.T) {
+func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "workspace-fact-storage-session")
 
 	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
@@ -81,10 +81,23 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 		t.Fatalf("first assert: %v", err)
 	}
 	if got, want := session.factCount(), 1; got != want {
-		t.Fatalf("facts slice length after first assert = %d, want %d", got, want)
+		t.Fatalf("fact count after first assert = %d, want %d", got, want)
 	}
-	if got, want := mustWorkingFactByID(t, session, first.Fact.ID()), &session.facts[0]; got != want {
-		t.Fatalf("first fact pointer = %p, want %p", got, want)
+	if got := len(session.facts); got != 0 {
+		t.Fatalf("broad fact rows after first assert = %d, want zero", got)
+	}
+	if got := session.compactFacts.len(); got != 1 {
+		t.Fatalf("compact fact rows after first assert = %d, want 1", got)
+	}
+	firstHandle, ok := session.factRowIndex(first.Fact.ID())
+	if !ok {
+		t.Fatalf("first fact row missing")
+	}
+	if row, compact := decodeCompactFactRow(firstHandle); !compact || row != 0 {
+		t.Fatalf("first fact row = %d compact=%v, want compact row 0", firstHandle, compact)
+	}
+	if got := mustWorkingFactByID(t, session, first.Fact.ID()).fieldsMap(); got == nil || got["name"].stringValue != "Ada" {
+		t.Fatalf("first payload fields = %#v, want name Ada", got)
 	}
 
 	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
@@ -94,13 +107,19 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 		t.Fatalf("second assert: %v", err)
 	}
 	if got, want := session.factCount(), 2; got != want {
-		t.Fatalf("facts slice length after second assert = %d, want %d", got, want)
+		t.Fatalf("fact count after second assert = %d, want %d", got, want)
 	}
-	if got, ok := session.factRowIndex(first.Fact.ID()); !ok || got != 0 {
-		t.Fatalf("first fact row after growth = %d/%v, want 0/true", got, ok)
+	if got := len(session.facts); got != 0 {
+		t.Fatalf("broad fact rows after second assert = %d, want zero", got)
 	}
-	if got, ok := session.factRowIndex(second.Fact.ID()); !ok || got != 1 {
-		t.Fatalf("second fact row = %d/%v, want 1/true", got, ok)
+	if got := session.compactFacts.len(); got != 2 {
+		t.Fatalf("compact fact rows after second assert = %d, want 2", got)
+	}
+	if got, ok := session.factRowIndex(first.Fact.ID()); !ok || got != firstHandle {
+		t.Fatalf("first fact row after growth = %d/%v, want %d/true", got, ok, firstHandle)
+	}
+	if got, ok := session.factRowIndex(second.Fact.ID()); !ok || got != encodeCompactFactRow(1) {
+		t.Fatalf("second fact row = %d/%v, want compact row 1", got, ok)
 	}
 
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
@@ -110,7 +129,7 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 		t.Fatalf("retracted fact %q remained in factsByID", first.Fact.ID())
 	}
 	if got, want := session.factCount(), 1; got != want {
-		t.Fatalf("facts slice length after retract = %d, want %d", got, want)
+		t.Fatalf("fact count after retract = %d, want %d", got, want)
 	}
 	for i := range 8 {
 		if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
@@ -122,10 +141,18 @@ func TestSessionAssertStoresFactsInWorkspaceSliceAndRetainsMapPointers(t *testin
 	if _, ok := session.factRowIndex(first.Fact.ID()); ok {
 		t.Fatalf("retracted fact %q was resurrected after slice growth", first.Fact.ID())
 	}
-	for i := range session.facts {
-		fact := &session.facts[i]
-		if got, ok := session.factRowIndex(fact.id); !ok || got != i {
-			t.Fatalf("fact %q row after growth = %d/%v, want %d/true", fact.id, got, ok, i)
+	for _, id := range session.insertionOrder {
+		handle, ok := session.factRowIndex(id)
+		if !ok {
+			t.Fatalf("fact %q row missing after growth", id)
+		}
+		row, compact := decodeCompactFactRow(handle)
+		if !compact {
+			t.Fatalf("fact %q row after growth = %d, want compact row", id, handle)
+		}
+		fact, ok := session.compactFacts.fact(row)
+		if !ok || fact.id != id {
+			t.Fatalf("compact row %d = %v/%v, want fact %q", row, fact, ok, id)
 		}
 	}
 }

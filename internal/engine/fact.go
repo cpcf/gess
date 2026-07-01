@@ -304,6 +304,7 @@ type compactFactStore struct {
 	supportStates []factSupportCode
 	compactSlots  []factCompactSlotRef
 	flags         []compactFactFlags
+	payloads      map[int]*workingFactPayload
 	names         map[int]string
 	templateKeys  map[int]TemplateKey
 }
@@ -332,6 +333,8 @@ func (s *compactFactStore) reset() {
 	s.recencies = s.recencies[:0]
 	s.supportStates = s.supportStates[:0]
 	s.compactSlots = s.compactSlots[:0]
+	s.flags = s.flags[:0]
+	clear(s.payloads)
 	clear(s.names)
 	clear(s.templateKeys)
 }
@@ -372,6 +375,12 @@ func (s *compactFactStore) append(fact workingFact) int {
 		flags |= compactFactTargetIndexesSkipped
 	}
 	s.flags = append(s.flags, flags)
+	if workingFactPayloadHasSideValues(fact.payload) {
+		if s.payloads == nil {
+			s.payloads = make(map[int]*workingFactPayload, 1)
+		}
+		s.payloads[row] = cloneWorkingFactSidePayload(fact.payload)
+	}
 	if name := fact.storedName(); name != "" {
 		if s.names == nil {
 			s.names = make(map[int]string, 1)
@@ -406,6 +415,11 @@ func (s *compactFactStore) fact(row int) (*workingFact, bool) {
 	if key, ok := s.templateKeys[row]; ok {
 		fact.setTemplateKey(key)
 	}
+	if payload, ok := s.payloads[row]; ok {
+		fact.setFields(cloneFields(payload.fields))
+		fact.setFieldSlots(cloneFactSlots(payload.fieldSlots))
+		fact.setFieldPresence(cloneFieldPresence(payload.fieldPresence))
+	}
 	return fact, true
 }
 
@@ -423,6 +437,14 @@ func (s *compactFactStore) replace(row int, fact *workingFact) bool {
 		flags |= compactFactTargetIndexesSkipped
 	}
 	s.flags[row] = flags
+	if workingFactPayloadHasSideValues(fact.payload) {
+		if s.payloads == nil {
+			s.payloads = make(map[int]*workingFactPayload, 1)
+		}
+		s.payloads[row] = cloneWorkingFactSidePayload(fact.payload)
+	} else if s.payloads != nil {
+		delete(s.payloads, row)
+	}
 	if name := fact.storedName(); name != "" {
 		if s.names == nil {
 			s.names = make(map[int]string, 1)
@@ -457,6 +479,15 @@ func (s *compactFactStore) remove(row int) (FactID, bool) {
 		s.supportStates[row] = s.supportStates[last]
 		s.compactSlots[row] = s.compactSlots[last]
 		s.flags[row] = s.flags[last]
+		if payload, ok := s.payloads[last]; ok {
+			if s.payloads == nil {
+				s.payloads = make(map[int]*workingFactPayload, 1)
+			}
+			s.payloads[row] = payload
+			delete(s.payloads, last)
+		} else if s.payloads != nil {
+			delete(s.payloads, row)
+		}
 		if name, ok := s.names[last]; ok {
 			if s.names == nil {
 				s.names = make(map[int]string, 1)
@@ -476,6 +507,9 @@ func (s *compactFactStore) remove(row int) (FactID, bool) {
 			delete(s.templateKeys, row)
 		}
 	} else {
+		if s.payloads != nil {
+			delete(s.payloads, row)
+		}
 		if s.names != nil {
 			delete(s.names, row)
 		}
@@ -512,6 +546,9 @@ func (s *compactFactStore) truncate(length int) {
 		s.supportStates[i] = 0
 		s.compactSlots[i] = factCompactSlotRef{}
 		s.flags[i] = 0
+		if s.payloads != nil {
+			delete(s.payloads, i)
+		}
 		if s.names != nil {
 			delete(s.names, i)
 		}
@@ -537,6 +574,7 @@ func cloneCompactFactStore(in compactFactStore) compactFactStore {
 		supportStates: slices.Clone(in.supportStates),
 		compactSlots:  slices.Clone(in.compactSlots),
 		flags:         slices.Clone(in.flags),
+		payloads:      cloneWorkingFactPayloadMap(in.payloads),
 		names:         maps.Clone(in.names),
 		templateKeys:  maps.Clone(in.templateKeys),
 	}
@@ -710,6 +748,32 @@ func cloneWorkingFactPayload(in *workingFactPayload) *workingFactPayload {
 		fieldSlots:    cloneFactSlots(in.fieldSlots),
 		fieldPresence: cloneFieldPresence(in.fieldPresence),
 	}
+}
+
+func workingFactPayloadHasSideValues(in *workingFactPayload) bool {
+	return in != nil && (in.fields != nil || len(in.fieldSlots) > 0 || in.fieldPresence != nil)
+}
+
+func cloneWorkingFactSidePayload(in *workingFactPayload) *workingFactPayload {
+	if !workingFactPayloadHasSideValues(in) {
+		return nil
+	}
+	return &workingFactPayload{
+		fields:        cloneFields(in.fields),
+		fieldSlots:    cloneFactSlots(in.fieldSlots),
+		fieldPresence: cloneFieldPresence(in.fieldPresence),
+	}
+}
+
+func cloneWorkingFactPayloadMap(in map[int]*workingFactPayload) map[int]*workingFactPayload {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[int]*workingFactPayload, len(in))
+	for row, payload := range in {
+		out[row] = cloneWorkingFactSidePayload(payload)
+	}
+	return out
 }
 
 type factCompactSlotRef struct {

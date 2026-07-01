@@ -1285,6 +1285,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		if before.Support().State == FactSupportLogical {
 			s.updateFactSupportState(fact)
 		}
+		state.replaceWorkingFact(fact)
 		after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 		s.commitFactWorkspace(state)
 		var delta *MutationDelta
@@ -1320,6 +1321,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 	if _, err := s.addLogicalSupportForPropagationEvent(ctx, fact, supportEvent, supportingFacts); err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
+	state.replaceWorkingFact(fact)
 	s.logicalSupportCounters.LogicalFactsAsserted++
 
 	snapshot := fact.snapshotForRevision(s.revision, state.compactSlotStore)
@@ -1396,6 +1398,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	if !inserted {
 		before := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 		if s.addStatedSupportToFact(fact) {
+			state.replaceWorkingFact(fact)
 			after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 			s.commitFactWorkspace(state)
 			delta := MutationDelta{
@@ -1444,7 +1447,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, &state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1606,7 +1609,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		s.restoreReteAfterPropagationFailure()
 		return nil, false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, &state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1671,7 +1674,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, &state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1738,7 +1741,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		s.restoreReteAfterPropagationFailure()
 		return false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1805,7 +1808,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		s.restoreReteAfterPropagationFailure()
 		return false, agendaDelta, err
 	}
-	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
 			span.finish()
 		}
@@ -1872,6 +1875,7 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 			return combined, err
 		}
 		fact.setSupportState(FactSupportLogical)
+		state.replaceWorkingFact(fact)
 		if !inserted {
 			s.addBackchainDemandSupport(fact, demand)
 			continue
@@ -1901,20 +1905,8 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		}
 		combined = mergeReteAgendaDelta(combined, next)
 	}
-	for _, owner := range combined.resolvedOwners {
-		resolvedDelta, err := s.removeBackchainDemandSupportForOwner(ctx, owner, origin)
-		if err != nil {
-			return combined, err
-		}
-		combined = mergeReteAgendaDelta(combined, resolvedDelta)
-	}
-	for _, resolved := range combined.resolvedDemands {
-		request, ok := s.backchainDemandRequestByID(resolved)
-		if !ok {
-			combined.supported = false
-			continue
-		}
-		resolvedDelta, err := s.removeBackchainDemandSupportForRequest(ctx, request, origin)
+	if len(combined.resolvedDemands) > 0 || len(combined.resolvedOwners) > 0 {
+		resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, state, combined.resolvedDemands, combined.resolvedOwners, origin)
 		if err != nil {
 			return combined, err
 		}
@@ -1924,6 +1916,16 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 	combined.resolvedDemands = nil
 	combined.resolvedOwners = nil
 	return combined, nil
+}
+
+func (s *Session) resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx context.Context, state *factWorkspace, resolved []backchainDemandID, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
+	if s == nil || state == nil || len(resolved) == 0 && len(owners) == 0 {
+		return s.resolveBackchainDemandRequestsImmediate(ctx, resolved, owners, origin)
+	}
+	s.swapFactWorkspace(state)
+	delta, err := s.resolveBackchainDemandRequestsImmediate(ctx, resolved, owners, origin)
+	s.swapFactWorkspace(state)
+	return delta, err
 }
 
 func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -2096,6 +2098,9 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		return RetractResult{Status: RetractLogicalOnly, Fact: before}, reteAgendaDelta{}, ErrLogicalOnlyRetract
 	case FactSupportStatedAndLogical:
 		s.removeStatedSupportFromFact(fact)
+		state := s.activeFactWorkspace()
+		state.replaceWorkingFact(fact)
+		s.commitFactWorkspace(state)
 		after := fact.snapshotForRevision(s.revision, s.compactSlotStore)
 		delta := MutationDelta{
 			Kind:           MutationRetract,
@@ -5057,6 +5062,9 @@ func factRowSequenceReserveTarget(sequence uint64, factCount int) (int, bool) {
 func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 	if w == nil {
 		return nil
+	}
+	if fact.payload != nil {
+		return w.storeCompactFact(fact)
 	}
 
 	w.facts = append(w.facts, fact)

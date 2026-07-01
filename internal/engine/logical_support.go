@@ -397,6 +397,9 @@ func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources [
 				}
 			} else if fact.resolvedSupportState() == FactSupportStatedAndLogical && !s.factHasLogicalSupport(factID) {
 				fact.setSupportState(FactSupportStated)
+				state := s.activeFactWorkspace()
+				state.replaceWorkingFact(fact)
+				s.commitFactWorkspace(state)
 				s.logicalSupportCounters.MetadataOnlyTransitions++
 			}
 		}
