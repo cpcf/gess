@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strconv"
 )
 
 type LogicalSupportEdge struct {
@@ -58,7 +59,7 @@ func (g SupportGraph) clone() SupportGraph {
 type logicalSupportSourceKey struct {
 	generation     Generation
 	ruleRevisionID RuleRevisionID
-	activationID   ActivationID
+	identityKey    candidateIdentityKey
 }
 
 type logicalSupportEdgeRecord struct {
@@ -82,21 +83,20 @@ func (s *Session) logicalSupportMemory() logicalSupportMemory {
 }
 
 func logicalSupportID(source logicalSupportSourceKey, factID FactID) SupportID {
-	if source.activationID.IsZero() || factID.IsZero() {
+	if source.identityKey == (candidateIdentityKey{}) || factID.IsZero() {
 		return ""
 	}
-	return SupportID("support:v1:" + source.activationID.String() + ":" + factID.String())
+	return SupportID("support:v2:" + source.ruleRevisionID.String() + ":" + strconv.FormatUint(source.identityKey.scopeHash, 10) + ":" + strconv.FormatUint(source.identityKey.hash, 10) + ":" + factID.String())
 }
 
 func logicalSupportSourceFromOrigin(origin mutationOrigin, generation Generation) (logicalSupportSourceKey, bool) {
-	activationID := origin.activationID()
-	if activationID.IsZero() || origin.RuleRevisionID.IsZero() {
+	if origin.activationIdentityKey == (candidateIdentityKey{}) || origin.RuleRevisionID.IsZero() {
 		return logicalSupportSourceKey{}, false
 	}
 	return logicalSupportSourceKey{
 		generation:     generation,
 		ruleRevisionID: origin.RuleRevisionID,
-		activationID:   activationID,
+		identityKey:    origin.activationIdentityKey,
 	}, true
 }
 
@@ -108,7 +108,7 @@ func logicalSupportSourceFromActivation(activation activation) logicalSupportSou
 	return logicalSupportSourceKey{
 		generation:     activation.generation,
 		ruleRevisionID: activation.ruleRevisionID,
-		activationID:   activation.activationID(),
+		identityKey:    activation.identity.key,
 	}
 }
 
@@ -221,7 +221,7 @@ func (s *Session) addLogicalSupportForPropagationEvent(ctx context.Context, fact
 		FactID:          fact.id,
 		RuleID:          event.origin.RuleID,
 		RuleRevisionID:  event.origin.RuleRevisionID,
-		ActivationID:    source.activationID,
+		ActivationID:    event.origin.activationID(),
 		Generation:      event.sourceGeneration,
 		SupportingFacts: cloneFactIDs(supportingFacts),
 	}
@@ -330,7 +330,10 @@ func (s *Session) removeLogicalSupportsForRuleRevisions(ctx context.Context, rev
 		if sources[i].ruleRevisionID != sources[j].ruleRevisionID {
 			return sources[i].ruleRevisionID < sources[j].ruleRevisionID
 		}
-		return sources[i].activationID < sources[j].activationID
+		if sources[i].identityKey.scopeHash != sources[j].identityKey.scopeHash {
+			return sources[i].identityKey.scopeHash < sources[j].identityKey.scopeHash
+		}
+		return sources[i].identityKey.hash < sources[j].identityKey.hash
 	})
 	return s.removeLogicalSupportsForSources(ctx, sources, origin)
 }

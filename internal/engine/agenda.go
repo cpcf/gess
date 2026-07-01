@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -123,7 +122,6 @@ func (h compactAgendaEntryHandle) index() int {
 
 type compactAgendaEntry struct {
 	key              activationKey
-	publicOrdinal    uint64
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
 	identity         candidateIdentity
@@ -344,7 +342,6 @@ func (s activationStatus) String() string {
 type activation struct {
 	id               ActivationID
 	key              activationKey
-	publicOrdinal    uint64
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
@@ -372,7 +369,7 @@ func (a activation) mutationOrigin() mutationOrigin {
 		RuleID:                a.ruleID,
 		RuleRevisionID:        a.ruleRevisionID,
 		activationIdentityKey: a.identity.key,
-		activationOrdinal:     a.publicOrdinal,
+		activationOrdinal:     a.key.ordinal,
 	}
 }
 
@@ -380,7 +377,7 @@ func (a activation) activationID() ActivationID {
 	if !a.id.IsZero() {
 		return a.id
 	}
-	return activationIDForIdentityKey(a.identity.key, a.publicOrdinal)
+	return activationIDForIdentityKey(a.identity.key, a.key.ordinal)
 }
 
 func (a *activation) ensureActivationID() ActivationID {
@@ -388,7 +385,7 @@ func (a *activation) ensureActivationID() ActivationID {
 		return ""
 	}
 	if a.id.IsZero() {
-		a.id = activationIDForIdentityKey(a.identity.key, a.publicOrdinal)
+		a.id = activationIDForIdentityKey(a.identity.key, a.key.ordinal)
 	}
 	return a.id
 }
@@ -2091,7 +2088,6 @@ func activationRunSnapshot(current *activation, materializeID bool) activation {
 	return activation{
 		id:               id,
 		key:              current.key,
-		publicOrdinal:    current.publicOrdinal,
 		ruleID:           current.ruleID,
 		ruleRevisionID:   current.ruleRevisionID,
 		generation:       current.generation,
@@ -2531,22 +2527,22 @@ func activationLess(left, right *activation) bool {
 	if !left.id.IsZero() || !right.id.IsZero() {
 		return left.activationID() < right.activationID()
 	}
-	if activationIDSegmentLess(left.identity.key.scopeHash, right.identity.key.scopeHash) {
+	if left.identity.key.scopeHash < right.identity.key.scopeHash {
 		return true
 	}
 	if left.identity.key.scopeHash != right.identity.key.scopeHash {
 		return false
 	}
-	if activationIDSegmentLess(left.identity.key.hash, right.identity.key.hash) {
+	if left.identity.key.hash < right.identity.key.hash {
 		return true
 	}
 	if left.identity.key.hash != right.identity.key.hash {
 		return false
 	}
-	if activationIDFinalSegmentLess(left.publicOrdinal, right.publicOrdinal) {
+	if left.key.ordinal < right.key.ordinal {
 		return true
 	}
-	if left.publicOrdinal != right.publicOrdinal {
+	if left.key.ordinal != right.key.ordinal {
 		return false
 	}
 	return false
@@ -2575,49 +2571,25 @@ func (a *agenda) activationLess(left, right *activation) bool {
 	if !left.id.IsZero() || !right.id.IsZero() {
 		return left.activationID() < right.activationID()
 	}
-	if activationIDSegmentLess(left.identity.key.scopeHash, right.identity.key.scopeHash) {
+	if left.identity.key.scopeHash < right.identity.key.scopeHash {
 		return true
 	}
 	if left.identity.key.scopeHash != right.identity.key.scopeHash {
 		return false
 	}
-	if activationIDSegmentLess(left.identity.key.hash, right.identity.key.hash) {
+	if left.identity.key.hash < right.identity.key.hash {
 		return true
 	}
 	if left.identity.key.hash != right.identity.key.hash {
 		return false
 	}
-	if activationIDFinalSegmentLess(left.publicOrdinal, right.publicOrdinal) {
+	if left.key.ordinal < right.key.ordinal {
 		return true
 	}
-	if left.publicOrdinal != right.publicOrdinal {
+	if left.key.ordinal != right.key.ordinal {
 		return false
 	}
 	return false
-}
-
-func activationIDSegmentLess(left, right uint64) bool {
-	return activationIDDecimalLess(left, right, true)
-}
-
-func activationIDFinalSegmentLess(left, right uint64) bool {
-	return activationIDDecimalLess(left, right, false)
-}
-
-func activationIDDecimalLess(left, right uint64, followedByColon bool) bool {
-	var leftBuf [20]byte
-	var rightBuf [20]byte
-	leftBytes := strconv.AppendUint(leftBuf[:0], left, 10)
-	rightBytes := strconv.AppendUint(rightBuf[:0], right, 10)
-	for i := 0; i < len(leftBytes) && i < len(rightBytes); i++ {
-		if leftBytes[i] != rightBytes[i] {
-			return leftBytes[i] < rightBytes[i]
-		}
-	}
-	if followedByColon {
-		return len(leftBytes) > len(rightBytes)
-	}
-	return len(leftBytes) < len(rightBytes)
 }
 
 func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, activationKey, bool) {
@@ -2832,8 +2804,6 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 		ordinal:     a.nextOrdinal,
 	}
 	a.nextOrdinal++
-	publicIndex := activationIdentityIndex(bucket, act.identity.key)
-	act.publicOrdinal = publicIndex
 	act.key = key
 	if bucket.first == nil {
 		bucket.first = act
@@ -2935,22 +2905,6 @@ func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFin
 	hash = fnvhash.MixUint64(hash, key.scopeHash)
 	hash = fnvhash.MixUint64(hash, key.hash)
 	return activationFingerprint(hash)
-}
-
-func activationIdentityIndex(bucket activationBucket, identity candidateIdentityKey) uint64 {
-	index := uint64(0)
-	if bucket.first != nil && bucket.first.identity.key == identity {
-		index++
-	}
-	if bucket.second != nil && bucket.second.identity.key == identity {
-		index++
-	}
-	for _, current := range bucket.overflow {
-		if current != nil && current.identity.key == identity {
-			index++
-		}
-	}
-	return index
 }
 
 func activationIDForIdentityKey(identity candidateIdentityKey, index uint64) ActivationID {

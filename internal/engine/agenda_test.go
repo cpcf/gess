@@ -334,7 +334,6 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 	}
 	first := compactAgendaEntry{
 		key:              activationKey{fingerprint: 10, ordinal: 1},
-		publicOrdinal:    3,
 		ruleRevisionID:   "rule-1@1",
 		generation:       4,
 		identity:         candidateIdentity{key: candidateIdentityKey{scopeHash: 5, hash: 6}},
@@ -1969,7 +1968,7 @@ func TestActivationLessOrdersBySalienceRecencyAndID(t *testing.T) {
 	}
 }
 
-func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
+func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 	base := activation{
 		salience:         10,
 		maxRecency:       9,
@@ -1979,6 +1978,7 @@ func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
 		name  string
 		left  activation
 		right activation
+		want  bool
 	}{
 		{
 			name: "scope prefix segment",
@@ -1992,6 +1992,7 @@ func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
 				act.identity.key = candidateIdentityKey{scopeHash: 1, hash: 1}
 				return act
 			}(),
+			want: false,
 		},
 		{
 			name: "hash prefix segment",
@@ -2005,30 +2006,31 @@ func TestActivationLessOrdersLazyActivationsLikePublicIDs(t *testing.T) {
 				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 1}
 				return act
 			}(),
+			want: false,
 		},
 		{
-			name: "final ordinal segment",
+			name: "internal activation key ordinal",
 			left: func() activation {
 				act := base
 				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
-				act.publicOrdinal = 1
+				act.key.ordinal = 1
 				return act
 			}(),
 			right: func() activation {
 				act := base
 				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
-				act.publicOrdinal = 10
+				act.key.ordinal = 10
 				return act
 			}(),
+			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := activationLess(&tt.left, &tt.right)
-			want := tt.left.activationID() < tt.right.activationID()
-			if got != want {
-				t.Fatalf("activationLess(%q, %q) = %v, want %v", tt.left.activationID(), tt.right.activationID(), got, want)
+			if got != tt.want {
+				t.Fatalf("activationLess(%#v, %#v) = %v, want %v", tt.left.identity.key, tt.right.identity.key, got, tt.want)
 			}
 		})
 	}
