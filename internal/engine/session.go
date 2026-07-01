@@ -122,7 +122,7 @@ type Session struct {
 	nextRunSequence               uint64
 	facts                         []workingFact
 	factsByID                     map[FactID]int
-	factsBySequence               []int
+	factsBySequence               []int32
 	factsByDuplicate              duplicateIndexes
 	factsByTemplate               map[TemplateKey][]FactID
 	factsByName                   map[string][]FactID
@@ -160,6 +160,11 @@ type queuedMutationResult struct {
 	value any
 	err   error
 }
+
+const (
+	missingFactRowIndex     int32 = -1
+	maxFactRowSequenceIndex       = int(^uint32(0) >> 1)
+)
 
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if revision == nil {
@@ -406,8 +411,8 @@ func (s *Session) factRowIndex(id FactID) (int, bool) {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
 			row := s.factsBySequence[index]
-			if row >= 0 {
-				return row, true
+			if row != missingFactRowIndex {
+				return int(row), true
 			}
 		}
 	}
@@ -422,13 +427,13 @@ func (s *Session) setFactRowIndex(id FactID, row int) {
 	if s == nil || id.IsZero() || row < 0 {
 		return
 	}
-	if id.generation == s.generation && id.sequence > 0 {
+	if id.generation == s.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 {
 			for len(s.factsBySequence) <= index {
-				s.factsBySequence = append(s.factsBySequence, -1)
+				s.factsBySequence = append(s.factsBySequence, missingFactRowIndex)
 			}
-			s.factsBySequence[index] = row
+			s.factsBySequence[index] = int32(row)
 			return
 		}
 	}
@@ -444,7 +449,7 @@ func (s *Session) deleteFactRowIndex(id FactID) {
 	if id.generation == s.generation && id.sequence > 0 {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
-			s.factsBySequence[index] = -1
+			s.factsBySequence[index] = missingFactRowIndex
 			return
 		}
 	}
@@ -3647,7 +3652,7 @@ type factWorkspace struct {
 	facts                     []workingFact
 	insertionOrder            []FactID
 	factsByID                 map[FactID]int
-	factsBySequence           []int
+	factsBySequence           []int32
 	factsByDuplicate          duplicateIndexes
 	duplicateReserveRulesetID RulesetID
 	factsByTemplate           map[TemplateKey][]FactID
@@ -4773,14 +4778,14 @@ func (w *factWorkspace) reserveFactRowSequenceRows(factCount int) {
 	}
 	oldLen := len(w.factsBySequence)
 	if cap(w.factsBySequence) < target {
-		next := make([]int, target)
+		next := make([]int32, target)
 		copy(next, w.factsBySequence)
 		w.factsBySequence = next
 	} else {
 		w.factsBySequence = w.factsBySequence[:target]
 	}
 	for i := oldLen; i < target; i++ {
-		w.factsBySequence[i] = -1
+		w.factsBySequence[i] = missingFactRowIndex
 	}
 }
 
@@ -4971,8 +4976,8 @@ func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
 			row := w.factsBySequence[index]
-			if row >= 0 {
-				return row, true
+			if row != missingFactRowIndex {
+				return int(row), true
 			}
 		}
 	}
@@ -4987,23 +4992,23 @@ func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
 	if w == nil || id.IsZero() || row < 0 {
 		return
 	}
-	if id.generation == w.generation && id.sequence > 0 {
+	if id.generation == w.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 {
 			if len(w.factsBySequence) <= index {
 				oldLen := len(w.factsBySequence)
 				if cap(w.factsBySequence) <= index {
-					next := make([]int, index+1)
+					next := make([]int32, index+1)
 					copy(next, w.factsBySequence)
 					w.factsBySequence = next
 				} else {
 					w.factsBySequence = w.factsBySequence[:index+1]
 				}
 				for i := oldLen; i <= index; i++ {
-					w.factsBySequence[i] = -1
+					w.factsBySequence[i] = missingFactRowIndex
 				}
 			}
-			w.factsBySequence[index] = row
+			w.factsBySequence[index] = int32(row)
 			return
 		}
 	}
@@ -5019,7 +5024,7 @@ func (w *factWorkspace) deleteFactRowIndex(id FactID) {
 	if id.generation == w.generation && id.sequence > 0 {
 		index := int(id.sequence - 1)
 		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
-			w.factsBySequence[index] = -1
+			w.factsBySequence[index] = missingFactRowIndex
 			return
 		}
 	}
@@ -6586,21 +6591,21 @@ func cloneFactIDIndex(in map[FactID]int) map[FactID]int {
 	return out
 }
 
-func resetFactRowSequenceIndex(index []int, capacity int) []int {
+func resetFactRowSequenceIndex(index []int32, capacity int) []int32 {
 	if capacity < 0 {
 		capacity = 0
 	}
 	if cap(index) < capacity {
-		return make([]int, 0, capacity)
+		return make([]int32, 0, capacity)
 	}
 	return index[:0]
 }
 
-func cloneFactRowSequenceIndex(in []int) []int {
+func cloneFactRowSequenceIndex(in []int32) []int32 {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]int, len(in), cap(in))
+	out := make([]int32, len(in), cap(in))
 	copy(out, in)
 	return out
 }
