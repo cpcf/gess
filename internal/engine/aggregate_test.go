@@ -1404,6 +1404,54 @@ func assertCollectedValue(t *testing.T, got Value, want []Value) {
 	}
 }
 
+func TestAggregateBucketTableRekeysAndReusesRows(t *testing.T) {
+	firstKey := graphTokenIdentityKey{size: 1, generation: 1, identityState: 11}
+	secondKey := graphTokenIdentityKey{size: 1, generation: 1, identityState: 22}
+	table := reteGraphAggregateBucketTable{
+		rows: []reteGraphAggregateBucket{{id: 0}},
+		ids:  map[graphTokenIdentityKey]reteGraphAggregateBucketID{firstKey: 0},
+		live: 1,
+	}
+
+	bucket, ok := table.get(firstKey)
+	if !ok {
+		t.Fatal("initial bucket lookup failed")
+	}
+	if !table.rekey(firstKey, secondKey, bucket) {
+		t.Fatal("rekey failed")
+	}
+	if _, ok := table.get(firstKey); ok {
+		t.Fatal("old key still resolves after rekey")
+	}
+	if got, ok := table.get(secondKey); !ok || got != bucket {
+		t.Fatalf("new key lookup = %#v, %v; want original bucket", got, ok)
+	}
+
+	removed, ok := table.remove(secondKey)
+	if !ok || removed != bucket {
+		t.Fatalf("remove = %#v, %v; want original bucket", removed, ok)
+	}
+	table.recycle(removed)
+	if got, want := table.len(), 0; got != want {
+		t.Fatalf("live buckets after recycle = %d, want %d", got, want)
+	}
+	reused := table.bucketForParent(tokenRef{})
+	if reused != bucket {
+		t.Fatalf("reused bucket = %#v, want original %#v", reused, bucket)
+	}
+	if got, want := table.len(), 1; got != want {
+		t.Fatalf("live buckets after reuse = %d, want %d", got, want)
+	}
+
+	table.clear()
+	if got, want := table.len(), 0; got != want {
+		t.Fatalf("live buckets after clear = %d, want %d", got, want)
+	}
+	if got, want := len(table.free), len(table.rows); got != want {
+		t.Fatalf("free rows after clear = %d, want %d", got, want)
+	}
+}
+
 type bucketedAggregateRow struct {
 	group string
 	count Value

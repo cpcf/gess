@@ -289,14 +289,19 @@ func addAggregateNodeMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, 
 	if out == nil || memory == nil {
 		return
 	}
-	out.Buckets += uint64(len(memory.buckets))
-	out.HighWater += uint64(len(memory.buckets) + cap(memory.freeBuckets))
-	out.Bytes += mapEntryBytes[graphTokenIdentityKey, *reteGraphAggregateBucket](len(memory.buckets))
-	out.Bytes += sliceBytes[*reteGraphAggregateBucket](cap(memory.freeBuckets))
-	for _, bucket := range memory.buckets {
+	out.Buckets += uint64(memory.bucketCount())
+	out.HighWater += uint64(len(memory.buckets.rows) + cap(memory.buckets.free))
+	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateBucketID](len(memory.buckets.ids))
+	out.Bytes += sliceBytes[reteGraphAggregateBucket](cap(memory.buckets.rows))
+	out.Bytes += sliceBytes[reteGraphAggregateBucketID](cap(memory.buckets.free))
+	memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
 		addAggregateBucketOwnerDiagnostics(out, bucket)
-	}
-	for _, bucket := range memory.freeBuckets {
+	})
+	for _, id := range memory.buckets.free {
+		bucket := memory.buckets.bucketByID(id)
+		if bucket == nil {
+			continue
+		}
 		addAggregateBucketOwnerDiagnostics(out, bucket)
 	}
 }
@@ -320,7 +325,6 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	out.HighWater += uint64(cap(bucket.extrema))
 	out.HighWater += uint64(cap(bucket.collects))
 	out.HighWater += uint64(cap(bucket.values))
-	out.Bytes += uint64(unsafe.Sizeof(*bucket))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
 	for _, member := range bucket.members {
 		out.Bytes += sliceBytes[Value](cap(member.values))

@@ -46,7 +46,7 @@ type reteGraphBetaMemory struct {
 	rootToken                tokenRef
 	deferNegativeOutputs     bool
 	deferAggregateOutputs    bool
-	deferredAggregateOutputs map[deferredAggregateOutputKey]*reteGraphAggregateBucket
+	deferredAggregateOutputs map[deferredAggregateOutputKey]struct{}
 	deferredAggregateOrder   []deferredAggregateOutputKey
 	suppressTerminalDeltas   bool
 	rightPredicateScratch    []conditionMatch
@@ -79,11 +79,20 @@ type reteGraphAlphaMemory struct {
 }
 
 type reteGraphAggregateNodeMemory struct {
-	buckets     map[graphTokenIdentityKey]*reteGraphAggregateBucket
-	freeBuckets []*reteGraphAggregateBucket
+	buckets reteGraphAggregateBucketTable
+}
+
+type reteGraphAggregateBucketID int
+
+type reteGraphAggregateBucketTable struct {
+	rows []reteGraphAggregateBucket
+	ids  map[graphTokenIdentityKey]reteGraphAggregateBucketID
+	free []reteGraphAggregateBucketID
+	live int
 }
 
 type reteGraphAggregateBucket struct {
+	id              reteGraphAggregateBucketID
 	parent          tokenRef
 	members         map[graphTokenIdentityKey]reteGraphAggregateMember
 	countOnlyFirst  tokenRef
@@ -2539,15 +2548,7 @@ func (m *reteGraphAggregateNodeMemory) clear() {
 	if m == nil {
 		return
 	}
-	for _, bucket := range m.buckets {
-		if bucket != nil {
-			bucket.clear()
-			m.freeBuckets = append(m.freeBuckets, bucket)
-		}
-	}
-	if m.buckets != nil {
-		clear(m.buckets)
-	}
+	m.buckets.clear()
 }
 
 func (m *reteGraphAggregateBucket) clear() {
@@ -3739,9 +3740,9 @@ func (m *reteGraphBetaMemory) refreshAggregateOutput(id reteGraphAggregateNodeID
 		}
 		return
 	}
-	for _, bucket := range memory.buckets {
+	memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
 		m.refreshAggregateOutputInternal(id, bucket, span, nil, delta)
-	}
+	})
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateOutputWithCounters(id reteGraphAggregateNodeID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -3752,9 +3753,9 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputWithCounters(id reteGraphAgg
 		}
 		return
 	}
-	for _, bucket := range memory.buckets {
+	memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
 		m.refreshAggregateOutputInternal(id, bucket, nil, counters, delta)
-	}
+	})
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateOutputDeferred(id reteGraphAggregateNodeID, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -3774,12 +3775,12 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputDeferred(id reteGraphAggrega
 		parent: tokenRefKey(bucket.parent),
 	}
 	if m.deferredAggregateOutputs == nil {
-		m.deferredAggregateOutputs = make(map[deferredAggregateOutputKey]*reteGraphAggregateBucket)
+		m.deferredAggregateOutputs = make(map[deferredAggregateOutputKey]struct{})
 	}
 	if _, exists := m.deferredAggregateOutputs[key]; !exists {
 		m.deferredAggregateOrder = append(m.deferredAggregateOrder, key)
 	}
-	m.deferredAggregateOutputs[key] = bucket
+	m.deferredAggregateOutputs[key] = struct{}{}
 }
 
 func (m *reteGraphBetaMemory) clearDeferredAggregateOutputs() {
@@ -3831,7 +3832,7 @@ func (m *reteGraphBetaMemory) finalizeDeferredAggregateOutputs(span *propagation
 		memory := m.aggregateMemory(key.id)
 		var bucket *reteGraphAggregateBucket
 		if memory != nil {
-			bucket = memory.buckets[key.parent]
+			bucket, _ = memory.bucketByKey(key.parent)
 		}
 		if bucket == nil {
 			delta.supported = false
@@ -3939,48 +3940,240 @@ func (m *reteGraphAggregateNodeMemory) bucketForParent(parent tokenRef) *reteGra
 	if m == nil {
 		return nil
 	}
-	if m.buckets == nil {
-		m.buckets = make(map[graphTokenIdentityKey]*reteGraphAggregateBucket)
-	}
-	key := tokenRefKey(parent)
-	bucket := m.buckets[key]
-	if bucket != nil {
-		return bucket
-	}
-	bucket = m.reuseBucket(parent)
-	m.buckets[key] = bucket
-	return bucket
-}
-
-func (m *reteGraphAggregateNodeMemory) reuseBucket(parent tokenRef) *reteGraphAggregateBucket {
-	if m == nil {
-		return nil
-	}
-	last := len(m.freeBuckets) - 1
-	if last >= 0 {
-		bucket := m.freeBuckets[last]
-		m.freeBuckets[last] = nil
-		m.freeBuckets = m.freeBuckets[:last]
-		bucket.parent = parent
-		return bucket
-	}
-	return &reteGraphAggregateBucket{parent: parent}
+	return m.buckets.bucketForParent(parent)
 }
 
 func (m *reteGraphAggregateNodeMemory) recycleBucket(bucket *reteGraphAggregateBucket) {
 	if m == nil || bucket == nil {
 		return
 	}
-	bucket.clear()
-	m.freeBuckets = append(m.freeBuckets, bucket)
+	m.buckets.recycle(bucket)
 }
 
 func (m *reteGraphAggregateNodeMemory) bucketForParentIfExists(parent tokenRef) (*reteGraphAggregateBucket, bool) {
-	if m == nil || m.buckets == nil {
+	if m == nil {
 		return nil, false
 	}
-	bucket := m.buckets[tokenRefKey(parent)]
+	return m.buckets.bucketForParentIfExists(parent)
+}
+
+func (m *reteGraphAggregateNodeMemory) removeBucketForParent(parent tokenRef) (*reteGraphAggregateBucket, bool) {
+	if m == nil {
+		return nil, false
+	}
+	return m.buckets.remove(tokenRefKey(parent))
+}
+
+func (m *reteGraphAggregateNodeMemory) removeBucketByKey(key graphTokenIdentityKey) (*reteGraphAggregateBucket, bool) {
+	if m == nil {
+		return nil, false
+	}
+	return m.buckets.remove(key)
+}
+
+func (m *reteGraphAggregateNodeMemory) bucketByKey(key graphTokenIdentityKey) (*reteGraphAggregateBucket, bool) {
+	if m == nil {
+		return nil, false
+	}
+	return m.buckets.get(key)
+}
+
+func (m *reteGraphAggregateNodeMemory) rekeyBucket(oldKey graphTokenIdentityKey, nextParent tokenRef, bucket *reteGraphAggregateBucket) bool {
+	if m == nil {
+		return false
+	}
+	return m.buckets.rekey(oldKey, tokenRefKey(nextParent), bucket)
+}
+
+func (m *reteGraphAggregateNodeMemory) forEachBucket(fn func(*reteGraphAggregateBucket)) {
+	if m == nil {
+		return
+	}
+	m.buckets.forEach(fn)
+}
+
+func (m *reteGraphAggregateNodeMemory) forEachBucketWithKey(fn func(graphTokenIdentityKey, *reteGraphAggregateBucket)) {
+	if m == nil {
+		return
+	}
+	m.buckets.forEachKey(fn)
+}
+
+func (m *reteGraphAggregateNodeMemory) bucketCount() int {
+	if m == nil {
+		return 0
+	}
+	return m.buckets.len()
+}
+
+func (t *reteGraphAggregateBucketTable) len() int {
+	if t == nil {
+		return 0
+	}
+	return t.live
+}
+
+func (t *reteGraphAggregateBucketTable) bucketForParent(parent tokenRef) *reteGraphAggregateBucket {
+	if t == nil {
+		return nil
+	}
+	key := tokenRefKey(parent)
+	if bucket, ok := t.get(key); ok {
+		return bucket
+	}
+	if t.ids == nil {
+		t.ids = make(map[graphTokenIdentityKey]reteGraphAggregateBucketID)
+	}
+	id := t.allocate(parent)
+	if id < 0 {
+		return nil
+	}
+	t.ids[key] = id
+	t.live++
+	return t.bucketByID(id)
+}
+
+func (t *reteGraphAggregateBucketTable) allocate(parent tokenRef) reteGraphAggregateBucketID {
+	if t == nil {
+		return -1
+	}
+	last := len(t.free) - 1
+	if last >= 0 {
+		id := t.free[last]
+		t.free[last] = 0
+		t.free = t.free[:last]
+		bucket := t.bucketByID(id)
+		if bucket == nil {
+			return t.allocate(parent)
+		}
+		bucket.clear()
+		bucket.parent = parent
+		return id
+	}
+	id := reteGraphAggregateBucketID(len(t.rows))
+	t.rows = append(t.rows, reteGraphAggregateBucket{id: id, parent: parent})
+	return id
+}
+
+func (t *reteGraphAggregateBucketTable) bucketForParentIfExists(parent tokenRef) (*reteGraphAggregateBucket, bool) {
+	if t == nil {
+		return nil, false
+	}
+	return t.get(tokenRefKey(parent))
+}
+
+func (t *reteGraphAggregateBucketTable) get(key graphTokenIdentityKey) (*reteGraphAggregateBucket, bool) {
+	if t == nil || t.ids == nil {
+		return nil, false
+	}
+	id, ok := t.ids[key]
+	if !ok {
+		return nil, false
+	}
+	bucket := t.bucketByID(id)
+	if bucket == nil {
+		return nil, false
+	}
+	return bucket, true
+}
+
+func (t *reteGraphAggregateBucketTable) bucketByID(id reteGraphAggregateBucketID) *reteGraphAggregateBucket {
+	if t == nil || id < 0 || int(id) >= len(t.rows) {
+		return nil
+	}
+	bucket := &t.rows[int(id)]
+	if bucket.id != id {
+		return nil
+	}
+	return bucket
+}
+
+func (t *reteGraphAggregateBucketTable) remove(key graphTokenIdentityKey) (*reteGraphAggregateBucket, bool) {
+	if t == nil || t.ids == nil {
+		return nil, false
+	}
+	id, ok := t.ids[key]
+	if !ok {
+		return nil, false
+	}
+	delete(t.ids, key)
+	if t.live > 0 {
+		t.live--
+	}
+	bucket := t.bucketByID(id)
 	return bucket, bucket != nil
+}
+
+func (t *reteGraphAggregateBucketTable) rekey(oldKey, nextKey graphTokenIdentityKey, bucket *reteGraphAggregateBucket) bool {
+	if t == nil || bucket == nil {
+		return false
+	}
+	if oldKey == nextKey {
+		return true
+	}
+	if t.ids == nil {
+		return false
+	}
+	if existingID, ok := t.ids[nextKey]; ok {
+		return t.bucketByID(existingID) == bucket
+	}
+	id, ok := t.ids[oldKey]
+	if !ok || t.bucketByID(id) != bucket {
+		return false
+	}
+	delete(t.ids, oldKey)
+	t.ids[nextKey] = id
+	return true
+}
+
+func (t *reteGraphAggregateBucketTable) recycle(bucket *reteGraphAggregateBucket) {
+	if t == nil || bucket == nil {
+		return
+	}
+	id := bucket.id
+	if id < 0 || int(id) >= len(t.rows) || &t.rows[int(id)] != bucket {
+		return
+	}
+	bucket.clear()
+	t.free = append(t.free, id)
+}
+
+func (t *reteGraphAggregateBucketTable) clear() {
+	if t == nil {
+		return
+	}
+	t.free = t.free[:0]
+	for i := range t.rows {
+		t.rows[i].clear()
+		t.rows[i].id = reteGraphAggregateBucketID(i)
+		t.free = append(t.free, reteGraphAggregateBucketID(i))
+	}
+	if t.ids != nil {
+		clear(t.ids)
+	}
+	t.live = 0
+}
+
+func (t *reteGraphAggregateBucketTable) forEach(fn func(*reteGraphAggregateBucket)) {
+	if t == nil || fn == nil || t.ids == nil {
+		return
+	}
+	for _, id := range t.ids {
+		if bucket := t.bucketByID(id); bucket != nil {
+			fn(bucket)
+		}
+	}
+}
+
+func (t *reteGraphAggregateBucketTable) forEachKey(fn func(graphTokenIdentityKey, *reteGraphAggregateBucket)) {
+	if t == nil || fn == nil || t.ids == nil {
+		return
+	}
+	for key, id := range t.ids {
+		if bucket := t.bucketByID(id); bucket != nil {
+			fn(key, bucket)
+		}
+	}
 }
 
 func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) error {

@@ -161,8 +161,10 @@ func (m reteGraphAggregateMemory) removeBucket(parent tokenRef, counters *propag
 		stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
 		m.owner.propagateRemoveFromStage(stage, bucket.token, counters, delta)
 	}
-	delete(m.memory.buckets, tokenRefKey(parent))
-	m.memory.recycleBucket(bucket)
+	removed, ok := m.memory.removeBucketForParent(parent)
+	if ok {
+		m.memory.recycleBucket(removed)
+	}
 }
 
 func (m reteGraphAggregateMemory) removeBucketsContainingFact(factID FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -172,19 +174,28 @@ func (m reteGraphAggregateMemory) removeBucketsContainingFact(factID FactID, cou
 		}
 		return
 	}
-	if m.memory == nil || len(m.memory.buckets) == 0 {
+	if m.memory == nil || m.memory.bucketCount() == 0 {
 		return
 	}
-	for key, bucket := range m.memory.buckets {
+	var removed []graphTokenIdentityKey
+	m.memory.forEachBucketWithKey(func(key graphTokenIdentityKey, bucket *reteGraphAggregateBucket) {
 		if bucket == nil || !bucket.parent.containsFact(factID) {
+			return
+		}
+		removed = append(removed, key)
+	})
+	for _, key := range removed {
+		bucket, ok := m.memory.bucketByKey(key)
+		if !ok {
 			continue
 		}
 		if !bucket.token.isZero() {
 			stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
 			m.owner.propagateRemoveFromStage(stage, bucket.token, counters, delta)
 		}
-		delete(m.memory.buckets, key)
-		m.memory.recycleBucket(bucket)
+		if removed, ok := m.memory.removeBucketByKey(key); ok {
+			m.memory.recycleBucket(removed)
+		}
 	}
 }
 
@@ -195,12 +206,12 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		}
 		return
 	}
-	if m.node == nil || m.memory == nil || len(m.memory.buckets) == 0 {
+	if m.node == nil || m.memory == nil || m.memory.bucketCount() == 0 {
 		return
 	}
-	for _, bucket := range m.memory.buckets {
+	m.memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
 		if bucket == nil {
-			continue
+			return
 		}
 		changed := false
 		if !aggregateSpecsNeedInputValues(m.node.specs) {
@@ -229,7 +240,7 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		if changed {
 			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 		}
-	}
+	})
 }
 
 func (m reteGraphAggregateMemory) refreshParentsForModifyEvent(event reteGraphPropagationEvent, cache map[tokenHandle]tokenRef, delta *reteAgendaDelta) bool {
@@ -241,7 +252,7 @@ func (m reteGraphAggregateMemory) refreshParentsForModifyEvent(event reteGraphPr
 		}
 		return false
 	}
-	if m.memory == nil || len(m.memory.buckets) == 0 {
+	if m.memory == nil || m.memory.bucketCount() == 0 {
 		return true
 	}
 	type aggregateParentRefresh struct {
@@ -249,12 +260,12 @@ func (m reteGraphAggregateMemory) refreshParentsForModifyEvent(event reteGraphPr
 		bucket *reteGraphAggregateBucket
 	}
 	updates := make([]aggregateParentRefresh, 0, 1)
-	for key, bucket := range m.memory.buckets {
+	m.memory.forEachBucketWithKey(func(key graphTokenIdentityKey, bucket *reteGraphAggregateBucket) {
 		if bucket == nil || !bucket.parent.containsFact(factID) {
-			continue
+			return
 		}
 		updates = append(updates, aggregateParentRefresh{oldKey: key, bucket: bucket})
-	}
+	})
 	for _, update := range updates {
 		bucket := update.bucket
 		nextParent, ok := m.owner.refreshTokenFactRefInPlaceCached(bucket.parent, factID, after, cache)
@@ -262,14 +273,9 @@ func (m reteGraphAggregateMemory) refreshParentsForModifyEvent(event reteGraphPr
 			delta.supported = false
 			return false
 		}
-		nextKey := tokenRefKey(nextParent)
-		if update.oldKey != nextKey {
-			if existing := m.memory.buckets[nextKey]; existing != nil && existing != bucket {
-				delta.supported = false
-				return false
-			}
-			delete(m.memory.buckets, update.oldKey)
-			m.memory.buckets[nextKey] = bucket
+		if !m.memory.rekeyBucket(update.oldKey, nextParent, bucket) {
+			delta.supported = false
+			return false
 		}
 		bucket.parent = nextParent
 		if bucket.token.isZero() {
@@ -294,12 +300,16 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 		}
 		return false
 	}
-	if m.node == nil || m.memory == nil || len(m.memory.buckets) == 0 {
+	if m.node == nil || m.memory == nil || m.memory.bucketCount() == 0 {
 		return true
 	}
-	for _, bucket := range m.memory.buckets {
+	keepGoing := true
+	m.memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
+		if !keepGoing {
+			return
+		}
 		if bucket == nil {
-			continue
+			return
 		}
 		changed := false
 		if !aggregateSpecsNeedInputValues(m.node.specs) {
@@ -312,7 +322,8 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 				next, ok := m.owner.refreshTokenFactRefInPlaceCached(token, factID, after, cache)
 				if !ok || next.isZero() {
 					delta.supported = false
-					return false
+					keepGoing = false
+					return
 				}
 				bucket.setCountOnlyMemberAt(i, next)
 				changed = true
@@ -330,17 +341,20 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 				next, ok := m.owner.refreshTokenFactRefInPlaceCached(member.token, factID, after, cache)
 				if !ok || next.isZero() {
 					delta.supported = false
-					return false
+					keepGoing = false
+					return
 				}
 				nextMatch, ok := tokenFactMatchForBindingSlot(next, m.node.inputEntry.bindingSlot)
 				if !ok {
 					delta.supported = false
-					return false
+					keepGoing = false
+					return
 				}
 				nextMember, ok := m.owner.aggregateMember(m.node, next, nextMatch)
 				if !ok {
 					delta.supported = false
-					return false
+					keepGoing = false
+					return
 				}
 				delete(bucket.members, oldKey)
 				bucket.removeMemberWithCollectKey(m.node, member, oldKey)
@@ -350,7 +364,8 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 				bucket.members[tokenRefKey(next)] = nextMember
 				if err := bucket.addMember(m.node, nextMember); err != nil {
 					delta.supported = false
-					return false
+					keepGoing = false
+					return
 				}
 				changed = true
 			}
@@ -358,6 +373,6 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 		if changed {
 			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, nil, delta)
 		}
-	}
-	return delta.supported
+	})
+	return keepGoing && delta.supported
 }
