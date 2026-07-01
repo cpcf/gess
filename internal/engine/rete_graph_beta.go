@@ -768,21 +768,6 @@ func (m *reteGraphBetaMemory) context() context.Context {
 	return context.Background()
 }
 
-func graphBetaSideMemoryCapacity(revision *Ruleset, initialFacts int) int {
-	capacity := max(8, initialFacts)
-	if revision != nil {
-		capacity = max(capacity, len(revision.ruleOrder)*2)
-	}
-	return capacity
-}
-
-func graphBetaTokenArenaCapacity(revision *Ruleset, initialFacts int) int {
-	if revision == nil {
-		return max(0, initialFacts)
-	}
-	return revision.estimatedRunFactCapacity(initialFacts) * 8
-}
-
 func graphBetaAlphaFactCapacity(revision *Ruleset, graph *reteGraph, initialFacts int) int {
 	if graph == nil || len(graph.alphaNodes) == 0 {
 		return 0
@@ -913,25 +898,6 @@ func (m *reteGraphBetaMemory) appendAlphaCondition(index int, conditionID Condit
 	m.alpha.conditions[index] = append(m.alpha.conditions[index], conditionID)
 }
 
-func (m *betaSideMemory) reserveBeta(rowCapacity, factCapacity int) {
-	if m == nil || rowCapacity <= 0 {
-		return
-	}
-	m.reserveRows(rowCapacity)
-	m.reserveIndexes(rowCapacity, rowCapacity, factCapacity)
-}
-
-func (m *betaSideMemory) reserveRows(rowCapacity int) {
-	if m == nil || rowCapacity <= cap(m.rows) {
-		return
-	}
-	rows := make([]betaTokenRow, len(m.rows), rowCapacity)
-	copy(rows, m.rows)
-	m.rows = rows
-	m.reserveRowHandles(rowCapacity)
-	m.rowReserve = max(m.rowReserve, rowCapacity)
-}
-
 func (m *betaSideMemory) ensureRowCapacity(rowCapacity int) {
 	if m == nil || rowCapacity <= cap(m.rows) {
 		return
@@ -960,33 +926,6 @@ func (m *betaSideMemory) reserveRowHandles(rowCapacity int) {
 		free := make([]graphTokenRowHandleID, len(m.freeRowHandles), rowCapacity)
 		copy(free, m.freeRowHandles)
 		m.freeRowHandles = free
-	}
-}
-
-func (m *betaSideMemory) reserveIndexes(joinCapacity, identityCapacity, factCapacity int) {
-	if m == nil {
-		return
-	}
-	if joinCapacity > 0 {
-		if m.indexes.reserve(joinCapacity) {
-			m.rebuildJoinRows()
-		}
-		m.joinIndexReserve = max(m.joinIndexReserve, joinCapacity)
-	}
-	if identityCapacity > 0 {
-		if m.identityRows.reserve(identityCapacity) {
-			m.rebuildIdentityRows()
-		}
-		m.identityIndexReserve = max(m.identityIndexReserve, identityCapacity)
-	}
-	if factCapacity > 0 {
-		m.factRows.reserve(factCapacity)
-		if factCapacity > cap(m.factLinks) {
-			links := make([]betaFactLinkRow, len(m.factLinks), factCapacity)
-			copy(links, m.factLinks)
-			m.factLinks = links
-		}
-		m.factIndexReserve = max(m.factIndexReserve, factCapacity)
 	}
 }
 
