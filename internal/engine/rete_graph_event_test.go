@@ -109,6 +109,11 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if !ok {
 		t.Fatalf("before fact %q not found", asserted.Fact.ID())
 	}
+	beforeState := session.activeFactWorkspace()
+	beforeFact, ok := beforeState.workingFactByID(asserted.Fact.ID())
+	if !ok {
+		t.Fatalf("before working fact %q not found", asserted.Fact.ID())
+	}
 	if _, err := session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"note": "new"})}); err != nil {
 		t.Fatalf("Modify: %v", err)
 	}
@@ -116,11 +121,17 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if !ok {
 		t.Fatalf("after fact %q not found", asserted.Fact.ID())
 	}
+	state := session.activeFactWorkspace()
+	afterFact, ok := state.workingFactByID(asserted.Fact.ID())
+	if !ok {
+		t.Fatalf("after working fact %q not found", asserted.Fact.ID())
+	}
 	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, []FactSnapshot{before}, session.Generation())
 	if err != nil {
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}
-	event := newReteGraphModifyEvent(revision, before, after, []FieldChange{
+	memory.compactSlotStore = state.compactSlotStore
+	event := newReteGraphWorkingModifyEvent(revision, before, beforeFact, afterFact, after, []FieldChange{
 		{Field: "note", Old: mustValue(t, "old"), New: mustValue(t, "new")},
 	}, false, mutationOrigin{}, nil)
 

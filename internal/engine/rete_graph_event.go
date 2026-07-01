@@ -14,20 +14,22 @@ const (
 )
 
 type reteGraphPropagationEvent struct {
-	tag              reteGraphPropagationTag
-	fact             FactSnapshot
-	workingFact      *workingFact
-	before           FactSnapshot
-	after            FactSnapshot
-	changes          []FieldChange
-	changedSlots     []int
-	duplicateChanged bool
-	nameChanged      bool
-	templateChanged  bool
-	sourceGeneration Generation
-	origin           mutationOrigin
-	span             *propagationCounterSpan
-	counters         *propagationCounterLedger
+	tag               reteGraphPropagationTag
+	fact              FactSnapshot
+	workingFact       *workingFact
+	before            FactSnapshot
+	beforeWorkingFact *workingFact
+	after             FactSnapshot
+	afterWorkingFact  *workingFact
+	changes           []FieldChange
+	changedSlots      []int
+	duplicateChanged  bool
+	nameChanged       bool
+	templateChanged   bool
+	sourceGeneration  Generation
+	origin            mutationOrigin
+	span              *propagationCounterSpan
+	counters          *propagationCounterLedger
 }
 
 func newReteGraphAssertEvent(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
@@ -94,15 +96,24 @@ func newReteGraphModifyEvent(revision *Ruleset, before, after FactSnapshot, chan
 	}
 }
 
+func newReteGraphWorkingModifyEvent(revision *Ruleset, before FactSnapshot, beforeFact *workingFact, afterFact *workingFact, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {
+	event := newReteGraphModifyEvent(revision, before, after, changes, duplicateChanged, origin, counters)
+	event.beforeWorkingFact = beforeFact
+	event.afterWorkingFact = afterFact
+	return event
+}
+
 func newReteGraphModifyRemoveEvent(event reteGraphPropagationEvent) reteGraphPropagationEvent {
 	event.tag = reteGraphPropagationModifyRemove
 	event.fact = event.before
+	event.workingFact = event.beforeWorkingFact
 	return event
 }
 
 func newReteGraphModifyAddEvent(event reteGraphPropagationEvent) reteGraphPropagationEvent {
 	event.tag = reteGraphPropagationModifyAdd
 	event.fact = event.after
+	event.workingFact = event.afterWorkingFact
 	return event
 }
 

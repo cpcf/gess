@@ -2602,8 +2602,14 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 		m.clearMemories()
 		return reteAgendaDelta{supported: true}, nil
 	case reteGraphPropagationModifyAdd:
+		if event.workingFact != nil {
+			return m.insertWorkingFactInternal(ctx, event.workingFact, event.fact, event.span, false)
+		}
 		return m.insertFactInternal(ctx, event.fact, event.span, false)
 	case reteGraphPropagationModifyRemove:
+		if event.workingFact != nil {
+			return m.removeWorkingFactForModifyInternal(ctx, event.workingFact, event.fact, event.counters, false)
+		}
 		return m.removeFactInternal(ctx, event.fact, event.counters, false)
 	default:
 		return reteAgendaDelta{}, ErrUnsupportedRuntime
@@ -2651,6 +2657,56 @@ func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactS
 			conditionID: node.entry.conditionID,
 			bindingSlot: node.entry.bindingSlot,
 			fact:        newConditionFactRefFromSnapshot(fact),
+		}
+		m.recordAlphaFact(nodeID, match.fact)
+		ok, err = m.insertAlphaMatch(nodeID, match, span, &delta)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
+			delta.supported = false
+		}
+	}
+	return m.finishTerminalTokenDelta(delta), nil
+}
+
+func (m *reteGraphBetaMemory) insertWorkingFactInternal(ctx context.Context, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan, updateSource bool) (reteAgendaDelta, error) {
+	if m == nil || m.graph == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	defer m.pushEvalContext(ctx)()
+	if updateSource {
+		m.upsertFactSource(snapshot)
+	}
+	routeIDs := m.snapshotAlphaRouteIDsForFactInsert(snapshot, span)
+	if len(routeIDs) == 0 {
+		return reteAgendaDelta{supported: true}, nil
+	}
+
+	delta := m.beginTerminalTokenDelta()
+	for _, nodeID := range routeIDs {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			delta.supported = false
+			continue
+		}
+		if span != nil {
+			span.recordConditionsTested()
+		}
+		ok, err := m.workingFactMatchesAlphaNode(ctx, fact, snapshot, node, span)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
+			continue
+		}
+		if span != nil {
+			span.recordAlphaMatchAdded()
+		}
+		match := conditionMatch{
+			conditionID: node.entry.conditionID,
+			bindingSlot: node.entry.bindingSlot,
+			fact:        m.workingFactRefForAlphaNode(fact, snapshot, node),
 		}
 		m.recordAlphaFact(nodeID, match.fact)
 		ok, err = m.insertAlphaMatch(nodeID, match, span, &delta)
@@ -5814,6 +5870,45 @@ func (m *reteGraphBetaMemory) removeGeneratedTerminalOnlyFact(id FactID, counter
 	return true
 }
 
+func (m *reteGraphBetaMemory) removeWorkingFactForModifyInternal(ctx context.Context, fact *workingFact, snapshot FactSnapshot, counters *propagationCounterLedger, updateSource bool) (reteAgendaDelta, error) {
+	if m == nil || m.graph == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	defer m.pushEvalContext(ctx)()
+	delta := reteAgendaDelta{supported: true}
+	id := fact.id
+	if updateSource {
+		defer m.removeFactSource(id)
+	}
+	nodeIDs := m.matchedAlphaRouteIDsForFact(id)
+	if len(nodeIDs) == 0 {
+		m.removeAlphaFact(id)
+		return delta, nil
+	}
+	for _, nodeID := range nodeIDs {
+		node := m.graph.alphaNode(nodeID)
+		if node == nil {
+			delta.supported = false
+			continue
+		}
+		ok, err := m.workingFactMatchesAlphaNode(ctx, fact, snapshot, node, nil)
+		if err != nil {
+			return delta, err
+		}
+		if !ok {
+			continue
+		}
+		match := conditionMatch{
+			conditionID: node.entry.conditionID,
+			bindingSlot: node.entry.bindingSlot,
+			fact:        m.workingFactRefForAlphaNode(fact, snapshot, node),
+		}
+		m.propagateRemoveAlphaStage(reteGraphStageRef{kind: reteGraphStageAlpha, id: int(nodeID)}, node.entry, match, counters, &delta)
+	}
+	m.removeAlphaFact(id)
+	return delta, nil
+}
+
 func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactSnapshot, counters *propagationCounterLedger, updateSource bool) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}, nil
@@ -6228,6 +6323,45 @@ func (m *reteGraphBetaMemory) canSkipUnmatchedModifyPropagation(event reteGraphP
 	return !m.graph.alphaRoutesMayObserveModify(before, after, summary)
 }
 
+func canUseWorkingFactForAlphaTarget(fact *workingFact, target conditionTarget) bool {
+	if fact == nil {
+		return false
+	}
+	switch target.kind {
+	case conditionTargetTemplateKey:
+		return fact.matchesTemplateTarget(target)
+	case conditionTargetName:
+		return fact.storedName() == target.name
+	default:
+		return false
+	}
+}
+
+func (m *reteGraphBetaMemory) workingFactMatchesAlphaNode(ctx context.Context, fact *workingFact, snapshot FactSnapshot, node *reteGraphAlphaNode, span *propagationCounterSpan) (bool, error) {
+	if m == nil || node == nil {
+		return false, nil
+	}
+	if canUseWorkingFactForAlphaTarget(fact, node.target) {
+		return node.matchesWorkingWithContextAndCounters(ctx, fact, m.compactSlotStore, span)
+	}
+	return node.matchesSnapshotWithContextAndCounters(ctx, snapshot, span)
+}
+
+func (m *reteGraphBetaMemory) workingFactRefForAlphaNode(fact *workingFact, snapshot FactSnapshot, node *reteGraphAlphaNode) conditionFactRef {
+	if m != nil && node != nil && canUseWorkingFactForAlphaTarget(fact, node.target) {
+		return newConditionFactRefFromWorkingFactForTarget(fact, node.target, m.compactSlotStore)
+	}
+	return newConditionFactRefFromSnapshot(snapshot)
+}
+
+func (m *reteGraphBetaMemory) modifyAfterMatchesAlphaNode(ctx context.Context, event reteGraphPropagationEvent, node *reteGraphAlphaNode) (bool, error) {
+	return m.workingFactMatchesAlphaNode(ctx, event.afterWorkingFact, event.after, node, nil)
+}
+
+func (m *reteGraphBetaMemory) modifyAfterFactRefForAlphaNode(event reteGraphPropagationEvent, node *reteGraphAlphaNode) conditionFactRef {
+	return m.workingFactRefForAlphaNode(event.afterWorkingFact, event.after, node)
+}
+
 func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, bool) {
 	if m == nil || m.graph == nil || m.revision == nil || len(event.changes) == 0 {
 		return reteAgendaDelta{}, false
@@ -6256,7 +6390,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, e
 		if node == nil {
 			return reteAgendaDelta{}, false
 		}
-		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		matchesAfter, err := m.modifyAfterMatchesAlphaNode(ctx, event, node)
 		if err != nil || !matchesAfter {
 			return reteAgendaDelta{}, false
 		}
@@ -6276,7 +6410,7 @@ func (m *reteGraphBetaMemory) refreshDirectTerminalModify(ctx context.Context, e
 		match := conditionMatch{
 			conditionID: node.entry.conditionID,
 			bindingSlot: node.entry.bindingSlot,
-			fact:        newConditionFactRefFromSnapshot(after),
+			fact:        m.modifyAfterFactRefForAlphaNode(event, node),
 		}
 		for _, terminal := range m.graph.stageTerminals(source) {
 			entry := terminal.entry
@@ -6439,7 +6573,7 @@ func (m *reteGraphBetaMemory) refreshPositiveBetaModify(ctx context.Context, eve
 		if node == nil {
 			return reteAgendaDelta{}, false
 		}
-		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		matchesAfter, err := m.modifyAfterMatchesAlphaNode(ctx, event, node)
 		if err != nil || !matchesAfter {
 			return reteAgendaDelta{}, false
 		}
@@ -6565,7 +6699,7 @@ func (m *reteGraphBetaMemory) refreshAggregateModify(ctx context.Context, event 
 		if node == nil {
 			return reteAgendaDelta{}, false
 		}
-		matchesAfter, err := node.matchesSnapshotWithContextAndCounters(ctx, after, nil)
+		matchesAfter, err := m.modifyAfterMatchesAlphaNode(ctx, event, node)
 		if err != nil || !matchesAfter {
 			return reteAgendaDelta{}, false
 		}

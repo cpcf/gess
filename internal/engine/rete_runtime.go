@@ -453,11 +453,11 @@ func (r *reteRuntime) removeBetaGeneratedWorkingFact(ctx context.Context, fact *
 	return reteAgendaDelta{}, nil
 }
 
-func (r *reteRuntime) updateBetaFact(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
+func (r *reteRuntime) updateBetaFact(ctx context.Context, before FactSnapshot, beforeFact *workingFact, afterFact *workingFact, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin, counters *propagationCounterLedger) (reteAgendaDelta, error) {
 	if r == nil {
 		return reteAgendaDelta{}, nil
 	}
-	return r.propagateBetaEvent(ctx, newReteGraphModifyEvent(r.revision, before, after, changes, duplicateChanged, origin, counters))
+	return r.propagateBetaEvent(ctx, newReteGraphWorkingModifyEvent(r.revision, before, beforeFact, afterFact, after, changes, duplicateChanged, origin, counters))
 }
 
 func (r *reteRuntime) propagateBetaEvent(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {

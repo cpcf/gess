@@ -3009,12 +3009,15 @@ func (s *Session) updateReteAlphaAfterRetractGeneratedWorkingFact(ctx context.Co
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
 
-func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before FactSnapshot, beforeFact *workingFact, afterFact *workingFact, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin) (reteAgendaDelta, error) {
 	if s == nil || s.rete == nil {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete.usesGraphBeta() {
-		return s.rete.updateBetaFact(ctx, before, after, changes, duplicateChanged, origin, s.propagationCounters)
+		if s.rete.graphBeta != nil {
+			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
+		}
+		return s.rete.updateBetaFact(ctx, before, beforeFact, afterFact, after, changes, duplicateChanged, origin, s.propagationCounters)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }
@@ -3393,7 +3396,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	state.replaceWorkingFact(fact)
 	after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 	duplicateChanged := oldDuplicate != newDuplicate
-	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged, origin)
+	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, &modifyMark.fact, fact, after, fieldChanges, duplicateChanged, origin)
 	if err != nil {
 		state.rollbackFactModify(modifyMark)
 		s.commitFactWorkspace(state)
