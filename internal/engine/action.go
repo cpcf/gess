@@ -359,7 +359,7 @@ func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, b
 	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return Value{}, false
 	}
-	template, ok := c.session.revision.templateByKey(fact.templateKey)
+	template, ok := fact.templateForRevision(c.session.revision)
 	if !ok || !template.closed {
 		return Value{}, false
 	}
@@ -1669,7 +1669,12 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 		matches[i] = conditionMatch{
 			conditionID: condition.id,
 			bindingSlot: i,
-			fact:        newConditionFactRefFromWorkingFact(fact),
+			fact: newConditionFactRefFromWorkingFactForTarget(fact, conditionTarget{
+				kind:        conditionTargetKindForRuleCondition(condition),
+				name:        condition.name,
+				templateKey: condition.templateKey,
+				templateID:  fact.templateID,
+			}),
 		}
 	}
 	s.actionMatchScratch = matches

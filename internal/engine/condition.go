@@ -26,6 +26,7 @@ type conditionTarget struct {
 	kind        conditionTargetKind
 	name        string
 	templateKey TemplateKey
+	templateID  templateID
 }
 
 type compiledConditionPlan struct {

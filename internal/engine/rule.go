@@ -153,7 +153,7 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 				Reason:            fmt.Sprintf("unknown template reference %q authored in module %q", ref.String(), normalizeModuleName(author).String()),
 			}
 		}
-		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: template.key}, conditionIndexTemplateKey, &template, "", template.key, nil
+		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: template.key, templateID: template.id}, conditionIndexTemplateKey, &template, "", template.key, nil
 	case FactTargetTemplateKey:
 		if target.templateKey == "" {
 			return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
@@ -172,7 +172,7 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 				Reason:            "unknown template key",
 			}
 		}
-		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: target.templateKey}, conditionIndexTemplateKey, &template, "", target.templateKey, nil
+		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: target.templateKey, templateID: template.id}, conditionIndexTemplateKey, &template, "", target.templateKey, nil
 	default:
 		return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 			RuleName:          ruleName,

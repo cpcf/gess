@@ -574,7 +574,9 @@ func (s *Session) rebuildFactTargetIndexes() {
 		if fact.id.IsZero() {
 			continue
 		}
-		s.factsByTemplate[fact.templateKey] = append(s.factsByTemplate[fact.templateKey], fact.id)
+		if templateKey := fact.templateKeyForRevision(s.revision); templateKey != "" {
+			s.factsByTemplate[templateKey] = append(s.factsByTemplate[templateKey], fact.id)
+		}
 		if name := fact.nameForRevision(s.revision); name != "" {
 			s.factsByName[name] = append(s.factsByName[name], fact.id)
 		}
@@ -1946,7 +1948,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	oldDuplicate := fact.publicDuplicateKey(s.revision)
 	factID := fact.id
 	factRecency := fact.recency
-	factTemplateKey := fact.templateKey
+	factTemplateKey := fact.templateKeyForRevision(s.revision)
 	factName := fact.nameForRevision(s.revision)
 
 	agendaDelta, err := s.updateReteAlphaAfterRetract(ctx, before, origin)
@@ -2016,7 +2018,7 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 		return reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	factTemplateKey := fact.templateKey
+	factTemplateKey := fact.templateKeyForRevision(s.revision)
 	factName := fact.nameForRevision(s.revision)
 
 	agendaDelta, err := s.updateReteAlphaAfterRetractGenerated(ctx, fact, origin)
@@ -2737,7 +2739,7 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	if s == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.nameForRevision(s.revision), fact.templateKey) {
+	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.nameForRevision(s.revision), fact.templateKeyForRevision(s.revision)) {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete == nil {
@@ -2785,7 +2787,8 @@ func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
 	}
 	for i := range s.facts {
 		fact := &s.facts[i]
-		template, ok := revision.templateByKey(fact.templateKey)
+		templateKey := fact.templateKeyForRevision(previous)
+		template, ok := revision.templateByKey(templateKey)
 		if !ok {
 			if fact.fieldsMap() == nil {
 				fact.setFields(materializeFieldsFromSlots(fact.materializeFieldSlots(), fact.fieldSpecsForRevision(previous)))
@@ -3032,7 +3035,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	if s.factHasLogicalSupport(id) {
 		return ModifyResult{Status: ModifyLogicalSupport, Fact: before}, reteAgendaDelta{}, ErrLogicalFactModify
 	}
-	template, templateExists := s.revision.templateByKey(fact.templateKey)
+	template, templateExists := fact.templateForRevision(s.revision)
 
 	var beforeFields Fields
 	var beforePresence map[string]FieldPresence
@@ -4888,7 +4891,7 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 			w.factsByDuplicate.deleteFact(duplicateIndex, fact.id)
 		}
 		if !fact.targetIndexesSkipped {
-			w.removeFactTargetIndexes(fact.templateKey, fact.storedName(), fact.id)
+			w.removeFactTargetIndexes(fact.templateKeyForRevision(nil), fact.storedName(), fact.id)
 		}
 		w.deleteFactRowIndex(fact.id)
 	}
@@ -5238,13 +5241,20 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 
 	fact := workingFact{
-		id:          id,
-		templateKey: templateKey,
-		version:     1,
-		recency:     w.recency,
-		dupIndex:    workingFactDuplicateIndex(duplicateIndex),
+		id:       id,
+		version:  1,
+		recency:  w.recency,
+		dupIndex: workingFactDuplicateIndex(duplicateIndex),
+	}
+	if templateExists {
+		fact.setTemplateIdentity(templateKey, template.id)
+	} else {
+		fact.setTemplateIdentity(templateKey, 0)
 	}
 	fact.setName(name)
+	if name != "" {
+		fact.setTemplateKey(templateKey)
+	}
 	fact.setFields(canonical)
 	fact.setFieldSlots(fieldSlots)
 	fact.setFieldPresence(presence)
@@ -5314,13 +5324,16 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	}
 	fact := workingFact{
 		id:           id,
-		templateKey:  templateKey,
 		version:      1,
 		recency:      w.recency,
 		compactSlots: compactSlots,
 		dupIndex:     workingFactDuplicateIndex(duplicateIndex),
 	}
+	fact.setTemplateIdentity(templateKey, template.id)
 	fact.setName(name)
+	if name != "" {
+		fact.setTemplateKey(templateKey)
+	}
 	fact.setFieldSlots(storedSlots)
 
 	stored := w.storeFact(fact)
@@ -5406,14 +5419,17 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 	}
 	fact := workingFact{
 		id:                   id,
-		templateKey:          templateKey,
 		version:              1,
 		recency:              w.recency,
 		compactSlots:         compactSlots,
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
+	fact.setTemplateIdentity(templateKey, plan.templateID)
 	fact.setName(storedName)
+	if storedName != "" {
+		fact.setTemplateKey(templateKey)
+	}
 	fact.setFieldSlots(fieldSlots)
 
 	stored := w.storeFact(fact)
@@ -5473,14 +5489,17 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 	}
 	fact := workingFact{
 		id:                   id,
-		templateKey:          templateKey,
 		version:              1,
 		recency:              w.recency,
 		compactSlots:         compactRef,
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
+	fact.setTemplateIdentity(templateKey, plan.templateID)
 	fact.setName(storedName)
+	if storedName != "" {
+		fact.setTemplateKey(templateKey)
+	}
 
 	stored := w.storeFact(fact)
 	if plan.duplicatePolicy != DuplicateAllow {
@@ -5529,6 +5548,7 @@ func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionI
 type compiledSessionInitialFact struct {
 	name            string
 	templateKey     TemplateKey
+	templateID      templateID
 	fields          Fields
 	fieldSlots      []factSlot
 	fieldSpecs      []FieldSpec
@@ -5617,6 +5637,7 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 		return compiledSessionInitialFact{
 			name:            name,
 			templateKey:     templateKey,
+			templateID:      template.id,
 			fieldSlots:      fieldSlots,
 			fieldSpecs:      template.fields,
 			duplicatePolicy: template.duplicatePolicy,
@@ -5658,6 +5679,7 @@ func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (c
 	return compiledSessionInitialFact{
 		name:            name,
 		templateKey:     templateKey,
+		templateID:      template.id,
 		fields:          fields,
 		fieldSlots:      fieldSlots,
 		fieldSpecs:      fieldSpecs,
@@ -5696,13 +5718,16 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	w.recency++
 	id := newFactID(w.generation, w.sequence)
 	fact := workingFact{
-		id:          id,
-		templateKey: initial.templateKey,
-		version:     1,
-		recency:     w.recency,
-		dupIndex:    workingFactDuplicateIndex(initial.duplicateIndex),
+		id:       id,
+		version:  1,
+		recency:  w.recency,
+		dupIndex: workingFactDuplicateIndex(initial.duplicateIndex),
 	}
+	fact.setTemplateIdentity(initial.templateKey, initial.templateID)
 	fact.setName(initial.name)
+	if initial.name != "" {
+		fact.setTemplateKey(initial.templateKey)
+	}
 	if initial.shareFields {
 		fact.setFields(initial.fields)
 	} else {

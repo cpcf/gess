@@ -141,13 +141,17 @@ func newConditionFactRefFromSnapshot(snapshot FactSnapshot) conditionFactRef {
 }
 
 func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
+	return newConditionFactRefFromWorkingFactForTarget(fact, conditionTarget{})
+}
+
+func newConditionFactRefFromWorkingFactForTarget(fact *workingFact, target conditionTarget) conditionFactRef {
 	if fact == nil {
 		return conditionFactRef{}
 	}
 	return conditionFactRef{
 		id:                fact.id,
 		name:              fact.storedName(),
-		templateKey:       fact.templateKey,
+		templateKey:       fact.templateKeyForTarget(target),
 		version:           fact.version,
 		recency:           fact.recency,
 		generation:        fact.id.Generation(),
@@ -271,7 +275,7 @@ func (f conditionFactRef) fieldSlot(name string) (int, bool) {
 
 type workingFact struct {
 	id                   FactID
-	templateKey          TemplateKey
+	templateID           templateID
 	version              FactVersion
 	recency              Recency
 	supportState         factSupportCode
@@ -283,6 +287,7 @@ type workingFact struct {
 
 type workingFactPayload struct {
 	name          string
+	templateKey   TemplateKey
 	fields        Fields
 	fieldSlots    []factSlot
 	fieldPresence map[string]FieldPresence
@@ -310,6 +315,37 @@ func (f *workingFact) storedName() string {
 		return ""
 	}
 	return f.payload.name
+}
+
+func (f *workingFact) storedTemplateKey() TemplateKey {
+	if f == nil || f.payload == nil {
+		return ""
+	}
+	return f.payload.templateKey
+}
+
+func (f *workingFact) setTemplateKey(key TemplateKey) {
+	if f == nil || key == "" && f.payload == nil {
+		return
+	}
+	payload := f.ensurePayload()
+	if payload == nil {
+		return
+	}
+	payload.templateKey = key
+	f.clearPayloadIfEmpty()
+}
+
+func (f *workingFact) setTemplateIdentity(key TemplateKey, id templateID) {
+	if f == nil {
+		return
+	}
+	f.templateID = id
+	if id == 0 {
+		f.setTemplateKey(key)
+		return
+	}
+	f.setTemplateKey("")
 }
 
 func (f *workingFact) setName(name string) {
@@ -409,7 +445,7 @@ func (f *workingFact) clearPayloadIfEmpty() {
 	if f == nil || f.payload == nil {
 		return
 	}
-	if f.payload.name == "" && f.payload.fields == nil && len(f.payload.fieldSlots) == 0 && f.payload.fieldPresence == nil {
+	if f.payload.name == "" && f.payload.templateKey == "" && f.payload.fields == nil && len(f.payload.fieldSlots) == 0 && f.payload.fieldPresence == nil {
 		f.payload = nil
 	}
 }
@@ -420,6 +456,7 @@ func cloneWorkingFactPayload(in *workingFactPayload) *workingFactPayload {
 	}
 	return &workingFactPayload{
 		name:          in.name,
+		templateKey:   in.templateKey,
 		fields:        cloneFields(in.fields),
 		fieldSlots:    cloneFactSlots(in.fieldSlots),
 		fieldPresence: cloneFieldPresence(in.fieldPresence),
@@ -1397,7 +1434,7 @@ func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.nameForRevision(revision),
-		templateKey:   f.templateKey,
+		templateKey:   f.templateKeyForRevision(revision),
 		version:       f.version,
 		recency:       f.recency,
 		generation:    f.id.Generation(),
@@ -1417,7 +1454,7 @@ func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapsho
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.nameForRevision(revision),
-		templateKey:   f.templateKey,
+		templateKey:   f.templateKeyForRevision(revision),
 		version:       f.version,
 		recency:       f.recency,
 		generation:    f.id.Generation(),
@@ -1443,19 +1480,71 @@ func (f *workingFact) nameForRevision(revision *Ruleset) string {
 	if name := f.storedName(); name != "" {
 		return name
 	}
-	if revision != nil && f.templateKey != "" {
-		if template, ok := revision.templateByKey(f.templateKey); ok {
+	if revision != nil {
+		if template, ok := f.templateForRevision(revision); ok {
 			return template.Name()
 		}
 	}
 	return ""
 }
 
+func (f *workingFact) templateKeyForTarget(target conditionTarget) TemplateKey {
+	if f == nil {
+		return ""
+	}
+	if key := f.storedTemplateKey(); key != "" {
+		return key
+	}
+	if target.templateKey != "" && target.templateID != 0 && f.templateID == target.templateID {
+		return target.templateKey
+	}
+	if target.kind == conditionTargetTemplateKey && target.templateID != 0 && f.templateID == target.templateID {
+		return target.templateKey
+	}
+	return ""
+}
+
+func (f *workingFact) matchesTemplateTarget(target conditionTarget) bool {
+	if f == nil || target.kind != conditionTargetTemplateKey {
+		return false
+	}
+	if target.templateID != 0 && f.templateID == target.templateID {
+		return true
+	}
+	return f.storedTemplateKey() == target.templateKey
+}
+
+func (f *workingFact) templateKeyForRevision(revision *Ruleset) TemplateKey {
+	if f == nil {
+		return ""
+	}
+	if key := f.storedTemplateKey(); key != "" {
+		return key
+	}
+	if template, ok := f.templateForRevision(revision); ok {
+		return template.Key()
+	}
+	return ""
+}
+
+func (f *workingFact) templateForRevision(revision *Ruleset) (Template, bool) {
+	if f == nil || revision == nil {
+		return Template{}, false
+	}
+	if f.templateID != 0 {
+		return revision.templateByID(f.templateID)
+	}
+	if key := f.storedTemplateKey(); key != "" {
+		return revision.templateByKey(key)
+	}
+	return Template{}, false
+}
+
 func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
 	if f == nil || f.fieldSlotCount() == 0 || revision == nil {
 		return nil
 	}
-	template, ok := revision.templateByKey(f.templateKey)
+	template, ok := f.templateForRevision(revision)
 	if !ok {
 		return nil
 	}
@@ -1467,10 +1556,10 @@ func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
 	if f == nil || duplicateIndex.isZero() {
 		return ""
 	}
-	template := Template{key: f.templateKey}
+	template := Template{key: f.templateKeyForRevision(revision)}
 	name := f.nameForRevision(revision)
 	if revision != nil {
-		if resolved, ok := revision.templateByKey(f.templateKey); ok {
+		if resolved, ok := f.templateForRevision(revision); ok {
 			template = resolved
 		}
 	}

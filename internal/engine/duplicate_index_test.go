@@ -287,7 +287,8 @@ func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testin
 	otherID := newFactID(1, 2)
 
 	workspace := newFactWorkspace(1, 2)
-	other := workingFact{id: otherID, templateKey: "response", dupIndex: workingFactDuplicateIndex(otherKey)}
+	other := workingFact{id: otherID, dupIndex: workingFactDuplicateIndex(otherKey)}
+	other.setTemplateIdentity("response", 0)
 	other.setName("response")
 	workspace.storeFact(other)
 	workspace.factsByDuplicate.string2Int.setHash(hashDuplicateStringStringIntIndexKey(requestedKey), otherID)
@@ -296,7 +297,8 @@ func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testin
 		t.Fatalf("lookup with hash collision = (%q, %t), want missing", got, ok)
 	}
 
-	requested := workingFact{id: requestedID, templateKey: "response", dupIndex: workingFactDuplicateIndex(requestedKey)}
+	requested := workingFact{id: requestedID, dupIndex: workingFactDuplicateIndex(requestedKey)}
+	requested.setTemplateIdentity("response", 0)
 	requested.setName("response")
 	workspace.storeFact(requested)
 	workspace.factsByDuplicate.set(requestedKey, requestedID)

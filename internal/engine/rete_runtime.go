@@ -979,7 +979,7 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 	}
 	switch p.target.kind {
 	case conditionTargetTemplateKey:
-		if fact.templateKey != p.target.templateKey {
+		if !fact.matchesTemplateTarget(p.target) {
 			return false, nil
 		}
 	case conditionTargetName:
@@ -994,7 +994,7 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 			return false, nil
 		}
 	}
-	ref := newConditionFactRefFromWorkingFact(fact)
+	ref := newConditionFactRefFromWorkingFactForTarget(fact, p.target)
 	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
 	if err != nil || !ok {
 		return ok, err
