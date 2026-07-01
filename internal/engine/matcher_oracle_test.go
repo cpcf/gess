@@ -644,7 +644,7 @@ func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact cond
 
 func (p compiledConditionPlan) matchesConstraintsWorking(ctx context.Context, fact *workingFact) (bool, error) {
 	for _, constraint := range p.constraints {
-		if !constraint.matchesWorking(fact) {
+		if !constraint.matchesWorking(fact, nil) {
 			return false, nil
 		}
 	}

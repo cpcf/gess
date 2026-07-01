@@ -19,11 +19,11 @@ func factSnapshotMatchesFieldEqualIndex(fact FactSnapshot, fieldSlot int, value 
 	return valueMatchesFieldEqualIndex(fieldValue, ok, value)
 }
 
-func workingFactMatchesFieldEqualIndex(fact *workingFact, fieldSlot int, value reteGraphAlphaRouteValue) bool {
+func workingFactMatchesFieldEqualIndex(fact *workingFact, fieldSlot int, value reteGraphAlphaRouteValue, compactSlotStore *factCompactSlotStore) bool {
 	if fact == nil {
 		return false
 	}
-	fieldValue, ok := fact.compiledFieldValue("", fieldSlot)
+	fieldValue, ok := fact.compiledFieldValue("", fieldSlot, compactSlotStore)
 	return valueMatchesFieldEqualIndex(fieldValue, ok, value)
 }
 

@@ -1490,7 +1490,7 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	if duplicate.DuplicateKey == "" {
 		t.Fatal("duplicate key was not materialized for public duplicate result")
 	}
-	if got := internal.publicDuplicateKey(session.revision); got != duplicate.DuplicateKey {
+	if got := internal.publicDuplicateKey(session.revision, session.compactSlotStore); got != duplicate.DuplicateKey {
 		t.Fatalf("public duplicate key = %q, want %q", got, duplicate.DuplicateKey)
 	}
 }
@@ -1960,7 +1960,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
-	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {
+	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), len(generated.fields); got != want {
 		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
 	}
 	if got := len(session.slotStorage); got != 0 {
@@ -2097,7 +2097,7 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
-	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {
+	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), len(generated.fields); got != want {
 		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
 	}
 	if got := len(session.slotStorage); got != 0 {

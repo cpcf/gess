@@ -30,8 +30,8 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
-	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndexForRevision(session.revision).kind != duplicateIndexSingleScalar {
-		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision).kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 	if got, want := len(mustSnapshot(t, context.Background(), session).Facts()), 1; got != want {
 		t.Fatalf("snapshot length = %d, want %d", got, want)
@@ -758,7 +758,7 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 		t.Helper()
 		for i := range session.facts {
 			fact := &session.facts[i]
-			if value, ok := fact.snapshotForRevision(session.revision).Field("id"); ok && value.stringValue == id {
+			if value, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("id"); ok && value.stringValue == id {
 				return fact
 			}
 		}
@@ -767,8 +767,8 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	}
 
 	firstFact := resetFact("settings-1")
-	if firstFact.duplicateIndexForRevision(session.revision).kind != duplicateIndexSingleScalar {
-		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.duplicateIndexForRevision(session.revision).kind, duplicateIndexSingleScalar)
+	if firstFact.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 	labelsSlot := -1
 	metaSlot := -1
@@ -895,7 +895,7 @@ func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.
 	if len(fact.fieldSlotSlice()) != 0 {
 		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlotSlice())
 	}
-	if got, ok := fact.snapshotForRevision(session.revision).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+	if got, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("default status = (%v, %v), want active", got, ok)
 	}
 }

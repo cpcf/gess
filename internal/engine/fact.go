@@ -106,7 +106,7 @@ func (f FactSnapshot) compiledFieldValue(field string, slot int) (Value, bool) {
 	return f.fieldValue(field)
 }
 
-func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
+func (f *workingFact) compiledFieldValue(field string, slot int, compactSlotStore *factCompactSlotStore) (Value, bool) {
 	if f == nil {
 		return Value{}, false
 	}
@@ -115,11 +115,11 @@ func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
 		resolved := fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
-	compactSlots := f.compactFieldSlots()
+	compactSlots := f.compactFieldSlots(compactSlotStore)
 	if slot >= 0 && slot < len(compactSlots) {
 		return compactSlots[slot].value()
 	}
-	return f.fieldValue(field)
+	return f.fieldValue(field, compactSlotStore)
 }
 
 func (f FactSnapshot) Support() FactSupportProvenance {
@@ -140,11 +140,11 @@ func newConditionFactRefFromSnapshot(snapshot FactSnapshot) conditionFactRef {
 	}
 }
 
-func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
-	return newConditionFactRefFromWorkingFactForTarget(fact, conditionTarget{})
+func newConditionFactRefFromWorkingFact(fact *workingFact, compactSlotStore *factCompactSlotStore) conditionFactRef {
+	return newConditionFactRefFromWorkingFactForTarget(fact, conditionTarget{}, compactSlotStore)
 }
 
-func newConditionFactRefFromWorkingFactForTarget(fact *workingFact, target conditionTarget) conditionFactRef {
+func newConditionFactRefFromWorkingFactForTarget(fact *workingFact, target conditionTarget, compactSlotStore *factCompactSlotStore) conditionFactRef {
 	if fact == nil {
 		return conditionFactRef{}
 	}
@@ -156,7 +156,7 @@ func newConditionFactRefFromWorkingFactForTarget(fact *workingFact, target condi
 		recency:           fact.recency,
 		generation:        fact.id.Generation(),
 		fieldSlots:        fact.fieldSlotSlice(),
-		compactFieldSlots: fact.compactFieldSlots(),
+		compactFieldSlots: fact.compactFieldSlots(compactSlotStore),
 	}
 }
 
@@ -463,7 +463,6 @@ func cloneWorkingFactPayload(in *workingFactPayload) *workingFactPayload {
 }
 
 type factCompactSlotRef struct {
-	store *factCompactSlotStore
 	start uint32
 	count uint32
 }
@@ -482,20 +481,20 @@ func newFactCompactSlotRef(store *factCompactSlotStore, start, count int) (factC
 	if start > len(store.slots) || count > len(store.slots)-start {
 		return factCompactSlotRef{}, false
 	}
-	return factCompactSlotRef{store: store, start: uint32(start), count: uint32(count)}, true
+	return factCompactSlotRef{start: uint32(start), count: uint32(count)}, true
 }
 
-func (r factCompactSlotRef) slots() []compactFactSlot {
-	if r.store == nil || r.count == 0 {
+func (r factCompactSlotRef) slots(store *factCompactSlotStore) []compactFactSlot {
+	if store == nil || r.count == 0 {
 		return nil
 	}
 	start := int(r.start)
 	count := int(r.count)
 	end := start + count
-	if start < 0 || count < 0 || end < start || end > len(r.store.slots) {
+	if start < 0 || count < 0 || end < start || end > len(store.slots) {
 		return nil
 	}
-	return r.store.slots[start:end:end]
+	return store.slots[start:end:end]
 }
 
 func (s *factCompactSlotStore) reset(capacity int) {
@@ -603,11 +602,11 @@ func cloneFactCompactSlotStore(in *factCompactSlotStore) *factCompactSlotStore {
 	return out
 }
 
-func (f *workingFact) compactFieldSlots() []compactFactSlot {
+func (f *workingFact) compactFieldSlots(store *factCompactSlotStore) []compactFactSlot {
 	if f == nil {
 		return nil
 	}
-	return f.compactSlots.slots()
+	return f.compactSlots.slots(store)
 }
 
 type factSupportCode uint8
@@ -1059,11 +1058,11 @@ func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateSlotsEqual(le
 	return true, true
 }
 
-func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateWorkingFactEqual(left []factSlot, right *workingFact) (bool, bool) {
+func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateWorkingFactEqual(left []factSlot, right *workingFact, compactSlotStore *factCompactSlotStore) (bool, bool) {
 	if right == nil {
 		return false, true
 	}
-	compactSlots := right.compactFieldSlots()
+	compactSlots := right.compactFieldSlots(compactSlotStore)
 	if len(compactSlots) == 0 {
 		return p.structuralScalarDuplicateSlotsEqual(left, right.fieldSlotSlice())
 	}
@@ -1405,10 +1404,10 @@ func (p fieldPresenceCode) fieldPresence() FieldPresence {
 }
 
 func (f *workingFact) snapshot() FactSnapshot {
-	return f.snapshotForRevision(nil)
+	return f.snapshotForRevision(nil, nil)
 }
 
-func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
+func (f *workingFact) snapshotForRevision(revision *Ruleset, compactSlotStore *factCompactSlotStore) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.nameForRevision(revision),
@@ -1417,18 +1416,18 @@ func (f *workingFact) snapshotForRevision(revision *Ruleset) FactSnapshot {
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        cloneFields(f.fieldsMap()),
-		fieldSlots:    f.materializeFieldSlots(),
-		fieldSpecs:    f.fieldSpecsForRevision(revision),
+		fieldSlots:    f.materializeFieldSlots(compactSlotStore),
+		fieldSpecs:    f.fieldSpecsForRevision(revision, compactSlotStore),
 		fieldPresence: cloneFieldPresence(f.fieldPresenceMap()),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
 	}
 }
 
 func (f *workingFact) detachedSnapshot() FactSnapshot {
-	return f.detachedSnapshotForRevision(nil)
+	return f.detachedSnapshotForRevision(nil, nil)
 }
 
-func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapshot {
+func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset, compactSlotStore *factCompactSlotStore) FactSnapshot {
 	return FactSnapshot{
 		id:            f.id,
 		name:          f.nameForRevision(revision),
@@ -1437,8 +1436,8 @@ func (f *workingFact) detachedSnapshotForRevision(revision *Ruleset) FactSnapsho
 		recency:       f.recency,
 		generation:    f.id.Generation(),
 		fields:        f.fieldsMap(),
-		fieldSlots:    f.materializeFieldSlots(),
-		fieldSpecs:    f.fieldSpecsForRevision(revision),
+		fieldSlots:    f.materializeFieldSlots(compactSlotStore),
+		fieldSpecs:    f.fieldSpecsForRevision(revision, compactSlotStore),
 		fieldPresence: f.fieldPresenceMap(),
 		support:       FactSupportProvenance{State: f.resolvedSupportState()},
 	}
@@ -1518,8 +1517,8 @@ func (f *workingFact) templateForRevision(revision *Ruleset) (Template, bool) {
 	return Template{}, false
 }
 
-func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
-	if f == nil || f.fieldSlotCount() == 0 || revision == nil {
+func (f *workingFact) fieldSpecsForRevision(revision *Ruleset, compactSlotStore *factCompactSlotStore) []FieldSpec {
+	if f == nil || f.fieldSlotCount(compactSlotStore) == 0 || revision == nil {
 		return nil
 	}
 	template, ok := f.templateForRevision(revision)
@@ -1529,7 +1528,7 @@ func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
 	return template.fields
 }
 
-func (f *workingFact) duplicateIndexForRevision(revision *Ruleset) duplicateIndexKey {
+func (f *workingFact) duplicateIndexForRevision(revision *Ruleset, compactSlotStore *factCompactSlotStore) duplicateIndexKey {
 	if f == nil {
 		return duplicateIndexKey{}
 	}
@@ -1542,11 +1541,11 @@ func (f *workingFact) duplicateIndexForRevision(revision *Ruleset) duplicateInde
 	if template.duplicatePolicy == DuplicateAllow {
 		return duplicateIndexKey{}
 	}
-	return makeDuplicateIndexForValidatedFact(f.nameForRevision(revision), template, f.fieldsMap(), f.materializeFieldSlots())
+	return makeDuplicateIndexForValidatedFact(f.nameForRevision(revision), template, f.fieldsMap(), f.materializeFieldSlots(compactSlotStore))
 }
 
-func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
-	duplicateIndex := f.duplicateIndexForRevision(revision)
+func (f *workingFact) publicDuplicateKey(revision *Ruleset, compactSlotStore *factCompactSlotStore) DuplicateKey {
+	duplicateIndex := f.duplicateIndexForRevision(revision, compactSlotStore)
 	if f == nil || duplicateIndex.isZero() {
 		return ""
 	}
@@ -1558,12 +1557,12 @@ func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
 		}
 	}
 	if duplicateIndex.kind == duplicateIndexStructural {
-		return makeDuplicateKeyForTemplateWithSlots(name, template, nil, f.materializeFieldSlots())
+		return makeDuplicateKeyForTemplateWithSlots(name, template, nil, f.materializeFieldSlots(compactSlotStore))
 	}
 	return duplicateIndex.publicKeyForTemplate(name, template)
 }
 
-func (f *workingFact) fieldSlotCount() int {
+func (f *workingFact) fieldSlotCount(compactSlotStore *factCompactSlotStore) int {
 	if f == nil {
 		return 0
 	}
@@ -1571,10 +1570,10 @@ func (f *workingFact) fieldSlotCount() int {
 	if len(fieldSlots) > 0 {
 		return len(fieldSlots)
 	}
-	return len(f.compactFieldSlots())
+	return len(f.compactFieldSlots(compactSlotStore))
 }
 
-func (f *workingFact) materializeFieldSlots() []factSlot {
+func (f *workingFact) materializeFieldSlots(compactSlotStore *factCompactSlotStore) []factSlot {
 	if f == nil {
 		return nil
 	}
@@ -1582,7 +1581,7 @@ func (f *workingFact) materializeFieldSlots() []factSlot {
 	if len(fieldSlots) > 0 {
 		return fieldSlots
 	}
-	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots())
+	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots(compactSlotStore))
 }
 
 func (f FactSnapshot) clone() FactSnapshot {
@@ -2109,11 +2108,11 @@ func duplicateFields(values Fields, template Template) Fields {
 	return out
 }
 
-func workingFactStructuralDuplicateSlotsEqual(template Template, slots []factSlot, fact *workingFact) bool {
+func workingFactStructuralDuplicateSlotsEqual(template Template, slots []factSlot, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
 	if fact == nil {
 		return false
 	}
-	compactSlots := fact.compactFieldSlots()
+	compactSlots := fact.compactFieldSlots(compactSlotStore)
 	if len(compactSlots) == 0 {
 		return structuralDuplicateSlotsEqual(template, slots, fact.fieldSlotSlice())
 	}
@@ -2185,7 +2184,7 @@ func (f FactSnapshot) fieldValue(name string) (Value, bool) {
 	return Value{}, false
 }
 
-func (f *workingFact) fieldValue(name string) (Value, bool) {
+func (f *workingFact) fieldValue(name string, compactSlotStore *factCompactSlotStore) (Value, bool) {
 	if f == nil {
 		return Value{}, false
 	}
@@ -2202,7 +2201,7 @@ func (f *workingFact) fieldValue(name string) (Value, bool) {
 			return resolved.value, true
 		}
 	}
-	compactSlots := f.compactFieldSlots()
+	compactSlots := f.compactFieldSlots(compactSlotStore)
 	if slot, ok := f.fieldSlot(name); ok && slot < len(compactSlots) {
 		return compactSlots[slot].value()
 	}

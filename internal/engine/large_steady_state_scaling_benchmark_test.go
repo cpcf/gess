@@ -769,7 +769,7 @@ func assertLargeSteadyStateFact(t testing.TB, session *Session, template string,
 		if fact == nil {
 			t.Fatalf("%s fact %s missing from working facts", templateKey, id)
 		}
-		snapshot := fact.snapshotForRevision(session.revision)
+		snapshot := fact.snapshotForRevision(session.revision, session.compactSlotStore)
 		if largeSteadyStateFactMatches(snapshot, expected) {
 			assertSteadyStateFactFields(t, templateKey, id, snapshot, expected)
 			return

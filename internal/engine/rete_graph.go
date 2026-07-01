@@ -1812,17 +1812,17 @@ func (n reteGraphAlphaNode) matchesSnapshotWithContextAndCounters(ctx context.Co
 	return true, nil
 }
 
-func (n reteGraphAlphaNode) matchesWorking(fact *workingFact) bool {
-	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, nil)
+func (n reteGraphAlphaNode) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
 	return ok
 }
 
-func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, span *propagationCounterSpan) bool {
-	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, span)
+func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) bool {
+	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, span)
 	return ok
 }
 
-func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (bool, error) {
+func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
 	if fact == nil {
 		return false, nil
 	}
@@ -1839,11 +1839,11 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 		return false, nil
 	}
 	for _, constraint := range n.constraints {
-		if !constraint.matchesWorkingWithCounters(fact, span) {
+		if !constraint.matchesWorkingWithCounters(fact, compactSlotStore, span) {
 			return false, nil
 		}
 	}
-	ref := newConditionFactRefFromWorkingFactForTarget(fact, n.target)
+	ref := newConditionFactRefFromWorkingFactForTarget(fact, n.target, compactSlotStore)
 	if !n.listPatternsMatch(ref, tokenRef{}) {
 		return false, nil
 	}
@@ -1854,14 +1854,14 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 	return true, nil
 }
 
-func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (bool, error) {
+func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
 	if n.generatedMatch.kind != reteGraphAlphaGeneratedMatchNone {
-		return n.generatedMatch.matchesWorking(n.target, fact), nil
+		return n.generatedMatch.matchesWorking(n.target, fact, compactSlotStore), nil
 	}
-	return n.matchesWorkingWithContextAndCounters(ctx, fact, span)
+	return n.matchesWorkingWithContextAndCounters(ctx, fact, compactSlotStore, span)
 }
 
-func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact) bool {
+func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
 	if fact == nil || !target.matchesWorkingFact(fact) {
 		return false
 	}
@@ -1870,7 +1870,7 @@ func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fac
 		return true
 	case reteGraphAlphaGeneratedMatchSlotEqual:
 		for _, equality := range m.equalities {
-			value, ok := fact.compiledFieldValue("", equality.fieldSlot)
+			value, ok := fact.compiledFieldValue("", equality.fieldSlot, compactSlotStore)
 			if !ok || !equality.value.matchesValue(value) {
 				return false
 			}

@@ -136,7 +136,7 @@ func benchmarkDuplicateIndexLookupInsert(b *testing.B, spec TemplateSpec, rawFie
 		if !inserted {
 			b.Fatal("first insert reported duplicate")
 		}
-		firstIndex := first.duplicateIndexForRevision(revision)
+		firstIndex := first.duplicateIndexForRevision(revision, factSpace.compactSlotStore)
 		if firstIndex.kind != want {
 			b.Fatalf("first duplicate index kind = %v, want %v", firstIndex.kind, want)
 		}

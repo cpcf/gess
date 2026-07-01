@@ -41,10 +41,10 @@ func newReteGraphAssertEvent(fact FactSnapshot, origin mutationOrigin, span *pro
 	}
 }
 
-func newReteGraphGeneratedAssertEvent(fact *workingFact, revision *Ruleset, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
+func newReteGraphGeneratedAssertEvent(fact *workingFact, revision *Ruleset, compactSlotStore *factCompactSlotStore, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
 	var snapshot FactSnapshot
 	if fact != nil {
-		snapshot = fact.snapshotForRevision(revision)
+		snapshot = fact.snapshotForRevision(revision, compactSlotStore)
 	}
 	return reteGraphPropagationEvent{
 		tag:              reteGraphPropagationAdd,

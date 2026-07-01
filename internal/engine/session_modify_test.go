@@ -487,8 +487,8 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fieldsMap() != nil || len(internal.fieldSlotSlice()) == 0 {
 		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fieldsMap(), len(internal.fieldSlotSlice()))
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndexForRevision(session.revision).kind != duplicateIndexSingleScalar {
-		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision).kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 
 	result, err := session.Modify(context.Background(), first.Fact.ID(), FactPatch{
@@ -506,8 +506,8 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fieldsMap() != nil {
 		t.Fatal("slot-backed fact should remain slot-backed after modify")
 	}
-	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndexForRevision(session.revision).kind != duplicateIndexSingleScalar {
-		t.Fatalf("slot-backed duplicate index kind after modify = %v, want %v", internal.duplicateIndexForRevision(session.revision).kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("slot-backed duplicate index kind after modify = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 
 	result, err = session.Modify(context.Background(), first.Fact.ID(), FactPatch{

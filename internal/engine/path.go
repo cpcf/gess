@@ -244,19 +244,19 @@ func (a compiledPathAccess) valueFromSnapshot(fact FactSnapshot) (Value, bool) {
 	return resolveValuePathTail(value, a.path.Segments[1:])
 }
 
-func (a compiledPathAccess) valueFromWorkingFact(fact *workingFact) (Value, bool) {
+func (a compiledPathAccess) valueFromWorkingFact(fact *workingFact, compactSlotStore *factCompactSlotStore) (Value, bool) {
 	if len(a.path.Segments) == 0 {
 		return Value{}, false
 	}
-	value, ok := fact.compiledFieldValue(a.root, a.rootSlot)
+	value, ok := fact.compiledFieldValue(a.root, a.rootSlot, compactSlotStore)
 	if !ok {
 		return Value{}, false
 	}
 	return resolveValuePathTail(value, a.path.Segments[1:])
 }
 
-func (a compiledPathAccess) valueFromWorkingFactWithCounters(fact *workingFact, span *propagationCounterSpan) (Value, bool) {
-	value, ok := a.valueFromWorkingFact(fact)
+func (a compiledPathAccess) valueFromWorkingFactWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (Value, bool) {
+	value, ok := a.valueFromWorkingFact(fact, compactSlotStore)
 	if a.nested() && span != nil {
 		span.recordNestedPathEvaluation(ok)
 	}

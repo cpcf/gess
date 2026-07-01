@@ -593,7 +593,7 @@ func assertSteadyStateFacts(t testing.TB, session *Session, templateKey Template
 		if fact == nil {
 			t.Fatalf("%s fact %s missing from working facts", templateKey, id)
 		}
-		snapshot := fact.snapshotForRevision(session.revision)
+		snapshot := fact.snapshotForRevision(session.revision, session.compactSlotStore)
 		key, err := steadyStateFactKey(snapshot, keyFields)
 		if err != nil {
 			t.Fatalf("%s fact %s key: %v", templateKey, id, err)

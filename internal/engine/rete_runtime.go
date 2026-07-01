@@ -968,12 +968,12 @@ func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Contex
 	return true, nil
 }
 
-func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact) bool {
-	ok, _ := p.matchesAlphaWorkingWithContextAndCounters(context.Background(), fact, nil)
+func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+	ok, _ := p.matchesAlphaWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
 	return ok
 }
 
-func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, span *propagationCounterSpan) (bool, error) {
+func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
 	if !p.supported || fact == nil {
 		return false, nil
 	}
@@ -990,11 +990,11 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 		return false, nil
 	}
 	for _, constraint := range p.constraints {
-		if !constraint.matchesWorking(fact) {
+		if !constraint.matchesWorking(fact, compactSlotStore) {
 			return false, nil
 		}
 	}
-	ref := newConditionFactRefFromWorkingFactForTarget(fact, p.target)
+	ref := newConditionFactRefFromWorkingFactForTarget(fact, p.target, compactSlotStore)
 	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
 	if err != nil || !ok {
 		return ok, err

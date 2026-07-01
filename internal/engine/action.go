@@ -367,7 +367,7 @@ func (c ActionContext) bindingScalarValueLive(index int, field string) (Value, b
 	if !ok || slot < 0 {
 		return Value{}, false
 	}
-	value, ok := fact.compiledFieldValue(field, slot)
+	value, ok := fact.compiledFieldValue(field, slot, c.session.compactSlotStore)
 	if !ok || !valueShareable(value) {
 		return Value{}, false
 	}
@@ -389,7 +389,7 @@ func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value
 	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return Value{}, false
 	}
-	value, ok := fact.compiledFieldValue("", fieldSlot)
+	value, ok := fact.compiledFieldValue("", fieldSlot, c.session.compactSlotStore)
 	if !ok || !valueShareable(value) {
 		return Value{}, false
 	}
@@ -421,7 +421,7 @@ func (c ActionContext) materializeBindingLocked(index int) (FactSnapshot, bool) 
 	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
 		return FactSnapshot{}, false
 	}
-	snapshot := fact.detachedSnapshotForRevision(c.session.revision)
+	snapshot := fact.detachedSnapshotForRevision(c.session.revision, c.session.compactSlotStore)
 	c.bindings.snapshots[index] = snapshot
 	return snapshot, true
 }
@@ -1674,7 +1674,7 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 				name:        condition.name,
 				templateKey: condition.templateKey,
 				templateID:  fact.templateID,
-			}),
+			}, s.compactSlotStore),
 		}
 	}
 	s.actionMatchScratch = matches

@@ -257,13 +257,13 @@ func (c compiledFieldConstraint) matchesValue(value Value, ok bool) bool {
 	return false
 }
 
-func (c compiledFieldConstraint) matchesWorking(fact *workingFact) bool {
-	value, ok := c.valueFromWorkingFact(fact)
+func (c compiledFieldConstraint) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+	value, ok := c.valueFromWorkingFact(fact, compactSlotStore)
 	return c.matchesValue(value, ok)
 }
 
-func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, span *propagationCounterSpan) bool {
-	value, ok := c.valueFromWorkingFactWithCounters(fact, span)
+func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) bool {
+	value, ok := c.valueFromWorkingFactWithCounters(fact, compactSlotStore, span)
 	return c.matchesValue(value, ok)
 }
 
@@ -275,12 +275,12 @@ func (c compiledFieldConstraint) valueFromFactWithCounters(fact conditionFactRef
 	return c.access.valueFromFactWithCounters(fact, span)
 }
 
-func (c compiledFieldConstraint) valueFromWorkingFact(fact *workingFact) (Value, bool) {
-	return c.access.valueFromWorkingFact(fact)
+func (c compiledFieldConstraint) valueFromWorkingFact(fact *workingFact, compactSlotStore *factCompactSlotStore) (Value, bool) {
+	return c.access.valueFromWorkingFact(fact, compactSlotStore)
 }
 
-func (c compiledFieldConstraint) valueFromWorkingFactWithCounters(fact *workingFact, span *propagationCounterSpan) (Value, bool) {
-	return c.access.valueFromWorkingFactWithCounters(fact, span)
+func (c compiledFieldConstraint) valueFromWorkingFactWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (Value, bool) {
+	return c.access.valueFromWorkingFactWithCounters(fact, compactSlotStore, span)
 }
 
 func valuesComparableForEquality(left, right Value) bool {

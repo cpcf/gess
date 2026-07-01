@@ -12,6 +12,7 @@ type factIndexRef int
 type reteGraphBetaMemory struct {
 	revision                 *Ruleset
 	graph                    *reteGraph
+	compactSlotStore         *factCompactSlotStore
 	evalCtx                  context.Context
 	nodes                    []*reteGraphBetaNodeMemory
 	aggregates               []*reteGraphAggregateNodeMemory
@@ -2827,7 +2828,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		ok, err := node.matchesGeneratedWorkingWithContextAndCounters(ctx, fact, span)
+		ok, err := node.matchesGeneratedWorkingWithContextAndCounters(ctx, fact, m.compactSlotStore, span)
 		if err != nil {
 			return delta, err
 		}
@@ -2840,7 +2841,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 		match := conditionMatch{
 			conditionID: node.entry.conditionID,
 			bindingSlot: node.entry.bindingSlot,
-			fact:        newConditionFactRefFromWorkingFactForTarget(fact, node.target),
+			fact:        newConditionFactRefFromWorkingFactForTarget(fact, node.target, m.compactSlotStore),
 		}
 		ok, err = m.insertGeneratedAlphaOps(nodeID, node, match, span, &delta)
 		if err != nil {
@@ -3080,7 +3081,7 @@ func (m *reteGraphBetaMemory) snapshotAlphaRouteFieldValue(templateKey TemplateK
 
 func (m *reteGraphBetaMemory) workingAlphaRouteFieldValue(id templateID, fact *workingFact, fieldSlot int) (Value, bool) {
 	field := m.alphaRouteFieldNameByID(id, fieldSlot)
-	return fact.compiledFieldValue(field, fieldSlot)
+	return fact.compiledFieldValue(field, fieldSlot, m.compactSlotStore)
 }
 
 func (m *reteGraphBetaMemory) alphaRouteFieldNameByID(id templateID, fieldSlot int) string {
@@ -5721,7 +5722,7 @@ func (m *reteGraphBetaMemory) removeFactGenerated(ctx context.Context, fact *wor
 		match := conditionMatch{
 			conditionID: node.entry.conditionID,
 			bindingSlot: node.entry.bindingSlot,
-			fact:        newConditionFactRefFromWorkingFactForTarget(fact, node.target),
+			fact:        newConditionFactRefFromWorkingFactForTarget(fact, node.target, m.compactSlotStore),
 		}
 		m.removeGeneratedAlphaOps(nodeID, node, match, counters, &delta)
 	}
