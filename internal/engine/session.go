@@ -964,11 +964,11 @@ func accumulateReteAgendaDelta(current reteAgendaDelta, hasCurrent bool, next re
 	return mergeReteAgendaDelta(current, next), true
 }
 
-func (b *preparedTemplateValueBatch) reserve(facts, slots int) {
+func (b *preparedTemplateValueBatch) reserve(_ int, slots int) {
 	if b == nil {
 		return
 	}
-	b.state.reserveGeneratedFactCapacity(b.session.revision, facts, slots, 0)
+	b.state.reserveGeneratedFactCapacity(b.session.revision, slots, 0)
 }
 
 func (p preparedTemplateValueInserter) insert2(b *preparedTemplateValueBatch, v0, v1 Value) error {
@@ -4858,24 +4858,9 @@ func (w *factWorkspace) reserveCompactSlotStorage(capacity int) {
 	w.compactSlotStore.reserve(capacity)
 }
 
-func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, factCount, slotCount, compactSlotCount int) {
+func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, slotCount, compactSlotCount int) {
 	if w == nil {
 		return
-	}
-	if factCount > 0 {
-		factCapacity := saturatingAddInt(len(w.facts), factCount)
-		if cap(w.facts) < factCapacity {
-			nextFacts := make([]workingFact, len(w.facts), factCapacity)
-			copy(nextFacts, w.facts)
-			w.facts = nextFacts
-		}
-		orderCapacity := saturatingAddInt(len(w.insertionOrder), factCount)
-		if cap(w.insertionOrder) < orderCapacity {
-			nextOrder := make([]FactID, len(w.insertionOrder), orderCapacity)
-			copy(nextOrder, w.insertionOrder)
-			w.insertionOrder = nextOrder
-		}
-		w.reserveFactRowSequenceRows(factCount)
 	}
 	if slotCount > 0 {
 		w.reserveSlotStorage(saturatingAddInt(len(w.slotStorage), slotCount))
@@ -6672,7 +6657,7 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 	if len(stats) == 0 {
 		return
 	}
-	var factCount, slotCount, compactSlotCount int
+	var slotCount, compactSlotCount int
 	s.agenda.forEachPendingActivation(func(current *activation) bool {
 		if current == nil {
 			return true
@@ -6681,17 +6666,16 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 		if stat.facts == 0 {
 			return true
 		}
-		factCount = saturatingAddInt(factCount, stat.facts)
 		slotCount = saturatingAddInt(slotCount, stat.slots)
 		compactSlotCount = saturatingAddInt(compactSlotCount, stat.compactSlots)
 		maximum := maxIntValue()
-		return factCount < maximum && slotCount < maximum && compactSlotCount < maximum
+		return slotCount < maximum && compactSlotCount < maximum
 	})
-	if factCount == 0 && slotCount == 0 && compactSlotCount == 0 {
+	if slotCount == 0 && compactSlotCount == 0 {
 		return
 	}
 	state := s.activeFactWorkspace()
-	state.reserveGeneratedFactCapacity(s.revision, factCount, slotCount, compactSlotCount)
+	state.reserveGeneratedFactCapacity(s.revision, slotCount, compactSlotCount)
 	s.facts = state.facts
 	s.insertionOrder = state.insertionOrder
 	s.factsBySequence = state.factsBySequence

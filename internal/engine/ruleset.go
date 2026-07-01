@@ -772,7 +772,8 @@ func nextGeneratedFactCapacity(length, capacity int, revision *Ruleset) int {
 	if revision != nil && len(revision.ruleOrder) > 0 {
 		minGrowth = max(minGrowth, len(revision.ruleOrder)*4)
 	}
-	next := max(capacity*2, length+minGrowth)
+	growth := max(capacity/8, minGrowth)
+	next := max(capacity+growth, length+minGrowth)
 	if next == 0 {
 		next = minGrowth
 	}
