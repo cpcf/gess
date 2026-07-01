@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -75,6 +76,54 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	}
 	if got := agenda.pendingActivations()[0].id; got != pending[0].id {
 		t.Fatalf("activation ID changed across duplicate reconcile: %q vs %q", got, pending[0].id)
+	}
+}
+
+func TestSessionDoesNotReserveAgendaRowsFromRuleCount(t *testing.T) {
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "source",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "noop",
+		Fn: func(ActionContext) error {
+			return nil
+		},
+	})
+	for i := range 300 {
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "rule-" + strconv.Itoa(i),
+			Conditions: []RuleConditionSpec{{
+				Binding: "source",
+				Target:  TemplateKeyFact(template.Key()),
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+	}
+
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "agenda-no-broad-reserve-session")
+	if got := len(session.agenda.activationRows.chunks); got != 0 {
+		t.Fatalf("activation row chunks after NewSession = %d, want 0", got)
+	}
+	if got := session.agenda.activationRows.count; got != 0 {
+		t.Fatalf("activation row count after NewSession = %d, want 0", got)
+	}
+
+	result, err := session.Reset(context.Background())
+	if err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if result.Status != ResetApplied {
+		t.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
+	}
+	if got := len(session.agenda.activationRows.chunks); got != 0 {
+		t.Fatalf("activation row chunks after Reset = %d, want 0", got)
+	}
+	if got := session.agenda.activationRows.count; got != 0 {
+		t.Fatalf("activation row count after Reset = %d, want 0", got)
 	}
 }
 

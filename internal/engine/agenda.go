@@ -48,16 +48,6 @@ type activationRows struct {
 	count  int
 }
 
-func (r *activationRows) reserve(capacity int) {
-	if r == nil || capacity <= 0 {
-		return
-	}
-	chunkCount := (capacity + activationRowChunkSize - 1) / activationRowChunkSize
-	for len(r.chunks) < chunkCount {
-		r.chunks = append(r.chunks, make([]activation, 0, activationRowChunkSize))
-	}
-}
-
 func (r *activationRows) reset() {
 	if r == nil {
 		return
@@ -778,22 +768,6 @@ func newAgenda() *agenda {
 		byFactID:         make(map[FactID]activationKeyBucket),
 		byRevision:       make(map[RuleRevisionID]activationKeyBucket),
 		handleGeneration: 1,
-	}
-}
-
-func (a *agenda) reserveActivationRows(capacity int) {
-	if a == nil {
-		return
-	}
-	a.activationRows.reserve(capacity)
-	if capacity <= 0 {
-		return
-	}
-	if a.activations == nil {
-		a.activations = make(map[activationFingerprint]activationBucket, capacity)
-	}
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket, capacity*2)
 	}
 }
 

@@ -216,7 +216,6 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		return nil, err
 	}
 	agenda := newAgenda()
-	agenda.reserveActivationRows(revision.estimatedRunFactCapacity(len(compiledInitials)))
 	useInitialAgenda := len(listeners) == 0 && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
@@ -2500,7 +2499,6 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	} else {
 		s.emitAgendaEvents(ctx, s.agenda.clear())
 	}
-	s.agenda.reserveActivationRows(s.revision.estimatedRunFactCapacity(len(compiledInitials)))
 
 	result := ResetResult{
 		Status:     ResetApplied,
