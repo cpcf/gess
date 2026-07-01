@@ -1956,10 +1956,17 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 	if got := len(generatedIDs); got != 1 {
 		t.Fatalf("generated fact count = %d, want 1", got)
 	}
+	generatedFact := mustWorkingFactByID(t, session, generatedIDs[0])
+	if got := len(generatedFact.fieldSlots); got != 0 {
+		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
+	}
+	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {
+		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
+	}
 	if got := len(session.slotStorage); got != 0 {
 		t.Fatalf("wide generated slot storage length = %d, want 0", got)
 	}
-	if got, want := len(session.compactSlotStorage), len(generated.fields); got != want {
+	if got, want := session.compactSlotStore.len(), len(generated.fields); got != want {
 		t.Fatalf("compact generated slot storage length = %d, want %d", got, want)
 	}
 	if got, want := session.nextFactSequence, uint64(3); got != want {
@@ -2086,10 +2093,17 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	if got := len(generatedIDs); got != 1 {
 		t.Fatalf("generated fact count = %d, want 1", got)
 	}
+	generatedFact := mustWorkingFactByID(t, session, generatedIDs[0])
+	if got := len(generatedFact.fieldSlots); got != 0 {
+		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
+	}
+	if got, want := len(generatedFact.compactFieldSlots()), len(generated.fields); got != want {
+		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
+	}
 	if got := len(session.slotStorage); got != 0 {
 		t.Fatalf("wide generated slot storage length = %d, want 0", got)
 	}
-	if got, want := len(session.compactSlotStorage), len(generated.fields); got != want {
+	if got, want := session.compactSlotStore.len(), len(generated.fields); got != want {
 		t.Fatalf("compact generated slot storage length = %d, want %d", got, want)
 	}
 	if got, want := session.nextFactSequence, uint64(3); got != want {

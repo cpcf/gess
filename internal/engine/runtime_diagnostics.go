@@ -97,8 +97,14 @@ func factWorkspaceMemoryOwnerDiagnostics(workspace any) RuntimeMemoryOwnerDiagno
 		}
 	}
 
-	for _, name := range []string{"insertionOrder", "factsBySequence", "slotStorage", "compactSlotStorage"} {
+	for _, name := range []string{"insertionOrder", "factsBySequence", "slotStorage"} {
 		slice := value.FieldByName(name)
+		out.HighWater += uint64(reflectSliceCap(slice))
+		out.Bytes += reflectSliceBytes(slice)
+	}
+	compactStore := reflectDerefValue(value.FieldByName("compactSlotStore"))
+	if compactStore.IsValid() && compactStore.Kind() == reflect.Struct {
+		slice := compactStore.FieldByName("slots")
 		out.HighWater += uint64(reflectSliceCap(slice))
 		out.Bytes += reflectSliceBytes(slice)
 	}

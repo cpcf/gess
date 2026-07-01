@@ -114,8 +114,9 @@ func (f *workingFact) compiledFieldValue(field string, slot int) (Value, bool) {
 		resolved := f.fieldSlots[slot]
 		return resolved.value, resolved.ok
 	}
-	if slot >= 0 && slot < len(f.compactFieldSlots) {
-		return f.compactFieldSlots[slot].value()
+	compactSlots := f.compactFieldSlots()
+	if slot >= 0 && slot < len(compactSlots) {
+		return compactSlots[slot].value()
 	}
 	return f.fieldValue(field)
 }
@@ -150,7 +151,7 @@ func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
 		recency:           fact.recency,
 		generation:        fact.id.Generation(),
 		fieldSlots:        fact.fieldSlots,
-		compactFieldSlots: fact.compactFieldSlots,
+		compactFieldSlots: fact.compactFieldSlots(),
 	}
 }
 
@@ -276,10 +277,158 @@ type workingFact struct {
 	supportState         factSupportCode
 	fields               Fields
 	fieldSlots           []factSlot
-	compactFieldSlots    []compactFactSlot
+	compactSlots         factCompactSlotRef
 	fieldPresence        map[string]FieldPresence
 	dupIndex             *duplicateIndexKey
 	targetIndexesSkipped bool
+}
+
+type factCompactSlotRef struct {
+	store *factCompactSlotStore
+	start uint32
+	count uint32
+}
+
+type factCompactSlotStore struct {
+	slots []compactFactSlot
+}
+
+func newFactCompactSlotRef(store *factCompactSlotStore, start, count int) (factCompactSlotRef, bool) {
+	if count == 0 {
+		return factCompactSlotRef{}, true
+	}
+	if store == nil || start < 0 || count < 0 || start > math.MaxUint32 || count > math.MaxUint32 {
+		return factCompactSlotRef{}, false
+	}
+	if start > len(store.slots) || count > len(store.slots)-start {
+		return factCompactSlotRef{}, false
+	}
+	return factCompactSlotRef{store: store, start: uint32(start), count: uint32(count)}, true
+}
+
+func (r factCompactSlotRef) slots() []compactFactSlot {
+	if r.store == nil || r.count == 0 {
+		return nil
+	}
+	start := int(r.start)
+	count := int(r.count)
+	end := start + count
+	if start < 0 || count < 0 || end < start || end > len(r.store.slots) {
+		return nil
+	}
+	return r.store.slots[start:end:end]
+}
+
+func (s *factCompactSlotStore) reset(capacity int) {
+	if s == nil {
+		return
+	}
+	if capacity < 0 {
+		capacity = 0
+	}
+	if s.slots == nil || cap(s.slots) < capacity {
+		s.slots = make([]compactFactSlot, 0, capacity)
+		return
+	}
+	for i := range s.slots {
+		s.slots[i] = compactFactSlot{}
+	}
+	s.slots = s.slots[:0]
+}
+
+func (s *factCompactSlotStore) len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.slots)
+}
+
+func (s *factCompactSlotStore) cap() int {
+	if s == nil {
+		return 0
+	}
+	return cap(s.slots)
+}
+
+func (s *factCompactSlotStore) reserve(capacity int) {
+	if s == nil || capacity <= cap(s.slots) {
+		return
+	}
+	next := make([]compactFactSlot, len(s.slots), capacity)
+	copy(next, s.slots)
+	s.slots = next
+}
+
+func (s *factCompactSlotStore) reserveSlots(slotCount int) ([]compactFactSlot, int) {
+	if s == nil {
+		return nil, 0
+	}
+	if slotCount <= 0 {
+		return nil, len(s.slots)
+	}
+	mark := len(s.slots)
+	end := mark + slotCount
+	if cap(s.slots) < end {
+		s.reserve(max(max(cap(s.slots)*2, end), 16))
+	}
+	s.slots = s.slots[:end]
+	return s.slots[mark:end:end], mark
+}
+
+func (s *factCompactSlotStore) appendFromFactSlots(fieldSlots []factSlot) (factCompactSlotRef, bool) {
+	if s == nil {
+		return factCompactSlotRef{}, false
+	}
+	if len(fieldSlots) == 0 {
+		return factCompactSlotRef{}, true
+	}
+	start := len(s.slots)
+	slots, _ := s.reserveSlots(len(fieldSlots))
+	for i, slot := range fieldSlots {
+		compact, ok := compactFactSlotFromFactSlot(slot)
+		if !ok {
+			s.rollback(start)
+			return factCompactSlotRef{}, false
+		}
+		slots[i] = compact
+	}
+	return newFactCompactSlotRef(s, start, len(fieldSlots))
+}
+
+func (s *factCompactSlotStore) ref(mark int, slots []compactFactSlot) (factCompactSlotRef, bool) {
+	if s == nil {
+		return factCompactSlotRef{}, false
+	}
+	if len(slots) == 0 {
+		return factCompactSlotRef{}, true
+	}
+	return newFactCompactSlotRef(s, mark, len(slots))
+}
+
+func (s *factCompactSlotStore) rollback(mark int) {
+	if s == nil || mark < 0 || mark > len(s.slots) {
+		return
+	}
+	for i := mark; i < len(s.slots); i++ {
+		s.slots[i] = compactFactSlot{}
+	}
+	s.slots = s.slots[:mark]
+}
+
+func cloneFactCompactSlotStore(in *factCompactSlotStore) *factCompactSlotStore {
+	if in == nil {
+		return nil
+	}
+	out := &factCompactSlotStore{}
+	out.slots = cloneCompactFactSlots(in.slots)
+	return out
+}
+
+func (f *workingFact) compactFieldSlots() []compactFactSlot {
+	if f == nil {
+		return nil
+	}
+	return f.compactSlots.slots()
 }
 
 type factSupportCode uint8
@@ -756,7 +905,8 @@ func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateWorkingFactEq
 	if right == nil {
 		return false, true
 	}
-	if len(right.compactFieldSlots) == 0 {
+	compactSlots := right.compactFieldSlots()
+	if len(compactSlots) == 0 {
 		return p.structuralScalarDuplicateSlotsEqual(left, right.fieldSlots)
 	}
 	if len(p.structuralScalarKinds) == 0 {
@@ -768,8 +918,8 @@ func (p *compiledGeneratedFactInsertPlan) structuralScalarDuplicateWorkingFactEq
 			leftSlot = left[i]
 		}
 		var rightSlot compactFactSlot
-		if i < len(right.compactFieldSlots) {
-			rightSlot = right.compactFieldSlots[i]
+		if i < len(compactSlots) {
+			rightSlot = compactSlots[i]
 		}
 		if leftSlot.ok != rightSlot.ok {
 			return false, true
@@ -1194,7 +1344,7 @@ func (f *workingFact) fieldSlotCount() int {
 	if len(f.fieldSlots) > 0 {
 		return len(f.fieldSlots)
 	}
-	return len(f.compactFieldSlots)
+	return len(f.compactFieldSlots())
 }
 
 func (f *workingFact) materializeFieldSlots() []factSlot {
@@ -1204,7 +1354,7 @@ func (f *workingFact) materializeFieldSlots() []factSlot {
 	if len(f.fieldSlots) > 0 {
 		return f.fieldSlots
 	}
-	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots)
+	return materializeFactSlotsFromCompactSlots(f.compactFieldSlots())
 }
 
 func (f FactSnapshot) clone() FactSnapshot {
@@ -1735,15 +1885,16 @@ func workingFactStructuralDuplicateSlotsEqual(template Template, slots []factSlo
 	if fact == nil {
 		return false
 	}
-	if len(fact.compactFieldSlots) == 0 {
+	compactSlots := fact.compactFieldSlots()
+	if len(compactSlots) == 0 {
 		return structuralDuplicateSlotsEqual(template, slots, fact.fieldSlots)
 	}
-	if len(slots) != len(fact.compactFieldSlots) {
+	if len(slots) != len(compactSlots) {
 		return false
 	}
 	for i := range slots {
 		left := slots[i]
-		right := fact.compactFieldSlots[i]
+		right := compactSlots[i]
 		if left.ok != right.ok {
 			return false
 		}
@@ -1822,8 +1973,9 @@ func (f *workingFact) fieldValue(name string) (Value, bool) {
 			return resolved.value, true
 		}
 	}
-	if slot, ok := f.fieldSlot(name); ok && slot < len(f.compactFieldSlots) {
-		return f.compactFieldSlots[slot].value()
+	compactSlots := f.compactFieldSlots()
+	if slot, ok := f.fieldSlot(name); ok && slot < len(compactSlots) {
+		return compactSlots[slot].value()
 	}
 	return Value{}, false
 }
