@@ -1315,7 +1315,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, agendaDelta, err
 	}
@@ -1323,7 +1323,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
@@ -1333,7 +1333,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
@@ -1425,14 +1425,14 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 
 func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Context, state factWorkspace, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
 	if !plan.valid() {
-		state.rollbackGeneratedFactInsert(mark, nil)
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, "", false, reteAgendaDelta{}, &ValidationError{
 			Reason: "generated fact insert plan is missing",
 		}
 	}
 	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlan(s.revision, s.generation, plan, fieldSlots, slotMark)
 	if err != nil {
-		state.rollbackGeneratedFactInsert(mark, nil)
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, "", false, reteAgendaDelta{}, err
 	}
 	if !inserted {
@@ -1455,7 +1455,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, agendaDelta, err
 	}
@@ -1463,7 +1463,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
@@ -1473,7 +1473,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
@@ -1491,7 +1491,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Context, state *factWorkspace, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (bool, reteAgendaDelta, error) {
 	if state == nil || !plan.valid() {
 		if state != nil {
-			state.rollbackGeneratedFactInsert(mark, nil)
+			state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		}
 		return false, reteAgendaDelta{}, &ValidationError{
 			Reason: "generated fact insert plan is missing",
@@ -1499,7 +1499,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
 	if err != nil {
-		state.rollbackGeneratedFactInsert(mark, nil)
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
 	}
 	if !inserted {
@@ -1522,7 +1522,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, agendaDelta, err
 	}
@@ -1530,7 +1530,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
@@ -1540,7 +1540,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
@@ -1558,7 +1558,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context.Context, state *factWorkspace, plan *compiledGeneratedFactInsertPlan, compactSlots []compactFactSlot, mark factWorkspaceInsertMark, compactSlotMark int, origin mutationOrigin) (bool, reteAgendaDelta, error) {
 	if state == nil || !plan.valid() {
 		if state != nil {
-			state.rollbackGeneratedFactInsert(mark, nil)
+			state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		}
 		return false, reteAgendaDelta{}, &ValidationError{
 			Reason: "generated fact insert plan is missing",
@@ -1566,7 +1566,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
-		state.rollbackGeneratedFactInsert(mark, nil)
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
 	}
 	if !inserted {
@@ -1589,7 +1589,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, agendaDelta, err
 	}
@@ -1597,7 +1597,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
@@ -1607,7 +1607,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		if span != nil {
 			span.finish()
 		}
-		state.rollbackGeneratedFactInsert(mark, fact)
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
@@ -1958,7 +1958,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	}
 
 	state := s.activeFactWorkspace()
-	if duplicateIndex := fact.duplicateIndex(); !duplicateIndex.isZero() {
+	if duplicateIndex := fact.duplicateIndexForRevision(s.revision); !duplicateIndex.isZero() {
 		state.factsByDuplicate.deleteFact(duplicateIndex, id)
 	}
 	if !fact.targetIndexesSkipped {
@@ -2028,7 +2028,7 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	}
 
 	state := s.activeFactWorkspace()
-	if duplicateIndex := fact.duplicateIndex(); !duplicateIndex.isZero() {
+	if duplicateIndex := fact.duplicateIndexForRevision(s.revision); !duplicateIndex.isZero() {
 		state.factsByDuplicate.deleteFact(duplicateIndex, id)
 	}
 	if !fact.targetIndexesSkipped {
@@ -3100,7 +3100,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			if duplicate {
 				return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 			}
-		} else if existingID, ok := state.duplicateFactID(newDupIndex); ok && existingID != fact.id {
+		} else if existingID, ok := state.duplicateFactID(s.revision, newDupIndex); ok && existingID != fact.id {
 			return ModifyResult{Status: ModifyDuplicate, Fact: before}, reteAgendaDelta{}, ErrDuplicateFact
 		}
 	}
@@ -3109,7 +3109,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyNoOp, Fact: before}, reteAgendaDelta{}, nil
 	}
 
-	currentDupIndex := fact.duplicateIndex()
+	currentDupIndex := fact.duplicateIndexForRevision(s.revision)
 	modifyMark := state.markFactModify(fact, duplicatePolicy != DuplicateAllow && currentDupIndex != newDupIndex)
 	state.recency++
 
@@ -3140,8 +3140,6 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		fact.compactSlots = factCompactSlotRef{}
 		fact.setFieldPresence(proposedPresence)
 	}
-	fact.setDuplicateIndex(newDupIndex)
-
 	after := fact.snapshotForRevision(s.revision)
 	duplicateChanged := oldDuplicate != newDuplicate
 	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged, origin)
@@ -4882,12 +4880,12 @@ func (w *factWorkspace) markGeneratedFactInsert() factWorkspaceInsertMark {
 	}
 }
 
-func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark, fact *workingFact) {
+func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark, fact *workingFact, revision *Ruleset) {
 	if w == nil {
 		return
 	}
 	if fact != nil {
-		if duplicateIndex := fact.duplicateIndex(); !duplicateIndex.isZero() {
+		if duplicateIndex := fact.duplicateIndexForRevision(revision); !duplicateIndex.isZero() {
 			w.factsByDuplicate.deleteFact(duplicateIndex, fact.id)
 		}
 		if !fact.targetIndexesSkipped {
@@ -5052,7 +5050,7 @@ func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factS
 	return nil, false
 }
 
-func (w *factWorkspace) duplicateFactID(key duplicateIndexKey) (FactID, bool) {
+func (w *factWorkspace) duplicateFactID(revision *Ruleset, key duplicateIndexKey) (FactID, bool) {
 	if w == nil || key.isZero() {
 		return FactID{}, false
 	}
@@ -5065,7 +5063,7 @@ func (w *factWorkspace) duplicateFactID(key duplicateIndexKey) (FactID, bool) {
 				stale = append(stale, id)
 				return true
 			}
-			if existing.duplicateIndex() == key {
+			if existing.duplicateIndexForRevision(revision) == key {
 				found = id
 				return false
 			}
@@ -5221,7 +5219,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 				return existing, existing.publicDuplicateKey(revision), false, nil
 			}
 		} else {
-			existingID, ok := w.duplicateFactID(duplicateIndex)
+			existingID, ok := w.duplicateFactID(revision, duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
@@ -5241,10 +5239,9 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	}
 
 	fact := workingFact{
-		id:       id,
-		version:  1,
-		recency:  w.recency,
-		dupIndex: workingFactDuplicateIndex(duplicateIndex),
+		id:      id,
+		version: 1,
+		recency: w.recency,
 	}
 	if templateExists {
 		fact.setTemplateIdentity(templateKey, template.id)
@@ -5287,7 +5284,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 				return existing, "", false, nil
 			}
 		} else {
-			existingID, ok := w.duplicateFactID(duplicateIndex)
+			existingID, ok := w.duplicateFactID(revision, duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
@@ -5327,7 +5324,6 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 		version:      1,
 		recency:      w.recency,
 		compactSlots: compactSlots,
-		dupIndex:     workingFactDuplicateIndex(duplicateIndex),
 	}
 	fact.setTemplateIdentity(templateKey, template.id)
 	fact.setName(name)
@@ -5392,7 +5388,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 				return existing, "", false, nil
 			}
 		} else {
-			existingID, ok := w.duplicateFactID(duplicateIndex)
+			existingID, ok := w.duplicateFactID(revision, duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
@@ -5422,7 +5418,6 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 		version:              1,
 		recency:              w.recency,
 		compactSlots:         compactSlots,
-		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
 	fact.setTemplateIdentity(templateKey, plan.templateID)
@@ -5464,7 +5459,7 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 				return existing, "", false, nil
 			}
 		} else {
-			existingID, ok := w.duplicateFactID(duplicateIndex)
+			existingID, ok := w.duplicateFactID(revision, duplicateIndex)
 			if ok {
 				existing, ok := w.workingFactByID(existingID)
 				if ok {
@@ -5492,7 +5487,6 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 		version:              1,
 		recency:              w.recency,
 		compactSlots:         compactRef,
-		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
 	fact.setTemplateIdentity(templateKey, plan.templateID)
@@ -5718,10 +5712,9 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	w.recency++
 	id := newFactID(w.generation, w.sequence)
 	fact := workingFact{
-		id:       id,
-		version:  1,
-		recency:  w.recency,
-		dupIndex: workingFactDuplicateIndex(initial.duplicateIndex),
+		id:      id,
+		version: 1,
+		recency: w.recency,
 	}
 	fact.setTemplateIdentity(initial.templateKey, initial.templateID)
 	fact.setName(initial.name)

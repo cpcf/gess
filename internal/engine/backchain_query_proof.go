@@ -98,7 +98,7 @@ func (p *backchainQueryProofContext) insertDemand(ctx context.Context, demand ba
 	if existing := p.findDemandFact(plan, duplicateIndex, slots); existing != nil {
 		return reteAgendaDelta{supported: true}, nil
 	}
-	factValue := p.newDemandFact(plan, duplicateIndex, slots)
+	factValue := p.newDemandFact(plan, slots)
 	p.facts = append(p.facts, factValue)
 	fact := &p.facts[len(p.facts)-1]
 	if session.rete == nil || session.rete.graphBeta == nil {
@@ -122,7 +122,7 @@ func (p *backchainQueryProofContext) findDemandFact(plan *compiledGeneratedFactI
 	}
 	for i := range p.facts {
 		fact := &p.facts[i]
-		if fact.templateID != plan.templateID || fact.duplicateIndex() != duplicateIndex {
+		if fact.templateID != plan.templateID || plan.duplicateIndex(fact.fieldSlotSlice()) != duplicateIndex {
 			continue
 		}
 		if duplicateIndex.kind == duplicateIndexStructural && !structuralDuplicateSlotsEqual(plan.template, slots, fact.fieldSlotSlice()) {
@@ -133,7 +133,7 @@ func (p *backchainQueryProofContext) findDemandFact(plan *compiledGeneratedFactI
 	return nil
 }
 
-func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactInsertPlan, duplicateIndex duplicateIndexKey, slots []factSlot) workingFact {
+func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactInsertPlan, slots []factSlot) workingFact {
 	p.nextSequence++
 	sequence := ^uint64(p.nextSequence)
 	recency := p.nextRecency
@@ -143,7 +143,6 @@ func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactIn
 		version:              1,
 		recency:              recency,
 		supportState:         factSupportCodeFromState(FactSupportLogical),
-		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: true,
 	}
 	fact.setTemplateIdentity(plan.templateKey, plan.templateID)

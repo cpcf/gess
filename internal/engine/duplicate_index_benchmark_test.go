@@ -136,8 +136,9 @@ func benchmarkDuplicateIndexLookupInsert(b *testing.B, spec TemplateSpec, rawFie
 		if !inserted {
 			b.Fatal("first insert reported duplicate")
 		}
-		if first.duplicateIndex().kind != want {
-			b.Fatalf("first duplicate index kind = %v, want %v", first.duplicateIndex().kind, want)
+		firstIndex := first.duplicateIndexForRevision(revision)
+		if firstIndex.kind != want {
+			b.Fatalf("first duplicate index kind = %v, want %v", firstIndex.kind, want)
 		}
 
 		second, secondKey, inserted, err := factSpace.insertFact(revision, 1, template.Name(), template.Key(), fields)
@@ -153,7 +154,7 @@ func benchmarkDuplicateIndexLookupInsert(b *testing.B, spec TemplateSpec, rawFie
 		if firstKey != secondKey {
 			b.Fatalf("duplicate keys differ: %q != %q", firstKey, secondKey)
 		}
-		if got, ok := factSpace.duplicateFactID(first.duplicateIndex()); !ok || got != first.id {
+		if got, ok := factSpace.duplicateFactID(revision, firstIndex); !ok || got != first.id {
 			b.Fatalf("duplicate index lookup = (%q, %t), want (%q, true)", got, ok, first.id)
 		}
 		benchmarkDuplicateKey = secondKey

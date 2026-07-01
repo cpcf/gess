@@ -154,7 +154,7 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			if internal == nil {
 				t.Fatal("missing stored fact")
 			}
-			if got := internal.duplicateIndex().kind; got != tc.wantIndex {
+			if got := internal.duplicateIndexForRevision(session.revision).kind; got != tc.wantIndex {
 				t.Fatalf("duplicate index kind = %v, want %v", got, tc.wantIndex)
 			}
 
@@ -202,7 +202,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	if internal == nil {
 		t.Fatal("missing stored fact")
 	}
-	if got := internal.duplicateIndex().kind; got != duplicateIndexString {
+	if got := internal.duplicateIndexForRevision(session.revision).kind; got != duplicateIndexString {
 		t.Fatalf("NaN duplicate index kind = %v, want %v", got, duplicateIndexString)
 	}
 
@@ -269,46 +269,63 @@ func TestDuplicateStructuralIndexTableRetainsHashCollisionsAndDeletesFacts(t *te
 }
 
 func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testing.T) {
-	requestedKey := duplicateIndexKey{
-		kind:         duplicateIndexStringStringInt,
-		templateKey:  "response",
-		stringValue:  "lane-a",
-		stringValue2: "rule-a",
-		firstInt:     7,
-	}
-	otherKey := duplicateIndexKey{
-		kind:         duplicateIndexStringStringInt,
-		templateKey:  "response",
-		stringValue:  "lane-b",
-		stringValue2: "rule-b",
-		firstInt:     8,
+	revision := mustCompile(t, TemplateSpec{
+		Name:            "response",
+		DuplicatePolicy: DuplicateUniqueKey,
+		DuplicateKeyNames: []string{
+			"lane",
+			"rule",
+			"ordinal",
+		},
+		Fields: []FieldSpec{
+			{Name: "lane", Kind: ValueString, Required: true},
+			{Name: "rule", Kind: ValueString, Required: true},
+			{Name: "ordinal", Kind: ValueInt, Required: true},
+		},
+	})
+	template, ok := revision.Template("response")
+	if !ok {
+		t.Fatal("expected response template")
 	}
 	requestedID := newFactID(1, 1)
 	otherID := newFactID(1, 2)
+	requestedSlots := revision.buildFieldSlots(template, mustFields(t, map[string]any{
+		"lane":    "lane-a",
+		"rule":    "rule-a",
+		"ordinal": 7,
+	}), nil)
+	requestedKey := makeDuplicateIndexForValidatedFact(template.Name(), template, nil, requestedSlots)
 
 	workspace := newFactWorkspace(1, 2)
-	other := workingFact{id: otherID, dupIndex: workingFactDuplicateIndex(otherKey)}
-	other.setTemplateIdentity("response", 0)
+	otherSlots := revision.buildFieldSlots(template, mustFields(t, map[string]any{
+		"lane":    "lane-b",
+		"rule":    "rule-b",
+		"ordinal": 8,
+	}), nil)
+	other := workingFact{id: otherID}
+	other.setTemplateIdentity(template.Key(), template.id)
 	other.setName("response")
+	other.setFieldSlots(otherSlots)
 	workspace.storeFact(other)
 	workspace.factsByDuplicate.string2Int.setHash(hashDuplicateStringStringIntIndexKey(requestedKey), otherID)
 
-	if got, ok := workspace.duplicateFactID(requestedKey); ok {
+	if got, ok := workspace.duplicateFactID(revision, requestedKey); ok {
 		t.Fatalf("lookup with hash collision = (%q, %t), want missing", got, ok)
 	}
 
-	requested := workingFact{id: requestedID, dupIndex: workingFactDuplicateIndex(requestedKey)}
-	requested.setTemplateIdentity("response", 0)
+	requested := workingFact{id: requestedID}
+	requested.setTemplateIdentity(template.Key(), template.id)
 	requested.setName("response")
+	requested.setFieldSlots(requestedSlots)
 	workspace.storeFact(requested)
 	workspace.factsByDuplicate.set(requestedKey, requestedID)
 
-	if got, ok := workspace.duplicateFactID(requestedKey); !ok || got != requestedID {
+	if got, ok := workspace.duplicateFactID(revision, requestedKey); !ok || got != requestedID {
 		t.Fatalf("lookup after exact insert = (%q, %t), want (%q, true)", got, ok, requestedID)
 	}
 
 	workspace.factsByDuplicate.deleteFact(requestedKey, requestedID)
-	if got, ok := workspace.duplicateFactID(requestedKey); ok {
+	if got, ok := workspace.duplicateFactID(revision, requestedKey); ok {
 		t.Fatalf("lookup after deleting exact fact = (%q, %t), want missing", got, ok)
 	}
 }

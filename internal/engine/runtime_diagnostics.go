@@ -159,10 +159,6 @@ func addWorkingFactDynamicOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, f
 		out.HighWater += uint64(reflectSliceCap(fieldSlots))
 		out.Bytes += reflectSliceBytes(fieldSlots)
 	}
-	if duplicate := fact.FieldByName("dupIndex"); duplicate.IsValid() && duplicate.Kind() == reflect.Pointer && !duplicate.IsNil() {
-		out.HighWater++
-		out.Bytes += uint64(duplicate.Type().Elem().Size())
-	}
 }
 
 func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {

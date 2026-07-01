@@ -281,7 +281,6 @@ type workingFact struct {
 	supportState         factSupportCode
 	compactSlots         factCompactSlotRef
 	payload              *workingFactPayload
-	dupIndex             *duplicateIndexKey
 	targetIndexesSkipped bool
 }
 
@@ -618,27 +617,6 @@ const (
 	factSupportLogical
 	factSupportStatedAndLogical
 )
-
-func workingFactDuplicateIndex(key duplicateIndexKey) *duplicateIndexKey {
-	if key.isZero() {
-		return nil
-	}
-	return &key
-}
-
-func (f *workingFact) duplicateIndex() duplicateIndexKey {
-	if f == nil || f.dupIndex == nil {
-		return duplicateIndexKey{}
-	}
-	return *f.dupIndex
-}
-
-func (f *workingFact) setDuplicateIndex(key duplicateIndexKey) {
-	if f == nil {
-		return
-	}
-	f.dupIndex = workingFactDuplicateIndex(key)
-}
 
 func factSupportCodeFromState(state FactSupportState) factSupportCode {
 	switch state {
@@ -1551,8 +1529,24 @@ func (f *workingFact) fieldSpecsForRevision(revision *Ruleset) []FieldSpec {
 	return template.fields
 }
 
+func (f *workingFact) duplicateIndexForRevision(revision *Ruleset) duplicateIndexKey {
+	if f == nil {
+		return duplicateIndexKey{}
+	}
+	template := Template{key: f.templateKeyForRevision(revision)}
+	if revision != nil {
+		if resolved, ok := f.templateForRevision(revision); ok {
+			template = resolved
+		}
+	}
+	if template.duplicatePolicy == DuplicateAllow {
+		return duplicateIndexKey{}
+	}
+	return makeDuplicateIndexForValidatedFact(f.nameForRevision(revision), template, f.fieldsMap(), f.materializeFieldSlots())
+}
+
 func (f *workingFact) publicDuplicateKey(revision *Ruleset) DuplicateKey {
-	duplicateIndex := f.duplicateIndex()
+	duplicateIndex := f.duplicateIndexForRevision(revision)
 	if f == nil || duplicateIndex.isZero() {
 		return ""
 	}
