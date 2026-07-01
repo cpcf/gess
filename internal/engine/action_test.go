@@ -1951,7 +1951,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 	}
 }
 
-func TestActionContextAssertTemplateValuesDiscardsOutputOnlyScratchValues(t *testing.T) {
+func TestActionContextAssertTemplateValuesKeepsFactAssertionSemantics(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1998,7 +1998,20 @@ func TestActionContextAssertTemplateValuesDiscardsOutputOnlyScratchValues(t *tes
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
 
-	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
+	first := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 7)
+	second := mustSessionFactByTemplateAndField(t, session, generated.Key(), "id", 8)
+	if got, ok := first.Field("id"); !ok || !got.Equal(mustValue(t, 7)) {
+		t.Fatalf("first generated id = (%v, %v), want 7", got, ok)
+	}
+	if got, ok := second.Field("id"); !ok || !got.Equal(mustValue(t, 8)) {
+		t.Fatalf("second generated id = (%v, %v), want 8", got, ok)
+	}
+	if got, ok := first.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("first generated default kind = (%v, %v), want effect", got, ok)
+	}
+	if got, ok := second.Field("kind"); !ok || !got.Equal(mustValue(t, "effect")) {
+		t.Fatalf("second generated default kind = (%v, %v), want effect", got, ok)
+	}
 }
 
 func assertNoGeneratedWorkingMemoryFacts(t testing.TB, session *Session, templateKey TemplateKey) {

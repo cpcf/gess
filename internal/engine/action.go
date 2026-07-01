@@ -1362,6 +1362,31 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 		defer s.endMutation()
 	}
 
+	if action.insertPlan.outputOnlyNoRetainEligible() {
+		state := s.activeFactWorkspace()
+		mark := state.markGeneratedFactInsert()
+		compactSlots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(action.template.fields))
+		compactSlots, err := action.template.buildValidatedCompactFieldSlotsFromValuesInto(compactSlots, values)
+		if err != nil {
+			state.rollbackGeneratedCompactFactSlots(compactSlotMark)
+			return err
+		}
+		inserted, agendaDelta, err := s.insertRuleActionGeneratedCompactFactSlotsImmediate(ctx, &state, &action.insertPlan, compactSlots, mark, compactSlotMark, origin)
+		if err != nil {
+			return err
+		}
+		if inserted && action.insertPlan.affectsRete {
+			if !s.canMutateDuringRun(origin) {
+				_, err = s.reconcileAgendaAfterMutation(ctx, agendaDelta)
+				return err
+			}
+			if err := s.recordRunAgendaDelta(agendaDelta); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	_, template, _, inserted, agendaDelta, err := s.insertTemplateValuesImmediate(ctx, action.template.Key(), values, origin)
 	if err != nil {
 		return err

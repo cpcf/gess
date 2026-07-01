@@ -1578,10 +1578,6 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 			Reason: "generated fact insert plan is missing",
 		}
 	}
-	if !origin.isZero() && plan.outputOnlyNoRetainEligible() {
-		s.discardGeneratedOutputCompactSlots(&state, compactSlotMark)
-		return nil, true, reteAgendaDelta{}, nil
-	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
