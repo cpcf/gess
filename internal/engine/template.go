@@ -270,6 +270,119 @@ func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot
 	return t.buildValidatedFieldSlotsFromValuesInto(nil, values)
 }
 
+func (t Template) buildValidatedCompactFieldSlotsFromValuesInto(dst []compactFactSlot, values []Value) ([]compactFactSlot, error) {
+	if !t.closed {
+		return nil, &ValidationError{
+			TemplateName: t.name,
+			Reason:       "template values require a fixed template",
+		}
+	}
+	if len(values) > len(t.fields) {
+		return nil, &ValidationError{
+			TemplateName: t.name,
+			Reason:       "too many field values",
+		}
+	}
+	if len(t.fields) == 0 {
+		return nil, nil
+	}
+
+	if cap(dst) < len(t.fields) {
+		dst = make([]compactFactSlot, len(t.fields))
+	} else {
+		dst = dst[:len(t.fields)]
+	}
+	for i := range dst {
+		dst[i] = compactFactSlot{presence: fieldPresenceOmitted}
+	}
+
+	for i, value := range values {
+		field := t.fields[i]
+		kind := field.Kind
+		var allowed []Value
+		if len(t.fieldValidation) == len(t.fields) {
+			validation := t.fieldValidation[i]
+			kind = validation.kind
+			allowed = validation.allowedValues
+		} else {
+			allowed = t.fieldAllowed[field.Name]
+		}
+		if kind != ValueAny && !isValueCompatibleWithKind(kind, value) {
+			return dst, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    field.Name,
+				Reason:       "invalid type",
+			}
+		}
+		if len(allowed) > 0 && !valueAllowed(allowed, value) {
+			return dst, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    field.Name,
+				Reason:       "value not in allowed set",
+			}
+		}
+		slot, ok := compactFactSlotFromValue(value, fieldPresenceExplicit)
+		if !ok {
+			return dst, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    field.Name,
+				Reason:       "compact generated value requires a scalar value",
+			}
+		}
+		dst[i] = slot
+	}
+
+	for i, field := range t.fields {
+		if dst[i].ok {
+			continue
+		}
+		if len(t.fieldValidation) == len(t.fields) {
+			validation := t.fieldValidation[i]
+			if validation.hasDefault {
+				slot, ok := compactFactSlotFromValue(validation.defaultValue, fieldPresenceDefault)
+				if !ok {
+					return dst, &ValidationError{
+						TemplateName: t.name,
+						FieldName:    field.Name,
+						Reason:       "compact generated default requires a scalar value",
+					}
+				}
+				dst[i] = slot
+				continue
+			}
+			if validation.required {
+				return dst, &ValidationError{
+					TemplateName: t.name,
+					FieldName:    field.Name,
+					Reason:       "required field is missing",
+				}
+			}
+			continue
+		}
+		if defaultValue, hasDefault := t.fieldDefaults[field.Name]; hasDefault {
+			slot, ok := compactFactSlotFromValue(defaultValue, fieldPresenceDefault)
+			if !ok {
+				return dst, &ValidationError{
+					TemplateName: t.name,
+					FieldName:    field.Name,
+					Reason:       "compact generated default requires a scalar value",
+				}
+			}
+			dst[i] = slot
+			continue
+		}
+		if field.Required {
+			return dst, &ValidationError{
+				TemplateName: t.name,
+				FieldName:    field.Name,
+				Reason:       "required field is missing",
+			}
+		}
+	}
+
+	return dst, nil
+}
+
 func (t Template) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values []Value) ([]factSlot, error) {
 	if !t.closed {
 		return nil, &ValidationError{

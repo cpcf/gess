@@ -616,6 +616,23 @@ func templateSupportsCompactGeneratedSlots(template Template) bool {
 	return true
 }
 
+func templateSupportsCompactGeneratedValueSlots(template Template) bool {
+	if !templateSupportsCompactGeneratedSlots(template) {
+		return false
+	}
+	if len(template.fieldValidation) != len(template.fields) {
+		return true
+	}
+	for _, validation := range template.fieldValidation {
+		switch validation.kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID]generatedAssertReserve {
 	if r == nil {
 		return nil

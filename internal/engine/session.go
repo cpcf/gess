@@ -1107,20 +1107,7 @@ func (p preparedTemplateValueInserter) insertPreparedCompactSlots(b *preparedTem
 }
 
 func (p preparedTemplateValueInserter) supportsCompactSlots() bool {
-	if !templateSupportsCompactGeneratedSlots(p.template) {
-		return false
-	}
-	if len(p.template.fieldValidation) != len(p.template.fields) {
-		return true
-	}
-	for _, validation := range p.template.fieldValidation {
-		switch validation.kind {
-		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
-		default:
-			return false
-		}
-	}
-	return true
+	return templateSupportsCompactGeneratedValueSlots(p.template)
 }
 
 func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateValueBatch, slots []factSlot, slotMark int) error {
@@ -1496,6 +1483,19 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 	}
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
+	if templateSupportsCompactGeneratedValueSlots(template) {
+		compactSlots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(template.fields))
+		compactSlots, err := template.buildValidatedCompactFieldSlotsFromValuesInto(compactSlots, values)
+		if err != nil {
+			state.rollbackGeneratedCompactFactSlots(compactSlotMark)
+			return nil, Template{}, "", false, reteAgendaDelta{}, err
+		}
+		fact, inserted, agendaDelta, err := s.insertPreparedTemplateCompactSlotsImmediate(ctx, state, template, compactSlots, mark, compactSlotMark, origin)
+		if err != nil {
+			return nil, Template{}, "", false, agendaDelta, err
+		}
+		return fact, template, "", inserted, agendaDelta, nil
+	}
 	fieldSlots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(template.fields))
 	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 	if err != nil {
@@ -1517,6 +1517,80 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 		plan = &compiled
 	}
 	return s.insertPreparedTemplateSlotsWithPlanImmediate(ctx, state, plan, fieldSlots, mark, slotMark, origin)
+}
+
+func (s *Session) insertPreparedTemplateCompactSlotsImmediate(ctx context.Context, state factWorkspace, template Template, compactSlots []compactFactSlot, mark factWorkspaceInsertMark, compactSlotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
+	plan, ok := s.revision.generatedFactInsertPlan(template.Key())
+	if !ok {
+		compiled := newCompiledGeneratedFactInsertPlan(template)
+		plan = &compiled
+	}
+	return s.insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx, state, plan, compactSlots, mark, compactSlotMark, origin)
+}
+
+func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx context.Context, state factWorkspace, plan *compiledGeneratedFactInsertPlan, compactSlots []compactFactSlot, mark factWorkspaceInsertMark, compactSlotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
+	if !plan.valid() {
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
+		return nil, false, reteAgendaDelta{}, &ValidationError{
+			Reason: "generated fact insert plan is missing",
+		}
+	}
+	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
+	if err != nil {
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
+		return nil, false, reteAgendaDelta{}, err
+	}
+	if !inserted {
+		return fact, false, reteAgendaDelta{}, nil
+	}
+
+	if !plan.affectsRete {
+		s.commitFactWorkspace(state)
+		s.emitGeneratedAssertEvent(ctx, fact, origin)
+		return fact, true, reteAgendaDelta{}, nil
+	}
+
+	var span *propagationCounterSpan
+	if s.propagationCounters != nil {
+		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+		span = &counterSpan
+	}
+	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
+	if err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
+		s.restoreReteAfterPropagationFailure()
+		return nil, false, agendaDelta, err
+	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
+		s.restoreReteAfterPropagationFailure()
+		return nil, false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+	}
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
+		if span != nil {
+			span.finish()
+		}
+		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
+		s.restoreReteAfterPropagationFailure()
+		return nil, false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+	} else {
+		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+	}
+	if span != nil {
+		span.finish()
+	}
+	s.commitFactWorkspace(state)
+	s.emitGeneratedAssertEvent(ctx, fact, origin)
+
+	return fact, true, agendaDelta, nil
 }
 
 func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Context, state factWorkspace, plan *compiledGeneratedFactInsertPlan, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
