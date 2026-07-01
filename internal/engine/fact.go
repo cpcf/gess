@@ -292,30 +292,30 @@ type workingFactPayload struct {
 	fieldPresence map[string]FieldPresence
 }
 
-type generatedFactFlags uint8
+type compactFactFlags uint8
 
-const generatedFactTargetIndexesSkipped generatedFactFlags = 1 << iota
+const compactFactTargetIndexesSkipped compactFactFlags = 1 << iota
 
-type generatedFactStore struct {
+type compactFactStore struct {
 	ids           []FactID
 	templateIDs   []templateID
 	versions      []FactVersion
 	recencies     []Recency
 	supportStates []factSupportCode
 	compactSlots  []factCompactSlotRef
-	flags         []generatedFactFlags
+	flags         []compactFactFlags
 	names         map[int]string
 	templateKeys  map[int]TemplateKey
 }
 
-func (s *generatedFactStore) len() int {
+func (s *compactFactStore) len() int {
 	if s == nil {
 		return 0
 	}
 	return len(s.ids)
 }
 
-func (s *generatedFactStore) reset() {
+func (s *compactFactStore) reset() {
 	if s == nil {
 		return
 	}
@@ -336,27 +336,27 @@ func (s *generatedFactStore) reset() {
 	clear(s.templateKeys)
 }
 
-func (s *generatedFactStore) reserve(capacity int) {
+func (s *compactFactStore) reserve(capacity int) {
 	if s == nil {
 		return
 	}
-	s.ids = growGeneratedFactColumn(s.ids, capacity)
-	s.templateIDs = growGeneratedFactColumn(s.templateIDs, capacity)
-	s.versions = growGeneratedFactColumn(s.versions, capacity)
-	s.recencies = growGeneratedFactColumn(s.recencies, capacity)
-	s.supportStates = growGeneratedFactColumn(s.supportStates, capacity)
-	s.compactSlots = growGeneratedFactColumn(s.compactSlots, capacity)
-	s.flags = growGeneratedFactColumn(s.flags, capacity)
+	s.ids = growCompactFactColumn(s.ids, capacity)
+	s.templateIDs = growCompactFactColumn(s.templateIDs, capacity)
+	s.versions = growCompactFactColumn(s.versions, capacity)
+	s.recencies = growCompactFactColumn(s.recencies, capacity)
+	s.supportStates = growCompactFactColumn(s.supportStates, capacity)
+	s.compactSlots = growCompactFactColumn(s.compactSlots, capacity)
+	s.flags = growCompactFactColumn(s.flags, capacity)
 }
 
-func growGeneratedFactColumn[T any](in []T, capacity int) []T {
+func growCompactFactColumn[T any](in []T, capacity int) []T {
 	if capacity <= cap(in) {
 		return in
 	}
 	return slices.Grow(in, capacity-cap(in))
 }
 
-func (s *generatedFactStore) append(fact workingFact) int {
+func (s *compactFactStore) append(fact workingFact) int {
 	if s == nil {
 		return -1
 	}
@@ -367,9 +367,9 @@ func (s *generatedFactStore) append(fact workingFact) int {
 	s.recencies = append(s.recencies, fact.recency)
 	s.supportStates = append(s.supportStates, fact.supportState)
 	s.compactSlots = append(s.compactSlots, fact.compactSlots)
-	var flags generatedFactFlags
+	var flags compactFactFlags
 	if fact.targetIndexesSkipped {
-		flags |= generatedFactTargetIndexesSkipped
+		flags |= compactFactTargetIndexesSkipped
 	}
 	s.flags = append(s.flags, flags)
 	if name := fact.storedName(); name != "" {
@@ -387,7 +387,7 @@ func (s *generatedFactStore) append(fact workingFact) int {
 	return row
 }
 
-func (s *generatedFactStore) fact(row int) (*workingFact, bool) {
+func (s *compactFactStore) fact(row int) (*workingFact, bool) {
 	if s == nil || row < 0 || row >= len(s.ids) {
 		return nil, false
 	}
@@ -398,7 +398,7 @@ func (s *generatedFactStore) fact(row int) (*workingFact, bool) {
 		recency:              s.recencies[row],
 		supportState:         s.supportStates[row],
 		compactSlots:         s.compactSlots[row],
-		targetIndexesSkipped: s.flags[row]&generatedFactTargetIndexesSkipped != 0,
+		targetIndexesSkipped: s.flags[row]&compactFactTargetIndexesSkipped != 0,
 	}
 	if name, ok := s.names[row]; ok {
 		fact.setName(name)
@@ -409,7 +409,7 @@ func (s *generatedFactStore) fact(row int) (*workingFact, bool) {
 	return fact, true
 }
 
-func (s *generatedFactStore) replace(row int, fact *workingFact) bool {
+func (s *compactFactStore) replace(row int, fact *workingFact) bool {
 	if s == nil || fact == nil || row < 0 || row >= len(s.ids) || s.ids[row] != fact.id {
 		return false
 	}
@@ -418,9 +418,9 @@ func (s *generatedFactStore) replace(row int, fact *workingFact) bool {
 	s.recencies[row] = fact.recency
 	s.supportStates[row] = fact.supportState
 	s.compactSlots[row] = fact.compactSlots
-	var flags generatedFactFlags
+	var flags compactFactFlags
 	if fact.targetIndexesSkipped {
-		flags |= generatedFactTargetIndexesSkipped
+		flags |= compactFactTargetIndexesSkipped
 	}
 	s.flags[row] = flags
 	if name := fact.storedName(); name != "" {
@@ -442,7 +442,7 @@ func (s *generatedFactStore) replace(row int, fact *workingFact) bool {
 	return true
 }
 
-func (s *generatedFactStore) remove(row int) (FactID, bool) {
+func (s *compactFactStore) remove(row int) (FactID, bool) {
 	if s == nil || row < 0 || row >= len(s.ids) {
 		return FactID{}, false
 	}
@@ -500,7 +500,7 @@ func (s *generatedFactStore) remove(row int) (FactID, bool) {
 	return moved, !moved.IsZero()
 }
 
-func (s *generatedFactStore) truncate(length int) {
+func (s *compactFactStore) truncate(length int) {
 	if s == nil || length < 0 || length >= len(s.ids) {
 		return
 	}
@@ -528,8 +528,8 @@ func (s *generatedFactStore) truncate(length int) {
 	s.flags = s.flags[:length]
 }
 
-func cloneGeneratedFactStore(in generatedFactStore) generatedFactStore {
-	return generatedFactStore{
+func cloneCompactFactStore(in compactFactStore) compactFactStore {
+	return compactFactStore{
 		ids:           cloneFactIDs(in.ids),
 		templateIDs:   slices.Clone(in.templateIDs),
 		versions:      slices.Clone(in.versions),
@@ -821,6 +821,34 @@ func (s *factCompactSlotStore) appendFromFactSlots(fieldSlots []factSlot) (factC
 		slots[i] = compact
 	}
 	return newFactCompactSlotRef(s, start, len(fieldSlots))
+}
+
+func (s *factCompactSlotStore) appendCompactSlots(compactSlots []compactFactSlot) (factCompactSlotRef, bool) {
+	if s == nil {
+		return factCompactSlotRef{}, false
+	}
+	if len(compactSlots) == 0 {
+		return factCompactSlotRef{}, true
+	}
+	start := len(s.slots)
+	slots, _ := s.reserveSlots(len(compactSlots))
+	copy(slots, compactSlots)
+	return newFactCompactSlotRef(s, start, len(compactSlots))
+}
+
+func compactFactSlotsFromFactSlots(fieldSlots []factSlot) ([]compactFactSlot, bool) {
+	if len(fieldSlots) == 0 {
+		return nil, true
+	}
+	slots := make([]compactFactSlot, len(fieldSlots))
+	for i, slot := range fieldSlots {
+		compact, ok := compactFactSlotFromFactSlot(slot)
+		if !ok {
+			return nil, false
+		}
+		slots[i] = compact
+	}
+	return slots, true
 }
 
 func (s *factCompactSlotStore) ref(mark int, slots []compactFactSlot) (factCompactSlotRef, bool) {

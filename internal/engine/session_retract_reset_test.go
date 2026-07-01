@@ -843,7 +843,7 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	}
 }
 
-func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.T) {
+func TestSessionResetUntargetedDeclaredTemplateUsesCompactInitial(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "settings",
@@ -882,18 +882,24 @@ func TestSessionResetUntargetedDeclaredTemplateKeepsMapBackedInitial(t *testing.
 		t.Fatalf("compiled initial facts = %d, want %d", got, want)
 	}
 	compiled := session.compiledInitials[0]
-	if len(compiled.fieldSlots) != 0 {
-		t.Fatalf("untargeted initial used slot storage: %#v", compiled.fieldSlots)
+	if len(compiled.compactSlots) != len(template.fields) {
+		t.Fatalf("untargeted scalar initial compact slots = %d, want %d", len(compiled.compactSlots), len(template.fields))
 	}
-	if compiled.fields == nil || compiled.fieldPresence == nil {
-		t.Fatalf("untargeted initial lost map-backed storage: fields=%#v presence=%#v", compiled.fields, compiled.fieldPresence)
+	if len(compiled.fieldSlots) != 0 || compiled.fields != nil || compiled.fieldPresence != nil {
+		t.Fatalf("untargeted scalar initial retained broad storage: fields=%#v slots=%#v presence=%#v", compiled.fields, compiled.fieldSlots, compiled.fieldPresence)
 	}
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
 	fact := mustOnlyFact(t, session)
+	if got := len(session.facts); got != 0 {
+		t.Fatalf("untargeted scalar initial retained broad fact rows = %d, want 0", got)
+	}
 	if len(fact.fieldSlotSlice()) != 0 {
-		t.Fatalf("untargeted reset fact used slot storage: %#v", fact.fieldSlotSlice())
+		t.Fatalf("untargeted scalar reset fact retained wide slots: %#v", fact.fieldSlotSlice())
+	}
+	if got, want := len(fact.compactFieldSlots(session.compactSlotStore)), len(template.fields); got != want {
+		t.Fatalf("untargeted scalar reset compact slots = %d, want %d", got, want)
 	}
 	if got, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("default status = (%v, %v), want active", got, ok)
@@ -1063,8 +1069,11 @@ func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	if got, want := session.factCount(), 1; got != want {
 		t.Fatalf("working facts = %d, want %d", got, want)
 	}
-	for i := range session.facts {
-		return &session.facts[i]
+	for _, id := range session.insertionOrder {
+		fact, ok := session.workingFactByID(id)
+		if ok {
+			return fact
+		}
 	}
 	t.Fatal("working fact missing")
 	return nil
