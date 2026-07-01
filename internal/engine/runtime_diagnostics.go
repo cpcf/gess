@@ -326,9 +326,6 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	out.HighWater += uint64(cap(bucket.collects))
 	out.HighWater += uint64(cap(bucket.values))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
-	for _, member := range bucket.members {
-		out.Bytes += sliceBytes[Value](cap(member.values))
-	}
 	out.Bytes += sliceBytes[tokenRef](cap(bucket.countOnlyRest))
 	out.Bytes += sliceBytes[int64](cap(bucket.intSums))
 	out.Bytes += sliceBytes[float64](cap(bucket.floatSums))

@@ -71,10 +71,17 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 	bucket := m.memory.bucketForParent(m.owner.aggregateParentToken(m.node, token))
 	memberKey := tokenRefKey(token)
 	if existing, ok := bucket.members[memberKey]; ok {
-		bucket.removeMember(m.node, existing)
+		if !bucket.removeMember(m.node, existing) {
+			delta.supported = false
+			return
+		}
 	}
 	member, ok := m.owner.aggregateMember(m.node, token, match)
 	if !ok {
+		delta.supported = false
+		return
+	}
+	if err := bucket.addMember(m.node, member); err != nil {
 		delta.supported = false
 		return
 	}
@@ -82,10 +89,6 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
 	}
 	bucket.members[memberKey] = member
-	if err := bucket.addMember(m.node, member); err != nil {
-		delta.supported = false
-		return
-	}
 	m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 }
 
@@ -116,7 +119,10 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 		return
 	}
 	delete(bucket.members, memberKey)
-	bucket.removeMember(m.node, member)
+	if !bucket.removeMember(m.node, member) {
+		delta.supported = false
+		return
+	}
 	m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 }
 
@@ -233,7 +239,10 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 					continue
 				}
 				delete(bucket.members, key)
-				bucket.removeMember(m.node, member)
+				if !bucket.removeMember(m.node, member) {
+					delta.supported = false
+					return
+				}
 				changed = true
 			}
 		}
@@ -357,16 +366,20 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 					return
 				}
 				delete(bucket.members, oldKey)
-				bucket.removeMemberWithCollectKey(m.node, member, oldKey)
-				if bucket.members == nil {
-					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
+				if !bucket.removeMemberWithCollectKey(m.node, member, oldKey) {
+					delta.supported = false
+					keepGoing = false
+					return
 				}
-				bucket.members[tokenRefKey(next)] = nextMember
 				if err := bucket.addMember(m.node, nextMember); err != nil {
 					delta.supported = false
 					keepGoing = false
 					return
 				}
+				if bucket.members == nil {
+					bucket.members = make(map[graphTokenIdentityKey]reteGraphAggregateMember)
+				}
+				bucket.members[tokenRefKey(next)] = nextMember
 				changed = true
 			}
 		}

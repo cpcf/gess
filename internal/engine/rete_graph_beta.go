@@ -129,7 +129,6 @@ type reteGraphAggregateCollectEntry struct {
 type reteGraphAggregateMember struct {
 	token  tokenRef
 	factID FactID
-	values []Value
 }
 
 type deferredAggregateOutputKey struct {
@@ -3689,35 +3688,46 @@ func (m *reteGraphBetaMemory) aggregateMember(node *reteGraphAggregateNode, toke
 	if node == nil {
 		return reteGraphAggregateMember{}, false
 	}
-	bindings, ok := tokenConditionMatches(token)
-	if !ok {
-		return reteGraphAggregateMember{}, false
-	}
-	return m.aggregateMemberWithBindings(node, token, match, bindings)
+	return reteGraphAggregateMember{token: token, factID: match.fact.ID()}, true
 }
 
-func (m *reteGraphBetaMemory) aggregateMemberWithBindings(node *reteGraphAggregateNode, token tokenRef, match conditionMatch, bindings []conditionMatch) (reteGraphAggregateMember, bool) {
+func aggregateMemberValues(node *reteGraphAggregateNode, token tokenRef) ([]Value, bool) {
 	if node == nil {
-		return reteGraphAggregateMember{}, false
+		return nil, false
 	}
-	member := reteGraphAggregateMember{token: token, factID: match.fact.ID()}
 	if !aggregateSpecsNeedInputValues(node.specs) {
-		return member, true
+		return nil, true
 	}
-	if len(node.specs) > 0 {
-		member.values = make([]Value, len(node.specs))
+	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
+	if !ok {
+		return nil, false
 	}
+	bindings, ok := tokenConditionMatches(token)
+	if !ok {
+		return nil, false
+	}
+	return aggregateMemberValuesWithBindings(node, match, bindings)
+}
+
+func aggregateMemberValuesWithBindings(node *reteGraphAggregateNode, match conditionMatch, bindings []conditionMatch) ([]Value, bool) {
+	if node == nil {
+		return nil, false
+	}
+	if !aggregateSpecsNeedInputValues(node.specs) {
+		return nil, true
+	}
+	values := make([]Value, len(node.specs))
 	for i, spec := range node.specs {
 		if spec.kind == AggregateCount {
 			continue
 		}
 		value, ok, err := spec.expression.evaluate(match.fact, bindings)
 		if err != nil || !ok {
-			return reteGraphAggregateMember{}, false
+			return nil, false
 		}
-		member.values[i] = value
+		values[i] = value
 	}
-	return member, true
+	return values, true
 }
 
 func aggregateSpecsNeedInputValues(specs []compiledAggregateSpec) bool {
@@ -4184,25 +4194,29 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 	if !aggregateSpecsNeedInputValues(node.specs) {
 		return nil
 	}
+	values, ok := aggregateMemberValues(node, member.token)
+	if !ok {
+		return fmt.Errorf("%w: aggregate member values unavailable", ErrAggregateEvaluation)
+	}
 	m.ensureSpecState(len(node.specs))
 	for i, spec := range node.specs {
 		switch spec.kind {
 		case AggregateCount:
 			continue
 		case AggregateSum:
-			if err := m.addSum(i, member.values[i]); err != nil {
+			if err := m.addSum(i, values[i]); err != nil {
 				return err
 			}
 		case AggregateMin:
-			if err := m.addExtremum(i, member.values[i], true); err != nil {
+			if err := m.addExtremum(i, values[i], true); err != nil {
 				return err
 			}
 		case AggregateMax:
-			if err := m.addExtremum(i, member.values[i], false); err != nil {
+			if err := m.addExtremum(i, values[i], false); err != nil {
 				return err
 			}
 		case AggregateCollect:
-			m.addCollect(i, member)
+			m.addCollect(i, member, values[i])
 		default:
 			return fmt.Errorf("%w: unsupported aggregate kind %q", ErrAggregateEvaluation, spec.kind)
 		}
@@ -4310,25 +4324,33 @@ func (m *reteGraphAggregateBucket) truncateCountOnlyMembers(length int) {
 	m.count = int64(length)
 }
 
-func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) {
-	m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token))
+func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) bool {
+	return m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token))
 }
 
-func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey) {
+func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey) bool {
 	if m == nil || node == nil {
-		return
+		return false
+	}
+	var values []Value
+	if aggregateSpecsNeedInputValues(node.specs) {
+		var ok bool
+		values, ok = aggregateMemberValues(node, member.token)
+		if !ok {
+			return false
+		}
 	}
 	if m.count > 0 {
 		m.count--
 	}
 	if !aggregateSpecsNeedInputValues(node.specs) {
-		return
+		return true
 	}
 	m.ensureSpecState(len(node.specs))
 	for i, spec := range node.specs {
 		switch spec.kind {
 		case AggregateSum:
-			value := member.values[i]
+			value := values[i]
 			switch value.Kind() {
 			case ValueInt:
 				if m.floaty[i] {
@@ -4340,13 +4362,14 @@ func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAgg
 				m.recomputeSum(node, i)
 			}
 		case AggregateMin:
-			m.removeExtremum(i, member.values[i], true)
+			m.removeExtremum(i, values[i], true)
 		case AggregateMax:
-			m.removeExtremum(i, member.values[i], false)
+			m.removeExtremum(i, values[i], false)
 		case AggregateCollect:
 			m.removeCollectByKey(i, collectKey)
 		}
 	}
+	return true
 }
 
 func (m *reteGraphAggregateExtremum) clear() {
@@ -4483,12 +4506,12 @@ func (m *reteGraphAggregateBucket) removeExtremum(index int, value Value, min bo
 	}
 }
 
-func (m *reteGraphAggregateBucket) addCollect(index int, member reteGraphAggregateMember) {
+func (m *reteGraphAggregateBucket) addCollect(index int, member reteGraphAggregateMember, value Value) {
 	m.ensureSpecState(index + 1)
 	entry := reteGraphAggregateCollectEntry{
 		key:    tokenRefKey(member.token),
 		factID: member.factID,
-		value:  cloneValue(member.values[index]),
+		value:  cloneValue(value),
 	}
 	entries := m.collects[index]
 	insertAt := sort.Search(len(entries), func(i int) bool {
@@ -4550,7 +4573,11 @@ func (m *reteGraphAggregateBucket) recomputeSum(node *reteGraphAggregateNode, in
 	m.floatSums[index] = 0
 	m.floaty[index] = false
 	for _, member := range m.members {
-		_ = m.addSum(index, member.values[index])
+		values, ok := aggregateMemberValues(node, member.token)
+		if !ok || index >= len(values) {
+			continue
+		}
+		_ = m.addSum(index, values[index])
 	}
 }
 
