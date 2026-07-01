@@ -193,7 +193,7 @@ func functionKeyExtractorInitialFacts(tc functionKeyExtractorBenchmarkCase) []Se
 
 func (tc functionKeyExtractorBenchmarkCase) initialFacts() int { return tc.systems * 2 }
 func (tc functionKeyExtractorBenchmarkCase) finalFacts() int {
-	return tc.initialFacts() + tc.firedCount()
+	return tc.initialFacts()
 }
 func (tc functionKeyExtractorBenchmarkCase) firedCount() int { return tc.systems }
 

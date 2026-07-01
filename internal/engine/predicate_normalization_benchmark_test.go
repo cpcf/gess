@@ -390,7 +390,7 @@ func predicateNormalizationInitialFacts(tc predicateNormalizationBenchmarkCase) 
 
 func (tc predicateNormalizationBenchmarkCase) initialFacts() int { return tc.systems * 2 }
 func (tc predicateNormalizationBenchmarkCase) finalFacts() int {
-	return tc.initialFacts() + tc.firedCount()
+	return tc.initialFacts()
 }
 func (tc predicateNormalizationBenchmarkCase) firedCount() int {
 	mod0 := (tc.systems + 3) / 4

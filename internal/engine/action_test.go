@@ -1495,7 +1495,7 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	}
 }
 
-func TestNativeAssertTemplateValuesAction(t *testing.T) {
+func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyDuplicateKey(t *testing.T) {
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "source",
@@ -1541,17 +1541,7 @@ func TestNativeAssertTemplateValuesAction(t *testing.T) {
 	if result.Status != RunCompleted || result.Fired != 1 {
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
 	}
-	snapshot := mustSnapshot(t, context.Background(), session)
-	generatedFacts := snapshot.FactsByTemplateKey(generated.Key())
-	if len(generatedFacts) != 1 {
-		t.Fatalf("generated facts = %d, want 1", len(generatedFacts))
-	}
-	if got, ok := generatedFacts[0].Field("kind"); !ok || !got.Equal(mustValue(t, "native")) {
-		t.Fatalf("generated kind = (%v, %t), want native", got, ok)
-	}
-	if got, ok := generatedFacts[0].Field("id"); !ok || !got.Equal(mustValue(t, "s-1")) {
-		t.Fatalf("generated id = (%v, %t), want s-1", got, ok)
-	}
+	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 }
 
 func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing.T) {
@@ -1586,6 +1576,13 @@ func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing
 		}},
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:          "generated-facts",
+		ConditionTree: Match{Binding: "generated", Target: TemplateKeyFact(generated.Key())},
+		Returns:       []QueryReturnSpec{{Alias: "generated", Binding: "generated"}},
+	}); err != nil {
+		t.Fatalf("AddQuery(generated-facts): %v", err)
+	}
 
 	collector := &testEventCollector{}
 	revision := mustCompileWorkspace(t, workspace)
@@ -1874,7 +1871,7 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 	assertNoGeneratedWorkingMemoryFacts(t, session, generated.Key())
 }
 
-func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *testing.T) {
+func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyDuplicatePreparedSlots(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	source := mustAddTemplate(t, workspace, TemplateSpec{
@@ -1910,7 +1907,7 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 		Actions: []RuleActionSpec{{Name: "generate"}},
 	})
 
-	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-duplicate-slot-rollback-session")
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-duplicate-output-discard-session")
 	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
 		t.Fatalf("AssertTemplate(source 1): %v", err)
 	}
@@ -1927,26 +1924,13 @@ func TestNativeAssertTemplateValuesActionDuplicateRollsBackPreparedSlots(t *test
 
 	session.ensureFactTargetIndexes()
 	generatedIDs := session.factsByTemplate[generated.Key()]
-	if got := len(generatedIDs); got != 1 {
-		t.Fatalf("generated fact count = %d, want 1", got)
+	if got := len(generatedIDs); got != 0 {
+		t.Fatalf("generated fact count = %d, want 0", got)
 	}
-	generatedFact := mustWorkingFactByID(t, session, generatedIDs[0])
-	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
-		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
-	}
-	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), len(generated.fields); got != want {
-		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
-	}
-	if got := len(session.slotStorage); got != 0 {
-		t.Fatalf("wide generated slot storage length = %d, want 0", got)
-	}
-	if got, want := session.compactSlotStore.len(), len(generated.fields); got != want {
-		t.Fatalf("compact generated slot storage length = %d, want %d", got, want)
-	}
-	if got, want := session.nextFactSequence, uint64(3); got != want {
+	if got, want := session.nextFactSequence, uint64(2); got != want {
 		t.Fatalf("next fact sequence = %d, want %d", got, want)
 	}
-	if got, want := session.nextRecency, Recency(3); got != want {
+	if got, want := session.nextRecency, Recency(2); got != want {
 		t.Fatalf("next recency = %d, want %d", got, want)
 	}
 }
