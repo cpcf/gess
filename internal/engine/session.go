@@ -192,7 +192,6 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	state := newFactWorkspace(1, revision.estimatedRunFactCapacity(len(compiledInitials)))
 	state.reserveTemplateIndexes(revision)
 	state.reserveDuplicateIndexes(revision)
-	state.reserveSlotStorage(revision.estimatedRunSlotCapacity(cap(state.facts)))
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
@@ -4741,11 +4740,7 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 		}
 		w.facts = w.facts[:0]
 	}
-	if w.slotStorage == nil {
-		w.slotStorage = make([]factSlot, 0, initialCapacity)
-	} else {
-		w.slotStorage = w.slotStorage[:0]
-	}
+	w.slotStorage = nil
 	if w.compactSlotStore == nil {
 		w.compactSlotStore = &factCompactSlotStore{}
 	}
