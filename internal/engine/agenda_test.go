@@ -564,6 +564,97 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 }
 
+func TestAgendaTerminalRowHandleDeactivatesOnRetractAndModify(t *testing.T) {
+	type terminalActivationState struct {
+		session  *Session
+		factID   FactID
+		terminal *reteGraphTerminalMemory
+		key      activationKey
+		handle   activationHandle
+	}
+	newState := func(t *testing.T, id SessionID) terminalActivationState {
+		t.Helper()
+		ctx := context.Background()
+		revision, templateKey := mustAgendaStatusRevision(t)
+		session := mustSession(t, revision, id)
+		inserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+			"status": "open",
+		}))
+		if err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+		if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+			t.Fatalf("pending activations = %d, want %d", got, want)
+		}
+		rule, ok := revision.Rule("match-open-task")
+		if !ok {
+			t.Fatal("compiled rule missing")
+		}
+		terminal := session.rete.graphBeta.terminalForRule(rule.RevisionID())
+		if terminal == nil {
+			t.Fatal("terminal memory missing")
+		}
+		if got, want := terminal.rows.len(), 1; got != want {
+			t.Fatalf("terminal rows = %d, want %d", got, want)
+		}
+		row := terminal.rows.rows[0]
+		if row.activation.isZero() {
+			t.Fatal("terminal row activation handle is zero")
+		}
+		stored, ok := session.agenda.activationByHandlePtr(row.activation)
+		if !ok || stored.status != activationStatusPending {
+			t.Fatalf("activation by terminal row handle = %#v, ok=%v; want pending", stored, ok)
+		}
+		if stored.terminalID == 0 || stored.terminalRow != row.handle {
+			t.Fatalf("stored terminal ownership = (%d, %#v), want nonzero terminal and row %#v", stored.terminalID, stored.terminalRow, row.handle)
+		}
+		return terminalActivationState{
+			session:  session,
+			factID:   inserted.Fact.ID(),
+			terminal: terminal,
+			key:      stored.key,
+			handle:   row.activation,
+		}
+	}
+	assertDeactivated := func(t *testing.T, state terminalActivationState) {
+		t.Helper()
+		if got := state.session.agenda.pendingActivations(); len(got) != 0 {
+			t.Fatalf("pending activations after mutation = %#v, want none", got)
+		}
+		if got, want := state.terminal.rows.len(), 0; got != want {
+			t.Fatalf("terminal rows after mutation = %d, want %d", got, want)
+		}
+		if _, ok := state.session.agenda.activationByHandlePtr(state.handle); !ok {
+			t.Fatal("activation handle should still resolve to the deactivated compact entry")
+		}
+		stored, ok := state.session.agenda.activationByKeyPtr(state.key)
+		if !ok {
+			t.Fatal("stored activation missing after mutation")
+		}
+		if stored.status != activationStatusDeactivated {
+			t.Fatalf("stored activation status = %v, want deactivated", stored.status)
+		}
+	}
+
+	t.Run("retract", func(t *testing.T) {
+		state := newState(t, "agenda-terminal-row-retract-session")
+		if _, err := state.session.Retract(context.Background(), state.factID); err != nil {
+			t.Fatalf("Retract: %v", err)
+		}
+		assertDeactivated(t, state)
+	})
+
+	t.Run("modify", func(t *testing.T) {
+		state := newState(t, "agenda-terminal-row-modify-session")
+		if _, err := state.session.Modify(context.Background(), state.factID, FactPatch{
+			Set: mustFields(t, map[string]any{"status": "closed"}),
+		}); err != nil {
+			t.Fatalf("Modify: %v", err)
+		}
+		assertDeactivated(t, state)
+	})
+}
+
 func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -2366,6 +2457,38 @@ func mustAgendaRevision(t testing.TB, salience int) (*Ruleset, TemplateKey) {
 		Conditions: []RuleConditionSpec{
 			{Binding: "person", Target: TemplateKeyFact(template.Key())},
 		},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+
+	revision, err := workspace.Compile(context.Background())
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return revision, template.Key()
+}
+
+func mustAgendaStatusRevision(t testing.TB) (*Ruleset, TemplateKey) {
+	t.Helper()
+	workspace := NewWorkspace()
+	template := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "task",
+		Fields: []FieldSpec{{Name: "status", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "mark",
+		Fn:   func(ActionContext) error { return nil },
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "match-open-task",
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(template.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "status",
+				Operator: FieldConstraintEqual,
+				Value:    "open",
+			}},
+		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 
