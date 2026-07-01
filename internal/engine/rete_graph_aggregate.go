@@ -71,7 +71,7 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 	bucket := m.memory.bucketForParent(m.owner.aggregateParentToken(m.node, token))
 	memberKey := tokenRefKey(token)
 	if existing, ok := bucket.members[memberKey]; ok {
-		if !bucket.removeMember(m.node, existing) {
+		if !m.memory.removeMember(m.node, bucket, existing) {
 			delta.supported = false
 			return
 		}
@@ -81,7 +81,7 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		delta.supported = false
 		return
 	}
-	if err := bucket.addMember(m.node, member); err != nil {
+	if err := m.memory.addMember(m.node, bucket, member); err != nil {
 		delta.supported = false
 		return
 	}
@@ -119,7 +119,7 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 		return
 	}
 	delete(bucket.members, memberKey)
-	if !bucket.removeMember(m.node, member) {
+	if !m.memory.removeMember(m.node, bucket, member) {
 		delta.supported = false
 		return
 	}
@@ -239,7 +239,7 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 					continue
 				}
 				delete(bucket.members, key)
-				if !bucket.removeMember(m.node, member) {
+				if !m.memory.removeMember(m.node, bucket, member) {
 					delta.supported = false
 					return
 				}
@@ -366,12 +366,12 @@ func (m reteGraphAggregateMemory) refreshMembersForModifyEvent(event reteGraphPr
 					return
 				}
 				delete(bucket.members, oldKey)
-				if !bucket.removeMemberWithCollectKey(m.node, member, oldKey) {
+				if !m.memory.removeMemberWithCollectKey(m.node, bucket, member, oldKey) {
 					delta.supported = false
 					keepGoing = false
 					return
 				}
-				if err := bucket.addMember(m.node, nextMember); err != nil {
+				if err := m.memory.addMember(m.node, bucket, nextMember); err != nil {
 					delta.supported = false
 					keepGoing = false
 					return

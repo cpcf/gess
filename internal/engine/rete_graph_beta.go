@@ -80,6 +80,7 @@ type reteGraphAlphaMemory struct {
 
 type reteGraphAggregateNodeMemory struct {
 	buckets reteGraphAggregateBucketTable
+	numeric reteGraphAggregateNumericState
 }
 
 type reteGraphAggregateBucketID int
@@ -99,14 +100,18 @@ type reteGraphAggregateBucket struct {
 	countOnlySecond tokenRef
 	countOnlyRest   []tokenRef
 	count           int64
-	intSums         []int64
-	floatSums       []float64
-	floaty          []bool
 	extrema         []reteGraphAggregateExtremum
 	collects        [][]reteGraphAggregateCollectEntry
 	token           tokenRef
 	values          []Value
 	hasValue        bool
+}
+
+type reteGraphAggregateNumericState struct {
+	specCount int
+	intSums   []int64
+	floatSums []float64
+	floaty    []bool
 }
 
 type reteGraphAggregateExtremum struct {
@@ -2548,6 +2553,7 @@ func (m *reteGraphAggregateNodeMemory) clear() {
 		return
 	}
 	m.buckets.clear()
+	m.numeric.clear()
 }
 
 func (m *reteGraphAggregateBucket) clear() {
@@ -2563,12 +2569,6 @@ func (m *reteGraphAggregateBucket) clear() {
 	m.countOnlyRest = m.countOnlyRest[:0]
 	m.parent = tokenRef{}
 	m.count = 0
-	clear(m.intSums)
-	m.intSums = m.intSums[:0]
-	clear(m.floatSums)
-	m.floatSums = m.floatSums[:0]
-	clear(m.floaty)
-	m.floaty = m.floaty[:0]
 	for i := range m.extrema {
 		m.extrema[i].clear()
 	}
@@ -3882,8 +3882,13 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		delta.supported = false
 		return
 	}
+	memory := m.aggregateMemory(id)
+	if memory == nil {
+		delta.supported = false
+		return
+	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-	values, ok := bucket.results(node)
+	values, ok := memory.bucketResults(node, bucket)
 	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateValuesEqual(bucket.values, values) {
 		return
 	}
@@ -3957,6 +3962,7 @@ func (m *reteGraphAggregateNodeMemory) recycleBucket(bucket *reteGraphAggregateB
 	if m == nil || bucket == nil {
 		return
 	}
+	m.numeric.clearBucket(bucket.id)
 	m.buckets.recycle(bucket)
 }
 
@@ -4014,6 +4020,160 @@ func (m *reteGraphAggregateNodeMemory) bucketCount() int {
 		return 0
 	}
 	return m.buckets.len()
+}
+
+func (m *reteGraphAggregateNodeMemory) addMember(node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, member reteGraphAggregateMember) error {
+	if m == nil || bucket == nil {
+		return nil
+	}
+	return bucket.addMember(node, member, &m.numeric)
+}
+
+func (m *reteGraphAggregateNodeMemory) removeMember(node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, member reteGraphAggregateMember) bool {
+	if m == nil || bucket == nil {
+		return false
+	}
+	return bucket.removeMember(node, member, &m.numeric)
+}
+
+func (m *reteGraphAggregateNodeMemory) removeMemberWithCollectKey(node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, member reteGraphAggregateMember, collectKey graphTokenIdentityKey) bool {
+	if m == nil || bucket == nil {
+		return false
+	}
+	return bucket.removeMemberWithCollectKey(node, member, collectKey, &m.numeric)
+}
+
+func (m *reteGraphAggregateNodeMemory) bucketResults(node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket) ([]Value, bool) {
+	if m == nil || bucket == nil {
+		return nil, false
+	}
+	return bucket.results(node, &m.numeric)
+}
+
+func (s *reteGraphAggregateNumericState) clear() {
+	if s == nil {
+		return
+	}
+	clear(s.intSums)
+	s.intSums = s.intSums[:0]
+	clear(s.floatSums)
+	s.floatSums = s.floatSums[:0]
+	clear(s.floaty)
+	s.floaty = s.floaty[:0]
+	s.specCount = 0
+}
+
+func (s *reteGraphAggregateNumericState) clearBucket(id reteGraphAggregateBucketID) {
+	if s == nil || s.specCount <= 0 || id < 0 {
+		return
+	}
+	start := int(id) * s.specCount
+	end := start + s.specCount
+	if start < 0 || end > len(s.intSums) || end > len(s.floatSums) || end > len(s.floaty) {
+		return
+	}
+	clear(s.intSums[start:end])
+	clear(s.floatSums[start:end])
+	clear(s.floaty[start:end])
+}
+
+func (s *reteGraphAggregateNumericState) offset(id reteGraphAggregateBucketID, specs int, index int) (int, bool) {
+	if s == nil || id < 0 || specs <= 0 || index < 0 || index >= specs {
+		return 0, false
+	}
+	if s.specCount == 0 {
+		s.specCount = specs
+	}
+	if s.specCount != specs {
+		return 0, false
+	}
+	offset := int(id)*s.specCount + index
+	need := offset + 1
+	if need > len(s.intSums) {
+		s.intSums = append(s.intSums, make([]int64, need-len(s.intSums))...)
+	}
+	if need > len(s.floatSums) {
+		s.floatSums = append(s.floatSums, make([]float64, need-len(s.floatSums))...)
+	}
+	if need > len(s.floaty) {
+		s.floaty = append(s.floaty, make([]bool, need-len(s.floaty))...)
+	}
+	return offset, true
+}
+
+func (s *reteGraphAggregateNumericState) addSum(id reteGraphAggregateBucketID, specs int, index int, value Value) error {
+	offset, ok := s.offset(id, specs, index)
+	if !ok {
+		return fmt.Errorf("%w: aggregate numeric state unavailable", ErrAggregateEvaluation)
+	}
+	switch value.Kind() {
+	case ValueInt:
+		if s.floaty[offset] {
+			s.floatSums[offset] += float64(value.intValue)
+			return nil
+		}
+		next, overflow := safeAddInt64(s.intSums[offset], value.intValue)
+		if overflow {
+			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
+		}
+		s.intSums[offset] = next
+	case ValueFloat:
+		if !s.floaty[offset] {
+			s.floatSums[offset] = float64(s.intSums[offset])
+			s.intSums[offset] = 0
+			s.floaty[offset] = true
+		}
+		s.floatSums[offset] += value.floatValue
+	default:
+		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
+	}
+	return nil
+}
+
+func (s *reteGraphAggregateNumericState) removeSum(bucket *reteGraphAggregateBucket, node *reteGraphAggregateNode, index int, value Value) {
+	if s == nil || bucket == nil || node == nil {
+		return
+	}
+	offset, ok := s.offset(bucket.id, len(node.specs), index)
+	if !ok {
+		return
+	}
+	switch value.Kind() {
+	case ValueInt:
+		if s.floaty[offset] {
+			s.floatSums[offset] -= float64(value.intValue)
+			return
+		}
+		s.intSums[offset] -= value.intValue
+	case ValueFloat:
+		bucket.recomputeSum(node, index, s)
+	}
+}
+
+func (s *reteGraphAggregateNumericState) resetSum(id reteGraphAggregateBucketID, specs int, index int) bool {
+	offset, ok := s.offset(id, specs, index)
+	if !ok {
+		return false
+	}
+	s.intSums[offset] = 0
+	s.floatSums[offset] = 0
+	s.floaty[offset] = false
+	return true
+}
+
+func (s *reteGraphAggregateNumericState) sumValue(id reteGraphAggregateBucketID, specs int, index int) (Value, bool) {
+	offset, ok := s.offset(id, specs, index)
+	if !ok {
+		return Value{}, false
+	}
+	if s.floaty[offset] {
+		value, err := canonicalFloat(s.floatSums[offset])
+		if err != nil {
+			return Value{}, false
+		}
+		return value, true
+	}
+	return newIntValue(s.intSums[offset]), true
 }
 
 func (t *reteGraphAggregateBucketTable) len() int {
@@ -4186,7 +4346,7 @@ func (t *reteGraphAggregateBucketTable) forEachKey(fn func(graphTokenIdentityKey
 	}
 }
 
-func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) error {
+func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, member reteGraphAggregateMember, numeric *reteGraphAggregateNumericState) error {
 	if m == nil || node == nil {
 		return nil
 	}
@@ -4204,7 +4364,7 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 		case AggregateCount:
 			continue
 		case AggregateSum:
-			if err := m.addSum(i, values[i]); err != nil {
+			if err := numeric.addSum(m.id, len(node.specs), i, values[i]); err != nil {
 				return err
 			}
 		case AggregateMin:
@@ -4324,11 +4484,11 @@ func (m *reteGraphAggregateBucket) truncateCountOnlyMembers(length int) {
 	m.count = int64(length)
 }
 
-func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember) bool {
-	return m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token))
+func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember, numeric *reteGraphAggregateNumericState) bool {
+	return m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token), numeric)
 }
 
-func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey) bool {
+func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey, numeric *reteGraphAggregateNumericState) bool {
 	if m == nil || node == nil {
 		return false
 	}
@@ -4350,17 +4510,7 @@ func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAgg
 	for i, spec := range node.specs {
 		switch spec.kind {
 		case AggregateSum:
-			value := values[i]
-			switch value.Kind() {
-			case ValueInt:
-				if m.floaty[i] {
-					m.floatSums[i] -= float64(value.intValue)
-					continue
-				}
-				m.intSums[i] -= value.intValue
-			case ValueFloat:
-				m.recomputeSum(node, i)
-			}
+			numeric.removeSum(m, node, i, values[i])
 		case AggregateMin:
 			m.removeExtremum(i, values[i], true)
 		case AggregateMax:
@@ -4387,47 +4537,12 @@ func (m *reteGraphAggregateBucket) ensureSpecState(specs int) {
 	if m == nil || specs <= 0 {
 		return
 	}
-	for len(m.intSums) < specs {
-		m.intSums = append(m.intSums, 0)
-	}
-	for len(m.floatSums) < specs {
-		m.floatSums = append(m.floatSums, 0)
-	}
-	for len(m.floaty) < specs {
-		m.floaty = append(m.floaty, false)
-	}
 	for len(m.extrema) < specs {
 		m.extrema = append(m.extrema, reteGraphAggregateExtremum{})
 	}
 	for len(m.collects) < specs {
 		m.collects = append(m.collects, nil)
 	}
-}
-
-func (m *reteGraphAggregateBucket) addSum(index int, value Value) error {
-	m.ensureSpecState(index + 1)
-	switch value.Kind() {
-	case ValueInt:
-		if m.floaty[index] {
-			m.floatSums[index] += float64(value.intValue)
-			return nil
-		}
-		next, overflow := safeAddInt64(m.intSums[index], value.intValue)
-		if overflow {
-			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
-		}
-		m.intSums[index] = next
-	case ValueFloat:
-		if !m.floaty[index] {
-			m.floatSums[index] = float64(m.intSums[index])
-			m.intSums[index] = 0
-			m.floaty[index] = true
-		}
-		m.floatSums[index] += value.floatValue
-	default:
-		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
-	}
-	return nil
 }
 
 func (m *reteGraphAggregateBucket) addExtremum(index int, value Value, min bool) error {
@@ -4564,24 +4679,23 @@ func collectEntryLess(left, right reteGraphAggregateCollectEntry) bool {
 	return left.key.identityState < right.key.identityState
 }
 
-func (m *reteGraphAggregateBucket) recomputeSum(node *reteGraphAggregateNode, index int) {
+func (m *reteGraphAggregateBucket) recomputeSum(node *reteGraphAggregateNode, index int, numeric *reteGraphAggregateNumericState) {
 	if m == nil || node == nil {
 		return
 	}
-	m.ensureSpecState(index + 1)
-	m.intSums[index] = 0
-	m.floatSums[index] = 0
-	m.floaty[index] = false
+	if !numeric.resetSum(m.id, len(node.specs), index) {
+		return
+	}
 	for _, member := range m.members {
 		values, ok := aggregateMemberValues(node, member.token)
 		if !ok || index >= len(values) {
 			continue
 		}
-		_ = m.addSum(index, values[index])
+		_ = numeric.addSum(m.id, len(node.specs), index, values[index])
 	}
 }
 
-func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode) ([]Value, bool) {
+func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode, numeric *reteGraphAggregateNumericState) ([]Value, bool) {
 	if m == nil || node == nil {
 		return nil, false
 	}
@@ -4592,15 +4706,11 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode) ([]Valu
 		case AggregateCount:
 			values[i] = newIntValue(m.count)
 		case AggregateSum:
-			if m.floaty[i] {
-				value, err := canonicalFloat(m.floatSums[i])
-				if err != nil {
-					return nil, false
-				}
-				values[i] = value
-				continue
+			value, ok := numeric.sumValue(m.id, len(node.specs), i)
+			if !ok {
+				return nil, false
 			}
-			values[i] = newIntValue(m.intSums[i])
+			values[i] = value
 		case AggregateMin, AggregateMax:
 			if i >= len(m.extrema) || !m.extrema[i].have {
 				return nil, false
