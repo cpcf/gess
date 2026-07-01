@@ -988,6 +988,18 @@ func (p preparedTemplateValueInserter) insert2(b *preparedTemplateValueBatch, v0
 	if err := b.ctx.Err(); err != nil {
 		return err
 	}
+	if p.supportsCompactSlots() {
+		slots, slotMark := b.state.reserveGeneratedCompactFactSlots(b.session.revision, len(p.template.fields))
+		if err := p.setPreparedCompactSlot(slots, 0, v0); err != nil {
+			b.state.rollbackGeneratedCompactFactSlots(slotMark)
+			return err
+		}
+		if err := p.setPreparedCompactSlot(slots, 1, v1); err != nil {
+			b.state.rollbackGeneratedCompactFactSlots(slotMark)
+			return err
+		}
+		return p.insertPreparedCompactSlots(b, slots, slotMark)
+	}
 	slots, slotMark := b.state.reserveGeneratedFactSlots(b.session.revision, len(p.template.fields))
 	if err := p.setPreparedSlot(slots, 0, v0); err != nil {
 		b.state.rollbackGeneratedFactSlots(slotMark)
@@ -1016,6 +1028,22 @@ func (p preparedTemplateValueInserter) insert3(b *preparedTemplateValueBatch, v0
 	if err := b.ctx.Err(); err != nil {
 		return err
 	}
+	if p.supportsCompactSlots() {
+		slots, slotMark := b.state.reserveGeneratedCompactFactSlots(b.session.revision, len(p.template.fields))
+		if err := p.setPreparedCompactSlot(slots, 0, v0); err != nil {
+			b.state.rollbackGeneratedCompactFactSlots(slotMark)
+			return err
+		}
+		if err := p.setPreparedCompactSlot(slots, 1, v1); err != nil {
+			b.state.rollbackGeneratedCompactFactSlots(slotMark)
+			return err
+		}
+		if err := p.setPreparedCompactSlot(slots, 2, v2); err != nil {
+			b.state.rollbackGeneratedCompactFactSlots(slotMark)
+			return err
+		}
+		return p.insertPreparedCompactSlots(b, slots, slotMark)
+	}
 	slots, slotMark := b.state.reserveGeneratedFactSlots(b.session.revision, len(p.template.fields))
 	if err := p.setPreparedSlot(slots, 0, v0); err != nil {
 		b.state.rollbackGeneratedFactSlots(slotMark)
@@ -1030,6 +1058,69 @@ func (p preparedTemplateValueInserter) insert3(b *preparedTemplateValueBatch, v0
 		return err
 	}
 	return p.insertPreparedSlots(b, slots, slotMark)
+}
+
+func (p preparedTemplateValueInserter) insertPreparedCompactSlots(b *preparedTemplateValueBatch, slots []compactFactSlot, slotMark int) error {
+	session := b.session
+	if err := validatePublicTemplateMutation(p.template); err != nil {
+		b.state.rollbackGeneratedCompactFactSlots(slotMark)
+		return err
+	}
+	plan, ok := session.revision.generatedFactInsertPlan(p.template.Key())
+	if !ok {
+		compiled := newCompiledGeneratedFactInsertPlan(p.template)
+		plan = &compiled
+	}
+	fact, _, inserted, err := b.state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(session.revision, session.generation, plan, slots, slotMark, factTargetIndexDirty)
+	if err != nil {
+		b.state.rollbackGeneratedCompactFactSlots(slotMark)
+		return err
+	}
+	if !inserted {
+		return nil
+	}
+
+	if !plan.affectsRete {
+		return nil
+	}
+
+	var span *propagationCounterSpan
+	if session.propagationCounters != nil {
+		counterSpan := session.propagationCounters.beginAssert(plan.templateKey, mutationOrigin{})
+		span = &counterSpan
+	}
+	agendaDelta, err := session.updateReteAlphaAfterAssertGenerated(b.ctx, fact, b.state.compactSlotStore, mutationOrigin{}, span)
+	if err != nil {
+		if span != nil {
+			span.finish()
+		}
+		session.restoreReteAfterPropagationFailure()
+		return err
+	}
+	if span != nil {
+		span.finish()
+	}
+	if plan.affectsRuleMatches {
+		b.agendaDelta, b.needsReconcile = accumulateReteAgendaDelta(b.agendaDelta, b.needsReconcile, agendaDelta)
+	}
+	return nil
+}
+
+func (p preparedTemplateValueInserter) supportsCompactSlots() bool {
+	if !templateSupportsCompactGeneratedSlots(p.template) {
+		return false
+	}
+	if len(p.template.fieldValidation) != len(p.template.fields) {
+		return true
+	}
+	for _, validation := range p.template.fieldValidation {
+		switch validation.kind {
+		case ValueNull, ValueBool, ValueInt, ValueFloat, ValueString:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateValueBatch, slots []factSlot, slotMark int) error {

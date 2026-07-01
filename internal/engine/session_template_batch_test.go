@@ -46,6 +46,20 @@ func TestPreparedTemplateValueBatchAppliesAgendaDeltasWithoutReconcile(t *testin
 		t.Fatalf("insertPreparedTemplateValuesBatchWithContext: %v", err)
 	}
 	assertTemplateValueBatchUsedAgendaDelta(t, session)
+	ids := session.factIDsByTemplate(templateKey)
+	if got := len(ids); got != 1 {
+		t.Fatalf("template facts = %d, want 1", got)
+	}
+	generatedFact := mustWorkingFactByID(t, session, ids[0])
+	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
+		t.Fatalf("prepared generated fact retained wide slots = %d, want 0", got)
+	}
+	if got := len(session.slotStorage); got != 0 {
+		t.Fatalf("prepared generated wide slot storage = %d, want 0", got)
+	}
+	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), 2; got != want {
+		t.Fatalf("prepared generated compact slots = %d, want %d", got, want)
+	}
 
 	result, err := session.Run(ctx)
 	if err != nil {
