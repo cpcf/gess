@@ -564,6 +564,156 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 }
 
+func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "ask"})
+	task := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "task",
+		Fields: []FieldSpec{
+			{Name: "bucket", Kind: ValueString, Required: true},
+		},
+	})
+	for _, actionName := range []string{"salience-first", "recent-new", "recent-old", "decl-first", "decl-second", "ask"} {
+		mustAddAction(t, workspace, ActionSpec{Name: actionName, Fn: func(ActionContext) error { return nil }})
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "salience-first",
+		Salience: 30,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "top",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "salience-first"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "recent-new",
+		Salience: 20,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "recent-new",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "recent-new"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "recent-old",
+		Salience: 20,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "recent-old",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "recent-old"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "decl-first",
+		Salience: 10,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "tie",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "decl-first"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "decl-second",
+		Salience: 10,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "tie",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "decl-second"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "ask",
+		Module:   "ask",
+		Salience: 15,
+		Conditions: []RuleConditionSpec{{
+			Binding: "task",
+			Target:  TemplateKeyFact(task.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "bucket",
+				Operator: FieldConstraintEqual,
+				Value:    "ask",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "ask"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "compact-graph-order-focus-session")
+	for _, bucket := range []string{"tie", "recent-old", "ask", "recent-new", "top"} {
+		if _, err := session.AssertTemplate(ctx, task.Key(), mustFields(t, map[string]any{"bucket": bucket})); err != nil {
+			t.Fatalf("AssertTemplate(%s): %v", bucket, err)
+		}
+	}
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok {
+		t.Fatal("currentTerminalTokenDeltas unavailable")
+	}
+
+	agenda := newAgenda()
+	if _, err := agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens)); err != nil {
+		t.Fatalf("reconcileTerminalTokens: %v", err)
+	}
+	for _, pending := range agenda.pending {
+		stored, ok := agenda.activationByKeyPtr(pending)
+		if !ok {
+			t.Fatalf("stored activation for key %#v missing", pending)
+		}
+		if !stored.ruleID.IsZero() || !stored.id.IsZero() || stored.payload != nil {
+			t.Fatalf("stored graph activation kept public fields: %#v", stored)
+		}
+	}
+
+	if _, selected, ok := agenda.nextInternalPtrForModule("ask"); !ok {
+		t.Fatal("nextInternalPtrForModule(ask) returned no activation")
+	} else if got := compactGraphActivationRuleName(t, revision, selected); got != "ask" {
+		t.Fatalf("focused activation = %q, want ask", got)
+	} else if selected.salience != 15 {
+		t.Fatalf("focused activation salience = %d, want 15", selected.salience)
+	}
+
+	var got []string
+	for {
+		_, selected, ok := agenda.nextInternalPtr()
+		if !ok {
+			break
+		}
+		got = append(got, compactGraphActivationRuleName(t, revision, selected))
+	}
+	want := []string{"salience-first", "recent-new", "recent-old", "decl-first", "decl-second"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("remaining activation order = %#v, want %#v", got, want)
+	}
+}
+
 func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-fact-index-session")
@@ -2234,6 +2384,15 @@ func mustAgendaMatchResults(t *testing.T, revision *Ruleset, session *Session) [
 		t.Fatalf("match: %v", err)
 	}
 	return results
+}
+
+func compactGraphActivationRuleName(t testing.TB, revision *Ruleset, activation activation) string {
+	t.Helper()
+	rule, ok := revision.rulesByRevisionID[activation.ruleRevisionID]
+	if !ok {
+		t.Fatalf("rule revision %q missing", activation.ruleRevisionID)
+	}
+	return rule.name
 }
 
 func mustCandidateForFactID(t testing.TB, candidates []matchCandidate, id FactID) matchCandidate {
