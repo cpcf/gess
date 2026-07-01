@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -413,8 +414,8 @@ func cloneIntPath(path []int) []int {
 
 func addRecency(total Recency, next Recency) Recency {
 	sum := uint64(total) + uint64(next)
-	if sum < uint64(total) {
-		return Recency(^uint64(0))
+	if sum > math.MaxUint32 {
+		return Recency(math.MaxUint32)
 	}
 	return Recency(sum)
 }

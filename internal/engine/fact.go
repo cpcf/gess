@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-type FactVersion uint64
+type FactVersion uint32
 
-type Recency uint64
+type Recency uint32
 
 // Generation is the working-memory reset epoch. Fact IDs include a generation
 // component so IDs from before Reset cannot address post-reset facts.
