@@ -528,7 +528,7 @@ type Ruleset struct {
 	queryConditionTemplateKeys map[TemplateKey]struct{}
 	queryConditionNames        map[string]struct{}
 	assertTemplateActionCount  int
-	generatedAssertReserve     map[RuleRevisionID]generatedAssertReserve
+	generatedAssertReserve     map[RuleRevisionID][]generatedAssertReserve
 	hasEffectiveAutoFocus      bool
 	allRulesInMainModule       bool
 	generatedFactInsertPlans   map[TemplateKey]*compiledGeneratedFactInsertPlan
@@ -536,6 +536,7 @@ type Ruleset struct {
 }
 
 type generatedAssertReserve struct {
+	templateKey  TemplateKey
 	facts        int
 	slots        int
 	compactSlots int
@@ -606,27 +607,38 @@ func countAssertTemplateActions(rules []compiledRule) int {
 	return count
 }
 
-func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevisionID]generatedAssertReserve {
+func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevisionID][]generatedAssertReserve {
 	if len(rules) == 0 {
 		return nil
 	}
-	out := make(map[RuleRevisionID]generatedAssertReserve, len(rules))
+	out := make(map[RuleRevisionID][]generatedAssertReserve, len(rules))
 	for _, rule := range rules {
-		var reserve generatedAssertReserve
+		reserveByTemplate := make(map[TemplateKey]int)
+		var reserves []generatedAssertReserve
 		for _, action := range rule.actionExecutions {
 			if action.kind != compiledRuleActionAssertTemplateValues {
 				continue
 			}
-			reserve.facts++
-			fields := len(action.assertTemplateValues.template.fields)
-			if templateSupportsCompactGeneratedSlots(action.assertTemplateValues.template) {
-				reserve.compactSlots += fields
+			plan := action.assertTemplateValues.insertPlan
+			if plan.outputOnlyNoRetainEligible() {
+				continue
+			}
+			fields := len(plan.template.fields)
+			index, ok := reserveByTemplate[plan.templateKey]
+			if !ok {
+				index = len(reserves)
+				reserveByTemplate[plan.templateKey] = index
+				reserves = append(reserves, generatedAssertReserve{templateKey: plan.templateKey})
+			}
+			reserves[index].facts++
+			if plan.compactSlots {
+				reserves[index].compactSlots += fields
 			} else {
-				reserve.slots += fields
+				reserves[index].slots += fields
 			}
 		}
-		if reserve.facts != 0 {
-			out[rule.revisionID] = reserve
+		if len(reserves) != 0 {
+			out[rule.revisionID] = reserves
 		}
 	}
 	if len(out) == 0 {
@@ -666,7 +678,7 @@ func templateSupportsCompactGeneratedValueSlots(template Template) bool {
 	return true
 }
 
-func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID]generatedAssertReserve {
+func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID][]generatedAssertReserve {
 	if r == nil {
 		return nil
 	}

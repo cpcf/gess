@@ -1586,6 +1586,14 @@ func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing
 
 	collector := &testEventCollector{}
 	revision := mustCompileWorkspace(t, workspace)
+	rule := revision.rules["generate-native"]
+	reserves := revision.generatedAssertReserveByRuleRevision()[rule.revisionID]
+	if got, want := len(reserves), 1; got != want {
+		t.Fatalf("generated assert reserves = %d, want %d", got, want)
+	}
+	if got := reserves[0]; got.templateKey != generated.Key() || got.facts != 1 || got.compactSlots != 1 || got.slots != 0 {
+		t.Fatalf("generated assert reserve = %#v, want one compact generated fact for %q", got, generated.Key())
+	}
 	session, err := NewSession(revision, WithSessionID("native-assert-action-listener-session"), WithEventListener(collector))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -1680,6 +1688,9 @@ func TestNativeAssertTemplateValuesActionDiscardsUntargetedTokenFastPath(t *test
 	}
 	if !compiled.insertPlan.outputOnlyNoRetainEligible() {
 		t.Fatal("untargeted generated insert plan should be no-retain eligible")
+	}
+	if reserves := revision.generatedAssertReserveByRuleRevision()[revision.rules["generate-native"].revisionID]; len(reserves) != 0 {
+		t.Fatalf("generated assert reserves = %#v, want none for output-only no-retain action", reserves)
 	}
 
 	session := mustSession(t, revision, "native-assert-action-token-fast-path-session")
@@ -1865,6 +1876,9 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyWideSlotsWithoutFactE
 	}
 	if !compiled.insertPlan.outputOnlyNoRetainEligible() {
 		t.Fatal("generated wide/map insert plan should be no-retain eligible")
+	}
+	if reserves := revision.generatedAssertReserveByRuleRevision()[revision.rules["generate"].revisionID]; len(reserves) != 0 {
+		t.Fatalf("generated assert reserves = %#v, want none for wide output-only no-retain action", reserves)
 	}
 	session, err := NewSession(revision, WithSessionID("native-assert-wide-output-discard-session"), WithEventListener(collector))
 	if err != nil {

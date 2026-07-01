@@ -6924,15 +6924,20 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 		if current == nil {
 			return true
 		}
-		stat := stats[current.ruleRevisionID]
-		if stat.facts == 0 {
+		reserves := stats[current.ruleRevisionID]
+		if len(reserves) == 0 {
 			return true
 		}
-		factCount = saturatingAddInt(factCount, stat.facts)
-		slotCount = saturatingAddInt(slotCount, stat.slots)
-		compactSlotCount = saturatingAddInt(compactSlotCount, stat.compactSlots)
-		maximum := maxIntValue()
-		return factCount < maximum && slotCount < maximum && compactSlotCount < maximum
+		for _, reserve := range reserves {
+			factCount = saturatingAddInt(factCount, reserve.facts)
+			slotCount = saturatingAddInt(slotCount, reserve.slots)
+			compactSlotCount = saturatingAddInt(compactSlotCount, reserve.compactSlots)
+			maximum := maxIntValue()
+			if factCount >= maximum || slotCount >= maximum || compactSlotCount >= maximum {
+				return false
+			}
+		}
+		return true
 	})
 	if factCount == 0 && slotCount == 0 && compactSlotCount == 0 {
 		return
