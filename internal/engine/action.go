@@ -238,9 +238,11 @@ func (c ActionContext) AssertLogical(name string, fields Fields) (AssertResult, 
 	return c.session.insertLogicalFactWithContextAndOrigin(c.Context(), name, "", fields, c.mutationOrigin(), c.supportingFactIDs())
 }
 
-// AssertTemplateValues asserts a fixed-template fact using values in template
-// field order and returns only whether the effect succeeded. It is intended for
-// generated facts where callers do not need an AssertResult.
+// AssertTemplateValues asserts a working-memory fact using values in template
+// field order and returns only whether the effect succeeded. It preserves fact
+// assertion semantics: inserted facts can be matched, queried, modified,
+// retracted, logically supported, returned in snapshots, and observed through
+// fact assertion events.
 func (c ActionContext) AssertTemplateValues(templateKey TemplateKey, values ...Value) error {
 	if c.session == nil {
 		return ErrClosedSession
@@ -533,6 +535,18 @@ type ActionBindingReadSpec struct {
 	Path    PathSpec
 }
 
+// AssertTemplateValuesActionSpec describes a generated rule action that emits
+// values in template field order. When the compiler proves the target template
+// is not visible to downstream rule matching, queries, modification, retraction,
+// logical support, public fact enumeration, or fact events, the runtime treats
+// the emitted value as output-only instead of as a working-memory fact.
+//
+// Output-only emitted values are validated/defaulted and then discarded unless
+// an explicit non-fact output consumer exists. They do not receive FactIDs or
+// recency, cannot be modified, retracted, logically supported, found by fact ID,
+// returned in snapshots, returned by queries, or observed as EventFactAsserted.
+// Use Session.AssertTemplateValues or ActionContext.AssertTemplateValues when a
+// value must be a Jess-style working-memory fact.
 type AssertTemplateValuesActionSpec struct {
 	TemplateKey TemplateKey
 	Values      []ExpressionSpec

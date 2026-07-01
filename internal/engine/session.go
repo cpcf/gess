@@ -687,6 +687,10 @@ func (s *Session) AssertTemplate(ctx context.Context, templateKey TemplateKey, f
 	return s.insertFactWithContextAndOrigin(ctx, "", templateKey, fields, mutationOrigin{})
 }
 
+// AssertTemplateValues asserts a working-memory fact using values in template
+// field order. It is a fact assertion API, not an output-only emission path:
+// inserted facts can be matched, queried, modified, retracted, logically
+// supported, returned in snapshots, and observed through fact assertion events.
 func (s *Session) AssertTemplateValues(ctx context.Context, templateKey TemplateKey, values ...Value) error {
 	return s.insertTemplateValuesWithContextAndOrigin(ctx, templateKey, values, mutationOrigin{})
 }
