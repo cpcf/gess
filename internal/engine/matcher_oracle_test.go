@@ -625,7 +625,7 @@ func (p compiledConditionPlan) matchesFact(fact conditionFactRef) bool {
 func (p compiledConditionPlan) matchesFactWorking(fact *workingFact) bool {
 	switch p.target.kind {
 	case conditionTargetName:
-		return fact != nil && fact.name == p.target.name
+		return fact != nil && fact.storedName() == p.target.name
 	case conditionTargetTemplateKey:
 		return fact != nil && fact.templateKey == p.target.templateKey
 	default:

@@ -146,7 +146,7 @@ func newConditionFactRefFromWorkingFact(fact *workingFact) conditionFactRef {
 	}
 	return conditionFactRef{
 		id:                fact.id,
-		name:              fact.name,
+		name:              fact.storedName(),
 		templateKey:       fact.templateKey,
 		version:           fact.version,
 		recency:           fact.recency,
@@ -271,7 +271,6 @@ func (f conditionFactRef) fieldSlot(name string) (int, bool) {
 
 type workingFact struct {
 	id                   FactID
-	name                 string
 	templateKey          TemplateKey
 	version              FactVersion
 	recency              Recency
@@ -283,6 +282,7 @@ type workingFact struct {
 }
 
 type workingFactPayload struct {
+	name          string
 	fields        Fields
 	fieldSlots    []factSlot
 	fieldPresence map[string]FieldPresence
@@ -303,6 +303,25 @@ func (f *workingFact) fieldsMap() Fields {
 		return nil
 	}
 	return f.payload.fields
+}
+
+func (f *workingFact) storedName() string {
+	if f == nil || f.payload == nil {
+		return ""
+	}
+	return f.payload.name
+}
+
+func (f *workingFact) setName(name string) {
+	if f == nil || name == "" && f.payload == nil {
+		return
+	}
+	payload := f.ensurePayload()
+	if payload == nil {
+		return
+	}
+	payload.name = name
+	f.clearPayloadIfEmpty()
 }
 
 func (f *workingFact) fieldSlotSlice() []factSlot {
@@ -390,7 +409,7 @@ func (f *workingFact) clearPayloadIfEmpty() {
 	if f == nil || f.payload == nil {
 		return
 	}
-	if f.payload.fields == nil && len(f.payload.fieldSlots) == 0 && f.payload.fieldPresence == nil {
+	if f.payload.name == "" && f.payload.fields == nil && len(f.payload.fieldSlots) == 0 && f.payload.fieldPresence == nil {
 		f.payload = nil
 	}
 }
@@ -400,6 +419,7 @@ func cloneWorkingFactPayload(in *workingFactPayload) *workingFactPayload {
 		return nil
 	}
 	return &workingFactPayload{
+		name:          in.name,
 		fields:        cloneFields(in.fields),
 		fieldSlots:    cloneFactSlots(in.fieldSlots),
 		fieldPresence: cloneFieldPresence(in.fieldPresence),
@@ -1420,8 +1440,8 @@ func (f *workingFact) nameForRevision(revision *Ruleset) string {
 	if f == nil {
 		return ""
 	}
-	if f.name != "" {
-		return f.name
+	if name := f.storedName(); name != "" {
+		return name
 	}
 	if revision != nil && f.templateKey != "" {
 		if template, ok := revision.templateByKey(f.templateKey); ok {

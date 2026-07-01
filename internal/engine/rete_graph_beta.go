@@ -2907,7 +2907,7 @@ func (m *reteGraphBetaMemory) workingAlphaRouteIDsForFact(fact *workingFact, spa
 	if len(templateIDs) > 3 {
 		templateIDs = m.workingAlphaRouteIDs(fact.templateKey, templateIDs, fact, span)
 	}
-	nameIDs := m.graph.routesByName[fact.name]
+	nameIDs := m.graph.routesByName[fact.storedName()]
 	if len(templateIDs) == 0 {
 		return nameIDs
 	}

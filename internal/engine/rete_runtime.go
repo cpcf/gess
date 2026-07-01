@@ -983,7 +983,7 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 			return false, nil
 		}
 	case conditionTargetName:
-		if fact.name != p.target.name {
+		if fact.storedName() != p.target.name {
 			return false, nil
 		}
 	default:

@@ -4888,7 +4888,7 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 			w.factsByDuplicate.deleteFact(duplicateIndex, fact.id)
 		}
 		if !fact.targetIndexesSkipped {
-			w.removeFactTargetIndexes(fact.templateKey, fact.name, fact.id)
+			w.removeFactTargetIndexes(fact.templateKey, fact.storedName(), fact.id)
 		}
 		w.deleteFactRowIndex(fact.id)
 	}
@@ -5239,12 +5239,12 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 
 	fact := workingFact{
 		id:          id,
-		name:        name,
 		templateKey: templateKey,
 		version:     1,
 		recency:     w.recency,
 		dupIndex:    workingFactDuplicateIndex(duplicateIndex),
 	}
+	fact.setName(name)
 	fact.setFields(canonical)
 	fact.setFieldSlots(fieldSlots)
 	fact.setFieldPresence(presence)
@@ -5314,13 +5314,13 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	}
 	fact := workingFact{
 		id:           id,
-		name:         name,
 		templateKey:  templateKey,
 		version:      1,
 		recency:      w.recency,
 		compactSlots: compactSlots,
 		dupIndex:     workingFactDuplicateIndex(duplicateIndex),
 	}
+	fact.setName(name)
 	fact.setFieldSlots(storedSlots)
 
 	stored := w.storeFact(fact)
@@ -5406,7 +5406,6 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 	}
 	fact := workingFact{
 		id:                   id,
-		name:                 storedName,
 		templateKey:          templateKey,
 		version:              1,
 		recency:              w.recency,
@@ -5414,6 +5413,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
+	fact.setName(storedName)
 	fact.setFieldSlots(fieldSlots)
 
 	stored := w.storeFact(fact)
@@ -5473,7 +5473,6 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 	}
 	fact := workingFact{
 		id:                   id,
-		name:                 storedName,
 		templateKey:          templateKey,
 		version:              1,
 		recency:              w.recency,
@@ -5481,6 +5480,7 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
+	fact.setName(storedName)
 
 	stored := w.storeFact(fact)
 	if plan.duplicatePolicy != DuplicateAllow {
@@ -5697,12 +5697,12 @@ func (w *factWorkspace) insertCompiledInitialFact(initial compiledSessionInitial
 	id := newFactID(w.generation, w.sequence)
 	fact := workingFact{
 		id:          id,
-		name:        initial.name,
 		templateKey: initial.templateKey,
 		version:     1,
 		recency:     w.recency,
 		dupIndex:    workingFactDuplicateIndex(initial.duplicateIndex),
 	}
+	fact.setName(initial.name)
 	if initial.shareFields {
 		fact.setFields(initial.fields)
 	} else {

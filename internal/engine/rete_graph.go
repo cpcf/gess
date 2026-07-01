@@ -1810,7 +1810,7 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 			return false, nil
 		}
 	case conditionTargetName:
-		if fact.name != n.target.name {
+		if fact.storedName() != n.target.name {
 			return false, nil
 		}
 	default:
@@ -1867,7 +1867,7 @@ func (target conditionTarget) matchesWorkingFact(fact *workingFact) bool {
 	case conditionTargetTemplateKey:
 		return fact.templateKey == target.templateKey
 	case conditionTargetName:
-		return fact.name == target.name
+		return fact.storedName() == target.name
 	default:
 		return false
 	}

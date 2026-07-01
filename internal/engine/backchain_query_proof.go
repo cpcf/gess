@@ -140,7 +140,6 @@ func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactIn
 	p.nextRecency++
 	fact := workingFact{
 		id:                   newFactID(p.session.generation, sequence),
-		name:                 plan.name,
 		templateKey:          plan.templateKey,
 		version:              1,
 		recency:              recency,
@@ -148,6 +147,7 @@ func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactIn
 		dupIndex:             workingFactDuplicateIndex(duplicateIndex),
 		targetIndexesSkipped: true,
 	}
+	fact.setName(plan.name)
 	fact.setFieldSlots(slots)
 	return fact
 }
