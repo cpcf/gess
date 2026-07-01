@@ -165,7 +165,7 @@ func validateClaimsTriageResetRun(t testing.TB, session *Session, result RunResu
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, expectedFired)
 	}
 	expectedFacts := factCount*4 + expectedFired
-	if got := len(session.facts); got != expectedFacts {
+	if got := session.factCount(); got != expectedFacts {
 		t.Fatalf("%s final facts = %d, want %d", phase, got, expectedFacts)
 	}
 }
@@ -175,7 +175,7 @@ func validateClaimsTriageMutation(t testing.TB, session *Session, result RunResu
 	if result.Status != RunCompleted || result.Fired != 1 {
 		t.Fatalf("%s mutation run result = (%v, %d), want (%v, 1)", phase, result.Status, result.Fired, RunCompleted)
 	}
-	if got := len(session.facts); got != expectedFinalFacts {
+	if got := session.factCount(); got != expectedFinalFacts {
 		t.Fatalf("%s mutation final facts = %d, want %d", phase, got, expectedFinalFacts)
 	}
 }

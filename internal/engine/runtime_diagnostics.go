@@ -96,6 +96,20 @@ func factWorkspaceMemoryOwnerDiagnostics(workspace any) RuntimeMemoryOwnerDiagno
 			addWorkingFactDynamicOwnerDiagnostics(&out, facts.Index(i))
 		}
 	}
+	generatedFacts := value.FieldByName("generatedFacts")
+	if generatedFacts.IsValid() && generatedFacts.Kind() == reflect.Struct {
+		if ids := generatedFacts.FieldByName("ids"); ids.IsValid() && ids.Kind() == reflect.Slice {
+			out.Rows += uint64(ids.Len())
+		}
+		for _, name := range []string{"ids", "templateIDs", "versions", "recencies", "supportStates", "compactSlots", "flags"} {
+			slice := generatedFacts.FieldByName(name)
+			out.HighWater += uint64(reflectSliceCap(slice))
+			out.Bytes += reflectSliceBytes(slice)
+		}
+		for _, name := range []string{"names", "templateKeys"} {
+			addFactMapOwnerDiagnostics(&out, generatedFacts.FieldByName(name))
+		}
+	}
 
 	for _, name := range []string{"insertionOrder", "factsBySequence", "slotStorage"} {
 		slice := value.FieldByName(name)

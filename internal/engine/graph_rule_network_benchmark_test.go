@@ -162,7 +162,7 @@ func TestGraphRuleNetworkTemplateValueBatchSeedRuns(t *testing.T) {
 	session.attachPropagationCounters()
 
 	seedAuthoredOrderFactsWithTemplateValueBatch(t, ctx, session, templates, tc.items)
-	if got, want := len(session.facts), authoredOrderInitialFacts(tc.items); got != want {
+	if got, want := session.factCount(), authoredOrderInitialFacts(tc.items); got != want {
 		t.Fatalf("facts retained = %d, want %d", got, want)
 	}
 	if session.agendaDirty || !session.agendaReady {
@@ -190,7 +190,7 @@ func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
 	session.attachPropagationCounters()
 
 	seedAuthoredOrderFactsWithPreparedTemplateValues(t, ctx, session, templates, tc.items)
-	if got, want := len(session.facts), authoredOrderInitialFacts(tc.items); got != want {
+	if got, want := session.factCount(), authoredOrderInitialFacts(tc.items); got != want {
 		t.Fatalf("facts retained = %d, want %d", got, want)
 	}
 	if !session.factTargetIndexesDirty {

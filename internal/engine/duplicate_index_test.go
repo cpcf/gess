@@ -381,10 +381,10 @@ func TestCompiledGeneratedFactInsertPlanUsesStructuralScalarDuplicatePath(t *tes
 	if inserted {
 		t.Fatal("second insert inserted duplicate structural fact")
 	}
-	if second != first {
-		t.Fatalf("duplicate fact pointer mismatch: got %p, want %p", second, first)
+	if second.id != first.id {
+		t.Fatalf("duplicate fact ID mismatch: got %s, want %s", second.id, first.id)
 	}
-	if got := len(workspace.facts); got != 1 {
+	if got := workspace.factCount(); got != 1 {
 		t.Fatalf("workspace facts = %d, want 1", got)
 	}
 }

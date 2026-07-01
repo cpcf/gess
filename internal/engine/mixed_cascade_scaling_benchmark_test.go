@@ -810,7 +810,7 @@ func validateMixedCascadeHarnessSession(t testing.TB, session *Session, result R
 	if result.Status != RunCompleted || result.Fired != mixedCascadeFiredCount(tc) {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, mixedCascadeFiredCount(tc))
 	}
-	if got := len(session.facts); got != mixedCascadeFinalFacts(tc) {
+	if got := session.factCount(); got != mixedCascadeFinalFacts(tc) {
 		t.Fatalf("%s final fact count = %d, want %d", phase, got, mixedCascadeFinalFacts(tc))
 	}
 

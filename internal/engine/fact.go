@@ -292,6 +292,256 @@ type workingFactPayload struct {
 	fieldPresence map[string]FieldPresence
 }
 
+type generatedFactFlags uint8
+
+const generatedFactTargetIndexesSkipped generatedFactFlags = 1 << iota
+
+type generatedFactStore struct {
+	ids           []FactID
+	templateIDs   []templateID
+	versions      []FactVersion
+	recencies     []Recency
+	supportStates []factSupportCode
+	compactSlots  []factCompactSlotRef
+	flags         []generatedFactFlags
+	names         map[int]string
+	templateKeys  map[int]TemplateKey
+}
+
+func (s *generatedFactStore) len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.ids)
+}
+
+func (s *generatedFactStore) reset() {
+	if s == nil {
+		return
+	}
+	clear(s.ids)
+	clear(s.templateIDs)
+	clear(s.versions)
+	clear(s.recencies)
+	clear(s.supportStates)
+	clear(s.compactSlots)
+	clear(s.flags)
+	s.ids = s.ids[:0]
+	s.templateIDs = s.templateIDs[:0]
+	s.versions = s.versions[:0]
+	s.recencies = s.recencies[:0]
+	s.supportStates = s.supportStates[:0]
+	s.compactSlots = s.compactSlots[:0]
+	clear(s.names)
+	clear(s.templateKeys)
+}
+
+func (s *generatedFactStore) reserve(capacity int) {
+	if s == nil {
+		return
+	}
+	s.ids = growGeneratedFactColumn(s.ids, capacity)
+	s.templateIDs = growGeneratedFactColumn(s.templateIDs, capacity)
+	s.versions = growGeneratedFactColumn(s.versions, capacity)
+	s.recencies = growGeneratedFactColumn(s.recencies, capacity)
+	s.supportStates = growGeneratedFactColumn(s.supportStates, capacity)
+	s.compactSlots = growGeneratedFactColumn(s.compactSlots, capacity)
+	s.flags = growGeneratedFactColumn(s.flags, capacity)
+}
+
+func growGeneratedFactColumn[T any](in []T, capacity int) []T {
+	if capacity <= cap(in) {
+		return in
+	}
+	return slices.Grow(in, capacity-cap(in))
+}
+
+func (s *generatedFactStore) append(fact workingFact) int {
+	if s == nil {
+		return -1
+	}
+	row := len(s.ids)
+	s.ids = append(s.ids, fact.id)
+	s.templateIDs = append(s.templateIDs, fact.templateID)
+	s.versions = append(s.versions, fact.version)
+	s.recencies = append(s.recencies, fact.recency)
+	s.supportStates = append(s.supportStates, fact.supportState)
+	s.compactSlots = append(s.compactSlots, fact.compactSlots)
+	var flags generatedFactFlags
+	if fact.targetIndexesSkipped {
+		flags |= generatedFactTargetIndexesSkipped
+	}
+	s.flags = append(s.flags, flags)
+	if name := fact.storedName(); name != "" {
+		if s.names == nil {
+			s.names = make(map[int]string, 1)
+		}
+		s.names[row] = name
+	}
+	if key := fact.storedTemplateKey(); key != "" {
+		if s.templateKeys == nil {
+			s.templateKeys = make(map[int]TemplateKey, 1)
+		}
+		s.templateKeys[row] = key
+	}
+	return row
+}
+
+func (s *generatedFactStore) fact(row int) (*workingFact, bool) {
+	if s == nil || row < 0 || row >= len(s.ids) {
+		return nil, false
+	}
+	fact := &workingFact{
+		id:                   s.ids[row],
+		templateID:           s.templateIDs[row],
+		version:              s.versions[row],
+		recency:              s.recencies[row],
+		supportState:         s.supportStates[row],
+		compactSlots:         s.compactSlots[row],
+		targetIndexesSkipped: s.flags[row]&generatedFactTargetIndexesSkipped != 0,
+	}
+	if name, ok := s.names[row]; ok {
+		fact.setName(name)
+	}
+	if key, ok := s.templateKeys[row]; ok {
+		fact.setTemplateKey(key)
+	}
+	return fact, true
+}
+
+func (s *generatedFactStore) replace(row int, fact *workingFact) bool {
+	if s == nil || fact == nil || row < 0 || row >= len(s.ids) || s.ids[row] != fact.id {
+		return false
+	}
+	s.templateIDs[row] = fact.templateID
+	s.versions[row] = fact.version
+	s.recencies[row] = fact.recency
+	s.supportStates[row] = fact.supportState
+	s.compactSlots[row] = fact.compactSlots
+	var flags generatedFactFlags
+	if fact.targetIndexesSkipped {
+		flags |= generatedFactTargetIndexesSkipped
+	}
+	s.flags[row] = flags
+	if name := fact.storedName(); name != "" {
+		if s.names == nil {
+			s.names = make(map[int]string, 1)
+		}
+		s.names[row] = name
+	} else if s.names != nil {
+		delete(s.names, row)
+	}
+	if key := fact.storedTemplateKey(); key != "" {
+		if s.templateKeys == nil {
+			s.templateKeys = make(map[int]TemplateKey, 1)
+		}
+		s.templateKeys[row] = key
+	} else if s.templateKeys != nil {
+		delete(s.templateKeys, row)
+	}
+	return true
+}
+
+func (s *generatedFactStore) remove(row int) (FactID, bool) {
+	if s == nil || row < 0 || row >= len(s.ids) {
+		return FactID{}, false
+	}
+	last := len(s.ids) - 1
+	var moved FactID
+	if row != last {
+		moved = s.ids[last]
+		s.ids[row] = s.ids[last]
+		s.templateIDs[row] = s.templateIDs[last]
+		s.versions[row] = s.versions[last]
+		s.recencies[row] = s.recencies[last]
+		s.supportStates[row] = s.supportStates[last]
+		s.compactSlots[row] = s.compactSlots[last]
+		s.flags[row] = s.flags[last]
+		if name, ok := s.names[last]; ok {
+			if s.names == nil {
+				s.names = make(map[int]string, 1)
+			}
+			s.names[row] = name
+			delete(s.names, last)
+		} else if s.names != nil {
+			delete(s.names, row)
+		}
+		if key, ok := s.templateKeys[last]; ok {
+			if s.templateKeys == nil {
+				s.templateKeys = make(map[int]TemplateKey, 1)
+			}
+			s.templateKeys[row] = key
+			delete(s.templateKeys, last)
+		} else if s.templateKeys != nil {
+			delete(s.templateKeys, row)
+		}
+	} else {
+		if s.names != nil {
+			delete(s.names, row)
+		}
+		if s.templateKeys != nil {
+			delete(s.templateKeys, row)
+		}
+	}
+	s.ids[last] = FactID{}
+	s.templateIDs[last] = 0
+	s.versions[last] = 0
+	s.recencies[last] = 0
+	s.supportStates[last] = 0
+	s.compactSlots[last] = factCompactSlotRef{}
+	s.flags[last] = 0
+	s.ids = s.ids[:last]
+	s.templateIDs = s.templateIDs[:last]
+	s.versions = s.versions[:last]
+	s.recencies = s.recencies[:last]
+	s.supportStates = s.supportStates[:last]
+	s.compactSlots = s.compactSlots[:last]
+	s.flags = s.flags[:last]
+	return moved, !moved.IsZero()
+}
+
+func (s *generatedFactStore) truncate(length int) {
+	if s == nil || length < 0 || length >= len(s.ids) {
+		return
+	}
+	for i := length; i < len(s.ids); i++ {
+		s.ids[i] = FactID{}
+		s.templateIDs[i] = 0
+		s.versions[i] = 0
+		s.recencies[i] = 0
+		s.supportStates[i] = 0
+		s.compactSlots[i] = factCompactSlotRef{}
+		s.flags[i] = 0
+		if s.names != nil {
+			delete(s.names, i)
+		}
+		if s.templateKeys != nil {
+			delete(s.templateKeys, i)
+		}
+	}
+	s.ids = s.ids[:length]
+	s.templateIDs = s.templateIDs[:length]
+	s.versions = s.versions[:length]
+	s.recencies = s.recencies[:length]
+	s.supportStates = s.supportStates[:length]
+	s.compactSlots = s.compactSlots[:length]
+	s.flags = s.flags[:length]
+}
+
+func cloneGeneratedFactStore(in generatedFactStore) generatedFactStore {
+	return generatedFactStore{
+		ids:           cloneFactIDs(in.ids),
+		templateIDs:   slices.Clone(in.templateIDs),
+		versions:      slices.Clone(in.versions),
+		recencies:     slices.Clone(in.recencies),
+		supportStates: slices.Clone(in.supportStates),
+		compactSlots:  slices.Clone(in.compactSlots),
+		flags:         slices.Clone(in.flags),
+		names:         maps.Clone(in.names),
+		templateKeys:  maps.Clone(in.templateKeys),
+	}
+}
+
 func (f *workingFact) ensurePayload() *workingFactPayload {
 	if f == nil {
 		return nil

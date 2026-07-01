@@ -164,7 +164,7 @@ func validateSteadyStateHarnessSession(t testing.TB, session *Session, result Ru
 	if result.Status != RunCompleted || result.Fired != firedCount {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, firedCount)
 	}
-	if got := len(session.facts); got != finalFacts {
+	if got := session.factCount(); got != finalFacts {
 		t.Fatalf("%s final fact count = %d, want %d", phase, got, finalFacts)
 	}
 	assertSteadyStateFactMix(t, session, tc)

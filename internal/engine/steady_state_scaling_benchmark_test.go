@@ -49,7 +49,7 @@ func BenchmarkGessSteadyStateRuleCreatedFacts(b *testing.B) {
 				if result.Status != RunCompleted || result.Fired != firedCount {
 					b.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, firedCount)
 				}
-				if got := len(session.facts); got != finalFacts {
+				if got := session.factCount(); got != finalFacts {
 					b.Fatalf("final fact count = %d, want %d", got, finalFacts)
 				}
 				assertSteadyStateFactMix(b, session, tc)
@@ -408,10 +408,10 @@ func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
 	if resultB.Status != RunCompleted || resultB.Fired != expectedFired {
 		t.Fatalf("second run result = (%v, %d), want (%v, %d)", resultB.Status, resultB.Fired, RunCompleted, expectedFired)
 	}
-	if got := len(sessionA.facts); got != expectedFacts {
+	if got := sessionA.factCount(); got != expectedFacts {
 		t.Fatalf("first run final fact count = %d, want %d", got, expectedFacts)
 	}
-	if got := len(sessionB.facts); got != expectedFacts {
+	if got := sessionB.factCount(); got != expectedFacts {
 		t.Fatalf("second run final fact count = %d, want %d", got, expectedFacts)
 	}
 	if got, want := strings.Join(traceA, "|"), strings.Join(traceB, "|"); got != want {
@@ -509,7 +509,7 @@ func TestSteadyStateScalingResetRunReusesTerminalTokenLifetimeAcrossCycles(t *te
 		if result.Status != RunCompleted || result.Fired != expectedFired {
 			t.Fatalf("run cycle %d result = (%v, %d), want (%v, %d)", cycle, result.Status, result.Fired, RunCompleted, expectedFired)
 		}
-		if got := len(session.facts); got != expectedFacts {
+		if got := session.factCount(); got != expectedFacts {
 			t.Fatalf("cycle %d final fact count = %d, want %d", cycle, got, expectedFacts)
 		}
 		assertSteadyStateFactMix(t, session, tc)

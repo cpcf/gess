@@ -121,6 +121,7 @@ type Session struct {
 	nextRecency                   Recency
 	nextRunSequence               uint64
 	facts                         []workingFact
+	generatedFacts                generatedFactStore
 	factsByID                     map[FactID]int
 	factsBySequence               []int32
 	factsByDuplicate              duplicateIndexes
@@ -166,6 +167,20 @@ const (
 	maxFactRowSequenceIndex       = int(^uint32(0) >> 1)
 )
 
+func encodeGeneratedFactRow(row int) int {
+	if row < 0 || row > maxFactRowSequenceIndex-1 {
+		return int(missingFactRowIndex)
+	}
+	return -row - 2
+}
+
+func decodeGeneratedFactRow(handle int) (int, bool) {
+	if handle >= -1 {
+		return 0, false
+	}
+	return -handle - 2, true
+}
+
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if revision == nil {
 		return nil, ErrInvalidRuleset
@@ -189,7 +204,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	state := newFactWorkspace(1, revision.estimatedRunFactCapacity(len(compiledInitials)))
+	state := newFactWorkspace(1, len(compiledInitials))
 	state.reserveTemplateIndexes(revision)
 	state.reserveDuplicateIndexes(revision)
 	if len(compiledInitials) > 0 {
@@ -241,6 +256,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		nextRecency:            state.nextRecency(),
 		nextRunSequence:        0,
 		facts:                  state.facts,
+		generatedFacts:         state.generatedFacts,
 		insertionOrder:         state.factsByInsertionOrder(),
 		slotStorage:            state.slotStorage,
 		compactSlotStore:       state.compactSlotStore,
@@ -352,18 +368,33 @@ func (s *Session) propagationCounterPhase() propagationCounterPhase {
 }
 
 func (s *Session) removeStoredFact(id FactID) {
-	if s == nil || len(s.facts) == 0 {
+	if s == nil {
 		return
 	}
-	index, ok := s.factRowIndex(id)
-	if !ok || index < 0 || index >= len(s.facts) || s.facts[index].id != id {
+	handle, ok := s.factRowIndex(id)
+	if !ok {
+		return
+	}
+	if row, generated := decodeGeneratedFactRow(handle); generated {
+		fact, ok := s.generatedFacts.fact(row)
+		if !ok || fact.id != id {
+			return
+		}
+		moved, ok := s.generatedFacts.remove(row)
+		s.deleteFactRowIndex(id)
+		if ok {
+			s.setFactRowIndex(moved, encodeGeneratedFactRow(row))
+		}
+		return
+	}
+	if handle < 0 || handle >= len(s.facts) || s.facts[handle].id != id {
 		return
 	}
 	last := len(s.facts) - 1
-	if index != last {
+	if handle != last {
 		moved := s.facts[last]
-		s.facts[index] = moved
-		s.setFactRowIndex(moved.id, index)
+		s.facts[handle] = moved
+		s.setFactRowIndex(moved.id, handle)
 	}
 	s.deleteFactRowIndex(id)
 	s.facts[last] = workingFact{}
@@ -389,7 +420,17 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 		}
 	}
 	index, ok := s.factRowIndex(id)
-	if !ok || index < 0 || index >= len(s.facts) {
+	if !ok {
+		return nil, false
+	}
+	if row, generated := decodeGeneratedFactRow(index); generated {
+		fact, ok := s.generatedFacts.fact(row)
+		if !ok || fact.id != id {
+			return nil, false
+		}
+		return fact, true
+	}
+	if index < 0 || index >= len(s.facts) {
 		return nil, false
 	}
 	fact := &s.facts[index]
@@ -423,7 +464,7 @@ func (s *Session) factRowIndex(id FactID) (int, bool) {
 }
 
 func (s *Session) setFactRowIndex(id FactID, row int) {
-	if s == nil || id.IsZero() || row < 0 {
+	if s == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
 	if id.generation == s.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
@@ -573,9 +614,9 @@ func (s *Session) rebuildFactTargetIndexes() {
 	} else {
 		clear(s.factsByName)
 	}
-	for i := range s.facts {
-		fact := &s.facts[i]
-		if fact.id.IsZero() {
+	for _, id := range s.insertionOrder {
+		fact, ok := s.workingFactByID(id)
+		if !ok || fact.id.IsZero() {
 			continue
 		}
 		if templateKey := fact.templateKeyForRevision(s.revision); templateKey != "" {
@@ -968,7 +1009,7 @@ func (b *preparedTemplateValueBatch) reserve(_ int, slots int) {
 	if b == nil {
 		return
 	}
-	b.state.reserveGeneratedFactCapacity(b.session.revision, slots, 0)
+	b.state.reserveGeneratedFactCapacity(b.session.revision, 0, slots, 0)
 }
 
 func (p preparedTemplateValueInserter) insert2(b *preparedTemplateValueBatch, v0, v1 Value) error {
@@ -2309,7 +2350,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		before = s.detachedSnapshotLocked()
 	}
 	next := &s.resetWorkspace
-	next.reset(s.generation+1, s.revision.estimatedRunFactCapacity(len(compiledInitials)))
+	next.reset(s.generation+1, len(compiledInitials))
 	next.skipFactTargetIndexes = true
 	next.reserveTemplateIndexes(s.revision)
 	if len(compiledInitials) > 0 {
@@ -3305,16 +3346,29 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	fact.version++
 	fact.recency = state.recency
 	if len(proposedFieldSlots) > 0 {
-		fact.clearFields()
-		fact.setFieldSlots(proposedFieldSlots)
-		fact.compactSlots = factCompactSlotRef{}
-		fact.clearFieldPresence()
+		if _, generated := decodeGeneratedFactRow(modifyMark.factIndex); generated && templateSupportsCompactGeneratedSlots(template) {
+			compactRef, ok := state.storeGeneratedCompactFactSlots(proposedFieldSlots)
+			if !ok {
+				state.rollbackFactModify(modifyMark)
+				return ModifyResult{Status: ModifyValidationFailure, Fact: before}, reteAgendaDelta{}, &ValidationError{TemplateName: template.Name(), Reason: "generated compact fact slot conversion failed"}
+			}
+			fact.clearFields()
+			fact.clearFieldSlots()
+			fact.compactSlots = compactRef
+			fact.clearFieldPresence()
+		} else {
+			fact.clearFields()
+			fact.setFieldSlots(proposedFieldSlots)
+			fact.compactSlots = factCompactSlotRef{}
+			fact.clearFieldPresence()
+		}
 	} else {
 		fact.setFields(proposedFields)
 		fact.clearFieldSlots()
 		fact.compactSlots = factCompactSlotRef{}
 		fact.setFieldPresence(proposedPresence)
 	}
+	state.replaceWorkingFact(fact)
 	after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 	duplicateChanged := oldDuplicate != newDuplicate
 	agendaDelta, err := s.updateReteAlphaAfterModify(ctx, before, after, fieldChanges, duplicateChanged, origin)
@@ -3820,6 +3874,7 @@ type factWorkspace struct {
 	sequence                  uint64
 	recency                   Recency
 	facts                     []workingFact
+	generatedFacts            generatedFactStore
 	insertionOrder            []FactID
 	factsByID                 map[FactID]int
 	factsBySequence           []int32
@@ -3837,6 +3892,7 @@ type factWorkspaceInsertMark struct {
 	sequence               uint64
 	recency                Recency
 	factsLen               int
+	generatedFactsLen      int
 	insertionOrderLen      int
 	slotStorageLen         int
 	compactSlotStoreLen    int
@@ -3856,6 +3912,7 @@ type factWorkspaceModifyMark struct {
 	factTargetIndexesDirty bool
 	factIndex              int
 	fact                   workingFact
+	compactSlotStoreLen    int
 	factsByDuplicate       duplicateIndexes
 	restoreDuplicateIndex  bool
 }
@@ -4740,6 +4797,7 @@ func (w *factWorkspace) reset(generation Generation, initialCapacity int) {
 		}
 		w.facts = w.facts[:0]
 	}
+	w.generatedFacts.reset()
 	w.slotStorage = nil
 	if w.compactSlotStore == nil {
 		w.compactSlotStore = &factCompactSlotStore{}
@@ -4755,7 +4813,7 @@ func (w *factWorkspace) reserveDuplicateIndexes(revision *Ruleset) {
 	if w.duplicateReserveRulesetID == rulesetID {
 		return
 	}
-	w.factsByDuplicate.reserve(revision, cap(w.facts))
+	w.factsByDuplicate.reserve(revision, cap(w.facts)+cap(w.generatedFacts.ids))
 	w.duplicateReserveRulesetID = rulesetID
 }
 
@@ -4767,7 +4825,8 @@ func (w *factWorkspace) reserveTemplateIndexes(revision *Ruleset) {
 	if templateCount == 0 {
 		return
 	}
-	perTemplate := max((len(w.facts)+templateCount-1)/templateCount+runFactReservePerRule, 1)
+	rowCount := len(w.facts) + w.generatedFacts.len()
+	perTemplate := max((rowCount+templateCount-1)/templateCount+runFactReservePerRule, 1)
 	for _, name := range revision.templateOrder {
 		template := revision.templates[name]
 		if template.key != "" {
@@ -4821,18 +4880,33 @@ func (w *factWorkspace) removeFactTargetIndexes(templateKey TemplateKey, name st
 }
 
 func (w *factWorkspace) removeStoredFact(id FactID) {
-	if w == nil || len(w.facts) == 0 {
+	if w == nil {
 		return
 	}
-	index, ok := w.factRowIndex(id)
-	if !ok || index < 0 || index >= len(w.facts) || w.facts[index].id != id {
+	handle, ok := w.factRowIndex(id)
+	if !ok {
+		return
+	}
+	if row, generated := decodeGeneratedFactRow(handle); generated {
+		fact, ok := w.generatedFacts.fact(row)
+		if !ok || fact.id != id {
+			return
+		}
+		moved, ok := w.generatedFacts.remove(row)
+		w.deleteFactRowIndex(id)
+		if ok {
+			w.setFactRowIndex(moved, encodeGeneratedFactRow(row))
+		}
+		return
+	}
+	if handle < 0 || handle >= len(w.facts) || w.facts[handle].id != id {
 		return
 	}
 	last := len(w.facts) - 1
-	if index != last {
+	if handle != last {
 		moved := w.facts[last]
-		w.facts[index] = moved
-		w.setFactRowIndex(moved.id, index)
+		w.facts[handle] = moved
+		w.setFactRowIndex(moved.id, handle)
 	}
 	w.deleteFactRowIndex(id)
 	w.facts[last] = workingFact{}
@@ -4858,9 +4932,19 @@ func (w *factWorkspace) reserveCompactSlotStorage(capacity int) {
 	w.compactSlotStore.reserve(capacity)
 }
 
-func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, slotCount, compactSlotCount int) {
+func (w *factWorkspace) reserveGeneratedFactCapacity(revision *Ruleset, factCount, slotCount, compactSlotCount int) {
 	if w == nil {
 		return
+	}
+	if factCount > 0 {
+		w.generatedFacts.reserve(saturatingAddInt(w.generatedFacts.len(), factCount))
+		w.reserveFactRowSequenceRows(factCount)
+		orderCapacity := saturatingAddInt(len(w.insertionOrder), factCount)
+		if cap(w.insertionOrder) < orderCapacity {
+			nextOrder := make([]FactID, len(w.insertionOrder), orderCapacity)
+			copy(nextOrder, w.insertionOrder)
+			w.insertionOrder = nextOrder
+		}
 	}
 	if slotCount > 0 {
 		w.reserveSlotStorage(saturatingAddInt(len(w.slotStorage), slotCount))
@@ -4909,7 +4993,7 @@ func (w *factWorkspace) reserveGeneratedCompactFactInsert(revision *Ruleset, slo
 	if w == nil {
 		return
 	}
-	w.reserveGeneratedFactRowInsert(revision)
+	w.reserveGeneratedFactMetadataInsert(revision)
 	if w.compactSlotStore == nil {
 		w.compactSlotStore = &factCompactSlotStore{}
 	}
@@ -4917,6 +5001,21 @@ func (w *factWorkspace) reserveGeneratedCompactFactInsert(revision *Ruleset, slo
 		nextCapacity := max(max(w.compactSlotStore.cap()*2, w.compactSlotStore.len()+slotCount), 16)
 		w.reserveCompactSlotStorage(nextCapacity)
 	}
+}
+
+func (w *factWorkspace) reserveGeneratedFactMetadataInsert(revision *Ruleset) {
+	if w == nil {
+		return
+	}
+	if len(w.insertionOrder) == cap(w.insertionOrder) {
+		nextCapacity := nextGeneratedFactCapacity(len(w.insertionOrder), cap(w.insertionOrder), revision)
+		if nextCapacity > cap(w.insertionOrder) {
+			nextOrder := make([]FactID, len(w.insertionOrder), nextCapacity)
+			copy(nextOrder, w.insertionOrder)
+			w.insertionOrder = nextOrder
+		}
+	}
+	w.reserveFactRowSequenceRows(1)
 }
 
 func (w *factWorkspace) reserveFactRowSequenceRows(factCount int) {
@@ -4959,6 +5058,19 @@ func (w *factWorkspace) storeFact(fact workingFact) *workingFact {
 	w.facts = append(w.facts, fact)
 	stored := &w.facts[len(w.facts)-1]
 	w.setFactRowIndex(stored.id, len(w.facts)-1)
+	return stored
+}
+
+func (w *factWorkspace) storeGeneratedCompactFact(fact workingFact) *workingFact {
+	if w == nil {
+		return nil
+	}
+	row := w.generatedFacts.append(fact)
+	if row < 0 {
+		return nil
+	}
+	w.setFactRowIndex(fact.id, encodeGeneratedFactRow(row))
+	stored, _ := w.generatedFacts.fact(row)
 	return stored
 }
 
@@ -5029,6 +5141,7 @@ func (w *factWorkspace) markGeneratedFactInsert() factWorkspaceInsertMark {
 		sequence:               w.sequence,
 		recency:                w.recency,
 		factsLen:               len(w.facts),
+		generatedFactsLen:      w.generatedFacts.len(),
 		insertionOrderLen:      len(w.insertionOrder),
 		slotStorageLen:         len(w.slotStorage),
 		compactSlotStoreLen:    w.compactSlotStore.len(),
@@ -5064,6 +5177,7 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 		}
 		w.facts = w.facts[:mark.factsLen]
 	}
+	w.generatedFacts.truncate(mark.generatedFactsLen)
 	w.rollbackGeneratedFactSlots(mark.slotStorageLen)
 	w.rollbackGeneratedCompactFactSlots(mark.compactSlotStoreLen)
 }
@@ -5081,6 +5195,7 @@ func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex 
 		factTargetIndexesDirty: w.factTargetIndexesDirty,
 		factIndex:              index,
 		fact:                   *fact,
+		compactSlotStoreLen:    w.compactSlotStore.len(),
 		restoreDuplicateIndex:  restoreDuplicateIndex,
 	}
 	mark.fact.payload = cloneWorkingFactPayload(fact.payload)
@@ -5101,7 +5216,10 @@ func (w *factWorkspace) rollbackFactModify(mark factWorkspaceModifyMark) {
 	}
 	if mark.factIndex >= 0 && mark.factIndex < len(w.facts) {
 		w.facts[mark.factIndex] = mark.fact
+	} else if row, generated := decodeGeneratedFactRow(mark.factIndex); generated {
+		w.generatedFacts.replace(row, &mark.fact)
 	}
+	w.rollbackGeneratedCompactFactSlots(mark.compactSlotStoreLen)
 }
 
 func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
@@ -5109,7 +5227,17 @@ func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	index, ok := w.factRowIndex(id)
-	if !ok || index < 0 || index >= len(w.facts) {
+	if !ok {
+		return nil, false
+	}
+	if row, generated := decodeGeneratedFactRow(index); generated {
+		fact, ok := w.generatedFacts.fact(row)
+		if !ok || fact.id != id {
+			return nil, false
+		}
+		return fact, true
+	}
+	if index < 0 || index >= len(w.facts) {
 		return nil, false
 	}
 	fact := &w.facts[index]
@@ -5117,6 +5245,25 @@ func (w *factWorkspace) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	return fact, true
+}
+
+func (w *factWorkspace) replaceWorkingFact(fact *workingFact) bool {
+	if w == nil || fact == nil {
+		return false
+	}
+	index, ok := w.factRowIndex(fact.id)
+	if !ok {
+		return false
+	}
+	if row, generated := decodeGeneratedFactRow(index); generated {
+		return w.generatedFacts.replace(row, fact)
+	}
+	if index < 0 || index >= len(w.facts) || w.facts[index].id != fact.id {
+		return false
+	}
+	w.facts[index] = *fact
+	w.facts[index].payload = cloneWorkingFactPayload(fact.payload)
+	return true
 }
 
 func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
@@ -5140,7 +5287,7 @@ func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
 }
 
 func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
-	if w == nil || id.IsZero() || row < 0 {
+	if w == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
 	if id.generation == w.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
@@ -5287,6 +5434,13 @@ func (w *factWorkspace) nextFactSequence() uint64 {
 		return 0
 	}
 	return w.sequence
+}
+
+func (w *factWorkspace) factCount() int {
+	if w == nil {
+		return 0
+	}
+	return len(w.facts) + w.generatedFacts.len()
 }
 
 func (w *factWorkspace) nextRecency() Recency {
@@ -5583,7 +5737,12 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 	}
 	fact.setFieldSlots(fieldSlots)
 
-	stored := w.storeFact(fact)
+	var stored *workingFact
+	if len(compactSlots.slots(w.compactSlotStore)) > 0 && len(fieldSlots) == 0 {
+		stored = w.storeGeneratedCompactFact(fact)
+	} else {
+		stored = w.storeFact(fact)
+	}
 	if plan.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
@@ -5646,12 +5805,12 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 		targetIndexesSkipped: indexMode == factTargetIndexSkip,
 	}
 	fact.setTemplateIdentity(templateKey, plan.templateID)
-	fact.setName(storedName)
 	if storedName != "" {
+		fact.setName(storedName)
 		fact.setTemplateKey(templateKey)
 	}
 
-	stored := w.storeFact(fact)
+	stored := w.storeGeneratedCompactFact(fact)
 	if plan.duplicatePolicy != DuplicateAllow {
 		w.factsByDuplicate.set(duplicateIndex, id)
 	}
@@ -6570,13 +6729,23 @@ func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
 }
 
 func (s *Session) factIDForDuplicateKey(key DuplicateKey) (FactID, bool) {
-	for i := range s.facts {
-		fact := &s.facts[i]
+	for _, id := range s.insertionOrder {
+		fact, ok := s.workingFactByID(id)
+		if !ok {
+			continue
+		}
 		if fact.publicDuplicateKey(s.revision, s.compactSlotStore) == key {
 			return fact.id, true
 		}
 	}
 	return FactID{}, false
+}
+
+func (s *Session) factCount() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.facts) + s.generatedFacts.len()
 }
 
 func (s *Session) activeFactWorkspace() factWorkspace {
@@ -6585,6 +6754,7 @@ func (s *Session) activeFactWorkspace() factWorkspace {
 		sequence:               s.nextFactSequence,
 		recency:                s.nextRecency,
 		facts:                  s.facts,
+		generatedFacts:         s.generatedFacts,
 		insertionOrder:         s.insertionOrder,
 		factsByID:              s.factsByID,
 		factsBySequence:        s.factsBySequence,
@@ -6601,6 +6771,7 @@ func (s *Session) clonedFactWorkspace() factWorkspace {
 	state := s.activeFactWorkspace()
 	state.compactSlotStore = cloneFactCompactSlotStore(state.compactSlotStore)
 	state.facts = cloneWorkingFacts(state.facts)
+	state.generatedFacts = cloneGeneratedFactStore(state.generatedFacts)
 	state.insertionOrder = cloneFactIDs(state.insertionOrder)
 	state.factsByID = cloneFactIDIndex(state.factsByID)
 	state.factsBySequence = cloneFactRowSequenceIndex(state.factsBySequence)
@@ -6618,6 +6789,7 @@ func (s *Session) commitFactWorkspace(state factWorkspace) {
 	s.nextFactSequence = state.sequence
 	s.nextRecency = state.recency
 	s.facts = state.facts
+	s.generatedFacts = state.generatedFacts
 	s.factsByID = state.factsByID
 	s.factsBySequence = state.factsBySequence
 	s.factsByDuplicate = state.factsByDuplicate
@@ -6637,6 +6809,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	s.nextFactSequence, workspace.sequence = workspace.sequence, s.nextFactSequence
 	s.nextRecency, workspace.recency = workspace.recency, s.nextRecency
 	s.facts, workspace.facts = workspace.facts, s.facts
+	s.generatedFacts, workspace.generatedFacts = workspace.generatedFacts, s.generatedFacts
 	s.factsByID, workspace.factsByID = workspace.factsByID, s.factsByID
 	s.factsBySequence, workspace.factsBySequence = workspace.factsBySequence, s.factsBySequence
 	s.factsByDuplicate, workspace.factsByDuplicate = workspace.factsByDuplicate, s.factsByDuplicate
@@ -6657,7 +6830,7 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 	if len(stats) == 0 {
 		return
 	}
-	var slotCount, compactSlotCount int
+	var factCount, slotCount, compactSlotCount int
 	s.agenda.forEachPendingActivation(func(current *activation) bool {
 		if current == nil {
 			return true
@@ -6666,17 +6839,19 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 		if stat.facts == 0 {
 			return true
 		}
+		factCount = saturatingAddInt(factCount, stat.facts)
 		slotCount = saturatingAddInt(slotCount, stat.slots)
 		compactSlotCount = saturatingAddInt(compactSlotCount, stat.compactSlots)
 		maximum := maxIntValue()
-		return slotCount < maximum && compactSlotCount < maximum
+		return factCount < maximum && slotCount < maximum && compactSlotCount < maximum
 	})
-	if slotCount == 0 && compactSlotCount == 0 {
+	if factCount == 0 && slotCount == 0 && compactSlotCount == 0 {
 		return
 	}
 	state := s.activeFactWorkspace()
-	state.reserveGeneratedFactCapacity(s.revision, slotCount, compactSlotCount)
+	state.reserveGeneratedFactCapacity(s.revision, factCount, slotCount, compactSlotCount)
 	s.facts = state.facts
+	s.generatedFacts = state.generatedFacts
 	s.insertionOrder = state.insertionOrder
 	s.factsBySequence = state.factsBySequence
 	s.factsByTemplate = state.factsByTemplate
@@ -6705,6 +6880,7 @@ func (s *Session) resetWorkingMemory() {
 	s.nextFactSequence = 0
 	s.nextRecency = 0
 	s.facts = nil
+	s.generatedFacts = generatedFactStore{}
 	s.factsByID = nil
 	s.factsBySequence = nil
 	s.factsByDuplicate = duplicateIndexes{}

@@ -681,7 +681,7 @@ func validateLargeSteadyStateHarnessSession(t testing.TB, session *Session, resu
 	if result.Status != RunCompleted || result.Fired != largeSteadyStateFiredCount(tc) {
 		t.Fatalf("%s run result = (%v, %d), want (%v, %d)", phase, result.Status, result.Fired, RunCompleted, largeSteadyStateFiredCount(tc))
 	}
-	if got := len(session.facts); got != largeSteadyStateFinalFacts(tc) {
+	if got := session.factCount(); got != largeSteadyStateFinalFacts(tc) {
 		t.Fatalf("%s final fact count = %d, want %d", phase, got, largeSteadyStateFinalFacts(tc))
 	}
 

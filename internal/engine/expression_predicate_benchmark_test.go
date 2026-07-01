@@ -69,7 +69,7 @@ func BenchmarkGessExpressionPredicatesResetOnly(b *testing.B) {
 				if result.Status != ResetApplied {
 					b.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
 				}
-				if got := len(session.facts); got != tc.initialFacts() {
+				if got := session.factCount(); got != tc.initialFacts() {
 					b.Fatalf("fact count after reset = %d, want %d", got, tc.initialFacts())
 				}
 				benchmarkExpressionPredicateResetResult = result
@@ -319,7 +319,7 @@ func assertExpressionPredicateBenchmarkResult(t testing.TB, session *Session, re
 	if result.Status != RunCompleted || result.Fired != tc.firedCount() {
 		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, tc.firedCount())
 	}
-	if got := len(session.facts); got != tc.finalFacts() {
+	if got := session.factCount(); got != tc.finalFacts() {
 		t.Fatalf("final fact count = %d, want %d", got, tc.finalFacts())
 	}
 }

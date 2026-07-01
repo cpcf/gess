@@ -525,8 +525,12 @@ func (s *Session) currentSupportGraph() SupportGraph {
 	sort.Slice(edges, func(i, j int) bool { return edges[i].SupportID < edges[j].SupportID })
 	counters := s.logicalSupportCounters
 	counters.CurrentSupportEdges = len(edges)
-	for i := range s.facts {
-		switch s.facts[i].resolvedSupportState() {
+	for _, id := range s.insertionOrder {
+		fact, ok := s.workingFactByID(id)
+		if !ok {
+			continue
+		}
+		switch fact.resolvedSupportState() {
 		case FactSupportLogical:
 			counters.CurrentLogicalFacts++
 		case FactSupportStatedAndLogical:
