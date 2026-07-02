@@ -44,7 +44,6 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 	out := ActionContext{
 		ctx:            ctx,
 		session:        session,
-		activationID:   activation.id,
 		activationKey:  activation.identity.key,
 		activationOrd:  activation.key.ordinal,
 		ruleID:         activation.ruleID,

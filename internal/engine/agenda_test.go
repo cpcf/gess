@@ -54,8 +54,8 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	if event.RuleRevisionID != rule.RevisionID() {
 		t.Fatalf("event rule revision ID = %q, want %q", event.RuleRevisionID, rule.RevisionID())
 	}
-	if event.ActivationID != pending[0].id {
-		t.Fatalf("event activation ID = %q, want %q", event.ActivationID, pending[0].id)
+	if event.ActivationID != pending[0].activationID() {
+		t.Fatalf("event activation ID = %q, want %q", event.ActivationID, pending[0].activationID())
 	}
 	if got, want := len(event.FactIDs), 1; got != want {
 		t.Fatalf("event fact IDs = %d, want %d", got, want)
@@ -74,8 +74,8 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	if got, want := len(agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after duplicate reconcile = %d, want %d", got, want)
 	}
-	if got := agenda.pendingActivations()[0].id; got != pending[0].id {
-		t.Fatalf("activation ID changed across duplicate reconcile: %q vs %q", got, pending[0].id)
+	if got := agenda.pendingActivations()[0].activationID(); got != pending[0].activationID() {
+		t.Fatalf("activation ID changed across duplicate reconcile: %q vs %q", got, pending[0].activationID())
 	}
 }
 
@@ -226,14 +226,14 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	if activated == nil || deactivated == nil {
 		t.Fatalf("missing activation transition kinds: %#v", changes)
 	}
-	if activated.activation.activationID() == initial.id {
+	if activated.activation.activationID() == initial.activationID() {
 		t.Fatalf("activation ID did not change after fact version changed: %q", activated.activation.activationID())
 	}
 	if len(activated.activation.bindings()) != 0 || len(activated.activation.path()) != 0 || len(activated.activation.factVersions()) != 0 {
 		t.Fatalf("activated change should stay compact: %#v", activated.activation)
 	}
-	if deactivated.activation.activationID() != initial.id {
-		t.Fatalf("deactivated activation ID = %q, want %q", deactivated.activation.activationID(), initial.id)
+	if deactivated.activation.activationID() != initial.activationID() {
+		t.Fatalf("deactivated activation ID = %q, want %q", deactivated.activation.activationID(), initial.activationID())
 	}
 	if deactivated.activation.status != activationStatusDeactivated {
 		t.Fatalf("deactivated status = %v, want deactivated", deactivated.activation.status)
@@ -241,7 +241,7 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	if len(deactivated.activation.bindings()) != 0 || len(deactivated.activation.path()) != 0 || len(deactivated.activation.factVersions()) != 0 {
 		t.Fatalf("deactivated change should stay compact: %#v", deactivated.activation)
 	}
-	if got := agenda.pendingActivations(); len(got) != 1 || got[0].id == initial.id {
+	if got := agenda.pendingActivations(); len(got) != 1 || got[0].activationID() == initial.activationID() {
 		t.Fatalf("pending activations after version change = %#v, want one new activation", got)
 	}
 }
@@ -536,13 +536,11 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations = %d, want %d", got, want)
 	}
-	if pending[0].id.IsZero() {
+	if pending[0].activationID().IsZero() {
 		t.Fatal("public pending activation ID is zero")
 	}
 	if stored, ok := agenda.activationByKeyPtr(pending[0].key); !ok {
 		t.Fatal("stored pending activation missing")
-	} else if !stored.id.IsZero() {
-		t.Fatalf("stored pending activation cached ID = %q, want derived only", stored.id)
 	} else if !stored.ruleID.IsZero() {
 		t.Fatalf("stored pending activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
@@ -551,7 +549,7 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if !ok {
 		t.Fatal("next returned no activation")
 	}
-	if selected.id.IsZero() {
+	if selected.activationID().IsZero() {
 		t.Fatal("selected public activation ID is zero")
 	}
 	rule := revision.rulesByRevisionID[selected.ruleRevisionID]
@@ -565,9 +563,6 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if stored.status != activationStatusConsumed {
 		t.Fatalf("stored activation status = %v, want consumed", stored.status)
 	}
-	if !stored.id.IsZero() {
-		t.Fatalf("stored consumed activation cached ID = %q, want derived only", stored.id)
-	}
 	if !stored.ruleID.IsZero() {
 		t.Fatalf("stored consumed activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
@@ -580,8 +575,8 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if stored.terminalID != 0 || !stored.terminalRow.isZero() {
 		t.Fatalf("stored consumed terminal ownership = (%d, %#v), want cleared", stored.terminalID, stored.terminalRow)
 	}
-	if got := stored.mutationOrigin().activationID(); got != selected.id {
-		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.id)
+	if got := stored.mutationOrigin().activationID(); got != selected.activationID() {
+		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.activationID())
 	}
 	actionCtx := newActionContext(ctx, nil, selected, nil)
 	origin := actionCtx.mutationOrigin()
@@ -591,8 +586,8 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if origin.RuleID != selected.ruleID {
 		t.Fatalf("action mutation origin rule ID = %q, want %q", origin.RuleID, selected.ruleID)
 	}
-	if got := origin.activationID(); got != selected.id {
-		t.Fatalf("action mutation origin activation ID = %q, want %q", got, selected.id)
+	if got := origin.activationID(); got != selected.activationID() {
+		t.Fatalf("action mutation origin activation ID = %q, want %q", got, selected.activationID())
 	}
 }
 
@@ -809,7 +804,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 		if !ok {
 			t.Fatalf("stored activation for key %#v missing", pending)
 		}
-		if !stored.ruleID.IsZero() || !stored.id.IsZero() || stored.payload != nil {
+		if !stored.ruleID.IsZero() || stored.payload != nil {
 			t.Fatalf("stored graph activation kept public fields: %#v", stored)
 		}
 	}
@@ -1253,8 +1248,8 @@ func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	if got, want := len(pending), 2; got != want {
 		t.Fatalf("pending collision activations = %d, want %d", got, want)
 	}
-	if pending[0].id == pending[1].id {
-		t.Fatalf("colliding activations reused public ID %q", pending[0].id)
+	if pending[0].activationID() == pending[1].activationID() {
+		t.Fatalf("colliding activations reused public ID %q", pending[0].activationID())
 	}
 
 	changes, err = agenda.reconcile(context.Background(), revision, results)
@@ -1315,8 +1310,8 @@ func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
 	if got, want := len(pending), 2; got != want {
 		t.Fatalf("pending fingerprint collision activations = %d, want %d", got, want)
 	}
-	if pending[0].id == pending[1].id {
-		t.Fatalf("fingerprint collision reused public activation ID %q", pending[0].id)
+	if pending[0].activationID() == pending[1].activationID() {
+		t.Fatalf("fingerprint collision reused public activation ID %q", pending[0].activationID())
 	}
 	if pending[0].identity.key == pending[1].identity.key {
 		t.Fatalf("test did not create distinct full identities: %#v", pending)
@@ -1388,8 +1383,8 @@ func TestAgendaScopedActivationFingerprintDoesNotRequeueConsumedActivation(t *te
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending after consumed scoped activation = %d, want %d", got, want)
 	}
-	if pending[0].id == selected.id {
-		t.Fatalf("consumed activation was requeued: %q", selected.id)
+	if pending[0].activationID() == selected.activationID() {
+		t.Fatalf("consumed activation was requeued: %q", selected.activationID())
 	}
 	if got, ok := agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
 		t.Fatalf("consumed activation after scoped reconcile = %#v, ok=%v", got, ok)
@@ -1559,8 +1554,8 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	if changes[0].kind != agendaChangeDeactivated {
 		t.Fatalf("purge change kind = %v, want deactivated", changes[0].kind)
 	}
-	if changes[0].activation.activationID() != remaining[0].id {
-		t.Fatalf("purge deactivated activation = %q, want %q", changes[0].activation.activationID(), remaining[0].id)
+	if changes[0].activation.activationID() != remaining[0].activationID() {
+		t.Fatalf("purge deactivated activation = %q, want %q", changes[0].activation.activationID(), remaining[0].activationID())
 	}
 	if changes[0].activation.status != activationStatusDeactivated {
 		t.Fatalf("purge deactivated status = %v, want deactivated", changes[0].activation.status)
@@ -1714,8 +1709,8 @@ func TestAgendaReconcileDeactivatesMissingPendingActivation(t *testing.T) {
 	if changes[0].kind != agendaChangeDeactivated {
 		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
 	}
-	if changes[0].activation.activationID() != initial.id {
-		t.Fatalf("deactivated activation ID = %q, want %q", changes[0].activation.activationID(), initial.id)
+	if changes[0].activation.activationID() != initial.activationID() {
+		t.Fatalf("deactivated activation ID = %q, want %q", changes[0].activation.activationID(), initial.activationID())
 	}
 	if got := agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after retract = %#v, want none", got)
@@ -1798,8 +1793,8 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if pending[0].id == selected.id {
-		t.Fatalf("reset reused consumed activation ID %q", selected.id)
+	if pending[0].activationID() == selected.activationID() {
+		t.Fatalf("reset reused consumed activation ID %q", selected.activationID())
 	}
 	if pending[0].generation != 2 {
 		t.Fatalf("reset activation generation = %d, want 2", pending[0].generation)
@@ -1808,8 +1803,8 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if got, want := len(byRevision), 1; got != want {
 		t.Fatalf("activations by revision after reset = %d, want %d", got, want)
 	}
-	if byRevision[0].id != pending[0].id {
-		t.Fatalf("revision index activation = %q, want %q", byRevision[0].id, pending[0].id)
+	if byRevision[0].activationID() != pending[0].activationID() {
+		t.Fatalf("revision index activation = %q, want %q", byRevision[0].activationID(), pending[0].activationID())
 	}
 
 	results = mustAgendaMatchResults(t, revision, session)
@@ -1820,7 +1815,7 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if got := len(changes); got != 0 {
 		t.Fatalf("post-reset reconcile changes = %d, want none", got)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 1 || got[0].id == selected.id {
+	if got := session.agenda.pendingActivations(); len(got) != 1 || got[0].activationID() == selected.activationID() {
 		t.Fatalf("post-reset pending activations = %#v, want new activation ID", got)
 	}
 }
@@ -1893,8 +1888,8 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 	if changes[0].activation.ruleRevisionID != rule2.RevisionID() {
 		t.Fatalf("new activation revision = %q, want %q", changes[0].activation.ruleRevisionID, rule2.RevisionID())
 	}
-	if changes[0].activation.activationID() == first.id {
-		t.Fatalf("new activation ID reused consumed activation ID %q", first.id)
+	if changes[0].activation.activationID() == first.activationID() {
+		t.Fatalf("new activation ID reused consumed activation ID %q", first.activationID())
 	}
 	if got := agenda.pendingActivations(); len(got) != 1 || got[0].ruleRevisionID != rule2.RevisionID() {
 		t.Fatalf("pending activations after revision replace = %#v", got)
@@ -1904,37 +1899,37 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 	}
 }
 
-func TestActivationLessOrdersBySalienceRecencyAndID(t *testing.T) {
+func TestActivationLessOrdersBySalienceRecencyAndCompactIdentity(t *testing.T) {
 	acts := []activation{
 		{
-			id:               ActivationID("z"),
 			salience:         20,
 			maxRecency:       1,
 			aggregateRecency: 1,
+			identity:         candidateIdentity{key: candidateIdentityKey{hash: 5}},
 		},
 		{
-			id:               ActivationID("y"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 9,
+			identity:         candidateIdentity{key: candidateIdentityKey{hash: 4}},
 		},
 		{
-			id:               ActivationID("x"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
+			identity:         candidateIdentity{key: candidateIdentityKey{hash: 3}},
 		},
 		{
-			id:               ActivationID("b"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
+			identity:         candidateIdentity{key: candidateIdentityKey{hash: 2}},
 		},
 		{
-			id:               ActivationID("a"),
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
+			identity:         candidateIdentity{key: candidateIdentityKey{hash: 1}},
 		},
 	}
 
@@ -1942,11 +1937,11 @@ func TestActivationLessOrdersBySalienceRecencyAndID(t *testing.T) {
 		return activationLess(&acts[i], &acts[j])
 	})
 
-	got := []ActivationID{acts[0].id, acts[1].id, acts[2].id, acts[3].id, acts[4].id}
-	want := []ActivationID{"z", "y", "a", "b", "x"}
+	got := []uint64{acts[0].identity.key.hash, acts[1].identity.key.hash, acts[2].identity.key.hash, acts[3].identity.key.hash, acts[4].identity.key.hash}
+	want := []uint64{5, 4, 1, 2, 3}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("sorted activation %d = %q, want %q", i, got[i], want[i])
+			t.Fatalf("sorted activation %d hash = %d, want %d", i, got[i], want[i])
 		}
 	}
 }
@@ -2021,10 +2016,11 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 
 func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 	activation := activation{
-		id:             ActivationID("activation"),
 		ruleID:         RuleID("rule"),
 		ruleRevisionID: RuleRevisionID("revision"),
 		generation:     1,
+		identity:       candidateIdentity{key: candidateIdentityKey{scopeHash: 1, hash: 2}},
+		key:            activationKey{ordinal: 3},
 	}
 	activation.setFactIDs([]FactID{newFactID(1, 2)})
 	change := agendaChange{
@@ -2036,7 +2032,7 @@ func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 	if event.Type != EventRuleActivated {
 		t.Fatalf("event type = %q, want %q", event.Type, EventRuleActivated)
 	}
-	if event.RuleID != "rule" || event.RuleRevisionID != "revision" || event.ActivationID != "activation" {
+	if event.RuleID != "rule" || event.RuleRevisionID != "revision" || event.ActivationID != activation.activationID() {
 		t.Fatalf("activation event metadata = %#v", event)
 	}
 	if got, want := len(event.FactIDs), 1; got != want {
@@ -2072,7 +2068,7 @@ func TestSessionReconcileAgendaEmitsActivationEvents(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after assert = %d, want %d", got, want)
 	}
-	activationID := pending[0].id
+	activationID := pending[0].activationID()
 	snapshot := mustSnapshot(t, context.Background(), session)
 	changes, err := session.reconcileAgenda(context.Background(), snapshot)
 	if err != nil {
@@ -2165,7 +2161,7 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if pending[0].id == initialID {
+	if pending[0].activationID() == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
 	if pending[0].generation != 2 {
@@ -2239,7 +2235,7 @@ func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if pending[0].id == initialID {
+	if pending[0].activationID() == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
 	if pending[0].generation != 2 {
@@ -2368,7 +2364,7 @@ func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testin
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if pending[0].id == initialID {
+	if pending[0].activationID() == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
 	if got, want := len(pending[0].factIDs()), 2; got != want {
@@ -2587,14 +2583,12 @@ func compactAgendaChangeActivationForCompare(owner *agenda, act *activation) act
 	out := *act
 	if owner != nil {
 		public := owner.publicActivation(act)
-		out.id = public.id
 		out.payload = nil
 		out.setFactIDs(cloneFactIDs(public.factIDs()))
 		out.setFactVersions(cloneFactVersions(public.factVersions()))
 		out.setBindings(cloneBindingTupleEntries(public.bindings()))
 		out.setPath(cloneIntPath(public.path()))
 	} else {
-		out.id = act.activationID()
 		out.setFactIDs(cloneActivationFactIDs(act))
 	}
 	out.payload = nil

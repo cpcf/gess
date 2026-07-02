@@ -181,8 +181,8 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	if ctx.bindings.snapshots != nil {
 		t.Fatal("action context materialized binding snapshots before they were read")
 	}
-	if got := ctx.ActivationID(); got != selected.id {
-		t.Fatalf("activation ID = %q, want %q", got, selected.id)
+	if got := ctx.ActivationID(); got != selected.activationID() {
+		t.Fatalf("activation ID = %q, want %q", got, selected.activationID())
 	}
 	if ctx.bindings.snapshots != nil {
 		t.Fatal("metadata access materialized binding snapshots")
@@ -1203,8 +1203,8 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	if rulesetID != revision.ID() {
 		t.Fatalf("action context ruleset ID = %q, want %q", rulesetID, revision.ID())
 	}
-	if activationID != selected.id {
-		t.Fatalf("action context activation ID = %q, want %q", activationID, selected.id)
+	if activationID != selected.activationID() {
+		t.Fatalf("action context activation ID = %q, want %q", activationID, selected.activationID())
 	}
 	if ruleID != selected.ruleID {
 		t.Fatalf("action context rule ID = %q, want %q", ruleID, selected.ruleID)
@@ -1261,13 +1261,13 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	if events[3].Type != EventRuleActivated {
 		t.Fatalf("fourth event type = %q, want %q", events[3].Type, EventRuleActivated)
 	}
-	if events[2].RuleID != selected.ruleID || events[2].RuleRevisionID != selected.ruleRevisionID || events[2].ActivationID != selected.id {
+	if events[2].RuleID != selected.ruleID || events[2].RuleRevisionID != selected.ruleRevisionID || events[2].ActivationID != selected.activationID() {
 		t.Fatalf("modify event origin = %#v", events[2])
 	}
 	if events[2].Delta == nil {
 		t.Fatal("modify event missing delta")
 	}
-	if events[2].Delta.RuleID != selected.ruleID || events[2].Delta.RuleRevisionID != selected.ruleRevisionID || events[2].Delta.ActivationID != selected.id {
+	if events[2].Delta.RuleID != selected.ruleID || events[2].Delta.RuleRevisionID != selected.ruleRevisionID || events[2].Delta.ActivationID != selected.activationID() {
 		t.Fatalf("modify delta origin = %#v", events[2].Delta)
 	}
 	if !inserted.Inserted() {
@@ -1388,14 +1388,14 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	if createdEvent.Type != EventFactAsserted {
 		t.Fatalf("created event type = %v, want %v", createdEvent.Type, EventFactAsserted)
 	}
-	if createdEvent.Delta == nil || createdEvent.Delta.ActivationID != selected.id || createdEvent.Delta.RuleID != selected.ruleID || createdEvent.Delta.RuleRevisionID != selected.ruleRevisionID {
+	if createdEvent.Delta == nil || createdEvent.Delta.ActivationID != selected.activationID() || createdEvent.Delta.RuleID != selected.ruleID || createdEvent.Delta.RuleRevisionID != selected.ruleRevisionID {
 		t.Fatalf("created event delta origin = %#v", createdEvent.Delta)
 	}
 
 	if !firstResult.Inserted() {
 		t.Fatalf("first assert result = %v, want inserted", firstResult.Status)
 	}
-	if firstResult.Delta == nil || firstResult.Delta.ActivationID != selected.id || firstResult.Delta.RuleID != selected.ruleID || firstResult.Delta.RuleRevisionID != selected.ruleRevisionID {
+	if firstResult.Delta == nil || firstResult.Delta.ActivationID != selected.activationID() || firstResult.Delta.RuleID != selected.ruleID || firstResult.Delta.RuleRevisionID != selected.ruleRevisionID {
 		t.Fatalf("first assert delta origin = %#v", firstResult.Delta)
 	}
 	if secondResult.Status != AssertExisting {
@@ -2301,7 +2301,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
-	selectionID = selected.id
+	selectionID = selected.activationID()
 	selectionRuleID = selected.ruleID
 	selectionRevID = selected.ruleRevisionID
 

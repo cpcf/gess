@@ -266,8 +266,8 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 	if pending[0].ruleRevisionID != rule2.RevisionID() {
 		t.Fatalf("replacement activation revision = %q, want %q", pending[0].ruleRevisionID, rule2.RevisionID())
 	}
-	if pending[0].id == oldActivation.id {
-		t.Fatalf("replacement activation reused old activation id %q", oldActivation.id)
+	if pending[0].activationID() == oldActivation.activationID() {
+		t.Fatalf("replacement activation reused old activation id %q", oldActivation.activationID())
 	}
 }
 
@@ -427,7 +427,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if !ok || keptAfterApply.status != activationStatusConsumed {
 		t.Fatalf("unchanged consumed activation after unrelated change = %#v, ok=%v", keptAfterApply, ok)
 	}
-	if got, want := keptAfterApply.id, kept.id; got != want {
+	if got, want := keptAfterApply.activationID(), kept.activationID(); got != want {
 		t.Fatalf("unchanged activation ID after unrelated change = %q, want %q", got, want)
 	}
 	if got, want := keptAfterApply.factIDs(), []FactID{inserted.Fact.ID()}; !reflect.DeepEqual(got, want) {

@@ -107,8 +107,8 @@ func BenchmarkActionContextCreationLoan(b *testing.B) {
 		}
 		benchmarkActionContext = ctx
 	}
-	if benchmarkActionContext.ActivationID() != activation.id {
-		b.Fatalf("activation context ID = %q, want %q", benchmarkActionContext.ActivationID(), activation.id)
+	if benchmarkActionContext.ActivationID() != activation.activationID() {
+		b.Fatalf("activation context ID = %q, want %q", benchmarkActionContext.ActivationID(), activation.activationID())
 	}
 }
 
@@ -124,8 +124,8 @@ func BenchmarkActionContextCreationClaims(b *testing.B) {
 		}
 		benchmarkActionContext = ctx
 	}
-	if benchmarkActionContext.ActivationID() != activation.id {
-		b.Fatalf("activation context ID = %q, want %q", benchmarkActionContext.ActivationID(), activation.id)
+	if benchmarkActionContext.ActivationID() != activation.activationID() {
+		b.Fatalf("activation context ID = %q, want %q", benchmarkActionContext.ActivationID(), activation.activationID())
 	}
 }
 

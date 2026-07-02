@@ -340,7 +340,6 @@ func (s activationStatus) String() string {
 }
 
 type activation struct {
-	id               ActivationID
 	key              activationKey
 	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
@@ -365,7 +364,7 @@ type activationPayload struct {
 
 func (a activation) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
-		ActivationID:          a.id,
+		ActivationID:          a.activationID(),
 		RuleID:                a.ruleID,
 		RuleRevisionID:        a.ruleRevisionID,
 		activationIdentityKey: a.identity.key,
@@ -374,9 +373,6 @@ func (a activation) mutationOrigin() mutationOrigin {
 }
 
 func (a activation) activationID() ActivationID {
-	if !a.id.IsZero() {
-		return a.id
-	}
 	return activationIDForIdentityKey(a.identity.key, a.key.ordinal)
 }
 
@@ -384,15 +380,11 @@ func (a *activation) ensureActivationID() ActivationID {
 	if a == nil {
 		return ""
 	}
-	if a.id.IsZero() {
-		a.id = activationIDForIdentityKey(a.identity.key, a.key.ordinal)
-	}
-	return a.id
+	return a.activationID()
 }
 
 func (a activation) clone() activation {
 	out := a
-	out.id = a.activationID()
 	out.payload = nil
 	out.setBindings(cloneBindingTupleEntries(a.bindings()))
 	out.setFactIDs(cloneActivationFactIDs(&a))
@@ -546,7 +538,6 @@ func (a *agenda) publicActivation(act *activation) activation {
 	if out.ruleID.IsZero() {
 		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
 	}
-	out.id = act.activationID()
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
 	out.setFactVersions(cloneActivationFactVersions(act))
@@ -1910,27 +1901,27 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 }
 
 func (a *agenda) next() (activation, bool) {
-	return a.nextActivation(true)
+	return a.nextActivation()
 }
 
 func (a *agenda) nextInternal() (activation, bool) {
-	return a.nextActivation(false)
+	return a.nextActivation()
 }
 
-func (a *agenda) nextActivation(materializeID bool) (activation, bool) {
-	_, out, ok := a.nextActivationPtr(materializeID)
+func (a *agenda) nextActivation() (activation, bool) {
+	_, out, ok := a.nextActivationPtr()
 	return out, ok
 }
 
 func (a *agenda) nextInternalPtr() (*activation, activation, bool) {
-	return a.nextActivationPtr(false)
+	return a.nextActivationPtr()
 }
 
 func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activation, bool) {
-	return a.nextActivationPtrForModule(module, false)
+	return a.nextActivationPtrForModule(module)
 }
 
-func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation, bool) {
+func (a *agenda) nextActivationPtr() (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
 	}
@@ -1952,7 +1943,7 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 			continue
 		}
 		current.status = activationStatusConsumed
-		selected := a.activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -1963,7 +1954,7 @@ func (a *agenda) nextActivationPtr(materializeID bool) (*activation, activation,
 	return nil, activation{}, false
 }
 
-func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID bool) (*activation, activation, bool) {
+func (a *agenda) nextActivationPtrForModule(module ModuleName) (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
 	}
@@ -1988,7 +1979,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		}
 		a.pendingHead++
 		current.status = activationStatusConsumed
-		selected := a.activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -2011,7 +2002,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName, materializeID boo
 		a.pending = a.pending[:last]
 		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
-		selected := a.activationRunSnapshot(current, materializeID)
+		selected := a.activationRunSnapshot(current)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
@@ -2022,14 +2013,13 @@ func compactConsumedTokenActivation(current *activation) {
 	if current == nil || current.status != activationStatusConsumed || current.token.isZero() {
 		return
 	}
-	current.id = ""
 	current.payload = nil
 	current.terminalID = 0
 	current.terminalRow = graphTokenRowHandle{}
 }
 
-func (a *agenda) activationRunSnapshot(current *activation, materializeID bool) activation {
-	out := activationRunSnapshot(current, materializeID)
+func (a *agenda) activationRunSnapshot(current *activation) activation {
+	out := activationRunSnapshot(current)
 	if out.ruleID.IsZero() {
 		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
 	}
@@ -2058,26 +2048,18 @@ func (a *agenda) ruleIDForRevision(id RuleRevisionID) RuleID {
 	return rule.id
 }
 
-func activationRunSnapshot(current *activation, materializeID bool) activation {
+func activationRunSnapshot(current *activation) activation {
 	if current == nil {
 		return activation{}
 	}
 	if current.token.isZero() {
 		out := *current
 		out.payload = nil
-		if materializeID {
-			out.id = current.activationID()
-		}
 		out.setFactIDs(cloneFactIDs(current.factIDs()))
 		out.setFactVersions(cloneFactVersions(current.factVersions()))
 		return out
 	}
-	id := current.id
-	if materializeID {
-		id = current.activationID()
-	}
 	return activation{
-		id:               id,
 		key:              current.key,
 		ruleID:           current.ruleID,
 		ruleRevisionID:   current.ruleRevisionID,
@@ -2515,9 +2497,6 @@ func activationLess(left, right *activation) bool {
 	if left.aggregateRecency != right.aggregateRecency {
 		return left.aggregateRecency > right.aggregateRecency
 	}
-	if !left.id.IsZero() || !right.id.IsZero() {
-		return left.activationID() < right.activationID()
-	}
 	if left.identity.key.scopeHash < right.identity.key.scopeHash {
 		return true
 	}
@@ -2558,9 +2537,6 @@ func (a *agenda) activationLess(left, right *activation) bool {
 		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
 			return leftRule.declarationOrder < rightRule.declarationOrder
 		}
-	}
-	if !left.id.IsZero() || !right.id.IsZero() {
-		return left.activationID() < right.activationID()
 	}
 	if left.identity.key.scopeHash < right.identity.key.scopeHash {
 		return true

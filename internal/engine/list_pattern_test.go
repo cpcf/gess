@@ -73,7 +73,7 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	if len(pending) != 2 {
 		t.Fatalf("pending activations = %d, want 2", len(pending))
 	}
-	before := activationForFactID(t, pending, first.Fact.ID()).id
+	before := activationForFactID(t, pending, first.Fact.ID()).activationID()
 
 	if _, err := session.Modify(ctx, first.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{
 		"tags": []any{"vip", "green", "active"},
@@ -81,7 +81,7 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 		t.Fatalf("Modify first tags: %v", err)
 	}
 	afterPending := session.agenda.pendingActivations()
-	after := activationForFactID(t, afterPending, first.Fact.ID()).id
+	after := activationForFactID(t, afterPending, first.Fact.ID()).activationID()
 	if before == after {
 		t.Fatalf("activation ID did not change after segment binding value changed: %q", before)
 	}

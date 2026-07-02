@@ -3945,10 +3945,6 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if stored.identity != identity {
 		t.Fatalf("activation identity = %#v, want terminal token identity %#v", stored.identity, identity)
 	}
-	if !stored.id.IsZero() {
-		t.Fatalf("stored activation ID = %q, want lazy zero ID", stored.id)
-	}
-
 	duplicateTokens := append(cloneTerminalTokenDeltas(tokens), tokens[0])
 	agenda := newAgenda()
 	changes, err := agenda.reconcileTerminalTokens(ctx, revision, duplicateTokens)
@@ -4626,7 +4622,7 @@ func activationFactIDForTemplate(t *testing.T, session *Session, activation acti
 			return id
 		}
 	}
-	t.Fatalf("activation %q has no fact for template %q", activation.id, templateKey)
+	t.Fatalf("activation %q has no fact for template %q", activation.activationID(), templateKey)
 	return FactID{}
 }
 
