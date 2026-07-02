@@ -2409,7 +2409,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		initialAgenda = newAgenda()
 		initialAgenda.propagationCounters = s.propagationCounters
 	}
-	if !resetAgendaWithInitialAgenda && s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
+	if len(s.listeners) > 0 && !resetAgendaWithInitialAgenda && s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
 		tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
