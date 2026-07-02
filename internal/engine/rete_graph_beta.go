@@ -68,7 +68,6 @@ type reteGraphAlphaMemory struct {
 
 type reteGraphAggregateNodeMemory struct {
 	buckets reteGraphAggregateBucketTable
-	numeric reteGraphAggregateNumericState
 }
 
 type reteGraphAggregateBucketID int
@@ -81,32 +80,18 @@ type reteGraphAggregateBucketTable struct {
 }
 
 type reteGraphAggregateBucket struct {
-	id               reteGraphAggregateBucketID
-	parent           tokenRef
-	countOnlyMembers map[graphTokenIdentityKey]FactID
-	scalarMembers    map[graphTokenIdentityKey]reteGraphAggregateScalarMember
-	count            int64
-	extrema          []reteGraphAggregateExtremumState
-	token            tokenRef
-	hasValue         bool
-}
-
-type reteGraphAggregateNumericState struct {
-	specCount int
-	intSums   []int64
-	floatSums []float64
-	floaty    []bool
+	id          reteGraphAggregateBucketID
+	parent      tokenRef
+	inputTokens []tokenRef
+	accumulator reteGraphAccumulatorState
+	token       tokenRef
+	hasValue    bool
 }
 
 type reteGraphAggregateScalarMember struct {
 	factID FactID
 	first  Value
 	rest   []Value
-}
-
-type reteGraphAggregateExtremumState struct {
-	current Value
-	have    bool
 }
 
 type reteGraphAggregateCollectEntry struct {
@@ -1535,23 +1520,16 @@ func (m *reteGraphAggregateNodeMemory) clear() {
 		return
 	}
 	m.buckets.clear()
-	m.numeric.clear()
 }
 
 func (m *reteGraphAggregateBucket) clear() {
 	if m == nil {
 		return
 	}
-	if m.countOnlyMembers != nil {
-		clear(m.countOnlyMembers)
-	}
-	if m.scalarMembers != nil {
-		clear(m.scalarMembers)
-	}
 	m.parent = tokenRef{}
-	m.count = 0
-	clear(m.extrema)
-	m.extrema = m.extrema[:0]
+	clear(m.inputTokens)
+	m.inputTokens = m.inputTokens[:0]
+	m.accumulator.clear()
 	m.token = tokenRef{}
 	m.hasValue = false
 }
@@ -2850,7 +2828,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		return
 	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-	values, ok := memory.bucketResults(node, bucket)
+	values, ok := memory.bucketResults(m.context(), node, bucket)
 	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateOutputTokenValuesEqual(bucket.token, node, values) {
 		return
 	}
@@ -2921,7 +2899,6 @@ func (m *reteGraphAggregateNodeMemory) recycleBucket(bucket *reteGraphAggregateB
 	if m == nil || bucket == nil {
 		return
 	}
-	m.numeric.clearBucket(bucket.id)
 	m.buckets.recycle(bucket)
 }
 
@@ -2974,131 +2951,11 @@ func (m *reteGraphAggregateNodeMemory) bucketCount() int {
 	return m.buckets.len()
 }
 
-func (m *reteGraphAggregateNodeMemory) bucketResults(node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket) ([]Value, bool) {
+func (m *reteGraphAggregateNodeMemory) bucketResults(ctx context.Context, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket) ([]Value, bool) {
 	if m == nil || bucket == nil {
 		return nil, false
 	}
-	return bucket.results(node, &m.numeric)
-}
-
-func (s *reteGraphAggregateNumericState) clear() {
-	if s == nil {
-		return
-	}
-	clear(s.intSums)
-	s.intSums = s.intSums[:0]
-	clear(s.floatSums)
-	s.floatSums = s.floatSums[:0]
-	clear(s.floaty)
-	s.floaty = s.floaty[:0]
-	s.specCount = 0
-}
-
-func (s *reteGraphAggregateNumericState) clearBucket(id reteGraphAggregateBucketID) {
-	if s == nil || s.specCount <= 0 || id < 0 {
-		return
-	}
-	start := int(id) * s.specCount
-	end := start + s.specCount
-	if start < 0 || end > len(s.intSums) || end > len(s.floatSums) || end > len(s.floaty) {
-		return
-	}
-	clear(s.intSums[start:end])
-	clear(s.floatSums[start:end])
-	clear(s.floaty[start:end])
-}
-
-func (s *reteGraphAggregateNumericState) offset(id reteGraphAggregateBucketID, specs int, index int) (int, bool) {
-	if s == nil || id < 0 || specs <= 0 || index < 0 || index >= specs {
-		return 0, false
-	}
-	if s.specCount == 0 {
-		s.specCount = specs
-	}
-	if s.specCount != specs {
-		return 0, false
-	}
-	offset := int(id)*s.specCount + index
-	need := offset + 1
-	if need > len(s.intSums) {
-		s.intSums = append(s.intSums, make([]int64, need-len(s.intSums))...)
-	}
-	if need > len(s.floatSums) {
-		s.floatSums = append(s.floatSums, make([]float64, need-len(s.floatSums))...)
-	}
-	if need > len(s.floaty) {
-		s.floaty = append(s.floaty, make([]bool, need-len(s.floaty))...)
-	}
-	return offset, true
-}
-
-func (s *reteGraphAggregateNumericState) addSum(id reteGraphAggregateBucketID, specs int, index int, value Value) error {
-	offset, ok := s.offset(id, specs, index)
-	if !ok {
-		return fmt.Errorf("%w: aggregate numeric state unavailable", ErrAggregateEvaluation)
-	}
-	switch value.Kind() {
-	case ValueInt:
-		if s.floaty[offset] {
-			s.floatSums[offset] += float64(value.intValue)
-			return nil
-		}
-		next, overflow := safeAddInt64(s.intSums[offset], value.intValue)
-		if overflow {
-			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
-		}
-		s.intSums[offset] = next
-	case ValueFloat:
-		if !s.floaty[offset] {
-			s.floatSums[offset] = float64(s.intSums[offset])
-			s.intSums[offset] = 0
-			s.floaty[offset] = true
-		}
-		s.floatSums[offset] += value.floatValue
-	default:
-		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
-	}
-	return nil
-}
-
-func (s *reteGraphAggregateNumericState) removeSumValue(bucket *reteGraphAggregateBucket, node *reteGraphAggregateNode, index int, value Value) {
-	if s == nil || bucket == nil || node == nil {
-		return
-	}
-	offset, ok := s.offset(bucket.id, len(node.specs), index)
-	if !ok {
-		return
-	}
-	switch value.Kind() {
-	case ValueInt:
-		if s.floaty[offset] {
-			s.floatSums[offset] -= float64(value.intValue)
-			return
-		}
-		s.intSums[offset] -= value.intValue
-	case ValueFloat:
-		if !s.floaty[offset] {
-			s.floatSums[offset] = float64(s.intSums[offset])
-			s.intSums[offset] = 0
-			s.floaty[offset] = true
-		}
-		s.floatSums[offset] -= value.floatValue
-	}
-}
-
-func (s *reteGraphAggregateNumericState) sumValue(id reteGraphAggregateBucketID, specs int, index int) (Value, bool) {
-	offset, ok := s.offset(id, specs, index)
-	if !ok {
-		return Value{}, false
-	}
-	if s.floaty[offset] {
-		value, err := canonicalFloat(s.floatSums[offset])
-		if err != nil {
-			return Value{}, false
-		}
-		return value, true
-	}
-	return newIntValue(s.intSums[offset]), true
+	return bucket.results(ctx, node)
 }
 
 func (t *reteGraphAggregateBucketTable) len() int {
@@ -3249,11 +3106,195 @@ func (t *reteGraphAggregateBucketTable) forEachKey(fn func(graphTokenIdentityKey
 	}
 }
 
-func (m *reteGraphAggregateBucket) addScalarMember(node *reteGraphAggregateNode, member reteGraphAggregateScalarMember, numeric *reteGraphAggregateNumericState) error {
+func (m *reteGraphAggregateBucket) addInputToken(token tokenRef) bool {
+	if m == nil || token.isZero() {
+		return false
+	}
+	for _, existing := range m.inputTokens {
+		if tokenRefEqual(existing, token) {
+			return false
+		}
+	}
+	m.inputTokens = append(m.inputTokens, token)
+	return true
+}
+
+func (m *reteGraphAggregateBucket) removeInputToken(token tokenRef) bool {
+	if m == nil || token.isZero() {
+		return false
+	}
+	for i, existing := range m.inputTokens {
+		if !tokenRefEqual(existing, token) {
+			continue
+		}
+		last := len(m.inputTokens) - 1
+		m.inputTokens[i] = m.inputTokens[last]
+		m.inputTokens[last] = tokenRef{}
+		m.inputTokens = m.inputTokens[:last]
+		return true
+	}
+	return false
+}
+
+func (m *reteGraphAggregateBucket) removeInputTokensContainingFact(id FactID) bool {
+	if m == nil || id.IsZero() {
+		return false
+	}
+	changed := false
+	for i := 0; i < len(m.inputTokens); {
+		token := m.inputTokens[i]
+		if token.isZero() || !token.containsFact(id) {
+			i++
+			continue
+		}
+		last := len(m.inputTokens) - 1
+		m.inputTokens[i] = m.inputTokens[last]
+		m.inputTokens[last] = tokenRef{}
+		m.inputTokens = m.inputTokens[:last]
+		changed = true
+	}
+	return changed
+}
+
+func (m *reteGraphAggregateBucket) results(ctx context.Context, node *reteGraphAggregateNode) ([]Value, bool) {
 	if m == nil || node == nil {
+		return nil, false
+	}
+	if !m.accumulator.initializedFor(node) {
+		if !m.rebuildAccumulator(ctx, node) {
+			return nil, false
+		}
+	}
+	return m.accumulator.results(node)
+}
+
+func (m *reteGraphAggregateBucket) rebuildAccumulator(ctx context.Context, node *reteGraphAggregateNode) bool {
+	if m == nil || node == nil {
+		return false
+	}
+	m.accumulator.reset(node)
+	for _, token := range m.inputTokens {
+		if !m.addAccumulatorToken(ctx, node, token) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *reteGraphAggregateBucket) addAccumulatorToken(ctx context.Context, node *reteGraphAggregateNode, token tokenRef) bool {
+	if m == nil || node == nil || token.isZero() {
+		return false
+	}
+	if !m.accumulator.initializedFor(node) {
+		m.accumulator.reset(node)
+	}
+	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
+	if !ok {
+		return false
+	}
+	member, ok := aggregateScalarMemberFromToken(ctx, node, match, token)
+	if !ok {
+		return false
+	}
+	return m.accumulator.addToken(node, token, member) == nil
+}
+
+type reteGraphAccumulatorState struct {
+	initialized bool
+	specCount   int
+	count       int64
+	intSums     []int64
+	floatSums   []float64
+	floaty      []bool
+	extrema     []reteGraphAccumulatorExtremum
+	collects    [][]reteGraphAggregateCollectEntry
+}
+
+type reteGraphAccumulatorExtremum struct {
+	current Value
+	have    bool
+}
+
+func (s *reteGraphAccumulatorState) initializedFor(node *reteGraphAggregateNode) bool {
+	if s == nil || node == nil {
+		return false
+	}
+	return s.initialized && s.specCount == len(node.specs)
+}
+
+func (s *reteGraphAccumulatorState) clear() {
+	if s == nil {
+		return
+	}
+	s.initialized = false
+	s.specCount = 0
+	s.count = 0
+	clear(s.intSums)
+	s.intSums = s.intSums[:0]
+	clear(s.floatSums)
+	s.floatSums = s.floatSums[:0]
+	clear(s.floaty)
+	s.floaty = s.floaty[:0]
+	clear(s.extrema)
+	s.extrema = s.extrema[:0]
+	for i := range s.collects {
+		clear(s.collects[i])
+		s.collects[i] = s.collects[i][:0]
+	}
+	s.collects = s.collects[:0]
+}
+
+func (s *reteGraphAccumulatorState) reset(node *reteGraphAggregateNode) {
+	if s == nil {
+		return
+	}
+	size := 0
+	if node != nil {
+		size = len(node.specs)
+	}
+	s.initialized = true
+	s.specCount = size
+	s.count = 0
+	if cap(s.intSums) < size {
+		s.intSums = make([]int64, size)
+	} else {
+		s.intSums = s.intSums[:size]
+		clear(s.intSums)
+	}
+	if cap(s.floatSums) < size {
+		s.floatSums = make([]float64, size)
+	} else {
+		s.floatSums = s.floatSums[:size]
+		clear(s.floatSums)
+	}
+	if cap(s.floaty) < size {
+		s.floaty = make([]bool, size)
+	} else {
+		s.floaty = s.floaty[:size]
+		clear(s.floaty)
+	}
+	if cap(s.extrema) < size {
+		s.extrema = make([]reteGraphAccumulatorExtremum, size)
+	} else {
+		s.extrema = s.extrema[:size]
+		clear(s.extrema)
+	}
+	if cap(s.collects) < size {
+		s.collects = make([][]reteGraphAggregateCollectEntry, size)
+	} else {
+		s.collects = s.collects[:size]
+		for i := range s.collects {
+			clear(s.collects[i])
+			s.collects[i] = s.collects[i][:0]
+		}
+	}
+}
+
+func (s *reteGraphAccumulatorState) addToken(node *reteGraphAggregateNode, token tokenRef, member reteGraphAggregateScalarMember) error {
+	if s == nil || node == nil {
 		return nil
 	}
-	m.count++
+	s.count++
 	for i, spec := range node.specs {
 		switch spec.kind {
 		case AggregateCount:
@@ -3263,24 +3304,35 @@ func (m *reteGraphAggregateBucket) addScalarMember(node *reteGraphAggregateNode,
 			if !ok {
 				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
 			}
-			if err := numeric.addSum(m.id, len(node.specs), i, value); err != nil {
+			if err := s.addSum(i, value); err != nil {
 				return err
 			}
-		case AggregateMin, AggregateMax, AggregateCollect:
+		case AggregateMin:
 			value, ok := member.value(spec.valueIndex)
 			if !ok {
 				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
 			}
-			switch spec.kind {
-			case AggregateMin:
-				if err := m.addExtremum(i, value, true); err != nil {
-					return err
-				}
-			case AggregateMax:
-				if err := m.addExtremum(i, value, false); err != nil {
-					return err
-				}
+			if err := s.addExtremum(i, value, true); err != nil {
+				return err
 			}
+		case AggregateMax:
+			value, ok := member.value(spec.valueIndex)
+			if !ok {
+				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
+			}
+			if err := s.addExtremum(i, value, false); err != nil {
+				return err
+			}
+		case AggregateCollect:
+			value, ok := member.value(spec.valueIndex)
+			if !ok {
+				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
+			}
+			s.collects[i] = append(s.collects[i], reteGraphAggregateCollectEntry{
+				key:    tokenRefKey(token),
+				factID: member.factID,
+				value:  value,
+			})
 		default:
 			return fmt.Errorf("%w: unsupported scalar aggregate kind %q", ErrAggregateEvaluation, spec.kind)
 		}
@@ -3288,133 +3340,39 @@ func (m *reteGraphAggregateBucket) addScalarMember(node *reteGraphAggregateNode,
 	return nil
 }
 
-func (m *reteGraphAggregateBucket) addCountOnlyMember(token tokenRef, bindingSlot int) (bool, bool) {
-	if m == nil || token.isZero() {
-		return false, false
+func (s *reteGraphAccumulatorState) addSum(index int, value Value) error {
+	if s == nil || index < 0 || index >= len(s.intSums) {
+		return fmt.Errorf("%w: aggregate numeric state unavailable", ErrAggregateEvaluation)
 	}
-	key := tokenRefKey(token)
-	if _, exists := m.countOnlyMembers[key]; exists {
-		return false, true
-	}
-	match, ok := tokenFactMatchForBindingSlot(token, bindingSlot)
-	if !ok || match.fact.ID().IsZero() {
-		return false, false
-	}
-	if m.countOnlyMembers == nil {
-		m.countOnlyMembers = make(map[graphTokenIdentityKey]FactID)
-	}
-	m.countOnlyMembers[key] = match.fact.ID()
-	m.count++
-	return true, true
-}
-
-func (m *reteGraphAggregateBucket) removeCountOnlyMember(token tokenRef) bool {
-	if m == nil || token.isZero() {
-		return false
-	}
-	key := tokenRefKey(token)
-	if _, exists := m.countOnlyMembers[key]; !exists {
-		return false
-	}
-	delete(m.countOnlyMembers, key)
-	if m.count > 0 {
-		m.count--
-	}
-	return true
-}
-
-func (m *reteGraphAggregateBucket) countOnlyMemberCount() int {
-	if m == nil || len(m.countOnlyMembers) == 0 {
-		return 0
-	}
-	return len(m.countOnlyMembers)
-}
-
-func (m *reteGraphAggregateBucket) removeScalarMember(node *reteGraphAggregateNode, member reteGraphAggregateScalarMember, numeric *reteGraphAggregateNumericState) bool {
-	if m == nil || node == nil {
-		return false
-	}
-	if m.count > 0 {
-		m.count--
-	}
-	for i, spec := range node.specs {
-		switch spec.kind {
-		case AggregateSum:
-			value, ok := member.value(spec.valueIndex)
-			if !ok {
-				return false
-			}
-			numeric.removeSumValue(m, node, i, value)
-		case AggregateMin:
-			value, ok := member.value(spec.valueIndex)
-			if !ok || !m.removeExtremum(node, i, value, true) {
-				return false
-			}
-		case AggregateMax:
-			value, ok := member.value(spec.valueIndex)
-			if !ok || !m.removeExtremum(node, i, value, false) {
-				return false
-			}
+	switch value.Kind() {
+	case ValueInt:
+		if s.floaty[index] {
+			s.floatSums[index] += float64(value.intValue)
+			return nil
 		}
-	}
-	return true
-}
-
-func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode, numeric *reteGraphAggregateNumericState) ([]Value, bool) {
-	if m == nil || node == nil {
-		return nil, false
-	}
-	values := make([]Value, len(node.specs))
-	for i, spec := range node.specs {
-		switch spec.kind {
-		case AggregateCount:
-			values[i] = newIntValue(m.count)
-		case AggregateSum:
-			value, ok := numeric.sumValue(m.id, len(node.specs), i)
-			if !ok {
-				return nil, false
-			}
-			values[i] = value
-		case AggregateMin:
-			value, ok := m.extremumValue(i)
-			if !ok {
-				return nil, false
-			}
-			values[i] = value
-		case AggregateMax:
-			value, ok := m.extremumValue(i)
-			if !ok {
-				return nil, false
-			}
-			values[i] = value
-		case AggregateCollect:
-			value, ok := m.collectValue(spec.valueIndex)
-			if !ok {
-				return nil, false
-			}
-			values[i] = value
-		default:
-			return nil, false
+		next, overflow := safeAddInt64(s.intSums[index], value.intValue)
+		if overflow {
+			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
 		}
+		s.intSums[index] = next
+	case ValueFloat:
+		if !s.floaty[index] {
+			s.floatSums[index] = float64(s.intSums[index])
+			s.intSums[index] = 0
+			s.floaty[index] = true
+		}
+		s.floatSums[index] += value.floatValue
+	default:
+		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
 	}
-	return values, true
+	return nil
 }
 
-func (m *reteGraphAggregateBucket) ensureExtremum(index int) (*reteGraphAggregateExtremumState, bool) {
-	if m == nil || index < 0 {
-		return nil, false
-	}
-	for len(m.extrema) <= index {
-		m.extrema = append(m.extrema, reteGraphAggregateExtremumState{})
-	}
-	return &m.extrema[index], true
-}
-
-func (m *reteGraphAggregateBucket) addExtremum(index int, value Value, min bool) error {
-	extremum, ok := m.ensureExtremum(index)
-	if !ok {
+func (s *reteGraphAccumulatorState) addExtremum(index int, value Value, min bool) error {
+	if s == nil || index < 0 || index >= len(s.extrema) {
 		return fmt.Errorf("%w: aggregate extremum state unavailable", ErrAggregateEvaluation)
 	}
+	extremum := &s.extrema[index]
 	if !extremum.have {
 		extremum.current = cloneValue(value)
 		extremum.have = true
@@ -3430,76 +3388,44 @@ func (m *reteGraphAggregateBucket) addExtremum(index int, value Value, min bool)
 	return nil
 }
 
-func (m *reteGraphAggregateBucket) removeExtremum(node *reteGraphAggregateNode, index int, value Value, min bool) bool {
-	if m == nil || node == nil || index < 0 || index >= len(m.extrema) {
-		return false
+func (s *reteGraphAccumulatorState) results(node *reteGraphAggregateNode) ([]Value, bool) {
+	if s == nil || node == nil {
+		return nil, false
 	}
-	extremum := &m.extrema[index]
-	if !extremum.have || !extremum.current.Equal(value) {
-		return true
+	values := make([]Value, len(node.specs))
+	for i, spec := range node.specs {
+		switch spec.kind {
+		case AggregateCount:
+			values[i] = newIntValue(s.count)
+		case AggregateSum:
+			if s.floaty[i] {
+				value, err := canonicalFloat(s.floatSums[i])
+				if err != nil {
+					return nil, false
+				}
+				values[i] = value
+			} else {
+				values[i] = newIntValue(s.intSums[i])
+			}
+		case AggregateMin, AggregateMax:
+			if i < 0 || i >= len(s.extrema) || !s.extrema[i].have {
+				return nil, false
+			}
+			values[i] = cloneValue(s.extrema[i].current)
+		case AggregateCollect:
+			collected, ok := accumulatorCollectValue(s.collects[i])
+			if !ok {
+				return nil, false
+			}
+			values[i] = collected
+		default:
+			return nil, false
+		}
 	}
-	return m.recomputeExtremum(node, index, min)
+	return values, true
 }
 
-func (m *reteGraphAggregateBucket) recomputeExtremum(node *reteGraphAggregateNode, index int, min bool) bool {
-	if m == nil || node == nil || index < 0 || index >= len(node.specs) {
-		return false
-	}
-	extremum, ok := m.ensureExtremum(index)
-	if !ok {
-		return false
-	}
-	extremum.current = Value{}
-	extremum.have = false
-	valueIndex := node.specs[index].valueIndex
-	for _, member := range m.scalarMembers {
-		value, ok := member.value(valueIndex)
-		if !ok {
-			return false
-		}
-		if !extremum.have {
-			extremum.current = cloneValue(value)
-			extremum.have = true
-			continue
-		}
-		comparison, ok := compareValues(value, extremum.current)
-		if !ok {
-			return false
-		}
-		if (min && comparison < 0) || (!min && comparison > 0) {
-			extremum.current = cloneValue(value)
-		}
-	}
-	return true
-}
-
-func (m *reteGraphAggregateBucket) extremumValue(index int) (Value, bool) {
-	if m == nil || index < 0 || index >= len(m.extrema) {
-		return Value{}, false
-	}
-	extremum := &m.extrema[index]
-	if !extremum.have {
-		return Value{}, false
-	}
-	return cloneValue(extremum.current), true
-}
-
-func (m *reteGraphAggregateBucket) collectValue(index int) (Value, bool) {
-	if m == nil || index < 0 {
-		return Value{}, false
-	}
-	entries := make([]reteGraphAggregateCollectEntry, 0, len(m.scalarMembers))
-	for key, member := range m.scalarMembers {
-		value, ok := member.value(index)
-		if !ok {
-			return Value{}, false
-		}
-		entries = append(entries, reteGraphAggregateCollectEntry{
-			key:    key,
-			factID: member.factID,
-			value:  value,
-		})
-	}
+func accumulatorCollectValue(entries []reteGraphAggregateCollectEntry) (Value, bool) {
 	sort.Slice(entries, func(i, j int) bool {
 		return collectEntryLess(entries[i], entries[j])
 	})

@@ -316,12 +316,6 @@ func addAggregateNodeMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, 
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateBucketID](len(memory.buckets.ids))
 	out.Bytes += sliceBytes[reteGraphAggregateBucket](cap(memory.buckets.rows))
 	out.Bytes += sliceBytes[reteGraphAggregateBucketID](cap(memory.buckets.free))
-	out.HighWater += uint64(cap(memory.numeric.intSums))
-	out.HighWater += uint64(cap(memory.numeric.floatSums))
-	out.HighWater += uint64(cap(memory.numeric.floaty))
-	out.Bytes += sliceBytes[int64](cap(memory.numeric.intSums))
-	out.Bytes += sliceBytes[float64](cap(memory.numeric.floatSums))
-	out.Bytes += sliceBytes[bool](cap(memory.numeric.floaty))
 	memory.forEachBucket(func(bucket *reteGraphAggregateBucket) {
 		addAggregateBucketOwnerDiagnostics(out, bucket)
 	})
@@ -338,21 +332,36 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	if out == nil || bucket == nil {
 		return
 	}
-	members := len(bucket.countOnlyMembers) + len(bucket.scalarMembers)
+	members := len(bucket.inputTokens)
 	resultTokens := 0
 	if !bucket.token.isZero() {
 		resultTokens = 1
 	}
 	out.Rows += uint64(1 + members + resultTokens)
 	out.HighWater += uint64(1 + members + resultTokens)
-	out.HighWater += uint64(cap(bucket.extrema))
-	out.Bytes += mapEntryBytes[graphTokenIdentityKey, FactID](len(bucket.countOnlyMembers))
-	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateScalarMember](len(bucket.scalarMembers))
-	for _, member := range bucket.scalarMembers {
-		out.HighWater += uint64(1 + cap(member.rest))
-		out.Bytes += sliceBytes[Value](cap(member.rest))
+	out.HighWater += uint64(cap(bucket.inputTokens))
+	out.Bytes += sliceBytes[tokenRef](cap(bucket.inputTokens))
+	addAggregateAccumulatorOwnerDiagnostics(out, &bucket.accumulator)
+}
+
+func addAggregateAccumulatorOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, state *reteGraphAccumulatorState) {
+	if out == nil || state == nil {
+		return
 	}
-	out.Bytes += sliceBytes[reteGraphAggregateExtremumState](cap(bucket.extrema))
+	out.HighWater += uint64(cap(state.intSums))
+	out.HighWater += uint64(cap(state.floatSums))
+	out.HighWater += uint64(cap(state.floaty))
+	out.HighWater += uint64(cap(state.extrema))
+	out.HighWater += uint64(cap(state.collects))
+	out.Bytes += sliceBytes[int64](cap(state.intSums))
+	out.Bytes += sliceBytes[float64](cap(state.floatSums))
+	out.Bytes += sliceBytes[bool](cap(state.floaty))
+	out.Bytes += sliceBytes[reteGraphAccumulatorExtremum](cap(state.extrema))
+	out.Bytes += sliceBytes[[]reteGraphAggregateCollectEntry](cap(state.collects))
+	for _, collected := range state.collects {
+		out.HighWater += uint64(cap(collected))
+		out.Bytes += sliceBytes[reteGraphAggregateCollectEntry](cap(collected))
+	}
 }
 
 func (a *agenda) consumedActivationRows() int {

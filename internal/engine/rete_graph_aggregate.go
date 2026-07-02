@@ -52,53 +52,19 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		delta.supported = false
 		return
 	}
-	if !aggregateSpecsNeedInputValues(m.node.specs) {
-		bucket := m.memory.bucketForParent(m.owner.aggregateParentToken(m.node, token))
-		if bucket == nil {
-			delta.supported = false
-			return
-		}
-		inserted, ok := bucket.addCountOnlyMember(token, m.node.inputEntry.bindingSlot)
-		if !ok {
-			delta.supported = false
-			return
-		}
-		if inserted {
-			m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
-		}
-		return
-	}
-	match, ok := tokenFactMatchForBindingSlot(token, m.node.inputEntry.bindingSlot)
-	if !ok {
-		delta.supported = false
-		return
-	}
 	bucket := m.memory.bucketForParent(m.owner.aggregateParentToken(m.node, token))
 	if bucket == nil {
 		delta.supported = false
 		return
 	}
-	memberKey := tokenRefKey(token)
-	if existing, ok := bucket.scalarMembers[memberKey]; ok {
-		delete(bucket.scalarMembers, memberKey)
-		if !bucket.removeScalarMember(m.node, existing, &m.memory.numeric) {
-			delta.supported = false
-			return
-		}
+	if !bucket.addInputToken(token) {
+		return
 	}
-	member, ok := aggregateScalarMemberFromToken(m.owner.context(), m.node, match, token)
-	if !ok {
+	if !bucket.addAccumulatorToken(m.owner.context(), m.node, token) {
+		bucket.removeInputToken(token)
 		delta.supported = false
 		return
 	}
-	if err := bucket.addScalarMember(m.node, member, &m.memory.numeric); err != nil {
-		delta.supported = false
-		return
-	}
-	if bucket.scalarMembers == nil {
-		bucket.scalarMembers = make(map[graphTokenIdentityKey]reteGraphAggregateScalarMember)
-	}
-	bucket.scalarMembers[memberKey] = member
 	m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 }
 
@@ -117,19 +83,10 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 	if !ok {
 		return
 	}
-	if !aggregateSpecsNeedInputValues(m.node.specs) {
-		if bucket.removeCountOnlyMember(token) {
-			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
-		}
+	if !bucket.removeInputToken(token) {
 		return
 	}
-	memberKey := tokenRefKey(token)
-	member, ok := bucket.scalarMembers[memberKey]
-	if !ok {
-		return
-	}
-	delete(bucket.scalarMembers, memberKey)
-	if !bucket.removeScalarMember(m.node, member, &m.memory.numeric) {
+	if !bucket.rebuildAccumulator(m.owner.context(), m.node) {
 		delta.supported = false
 		return
 	}
@@ -237,32 +194,12 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		if bucket == nil {
 			return
 		}
-		changed := false
-		if !aggregateSpecsNeedInputValues(m.node.specs) {
-			for key, memberFactID := range bucket.countOnlyMembers {
-				if memberFactID != factID {
-					continue
-				}
-				delete(bucket.countOnlyMembers, key)
-				if bucket.count > 0 {
-					bucket.count--
-				}
-				changed = true
-			}
-		} else if len(bucket.scalarMembers) > 0 {
-			for key, member := range bucket.scalarMembers {
-				if member.factID != factID {
-					continue
-				}
-				delete(bucket.scalarMembers, key)
-				if !bucket.removeScalarMember(m.node, member, &m.memory.numeric) {
-					delta.supported = false
-					return
-				}
-				changed = true
-			}
-		}
+		changed := bucket.removeInputTokensContainingFact(factID)
 		if changed {
+			if !bucket.rebuildAccumulator(m.owner.context(), m.node) {
+				delta.supported = false
+				return
+			}
 			m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
 		}
 	})
