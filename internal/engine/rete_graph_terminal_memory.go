@@ -15,12 +15,12 @@ type terminalTokenMemory struct {
 }
 
 type terminalTokenRow struct {
-	handle       graphTokenRowHandle
-	token        tokenRef
-	identityHash uint64
-	identityNext uint32
-	supportCount uint32
-	candidateKey candidateIdentityKey
+	handle        graphTokenRowHandle
+	token         tokenRef
+	identityHash  uint64
+	identityNext  uint32
+	supportCount  uint32
+	candidateHash uint64
 }
 
 type terminalBranchSupportState struct {
@@ -185,7 +185,7 @@ func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
 		handle:       r.handle,
 		token:        r.token,
 		identity:     r.token.identityKey(),
-		candidate:    candidateIdentity{key: r.candidateKey},
+		candidate:    candidateIdentity{key: candidateIdentityKey{hash: r.candidateHash}},
 		supportCount: int(r.supportCount),
 	}
 	return row
@@ -494,11 +494,11 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
-		handle:       handle,
-		token:        token,
-		identityHash: hashTokenIdentityBucketKey(identity),
-		candidateKey: candidateKey,
-		supportCount: 1,
+		handle:        handle,
+		token:         token,
+		identityHash:  hashTokenIdentityBucketKey(identity),
+		candidateHash: candidateKey.hash,
+		supportCount:  1,
 	}
 	m.rows[rowID] = row
 	m.addTerminalBranchSupport(rowID, branchID)
@@ -525,17 +525,13 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 			continue
 		}
 		if row.token.handle == token.handle {
-			if row.candidateKey == (candidateIdentityKey{}) {
-				row.candidateKey = candidateKey
-			}
+			row.candidateHash = candidateKey.hash
 			if !m.hasTerminalBranchSupport(rowID, branchID) {
 				m.addTerminalBranchSupport(rowID, branchID)
 			}
 			return row.handle, false
 		}
-		if row.candidateKey == (candidateIdentityKey{}) {
-			row.candidateKey = candidateKey
-		}
+		row.candidateHash = candidateKey.hash
 		row.supportCount++
 		m.addTerminalBranchSupport(rowID, branchID)
 		return row.handle, false
@@ -548,11 +544,11 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
-		handle:       handle,
-		token:        token,
-		identityHash: identityHash,
-		candidateKey: candidateKey,
-		supportCount: 1,
+		handle:        handle,
+		token:         token,
+		identityHash:  identityHash,
+		candidateHash: candidateKey.hash,
+		supportCount:  1,
 	}
 	m.rows[rowID] = row
 	m.addTerminalBranchSupport(rowID, branchID)
@@ -591,12 +587,10 @@ func (m *terminalTokenMemory) refreshTerminalTokensContainingFact(id FactID, upd
 		before := row.token
 		identity := candidateIdentity{}
 		if collectUpdates {
-			if row.candidateKey != (candidateIdentityKey{}) {
-				identity = candidateIdentity{key: row.candidateKey}
-			}
-			if identity.isZero() && identityForToken != nil {
+			if identityForToken != nil {
 				identity = identityForToken(before)
 			}
+			identity.key.hash = row.candidateHash
 		}
 		m.replaceRowTokenWithPreviousIdentityHash(rowID, beforeIdentityHash, next)
 		if collectUpdates {

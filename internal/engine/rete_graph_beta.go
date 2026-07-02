@@ -7799,6 +7799,9 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentity(token tokenRef) candidat
 
 func (t *reteGraphTerminalMemory) rowCandidateIdentity(row graphTokenRow) candidateIdentity {
 	if !row.candidate.isZero() {
+		if row.candidate.key.scopeHash == 0 {
+			row.candidate.key.scopeHash = t.ruleIdentityScopeHash
+		}
 		return row.candidate
 	}
 	return t.terminalTokenIdentity(row.token)
