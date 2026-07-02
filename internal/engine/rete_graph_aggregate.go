@@ -69,6 +69,10 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		return
 	}
 	bucket := m.memory.bucketForParent(m.owner.aggregateParentToken(m.node, token))
+	if bucket == nil {
+		delta.supported = false
+		return
+	}
 	memberKey := tokenRefKey(token)
 	if existing, ok := bucket.members[memberKey]; ok {
 		if !m.memory.removeMember(m.node, bucket, existing) {

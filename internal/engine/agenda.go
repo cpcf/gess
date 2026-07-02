@@ -3458,6 +3458,9 @@ func terminalTokenIdentityStateForRule(rule compiledRule, token tokenRef, state 
 	if !ok {
 		return state, count, false
 	}
+	if match.bindingSlot < 0 {
+		return state, count, true
+	}
 	entry, err := bindingTupleEntryForMatch(rule, match)
 	if err != nil {
 		return state, count, false
@@ -3501,21 +3504,8 @@ func tokenRefGeneration(token tokenRef) Generation {
 }
 
 func matchTokenFactsEqualSlices(token tokenRef, factIDs []FactID, factVersions []FactVersion) bool {
-	if tokenRefSize(token) != len(factIDs) || len(factIDs) != len(factVersions) {
+	if len(factIDs) != len(factVersions) {
 		return false
-	}
-	tokenFactIDs, idsOK := token.factIDs()
-	tokenFactVersions, versionsOK := token.factVersions()
-	if idsOK && versionsOK {
-		if len(tokenFactIDs) != len(factIDs) || len(tokenFactVersions) != len(factVersions) {
-			return false
-		}
-		for i := range tokenFactIDs {
-			if tokenFactIDs[i] != factIDs[i] || tokenFactVersions[i] != factVersions[i] {
-				return false
-			}
-		}
-		return true
 	}
 	index, ok := matchTokenFactsEqualSlicesAt(token, factIDs, factVersions, 0)
 	return ok && index == len(factIDs)
@@ -3537,6 +3527,12 @@ func matchTokenFactsEqualSlicesAt(token tokenRef, factIDs []FactID, factVersions
 	if !ok {
 		return next, false
 	}
+	if match.bindingSlot < 0 {
+		return next, true
+	}
+	if next >= len(factIDs) || next >= len(factVersions) {
+		return next, false
+	}
 	if factIDs[next] != match.fact.ID() || factVersions[next] != match.fact.Version() {
 		return next, false
 	}
@@ -3544,42 +3540,33 @@ func matchTokenFactsEqualSlicesAt(token tokenRef, factIDs []FactID, factVersions
 }
 
 func terminalTokenFactVersionsEqual(left, right tokenRef) bool {
-	if tokenRefSize(left) != tokenRefSize(right) {
-		return false
-	}
-	leftFactIDs, leftIDsOK := left.factIDs()
-	rightFactIDs, rightIDsOK := right.factIDs()
-	leftFactVersions, leftVersionsOK := left.factVersions()
-	rightFactVersions, rightVersionsOK := right.factVersions()
-	if leftIDsOK && rightIDsOK && leftVersionsOK && rightVersionsOK {
-		if len(leftFactIDs) != len(rightFactIDs) || len(leftFactVersions) != len(rightFactVersions) || len(leftFactIDs) != len(leftFactVersions) {
-			return false
-		}
-		for i := range leftFactIDs {
-			if leftFactIDs[i] != rightFactIDs[i] || leftFactVersions[i] != rightFactVersions[i] {
-				return false
-			}
-		}
-		return true
-	}
-	return terminalTokenFactVersionsEqualAt(left, right)
+	leftIDs, leftVersions, leftOK := tokenPublicFactSlices(left)
+	rightIDs, rightVersions, rightOK := tokenPublicFactSlices(right)
+	return leftOK && rightOK && factVersionSlicesEqual(leftIDs, leftVersions, rightIDs, rightVersions)
 }
 
-func terminalTokenFactVersionsEqualAt(left, right tokenRef) bool {
-	if left.isZero() || right.isZero() {
-		return left.isZero() && right.isZero()
+func tokenPublicFactSlices(token tokenRef) ([]FactID, []FactVersion, bool) {
+	if token.isZero() {
+		return nil, nil, true
 	}
-	leftRow, leftOK := left.resolve()
-	rightRow, rightOK := right.resolve()
-	if !leftOK || !rightOK {
-		return false
+	row, ok := token.resolve()
+	if !ok {
+		return nil, nil, false
 	}
-	if !terminalTokenFactVersionsEqualAt(left.parent(), right.parent()) {
-		return false
+	ids, versions, ok := tokenPublicFactSlices(token.parent())
+	if !ok {
+		return nil, nil, false
 	}
-	leftMatch, leftOK := leftRow.conditionMatch()
-	rightMatch, rightOK := rightRow.conditionMatch()
-	return leftOK && rightOK && leftMatch.fact.ID() == rightMatch.fact.ID() && leftMatch.fact.Version() == rightMatch.fact.Version()
+	match, ok := row.conditionMatch()
+	if !ok {
+		return nil, nil, false
+	}
+	if match.bindingSlot < 0 {
+		return ids, versions, true
+	}
+	ids = append(ids, match.fact.ID())
+	versions = append(versions, match.fact.Version())
+	return ids, versions, true
 }
 
 func compareTerminalTokenFacts(left, right tokenRef) int {

@@ -5,32 +5,32 @@ import (
 	"unsafe"
 )
 
-func TestBetaSideMemoryStoresNegativeBlockerCount(t *testing.T) {
+func TestNegativeBetaLeftMemoryStoresBlockerOutputState(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
 	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}, fact.Recency(), fact.Generation())
+	output := arena.addCompact(token, tokenRowEntry{bindingSlot: -1}, conditionMatch{bindingSlot: -1}, 0, fact.Generation())
 
-	var memory betaSideMemory
-	if !memory.insertWithNegativeBlockerCount(token, betaJoinKey{}, 2) {
-		t.Fatal("insertWithNegativeBlockerCount returned false")
+	var memory negativeBetaLeftMemory
+	row, inserted := memory.insert(token, betaJoinKey{}, 2)
+	if !inserted {
+		t.Fatal("negative left insert returned false")
 	}
-	var row *betaTokenRow
-	memory.forEachRow(func(candidate *betaTokenRow) bool {
-		row = candidate
+	row.output = output
+	var retained *negativeBetaLeftRow
+	memory.forEachRow(func(candidate *negativeBetaLeftRow) bool {
+		retained = candidate
 		return false
 	})
-	if row == nil {
+	if retained == nil {
 		t.Fatal("negative row was not retained")
 	}
-	if got, want := row.negativeBlockerCount(), 2; got != want {
+	if got, want := retained.blockerCount, 2; got != want {
 		t.Fatalf("negative blocker count = %d, want %d", got, want)
 	}
-	if got, want := row.incrementNegativeBlockerCount(), 3; got != want {
-		t.Fatalf("incremented blocker count = %d, want %d", got, want)
-	}
-	if got, want := row.decrementNegativeBlockerCount(), 2; got != want {
-		t.Fatalf("decremented blocker count = %d, want %d", got, want)
+	if !tokenRefEqual(retained.output, output) {
+		t.Fatal("negative output token was not retained")
 	}
 }
 
@@ -225,11 +225,11 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	}
 
 	var memory terminalTokenMemory
-	firstHandle, inserted := memory.insertTerminalRow(firstToken, 10, candidateIdentityKey{})
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 10, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	secondHandle, inserted := memory.insertTerminalRow(secondToken, 20, candidateIdentityKey{})
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 20, candidateIdentity{})
 	if inserted {
 		t.Fatal("insertTerminalRow(equivalent second) returned true, want duplicate support")
 	}
@@ -293,10 +293,10 @@ func TestTerminalTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 
 	var memory terminalTokenMemory
-	if _, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentityKey{}); !inserted {
+	if _, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentity{}); !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	if _, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentityKey{}); !inserted {
+	if _, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentity{}); !inserted {
 		t.Fatal("insertTerminalRow(colliding second) returned false")
 	}
 	if got, want := len(memory.rows), 2; got != want {
@@ -397,11 +397,11 @@ func TestTerminalTokenMemoryHandlesUseRowGenerationWithoutMove(t *testing.T) {
 	thirdToken := arena.add(tokenRef{}, thirdEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(thirdFact)}, thirdFact.Recency(), thirdFact.Generation())
 
 	var memory terminalTokenMemory
-	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentityKey{})
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
-	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentityKey{})
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(second) returned false")
 	}
@@ -425,7 +425,7 @@ func TestTerminalTokenMemoryHandlesUseRowGenerationWithoutMove(t *testing.T) {
 	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(1) {
 		t.Fatalf("remaining terminal row id = %d, ok=%v, want 1 and true", got, ok)
 	}
-	thirdHandle, inserted := memory.insertTerminalRow(thirdToken, 0, candidateIdentityKey{})
+	thirdHandle, inserted := memory.insertTerminalRow(thirdToken, 0, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(third) returned false")
 	}
@@ -460,7 +460,7 @@ func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
 	var memory terminalTokenMemory
-	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentityKey{})
+	firstHandle, inserted := memory.insertTerminalRow(firstToken, 0, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(first) returned false")
 	}
@@ -471,7 +471,7 @@ func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
 	if row := memory.rowByHandle(firstHandle); row != nil {
 		t.Fatalf("cleared terminal handle resolved to %#v", row)
 	}
-	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentityKey{})
+	secondHandle, inserted := memory.insertTerminalRow(secondToken, 0, candidateIdentity{})
 	if !inserted {
 		t.Fatal("insertTerminalRow(second) returned false")
 	}

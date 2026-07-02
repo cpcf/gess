@@ -226,6 +226,8 @@ func (m *reteGraphBetaMemory) betaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDia
 		}
 		addBetaSideMemoryOwnerDiagnostics(&out, node.left)
 		addBetaSideMemoryOwnerDiagnostics(&out, node.right)
+		addNegativeBetaLeftMemoryOwnerDiagnostics(&out, &node.negative.left)
+		addNegativeBetaRightMemoryOwnerDiagnostics(&out, &node.negative.right)
 	}
 	if out.Rows == 0 && out.Buckets == 0 && out.Indexes == 0 && out.Bytes == 0 && out.HighWater == 0 {
 		return RuntimeMemoryOwnerDiagnostics{}
@@ -558,12 +560,80 @@ func betaSideMemoryRetainedBytes(memory betaSideMemory) uint64 {
 	return bytes
 }
 
+func addNegativeBetaLeftMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory *negativeBetaLeftMemory) {
+	if out == nil || memory == nil {
+		return
+	}
+	joinBuckets := memory.indexes.keyCount()
+	out.Rows += uint64(memory.len())
+	out.Buckets += uint64(joinBuckets)
+	out.HighWater += uint64(negativeBetaLeftMemoryHighWater(*memory))
+	out.Bytes += negativeBetaLeftMemoryRetainedBytes(*memory)
+}
+
+func addNegativeBetaRightMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory *negativeBetaRightMemory) {
+	if out == nil || memory == nil {
+		return
+	}
+	joinBuckets := memory.indexes.keyCount()
+	out.Rows += uint64(memory.len())
+	out.Buckets += uint64(joinBuckets)
+	out.HighWater += uint64(negativeBetaRightMemoryHighWater(*memory))
+	out.Bytes += negativeBetaRightMemoryRetainedBytes(*memory)
+}
+
+func negativeBetaLeftMemoryHighWater(memory negativeBetaLeftMemory) int {
+	highWater := memory.rowCapacity()
+	highWater += cap(memory.indexes.buckets)
+	highWater += cap(memory.indexes.touched)
+	return highWater
+}
+
+func negativeBetaRightMemoryHighWater(memory negativeBetaRightMemory) int {
+	highWater := memory.rowCapacity()
+	highWater += cap(memory.indexes.buckets)
+	highWater += cap(memory.indexes.touched)
+	return highWater
+}
+
+func negativeBetaLeftMemoryRetainedBytes(memory negativeBetaLeftMemory) uint64 {
+	var bytes uint64
+	bytes += negativeBetaLeftBucketTableBytes(memory.indexes)
+	return bytes
+}
+
+func negativeBetaRightMemoryRetainedBytes(memory negativeBetaRightMemory) uint64 {
+	var bytes uint64
+	bytes += negativeBetaRightBucketTableBytes(memory.indexes)
+	return bytes
+}
+
 func betaJoinBucketTableBytes(table betaJoinBucketTable) uint64 {
 	var bytes uint64
 	bytes += sliceBytes[betaJoinTokenBucket](cap(table.buckets))
 	bytes += sliceBytes[int](cap(table.touched))
 	for i := range table.buckets {
 		bytes += sliceBytes[betaTokenRow](cap(table.buckets[i].rows))
+	}
+	return bytes
+}
+
+func negativeBetaLeftBucketTableBytes(table negativeBetaLeftBucketTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[negativeBetaLeftBucket](cap(table.buckets))
+	bytes += sliceBytes[int](cap(table.touched))
+	for i := range table.buckets {
+		bytes += sliceBytes[negativeBetaLeftRow](cap(table.buckets[i].rows))
+	}
+	return bytes
+}
+
+func negativeBetaRightBucketTableBytes(table negativeBetaRightBucketTable) uint64 {
+	var bytes uint64
+	bytes += sliceBytes[negativeBetaRightBucket](cap(table.buckets))
+	bytes += sliceBytes[int](cap(table.touched))
+	for i := range table.buckets {
+		bytes += sliceBytes[negativeBetaRightRow](cap(table.buckets[i].rows))
 	}
 	return bytes
 }
