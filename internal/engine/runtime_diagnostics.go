@@ -429,11 +429,23 @@ func (a *agenda) activationStoredInRows(act *activation) bool {
 	if a == nil || act == nil {
 		return false
 	}
-	for _, chunk := range a.activationRows.chunks {
-		for i := range chunk {
-			if &chunk[i] == act {
-				return true
-			}
+	return activationRowsContain(&a.activationRows, act) || activationRowsContain(&a.terminalActivations, act)
+}
+
+func activationRowsContain(rows *activationRows, act *activation) bool {
+	if rows == nil || act == nil {
+		return false
+	}
+	target := uintptr(unsafe.Pointer(act))
+	rowSize := unsafe.Sizeof(activation{})
+	for _, chunk := range rows.chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		first := uintptr(unsafe.Pointer(&chunk[0]))
+		last := first + uintptr(len(chunk))*rowSize
+		if target >= first && target < last {
+			return true
 		}
 	}
 	return false
@@ -445,6 +457,10 @@ func agendaMemoryHighWater(a *agenda) int {
 	}
 	highWater := cap(a.activationRows.chunks)
 	for _, chunk := range a.activationRows.chunks {
+		highWater += cap(chunk)
+	}
+	highWater += cap(a.terminalActivations.chunks)
+	for _, chunk := range a.terminalActivations.chunks {
 		highWater += cap(chunk)
 	}
 	highWater += cap(a.pending)
@@ -480,6 +496,13 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 	var bytes uint64
 	bytes += sliceBytes[[]activation](cap(a.activationRows.chunks))
 	for _, chunk := range a.activationRows.chunks {
+		bytes += sliceBytes[activation](cap(chunk))
+		for i := range chunk {
+			bytes += activationPayloadBytes(chunk[i].payload)
+		}
+	}
+	bytes += sliceBytes[[]activation](cap(a.terminalActivations.chunks))
+	for _, chunk := range a.terminalActivations.chunks {
 		bytes += sliceBytes[activation](cap(chunk))
 		for i := range chunk {
 			bytes += activationPayloadBytes(chunk[i].payload)

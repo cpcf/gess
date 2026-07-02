@@ -720,6 +720,7 @@ func activationPathForRule(rule compiledRule) []int {
 type agenda struct {
 	activations         map[activationFingerprint]activationBucket
 	activationRows      activationRows
+	terminalActivations activationRows
 	pending             []activationKey
 	pendingActivation   []*activation
 	pendingHead         int
@@ -836,6 +837,7 @@ func (a *agenda) reset() {
 	a.resetPendingKeys()
 	a.lazyDeactivated = 0
 	a.activationRows.reset()
+	a.terminalActivations.reset()
 	if a.byFactID == nil {
 		a.byFactID = make(map[FactID]activationKeyBucket)
 	} else {
@@ -1082,7 +1084,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 		}
 		return existing, nil
 	}
-	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+	created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -1167,7 +1169,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return existing, nil
 	}
 	a.reservePendingActivationKeys(1)
-	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+	created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -1309,7 +1311,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			}
 			continue
 		}
-		created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+		created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
 		}
@@ -1473,7 +1475,7 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				}
 				continue
 			}
-			created, err := newActivationFromTerminalTokenWithIdentity(rule, token, identity)
+			created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, token, identity)
 			if err != nil {
 				return nil, true, err
 			}
@@ -1607,7 +1609,7 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 			continue
 		}
 
-		created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
+		created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
 		}
@@ -3062,9 +3064,14 @@ func activationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, 
 	return out, nil
 }
 
-func newActivationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (*activation, error) {
-	out := new(activation)
+func (a *agenda) newTerminalActivationFromTerminalTokenWithIdentity(rule compiledRule, token tokenRef, identity candidateIdentity) (*activation, error) {
+	if a == nil {
+		return nil, ErrInvalidRuleset
+	}
+	rowCount := a.terminalActivations.count
+	out := a.terminalActivations.addEmpty()
 	if err := fillActivationFromTerminalTokenWithIdentity(out, rule, token, identity); err != nil {
+		a.terminalActivations.truncate(rowCount)
 		return nil, err
 	}
 	out.ruleID = ""
