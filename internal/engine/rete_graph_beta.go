@@ -298,36 +298,6 @@ type alphaFactOwnershipRow struct {
 	terminalRows []generatedTerminalRowHandle
 }
 
-// Negative beta rows reuse supportCount for their blocker count.
-func (r graphTokenRow) negativeBlockerCount() int {
-	return r.supportCount
-}
-
-func (r *graphTokenRow) incrementNegativeBlockerCount() int {
-	if r == nil {
-		return 0
-	}
-	r.supportCount++
-	return r.supportCount
-}
-
-func (r *graphTokenRow) decrementNegativeBlockerCount() int {
-	if r == nil || r.supportCount <= 0 {
-		return 0
-	}
-	r.supportCount--
-	return r.supportCount
-}
-
-func (r betaTokenRow) toGraphTokenRow() graphTokenRow {
-	return graphTokenRow{
-		token:        r.token,
-		joinKey:      r.joinKey,
-		identity:     tokenRefKey(r.token),
-		supportCount: r.blockerCount,
-	}
-}
-
 func (r betaTokenRow) negativeBlockerCount() int {
 	return r.blockerCount
 }
@@ -1063,7 +1033,7 @@ func (m *betaSideMemory) removeContainingFact(id FactID, counters *propagationCo
 	return removed
 }
 
-func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) int {
+func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(betaTokenRow)) int {
 	if m == nil || id.IsZero() {
 		return 0
 	}
@@ -1083,7 +1053,7 @@ func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propaga
 				continue
 			}
 			if fn != nil {
-				fn(row.toGraphTokenRow())
+				fn(*row)
 			}
 			m.removeBucketRow(bucket, rowIndex, counters)
 			removed++
@@ -1092,9 +1062,9 @@ func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propaga
 	return removed
 }
 
-func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (graphTokenRow, bool) {
+func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (betaTokenRow, bool) {
 	if m == nil || token.isZero() {
-		return graphTokenRow{}, false
+		return betaTokenRow{}, false
 	}
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
@@ -1109,24 +1079,24 @@ func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounte
 			if !tokenRefEqual(row.token, token) {
 				continue
 			}
-			removed := row.toGraphTokenRow()
+			removed := *row
 			m.removeBucketRow(bucket, rowIndex, counters)
 			return removed, true
 		}
 	}
-	return graphTokenRow{}, false
+	return betaTokenRow{}, false
 }
 
-func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (graphTokenRow, bool) {
+func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (betaTokenRow, bool) {
 	if m == nil || token.isZero() {
-		return graphTokenRow{}, false
+		return betaTokenRow{}, false
 	}
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
 	bucket := m.indexes.bucket(joinKey)
 	if bucket == nil {
-		return graphTokenRow{}, false
+		return betaTokenRow{}, false
 	}
 	for rowIndex := range bucket.rows {
 		row := &bucket.rows[rowIndex]
@@ -1139,14 +1109,14 @@ func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoin
 		if !tokenRefEqual(row.token, token) {
 			continue
 		}
-		removed := row.toGraphTokenRow()
+		removed := *row
 		m.removeBucketRow(bucket, rowIndex, counters)
 		return removed, true
 	}
-	return graphTokenRow{}, false
+	return betaTokenRow{}, false
 }
 
-func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(graphTokenRow)) {
+func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(betaTokenRow)) {
 	if m == nil || id.IsZero() {
 		return
 	}
@@ -1164,7 +1134,7 @@ func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propaga
 				continue
 			}
 			if fn != nil {
-				fn(row.toGraphTokenRow())
+				fn(*row)
 			}
 		}
 	}
@@ -4614,7 +4584,7 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 		return m.negativeBetaMemory(nodeID, node).removeContainingFact(side, id, counters, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	removeToken := func(row graphTokenRow) {
+	removeToken := func(row betaTokenRow) {
 		m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, row.joinKey, row.token, counters, delta)
 	}
 	switch side {
@@ -4637,7 +4607,7 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputContainingFact(nodeID reteGra
 	}
 	nodeMemory := m.nodeMemory(nodeID)
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
-	nodeMemory.left.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
+	nodeMemory.left.removeTokensContainingFact(id, counters, func(row betaTokenRow) {
 		m.propagateRemoveFromStage(source, row.token, counters, delta)
 	})
 	return true

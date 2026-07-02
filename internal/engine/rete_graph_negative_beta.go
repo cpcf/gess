@@ -198,7 +198,7 @@ func (m reteGraphNegativeBetaMemory) removeLeftContainingFact(id FactID, counter
 		return false
 	}
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
-	m.memory.left.removeTokensContainingFact(id, counters, func(row graphTokenRow) {
+	m.memory.left.removeTokensContainingFact(id, counters, func(row betaTokenRow) {
 		if row.negativeBlockerCount() == 0 {
 			m.owner.propagateRemoveFromStage(source, row.token, counters, delta)
 		}
@@ -211,7 +211,7 @@ func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counte
 		return false
 	}
 	var tokens []tokenRef
-	m.memory.right.forEachTokenContainingFact(id, counters, func(row graphTokenRow) {
+	m.memory.right.forEachTokenContainingFact(id, counters, func(row betaTokenRow) {
 		if !row.token.isZero() {
 			tokens = append(tokens, row.token)
 		}
