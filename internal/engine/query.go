@@ -1322,6 +1322,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, false, nil
 	}
 
+	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
 	proof := s.beginBackchainQueryProof()
 	previousProof := s.activeBackchainQueryProof
 	s.activeBackchainQueryProof = proof
@@ -1329,16 +1330,17 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		s.activeBackchainQueryProof = previousProof
 	}()
 
+	cleanupTrigger := true
+	defer func() {
+		if cleanupTrigger {
+			s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
+			_, _ = s.cleanupQueryProofImmediate(context.Background(), trigger, proof)
+		}
+	}()
 	agendaDelta, needsProof, err := s.insertQueryTriggerForProofImmediate(ctx, trigger, proof)
 	if err != nil {
 		return nil, true, err
 	}
-	cleanupTrigger := true
-	defer func() {
-		if cleanupTrigger {
-			_, _ = s.cleanupQueryProofImmediate(context.Background(), trigger, proof)
-		}
-	}()
 	if queryAgendaDeltaHasRuleChanges(agendaDelta) {
 		if _, err := s.reconcileAgendaAfterMutation(ctx, agendaDelta); err != nil {
 			return nil, true, err
@@ -1363,11 +1365,12 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, true, ErrConcurrencyMisuse
 	}
 
-	rows, err := s.rete.graphBeta.materializeQueryTerminalRows(ctx, query, args, Snapshot{revision: s.revision}, terminalIDs, trigger.ID())
+	rows, err := s.rete.graphBeta.materializeQueryTerminalRows(ctx, query, args, Snapshot{revision: s.revision}, terminalIDs)
 	if err != nil {
 		return nil, true, err
 	}
 	cleanupTrigger = false
+	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
 	cleanupDelta, err := s.cleanupQueryProofImmediate(ctx, trigger, proof)
 	if err != nil {
 		return nil, true, err

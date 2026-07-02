@@ -205,7 +205,7 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
 		t.Fatalf("query terminal rows after trigger = %d, want 1", got)
 	}
-	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name])
 	if err != nil {
 		t.Fatalf("materializeQueryTerminalRows: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	}
 }
 
-func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
+func TestQueryTerminalMaterializationUsesActiveQueryRows(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustQueryRevision(t)
 	session, err := NewSession(revision, WithInitialFacts(
@@ -253,16 +253,7 @@ func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
 	}
 
 	terminalIDs := revision.graph.queryTerminalIDs[query.name]
-	wrongTriggerID := newFactID(session.Generation()+1, ^uint64(0))
-	wrongRows, err := memory.materializeQueryTerminalRows(ctx, query, &engineeringArgs, Snapshot{revision: revision}, terminalIDs, wrongTriggerID)
-	if err != nil {
-		t.Fatalf("materialize wrong-trigger rows: %v", err)
-	}
-	if len(wrongRows) != 0 {
-		t.Fatalf("wrong-trigger rows = %d, want 0", len(wrongRows))
-	}
-
-	engineeringRows, err := memory.materializeQueryTerminalRows(ctx, query, &engineeringArgs, Snapshot{revision: revision}, terminalIDs, engineeringTrigger.ID())
+	engineeringRows, err := memory.materializeQueryTerminalRows(ctx, query, &engineeringArgs, Snapshot{revision: revision}, terminalIDs)
 	if err != nil {
 		t.Fatalf("materialize engineering rows: %v", err)
 	}
@@ -272,6 +263,10 @@ func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
 	assertQueryRowStringValue(t, engineeringRows[0], "id", "p1")
 	assertQueryRowStringValue(t, engineeringRows[0], "requested_dept", "engineering")
 
+	memory.clearQueryTerminalRows(terminalIDs)
+	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
+		t.Fatalf("query terminal rows after direct clear = %d, want 0", got)
+	}
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(engineeringTrigger)); err != nil {
 		t.Fatalf("remove engineering query trigger: %v", err)
 	}
@@ -422,7 +417,7 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	if got, want := queryTerminalRowsRetained(memory, query.name), 1; got != want {
 		t.Fatalf("retained query rows after modify = %d, want %d", got, want)
 	}
-	retainedRows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	retainedRows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name])
 	if err != nil {
 		t.Fatalf("materialize retained rows after modify: %v", err)
 	}
@@ -784,7 +779,7 @@ func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
-	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name])
 	if err != nil {
 		t.Fatalf("materializeQueryTerminalRows: %v", err)
 	}

@@ -5290,22 +5290,30 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 		source.revision = m.revision
 	}
 
+	m.clearQueryTerminalRows(terminalIDs)
 	_, _ = m.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	cleanupTrigger := true
+	defer func() {
+		if cleanupTrigger {
+			m.clearQueryTerminalRows(terminalIDs)
+			_, _ = m.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
+		}
+	}()
 	delta, err := m.propagateEvent(ctx, event)
 	if err != nil {
 		return nil, true, err
 	}
-	defer func() {
-		_, _ = m.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
-	}()
 	if len(delta.demands) > 0 || len(delta.resolvedDemands) > 0 || len(delta.resolvedOwners) > 0 {
 		return nil, true, fmt.Errorf("%w: query %q generated backchain demand facts; query-time backward chaining is not supported", ErrUnsupportedRuntime, query.name)
 	}
 
-	rows, err := m.materializeQueryTerminalRows(ctx, query, args, source, terminalIDs, trigger.ID())
+	rows, err := m.materializeQueryTerminalRows(ctx, query, args, source, terminalIDs)
 	if err != nil {
 		return nil, true, err
 	}
+	cleanupTrigger = false
+	m.clearQueryTerminalRows(terminalIDs)
+	_, _ = m.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
 	return rows, true, nil
 }
 
@@ -5330,6 +5338,22 @@ func (m *reteGraphBetaMemory) queryTerminalRowCapacity(terminalIDs []reteGraphTe
 	return capacity
 }
 
+func (m *reteGraphBetaMemory) clearQueryTerminalRows(terminalIDs []reteGraphTerminalNodeID) int {
+	if m == nil {
+		return 0
+	}
+	removed := 0
+	for _, terminalID := range terminalIDs {
+		terminal := m.terminalAt(terminalID)
+		if terminal == nil || terminal.ruleRevisionID != "" {
+			continue
+		}
+		removed += terminal.queryRows.len()
+		terminal.queryRows.clear()
+	}
+	return removed
+}
+
 type reteGraphQueryCollector struct {
 	ctx         context.Context
 	query       compiledQuery
@@ -5343,7 +5367,7 @@ type reteGraphQueryCollector struct {
 	valueRows   bool
 }
 
-func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, query compiledQuery, args *compiledQueryArgs, source Snapshot, terminalIDs []reteGraphTerminalNodeID, triggerID FactID) ([]QueryRow, error) {
+func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, query compiledQuery, args *compiledQueryArgs, source Snapshot, terminalIDs []reteGraphTerminalNodeID) ([]QueryRow, error) {
 	collector := reteGraphQueryCollector{
 		ctx:       ctx,
 		query:     query,
@@ -5367,7 +5391,7 @@ func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, 
 			continue
 		}
 		for _, terminalRow := range terminal.queryRows.rows {
-			if terminalRow.token.isZero() || !terminalRow.token.containsFact(triggerID) {
+			if terminalRow.token.isZero() {
 				continue
 			}
 			if err := m.queryCollectTerminalToken(terminalRow.token, &collector); err != nil {
@@ -6428,18 +6452,6 @@ func (s *reteGraphBetaMemoryStats) addQueryTerminalTokenMemory(memory queryTermi
 	s.TokenRowReserve += memory.rowReserve
 	s.TokenRowCapacityMax = max(s.TokenRowCapacityMax, rowCapacity)
 	s.TokenRowReserveMax = max(s.TokenRowReserveMax, memory.rowReserve)
-
-	identityKeys := memory.identityRows.keyCount()
-	s.IdentityIndexKeys += identityKeys
-	s.IdentityIndexReserve += memory.identityIndexReserve
-	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
-	s.IdentityIndexReserveMax = max(s.IdentityIndexReserveMax, memory.identityIndexReserve)
-
-	factKeys := memory.factIndexKeyCount()
-	s.FactIndexKeys += factKeys
-	s.FactIndexReserve += memory.factIndexReserve
-	s.FactIndexKeysMax = max(s.FactIndexKeysMax, factKeys)
-	s.FactIndexReserveMax = max(s.FactIndexReserveMax, memory.factIndexReserve)
 }
 
 func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGraphBetaNodeMemory {

@@ -668,6 +668,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 			highWater += reflectSliceCap(rests.Index(i))
 		}
 	}
+	highWater += reflectIntField(value.FieldByName("rowByTokenReserve"))
 	return highWater
 }
 
@@ -695,7 +696,39 @@ func reflectTokenMemoryRetainedBytes(memory any) uint64 {
 			bytes += reflectSliceBytes(rests.Index(i))
 		}
 	}
+	bytes += reflectReservedMapBytes(value.FieldByName("rowByToken"), value.FieldByName("rowByTokenReserve"))
 	return bytes
+}
+
+func reflectReservedMapBytes(value reflect.Value, reserve reflect.Value) uint64 {
+	if !value.IsValid() || value.Kind() != reflect.Map {
+		return 0
+	}
+	entries := max(reflectIntField(reserve), value.Len())
+	if entries <= 0 {
+		return 0
+	}
+	return uint64(entries) * uint64(value.Type().Key().Size()+value.Type().Elem().Size())
+}
+
+func reflectIntField(value reflect.Value) int {
+	if !value.IsValid() {
+		return 0
+	}
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if value.Int() <= 0 {
+			return 0
+		}
+		return int(value.Int())
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		if value.Uint() == 0 {
+			return 0
+		}
+		return int(value.Uint())
+	default:
+		return 0
+	}
 }
 
 func reflectBucketTableBytes(table reflect.Value) uint64 {

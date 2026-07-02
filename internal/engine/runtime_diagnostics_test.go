@@ -101,11 +101,11 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	if queryOwner.Rows == 0 {
 		t.Fatalf("query terminal rows = 0, want retained query terminal rows: %#v", queryOwner)
 	}
-	if queryOwner.Buckets == 0 {
-		t.Fatalf("query terminal buckets = 0, want retained identity buckets: %#v", queryOwner)
+	if queryOwner.Buckets != 0 {
+		t.Fatalf("query terminal buckets = %d, want 0 after compact query terminal rows", queryOwner.Buckets)
 	}
-	if queryOwner.Indexes == 0 {
-		t.Fatalf("query terminal indexes = 0, want retained fact reverse indexes: %#v", queryOwner)
+	if queryOwner.Indexes != 0 {
+		t.Fatalf("query terminal indexes = %d, want 0 after removing fact reverse indexes", queryOwner.Indexes)
 	}
 	for _, owner := range []RuntimeMemoryOwnerDiagnostics{agendaOwner, queryOwner} {
 		if owner.Bytes == 0 {
@@ -114,6 +114,44 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 		if owner.HighWater == 0 {
 			t.Fatalf("%s high water = 0, want capacity estimate: %#v", owner.Owner, owner)
 		}
+	}
+}
+
+func TestSessionRuntimeDiagnosticsCountsClearedQueryTerminalCapacity(t *testing.T) {
+	ctx := context.Background()
+	revision, personKey := mustQueryRevision(t)
+	session, err := NewSession(revision, WithInitialFacts(
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p1", "dept": "engineering", "age": 32})},
+		SessionInitialFact{TemplateKey: personKey, Fields: mustFields(t, map[string]any{"id": "p2", "dept": "engineering", "age": 41})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if rows, err := session.QueryAll(ctx, "adults-by-dept", QueryArgs{"dept": "engineering"}); err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	} else if got, want := len(rows), 2; got != want {
+		t.Fatalf("query rows = %d, want %d", got, want)
+	}
+	if got := queryTerminalRowsRetained(session.rete.graphBeta, "adults-by-dept"); got != 0 {
+		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
+	}
+
+	diagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	queryOwner := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerQueryTerminal)
+	if queryOwner.Owner == "" {
+		t.Fatalf("runtime diagnostics missing cleared query terminal owner: %#v", diagnostics.MemoryOwners)
+	}
+	if queryOwner.Rows != 0 {
+		t.Fatalf("query terminal rows = %d, want 0 after QueryAll cleanup", queryOwner.Rows)
+	}
+	if queryOwner.Buckets != 0 || queryOwner.Indexes != 0 {
+		t.Fatalf("query terminal buckets/indexes = %d/%d, want compact handle map only", queryOwner.Buckets, queryOwner.Indexes)
+	}
+	if queryOwner.Bytes == 0 || queryOwner.HighWater == 0 {
+		t.Fatalf("query terminal retained bytes/highWater = %d/%d, want cleared compact capacity counted", queryOwner.Bytes, queryOwner.HighWater)
 	}
 }
 
