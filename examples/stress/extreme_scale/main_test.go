@@ -43,7 +43,6 @@ func TestRunSmoke(t *testing.T) {
 		"rete-memory: owner=alpha",
 		"rete-memory: owner=beta",
 		"rete-memory: owner=rule-terminal",
-		"rete-memory: owner=agenda",
 		"query: name=inputs-by-bucket-0000000",
 	} {
 		if !strings.Contains(out.String(), want) {

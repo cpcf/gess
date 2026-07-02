@@ -2754,6 +2754,9 @@ func (a *agenda) storeActivationOrdinalRef(fingerprint activationFingerprint, re
 	if a == nil || ref.isZero() {
 		return
 	}
+	if a.activations == nil {
+		a.activations = make(map[activationFingerprint]activationOrdinalRef)
+	}
 	first := a.activations[fingerprint]
 	if first.isZero() {
 		a.activations[fingerprint] = ref
@@ -2878,7 +2881,41 @@ func (a *agenda) compactConsumedActivationRows() {
 
 	a.activationRows = nextRows
 	a.terminalActivations = activationRows{}
+	if nextRows.count == 0 && len(a.pending) == 0 {
+		a.releaseCompletedRunStorage()
+		return
+	}
 	a.rebuildPendingActivationCache()
+}
+
+func (a *agenda) releaseCompletedRunStorage() {
+	if a == nil {
+		return
+	}
+	a.activations = nil
+	a.activationCollisions = nil
+	a.activationRefs = nil
+	a.activationRows = activationRows{}
+	a.terminalActivations = activationRows{}
+	a.pending = nil
+	a.pendingActivation = nil
+	a.pendingHead = 0
+	a.lazyDeactivated = 0
+	a.byFactID = nil
+	a.byRevision = nil
+	a.tokenFactIndexDirty = false
+	a.revisionIndexDirty = false
+	a.reconcileSeen = nil
+	a.reconcileNextPending = nil
+	a.reconcileChanges = nil
+	a.reconcileActivated = nil
+	a.deltaRemovedKeys = nil
+	a.deltaNextPending = nil
+	a.deltaChanges = nil
+	a.deltaActivated = nil
+	a.purgeNextPending = nil
+	a.purgeChanges = nil
+	a.sortEntries = nil
 }
 
 func (a *agenda) forEachActivationWithFingerprint(fingerprint activationFingerprint, fn func(*activation) bool) {
