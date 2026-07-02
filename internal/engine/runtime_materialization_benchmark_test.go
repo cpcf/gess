@@ -15,9 +15,8 @@ import (
 //     snapshot materialization.
 //   - TemplateDefaultsValidationAndDuplicateKey tracks Template validation,
 //     field/default copying, slot validation, and duplicate-key construction.
-//   - AgendaReconcile and AgendaIndexInsertion track activation materialization,
-//     agenda.reconcile, indexActivation, and cold activation index map growth.
-//   - AgendaIndexRebuild tracks steady-state reuse of activation index storage.
+//   - AgendaReconcile and AgendaInspectionScan track activation materialization,
+//     agenda.reconcile, and scan-based agenda inspection.
 //   - AgendaTerminalTokenPopulation tracks initial full agenda population from
 //     terminal tokens without candidate materialization.
 //   - AgendaTerminalTokenCollection and AgendaTerminalTokenReconcile split that
@@ -35,8 +34,7 @@ var (
 	benchmarkTemplateSlots       []factSlot
 	benchmarkAgendaChanges       []agendaChange
 	benchmarkTerminalTokenDeltas []reteTerminalTokenDelta
-	benchmarkAgendaByFactID      map[FactID]activationKeyBucket
-	benchmarkAgendaByRevision    map[RuleRevisionID]activationKeyBucket
+	benchmarkAgendaActivations   []activation
 	benchmarkAssertResult        AssertResult
 	benchmarkModifyResult        ModifyResult
 	benchmarkRetractResult       RetractResult
@@ -441,51 +439,51 @@ func BenchmarkAgendaTerminalTokenReconcileLoan(b *testing.B) {
 	}
 }
 
-func BenchmarkAgendaIndexInsertion(b *testing.B) {
+func BenchmarkAgendaInspectionScan(b *testing.B) {
 	revision, results := mustClaimsTriageReteResults(b)
 	activations := mustAgendaPendingActivations(b, revision, results)
+	factID := activations[0].factIDs()[0]
+	revisionID := activations[0].ruleRevisionID
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		agenda := &agenda{
-			byFactID:   make(map[FactID]activationKeyBucket, len(activations)),
-			byRevision: make(map[RuleRevisionID]activationKeyBucket, len(activations)),
-		}
+		agenda := newAgenda()
 		for _, activation := range activations {
-			agenda.indexActivation(&activation)
+			key := agenda.storeActivation(&activation)
+			if stored, ok := agenda.activationByKeyPtr(key); ok {
+				agenda.enqueueActivation(stored)
+			}
 		}
-		benchmarkAgendaByFactID = agenda.byFactID
-		benchmarkAgendaByRevision = agenda.byRevision
+		benchmarkAgendaActivations = agenda.activationsByFactID(factID)
+		benchmarkAgendaActivations = append(benchmarkAgendaActivations, agenda.activationsByRuleRevisionID(revisionID)...)
 	}
-	if len(benchmarkAgendaByFactID) == 0 || len(benchmarkAgendaByRevision) == 0 {
-		b.Fatal("expected agenda indexes")
+	if len(benchmarkAgendaActivations) == 0 {
+		b.Fatal("expected agenda inspection activations")
 	}
 }
 
-func BenchmarkAgendaIndexRebuild(b *testing.B) {
+func BenchmarkAgendaInspectionRepeatedScan(b *testing.B) {
 	revision, results := mustClaimsTriageReteResults(b)
 	activations := mustAgendaPendingActivations(b, revision, results)
 	agenda := newAgenda()
-	agenda.resetIndexesForRebuild()
 	for _, activation := range activations {
-		agenda.indexActivation(&activation)
+		key := agenda.storeActivation(&activation)
+		if stored, ok := agenda.activationByKeyPtr(key); ok {
+			agenda.enqueueActivation(stored)
+		}
 	}
-	agenda.pruneEmptyIndexes()
+	factID := activations[0].factIDs()[0]
+	revisionID := activations[0].ruleRevisionID
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		agenda.resetIndexesForRebuild()
-		for _, activation := range activations {
-			agenda.indexActivation(&activation)
-		}
-		agenda.pruneEmptyIndexes()
-		benchmarkAgendaByFactID = agenda.byFactID
-		benchmarkAgendaByRevision = agenda.byRevision
+		benchmarkAgendaActivations = agenda.activationsByFactID(factID)
+		benchmarkAgendaActivations = append(benchmarkAgendaActivations, agenda.activationsByRuleRevisionID(revisionID)...)
 	}
-	if len(benchmarkAgendaByFactID) == 0 || len(benchmarkAgendaByRevision) == 0 {
-		b.Fatal("expected agenda indexes")
+	if len(benchmarkAgendaActivations) == 0 {
+		b.Fatal("expected agenda inspection activations")
 	}
 }
 

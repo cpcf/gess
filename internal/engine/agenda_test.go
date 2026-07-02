@@ -326,90 +326,6 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
-func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T) {
-	var arena compactAgendaEntryArena
-	arena.reserve(2)
-	if cap(arena.rows) < 2 {
-		t.Fatalf("arena row capacity = %d, want at least 2", cap(arena.rows))
-	}
-	first := compactAgendaEntry{
-		key:            activationKey{fingerprint: 10, ordinal: 1},
-		ruleRevisionID: "rule-1@1",
-		identityKey:    candidateIdentityKey{scopeHash: 5, hash: 6},
-		salience:       11,
-		maxRecency:     12,
-		totalRecency:   13,
-		status:         activationStatusPending,
-	}
-	firstHandle, stored := arena.add(first)
-	if firstHandle.isZero() {
-		t.Fatal("first compact handle is zero")
-	}
-	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.identityKey != first.identityKey {
-		t.Fatalf("stored first entry = %#v, want %#v", stored, first)
-	}
-	if got := arena.len(); got != 1 {
-		t.Fatalf("arena len after first add = %d, want 1", got)
-	}
-	if !arena.remove(firstHandle) {
-		t.Fatal("remove first compact handle returned false")
-	}
-	if got := arena.len(); got != 0 {
-		t.Fatalf("arena len after remove = %d, want 0", got)
-	}
-	if entry, ok := arena.get(firstHandle); ok || entry != nil {
-		t.Fatalf("stale first compact handle resolved to %#v", entry)
-	}
-
-	second := first
-	second.key = activationKey{fingerprint: 20, ordinal: 2}
-	second.ruleRevisionID = "rule-2@1"
-	second.status = activationStatusDeactivated
-	secondHandle, stored := arena.add(second)
-	if secondHandle.id != firstHandle.id || secondHandle.generation == firstHandle.generation {
-		t.Fatalf("second compact handle = %#v after first %#v, want reused id and new generation", secondHandle, firstHandle)
-	}
-	if stored == nil || stored.key != second.key || stored.status != activationStatusDeactivated {
-		t.Fatalf("stored second entry = %#v, want %#v", stored, second)
-	}
-	if entry, ok := arena.get(secondHandle); !ok || entry.ruleRevisionID != second.ruleRevisionID {
-		t.Fatalf("second compact handle resolved to %#v, ok=%v", entry, ok)
-	}
-	if entry, ok := arena.get(firstHandle); ok || entry != nil {
-		t.Fatalf("stale reused compact handle resolved to %#v", entry)
-	}
-}
-
-func TestCompactAgendaEntryArenaResetInvalidatesHandles(t *testing.T) {
-	var arena compactAgendaEntryArena
-	handle, _ := arena.add(compactAgendaEntry{
-		key:            activationKey{fingerprint: 1, ordinal: 1},
-		ruleRevisionID: "rule@1",
-		status:         activationStatusPending,
-	})
-	if handle.isZero() {
-		t.Fatal("compact handle is zero")
-	}
-	arena.reset()
-	if got := arena.len(); got != 0 {
-		t.Fatalf("arena len after reset = %d, want 0", got)
-	}
-	if entry, ok := arena.get(handle); ok || entry != nil {
-		t.Fatalf("reset compact handle resolved to %#v", entry)
-	}
-	nextHandle, entry := arena.add(compactAgendaEntry{
-		key:            activationKey{fingerprint: 2, ordinal: 1},
-		ruleRevisionID: "rule@2",
-		status:         activationStatusPending,
-	})
-	if nextHandle.id != handle.id || nextHandle.generation == handle.generation {
-		t.Fatalf("compact handle after reset = %#v after %#v, want same id and new generation", nextHandle, handle)
-	}
-	if entry == nil || entry.ruleRevisionID != "rule@2" {
-		t.Fatalf("compact entry after reset = %#v", entry)
-	}
-}
-
 func TestAgendaTerminalTokenDeltaBatchObservesActivations(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)
@@ -510,6 +426,138 @@ func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
 	}
 	if got := graphAgenda.activationRows.count; got != 0 {
 		t.Fatalf("graph terminal row reconcile activationRows.count = %d, want 0", got)
+	}
+}
+
+func TestAgendaInitialTerminalActivationRequeuesDeactivatedActivation(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session := mustSession(t, revision, "agenda-initial-token-reactivation-session")
+
+	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+		"name": "Ada",
+	}), mutationOrigin{}); err != nil {
+		t.Fatalf("insertFactImmediate: %v", err)
+	}
+	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
+	if err != nil {
+		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	}
+	if !ok || len(tokens) != 1 {
+		t.Fatalf("terminal token deltas = %#v, ok=%v, want one", tokens, ok)
+	}
+
+	agenda := newAgenda()
+	created, err := agenda.addInitialTerminalActivation(ctx, revision, tokens[0])
+	if err != nil {
+		t.Fatalf("addInitialTerminalActivation: %v", err)
+	}
+	if created == nil {
+		t.Fatal("created activation is nil")
+	}
+	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, cloneTerminalTokenDeltas(tokens), nil); err != nil {
+		t.Fatalf("applyTerminalTokenDeltasWithoutChanges remove: %v", err)
+	}
+	if created.status != activationStatusDeactivated {
+		t.Fatalf("created activation status after remove = %v, want deactivated", created.status)
+	}
+	if got := agenda.pendingActivationCount(); got != 0 {
+		t.Fatalf("pending activations after remove = %d, want 0", got)
+	}
+
+	reactivated, err := agenda.addInitialTerminalActivation(ctx, revision, tokens[0])
+	if err != nil {
+		t.Fatalf("reactivate addInitialTerminalActivation: %v", err)
+	}
+	if reactivated != created {
+		t.Fatalf("reactivated activation = %p, want original %p", reactivated, created)
+	}
+	if got := agenda.pendingActivationCount(); got != 1 {
+		t.Fatalf("pending activations after reactivation = %d, want 1", got)
+	}
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next after reactivation returned none")
+	}
+	if selected.activationID() != created.activationID() {
+		t.Fatalf("selected activation = %q, want %q", selected.activationID(), created.activationID())
+	}
+}
+
+func TestAgendaModuleQueueRemoveAndFixUseHeapIndexes(t *testing.T) {
+	agenda := newAgenda()
+	acts := make([]*activation, 0, 4)
+	for i := range 4 {
+		key := agenda.storeActivation(&activation{
+			ruleRevisionID: RuleRevisionID("rule"),
+			identityKey:    candidateIdentityKey{scopeHash: 1, hash: uint64(i + 1)},
+			module:         MainModule,
+			salience:       i,
+			status:         activationStatusPending,
+		})
+		stored, ok := agenda.activationByKeyPtr(key)
+		if !ok {
+			t.Fatalf("stored activation %d missing", i)
+		}
+		agenda.enqueueActivation(stored)
+		acts = append(acts, stored)
+	}
+
+	if !agenda.dequeueActivation(acts[1]) {
+		t.Fatal("dequeue middle activation returned false")
+	}
+	if acts[1].heapIndex != 0 {
+		t.Fatalf("removed activation heapIndex = %d, want 0", acts[1].heapIndex)
+	}
+	for _, act := range []*activation{acts[0], acts[2], acts[3]} {
+		if act.heapIndex <= 0 {
+			t.Fatalf("remaining activation %#v heapIndex = %d, want queued", act.identityKey, act.heapIndex)
+		}
+	}
+
+	acts[0].salience = 100
+	agenda.fixActivationOrder(acts[0])
+	selected, ok := agenda.next()
+	if !ok {
+		t.Fatal("next returned no activation")
+	}
+	if selected.key != acts[0].key {
+		t.Fatalf("selected key = %#v, want raised activation %#v", selected.key, acts[0].key)
+	}
+}
+
+func TestAgendaCompactionShrinksDenseActivationStorage(t *testing.T) {
+	agenda := newAgenda()
+	const activationCount = 128
+	for i := range activationCount {
+		key := agenda.storeActivation(&activation{
+			ruleRevisionID: RuleRevisionID("rule"),
+			identityKey:    candidateIdentityKey{scopeHash: 1, hash: uint64(i + 1)},
+			module:         MainModule,
+			salience:       i,
+			status:         activationStatusPending,
+		})
+		stored, ok := agenda.activationByKeyPtr(key)
+		if !ok {
+			t.Fatalf("stored activation %d missing", i)
+		}
+		agenda.enqueueActivation(stored)
+	}
+	for i := range activationCount - 1 {
+		if _, ok := agenda.next(); !ok {
+			t.Fatalf("next %d returned no activation", i)
+		}
+	}
+
+	agenda.compactConsumedActivationRows()
+	if got, want := len(agenda.activations), 1; got != want {
+		t.Fatalf("dense activations after compaction = %d, want %d", got, want)
+	}
+	if got, wantMax := cap(agenda.activations), 1; got > wantMax {
+		t.Fatalf("dense activation capacity after compaction = %d, want <= %d", got, wantMax)
+	}
+	if got, want := agenda.pendingActivationCount(), 1; got != want {
+		t.Fatalf("pending activations after compaction = %d, want %d", got, want)
 	}
 }
 
@@ -787,15 +835,12 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 	if _, err := agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens)); err != nil {
 		t.Fatalf("reconcileTerminalTokens: %v", err)
 	}
-	for _, pending := range agenda.pending {
-		stored, ok := agenda.activationByKeyPtr(pending)
-		if !ok {
-			t.Fatalf("stored activation for key %#v missing", pending)
-		}
+	agenda.forEachPendingActivation(func(stored *activation) bool {
 		if stored.payload != nil {
 			t.Fatalf("stored graph activation kept public fields: %#v", stored)
 		}
-	}
+		return true
+	})
 
 	if _, selected, ok := agenda.nextInternalPtrForModule("ask"); !ok {
 		t.Fatal("nextInternalPtrForModule(ask) returned no activation")
@@ -819,7 +864,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 	}
 }
 
-func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
+func TestAgendaTerminalTokenFactLookupScansTokenActivations(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-fact-index-session")
 
@@ -834,12 +879,6 @@ func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	if _, err := agenda.applyTerminalTokenDeltas(context.Background(), revision, nil, cloneTerminalTokenDeltas(delta.added)); err != nil {
 		t.Fatalf("applyTerminalTokenDeltas: %v", err)
 	}
-	if !agenda.tokenFactIndexDirty {
-		t.Fatal("token fact index should be dirty after storing a token-backed activation")
-	}
-	if got := agenda.byFactID[inserted.Fact.ID()].len(); got != 0 {
-		t.Fatalf("eager token fact index entries = %d, want 0", got)
-	}
 
 	activations := agenda.activationsByFactID(inserted.Fact.ID())
 	if got, want := len(activations), 1; got != want {
@@ -848,12 +887,6 @@ func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	activationFactIDs := activations[0].factIDs()
 	if activationFactIDs[0] != inserted.Fact.ID() {
 		t.Fatalf("activation fact ID = %q, want %q", activationFactIDs[0], inserted.Fact.ID())
-	}
-	if agenda.tokenFactIndexDirty {
-		t.Fatal("token fact index should be clean after fact lookup")
-	}
-	if got := agenda.byFactID[inserted.Fact.ID()].len(); got != 1 {
-		t.Fatalf("lazy token fact index entries = %d, want 1", got)
 	}
 }
 
@@ -1162,8 +1195,8 @@ func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.
 	if got := cloneActivationFactIDs(&firstChanges[0].activation)[0]; got != first.Fact.ID() {
 		t.Fatalf("first change fact ID = %q, want %q", got, first.Fact.ID())
 	}
-	if agenda.deltaRemovedKeys == nil || cap(agenda.deltaChanges) == 0 || cap(agenda.deltaNextPending) == 0 {
-		t.Fatalf("agenda delta scratch not retained: removed=%#v changesCap=%d pendingCap=%d", agenda.deltaRemovedKeys, cap(agenda.deltaChanges), cap(agenda.deltaNextPending))
+	if cap(agenda.deltaChanges) == 0 {
+		t.Fatalf("agenda delta change scratch not retained: changesCap=%d", cap(agenda.deltaChanges))
 	}
 
 	secondChanges, err := agenda.applyCandidateDeltas(context.Background(), revision, []matchCandidate{secondCandidate}, nil)
@@ -1233,7 +1266,7 @@ func TestAgendaActivationIdentityHandlesHashCollisions(t *testing.T) {
 	}
 }
 
-func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
+func TestAgendaActivationLookupIncludesScopeHash(t *testing.T) {
 	revision, _ := mustAgendaRevision(t, 10)
 	rule := revision.rules["match-person"]
 	firstIdentity := candidateIdentity{
@@ -1273,17 +1306,17 @@ func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if got, want := len(changes), 2; got != want {
-		t.Fatalf("scoped fingerprint changes = %d, want %d", got, want)
+		t.Fatalf("scoped lookup changes = %d, want %d", got, want)
 	}
-	if got, want := len(agenda.activations), 2; got != want {
-		t.Fatalf("activation fingerprint buckets = %d, want %d", got, want)
+	if got, want := len(agenda.activationLookup), 2; got != want {
+		t.Fatalf("activation lookup buckets = %d, want %d", got, want)
 	}
 	pending := agenda.pendingActivations()
 	if got, want := len(pending), 2; got != want {
-		t.Fatalf("pending fingerprint collision activations = %d, want %d", got, want)
+		t.Fatalf("pending scoped lookup activations = %d, want %d", got, want)
 	}
 	if pending[0].activationID() == pending[1].activationID() {
-		t.Fatalf("fingerprint collision reused public activation ID %q", pending[0].activationID())
+		t.Fatalf("scoped lookup reused public activation ID %q", pending[0].activationID())
 	}
 	if pending[0].identityKey == pending[1].identityKey {
 		t.Fatalf("test did not create distinct full identities: %#v", pending)
@@ -1294,11 +1327,11 @@ func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
 		t.Fatalf("duplicate reconcile: %v", err)
 	}
 	if len(changes) != 0 {
-		t.Fatalf("duplicate scoped fingerprint changes = %#v, want none", changes)
+		t.Fatalf("duplicate scoped lookup changes = %#v, want none", changes)
 	}
 }
 
-func TestAgendaScopedActivationFingerprintDoesNotRequeueConsumedActivation(t *testing.T) {
+func TestAgendaScopedActivationLookupDoesNotRequeueConsumedActivation(t *testing.T) {
 	revision, _ := mustAgendaRevision(t, 10)
 	rule := revision.rules["match-person"]
 	firstIdentity := candidateIdentity{
@@ -1363,7 +1396,7 @@ func TestAgendaScopedActivationFingerprintDoesNotRequeueConsumedActivation(t *te
 	}
 }
 
-func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
+func TestAgendaInspectionSuppressesRepeatedFactIDs(t *testing.T) {
 	agenda := newAgenda()
 	factID := newFactID(1, 1)
 	activation := activation{
@@ -1376,102 +1409,11 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 
 	agenda.storeActivation(&activation)
 
-	if got, want := agenda.byFactID[factID].len(), 1; got != want {
-		t.Fatalf("fact index keys = %d, want %d", got, want)
-	}
 	if got, want := len(agenda.activationsByFactID(factID)), 1; got != want {
-		t.Fatalf("fact index activations = %d, want %d", got, want)
-	}
-	if got, want := agenda.byRevision[activation.ruleRevisionID].len(), 1; got != want {
-		t.Fatalf("revision index keys = %d, want %d", got, want)
+		t.Fatalf("fact activations = %d, want %d", got, want)
 	}
 	if got, want := len(agenda.activationsByRuleRevisionID(activation.ruleRevisionID)), 1; got != want {
-		t.Fatalf("revision index activations = %d, want %d", got, want)
-	}
-}
-
-func TestActivationKeyBucketSupportsInlineSecondAndReset(t *testing.T) {
-	var bucket activationKeyBucket
-	first := activationKey{fingerprint: 1, ordinal: 1}
-	second := activationKey{fingerprint: 2, ordinal: 2}
-	third := activationKey{fingerprint: 3, ordinal: 3}
-
-	if got := bucket.len(); got != 0 {
-		t.Fatalf("empty bucket len = %d, want 0", got)
-	}
-
-	bucket.append(first)
-	if got := bucket.len(); got != 1 {
-		t.Fatalf("single-item bucket len = %d, want 1", got)
-	}
-	if bucket.first != first {
-		t.Fatalf("bucket first = %#v, want %#v", bucket.first, first)
-	}
-	if bucket.second != (activationKey{}) {
-		t.Fatalf("bucket second after first append = %#v, want zero", bucket.second)
-	}
-	if bucket.overflow != nil {
-		t.Fatalf("bucket overflow after first append = %#v, want nil", bucket.overflow)
-	}
-
-	bucket.append(second)
-	if got := bucket.len(); got != 2 {
-		t.Fatalf("two-item bucket len = %d, want 2", got)
-	}
-	if bucket.first != first {
-		t.Fatalf("bucket first after second append = %#v, want %#v", bucket.first, first)
-	}
-	if bucket.second != second {
-		t.Fatalf("bucket second after second append = %#v, want %#v", bucket.second, second)
-	}
-	if bucket.overflow != nil {
-		t.Fatalf("bucket overflow after second append = %#v, want nil", bucket.overflow)
-	}
-
-	got := make([]activationKey, 0, 3)
-	bucket.forEach(func(key activationKey) {
-		got = append(got, key)
-	})
-	if !reflect.DeepEqual(got, []activationKey{first, second}) {
-		t.Fatalf("bucket iteration after two appends = %#v, want %#v", got, []activationKey{first, second})
-	}
-
-	bucket.append(third)
-	if got := bucket.len(); got != 3 {
-		t.Fatalf("overflow bucket len = %d, want 3", got)
-	}
-	if len(bucket.overflow) != 1 || bucket.overflow[0] != third {
-		t.Fatalf("bucket overflow after third append = %#v, want [%#v]", bucket.overflow, third)
-	}
-
-	got = got[:0]
-	bucket.forEach(func(key activationKey) {
-		got = append(got, key)
-	})
-	if !reflect.DeepEqual(got, []activationKey{first, second, third}) {
-		t.Fatalf("bucket iteration after overflow append = %#v, want %#v", got, []activationKey{first, second, third})
-	}
-
-	reset := bucket.reset()
-	if got := reset.len(); got != 0 {
-		t.Fatalf("reset bucket len = %d, want 0", got)
-	}
-	if reset.first != (activationKey{}) {
-		t.Fatalf("reset bucket first = %#v, want zero", reset.first)
-	}
-	if reset.second != (activationKey{}) {
-		t.Fatalf("reset bucket second = %#v, want zero", reset.second)
-	}
-	if got := len(reset.overflow); got != 0 {
-		t.Fatalf("reset bucket overflow len = %d, want 0", got)
-	}
-
-	got = got[:0]
-	reset.forEach(func(key activationKey) {
-		got = append(got, key)
-	})
-	if len(got) != 0 {
-		t.Fatalf("reset bucket iteration = %#v, want none", got)
+		t.Fatalf("revision activations = %d, want %d", got, want)
 	}
 }
 
@@ -1528,17 +1470,11 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	if got := agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after purge = %#v, want none", got)
 	}
-	if got := len(agenda.activations); got != 0 {
-		t.Fatalf("activation map size after purge = %d, want 0", got)
+	if got := len(agenda.activationLookup); got != 0 {
+		t.Fatalf("activation lookup size after purge = %d, want 0", got)
 	}
 	if got := agenda.activationsByRuleRevisionID(consumed.ruleRevisionID); len(got) != 0 {
 		t.Fatalf("rule revision activations after purge = %#v, want none", got)
-	}
-	if got := len(agenda.byFactID); got != 0 {
-		t.Fatalf("fact index map size after purge = %d, want 0", got)
-	}
-	if got := len(agenda.byRevision); got != 0 {
-		t.Fatalf("revision index map size after purge = %d, want 0", got)
 	}
 	if got, ok := agenda.activationByKey(consumed.key); ok {
 		t.Fatalf("consumed activation still reachable after purge: %#v", got)
@@ -1546,18 +1482,18 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	if got, ok := agenda.activationByKey(remaining[0].key); ok {
 		t.Fatalf("pending activation still reachable after purge: %#v", got)
 	}
-	if got := agenda.byFactID[first.Fact.ID()].len(); got != 0 {
-		t.Fatalf("fact index for %q after purge = %d, want 0", first.Fact.ID(), got)
+	if got := agenda.activationsByFactID(first.Fact.ID()); len(got) != 0 {
+		t.Fatalf("fact activations for %q after purge = %#v, want none", first.Fact.ID(), got)
 	}
-	if got := agenda.byFactID[second.Fact.ID()].len(); got != 0 {
-		t.Fatalf("fact index for %q after purge = %d, want 0", second.Fact.ID(), got)
+	if got := agenda.activationsByFactID(second.Fact.ID()); len(got) != 0 {
+		t.Fatalf("fact activations for %q after purge = %#v, want none", second.Fact.ID(), got)
 	}
-	if got := agenda.byRevision[consumed.ruleRevisionID].len(); got != 0 {
-		t.Fatalf("revision index after purge = %d, want 0", got)
+	if got := agenda.activationsByRuleRevisionID(consumed.ruleRevisionID); len(got) != 0 {
+		t.Fatalf("revision activations after purge = %#v, want none", got)
 	}
 }
 
-func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.T) {
+func TestAgendaPurgeRuleRevisionsKeepsSurvivingLookupActivation(t *testing.T) {
 	agenda := newAgenda()
 	removedFactID := newFactID(1, 1)
 	keptFactID := newFactID(1, 2)
@@ -1577,8 +1513,13 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 	kept.setFactVersions([]FactVersion{1})
 
 	removedKey := agenda.storeActivation(&removed)
+	if stored, ok := agenda.activationByKeyPtr(removedKey); ok {
+		agenda.enqueueActivation(stored)
+	}
 	keptKey := agenda.storeActivation(&kept)
-	agenda.pending = append(agenda.pending, removedKey, keptKey)
+	if stored, ok := agenda.activationByKeyPtr(keptKey); ok {
+		agenda.enqueueActivation(stored)
+	}
 
 	changes := agenda.purgeRuleRevisions(map[RuleRevisionID]struct{}{
 		removed.ruleRevisionID: {},
@@ -1618,15 +1559,15 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 	if got := agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 || got[0].key != keptKey {
 		t.Fatalf("kept revision activations after purge = %#v, want kept activation", got)
 	}
-	ref := agenda.activations[keptKey.fingerprint]
-	if ref.isZero() {
-		t.Fatal("activation ref after purge is zero")
+	refs := agenda.activationLookup[activationLookupKey{
+		ruleRevisionID: kept.ruleRevisionID,
+		identityKey:    kept.identityKey,
+	}]
+	if len(refs) != 1 {
+		t.Fatalf("activation lookup refs after purge = %#v, want one", refs)
 	}
-	if stored, ok := agenda.activationByOrdinalRef(ref); !ok || stored.key != keptKey {
-		t.Fatalf("activation ref after purge = (%#v, %v), want kept key %#v", stored, ok, keptKey)
-	}
-	if bucket := agenda.activationCollisions[keptKey.fingerprint]; bucket.len() != 0 {
-		t.Fatalf("collision bucket after purge = %d, want 0", bucket.len())
+	if stored := refs[0]; stored == nil || stored.key != keptKey {
+		t.Fatalf("activation lookup ref after purge = %#v, want kept key %#v", stored, keptKey)
 	}
 }
 
@@ -1758,7 +1699,7 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 		t.Fatalf("activations by revision after reset = %d, want %d", got, want)
 	}
 	if byRevision[0].activationID() != pending[0].activationID() {
-		t.Fatalf("revision index activation = %q, want %q", byRevision[0].activationID(), pending[0].activationID())
+		t.Fatalf("revision activation = %q, want %q", byRevision[0].activationID(), pending[0].activationID())
 	}
 
 	results = mustAgendaMatchResults(t, revision, session)

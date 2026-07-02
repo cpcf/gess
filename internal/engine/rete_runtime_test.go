@@ -3953,11 +3953,12 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 		t.Fatalf("terminal delta identity = %#v, want %#v", tokens[0].identity, identity)
 	}
 
-	if got, want := len(session.agenda.pending), 1; got != want {
-		t.Fatalf("pending keys = %d, want %d", got, want)
-	}
-	stored, ok := session.agenda.activationByKeyPtr(session.agenda.pending[0])
-	if !ok {
+	var stored *activation
+	session.agenda.forEachPendingActivation(func(act *activation) bool {
+		stored = act
+		return false
+	})
+	if stored == nil {
 		t.Fatal("pending activation not found")
 	}
 	if stored.identityKey != identity.key {
@@ -3972,7 +3973,7 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if got, want := len(changes), 1; got != want {
 		t.Fatalf("duplicate terminal token changes = %d, want %d", got, want)
 	}
-	if got, want := len(agenda.pending), 1; got != want {
+	if got, want := agenda.pendingActivationCount(), 1; got != want {
 		t.Fatalf("duplicate terminal token pending keys = %d, want %d", got, want)
 	}
 }

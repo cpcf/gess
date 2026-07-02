@@ -292,8 +292,8 @@ func (a *agenda) agendaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
 	}
 	out := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerAgenda}
 	out.Rows = uint64(a.agendaActivationEntryCount())
-	out.Buckets = uint64(len(a.activations))
-	out.Indexes = uint64(len(a.byFactID) + len(a.byRevision))
+	out.Buckets = uint64(len(a.activationLookup))
+	out.Indexes = uint64(len(a.moduleQueues))
 	out.Tombstones = uint64(a.consumedActivationRows())
 	out.HighWater = uint64(agendaMemoryHighWater(a))
 	out.Bytes = agendaMemoryRetainedBytes(a)
@@ -441,26 +441,17 @@ func agendaMemoryHighWater(a *agenda) int {
 	for _, chunk := range a.terminalActivations.chunks {
 		highWater += cap(chunk)
 	}
-	highWater += cap(a.pending)
-	highWater += cap(a.pendingActivation)
-	highWater += cap(a.reconcileNextPending)
 	highWater += cap(a.reconcileChanges)
 	highWater += cap(a.reconcileActivated)
-	highWater += cap(a.deltaNextPending)
 	highWater += cap(a.deltaChanges)
 	highWater += cap(a.deltaActivated)
-	highWater += cap(a.purgeNextPending)
 	highWater += cap(a.purgeChanges)
-	highWater += cap(a.sortEntries)
-	highWater += cap(a.activationRefs)
-	for _, bucket := range a.activationCollisions {
-		highWater += cap(bucket.overflow)
-	}
-	for _, bucket := range a.byFactID {
-		highWater += cap(bucket.overflow)
-	}
-	for _, bucket := range a.byRevision {
-		highWater += cap(bucket.overflow)
+	highWater += cap(a.pendingScratch)
+	highWater += cap(a.activations)
+	for _, queue := range a.moduleQueues {
+		if queue != nil {
+			highWater += cap(queue.heap)
+		}
 	}
 	return highWater
 }
@@ -492,33 +483,26 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 		bytes += activationPayloadBytes(current.payload)
 		return true
 	})
-	bytes += mapEntryBytes[activationFingerprint, activationOrdinalRef](len(a.activations))
-	bytes += mapEntryBytes[activationFingerprint, activationCollisionBucket](len(a.activationCollisions))
-	for _, bucket := range a.activationCollisions {
-		bytes += sliceBytes[activationOrdinalRef](cap(bucket.overflow))
+	bytes += mapEntryBytes[activationLookupKey, []*activation](len(a.activationLookup))
+	for _, refs := range a.activationLookup {
+		bytes += sliceBytes[*activation](cap(refs))
 	}
-	bytes += sliceBytes[*activation](cap(a.activationRefs))
-	bytes += sliceBytes[activationKey](cap(a.pending))
-	bytes += sliceBytes[*activation](cap(a.pendingActivation))
-	bytes += mapEntryBytes[FactID, activationKeyBucket](len(a.byFactID))
-	for _, bucket := range a.byFactID {
-		bytes += sliceBytes[activationKey](cap(bucket.overflow))
-	}
-	bytes += mapEntryBytes[RuleRevisionID, activationKeyBucket](len(a.byRevision))
-	for _, bucket := range a.byRevision {
-		bytes += sliceBytes[activationKey](cap(bucket.overflow))
+	bytes += sliceBytes[*activation](cap(a.activations))
+	bytes += mapEntryBytes[ModuleName, *agendaModuleQueue](len(a.moduleQueues))
+	for _, queue := range a.moduleQueues {
+		if queue == nil {
+			continue
+		}
+		bytes += uint64(unsafe.Sizeof(*queue))
+		bytes += sliceBytes[*activation](cap(queue.heap))
 	}
 	bytes += mapEntryBytes[activationKey, struct{}](len(a.reconcileSeen))
-	bytes += sliceBytes[activationKey](cap(a.reconcileNextPending))
 	bytes += sliceBytes[agendaChange](cap(a.reconcileChanges))
 	bytes += sliceBytes[agendaChange](cap(a.reconcileActivated))
-	bytes += mapEntryBytes[activationKey, struct{}](len(a.deltaRemovedKeys))
-	bytes += sliceBytes[activationKey](cap(a.deltaNextPending))
 	bytes += sliceBytes[agendaChange](cap(a.deltaChanges))
 	bytes += sliceBytes[agendaChange](cap(a.deltaActivated))
-	bytes += sliceBytes[activationKey](cap(a.purgeNextPending))
 	bytes += sliceBytes[agendaChange](cap(a.purgeChanges))
-	bytes += sliceBytes[activationSortEntry](cap(a.sortEntries))
+	bytes += sliceBytes[*activation](cap(a.pendingScratch))
 	return bytes
 }
 

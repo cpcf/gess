@@ -260,7 +260,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		slotStorage:            state.slotStorage,
 		compactSlotStore:       state.compactSlotStore,
 	}
-	if useInitialAgenda && len(session.agenda.pending) != 0 && initialDelta.supported && len(initialDelta.removed) == 0 && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
+	if useInitialAgenda && session.agenda.pendingActivationCount() != 0 && initialDelta.supported && len(initialDelta.removed) == 0 && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
 		session.agenda.finishInitialTerminalActivations()
 		session.agendaReady = true
 		session.agendaDirty = false

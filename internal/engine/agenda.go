@@ -4,93 +4,20 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
-
-	"github.com/cpcf/gess/internal/fnvhash"
 )
 
 type activationKey struct {
-	fingerprint activationFingerprint
-	ordinal     uint64
+	ordinal uint64
 }
 
-type activationSortEntry struct {
-	key activationKey
-	act *activation
+type activationLookupKey struct {
+	ruleRevisionID RuleRevisionID
+	identityKey    candidateIdentityKey
 }
-
-type activationHandle struct {
-	key        activationKey
-	generation uint32
-}
-
-func (h activationHandle) isZero() bool {
-	return h.generation == 0
-}
-
-type activationFingerprint uint64
 
 type activationObserveFunc func(*activation)
-
-type activationOrdinalRef uint64
-
-func activationOrdinalRefForKey(key activationKey) activationOrdinalRef {
-	return activationOrdinalRef(key.ordinal + 1)
-}
-
-func (r activationOrdinalRef) isZero() bool {
-	return r == 0
-}
-
-func (r activationOrdinalRef) ordinal() uint64 {
-	if r == 0 {
-		return 0
-	}
-	return uint64(r - 1)
-}
-
-type activationCollisionBucket struct {
-	second   activationOrdinalRef
-	overflow []activationOrdinalRef
-	count    int
-}
-
-func (b activationCollisionBucket) len() int {
-	return b.count
-}
-
-func (b *activationCollisionBucket) append(ref activationOrdinalRef) {
-	if ref.isZero() {
-		return
-	}
-	switch b.count {
-	case 0:
-		b.second = ref
-	default:
-		if b.overflow == nil {
-			b.overflow = make([]activationOrdinalRef, 0, 4)
-		}
-		b.overflow = append(b.overflow, ref)
-	}
-	b.count++
-}
-
-func (b activationCollisionBucket) forEach(fn func(activationOrdinalRef) bool) bool {
-	if b.count == 0 || fn == nil {
-		return true
-	}
-	if !fn(b.second) {
-		return false
-	}
-	for i := 0; i < b.count-1 && i < len(b.overflow); i++ {
-		if !fn(b.overflow[i]) {
-			return false
-		}
-	}
-	return true
-}
 
 const activationRowChunkSize = 256
 
@@ -154,219 +81,6 @@ func (r *activationRows) truncate(count int) {
 	}
 }
 
-type compactAgendaEntryID uint32
-
-type compactAgendaEntryHandle struct {
-	id         compactAgendaEntryID
-	generation uint32
-}
-
-func (h compactAgendaEntryHandle) isZero() bool {
-	return h.id == 0 || h.generation == 0
-}
-
-func (h compactAgendaEntryHandle) index() int {
-	if h.id == 0 {
-		return -1
-	}
-	return int(h.id - 1)
-}
-
-type compactAgendaEntry struct {
-	key            activationKey
-	ruleRevisionID RuleRevisionID
-	identityKey    candidateIdentityKey
-	token          tokenRef
-	salience       int
-	maxRecency     Recency
-	totalRecency   Recency
-	status         activationStatus
-}
-
-type compactAgendaEntryRow struct {
-	entry      compactAgendaEntry
-	generation uint32
-	live       bool
-}
-
-type compactAgendaEntryArena struct {
-	rows []compactAgendaEntryRow
-	free []compactAgendaEntryID
-	live int
-}
-
-func (a *compactAgendaEntryArena) reserve(capacity int) {
-	if a == nil || capacity <= cap(a.rows) {
-		return
-	}
-	rows := make([]compactAgendaEntryRow, len(a.rows), capacity)
-	copy(rows, a.rows)
-	a.rows = rows
-	if capacity > cap(a.free) {
-		free := make([]compactAgendaEntryID, len(a.free), capacity)
-		copy(free, a.free)
-		a.free = free
-	}
-}
-
-func (a *compactAgendaEntryArena) reset() {
-	if a == nil {
-		return
-	}
-	a.free = a.free[:0]
-	for index := range a.rows {
-		row := &a.rows[index]
-		if row.live {
-			row.generation++
-			if row.generation == 0 {
-				row.generation = 1
-			}
-		}
-		row.entry = compactAgendaEntry{}
-		row.live = false
-		a.free = append(a.free, compactAgendaEntryID(index+1))
-	}
-	a.live = 0
-}
-
-func (a *compactAgendaEntryArena) add(entry compactAgendaEntry) (compactAgendaEntryHandle, *compactAgendaEntry) {
-	if a == nil {
-		return compactAgendaEntryHandle{}, nil
-	}
-	rowID := a.allocateRowID()
-	if rowID == 0 {
-		return compactAgendaEntryHandle{}, nil
-	}
-	row := &a.rows[int(rowID)-1]
-	if row.generation == 0 {
-		row.generation = 1
-	}
-	row.entry = entry
-	row.live = true
-	a.live++
-	handle := compactAgendaEntryHandle{id: rowID, generation: row.generation}
-	return handle, &row.entry
-}
-
-func (a *compactAgendaEntryArena) allocateRowID() compactAgendaEntryID {
-	if a == nil {
-		return 0
-	}
-	for len(a.free) > 0 {
-		last := len(a.free) - 1
-		id := a.free[last]
-		a.free[last] = 0
-		a.free = a.free[:last]
-		index := int(id) - 1
-		if id == 0 || index < 0 || index >= len(a.rows) || a.rows[index].live {
-			continue
-		}
-		return id
-	}
-	if uint64(len(a.rows)) >= uint64(^uint32(0)) {
-		return 0
-	}
-	id := compactAgendaEntryID(len(a.rows) + 1)
-	a.rows = append(a.rows, compactAgendaEntryRow{generation: 1})
-	return id
-}
-
-func (a *compactAgendaEntryArena) get(handle compactAgendaEntryHandle) (*compactAgendaEntry, bool) {
-	if a == nil || handle.isZero() {
-		return nil, false
-	}
-	index := handle.index()
-	if index < 0 || index >= len(a.rows) {
-		return nil, false
-	}
-	row := &a.rows[index]
-	if !row.live || row.generation != handle.generation {
-		return nil, false
-	}
-	return &row.entry, true
-}
-
-func (a *compactAgendaEntryArena) remove(handle compactAgendaEntryHandle) bool {
-	if a == nil || handle.isZero() {
-		return false
-	}
-	index := handle.index()
-	if index < 0 || index >= len(a.rows) {
-		return false
-	}
-	row := &a.rows[index]
-	if !row.live || row.generation != handle.generation {
-		return false
-	}
-	row.entry = compactAgendaEntry{}
-	row.live = false
-	row.generation++
-	if row.generation == 0 {
-		row.generation = 1
-	}
-	a.free = append(a.free, handle.id)
-	if a.live > 0 {
-		a.live--
-	}
-	return true
-}
-
-func (a *compactAgendaEntryArena) len() int {
-	if a == nil {
-		return 0
-	}
-	return a.live
-}
-
-type activationKeyBucket struct {
-	first    activationKey
-	second   activationKey
-	overflow []activationKey
-	count    int
-}
-
-func (b activationKeyBucket) len() int {
-	return b.count
-}
-
-func (b *activationKeyBucket) append(key activationKey) {
-	switch b.count {
-	case 0:
-		b.first = key
-	case 1:
-		b.second = key
-	default:
-		if b.overflow == nil {
-			b.overflow = make([]activationKey, 0, 8)
-		}
-		b.overflow = append(b.overflow, key)
-	}
-	b.count++
-}
-
-func (b activationKeyBucket) forEach(fn func(activationKey)) {
-	if b.count == 0 || fn == nil {
-		return
-	}
-	fn(b.first)
-	if b.count == 1 {
-		return
-	}
-	fn(b.second)
-	for i := 0; i < b.count-2 && i < len(b.overflow); i++ {
-		fn(b.overflow[i])
-	}
-}
-
-func (b *activationKeyBucket) reset() activationKeyBucket {
-	clear(b.overflow)
-	b.first = activationKey{}
-	b.second = activationKey{}
-	b.overflow = b.overflow[:0]
-	b.count = 0
-	return *b
-}
-
 type activationStatus uint8
 
 const (
@@ -393,6 +107,8 @@ type activation struct {
 	ruleRevisionID RuleRevisionID
 	identityKey    candidateIdentityKey
 	token          tokenRef
+	module         ModuleName
+	heapIndex      int
 	salience       int
 	maxRecency     Recency
 	totalRecency   Recency
@@ -543,6 +259,146 @@ func (a *activation) ensurePayload() *activationPayload {
 
 func (p *activationPayload) empty() bool {
 	return p == nil || len(p.bindings) == 0 && len(p.path) == 0 && len(p.factIDs) == 0 && len(p.factVersions) == 0
+}
+
+type agendaModuleQueue struct {
+	module ModuleName
+	heap   []*activation
+}
+
+func newAgendaModuleQueue(module ModuleName) *agendaModuleQueue {
+	return &agendaModuleQueue{
+		module: module,
+		heap:   []*activation{nil},
+	}
+}
+
+func (q *agendaModuleQueue) len() int {
+	if q == nil || len(q.heap) == 0 {
+		return 0
+	}
+	return len(q.heap) - 1
+}
+
+func (q *agendaModuleQueue) empty() bool {
+	return q.len() == 0
+}
+
+func (q *agendaModuleQueue) reset() {
+	if q == nil {
+		return
+	}
+	for i := 1; i < len(q.heap); i++ {
+		if act := q.heap[i]; act != nil {
+			act.heapIndex = 0
+		}
+		q.heap[i] = nil
+	}
+	q.heap = q.heap[:1]
+}
+
+func (q *agendaModuleQueue) push(a *agenda, act *activation) {
+	if q == nil || act == nil || act.status != activationStatusPending || act.heapIndex > 0 {
+		return
+	}
+	if len(q.heap) == 0 {
+		q.heap = append(q.heap, nil)
+	}
+	q.heap = append(q.heap, act)
+	act.heapIndex = len(q.heap) - 1
+	q.siftUp(a, act.heapIndex)
+}
+
+func (q *agendaModuleQueue) pop(a *agenda) (*activation, bool) {
+	if q == nil || q.empty() {
+		return nil, false
+	}
+	act := q.heap[1]
+	q.removeAt(a, 1)
+	return act, act != nil
+}
+
+func (q *agendaModuleQueue) remove(a *agenda, act *activation) bool {
+	if q == nil || act == nil || act.heapIndex <= 0 || act.heapIndex >= len(q.heap) || q.heap[act.heapIndex] != act {
+		return false
+	}
+	q.removeAt(a, act.heapIndex)
+	return true
+}
+
+func (q *agendaModuleQueue) fix(a *agenda, act *activation) {
+	if q == nil || act == nil || act.heapIndex <= 0 || act.heapIndex >= len(q.heap) || q.heap[act.heapIndex] != act {
+		return
+	}
+	index := act.heapIndex
+	if index > 1 && a.activationLess(q.heap[index], q.heap[index/2]) {
+		q.siftUp(a, index)
+		return
+	}
+	q.siftDown(a, index)
+}
+
+func (q *agendaModuleQueue) removeAt(a *agenda, index int) {
+	if q == nil || index <= 0 || index >= len(q.heap) {
+		return
+	}
+	last := len(q.heap) - 1
+	removed := q.heap[index]
+	if index != last {
+		q.swap(index, last)
+	}
+	q.heap[last] = nil
+	q.heap = q.heap[:last]
+	if removed != nil {
+		removed.heapIndex = 0
+	}
+	if index < len(q.heap) {
+		if index > 1 && a.activationLess(q.heap[index], q.heap[index/2]) {
+			q.siftUp(a, index)
+		} else {
+			q.siftDown(a, index)
+		}
+	}
+}
+
+func (q *agendaModuleQueue) siftUp(a *agenda, index int) {
+	for index > 1 {
+		parent := index / 2
+		if !a.activationLess(q.heap[index], q.heap[parent]) {
+			return
+		}
+		q.swap(index, parent)
+		index = parent
+	}
+}
+
+func (q *agendaModuleQueue) siftDown(a *agenda, index int) {
+	for {
+		left := index * 2
+		if left >= len(q.heap) {
+			return
+		}
+		child := left
+		right := left + 1
+		if right < len(q.heap) && a.activationLess(q.heap[right], q.heap[left]) {
+			child = right
+		}
+		if !a.activationLess(q.heap[child], q.heap[index]) {
+			return
+		}
+		q.swap(index, child)
+		index = child
+	}
+}
+
+func (q *agendaModuleQueue) swap(left, right int) {
+	q.heap[left], q.heap[right] = q.heap[right], q.heap[left]
+	if q.heap[left] != nil {
+		q.heap[left].heapIndex = left
+	}
+	if q.heap[right] != nil {
+		q.heap[right].heapIndex = right
+	}
 }
 
 type agendaChangeKind uint8
@@ -760,147 +616,128 @@ func activationPathForRule(rule compiledRule) []int {
 }
 
 type agenda struct {
-	activations          map[activationFingerprint]activationOrdinalRef
-	activationCollisions map[activationFingerprint]activationCollisionBucket
-	activationRefs       []*activation
-	activationRows       activationRows
-	terminalActivations  activationRows
-	pending              []activationKey
-	pendingActivation    []*activation
-	pendingHead          int
-	lazyDeactivated      int
-	byFactID             map[FactID]activationKeyBucket
-	byRevision           map[RuleRevisionID]activationKeyBucket
-	tokenFactIndexDirty  bool
-	revisionIndexDirty   bool
-	nextOrdinal          uint64
-	handleGeneration     uint32
-	revision             *Ruleset
-	propagationCounters  *propagationCounterLedger
+	activationLookup    map[activationLookupKey][]*activation
+	activations         []*activation
+	activationRows      activationRows
+	terminalActivations activationRows
+	moduleQueues        map[ModuleName]*agendaModuleQueue
+	nextOrdinal         uint64
+	handleGeneration    uint32
+	revision            *Ruleset
+	propagationCounters *propagationCounterLedger
 
-	reconcileSeen        map[activationKey]struct{}
-	reconcileNextPending []activationKey
-	reconcileChanges     []agendaChange
-	reconcileActivated   []agendaChange
+	reconcileSeen      map[activationKey]struct{}
+	reconcileChanges   []agendaChange
+	reconcileActivated []agendaChange
 
-	deltaRemovedKeys map[activationKey]struct{}
-	deltaNextPending []activationKey
-	deltaChanges     []agendaChange
-	deltaActivated   []agendaChange
+	deltaChanges   []agendaChange
+	deltaActivated []agendaChange
 
-	purgeNextPending []activationKey
-	purgeChanges     []agendaChange
+	purgeChanges []agendaChange
 
-	sortEntries []activationSortEntry
+	pendingScratch []*activation
 }
 
 func newAgenda() *agenda {
 	return &agenda{
-		activations:      make(map[activationFingerprint]activationOrdinalRef),
-		byFactID:         make(map[FactID]activationKeyBucket),
-		byRevision:       make(map[RuleRevisionID]activationKeyBucket),
+		activationLookup: make(map[activationLookupKey][]*activation),
+		moduleQueues:     make(map[ModuleName]*agendaModuleQueue),
 		handleGeneration: 1,
 	}
 }
 
-func (a *agenda) normalizePendingKeys() []activationKey {
+func (a *agenda) queueForModule(module ModuleName) *agendaModuleQueue {
 	if a == nil {
 		return nil
 	}
-	if a.pendingHead <= 0 {
-		return a.pending
+	module = normalizeModuleName(module)
+	if module.IsZero() {
+		module = MainModule
 	}
-	if a.pendingHead >= len(a.pending) {
-		clear(a.pending)
-		a.pending = a.pending[:0]
-		a.invalidatePendingActivationCache()
-		a.pendingHead = 0
-		return a.pending
+	if a.moduleQueues == nil {
+		a.moduleQueues = make(map[ModuleName]*agendaModuleQueue)
 	}
-	if len(a.pendingActivation) == len(a.pending) {
-		copy(a.pendingActivation, a.pendingActivation[a.pendingHead:])
-		clear(a.pendingActivation[len(a.pendingActivation)-a.pendingHead:])
-		a.pendingActivation = a.pendingActivation[:len(a.pending)-a.pendingHead]
-	} else {
-		a.invalidatePendingActivationCache()
+	queue := a.moduleQueues[module]
+	if queue == nil {
+		queue = newAgendaModuleQueue(module)
+		a.moduleQueues[module] = queue
 	}
-	copy(a.pending, a.pending[a.pendingHead:])
-	clear(a.pending[len(a.pending)-a.pendingHead:])
-	a.pending = a.pending[:len(a.pending)-a.pendingHead]
-	a.pendingHead = 0
-	return a.pending
+	return queue
 }
 
-func (a *agenda) resetPendingKeys() {
+func (a *agenda) resetModuleQueues() {
 	if a == nil {
 		return
 	}
-	clear(a.pending)
-	a.pending = a.pending[:0]
-	a.invalidatePendingActivationCache()
-	a.pendingHead = 0
+	for module, queue := range a.moduleQueues {
+		if queue != nil {
+			queue.reset()
+		}
+		if queue == nil || queue.empty() {
+			delete(a.moduleQueues, module)
+		}
+	}
 }
 
-func (a *agenda) invalidatePendingActivationCache() {
-	if a == nil {
+func (a *agenda) enqueueActivation(act *activation) {
+	if a == nil || act == nil || act.status != activationStatusPending {
 		return
 	}
-	clear(a.pendingActivation)
-	a.pendingActivation = a.pendingActivation[:0]
+	queue := a.queueForModule(act.module)
+	if queue != nil {
+		queue.push(a, act)
+	}
 }
 
-func (a *agenda) rebuildPendingActivationCache() {
+func (a *agenda) dequeueActivation(act *activation) bool {
+	if a == nil || act == nil || act.heapIndex <= 0 {
+		return false
+	}
+	queue := a.moduleQueues[normalizeModuleName(act.module)]
+	if queue == nil {
+		return false
+	}
+	removed := queue.remove(a, act)
+	if queue.empty() {
+		delete(a.moduleQueues, queue.module)
+	}
+	return removed
+}
+
+func (a *agenda) fixActivationOrder(act *activation) {
+	if a == nil || act == nil || act.heapIndex <= 0 {
+		return
+	}
+	if queue := a.moduleQueues[normalizeModuleName(act.module)]; queue != nil {
+		queue.fix(a, act)
+	}
+}
+
+func (a *agenda) pendingActivationCount() int {
 	if a == nil {
-		return
+		return 0
 	}
-	if len(a.pending) == 0 {
-		a.invalidatePendingActivationCache()
-		return
+	count := 0
+	for _, queue := range a.moduleQueues {
+		count += queue.len()
 	}
-	if cap(a.pendingActivation) < len(a.pending) {
-		a.pendingActivation = make([]*activation, len(a.pending))
-	} else {
-		a.pendingActivation = a.pendingActivation[:len(a.pending)]
-	}
-	for i, key := range a.pending {
-		current, _ := a.activationByKeyPtr(key)
-		a.pendingActivation[i] = current
-	}
+	return count
 }
 
 func (a *agenda) reset() {
 	if a == nil {
 		return
 	}
-	if a.activations == nil {
-		a.activations = make(map[activationFingerprint]activationOrdinalRef)
+	if a.activationLookup == nil {
+		a.activationLookup = make(map[activationLookupKey][]*activation)
 	} else {
-		clear(a.activations)
+		a.clearActivationLookup()
 	}
-	if a.activationCollisions != nil {
-		for fingerprint, bucket := range a.activationCollisions {
-			clear(bucket.overflow)
-			delete(a.activationCollisions, fingerprint)
-		}
-	}
-	clear(a.activationRefs)
-	a.activationRefs = a.activationRefs[:0]
-	a.resetPendingKeys()
-	a.lazyDeactivated = 0
+	clear(a.activations)
+	a.activations = a.activations[:0]
+	a.resetModuleQueues()
 	a.activationRows.reset()
 	a.terminalActivations.reset()
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket)
-	} else {
-		clear(a.byFactID)
-	}
-	if a.byRevision == nil {
-		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
-	} else {
-		clear(a.byRevision)
-	}
-	a.tokenFactIndexDirty = false
-	a.revisionIndexDirty = false
 	a.nextOrdinal = 0
 	a.advanceHandleGeneration()
 }
@@ -916,18 +753,15 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		return nil, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
 	seen := a.reconcileSeen
 	if seen == nil {
-		seen = make(map[activationKey]struct{}, len(a.pending))
+		seen = make(map[activationKey]struct{}, a.pendingActivationCount())
 	} else {
 		clear(seen)
 	}
-	nextPending := a.reconcileNextPending[:0]
 	changes := a.reconcileChanges[:0]
 	activated := a.reconcileActivated[:0]
-	oldPending := a.pending
 
 	for _, result := range results {
 		if err := ctx.Err(); err != nil {
@@ -949,10 +783,7 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			existing, key, ok := a.activationForCandidate(candidate)
 			if ok {
 				if existing.status == activationStatusPending {
-					if _, seenBefore := seen[key]; !seenBefore {
-						seen[key] = struct{}{}
-						nextPending = append(nextPending, key)
-					}
+					seen[key] = struct{}{}
 				}
 				continue
 			}
@@ -960,11 +791,9 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			created := a.activationRows.addEmpty()
 			fillActivationFromCandidate(created, rule, candidate)
 			key = a.storePreparedActivation(created)
+			a.enqueueActivation(created)
 
-			if _, seenBefore := seen[key]; !seenBefore {
-				seen[key] = struct{}{}
-				nextPending = append(nextPending, key)
-			}
+			seen[key] = struct{}{}
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
 				activation: a.compactChangeActivation(created),
@@ -972,34 +801,25 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		}
 	}
 
-	for _, key := range oldPending {
+	a.forEachPendingActivation(func(existing *activation) bool {
+		key := existing.key
 		if _, ok := seen[key]; ok {
-			continue
+			return true
 		}
-		existing, ok := a.activationByKeyPtr(key)
-		if !ok || existing.status != activationStatusPending {
-			continue
-		}
+		a.dequeueActivation(existing)
 		existing.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
 			activation: a.compactChangeActivation(existing),
 		})
-	}
+		return true
+	})
 
 	changes = append(changes, activated...)
 
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(nextPending)
-
 	a.reconcileSeen = seen
-	a.reconcileNextPending = oldPending[:0]
 	a.reconcileChanges = changes[:0]
 	a.reconcileActivated = activated[:0]
-	a.pending = nextPending
-	a.rebuildPendingActivationCache()
 	return append([]agendaChange(nil), changes...), nil
 }
 
@@ -1014,54 +834,26 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		return nil, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
-	removedKeys := a.deltaRemovedKeys
-	if removedKeys == nil {
-		removedKeys = make(map[activationKey]struct{}, len(removed))
-	} else {
-		clear(removedKeys)
-	}
+	changes := a.deltaChanges[:0]
 	for _, candidate := range removed {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		existing, key, ok := a.activationForCandidate(candidate)
+		existing, _, ok := a.activationForCandidate(candidate)
 		if !ok || existing.status != activationStatusPending {
 			continue
 		}
-		removedKeys[key] = struct{}{}
-	}
-
-	changes := a.deltaChanges[:0]
-	if len(removedKeys) > 0 {
-		nextPending := a.deltaNextPending[:0]
-		for _, key := range a.pending {
-			existing, ok := a.activationByKeyPtr(key)
-			if !ok || existing.status != activationStatusPending {
-				continue
-			}
-			if _, remove := removedKeys[key]; remove {
-				existing.status = activationStatusDeactivated
-				changes = append(changes, agendaChange{
-					kind:       agendaChangeDeactivated,
-					activation: a.compactChangeActivation(existing),
-				})
-				continue
-			}
-			nextPending = append(nextPending, key)
-		}
-		a.deltaNextPending = a.pending[:0]
-		a.pending = nextPending
-		a.invalidatePendingActivationCache()
+		a.dequeueActivation(existing)
+		existing.status = activationStatusDeactivated
+		changes = append(changes, agendaChange{
+			kind:       agendaChangeDeactivated,
+			activation: a.compactChangeActivation(existing),
+		})
 	}
 
 	activated := a.deltaActivated[:0]
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
 	sortMatchCandidates(revision, added)
-	a.reservePendingActivationKeys(len(added))
 	for _, candidate := range added {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -1079,8 +871,8 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 
 		created := a.activationRows.addEmpty()
 		fillActivationFromCandidate(created, rule, candidate)
-		key := a.storePreparedActivation(created)
-		a.pending = a.insertActivationKeySorted(a.pending, key, created)
+		a.storePreparedActivation(created)
+		a.enqueueActivation(created)
 		activated = append(activated, agendaChange{
 			kind:       agendaChangeActivated,
 			activation: a.compactChangeActivation(created),
@@ -1088,7 +880,6 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	}
 	changes = append(changes, activated...)
 
-	a.deltaRemovedKeys = removedKeys
 	a.deltaChanges = changes[:0]
 	a.deltaActivated = activated[:0]
 	return append([]agendaChange(nil), changes...), nil
@@ -1129,6 +920,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
+			a.enqueueActivation(existing)
 		}
 		return existing, nil
 	}
@@ -1136,8 +928,8 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	if err != nil {
 		return nil, err
 	}
-	key := a.storePreparedActivation(created)
-	a.pending = append(a.pending, key)
+	a.storePreparedActivation(created)
+	a.enqueueActivation(created)
 	return created, nil
 }
 
@@ -1145,13 +937,6 @@ func (a *agenda) finishInitialTerminalActivations() {
 	if a == nil {
 		return
 	}
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(a.pending)
-	a.pendingHead = 0
-	a.lazyDeactivated = 0
-	a.rebuildPendingActivationCache()
 }
 
 func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) (*activation, error) {
@@ -1165,7 +950,6 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return nil, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
 	if len(removed) == 1 {
 		delta := removed[0]
@@ -1178,8 +962,8 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 			if ok {
 				switch existing.status {
 				case activationStatusPending:
+					a.dequeueActivation(existing)
 					existing.status = activationStatusDeactivated
-					a.lazyDeactivated++
 				case activationStatusConsumed:
 					existing.status = activationStatusDeactivated
 				}
@@ -1199,29 +983,19 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
-			pending := activationKeyPending(a.pending, key)
-			if pending && a.lazyDeactivated > 0 {
-				a.lazyDeactivated--
-			}
-			if !pending {
-				a.pending = a.insertActivationKeySorted(a.pending, key, existing)
-			}
+			a.enqueueActivation(existing)
 		}
 		return existing, nil
 	}
-	a.reservePendingActivationKeys(1)
 	created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 	if err != nil {
 		return nil, err
 	}
-	key := a.storePreparedActivation(created)
-	a.pending = a.insertActivationKeySorted(a.pending, key, created)
-	if stored, ok := a.activationByKeyPtr(key); ok {
-		return stored, nil
-	}
+	a.storePreparedActivation(created)
+	a.enqueueActivation(created)
 	return created, nil
 }
 
@@ -1236,13 +1010,10 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		return nil, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
-	removedKeys := a.deltaRemovedKeys
-	if removedKeys == nil {
-		removedKeys = make(map[activationKey]struct{}, len(removed))
-	} else {
-		clear(removedKeys)
+	var changes []agendaChange
+	if collectChanges {
+		changes = a.deltaChanges[:0]
 	}
 	for _, delta := range removed {
 		if err := ctx.Err(); err != nil {
@@ -1255,7 +1026,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !ok {
 			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 		}
-		existing, key, ok := a.activationForTerminalTokenDelta(rule, delta)
+		existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
 		if !ok || existing.status != activationStatusPending {
 			if ok && existing.status == activationStatusConsumed {
 				existing.status = activationStatusDeactivated
@@ -1263,39 +1034,16 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			continue
 		}
 		if !collectChanges {
+			a.dequeueActivation(existing)
 			existing.status = activationStatusDeactivated
-			a.lazyDeactivated++
 			continue
 		}
-		removedKeys[key] = struct{}{}
-	}
-
-	var changes []agendaChange
-	if collectChanges {
-		changes = a.deltaChanges[:0]
-	}
-	if len(removedKeys) > 0 {
-		nextPending := a.deltaNextPending[:0]
-		for _, key := range a.pending {
-			existing, ok := a.activationByKeyPtr(key)
-			if !ok || existing.status != activationStatusPending {
-				continue
-			}
-			if _, remove := removedKeys[key]; remove {
-				existing.status = activationStatusDeactivated
-				if collectChanges {
-					changes = append(changes, agendaChange{
-						kind:       agendaChangeDeactivated,
-						activation: a.compactChangeActivation(existing),
-					})
-				}
-				continue
-			}
-			nextPending = append(nextPending, key)
-		}
-		a.deltaNextPending = a.pending[:0]
-		a.pending = nextPending
-		a.invalidatePendingActivationCache()
+		a.dequeueActivation(existing)
+		existing.status = activationStatusDeactivated
+		changes = append(changes, agendaChange{
+			kind:       agendaChangeDeactivated,
+			activation: a.compactChangeActivation(existing),
+		})
 	}
 
 	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
@@ -1304,7 +1052,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		}
 		sortTerminalTokenDeltas(revision, added)
 	}
-	a.reservePendingActivationKeys(len(added))
 
 	var previous reteTerminalTokenDelta
 	havePrevious := false
@@ -1329,16 +1076,10 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		previous = delta
 		havePrevious = true
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-		if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
-				pending := activationKeyPending(a.pending, key)
-				if pending && a.lazyDeactivated > 0 {
-					a.lazyDeactivated--
-				}
-				if collectChanges || !pending {
-					a.pending = a.insertActivationKeySorted(a.pending, key, existing)
-				}
+				a.enqueueActivation(existing)
 				if collectChanges {
 					activated = append(activated, agendaChange{
 						kind:       agendaChangeActivated,
@@ -1356,8 +1097,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if err != nil {
 			return nil, err
 		}
-		key := a.storePreparedActivation(created)
-		a.pending = a.insertActivationKeySorted(a.pending, key, created)
+		a.storePreparedActivation(created)
+		a.enqueueActivation(created)
 		if observeActivation != nil {
 			observeActivation(created)
 		}
@@ -1372,7 +1113,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		changes = append(changes, activated...)
 	}
 
-	a.deltaRemovedKeys = removedKeys
 	if collectChanges {
 		a.deltaChanges = changes[:0]
 		a.deltaActivated = activated[:0]
@@ -1394,8 +1134,6 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		return err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
-	refreshPendingOrder := false
 	for _, update := range updates {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1419,13 +1157,9 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		existing.maxRecency = update.after.maxRecency()
 		existing.totalRecency = update.after.totalRecency()
 		if existing.status == activationStatusPending {
-			refreshPendingOrder = true
+			a.fixActivationOrder(existing)
 			continue
 		}
-	}
-	if refreshPendingOrder {
-		a.sortActivationKeys(a.pending)
-		a.rebuildPendingActivationCache()
 	}
 	return nil
 }
@@ -1453,15 +1187,13 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 		return nil, true, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
 	seen := a.reconcileSeen
 	if seen == nil {
-		seen = make(map[activationKey]struct{}, len(a.pending))
+		seen = make(map[activationKey]struct{}, a.pendingActivationCount())
 	} else {
 		clear(seen)
 	}
-	nextPending := a.reconcileNextPending[:0]
 	var changes []agendaChange
 	var activated []agendaChange
 	if collectChanges {
@@ -1491,16 +1223,11 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 			identity := terminal.terminalTokenIdentity(token)
 			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, token, identity); ok {
 				if existing.status == activationStatusPending {
-					if _, seenBefore := seen[key]; !seenBefore {
-						seen[key] = struct{}{}
-						nextPending = append(nextPending, key)
-					}
+					seen[key] = struct{}{}
 				} else if existing.status == activationStatusDeactivated {
 					existing.status = activationStatusPending
-					if _, seenBefore := seen[key]; !seenBefore {
-						seen[key] = struct{}{}
-						nextPending = append(nextPending, key)
-					}
+					a.enqueueActivation(existing)
+					seen[key] = struct{}{}
 					if collectChanges {
 						activated = append(activated, agendaChange{
 							kind:       agendaChangeActivated,
@@ -1515,10 +1242,8 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				return nil, true, err
 			}
 			key := a.storePreparedActivation(created)
-			if _, seenBefore := seen[key]; !seenBefore {
-				seen[key] = struct{}{}
-				nextPending = append(nextPending, key)
-			}
+			a.enqueueActivation(created)
+			seen[key] = struct{}{}
 			if collectChanges {
 				activated = append(activated, agendaChange{
 					kind:       agendaChangeActivated,
@@ -1528,14 +1253,12 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 		}
 	}
 
-	for _, key := range a.pending {
+	a.forEachPendingActivation(func(existing *activation) bool {
+		key := existing.key
 		if _, ok := seen[key]; ok {
-			continue
+			return true
 		}
-		existing, ok := a.activationByKeyPtr(key)
-		if !ok || existing.status != activationStatusPending {
-			continue
-		}
+		a.dequeueActivation(existing)
 		existing.status = activationStatusDeactivated
 		if collectChanges {
 			changes = append(changes, agendaChange{
@@ -1543,20 +1266,14 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				activation: a.compactChangeActivation(existing),
 			})
 		}
-	}
+		return true
+	})
 
 	if collectChanges {
 		changes = append(changes, activated...)
 	}
 
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(nextPending)
 	a.reconcileSeen = seen
-	a.reconcileNextPending = a.pending[:0]
-	a.pending = nextPending
-	a.rebuildPendingActivationCache()
 	a.reconcileChanges = a.reconcileChanges[:0]
 	a.reconcileActivated = a.reconcileActivated[:0]
 	if collectChanges {
@@ -1576,15 +1293,13 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		return nil, err
 	}
 	a.revision = revision
-	a.normalizePendingKeys()
 
 	seen := a.reconcileSeen
 	if seen == nil {
-		seen = make(map[activationKey]struct{}, max(len(a.pending), len(deltas)))
+		seen = make(map[activationKey]struct{}, max(a.pendingActivationCount(), len(deltas)))
 	} else {
 		clear(seen)
 	}
-	nextPending := a.reconcileNextPending[:0]
 	var changes []agendaChange
 	var activated []agendaChange
 	if collectChanges {
@@ -1620,16 +1335,11 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity)
 		if ok {
 			if existing.status == activationStatusPending {
-				if _, seenBefore := seen[key]; !seenBefore {
-					seen[key] = struct{}{}
-					nextPending = append(nextPending, key)
-				}
+				seen[key] = struct{}{}
 			} else if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
-				if _, seenBefore := seen[key]; !seenBefore {
-					seen[key] = struct{}{}
-					nextPending = append(nextPending, key)
-				}
+				a.enqueueActivation(existing)
+				seen[key] = struct{}{}
 				if collectChanges {
 					activated = append(activated, agendaChange{
 						kind:       agendaChangeActivated,
@@ -1644,10 +1354,8 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 			return nil, err
 		}
 		key = a.storePreparedActivation(created)
-		if _, seenBefore := seen[key]; !seenBefore {
-			seen[key] = struct{}{}
-			nextPending = append(nextPending, key)
-		}
+		a.enqueueActivation(created)
+		seen[key] = struct{}{}
 		if collectChanges {
 			activated = append(activated, agendaChange{
 				kind:       agendaChangeActivated,
@@ -1656,14 +1364,12 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		}
 	}
 
-	for _, key := range a.pending {
-		existing, ok := a.activationByKeyPtr(key)
-		if !ok || existing.status != activationStatusPending {
-			continue
-		}
+	a.forEachPendingActivation(func(existing *activation) bool {
+		key := existing.key
 		if _, ok := seen[key]; ok {
-			continue
+			return true
 		}
+		a.dequeueActivation(existing)
 		existing.status = activationStatusDeactivated
 		if collectChanges {
 			changes = append(changes, agendaChange{
@@ -1671,21 +1377,14 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 				activation: a.compactChangeActivation(existing),
 			})
 		}
-	}
+		return true
+	})
 
 	if collectChanges {
 		changes = append(changes, activated...)
 	}
 
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	a.sortActivationKeys(nextPending)
-
 	a.reconcileSeen = seen
-	a.reconcileNextPending = a.pending[:0]
-	a.pending = nextPending
-	a.rebuildPendingActivationCache()
 	if !collectChanges {
 		a.reconcileChanges = a.reconcileChanges[:0]
 		a.reconcileActivated = a.reconcileActivated[:0]
@@ -1821,78 +1520,37 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	if a == nil || len(revisionIDs) == 0 {
 		return nil
 	}
-	a.normalizePendingKeys()
 
 	changes := a.purgeChanges[:0]
-	for _, key := range a.pending {
-		current, ok := a.activationByKeyPtr(key)
-		if !ok || current == nil {
-			continue
-		}
+	a.forEachPendingActivation(func(current *activation) bool {
 		if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
-			continue
+			return true
 		}
-		if current.status != activationStatusPending {
-			continue
-		}
+		a.dequeueActivation(current)
 		current.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
 			activation: a.compactChangeActivation(current),
 		})
-	}
-
-	nextActivations := make(map[activationFingerprint]activationOrdinalRef, len(a.activations))
-	var nextCollisions map[activationFingerprint]activationCollisionBucket
-	a.resetIndexesForRebuild()
-	oldPending := a.pending
-
-	a.forEachActivation(func(current *activation) bool {
-		if current == nil {
-			return true
-		}
-		if _, ok := revisionIDs[current.ruleRevisionID]; ok {
-			index := int(current.key.ordinal)
-			if index >= 0 && index < len(a.activationRefs) {
-				a.activationRefs[index] = nil
-			}
-			return true
-		}
-		ref := activationOrdinalRefForKey(current.key)
-		first := nextActivations[current.key.fingerprint]
-		if first.isZero() {
-			nextActivations[current.key.fingerprint] = ref
-		} else {
-			if nextCollisions == nil {
-				nextCollisions = make(map[activationFingerprint]activationCollisionBucket)
-			}
-			bucket := nextCollisions[current.key.fingerprint]
-			bucket.append(ref)
-			nextCollisions[current.key.fingerprint] = bucket
-		}
-		a.indexActivation(current)
 		return true
 	})
 
-	a.activations = nextActivations
-	a.activationCollisions = nextCollisions
+	a.clearActivationLookup()
 
-	nextPending := a.purgeNextPending[:0]
-	for _, key := range oldPending {
-		current, ok := a.activationByKeyPtr(key)
-		if !ok || current.status != activationStatusPending {
-			if ok && current.status == activationStatusDeactivated && a.lazyDeactivated > 0 {
-				a.lazyDeactivated--
-			}
+	oldActivations := a.activations
+	a.activationLookup = make(map[activationLookupKey][]*activation, len(oldActivations))
+	a.activations = make([]*activation, 0, len(oldActivations))
+	for _, current := range oldActivations {
+		if current == nil {
 			continue
 		}
-		nextPending = append(nextPending, key)
+		if _, ok := revisionIDs[current.ruleRevisionID]; ok {
+			continue
+		}
+		a.storeActivationRef(current)
 	}
+	clear(oldActivations)
 
-	a.pending = nextPending
-	a.rebuildPendingActivationCache()
-	a.purgeNextPending = oldPending[:0]
-	a.pruneEmptyIndexes()
 	out := append([]agendaChange(nil), changes...)
 	clear(changes)
 	a.purgeChanges = changes[:0]
@@ -1925,20 +1583,15 @@ func (a *agenda) nextActivationPtr() (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
 	}
-	usePendingActivation := len(a.pendingActivation) == len(a.pending)
-	for a.pendingHead < len(a.pending) {
-		key := a.pending[a.pendingHead]
-		var current *activation
-		ok := false
-		if usePendingActivation {
-			current = a.pendingActivation[a.pendingHead]
-			ok = current != nil && current.key == key
-		}
+	for {
+		queue, ok := a.nextQueue()
 		if !ok {
-			current, ok = a.activationByKeyPtr(key)
+			return nil, activation{}, false
 		}
-		a.pendingHead++
-
+		current, ok := queue.pop(a)
+		if queue.empty() {
+			delete(a.moduleQueues, queue.module)
+		}
 		if !ok || current.status != activationStatusPending {
 			continue
 		}
@@ -1947,66 +1600,58 @@ func (a *agenda) nextActivationPtr() (*activation, activation, bool) {
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
-	a.pending = a.pending[:0]
-	a.invalidatePendingActivationCache()
-	a.pendingHead = 0
-	a.lazyDeactivated = 0
-	return nil, activation{}, false
 }
 
 func (a *agenda) nextActivationPtrForModule(module ModuleName) (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
 	}
-	usePendingActivation := len(a.pendingActivation) == len(a.pending)
-	for a.pendingHead < len(a.pending) {
-		key := a.pending[a.pendingHead]
-		var current *activation
-		ok := false
-		if usePendingActivation {
-			current = a.pendingActivation[a.pendingHead]
-			ok = current != nil && current.key == key
-		}
-		if !ok {
-			current, ok = a.activationByKeyPtr(key)
+	module = normalizeModuleName(module)
+	if module.IsZero() {
+		module = MainModule
+	}
+	queue := a.moduleQueues[module]
+	for queue != nil && !queue.empty() {
+		current, ok := queue.pop(a)
+		if queue.empty() {
+			delete(a.moduleQueues, module)
 		}
 		if !ok || current.status != activationStatusPending {
-			a.pendingHead++
 			continue
 		}
-		if a.activationModule(current) != module {
-			break
-		}
-		a.pendingHead++
-		current.status = activationStatusConsumed
-		selected := a.activationRunSnapshot(current)
-		compactConsumedTokenActivation(current)
-		return current, selected, true
-	}
-	if a.pendingHead >= len(a.pending) {
-		a.pending = a.pending[:0]
-		a.invalidatePendingActivationCache()
-		a.pendingHead = 0
-		a.lazyDeactivated = 0
-		return nil, activation{}, false
-	}
-	a.normalizePendingKeys()
-	for i, key := range a.pending {
-		current, ok := a.activationByKeyPtr(key)
-		if !ok || current.status != activationStatusPending || a.activationModule(current) != module {
-			continue
-		}
-		copy(a.pending[i:], a.pending[i+1:])
-		last := len(a.pending) - 1
-		a.pending[last] = activationKey{}
-		a.pending = a.pending[:last]
-		a.invalidatePendingActivationCache()
 		current.status = activationStatusConsumed
 		selected := a.activationRunSnapshot(current)
 		compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
 	return nil, activation{}, false
+}
+
+func (a *agenda) nextQueue() (*agendaModuleQueue, bool) {
+	if a == nil {
+		return nil, false
+	}
+	var best *agendaModuleQueue
+	var bestAct *activation
+	for module, queue := range a.moduleQueues {
+		for queue != nil && !queue.empty() {
+			act := queue.heap[1]
+			if act != nil && act.status == activationStatusPending {
+				break
+			}
+			queue.pop(a)
+		}
+		if queue == nil || queue.empty() {
+			delete(a.moduleQueues, module)
+			continue
+		}
+		act := queue.heap[1]
+		if bestAct == nil || a.activationLess(act, bestAct) {
+			best = queue
+			bestAct = act
+		}
+	}
+	return best, best != nil
 }
 
 func compactConsumedTokenActivation(current *activation) {
@@ -2021,14 +1666,10 @@ func (a *agenda) activationRunSnapshot(current *activation) activation {
 }
 
 func (a *agenda) activationModule(act *activation) ModuleName {
-	if a == nil || a.revision == nil || act == nil {
+	if act == nil {
 		return ""
 	}
-	rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]
-	if !ok {
-		return ""
-	}
-	return rule.module
+	return act.module
 }
 
 func (a *agenda) ruleIDForRevision(id RuleRevisionID) RuleID {
@@ -2058,6 +1699,7 @@ func activationRunSnapshot(current *activation) activation {
 		ruleRevisionID: current.ruleRevisionID,
 		identityKey:    current.identityKey,
 		token:          current.token,
+		module:         current.module,
 		salience:       current.salience,
 		maxRecency:     current.maxRecency,
 		totalRecency:   current.totalRecency,
@@ -2069,19 +1711,16 @@ func (a *agenda) clear() []agendaChange {
 	if a == nil {
 		return nil
 	}
-	a.normalizePendingKeys()
-	changes := make([]agendaChange, 0, len(a.pending))
-	for _, key := range a.pending {
-		current, ok := a.activationByKeyPtr(key)
-		if !ok || current.status != activationStatusPending {
-			continue
-		}
+	changes := make([]agendaChange, 0, a.pendingActivationCount())
+	a.forEachPendingActivation(func(current *activation) bool {
+		a.dequeueActivation(current)
 		current.status = activationStatusDeactivated
 		changes = append(changes, agendaChange{
 			kind:       agendaChangeDeactivated,
 			activation: a.compactChangeActivation(current),
 		})
-	}
+		return true
+	})
 	a.reset()
 	return changes
 }
@@ -2090,26 +1729,25 @@ func (a *agenda) materializePendingTokenFacts(revision *Ruleset) {
 	if a == nil || revision == nil {
 		return
 	}
-	a.normalizePendingKeys()
-	for _, key := range a.pending {
-		current, ok := a.activationByKeyPtr(key)
-		if !ok || current.status != activationStatusPending || current.token.isZero() {
-			continue
+	a.forEachPendingActivation(func(current *activation) bool {
+		if current.token.isZero() {
+			return true
 		}
 		if len(current.factIDs()) > 0 && len(current.factVersions()) > 0 {
-			continue
+			return true
 		}
 		rule, ok := revision.rulesByRevisionID[current.ruleRevisionID]
 		if !ok {
-			continue
+			return true
 		}
 		factIDs, factVersions, ok := terminalTokenFactTuple(rule, current.token)
 		if !ok {
-			continue
+			return true
 		}
 		current.setFactIDs(cloneFactIDs(factIDs))
 		current.setFactVersions(cloneFactVersions(factVersions))
-	}
+		return true
+	})
 }
 
 func (a *agenda) activationByKey(key activationKey) (activation, bool) {
@@ -2124,62 +1762,62 @@ func (a *agenda) activationByKey(key activationKey) (activation, bool) {
 }
 
 func (a *agenda) pendingActivations() []activation {
-	if a == nil || len(a.pending) == 0 {
+	if a == nil {
 		return nil
 	}
-	a.normalizePendingKeys()
-	if len(a.pending) == 0 {
+	count := a.pendingActivationCount()
+	if count == 0 {
 		return nil
 	}
-	a.compactLazyPending(false)
-	out := make([]activation, 0, len(a.pending))
-	for _, key := range a.pending {
-		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
-			out = append(out, a.publicActivation(current))
-		}
-	}
+	out := make([]activation, 0, count)
+	a.forEachPendingActivation(func(current *activation) bool {
+		out = append(out, a.publicActivation(current))
+		return true
+	})
+	sortActivations(out)
 	return out
 }
 
 func (a *agenda) forEachPendingActivation(fn func(*activation) bool) {
-	if a == nil || fn == nil || len(a.pending) == 0 {
+	if a == nil || fn == nil {
 		return
 	}
-	usePendingActivation := len(a.pendingActivation) == len(a.pending)
-	for i := a.pendingHead; i < len(a.pending); i++ {
-		key := a.pending[i]
-		var current *activation
-		ok := false
-		if usePendingActivation {
-			current = a.pendingActivation[i]
-			ok = current != nil && current.key == key
+	scratch := a.pendingScratch[:0]
+	for _, queue := range a.moduleQueues {
+		if queue == nil {
+			continue
 		}
-		if !ok {
-			current, ok = a.activationByKeyPtr(key)
+		for i := 1; i < len(queue.heap); i++ {
+			current := queue.heap[i]
+			if current == nil || current.status != activationStatusPending {
+				continue
+			}
+			scratch = append(scratch, current)
 		}
-		if !ok || current.status != activationStatusPending {
+	}
+	a.pendingScratch = scratch
+	for _, current := range scratch {
+		if current == nil || current.status != activationStatusPending {
 			continue
 		}
 		if !fn(current) {
-			return
+			break
 		}
 	}
+	clear(scratch)
+	a.pendingScratch = scratch[:0]
 }
 
 func (a *agenda) activationsByFactID(id FactID) []activation {
-	if a == nil {
+	if a == nil || id.IsZero() {
 		return nil
 	}
-	a.ensureFactIndex()
-	bucket := a.byFactID[id]
-	if bucket.len() == 0 {
-		return nil
-	}
-	out := make([]activation, 0, bucket.len())
-	bucket.forEach(func(key activationKey) {
-		if current, ok := a.activationByKeyPtr(key); ok {
+	var out []activation
+	a.forEachActivation(func(current *activation) bool {
+		if activationContainsFactID(current, id) {
 			out = append(out, a.publicActivation(current))
 		}
+		return true
 	})
 	sortActivations(out)
 	return out
@@ -2189,246 +1827,29 @@ func (a *agenda) activationsByRuleRevisionID(id RuleRevisionID) []activation {
 	if a == nil {
 		return nil
 	}
-	a.ensureRevisionIndex()
-	bucket := a.byRevision[id]
-	if bucket.len() == 0 {
-		return nil
-	}
-	out := make([]activation, 0, bucket.len())
-	bucket.forEach(func(key activationKey) {
-		if current, ok := a.activationByKeyPtr(key); ok {
+	var out []activation
+	a.forEachActivation(func(current *activation) bool {
+		if current != nil && current.ruleRevisionID == id {
 			out = append(out, a.publicActivation(current))
 		}
+		return true
 	})
 	sortActivations(out)
 	return out
 }
 
-func (a *agenda) rebuildIndexes() {
-	if a == nil {
-		return
-	}
-	a.resetIndexesForRebuild()
-	a.forEachActivation(func(current *activation) bool {
-		a.indexActivationFacts(current, false)
-		a.indexActivationRevision(current)
-		return true
-	})
-	a.pruneEmptyIndexes()
-}
-
-func (a *agenda) ensureFactIndex() {
-	if a == nil || !a.tokenFactIndexDirty {
-		return
-	}
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket)
-	} else {
-		resetActivationIndex(a.byFactID)
-	}
-	a.forEachActivation(func(current *activation) bool {
-		a.indexActivationFacts(current, true)
-		return true
-	})
-	pruneEmptyActivationIndex(a.byFactID)
-	a.tokenFactIndexDirty = false
-}
-
-func (a *agenda) ensureRevisionIndex() {
-	if a == nil || !a.revisionIndexDirty {
-		return
-	}
-	if a.byRevision == nil {
-		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
-	} else {
-		resetActivationIndex(a.byRevision)
-	}
-	a.forEachActivation(func(current *activation) bool {
-		a.indexActivationRevision(current)
-		return true
-	})
-	pruneEmptyActivationIndex(a.byRevision)
-	a.revisionIndexDirty = false
-}
-
-func (a *agenda) resetIndexesForRebuild() {
-	a.tokenFactIndexDirty = false
-	a.revisionIndexDirty = false
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket)
-	} else {
-		resetActivationIndex(a.byFactID)
-	}
-	if a.byRevision == nil {
-		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
-	} else {
-		resetActivationIndex(a.byRevision)
-	}
-}
-
-func (a *agenda) pruneEmptyIndexes() {
-	if a == nil {
-		return
-	}
-	pruneEmptyActivationIndex(a.byFactID)
-	pruneEmptyActivationIndex(a.byRevision)
-}
-
-func (a *agenda) indexActivation(act *activation) {
-	if a == nil || act == nil {
-		return
-	}
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket)
-	}
-
-	a.indexActivationFacts(act, false)
-	a.revisionIndexDirty = true
-}
-
-func (a *agenda) indexActivationRevision(act *activation) {
-	if a == nil || act == nil {
-		return
-	}
-	if a.byRevision == nil {
-		a.byRevision = make(map[RuleRevisionID]activationKeyBucket)
-	}
-	revisionBucket := a.byRevision[act.ruleRevisionID]
-	revisionBucket.append(act.key)
-	a.byRevision[act.ruleRevisionID] = revisionBucket
-}
-
-func (a *agenda) indexActivationFacts(act *activation, includeTokenFacts bool) {
-	if a == nil || act == nil {
-		return
-	}
-	if a.byFactID == nil {
-		a.byFactID = make(map[FactID]activationKeyBucket)
+func activationContainsFactID(act *activation, id FactID) bool {
+	if act == nil || id.IsZero() {
+		return false
 	}
 	if !act.token.isZero() {
-		if includeTokenFacts {
-			a.indexActivationTokenFacts(act.key, act.token)
-			return
-		}
-		a.tokenFactIndexDirty = true
-		return
+		return act.token.containsFact(id)
 	}
-	factIDs := act.factIDs()
-	for i, factID := range factIDs {
-		if factIDSeenBefore(factIDs[:i], factID) {
-			continue
-		}
-		factBucket := a.byFactID[factID]
-		factBucket.append(act.key)
-		a.byFactID[factID] = factBucket
-	}
-}
-
-func (a *agenda) indexActivationTokenFacts(key activationKey, token tokenRef) {
-	if a == nil || token.isZero() {
-		return
-	}
-	if factIDs, ok := token.factIDs(); ok {
-		for i, factID := range factIDs {
-			if factIDSeenBefore(factIDs[:i], factID) {
-				continue
-			}
-			factBucket := a.byFactID[factID]
-			factBucket.append(key)
-			a.byFactID[factID] = factBucket
-		}
-		return
-	}
-	row, ok := token.resolve()
-	if !ok {
-		return
-	}
-	a.indexActivationTokenFacts(key, token.parent())
-	match, ok := row.conditionMatch()
-	if !ok {
-		return
-	}
-	factID := match.fact.ID()
-	if tokenRefContainsFactID(token.parent(), factID) {
-		return
-	}
-	factBucket := a.byFactID[factID]
-	factBucket.append(key)
-	a.byFactID[factID] = factBucket
-}
-
-func tokenRefContainsFactID(token tokenRef, id FactID) bool {
-	return token.containsFact(id)
-}
-
-func resetActivationIndex[K comparable](index map[K]activationKeyBucket) {
-	for key, bucket := range index {
-		index[key] = bucket.reset()
-	}
-}
-
-func pruneEmptyActivationIndex[K comparable](index map[K]activationKeyBucket) {
-	for key, bucket := range index {
-		if bucket.len() == 0 {
-			delete(index, key)
-		}
-	}
+	return slices.Contains(act.factIDs(), id)
 }
 
 func factIDSeenBefore(ids []FactID, id FactID) bool {
 	return slices.Contains(ids, id)
-}
-
-func (a *agenda) sortActivationKeys(keys []activationKey) {
-	if a == nil || len(keys) < 2 {
-		return
-	}
-	entries := a.sortEntries
-	if cap(entries) < len(keys) {
-		entries = make([]activationSortEntry, len(keys))
-	} else {
-		entries = entries[:len(keys)]
-	}
-	for i, key := range keys {
-		act, _ := a.activationByKeyPtr(key)
-		entries[i] = activationSortEntry{key: key, act: act}
-	}
-	slices.SortStableFunc(entries, func(left, right activationSortEntry) int {
-		return a.activationCompare(left.act, right.act)
-	})
-	for i, entry := range entries {
-		keys[i] = entry.key
-		entries[i] = activationSortEntry{}
-	}
-	a.sortEntries = entries[:0]
-	a.invalidatePendingActivationCache()
-}
-
-func (a *agenda) insertActivationKeySorted(keys []activationKey, key activationKey, act *activation) []activationKey {
-	a.invalidatePendingActivationCache()
-	if a == nil || act == nil || len(keys) == 0 {
-		return append(keys, key)
-	}
-	if last, ok := a.activationByKeyPtr(keys[len(keys)-1]); ok && !a.activationLess(act, last) {
-		return append(keys, key)
-	}
-	index := sort.Search(len(keys), func(i int) bool {
-		existing, _ := a.activationByKeyPtr(keys[i])
-		return a.activationLess(act, existing)
-	})
-	keys = append(keys, activationKey{})
-	copy(keys[index+1:], keys[index:])
-	keys[index] = key
-	return keys
-}
-
-func (a *agenda) reservePendingActivationKeys(additional int) {
-	if a == nil || additional <= 0 {
-		return
-	}
-	a.normalizePendingKeys()
-	a.pending = slices.Grow(a.pending, additional)
-	a.pendingActivation = slices.Grow(a.pendingActivation, additional)
 }
 
 func sortActivations(activations []activation) {
@@ -2524,9 +1945,11 @@ func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, 
 	if a == nil {
 		return nil, activationKey{}, false
 	}
-	fingerprint := activationFingerprintForIdentityKey(candidate.identity.key)
 	var found *activation
-	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+	a.forEachActivationLookup(activationLookupKey{
+		ruleRevisionID: candidate.ruleRevisionID,
+		identityKey:    candidate.identity.key,
+	}, func(current *activation) bool {
 		if activationMatchesCandidate(current, candidate) {
 			found = current
 			return false
@@ -2550,9 +1973,11 @@ func (a *agenda) activationForTerminalTokenIdentity(rule compiledRule, token tok
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
-	fingerprint := activationFingerprintForIdentityKey(identity.key)
 	var found *activation
-	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+	a.forEachActivationLookup(activationLookupKey{
+		ruleRevisionID: rule.revisionID,
+		identityKey:    identity.key,
+	}, func(current *activation) bool {
 		if activationMatchesTerminalToken(current, rule, identity, token) {
 			found = current
 			return false
@@ -2573,9 +1998,11 @@ func (a *agenda) activationForTerminalTokenDelta(rule compiledRule, delta reteTe
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, delta.token)
 	}
-	fingerprint := activationFingerprintForIdentityKey(identity.key)
 	var found *activation
-	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+	a.forEachActivationLookup(activationLookupKey{
+		ruleRevisionID: rule.revisionID,
+		identityKey:    identity.key,
+	}, func(current *activation) bool {
 		if activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
 			found = current
 			return false
@@ -2710,7 +2137,6 @@ func (a *agenda) storeActivation(act *activation) activationKey {
 		*stored = *act
 	}
 	key := a.storePreparedActivation(stored)
-	a.ensureRevisionIndex()
 	return key
 }
 
@@ -2719,55 +2145,48 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 		return activationKey{}
 	}
 	a.ensureHandleGeneration()
-	fingerprint := activationFingerprintForIdentityKey(act.identityKey)
 	key := activationKey{
-		fingerprint: fingerprint,
-		ordinal:     a.nextOrdinal,
+		ordinal: a.nextOrdinal + 1,
 	}
 	a.nextOrdinal++
 	act.key = key
-	a.storeActivationRef(fingerprint, activationOrdinalRefForKey(key), act)
-	a.indexActivation(act)
+	a.storeActivationRef(act)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
 	}
 	return key
 }
 
-func (a *agenda) storeActivationRef(fingerprint activationFingerprint, ref activationOrdinalRef, act *activation) {
-	if a == nil || ref.isZero() || act == nil {
+func (a *agenda) storeActivationRef(act *activation) {
+	if a == nil || act == nil {
 		return
 	}
-	ordinal := ref.ordinal()
-	if ordinal > uint64(int(^uint(0)>>1)) {
-		return
-	}
-	index := int(ordinal)
-	if index >= len(a.activationRefs) {
-		a.activationRefs = append(a.activationRefs, make([]*activation, index-len(a.activationRefs)+1)...)
-	}
-	a.activationRefs[index] = act
-	a.storeActivationOrdinalRef(fingerprint, ref)
+	a.activations = append(a.activations, act)
+	a.storeActivationLookupRef(act)
 }
 
-func (a *agenda) storeActivationOrdinalRef(fingerprint activationFingerprint, ref activationOrdinalRef) {
-	if a == nil || ref.isZero() {
+func (a *agenda) storeActivationLookupRef(act *activation) {
+	if a == nil || act == nil || act.key == (activationKey{}) {
 		return
 	}
-	if a.activations == nil {
-		a.activations = make(map[activationFingerprint]activationOrdinalRef)
+	if a.activationLookup == nil {
+		a.activationLookup = make(map[activationLookupKey][]*activation)
 	}
-	first := a.activations[fingerprint]
-	if first.isZero() {
-		a.activations[fingerprint] = ref
+	key := activationLookupKey{
+		ruleRevisionID: act.ruleRevisionID,
+		identityKey:    act.identityKey,
+	}
+	a.activationLookup[key] = append(a.activationLookup[key], act)
+}
+
+func (a *agenda) clearActivationLookup() {
+	if a == nil {
 		return
 	}
-	if a.activationCollisions == nil {
-		a.activationCollisions = make(map[activationFingerprint]activationCollisionBucket)
+	for key, refs := range a.activationLookup {
+		clear(refs)
+		delete(a.activationLookup, key)
 	}
-	bucket := a.activationCollisions[fingerprint]
-	bucket.append(ref)
-	a.activationCollisions[fingerprint] = bucket
 }
 
 func (a *agenda) ensureHandleGeneration() uint32 {
@@ -2790,151 +2209,77 @@ func (a *agenda) advanceHandleGeneration() {
 	}
 }
 
-func (a *agenda) handleForActivationKey(key activationKey) activationHandle {
-	if a == nil {
-		return activationHandle{}
-	}
-	return activationHandle{
-		key:        key,
-		generation: a.ensureHandleGeneration(),
-	}
-}
-
-func (a *agenda) activationByHandlePtr(handle activationHandle) (*activation, bool) {
-	if a == nil || handle.isZero() || handle.generation != a.ensureHandleGeneration() {
-		return nil, false
-	}
-	return a.activationByKeyPtr(handle.key)
-}
-
 func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
-	if a == nil {
+	if a == nil || key == (activationKey{}) {
 		return nil, false
 	}
-	ref := activationOrdinalRefForKey(key)
-	current, ok := a.activationByOrdinalRef(ref)
-	if !ok || current.key != key {
-		return nil, false
+	for _, current := range a.activations {
+		if current == nil || current.key != key {
+			continue
+		}
+		return current, true
 	}
-	return current, true
-}
-
-func (a *agenda) activationByOrdinalRef(ref activationOrdinalRef) (*activation, bool) {
-	if a == nil || ref.isZero() {
-		return nil, false
-	}
-	ordinal := ref.ordinal()
-	if ordinal > uint64(int(^uint(0)>>1)) {
-		return nil, false
-	}
-	index := int(ordinal)
-	if index < 0 || index >= len(a.activationRefs) {
-		return nil, false
-	}
-	current := a.activationRefs[index]
-	return current, current != nil
+	return nil, false
 }
 
 func (a *agenda) compactConsumedActivationRows() {
-	if a == nil || len(a.activationRefs) == 0 {
+	if a == nil || len(a.activations) == 0 {
 		return
 	}
-	a.normalizePendingKeys()
-	oldRefs := append([]*activation(nil), a.activationRefs...)
-	consumed := 0
-	for _, current := range oldRefs {
-		if current != nil && current.status == activationStatusConsumed {
-			consumed++
-		}
-	}
-	if consumed == 0 {
-		return
-	}
+	oldActivations := append([]*activation(nil), a.activations...)
+	pendingCount := a.pendingActivationCount()
 
-	if a.activations == nil {
-		a.activations = make(map[activationFingerprint]activationOrdinalRef)
-	} else {
-		clear(a.activations)
-	}
-	if a.activationCollisions != nil {
-		for fingerprint, bucket := range a.activationCollisions {
-			clear(bucket.overflow)
-			delete(a.activationCollisions, fingerprint)
-		}
-	}
-	clear(a.activationRefs)
-	a.activationRefs = a.activationRefs[:0]
-	a.resetIndexesForRebuild()
+	a.activationLookup = make(map[activationLookupKey][]*activation, pendingCount)
+	a.activations = make([]*activation, 0, pendingCount)
+	a.resetModuleQueues()
 
 	var nextRows activationRows
-	for _, current := range oldRefs {
-		if current == nil {
-			continue
-		}
-		if current.status == activationStatusConsumed {
+	for _, current := range oldActivations {
+		if current == nil || current.status != activationStatusPending {
 			continue
 		}
 		stored := nextRows.add(*current)
-		a.storeActivationRef(stored.key.fingerprint, activationOrdinalRefForKey(stored.key), stored)
-		a.indexActivation(stored)
+		stored.heapIndex = 0
+		a.storeActivationRef(stored)
+		a.enqueueActivation(stored)
 	}
 
 	a.activationRows = nextRows
 	a.terminalActivations = activationRows{}
-	if nextRows.count == 0 && len(a.pending) == 0 {
+	if a.pendingActivationCount() == 0 {
 		a.releaseCompletedRunStorage()
-		return
 	}
-	a.rebuildPendingActivationCache()
 }
 
 func (a *agenda) releaseCompletedRunStorage() {
 	if a == nil {
 		return
 	}
+	a.activationLookup = nil
 	a.activations = nil
-	a.activationCollisions = nil
-	a.activationRefs = nil
 	a.activationRows = activationRows{}
 	a.terminalActivations = activationRows{}
-	a.pending = nil
-	a.pendingActivation = nil
-	a.pendingHead = 0
-	a.lazyDeactivated = 0
-	a.byFactID = nil
-	a.byRevision = nil
-	a.tokenFactIndexDirty = false
-	a.revisionIndexDirty = false
+	a.moduleQueues = nil
 	a.reconcileSeen = nil
-	a.reconcileNextPending = nil
 	a.reconcileChanges = nil
 	a.reconcileActivated = nil
-	a.deltaRemovedKeys = nil
-	a.deltaNextPending = nil
 	a.deltaChanges = nil
 	a.deltaActivated = nil
-	a.purgeNextPending = nil
 	a.purgeChanges = nil
-	a.sortEntries = nil
+	a.pendingScratch = nil
 }
 
-func (a *agenda) forEachActivationWithFingerprint(fingerprint activationFingerprint, fn func(*activation) bool) {
+func (a *agenda) forEachActivationLookup(key activationLookupKey, fn func(*activation) bool) {
 	if a == nil || fn == nil {
 		return
 	}
-	if current, ok := a.activationByOrdinalRef(a.activations[fingerprint]); ok {
+	for _, current := range a.activationLookup[key] {
+		if current == nil {
+			continue
+		}
 		if !fn(current) {
 			return
 		}
-	}
-	if bucket, ok := a.activationCollisions[fingerprint]; ok {
-		bucket.forEach(func(ref activationOrdinalRef) bool {
-			current, ok := a.activationByOrdinalRef(ref)
-			if !ok {
-				return true
-			}
-			return fn(current)
-		})
 	}
 }
 
@@ -2942,31 +2287,14 @@ func (a *agenda) forEachActivation(fn func(*activation) bool) {
 	if a == nil || fn == nil {
 		return
 	}
-	for _, ref := range a.activations {
-		if current, ok := a.activationByOrdinalRef(ref); ok {
-			if !fn(current) {
-				return
-			}
+	for _, current := range a.activations {
+		if current == nil {
+			continue
 		}
-	}
-	for _, bucket := range a.activationCollisions {
-		if !bucket.forEach(func(ref activationOrdinalRef) bool {
-			current, ok := a.activationByOrdinalRef(ref)
-			if !ok {
-				return true
-			}
-			return fn(current)
-		}) {
+		if !fn(current) {
 			return
 		}
 	}
-}
-
-func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFingerprint {
-	hash := fnvhash.Offset64
-	hash = fnvhash.MixUint64(hash, key.scopeHash)
-	hash = fnvhash.MixUint64(hash, key.hash)
-	return activationFingerprint(hash)
 }
 
 func activationIDForIdentityKey(identity candidateIdentityKey, index uint64) ActivationID {
@@ -2982,30 +2310,6 @@ func activationIDForIdentityKey(identity candidateIdentityKey, index uint64) Act
 	b.WriteByte(':')
 	writeUintToBuilder(&b, index)
 	return ActivationID(b.String())
-}
-
-func activationKeyPending(keys []activationKey, want activationKey) bool {
-	return slices.Contains(keys, want)
-}
-
-func (a *agenda) compactLazyPending(force bool) {
-	if a == nil || a.lazyDeactivated == 0 {
-		return
-	}
-	a.normalizePendingKeys()
-	if !force && a.lazyDeactivated < 1024 && a.lazyDeactivated*2 < len(a.pending) {
-		return
-	}
-	next := a.deltaNextPending[:0]
-	for _, key := range a.pending {
-		if current, ok := a.activationByKeyPtr(key); ok && current.status == activationStatusPending {
-			next = append(next, key)
-		}
-	}
-	a.deltaNextPending = a.pending[:0]
-	a.pending = next
-	a.rebuildPendingActivationCache()
-	a.lazyDeactivated = 0
 }
 
 func cloneBindingTupleEntries(entries []bindingTupleEntry) []bindingTupleEntry {
@@ -3158,6 +2462,8 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	}
 	dst.ruleRevisionID = candidate.ruleRevisionID
 	dst.identityKey = candidate.identity.key
+	dst.module = rule.module
+	dst.heapIndex = 0
 	dst.payload = nil
 	dst.setBindings(cloneBindingTupleEntries(candidate.bindingTuple))
 	dst.setFactIDs(cloneFactIDs(candidate.factIDs))
@@ -3213,6 +2519,8 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.ruleRevisionID = rule.revisionID
 	dst.identityKey = identity.key
 	dst.token = token
+	dst.module = rule.module
+	dst.heapIndex = 0
 	dst.salience = rule.salience
 	dst.maxRecency = row.maxRecency
 	dst.totalRecency = row.totalRecency

@@ -34,23 +34,23 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	} else if !ok {
 		t.Fatal("reconcileAgendaWithoutSnapshot unavailable")
 	}
-	session.agenda.normalizePendingKeys()
-	if len(session.agenda.pending) != 1 {
-		t.Fatalf("pending activations = %d, want 1", len(session.agenda.pending))
-	}
-	activation, ok := session.agenda.activationByKeyPtr(session.agenda.pending[0])
-	if !ok {
+	var actPtr *activation
+	session.agenda.forEachPendingActivation(func(act *activation) bool {
+		actPtr = act
+		return false
+	})
+	if actPtr == nil {
 		t.Fatal("missing internal activation")
 	}
-	rule := revision.rulesByRevisionID[activation.ruleRevisionID]
-	matches, err := session.actionMatchesForActivation(*activation, rule)
+	rule := revision.rulesByRevisionID[actPtr.ruleRevisionID]
+	matches, err := session.actionMatchesForActivation(*actPtr, rule)
 	if err != nil {
 		t.Fatalf("actionMatchesForActivation: %v", err)
 	}
 	if got, want := len(matches), 1; got != want {
 		t.Fatalf("matches = %d, want %d", got, want)
 	}
-	activationFactIDs := cloneActivationFactIDs(activation)
+	activationFactIDs := cloneActivationFactIDs(actPtr)
 	if matches[0].fact.ID() != activationFactIDs[0] {
 		t.Fatalf("match fact ID = %q, want %q", matches[0].fact.ID(), activationFactIDs[0])
 	}
@@ -68,7 +68,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("compileExpressionSpec = (%v, %v), want ok", err, ok)
 	}
-	value, err := evaluateNativeActionExpressionWithToken(ctx, expression, activation.token)
+	value, err := evaluateNativeActionExpressionWithToken(ctx, expression, actPtr.token)
 	if err != nil {
 		t.Fatalf("evaluateNativeActionExpressionWithToken: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 		t.Fatalf("token expression value = (%q, %v), want s-1", got, ok)
 	}
 
-	stale := *activation
+	stale := *actPtr
 	stale.payload = nil
 	stale.setFactIDs(cloneActivationFactIDs(&stale))
 	staleVersions := cloneActivationFactVersions(&stale)
