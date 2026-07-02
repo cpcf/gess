@@ -85,6 +85,7 @@ type reteGraphAggregateBucket struct {
 	parent           tokenRef
 	members          map[graphTokenIdentityKey]reteGraphAggregateMember
 	countOnlyMembers map[graphTokenIdentityKey]FactID
+	scalarMembers    map[graphTokenIdentityKey]reteGraphAggregateScalarMember
 	count            int64
 	extrema          []reteGraphAggregateExtremum
 	collects         [][]reteGraphAggregateCollectEntry
@@ -119,6 +120,11 @@ type reteGraphAggregateCollectEntry struct {
 type reteGraphAggregateMember struct {
 	token  tokenRef
 	factID FactID
+}
+
+type reteGraphAggregateScalarMember struct {
+	factID FactID
+	values []Value
 }
 
 type deferredAggregateOutputKey struct {
@@ -1554,6 +1560,9 @@ func (m *reteGraphAggregateBucket) clear() {
 	if m.countOnlyMembers != nil {
 		clear(m.countOnlyMembers)
 	}
+	if m.scalarMembers != nil {
+		clear(m.scalarMembers)
+	}
 	m.parent = tokenRef{}
 	m.count = 0
 	for i := range m.extrema {
@@ -2631,12 +2640,33 @@ func aggregateMemberValuesWithBindings(node *reteGraphAggregateNode, match condi
 	return values, true
 }
 
+func aggregateScalarMember(match conditionMatch, values []Value) reteGraphAggregateScalarMember {
+	out := reteGraphAggregateScalarMember{
+		factID: match.fact.ID(),
+		values: make([]Value, len(values)),
+	}
+	for i, value := range values {
+		out.values[i] = cloneValue(value)
+	}
+	return out
+}
+
 func aggregateSpecsNeedInputValues(specs []compiledAggregateSpec) bool {
 	for _, spec := range specs {
 		switch spec.kind {
 		case AggregateCount:
 			continue
 		default:
+			return true
+		}
+	}
+	return false
+}
+
+func aggregateSpecsNeedMemberTokens(specs []compiledAggregateSpec) bool {
+	for _, spec := range specs {
+		switch spec.kind {
+		case AggregateMin, AggregateMax, AggregateCollect:
 			return true
 		}
 	}
@@ -3078,6 +3108,31 @@ func (s *reteGraphAggregateNumericState) removeSum(bucket *reteGraphAggregateBuc
 	}
 }
 
+func (s *reteGraphAggregateNumericState) removeSumValue(bucket *reteGraphAggregateBucket, node *reteGraphAggregateNode, index int, value Value) {
+	if s == nil || bucket == nil || node == nil {
+		return
+	}
+	offset, ok := s.offset(bucket.id, len(node.specs), index)
+	if !ok {
+		return
+	}
+	switch value.Kind() {
+	case ValueInt:
+		if s.floaty[offset] {
+			s.floatSums[offset] -= float64(value.intValue)
+			return
+		}
+		s.intSums[offset] -= value.intValue
+	case ValueFloat:
+		if !s.floaty[offset] {
+			s.floatSums[offset] = float64(s.intSums[offset])
+			s.intSums[offset] = 0
+			s.floaty[offset] = true
+		}
+		s.floatSums[offset] -= value.floatValue
+	}
+}
+
 func (s *reteGraphAggregateNumericState) resetSum(id reteGraphAggregateBucketID, specs int, index int) bool {
 	offset, ok := s.offset(id, specs, index)
 	if !ok {
@@ -3290,6 +3345,30 @@ func (m *reteGraphAggregateBucket) addMember(node *reteGraphAggregateNode, membe
 	return nil
 }
 
+func (m *reteGraphAggregateBucket) addScalarMember(node *reteGraphAggregateNode, member reteGraphAggregateScalarMember, numeric *reteGraphAggregateNumericState) error {
+	if m == nil || node == nil {
+		return nil
+	}
+	m.count++
+	m.ensureSpecState(len(node.specs))
+	for i, spec := range node.specs {
+		switch spec.kind {
+		case AggregateCount:
+			continue
+		case AggregateSum:
+			if i >= len(member.values) {
+				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
+			}
+			if err := numeric.addSum(m.id, len(node.specs), i, member.values[i]); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("%w: unsupported scalar aggregate kind %q", ErrAggregateEvaluation, spec.kind)
+		}
+	}
+	return nil
+}
+
 func (m *reteGraphAggregateBucket) addCountOnlyMember(token tokenRef, bindingSlot int) (bool, bool) {
 	if m == nil || token.isZero() {
 		return false, false
@@ -3334,6 +3413,26 @@ func (m *reteGraphAggregateBucket) countOnlyMemberCount() int {
 
 func (m *reteGraphAggregateBucket) removeMember(node *reteGraphAggregateNode, member reteGraphAggregateMember, numeric *reteGraphAggregateNumericState) bool {
 	return m.removeMemberWithCollectKey(node, member, tokenRefKey(member.token), numeric)
+}
+
+func (m *reteGraphAggregateBucket) removeScalarMember(node *reteGraphAggregateNode, member reteGraphAggregateScalarMember, numeric *reteGraphAggregateNumericState) bool {
+	if m == nil || node == nil {
+		return false
+	}
+	if m.count > 0 {
+		m.count--
+	}
+	m.ensureSpecState(len(node.specs))
+	for i, spec := range node.specs {
+		if spec.kind != AggregateSum {
+			continue
+		}
+		if i >= len(member.values) {
+			return false
+		}
+		numeric.removeSumValue(m, node, i, member.values[i])
+	}
+	return true
 }
 
 func (m *reteGraphAggregateBucket) removeMemberWithCollectKey(node *reteGraphAggregateNode, member reteGraphAggregateMember, collectKey graphTokenIdentityKey, numeric *reteGraphAggregateNumericState) bool {

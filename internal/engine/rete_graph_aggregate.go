@@ -79,6 +79,32 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 		return
 	}
 	memberKey := tokenRefKey(token)
+	valuesNeedMemberTokens := aggregateSpecsNeedMemberTokens(m.node.specs)
+	if !valuesNeedMemberTokens {
+		if existing, ok := bucket.scalarMembers[memberKey]; ok {
+			if !bucket.removeScalarMember(m.node, existing, &m.memory.numeric) {
+				delta.supported = false
+				return
+			}
+			delete(bucket.scalarMembers, memberKey)
+		}
+		values, ok := aggregateMemberValues(m.node, token)
+		if !ok {
+			delta.supported = false
+			return
+		}
+		member := aggregateScalarMember(match, values)
+		if err := bucket.addScalarMember(m.node, member, &m.memory.numeric); err != nil {
+			delta.supported = false
+			return
+		}
+		if bucket.scalarMembers == nil {
+			bucket.scalarMembers = make(map[graphTokenIdentityKey]reteGraphAggregateScalarMember)
+		}
+		bucket.scalarMembers[memberKey] = member
+		m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
+		return
+	}
 	if existing, ok := bucket.members[memberKey]; ok {
 		if !m.memory.removeMember(m.node, bucket, existing) {
 			delta.supported = false
@@ -123,6 +149,19 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 		return
 	}
 	memberKey := tokenRefKey(token)
+	if !aggregateSpecsNeedMemberTokens(m.node.specs) {
+		member, ok := bucket.scalarMembers[memberKey]
+		if !ok {
+			return
+		}
+		delete(bucket.scalarMembers, memberKey)
+		if !bucket.removeScalarMember(m.node, member, &m.memory.numeric) {
+			delta.supported = false
+			return
+		}
+		m.owner.refreshAggregateOutputDeferred(m.id, bucket, nil, counters, delta)
+		return
+	}
 	member, ok := bucket.members[memberKey]
 	if !ok {
 		return
@@ -255,6 +294,18 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 				}
 				delete(bucket.members, key)
 				if !m.memory.removeMember(m.node, bucket, member) {
+					delta.supported = false
+					return
+				}
+				changed = true
+			}
+		} else if len(bucket.scalarMembers) > 0 {
+			for key, member := range bucket.scalarMembers {
+				if member.factID != factID {
+					continue
+				}
+				delete(bucket.scalarMembers, key)
+				if !bucket.removeScalarMember(m.node, member, &m.memory.numeric) {
 					delta.supported = false
 					return
 				}
