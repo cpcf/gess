@@ -194,9 +194,13 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
 		t.Fatalf("query terminal rows before trigger = %d, want 0", got)
 	}
+	sourceGeneration := memory.sourceGeneration()
 
-	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
+	}
+	if got := memory.sourceGeneration(); got != sourceGeneration {
+		t.Fatalf("source generation after query trigger add = %d, want %d", got, sourceGeneration)
 	}
 	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
 		t.Fatalf("query terminal rows after trigger = %d, want 1", got)
@@ -210,8 +214,11 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 	}
 	assertQueryRowStringValue(t, rows[0], "id", "p1")
 
-	if _, err := memory.removeFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger)); err != nil {
 		t.Fatalf("remove query trigger: %v", err)
+	}
+	if got := memory.sourceGeneration(); got != sourceGeneration {
+		t.Fatalf("source generation after query trigger cleanup = %d, want %d", got, sourceGeneration)
 	}
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
 		t.Fatalf("query terminal rows after trigger cleanup = %d, want 0", got)
@@ -238,7 +245,7 @@ func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
 	}
 	engineeringTrigger := session.queryTriggerFact(query, &engineeringArgs)
 	memory := session.rete.graphBeta
-	if _, err := memory.insertFactInternal(ctx, engineeringTrigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(engineeringTrigger)); err != nil {
 		t.Fatalf("insert engineering query trigger: %v", err)
 	}
 	if got := queryTerminalRowsRetained(memory, query.name); got != 1 {
@@ -265,7 +272,7 @@ func TestQueryTerminalMaterializationFiltersRowsByTriggerID(t *testing.T) {
 	assertQueryRowStringValue(t, engineeringRows[0], "id", "p1")
 	assertQueryRowStringValue(t, engineeringRows[0], "requested_dept", "engineering")
 
-	if _, err := memory.removeFactInternal(ctx, engineeringTrigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(engineeringTrigger)); err != nil {
 		t.Fatalf("remove engineering query trigger: %v", err)
 	}
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
@@ -386,7 +393,7 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
 	memory := session.rete.graphBeta
-	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
 	if got, want := queryTerminalRowsRetained(memory, query.name), 1; got != want {
@@ -774,7 +781,7 @@ func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
 	memory := session.rete.graphBeta
-	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
 	rows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
@@ -793,7 +800,7 @@ func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
 	assertQueryRowStringValue(t, rows[0], "id", "p1")
 	assertQueryRowStringValue(t, rows[1], "id", "p2")
 
-	if _, err := memory.removeFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger)); err != nil {
 		t.Fatalf("remove query trigger: %v", err)
 	}
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {

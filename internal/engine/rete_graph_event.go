@@ -26,7 +26,10 @@ type reteGraphPropagationEvent struct {
 	duplicateChanged  bool
 	nameChanged       bool
 	templateChanged   bool
+	generated         bool
 	sourceGeneration  Generation
+	updateSource      bool
+	transient         bool
 	origin            mutationOrigin
 	span              *propagationCounterSpan
 	counters          *propagationCounterLedger
@@ -38,8 +41,41 @@ func newReteGraphAssertEvent(fact FactSnapshot, origin mutationOrigin, span *pro
 		fact:             fact,
 		after:            fact,
 		sourceGeneration: fact.Generation(),
+		updateSource:     true,
 		origin:           origin,
 		span:             span,
+	}
+}
+
+func newReteGraphWorkingAssertEvent(fact *workingFact, snapshot FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationAdd,
+		fact:             snapshot,
+		workingFact:      fact,
+		after:            snapshot,
+		sourceGeneration: snapshot.Generation(),
+		updateSource:     true,
+		origin:           origin,
+		span:             span,
+	}
+}
+
+func newReteGraphResetAssertEvent(fact FactSnapshot) reteGraphPropagationEvent {
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationAdd,
+		fact:             fact,
+		after:            fact,
+		sourceGeneration: fact.Generation(),
+	}
+}
+
+func newReteGraphResetWorkingAssertEvent(fact *workingFact, snapshot FactSnapshot) reteGraphPropagationEvent {
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationAdd,
+		fact:             snapshot,
+		workingFact:      fact,
+		after:            snapshot,
+		sourceGeneration: snapshot.Generation(),
 	}
 }
 
@@ -53,6 +89,7 @@ func newReteGraphGeneratedAssertEvent(fact *workingFact, revision *Ruleset, comp
 		fact:             snapshot,
 		workingFact:      fact,
 		after:            snapshot,
+		generated:        true,
 		sourceGeneration: snapshot.Generation(),
 		origin:           origin,
 		span:             span,
@@ -65,7 +102,38 @@ func newReteGraphQueryTriggerEvent(fact FactSnapshot) reteGraphPropagationEvent 
 		fact:             fact,
 		after:            fact,
 		sourceGeneration: fact.Generation(),
+		transient:        true,
 	}
+}
+
+func newReteGraphQueryTriggerRemoveEvent(fact FactSnapshot) reteGraphPropagationEvent {
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationRemove,
+		fact:             fact,
+		before:           fact,
+		sourceGeneration: fact.Generation(),
+		transient:        true,
+	}
+}
+
+func newReteGraphWorkingRetractEvent(fact *workingFact, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {
+	var generation Generation
+	if fact != nil {
+		generation = fact.id.Generation()
+	}
+	return reteGraphPropagationEvent{
+		tag:              reteGraphPropagationRemove,
+		workingFact:      fact,
+		sourceGeneration: generation,
+		origin:           origin,
+		counters:         counters,
+	}
+}
+
+func newReteGraphGeneratedRetractEvent(fact *workingFact, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {
+	event := newReteGraphWorkingRetractEvent(fact, origin, counters)
+	event.generated = true
+	return event
 }
 
 func newReteGraphRetractEvent(fact FactSnapshot, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {

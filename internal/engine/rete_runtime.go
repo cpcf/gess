@@ -443,7 +443,7 @@ func (r *reteRuntime) insertBetaWorkingFactWithOrigin(ctx context.Context, fact 
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.insertWorkingFact(ctx, fact, snapshot, span)
+		delta, err := r.propagateBetaEvent(ctx, newReteGraphWorkingAssertEvent(fact, snapshot, origin, span))
 		if err != nil {
 			return delta, err
 		}
@@ -459,7 +459,7 @@ func (r *reteRuntime) insertBetaFactGenerated(ctx context.Context, fact *working
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.insertFactGenerated(ctx, fact, span)
+		delta, err := r.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, r.revision, r.graphBeta.compactSlotStore, origin, span))
 		if err != nil {
 			return delta, err
 		}
@@ -489,7 +489,7 @@ func (r *reteRuntime) removeBetaWorkingFact(ctx context.Context, fact *workingFa
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.removeWorkingFact(ctx, fact, counters)
+		delta, err := r.propagateBetaEvent(ctx, newReteGraphWorkingRetractEvent(fact, origin, counters))
 		if err != nil {
 			return delta, err
 		}
@@ -505,7 +505,7 @@ func (r *reteRuntime) removeBetaGeneratedWorkingFact(ctx context.Context, fact *
 	}
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
-		delta, err := r.graphBeta.removeGeneratedWorkingFact(ctx, fact, counters)
+		delta, err := r.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, origin, counters))
 		if err != nil {
 			return delta, err
 		}
@@ -659,7 +659,7 @@ func (r *reteRuntime) insertGraphAlphaFact(ctx context.Context, fact FactSnapsho
 	if r == nil || r.revision == nil || r.graph == nil || !r.supportsIncrementalAgenda() {
 		return reteAgendaDelta{}, false, nil
 	}
-	delta, err := r.graphBeta.insertFact(ctx, fact, span)
+	delta, err := r.propagateBetaEvent(ctx, newReteGraphAssertEvent(fact, mutationOrigin{}, span))
 	if err != nil {
 		return delta, true, err
 	}
@@ -671,7 +671,7 @@ func (r *reteRuntime) insertGraphAlphaFactGenerated(ctx context.Context, fact *w
 	if r == nil || r.revision == nil || r.graph == nil || !r.supportsIncrementalAgenda() || fact == nil {
 		return reteAgendaDelta{}, false, nil
 	}
-	delta, err := r.graphBeta.insertFactGenerated(ctx, fact, span)
+	delta, err := r.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, r.revision, r.graphBeta.compactSlotStore, mutationOrigin{}, span))
 	if err != nil {
 		return delta, true, err
 	}

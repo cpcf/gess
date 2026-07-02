@@ -76,11 +76,11 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 		t.Fatalf("compileArgs: %v", err)
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
-	if _, err := session.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false); err != nil {
+	if _, err := session.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
 	defer func() {
-		_, _ = session.rete.graphBeta.removeFactInternal(context.Background(), trigger, nil, false)
+		_, _ = session.rete.graphBeta.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
 	}()
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)

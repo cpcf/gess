@@ -1385,8 +1385,8 @@ func (s *Session) insertQueryTriggerForProofImmediate(ctx context.Context, trigg
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
 		return combined, false, ErrInvalidRuleset
 	}
-	_, _ = s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
-	delta, err := s.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false)
+	_, _ = s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	delta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
 	if err != nil {
 		return combined, false, err
 	}
@@ -1412,7 +1412,7 @@ func (s *Session) cleanupQueryProofImmediate(ctx context.Context, trigger FactSn
 		return combined, err
 	}
 	combined = mergeReteAgendaDelta(combined, proofDelta)
-	graphDelta, err := s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	graphDelta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
 	if err != nil {
 		return combined, err
 	}
@@ -1429,8 +1429,8 @@ func (s *Session) insertQueryTriggerImmediate(ctx context.Context, trigger FactS
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
 		return combined, false, ErrInvalidRuleset
 	}
-	_, _ = s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
-	delta, err := s.rete.graphBeta.insertFactInternal(ctx, trigger, nil, false)
+	_, _ = s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	delta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
 	if err != nil {
 		return combined, false, err
 	}
@@ -1456,7 +1456,7 @@ func (s *Session) cleanupQueryTriggerImmediate(ctx context.Context, trigger Fact
 		return combined, err
 	}
 	combined = mergeReteAgendaDelta(combined, supportDelta)
-	graphDelta, err := s.rete.graphBeta.removeFactInternal(ctx, trigger, nil, false)
+	graphDelta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
 	if err != nil {
 		return combined, err
 	}

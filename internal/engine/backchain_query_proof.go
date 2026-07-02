@@ -104,7 +104,7 @@ func (p *backchainQueryProofContext) insertDemand(ctx context.Context, demand ba
 	if session.rete == nil || session.rete.graphBeta == nil {
 		return reteAgendaDelta{supported: false}, ErrInvalidRuleset
 	}
-	return session.rete.graphBeta.insertFactGenerated(ctx, fact, nil)
+	return session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, session.revision, session.rete.graphBeta.compactSlotStore, origin, nil))
 }
 
 func (p *backchainQueryProofContext) cloneDemandSlots(slots []factSlot) []factSlot {
@@ -173,7 +173,7 @@ func (p *backchainQueryProofContext) cleanup(ctx context.Context) (reteAgendaDel
 	}
 	for i := len(p.facts) - 1; i >= 0; i-- {
 		fact := &p.facts[i]
-		delta, err := p.session.rete.graphBeta.removeGeneratedWorkingFact(ctx, fact, p.session.propagationCounters)
+		delta, err := p.session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, mutationOrigin{}, p.session.propagationCounters))
 		if err != nil {
 			return combined, err
 		}

@@ -191,6 +191,9 @@ func TestReteGraphPropagationEventCarriesQueryTriggerMetadata(t *testing.T) {
 	if event.tag != reteGraphPropagationAdd {
 		t.Fatalf("event tag = %d, want add", event.tag)
 	}
+	if !event.transient {
+		t.Fatal("query trigger event transient = false, want true")
+	}
 	if event.fact.ID() != trigger.ID() || event.after.ID() != trigger.ID() {
 		t.Fatalf("event trigger IDs = (%#v, %#v), want %#v", event.fact.ID(), event.after.ID(), trigger.ID())
 	}
@@ -199,6 +202,72 @@ func TestReteGraphPropagationEventCarriesQueryTriggerMetadata(t *testing.T) {
 	}
 	if event.fact.Name() != internalQueryTriggerName("adults-by-dept") {
 		t.Fatalf("trigger fact name = %q, want query trigger name", event.fact.Name())
+	}
+
+	remove := newReteGraphQueryTriggerRemoveEvent(trigger)
+	if remove.tag != reteGraphPropagationRemove {
+		t.Fatalf("remove event tag = %d, want remove", remove.tag)
+	}
+	if !remove.transient {
+		t.Fatal("query trigger remove event transient = false, want true")
+	}
+	if remove.fact.ID() != trigger.ID() || remove.before.ID() != trigger.ID() {
+		t.Fatalf("remove event trigger IDs = (%#v, %#v), want %#v", remove.fact.ID(), remove.before.ID(), trigger.ID())
+	}
+}
+
+func TestReteGraphPropagationEventCarriesGeneratedMetadata(t *testing.T) {
+	revision, templateKey := mustCompileGeneratedFactInsertRuleset(t)
+	templateID, ok := revision.templateIDByKey(templateKey)
+	if !ok {
+		t.Fatalf("generated template %q missing id", templateKey)
+	}
+	fact := &workingFact{
+		id:           newFactID(12, 34),
+		version:      2,
+		recency:      3,
+		supportState: factSupportCodeFromState(FactSupportLogical),
+	}
+	fact.setTemplateIdentity(templateKey, templateID)
+	fact.setName("generated-fact")
+	slots := []factSlot{
+		{value: mustValue(t, "kind-a"), ok: true},
+		{value: mustValue(t, 7), ok: true},
+		{value: mustValue(t, "stream-a"), ok: true},
+	}
+	fact.setFieldSlots(slots)
+
+	event := newReteGraphGeneratedAssertEvent(fact, revision, nil, mutationOrigin{}, nil)
+
+	if event.tag != reteGraphPropagationAdd {
+		t.Fatalf("event tag = %d, want add", event.tag)
+	}
+	if !event.generated {
+		t.Fatal("generated assert event generated = false, want true")
+	}
+	if event.workingFact != fact {
+		t.Fatal("generated assert event lost working fact handle")
+	}
+	if event.fact.ID() != fact.id || event.after.ID() != fact.id {
+		t.Fatalf("generated event IDs = (%#v, %#v), want %#v", event.fact.ID(), event.after.ID(), fact.id)
+	}
+	if event.fact.TemplateKey() != templateKey {
+		t.Fatalf("generated event template key = %q, want %q", event.fact.TemplateKey(), templateKey)
+	}
+	slots[0].value = mustValue(t, "mutated")
+	if got := event.fact.fieldSlots[0].value; !got.Equal(mustValue(t, "kind-a")) {
+		t.Fatalf("generated event snapshot slot aliased caller slots: %v", got)
+	}
+
+	remove := newReteGraphGeneratedRetractEvent(fact, mutationOrigin{}, nil)
+	if remove.tag != reteGraphPropagationRemove {
+		t.Fatalf("remove event tag = %d, want remove", remove.tag)
+	}
+	if !remove.generated {
+		t.Fatal("generated retract event generated = false, want true")
+	}
+	if remove.workingFact != fact {
+		t.Fatal("generated retract event lost working fact handle")
 	}
 }
 

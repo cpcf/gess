@@ -1975,7 +1975,7 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 		return combined, err
 	}
 	for _, fact := range facts {
-		delta, err := m.insertFactInternal(ctx, fact, nil, false)
+		delta, err := m.propagateEvent(ctx, newReteGraphResetAssertEvent(fact))
 		if err != nil {
 			return combined, err
 		}
@@ -2038,7 +2038,7 @@ func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx conte
 				continue
 			}
 			snapshot := fact.detachedSnapshotForRevision(m.revision, facts.compactSlotStore)
-			delta, err := m.insertWorkingFactInternal(ctx, fact, snapshot, nil, false)
+			delta, err := m.propagateEvent(ctx, newReteGraphResetWorkingAssertEvent(fact, snapshot))
 			if err != nil {
 				return combined, err
 			}
@@ -2445,10 +2445,25 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	switch event.tag {
 	case reteGraphPropagationAdd:
 		if event.workingFact != nil {
-			return m.insertFactGenerated(ctx, event.workingFact, event.span)
+			if event.generated {
+				return m.insertFactGenerated(ctx, event.workingFact, event.span)
+			}
+			return m.insertWorkingFactInternal(ctx, event.workingFact, event.fact, event.span, event.updateSource)
 		}
-		return m.insertFact(ctx, event.fact, event.span)
+		if event.transient {
+			return m.insertFactInternal(ctx, event.fact, event.span, false)
+		}
+		return m.insertFactInternal(ctx, event.fact, event.span, event.updateSource)
 	case reteGraphPropagationRemove:
+		if event.workingFact != nil {
+			if event.generated {
+				return m.removeGeneratedWorkingFact(ctx, event.workingFact, event.counters)
+			}
+			return m.removeWorkingFact(ctx, event.workingFact, event.counters)
+		}
+		if event.transient {
+			return m.removeFactInternal(ctx, event.fact, event.counters, false)
+		}
 		return m.removeFact(ctx, event.fact, event.counters)
 	case reteGraphPropagationUpdate:
 		return m.updateFact(ctx, event)
@@ -6507,13 +6522,13 @@ func (m *reteGraphBetaMemory) queryRows(ctx context.Context, query compiledQuery
 		source.revision = m.revision
 	}
 
-	_, _ = m.removeFactInternal(ctx, trigger, nil, false)
-	delta, err := m.insertFactInternal(ctx, trigger, nil, false)
+	_, _ = m.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	delta, err := m.propagateEvent(ctx, event)
 	if err != nil {
 		return nil, true, err
 	}
 	defer func() {
-		_, _ = m.removeFactInternal(context.Background(), trigger, nil, false)
+		_, _ = m.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
 	}()
 	if len(delta.demands) > 0 || len(delta.resolvedDemands) > 0 || len(delta.resolvedOwners) > 0 {
 		return nil, true, fmt.Errorf("%w: query %q generated backchain demand facts; query-time backward chaining is not supported", ErrUnsupportedRuntime, query.name)
