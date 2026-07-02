@@ -153,7 +153,7 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 		t.Fatal("derive rule missing")
 	}
 	stored := consumedActivationForRuleRevision(t, session.agenda, rule.RevisionID())
-	if !stored.ruleID.IsZero() || stored.payload != nil || stored.terminalID != 0 || !stored.terminalRow.isZero() {
+	if !stored.ruleID.IsZero() || stored.payload != nil {
 		t.Fatalf("stored consumed activation kept public fields: %#v", stored)
 	}
 	if stored.token.isZero() {

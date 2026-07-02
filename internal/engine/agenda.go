@@ -126,8 +126,6 @@ type compactAgendaEntry struct {
 	generation       Generation
 	identity         candidateIdentity
 	token            tokenRef
-	terminalID       reteGraphTerminalNodeID
-	terminalRow      graphTokenRowHandle
 	salience         int
 	maxRecency       Recency
 	aggregateRecency Recency
@@ -346,8 +344,6 @@ type activation struct {
 	generation       Generation
 	identity         candidateIdentity
 	token            tokenRef
-	terminalID       reteGraphTerminalNodeID
-	terminalRow      graphTokenRowHandle
 	salience         int
 	maxRecency       Recency
 	aggregateRecency Recency
@@ -542,8 +538,6 @@ func (a *agenda) publicActivation(act *activation) activation {
 	out.setFactIDs(cloneActivationFactIDs(act))
 	out.setFactVersions(cloneActivationFactVersions(act))
 	out.token = tokenRef{}
-	out.terminalID = 0
-	out.terminalRow = graphTokenRowHandle{}
 	outFactIDs := out.factIDs()
 	outFactVersions := out.factVersions()
 	if a == nil || a.revision == nil || len(outFactIDs) == 0 {
@@ -584,8 +578,6 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 		}
 	}
 	out.token = tokenRef{}
-	out.terminalID = 0
-	out.terminalRow = graphTokenRowHandle{}
 	return out
 }
 
@@ -1077,8 +1069,6 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
-		existing.terminalID = delta.terminalID
-		existing.terminalRow = delta.terminalRow
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 		}
@@ -1088,8 +1078,6 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	if err != nil {
 		return nil, err
 	}
-	created.terminalID = delta.terminalID
-	created.terminalRow = delta.terminalRow
 	key := a.storePreparedActivation(created)
 	a.pending = append(a.pending, key)
 	return created, nil
@@ -1154,8 +1142,6 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
-		existing.terminalID = delta.terminalID
-		existing.terminalRow = delta.terminalRow
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 			pending := activationKeyPending(a.pending, key)
@@ -1173,8 +1159,6 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	created.terminalID = delta.terminalID
-	created.terminalRow = delta.terminalRow
 	key := a.storePreparedActivation(created)
 	a.pending = a.insertActivationKeySorted(a.pending, key, created)
 	if stored, ok := a.activationByKeyPtr(key); ok {
@@ -1288,8 +1272,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		havePrevious = true
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
-			existing.terminalID = delta.terminalID
-			existing.terminalRow = delta.terminalRow
 			if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
 				pending := activationKeyPending(a.pending, key)
@@ -1315,8 +1297,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if err != nil {
 			return nil, err
 		}
-		created.terminalID = delta.terminalID
-		created.terminalRow = delta.terminalRow
 		key := a.storePreparedActivation(created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, created)
 		if observeActivation != nil {
@@ -1445,16 +1425,13 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 		if terminal == nil {
 			continue
 		}
-		for rowIndex, row := range terminal.rows.rows {
+		for _, row := range terminal.rows.rows {
 			if row.token.isZero() {
 				continue
 			}
-			handle := terminal.rows.rowHandle(graphTokenRowID(rowIndex), row)
 			token := terminal.rows.rowToken(row)
 			identity := terminal.terminalTokenIdentity(token)
 			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, token, identity); ok {
-				existing.terminalID = terminalNode.id
-				existing.terminalRow = handle
 				if existing.status == activationStatusPending {
 					if _, seenBefore := seen[key]; !seenBefore {
 						seen[key] = struct{}{}
@@ -1479,8 +1456,6 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 			if err != nil {
 				return nil, true, err
 			}
-			created.terminalID = terminalNode.id
-			created.terminalRow = handle
 			key := a.storePreparedActivation(created)
 			if _, seenBefore := seen[key]; !seenBefore {
 				seen[key] = struct{}{}
@@ -1586,8 +1561,6 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity)
 		if ok {
-			existing.terminalID = delta.terminalID
-			existing.terminalRow = delta.terminalRow
 			if existing.status == activationStatusPending {
 				if _, seenBefore := seen[key]; !seenBefore {
 					seen[key] = struct{}{}
@@ -1613,8 +1586,6 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 		if err != nil {
 			return nil, err
 		}
-		created.terminalID = delta.terminalID
-		created.terminalRow = delta.terminalRow
 		key = a.storePreparedActivation(created)
 		if _, seenBefore := seen[key]; !seenBefore {
 			seen[key] = struct{}{}
@@ -2016,8 +1987,6 @@ func compactConsumedTokenActivation(current *activation) {
 		return
 	}
 	current.payload = nil
-	current.terminalID = 0
-	current.terminalRow = graphTokenRowHandle{}
 }
 
 func (a *agenda) activationRunSnapshot(current *activation) activation {
@@ -2068,8 +2037,6 @@ func activationRunSnapshot(current *activation) activation {
 		generation:       current.generation,
 		identity:         current.identity,
 		token:            current.token,
-		terminalID:       current.terminalID,
-		terminalRow:      current.terminalRow,
 		salience:         current.salience,
 		maxRecency:       current.maxRecency,
 		aggregateRecency: current.aggregateRecency,

@@ -337,8 +337,6 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 		ruleRevisionID:   "rule-1@1",
 		generation:       4,
 		identity:         candidateIdentity{key: candidateIdentityKey{scopeHash: 5, hash: 6}},
-		terminalID:       7,
-		terminalRow:      graphTokenRowHandle{id: 8, generation: 9},
 		salience:         11,
 		maxRecency:       12,
 		aggregateRecency: 13,
@@ -348,7 +346,7 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 	if firstHandle.isZero() {
 		t.Fatal("first compact handle is zero")
 	}
-	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.terminalRow != first.terminalRow {
+	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.identity != first.identity {
 		t.Fatalf("stored first entry = %#v, want %#v", stored, first)
 	}
 	if got := arena.len(); got != 1 {
@@ -454,8 +452,8 @@ func TestAgendaTerminalTokenDeltaBatchObservesActivations(t *testing.T) {
 		if activation == nil || activation.status != activationStatusPending {
 			t.Fatalf("observed activation %d = %#v, want pending", i, activation)
 		}
-		if activation.terminalID == 0 || activation.terminalRow.isZero() {
-			t.Fatalf("observed activation %d terminal ownership = (%d, %#v), want nonzero", i, activation.terminalID, activation.terminalRow)
+		if activation.token.isZero() || activation.identity.isZero() {
+			t.Fatalf("observed activation %d identity/token = (%#v, %#v), want retained rule-token identity", i, activation.identity, activation.token)
 		}
 	}
 
@@ -572,9 +570,6 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if stored.token.isZero() {
 		t.Fatal("stored consumed activation lost token ref")
 	}
-	if stored.terminalID != 0 || !stored.terminalRow.isZero() {
-		t.Fatalf("stored consumed terminal ownership = (%d, %#v), want cleared", stored.terminalID, stored.terminalRow)
-	}
 	if got := stored.mutationOrigin().activationID(); got != selected.activationID() {
 		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.activationID())
 	}
@@ -634,9 +629,8 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 		if !ok || stored.status != activationStatusPending {
 			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
 		}
-		handle := terminal.rows.rowHandle(0, row)
-		if stored.terminalID == 0 || stored.terminalRow != handle {
-			t.Fatalf("stored terminal ownership = (%d, %#v), want nonzero terminal and row %#v", stored.terminalID, stored.terminalRow, handle)
+		if stored.token.isZero() || stored.identity.isZero() {
+			t.Fatalf("stored activation identity/token = (%#v, %#v), want retained rule-token identity", stored.identity, stored.token)
 		}
 		return terminalActivationState{
 			session:  session,
