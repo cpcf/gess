@@ -151,7 +151,7 @@ func TestBackchainDemandSupportSingleBucketFastPathRequiresUniqueSupport(t *test
 func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
 	session := &Session{}
 	arena := newTokenArena()
-	token := arena.addCompact(tokenRef{}, tokenRowEntry{binding: "q", bindingSlot: 0, factID: newFactID(1, 40), factVersion: 1}, conditionMatch{}, 1, 1, 1)
+	token := arena.addCompact(tokenRef{}, tokenRowEntry{bindingSlot: 0, factID: newFactID(1, 40), factVersion: 1}, conditionMatch{}, 1, 1, 1)
 	if token.isZero() {
 		t.Fatal("token arena returned zero token")
 	}

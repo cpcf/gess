@@ -34,7 +34,6 @@ func (h tokenParentHandle) isZero() bool {
 
 type tokenRowEntry struct {
 	conditionID ConditionID
-	binding     string
 	bindingSlot int
 	factID      FactID
 	factVersion FactVersion
@@ -45,7 +44,6 @@ type tokenRowEntry struct {
 type tokenRow struct {
 	parent           tokenParentHandle
 	conditionID      ConditionID
-	binding          string
 	bindingSlot      int
 	fact             *conditionFactRef
 	value            Value
@@ -163,9 +161,7 @@ func (a *tokenArena) addAlphaSource(entry bindingTupleEntry, match conditionMatc
 	if rowEntry.conditionID == "" {
 		rowEntry.conditionID = match.conditionID
 	}
-	if match.hasValue {
-		rowEntry.binding = entry.binding
-	} else {
+	if !match.hasValue {
 		rowEntry.factID = match.fact.ID()
 		rowEntry.factVersion = match.fact.Version()
 	}
@@ -367,7 +363,6 @@ func (r *tokenRow) setEntry(entry tokenRowEntry) {
 		return
 	}
 	r.conditionID = entry.conditionID
-	r.binding = entry.binding
 	r.bindingSlot = entry.bindingSlot
 	r.value = entry.value
 	r.hasValue = entry.hasValue
@@ -379,7 +374,6 @@ func (r *tokenRow) tokenRowEntry() tokenRowEntry {
 	}
 	out := tokenRowEntry{
 		conditionID: r.conditionID,
-		binding:     r.binding,
 		bindingSlot: r.bindingSlot,
 		value:       r.value,
 		hasValue:    r.hasValue,
@@ -401,18 +395,16 @@ func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenR
 	if out.conditionID == "" {
 		out.conditionID = match.conditionID
 	}
-	if match.hasValue {
-		out.binding = entry.binding
-		return out
+	if !match.hasValue {
+		out.factID = match.fact.ID()
+		out.factVersion = match.fact.Version()
 	}
-	out.factID = match.fact.ID()
-	out.factVersion = match.fact.Version()
 	return out
 }
 
 func candidateIdentityHashTokenEntryStep(hash uint64, entry tokenRowEntry) uint64 {
 	if entry.hasValue {
-		return candidateIdentityHashValueStep(hash, entry.binding, entry.value)
+		return candidateIdentityHashValueStep(hash, entry.bindingSlot, entry.value)
 	}
 	return candidateIdentityHashFactStep(hash, entry.factID, entry.factVersion)
 }
