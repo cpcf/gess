@@ -1452,15 +1452,16 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 		if terminal == nil {
 			continue
 		}
-		for _, row := range terminal.rows.rows {
+		for rowIndex, row := range terminal.rows.rows {
 			if row.token.isZero() {
 				continue
 			}
+			handle := terminal.rows.rowHandle(graphTokenRowID(rowIndex), row)
 			token := terminal.rows.rowToken(row)
 			identity := terminal.terminalTokenIdentity(token)
 			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, token, identity); ok {
 				existing.terminalID = terminalNode.id
-				existing.terminalRow = row.handle
+				existing.terminalRow = handle
 				if existing.status == activationStatusPending {
 					if _, seenBefore := seen[key]; !seenBefore {
 						seen[key] = struct{}{}
@@ -1486,7 +1487,7 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				return nil, true, err
 			}
 			created.terminalID = terminalNode.id
-			created.terminalRow = row.handle
+			created.terminalRow = handle
 			key := a.storePreparedActivation(created)
 			if _, seenBefore := seen[key]; !seenBefore {
 				seen[key] = struct{}{}

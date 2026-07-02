@@ -284,12 +284,12 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if row == nil {
 		t.Fatal("terminal row missing")
 	}
-	if got, want := int(row.supportCount), 2; got != want {
-		t.Fatalf("support count = %d, want %d", got, want)
-	}
 	rowID, ok := memory.rowIDByHandle(firstHandle)
 	if !ok {
 		t.Fatal("terminal row id missing")
+	}
+	if got, want := int(memory.terminalSupportCount(rowID, *row)), 2; got != want {
+		t.Fatalf("support count = %d, want %d", got, want)
 	}
 	if !memory.hasTerminalBranchSupport(rowID, 10) || !memory.hasTerminalBranchSupport(rowID, 20) {
 		t.Fatalf("branch support missing after duplicate insert: %#v", memory.terminalBranchIDs(rowID))
@@ -301,7 +301,7 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if row == nil {
 		t.Fatal("terminal row missing after support decrement")
 	}
-	if got, want := int(row.supportCount), 1; got != want {
+	if got, want := int(memory.terminalSupportCount(rowID, *row)), 1; got != want {
 		t.Fatalf("support count after decrement = %d, want %d", got, want)
 	}
 	if memory.hasTerminalBranchSupport(rowID, 20) {
@@ -606,7 +606,7 @@ func TestBetaSideMemoryRowHandleEntryIsCompact(t *testing.T) {
 }
 
 func TestTerminalTokenRowIsCompact(t *testing.T) {
-	if got, want := unsafe.Sizeof(terminalTokenRow{}), uintptr(48); got != want {
+	if got, want := unsafe.Sizeof(terminalTokenRow{}), uintptr(32); got != want {
 		t.Fatalf("terminal token row size = %d, want %d", got, want)
 	}
 }

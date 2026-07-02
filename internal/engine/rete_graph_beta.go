@@ -7420,17 +7420,18 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 		if terminal == nil {
 			continue
 		}
-		for _, row := range terminal.rows.rows {
+		for rowIndex, row := range terminal.rows.rows {
 			if row.token.isZero() {
 				continue
 			}
 			token := terminal.rows.rowToken(row)
+			handle := terminal.rows.rowHandle(graphTokenRowID(rowIndex), row)
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          token,
 				identity:       terminal.terminalTokenIdentity(token),
 				terminalID:     terminalNode.id,
-				terminalRow:    row.handle,
+				terminalRow:    handle,
 			})
 		}
 	}

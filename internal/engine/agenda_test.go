@@ -639,8 +639,9 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 		if !ok || stored.status != activationStatusPending {
 			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
 		}
-		if stored.terminalID == 0 || stored.terminalRow != row.handle {
-			t.Fatalf("stored terminal ownership = (%d, %#v), want nonzero terminal and row %#v", stored.terminalID, stored.terminalRow, row.handle)
+		handle := terminal.rows.rowHandle(0, row)
+		if stored.terminalID == 0 || stored.terminalRow != handle {
+			t.Fatalf("stored terminal ownership = (%d, %#v), want nonzero terminal and row %#v", stored.terminalID, stored.terminalRow, handle)
 		}
 		return terminalActivationState{
 			session:  session,
