@@ -108,7 +108,7 @@ func logicalSupportSourceFromActivation(activation activation) logicalSupportSou
 	return logicalSupportSourceKey{
 		generation:     activation.generation,
 		ruleRevisionID: activation.ruleRevisionID,
-		identityKey:    activation.identity.key,
+		identityKey:    activation.identityKey,
 	}
 }
 

@@ -336,7 +336,7 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 		key:              activationKey{fingerprint: 10, ordinal: 1},
 		ruleRevisionID:   "rule-1@1",
 		generation:       4,
-		identity:         candidateIdentity{key: candidateIdentityKey{scopeHash: 5, hash: 6}},
+		identityKey:      candidateIdentityKey{scopeHash: 5, hash: 6},
 		salience:         11,
 		maxRecency:       12,
 		aggregateRecency: 13,
@@ -346,7 +346,7 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 	if firstHandle.isZero() {
 		t.Fatal("first compact handle is zero")
 	}
-	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.identity != first.identity {
+	if stored == nil || stored.ruleRevisionID != first.ruleRevisionID || stored.identityKey != first.identityKey {
 		t.Fatalf("stored first entry = %#v, want %#v", stored, first)
 	}
 	if got := arena.len(); got != 1 {
@@ -452,8 +452,8 @@ func TestAgendaTerminalTokenDeltaBatchObservesActivations(t *testing.T) {
 		if activation == nil || activation.status != activationStatusPending {
 			t.Fatalf("observed activation %d = %#v, want pending", i, activation)
 		}
-		if activation.token.isZero() || activation.identity.isZero() {
-			t.Fatalf("observed activation %d identity/token = (%#v, %#v), want retained rule-token identity", i, activation.identity, activation.token)
+		if activation.token.isZero() || activation.identityKey == (candidateIdentityKey{}) {
+			t.Fatalf("observed activation %d identity/token = (%#v, %#v), want retained rule-token identity", i, activation.identityKey, activation.token)
 		}
 	}
 
@@ -624,8 +624,8 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 		if !ok || stored.status != activationStatusPending {
 			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
 		}
-		if stored.token.isZero() || stored.identity.isZero() {
-			t.Fatalf("stored activation identity/token = (%#v, %#v), want retained rule-token identity", stored.identity, stored.token)
+		if stored.token.isZero() || stored.identityKey == (candidateIdentityKey{}) {
+			t.Fatalf("stored activation identity/token = (%#v, %#v), want retained rule-token identity", stored.identityKey, stored.token)
 		}
 		return terminalActivationState{
 			session:  session,
@@ -1302,7 +1302,7 @@ func TestAgendaActivationFingerprintIncludesScopeHash(t *testing.T) {
 	if pending[0].activationID() == pending[1].activationID() {
 		t.Fatalf("fingerprint collision reused public activation ID %q", pending[0].activationID())
 	}
-	if pending[0].identity.key == pending[1].identity.key {
+	if pending[0].identityKey == pending[1].identityKey {
 		t.Fatalf("test did not create distinct full identities: %#v", pending)
 	}
 
@@ -1385,15 +1385,8 @@ func TestAgendaIndexesSuppressRepeatedFactIDs(t *testing.T) {
 	factID := newFactID(1, 1)
 	activation := activation{
 		ruleRevisionID: RuleRevisionID("revision"),
-		identity: candidateIdentity{
-			generation: 1,
-			count:      2,
-			key: candidateIdentityKey{
-				scopeHash: 1,
-				hash:      2,
-			},
-		},
-		status: activationStatusPending,
+		identityKey:    candidateIdentityKey{scopeHash: 1, hash: 2},
+		status:         activationStatusPending,
 	}
 	activation.setFactIDs([]FactID{factID, factID})
 	activation.setFactVersions([]FactVersion{1, 1})
@@ -1587,29 +1580,15 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 	keptFactID := newFactID(1, 2)
 	removed := activation{
 		ruleRevisionID: RuleRevisionID("removed"),
-		identity: candidateIdentity{
-			generation: 1,
-			count:      1,
-			key: candidateIdentityKey{
-				scopeHash: 100,
-				hash:      42,
-			},
-		},
-		status: activationStatusPending,
+		identityKey:    candidateIdentityKey{scopeHash: 100, hash: 42},
+		status:         activationStatusPending,
 	}
 	removed.setFactIDs([]FactID{removedFactID})
 	removed.setFactVersions([]FactVersion{1})
 	kept := activation{
 		ruleRevisionID: RuleRevisionID("kept"),
-		identity: candidateIdentity{
-			generation: 1,
-			count:      1,
-			key: candidateIdentityKey{
-				scopeHash: 200,
-				hash:      42,
-			},
-		},
-		status: activationStatusPending,
+		identityKey:    candidateIdentityKey{scopeHash: 200, hash: 42},
+		status:         activationStatusPending,
 	}
 	kept.setFactIDs([]FactID{keptFactID})
 	kept.setFactVersions([]FactVersion{1})
@@ -1897,31 +1876,31 @@ func TestActivationLessOrdersBySalienceRecencyAndCompactIdentity(t *testing.T) {
 			salience:         20,
 			maxRecency:       1,
 			aggregateRecency: 1,
-			identity:         candidateIdentity{key: candidateIdentityKey{hash: 5}},
+			identityKey:      candidateIdentityKey{hash: 5},
 		},
 		{
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 9,
-			identity:         candidateIdentity{key: candidateIdentityKey{hash: 4}},
+			identityKey:      candidateIdentityKey{hash: 4},
 		},
 		{
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			identity:         candidateIdentity{key: candidateIdentityKey{hash: 3}},
+			identityKey:      candidateIdentityKey{hash: 3},
 		},
 		{
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			identity:         candidateIdentity{key: candidateIdentityKey{hash: 2}},
+			identityKey:      candidateIdentityKey{hash: 2},
 		},
 		{
 			salience:         10,
 			maxRecency:       9,
 			aggregateRecency: 8,
-			identity:         candidateIdentity{key: candidateIdentityKey{hash: 1}},
+			identityKey:      candidateIdentityKey{hash: 1},
 		},
 	}
 
@@ -1929,7 +1908,7 @@ func TestActivationLessOrdersBySalienceRecencyAndCompactIdentity(t *testing.T) {
 		return activationLess(&acts[i], &acts[j])
 	})
 
-	got := []uint64{acts[0].identity.key.hash, acts[1].identity.key.hash, acts[2].identity.key.hash, acts[3].identity.key.hash, acts[4].identity.key.hash}
+	got := []uint64{acts[0].identityKey.hash, acts[1].identityKey.hash, acts[2].identityKey.hash, acts[3].identityKey.hash, acts[4].identityKey.hash}
 	want := []uint64{5, 4, 1, 2, 3}
 	for i := range want {
 		if got[i] != want[i] {
@@ -1954,12 +1933,12 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 			name: "scope prefix segment",
 			left: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 10, hash: 1}
+				act.identityKey = candidateIdentityKey{scopeHash: 10, hash: 1}
 				return act
 			}(),
 			right: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 1, hash: 1}
+				act.identityKey = candidateIdentityKey{scopeHash: 1, hash: 1}
 				return act
 			}(),
 			want: false,
@@ -1968,12 +1947,12 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 			name: "hash prefix segment",
 			left: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 10}
+				act.identityKey = candidateIdentityKey{scopeHash: 2, hash: 10}
 				return act
 			}(),
 			right: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 1}
+				act.identityKey = candidateIdentityKey{scopeHash: 2, hash: 1}
 				return act
 			}(),
 			want: false,
@@ -1982,13 +1961,13 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 			name: "internal activation key ordinal",
 			left: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
+				act.identityKey = candidateIdentityKey{scopeHash: 2, hash: 3}
 				act.key.ordinal = 1
 				return act
 			}(),
 			right: func() activation {
 				act := base
-				act.identity.key = candidateIdentityKey{scopeHash: 2, hash: 3}
+				act.identityKey = candidateIdentityKey{scopeHash: 2, hash: 3}
 				act.key.ordinal = 10
 				return act
 			}(),
@@ -2000,7 +1979,7 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := activationLess(&tt.left, &tt.right)
 			if got != tt.want {
-				t.Fatalf("activationLess(%#v, %#v) = %v, want %v", tt.left.identity.key, tt.right.identity.key, got, tt.want)
+				t.Fatalf("activationLess(%#v, %#v) = %v, want %v", tt.left.identityKey, tt.right.identityKey, got, tt.want)
 			}
 		})
 	}
@@ -2010,7 +1989,7 @@ func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 	activation := activation{
 		ruleRevisionID: RuleRevisionID("revision"),
 		generation:     1,
-		identity:       candidateIdentity{key: candidateIdentityKey{scopeHash: 1, hash: 2}},
+		identityKey:    candidateIdentityKey{scopeHash: 1, hash: 2},
 		key:            activationKey{ordinal: 3},
 	}
 	activation.setFactIDs([]FactID{newFactID(1, 2)})

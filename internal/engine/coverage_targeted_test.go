@@ -462,7 +462,7 @@ func TestCoverageAgendaActivationFromCandidateAndTerminalToken(t *testing.T) {
 		aggregateRecency: fact.Recency(),
 	}
 	candidateActivation := activationFromCandidate(rule, candidate)
-	if candidateActivation.identity != activation.identity || candidateActivation.factIDs()[0] != fact.ID() {
+	if candidateActivation.identityKey != activation.identityKey || candidateActivation.factIDs()[0] != fact.ID() {
 		t.Fatalf("candidate activation = %#v, want identity/fact from terminal activation %#v", candidateActivation, activation)
 	}
 

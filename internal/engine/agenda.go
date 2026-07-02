@@ -176,7 +176,7 @@ type compactAgendaEntry struct {
 	key              activationKey
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
-	identity         candidateIdentity
+	identityKey      candidateIdentityKey
 	token            tokenRef
 	salience         int
 	maxRecency       Recency
@@ -393,7 +393,7 @@ type activation struct {
 	key              activationKey
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
-	identity         candidateIdentity
+	identityKey      candidateIdentityKey
 	token            tokenRef
 	salience         int
 	maxRecency       Recency
@@ -413,13 +413,13 @@ func (a activation) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
 		ActivationID:          a.activationID(),
 		RuleRevisionID:        a.ruleRevisionID,
-		activationIdentityKey: a.identity.key,
+		activationIdentityKey: a.identityKey,
 		activationOrdinal:     a.key.ordinal,
 	}
 }
 
 func (a activation) activationID() ActivationID {
-	return activationIDForIdentityKey(a.identity.key, a.key.ordinal)
+	return activationIDForIdentityKey(a.identityKey, a.key.ordinal)
 }
 
 func (a *activation) ensureActivationID() ActivationID {
@@ -2056,7 +2056,7 @@ func activationRunSnapshot(current *activation) activation {
 		key:              current.key,
 		ruleRevisionID:   current.ruleRevisionID,
 		generation:       current.generation,
-		identity:         current.identity,
+		identityKey:      current.identityKey,
 		token:            current.token,
 		salience:         current.salience,
 		maxRecency:       current.maxRecency,
@@ -2458,16 +2458,16 @@ func activationLess(left, right *activation) bool {
 	if left.aggregateRecency != right.aggregateRecency {
 		return left.aggregateRecency > right.aggregateRecency
 	}
-	if left.identity.key.scopeHash < right.identity.key.scopeHash {
+	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
 	}
-	if left.identity.key.scopeHash != right.identity.key.scopeHash {
+	if left.identityKey.scopeHash != right.identityKey.scopeHash {
 		return false
 	}
-	if left.identity.key.hash < right.identity.key.hash {
+	if left.identityKey.hash < right.identityKey.hash {
 		return true
 	}
-	if left.identity.key.hash != right.identity.key.hash {
+	if left.identityKey.hash != right.identityKey.hash {
 		return false
 	}
 	if left.key.ordinal < right.key.ordinal {
@@ -2499,16 +2499,16 @@ func (a *agenda) activationLess(left, right *activation) bool {
 			return leftRule.declarationOrder < rightRule.declarationOrder
 		}
 	}
-	if left.identity.key.scopeHash < right.identity.key.scopeHash {
+	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
 	}
-	if left.identity.key.scopeHash != right.identity.key.scopeHash {
+	if left.identityKey.scopeHash != right.identityKey.scopeHash {
 		return false
 	}
-	if left.identity.key.hash < right.identity.key.hash {
+	if left.identityKey.hash < right.identityKey.hash {
 		return true
 	}
-	if left.identity.key.hash != right.identity.key.hash {
+	if left.identityKey.hash != right.identityKey.hash {
 		return false
 	}
 	if left.key.ordinal < right.key.ordinal {
@@ -2595,13 +2595,13 @@ func activationMatchesCandidate(current *activation, candidate matchCandidate) b
 	if current.ruleRevisionID != candidate.ruleRevisionID {
 		return false
 	}
-	if current.identity.key != candidate.identity.key || current.identity.generation != candidate.identity.generation || current.identity.count != candidate.identity.count {
+	if current.identityKey != candidate.identity.key {
 		return false
 	}
 	if !current.token.isZero() {
 		return matchTokenFactsEqualSlices(current.token, candidate.factIDs, candidate.factVersions)
 	}
-	return candidateIdentityEqual(current.identity, current.factIDs(), current.factVersions(), candidate.identity, candidate.factIDs, candidate.factVersions)
+	return factVersionSlicesEqual(current.factIDs(), current.factVersions(), candidate.factIDs, candidate.factVersions)
 }
 
 func activationMatchesTerminalToken(current *activation, rule compiledRule, identity candidateIdentity, token tokenRef) bool {
@@ -2611,13 +2611,7 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
-	if current.identity.key != identity.key {
-		return false
-	}
-	if identity.generation != 0 && current.identity.generation != identity.generation {
-		return false
-	}
-	if identity.count != 0 && current.identity.count != identity.count {
+	if current.identityKey != identity.key {
 		return false
 	}
 	if !current.token.isZero() {
@@ -2633,13 +2627,7 @@ func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule,
 	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
-	if current.identity.key != identity.key {
-		return false
-	}
-	if identity.generation != 0 && current.identity.generation != identity.generation {
-		return false
-	}
-	if identity.count != 0 && current.identity.count != identity.count {
+	if current.identityKey != identity.key {
 		return false
 	}
 	if !current.token.isZero() && (len(delta.factIDs) > 0 || len(delta.factVersions) > 0) {
@@ -2731,7 +2719,7 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 		return activationKey{}
 	}
 	a.ensureHandleGeneration()
-	fingerprint := activationFingerprintForIdentityKey(act.identity.key)
+	fingerprint := activationFingerprintForIdentityKey(act.identityKey)
 	key := activationKey{
 		fingerprint: fingerprint,
 		ordinal:     a.nextOrdinal,
@@ -3064,7 +3052,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	}
 	dst.ruleRevisionID = candidate.ruleRevisionID
 	dst.generation = candidate.generation
-	dst.identity = candidate.identity
+	dst.identityKey = candidate.identity.key
 	dst.payload = nil
 	dst.setBindings(cloneBindingTupleEntries(candidate.bindingTuple))
 	dst.setFactIDs(cloneFactIDs(candidate.factIDs))
@@ -3119,7 +3107,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	}
 	dst.ruleRevisionID = rule.revisionID
 	dst.generation = token.generation()
-	dst.identity = identity
+	dst.identityKey = identity.key
 	dst.token = token
 	dst.salience = rule.salience
 	dst.maxRecency = row.maxRecency

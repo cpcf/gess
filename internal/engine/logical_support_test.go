@@ -161,7 +161,7 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 	}
 
 	source := logicalSupportSourceFromActivation(*stored)
-	if source.generation != edges[0].Generation || source.ruleRevisionID != edges[0].RuleRevisionID || source.identityKey != stored.identity.key {
+	if source.generation != edges[0].Generation || source.ruleRevisionID != edges[0].RuleRevisionID || source.identityKey != stored.identityKey {
 		t.Fatalf("source key = %#v, edge = %#v", source, edges[0])
 	}
 	if edges[0].ActivationID.IsZero() {

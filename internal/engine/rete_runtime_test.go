@@ -3942,8 +3942,8 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 	if !ok {
 		t.Fatal("pending activation not found")
 	}
-	if stored.identity != identity {
-		t.Fatalf("activation identity = %#v, want terminal token identity %#v", stored.identity, identity)
+	if stored.identityKey != identity.key {
+		t.Fatalf("activation identity key = %#v, want terminal token identity key %#v", stored.identityKey, identity.key)
 	}
 	duplicateTokens := append(cloneTerminalTokenDeltas(tokens), tokens[0])
 	agenda := newAgenda()
@@ -3988,9 +3988,9 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 		t.Fatalf("reconcile first: %v", err)
 	}
 	firstActivation := singlePendingActivation(t, session)
-	firstIdentity := firstActivation.identity
+	firstIdentity := firstActivation.identityKey
 	firstFactIDs := cloneFactIDs(firstActivation.factIDs())
-	if firstIdentity.isZero() {
+	if firstIdentity == (candidateIdentityKey{}) {
 		t.Fatal("first identity is zero")
 	}
 
@@ -4009,8 +4009,8 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 		t.Fatalf("reasserted fact reused ID %q", second.Fact.ID())
 	}
 	secondActivation := singlePendingActivation(t, session)
-	if secondActivation.identity == firstIdentity {
-		t.Fatalf("reasserted activation reused identity %#v", secondActivation.identity)
+	if secondActivation.identityKey == firstIdentity {
+		t.Fatalf("reasserted activation reused identity %#v", secondActivation.identityKey)
 	}
 	if reflect.DeepEqual(secondActivation.factIDs(), firstFactIDs) {
 		t.Fatalf("reasserted activation facts = %#v, want new fact IDs", secondActivation.factIDs())
@@ -4937,7 +4937,7 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 		records[i] = activationParityRecord{
 			ruleRevisionID:   activation.ruleRevisionID,
 			generation:       activation.generation,
-			identity:         activation.identity,
+			identityKey:      activation.identityKey,
 			bindings:         activation.bindings(),
 			factIDs:          activation.factIDs(),
 			factVersions:     activation.factVersions(),
@@ -5103,7 +5103,7 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 		records[i] = activationParityRecord{
 			ruleRevisionID:   activation.ruleRevisionID,
 			generation:       activation.generation,
-			identity:         activation.identity,
+			identityKey:      activation.identityKey,
 			bindings:         activation.bindings(),
 			factIDs:          activation.factIDs(),
 			factVersions:     activation.factVersions(),
@@ -5119,7 +5119,7 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 type activationParityRecord struct {
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
-	identity         candidateIdentity
+	identityKey      candidateIdentityKey
 	bindings         []bindingTupleEntry
 	factIDs          []FactID
 	factVersions     []FactVersion
