@@ -520,6 +520,14 @@ func writeJessAggregateRules(w io.Writer, cfg config) error {
 		if _, err := fmt.Fprintf(w, `
 (defrule %s
   (policy (bucket %d) (enabled TRUE))
+  ?count <- (accumulate
+    (bind ?n 0)
+    (bind ?n (+ ?n 1))
+    ?n
+    (vulnerability
+      (bucket %d)
+    )
+  )
   ?total <- (accumulate
     (bind ?sum 0)
     (bind ?sum (+ ?sum ?score))
@@ -529,16 +537,25 @@ func writeJessAggregateRules(w io.Writer, cfg config) error {
       (score ?score)
     )
   )
+  ?max-score <- (accumulate
+    (bind ?mx 0)
+    (bind ?mx (max ?mx ?score))
+    ?mx
+    (vulnerability
+      (bucket %d)
+      (score ?score)
+    )
+  )
   =>
   (assert (bucket-summary
     (bucket %d)
     (rule %q)
-    (count 0)
+    (count ?count)
     (total ?total)
-    (max-score 0))
+    (max-score ?max-score))
   )
 )
-`, name, bucket, bucket, bucket, name); err != nil {
+`, name, bucket, bucket, bucket, bucket, bucket, name); err != nil {
 			return err
 		}
 	}

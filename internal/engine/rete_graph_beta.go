@@ -86,6 +86,7 @@ type reteGraphAggregateBucket struct {
 	countOnlyMembers map[graphTokenIdentityKey]FactID
 	scalarMembers    map[graphTokenIdentityKey]reteGraphAggregateScalarMember
 	count            int64
+	extrema          []reteGraphAggregateExtremumState
 	token            tokenRef
 	hasValue         bool
 }
@@ -101,6 +102,11 @@ type reteGraphAggregateScalarMember struct {
 	factID FactID
 	first  Value
 	rest   []Value
+}
+
+type reteGraphAggregateExtremumState struct {
+	current Value
+	have    bool
 }
 
 type reteGraphAggregateCollectEntry struct {
@@ -1544,6 +1550,8 @@ func (m *reteGraphAggregateBucket) clear() {
 	}
 	m.parent = tokenRef{}
 	m.count = 0
+	clear(m.extrema)
+	m.extrema = m.extrema[:0]
 	m.token = tokenRef{}
 	m.hasValue = false
 }
@@ -2562,30 +2570,15 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 	m.graphAggregateMemory(id).removeMembersContainingFact(factID, counters, delta)
 }
 
-func aggregateMemberValues(node *reteGraphAggregateNode, token tokenRef) ([]Value, bool) {
+func aggregateScalarMemberFromToken(ctx context.Context, node *reteGraphAggregateNode, match conditionMatch, token tokenRef) (reteGraphAggregateScalarMember, bool) {
+	member := reteGraphAggregateScalarMember{
+		factID: match.fact.ID(),
+	}
 	if node == nil {
-		return nil, false
+		return member, false
 	}
 	if !aggregateSpecsNeedInputValues(node.specs) {
-		return nil, true
-	}
-	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
-	if !ok {
-		return nil, false
-	}
-	bindings, ok := tokenConditionMatches(token)
-	if !ok {
-		return nil, false
-	}
-	return aggregateMemberValuesWithBindings(node, match, bindings)
-}
-
-func aggregateMemberValuesWithBindings(node *reteGraphAggregateNode, match conditionMatch, bindings []conditionMatch) ([]Value, bool) {
-	if node == nil {
-		return nil, false
-	}
-	if !aggregateSpecsNeedInputValues(node.specs) {
-		return nil, true
+		return member, true
 	}
 	valueCount := 0
 	for _, spec := range node.specs {
@@ -2593,37 +2586,59 @@ func aggregateMemberValuesWithBindings(node *reteGraphAggregateNode, match condi
 			valueCount = spec.valueIndex + 1
 		}
 	}
-	values := make([]Value, valueCount)
+	if valueCount > 1 {
+		member.rest = make([]Value, valueCount-1)
+	}
+	seen := uint64(0)
+	seenOverflow := make([]bool, 0)
 	for _, spec := range node.specs {
 		if spec.kind == AggregateCount {
 			continue
 		}
-		if spec.valueIndex < 0 || spec.valueIndex >= len(values) {
-			return nil, false
+		if spec.valueIndex < 0 || spec.valueIndex >= valueCount {
+			return member, false
 		}
-		value, ok, err := spec.expression.evaluate(match.fact, bindings)
+		if spec.valueIndex < 64 {
+			bit := uint64(1) << spec.valueIndex
+			if seen&bit != 0 {
+				continue
+			}
+			seen |= bit
+		} else {
+			overflowIndex := spec.valueIndex - 64
+			for len(seenOverflow) <= overflowIndex {
+				seenOverflow = append(seenOverflow, false)
+			}
+			if seenOverflow[overflowIndex] {
+				continue
+			}
+			seenOverflow[overflowIndex] = true
+		}
+		value, ok, err := spec.expression.evaluateTokenWithContextParamsOffset(ctx, match.fact, token, nil, 0)
 		if err != nil || !ok {
-			return nil, false
+			return member, false
 		}
-		values[spec.valueIndex] = value
+		if !member.setValue(spec.valueIndex, value) {
+			return member, false
+		}
 	}
-	return values, true
+	return member, true
 }
 
-func aggregateScalarMember(match conditionMatch, values []Value) reteGraphAggregateScalarMember {
-	out := reteGraphAggregateScalarMember{
-		factID: match.fact.ID(),
+func (m *reteGraphAggregateScalarMember) setValue(index int, value Value) bool {
+	if m == nil || index < 0 {
+		return false
 	}
-	if len(values) > 0 {
-		out.first = cloneValue(values[0])
+	if index == 0 {
+		m.first = cloneValue(value)
+		return true
 	}
-	if len(values) > 1 {
-		out.rest = make([]Value, len(values)-1)
-		for i, value := range values[1:] {
-			out.rest[i] = cloneValue(value)
-		}
+	index--
+	if index >= len(m.rest) {
+		return false
 	}
-	return out
+	m.rest[index] = cloneValue(value)
+	return true
 }
 
 func (m reteGraphAggregateScalarMember) value(index int) (Value, bool) {
@@ -3252,8 +3267,19 @@ func (m *reteGraphAggregateBucket) addScalarMember(node *reteGraphAggregateNode,
 				return err
 			}
 		case AggregateMin, AggregateMax, AggregateCollect:
-			if _, ok := member.value(spec.valueIndex); !ok {
+			value, ok := member.value(spec.valueIndex)
+			if !ok {
 				return fmt.Errorf("%w: aggregate scalar member values unavailable", ErrAggregateEvaluation)
+			}
+			switch spec.kind {
+			case AggregateMin:
+				if err := m.addExtremum(i, value, true); err != nil {
+					return err
+				}
+			case AggregateMax:
+				if err := m.addExtremum(i, value, false); err != nil {
+					return err
+				}
 			}
 		default:
 			return fmt.Errorf("%w: unsupported scalar aggregate kind %q", ErrAggregateEvaluation, spec.kind)
@@ -3312,14 +3338,24 @@ func (m *reteGraphAggregateBucket) removeScalarMember(node *reteGraphAggregateNo
 		m.count--
 	}
 	for i, spec := range node.specs {
-		if spec.kind != AggregateSum {
-			continue
+		switch spec.kind {
+		case AggregateSum:
+			value, ok := member.value(spec.valueIndex)
+			if !ok {
+				return false
+			}
+			numeric.removeSumValue(m, node, i, value)
+		case AggregateMin:
+			value, ok := member.value(spec.valueIndex)
+			if !ok || !m.removeExtremum(node, i, value, true) {
+				return false
+			}
+		case AggregateMax:
+			value, ok := member.value(spec.valueIndex)
+			if !ok || !m.removeExtremum(node, i, value, false) {
+				return false
+			}
 		}
-		value, ok := member.value(spec.valueIndex)
-		if !ok {
-			return false
-		}
-		numeric.removeSumValue(m, node, i, value)
 	}
 	return true
 }
@@ -3340,13 +3376,13 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode, numeric
 			}
 			values[i] = value
 		case AggregateMin:
-			value, ok := m.extremumValue(spec.valueIndex, true)
+			value, ok := m.extremumValue(i)
 			if !ok {
 				return nil, false
 			}
 			values[i] = value
 		case AggregateMax:
-			value, ok := m.extremumValue(spec.valueIndex, false)
+			value, ok := m.extremumValue(i)
 			if !ok {
 				return nil, false
 			}
@@ -3364,31 +3400,88 @@ func (m *reteGraphAggregateBucket) results(node *reteGraphAggregateNode, numeric
 	return values, true
 }
 
-func (m *reteGraphAggregateBucket) extremumValue(index int, min bool) (Value, bool) {
-	if m == nil || index < 0 || len(m.scalarMembers) == 0 {
-		return Value{}, false
+func (m *reteGraphAggregateBucket) ensureExtremum(index int) (*reteGraphAggregateExtremumState, bool) {
+	if m == nil || index < 0 {
+		return nil, false
 	}
-	var out Value
-	have := false
+	for len(m.extrema) <= index {
+		m.extrema = append(m.extrema, reteGraphAggregateExtremumState{})
+	}
+	return &m.extrema[index], true
+}
+
+func (m *reteGraphAggregateBucket) addExtremum(index int, value Value, min bool) error {
+	extremum, ok := m.ensureExtremum(index)
+	if !ok {
+		return fmt.Errorf("%w: aggregate extremum state unavailable", ErrAggregateEvaluation)
+	}
+	if !extremum.have {
+		extremum.current = cloneValue(value)
+		extremum.have = true
+		return nil
+	}
+	comparison, ok := compareValues(value, extremum.current)
+	if !ok {
+		return fmt.Errorf("%w: min/max input is not comparable", ErrAggregateEvaluation)
+	}
+	if (min && comparison < 0) || (!min && comparison > 0) {
+		extremum.current = cloneValue(value)
+	}
+	return nil
+}
+
+func (m *reteGraphAggregateBucket) removeExtremum(node *reteGraphAggregateNode, index int, value Value, min bool) bool {
+	if m == nil || node == nil || index < 0 || index >= len(m.extrema) {
+		return false
+	}
+	extremum := &m.extrema[index]
+	if !extremum.have || !extremum.current.Equal(value) {
+		return true
+	}
+	return m.recomputeExtremum(node, index, min)
+}
+
+func (m *reteGraphAggregateBucket) recomputeExtremum(node *reteGraphAggregateNode, index int, min bool) bool {
+	if m == nil || node == nil || index < 0 || index >= len(node.specs) {
+		return false
+	}
+	extremum, ok := m.ensureExtremum(index)
+	if !ok {
+		return false
+	}
+	extremum.current = Value{}
+	extremum.have = false
+	valueIndex := node.specs[index].valueIndex
 	for _, member := range m.scalarMembers {
-		value, ok := member.value(index)
+		value, ok := member.value(valueIndex)
 		if !ok {
-			return Value{}, false
+			return false
 		}
-		if !have {
-			out = cloneValue(value)
-			have = true
+		if !extremum.have {
+			extremum.current = cloneValue(value)
+			extremum.have = true
 			continue
 		}
-		comparison, ok := compareValues(value, out)
+		comparison, ok := compareValues(value, extremum.current)
 		if !ok {
-			return Value{}, false
+			return false
 		}
 		if (min && comparison < 0) || (!min && comparison > 0) {
-			out = cloneValue(value)
+			extremum.current = cloneValue(value)
 		}
 	}
-	return out, have
+	return true
+}
+
+func (m *reteGraphAggregateBucket) extremumValue(index int) (Value, bool) {
+	if m == nil || index < 0 || index >= len(m.extrema) {
+		return Value{}, false
+	}
+	extremum := &m.extrema[index]
+	if !extremum.have {
+		return Value{}, false
+	}
+	return cloneValue(extremum.current), true
 }
 
 func (m *reteGraphAggregateBucket) collectValue(index int) (Value, bool) {

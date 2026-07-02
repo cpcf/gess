@@ -80,18 +80,17 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 	}
 	memberKey := tokenRefKey(token)
 	if existing, ok := bucket.scalarMembers[memberKey]; ok {
+		delete(bucket.scalarMembers, memberKey)
 		if !bucket.removeScalarMember(m.node, existing, &m.memory.numeric) {
 			delta.supported = false
 			return
 		}
-		delete(bucket.scalarMembers, memberKey)
 	}
-	values, ok := aggregateMemberValues(m.node, token)
+	member, ok := aggregateScalarMemberFromToken(m.owner.context(), m.node, match, token)
 	if !ok {
 		delta.supported = false
 		return
 	}
-	member := aggregateScalarMember(match, values)
 	if err := bucket.addScalarMember(m.node, member, &m.memory.numeric); err != nil {
 		delta.supported = false
 		return
