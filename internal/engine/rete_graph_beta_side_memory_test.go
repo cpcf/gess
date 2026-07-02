@@ -513,7 +513,7 @@ func TestTerminalTokenMemoryHandlesUseRowGenerationWithoutMove(t *testing.T) {
 	if row := memory.rowByHandle(firstHandle); row != nil {
 		t.Fatalf("stale removed terminal handle resolved after reuse to %#v", row)
 	}
-	if row := memory.rowByHandle(thirdHandle); row == nil || !tokenRefEqual(row.token, thirdToken) {
+	if row := memory.rowByHandle(thirdHandle); row == nil || !tokenRefEqual(memory.rowToken(*row), thirdToken) {
 		t.Fatalf("reused terminal handle resolved to %#v, want third token", row)
 	}
 	if removed, ok := memory.removeToken(secondToken, nil, 0); !ok || !tokenRefEqual(removed.token, secondToken) {
@@ -559,7 +559,7 @@ func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
 	if row := memory.rowByHandle(firstHandle); row != nil {
 		t.Fatalf("stale cleared terminal handle resolved after reuse to %#v", row)
 	}
-	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(row.token, secondToken) {
+	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(memory.rowToken(*row), secondToken) {
 		t.Fatalf("reused terminal handle resolved to %#v, want second token", row)
 	}
 }
@@ -602,6 +602,12 @@ func TestBetaSideMemoryRowHandlesReuseWithGeneration(t *testing.T) {
 func TestBetaSideMemoryRowHandleEntryIsCompact(t *testing.T) {
 	if got, want := unsafe.Sizeof(betaTokenRowHandleEntry{}), uintptr(8); got != want {
 		t.Fatalf("beta row handle entry size = %d, want %d", got, want)
+	}
+}
+
+func TestTerminalTokenRowIsCompact(t *testing.T) {
+	if got, want := unsafe.Sizeof(terminalTokenRow{}), uintptr(48); got != want {
+		t.Fatalf("terminal token row size = %d, want %d", got, want)
 	}
 }
 

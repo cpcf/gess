@@ -1,6 +1,7 @@
 package engine
 
 type terminalTokenMemory struct {
+	arena                *tokenArena
 	rows                 []terminalTokenRow
 	identityRows         tokenIdentityHeadTable
 	factRows             factTokenBucketTable
@@ -16,11 +17,41 @@ type terminalTokenMemory struct {
 
 type terminalTokenRow struct {
 	handle        graphTokenRowHandle
-	token         tokenRef
+	token         terminalTokenRef
 	identityHash  uint64
 	identityNext  uint32
 	supportCount  uint32
 	candidateHash uint64
+}
+
+type terminalTokenRef struct {
+	generation uint64
+	rowID      tokenArenaRowID
+}
+
+func terminalTokenRefFromToken(token tokenRef) terminalTokenRef {
+	if token.isZero() {
+		return terminalTokenRef{}
+	}
+	return terminalTokenRef{
+		generation: token.handle.generation,
+		rowID:      token.handle.rowID,
+	}
+}
+
+func (r terminalTokenRef) isZero() bool {
+	return r.rowID == 0 || r.generation == 0
+}
+
+func (r terminalTokenRef) toTokenRef(arena *tokenArena) tokenRef {
+	if r.isZero() || arena == nil {
+		return tokenRef{}
+	}
+	return tokenRef{handle: tokenHandle{
+		arena:      arena,
+		rowID:      r.rowID,
+		generation: r.generation,
+	}}
 }
 
 type terminalBranchSupportState struct {
@@ -180,17 +211,6 @@ type queryTerminalRow struct {
 	supportCount uint32
 }
 
-func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
-	row := graphTokenRow{
-		handle:       r.handle,
-		token:        r.token,
-		identity:     r.token.identityKey(),
-		candidate:    candidateIdentity{key: candidateIdentityKey{hash: r.candidateHash}},
-		supportCount: int(r.supportCount),
-	}
-	return row
-}
-
 func (r terminalTokenRow) isTerminal() bool {
 	return r.supportCount > 0
 }
@@ -273,13 +293,38 @@ func (m *terminalTokenMemory) forEachTerminalBranchSupport(rowID graphTokenRowID
 }
 
 func (m *terminalTokenMemory) graphTokenRow(rowID graphTokenRowID, row terminalTokenRow) graphTokenRow {
-	out := row.toGraphTokenRow()
+	token := m.rowToken(row)
+	out := graphTokenRow{
+		handle:       row.handle,
+		token:        token,
+		identity:     token.identityKey(),
+		candidate:    candidateIdentity{key: candidateIdentityKey{hash: row.candidateHash}},
+		supportCount: int(row.supportCount),
+	}
 	if state := m.branchState(rowID); state != nil && state.count > 0 {
 		out.branchSupport = state.primary
 		out.branchOverflow = state.overflow
 		out.branchCount = state.count
 	}
 	return out
+}
+
+func (m *terminalTokenMemory) rowToken(row terminalTokenRow) tokenRef {
+	if m == nil {
+		return tokenRef{}
+	}
+	return row.token.toTokenRef(m.arena)
+}
+
+func (m *terminalTokenMemory) bindTokenArena(token tokenRef) bool {
+	if m == nil || token.isZero() || token.handle.arena == nil {
+		return false
+	}
+	if m.arena == nil || m.liveRows == 0 {
+		m.arena = token.handle.arena
+		return true
+	}
+	return m.arena == token.handle.arena
 }
 
 func (m *terminalTokenMemory) ensureRowCapacity(rowCapacity int) {
@@ -483,7 +528,7 @@ func (m *terminalTokenMemory) row(rowID graphTokenRowID) *terminalTokenRow {
 }
 
 func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID int, candidateKey candidateIdentityKey) graphTokenRowHandle {
-	if m == nil || token.isZero() {
+	if m == nil || token.isZero() || !m.bindTokenArena(token) {
 		return graphTokenRowHandle{}
 	}
 	identity := tokenRefKey(token)
@@ -495,7 +540,7 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
 		handle:        handle,
-		token:         token,
+		token:         terminalTokenRefFromToken(token),
 		identityHash:  hashTokenIdentityBucketKey(identity),
 		candidateHash: candidateKey.hash,
 		supportCount:  1,
@@ -508,7 +553,7 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 }
 
 func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, candidateKey candidateIdentityKey) (graphTokenRowHandle, bool) {
-	if m == nil || token.isZero() {
+	if m == nil || token.isZero() || !m.bindTokenArena(token) {
 		return graphTokenRowHandle{}, false
 	}
 	identity := tokenRefKey(token)
@@ -521,10 +566,14 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 		} else {
 			ref = 0
 		}
-		if row == nil || row.identityHash != identityHash || !tokenRefEqual(row.token, token) {
+		if row == nil {
 			continue
 		}
-		if row.token.handle == token.handle {
+		rowToken := m.rowToken(*row)
+		if row.identityHash != identityHash || !tokenRefEqual(rowToken, token) {
+			continue
+		}
+		if rowToken.handle == token.handle {
 			row.candidateHash = candidateKey.hash
 			if !m.hasTerminalBranchSupport(rowID, branchID) {
 				m.addTerminalBranchSupport(rowID, branchID)
@@ -545,7 +594,7 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 	handle := m.allocateRowHandle(rowID)
 	row := terminalTokenRow{
 		handle:        handle,
-		token:         token,
+		token:         terminalTokenRefFromToken(token),
 		identityHash:  identityHash,
 		candidateHash: candidateKey.hash,
 		supportCount:  1,
@@ -576,7 +625,11 @@ func (m *terminalTokenMemory) refreshTerminalTokensContainingFact(id FactID, upd
 		havePrevious = true
 		previous = rowID
 		row := m.row(rowID)
-		if row == nil || row.token.isZero() || !row.isTerminal() || !row.token.containsFact(id) {
+		if row == nil {
+			continue
+		}
+		rowToken := m.rowToken(*row)
+		if rowToken.isZero() || !row.isTerminal() || !rowToken.containsFact(id) {
 			continue
 		}
 		beforeIdentityHash := row.identityHash
@@ -584,7 +637,7 @@ func (m *terminalTokenMemory) refreshTerminalTokensContainingFact(id FactID, upd
 		if !ok || next.isZero() {
 			continue
 		}
-		before := row.token
+		before := rowToken
 		identity := candidateIdentity{}
 		if collectUpdates {
 			if identityForToken != nil {
@@ -609,7 +662,7 @@ func (m *terminalTokenMemory) replaceRowToken(rowID graphTokenRowID, token token
 }
 
 func (m *terminalTokenMemory) replaceRowTokenWithPreviousIdentityHash(rowID graphTokenRowID, previousIdentityHash uint64, token tokenRef) {
-	if m == nil || rowID < 0 || token.isZero() {
+	if m == nil || rowID < 0 || token.isZero() || !m.bindTokenArena(token) {
 		return
 	}
 	row := m.row(rowID)
@@ -626,7 +679,7 @@ func (m *terminalTokenMemory) replaceRowTokenWithPreviousIdentityHash(rowID grap
 		m.appendIdentityHashIndexRow(nextIdentityHash, rowID)
 		row.identityHash = nextIdentityHash
 	}
-	row.token = token
+	row.token = terminalTokenRefFromToken(token)
 	m.markFactRowsDirty()
 }
 
@@ -678,7 +731,11 @@ func (m *terminalTokenMemory) removeTokensContainingFact(id FactID, counters *pr
 			counters.recordRemovalRowTouched()
 		}
 		row := m.row(rowID)
-		if row != nil && !row.token.isZero() && row.token.containsFact(id) && fn != nil {
+		rowToken := tokenRef{}
+		if row != nil {
+			rowToken = m.rowToken(*row)
+		}
+		if row != nil && !rowToken.isZero() && rowToken.containsFact(id) && fn != nil {
 			fn(m.graphTokenRow(rowID, *row))
 		}
 		m.removeRow(rowID, counters)
@@ -716,7 +773,8 @@ func (m *terminalTokenMemory) removeToken(token tokenRef, counters *propagationC
 		if counters != nil {
 			counters.recordRemovalRowTouched()
 		}
-		if !tokenRefEqual(row.token, token) {
+		rowToken := m.rowToken(*row)
+		if !tokenRefEqual(rowToken, token) {
 			continue
 		}
 		if row.isTerminal() && row.supportCount > 1 {
@@ -781,7 +839,11 @@ func (m *terminalTokenMemory) forEachTokenContainingFact(id FactID, counters *pr
 			counters.recordRemovalRowTouched()
 		}
 		row := m.row(rowID)
-		if row == nil || row.token.isZero() || !row.token.containsFact(id) {
+		rowToken := tokenRef{}
+		if row != nil {
+			rowToken = m.rowToken(*row)
+		}
+		if row == nil || rowToken.isZero() || !rowToken.containsFact(id) {
 			continue
 		}
 		if fn != nil {
@@ -801,7 +863,7 @@ func (m *terminalTokenMemory) removeRow(rowID graphTokenRowID, counters *propaga
 	removed := m.rows[index]
 	m.removeIdentityHashIndexRow(removed.identityHash, rowID)
 	if !m.factRowsDirty {
-		m.removeTokenFacts(removed.token, rowID)
+		m.removeTokenFacts(m.rowToken(removed), rowID)
 	}
 	m.clearRowForReuse(rowID)
 	if m.liveRows > 0 {
@@ -836,7 +898,7 @@ func (m *terminalTokenMemory) rebuildIdentityRows() {
 		}
 		hash := row.identityHash
 		if hash == 0 {
-			hash = hashTokenIdentityBucketKey(row.token.identityKey())
+			hash = hashTokenIdentityBucketKey(m.rowToken(*row).identityKey())
 			row.identityHash = hash
 		}
 		m.appendIdentityHashIndexRow(hash, graphTokenRowID(index))
@@ -919,7 +981,7 @@ func (m *terminalTokenMemory) rebuildFactRows() {
 		if row.token.isZero() {
 			continue
 		}
-		m.indexTokenFacts(row.token, graphTokenRowID(index))
+		m.indexTokenFacts(m.rowToken(row), graphTokenRowID(index))
 	}
 	m.factRowsDirty = false
 }
@@ -1050,7 +1112,8 @@ func (m terminalTokenMemory) factIndexKeyCount() int {
 		if row.token.isZero() {
 			continue
 		}
-		if factIDs, ok := row.token.factIDs(); ok {
+		token := m.rowToken(row)
+		if factIDs, ok := token.factIDs(); ok {
 			for i, id := range factIDs {
 				if id.IsZero() || factIDSeenBefore(factIDs[:i], id) {
 					continue
@@ -1059,7 +1122,7 @@ func (m terminalTokenMemory) factIndexKeyCount() int {
 			}
 			continue
 		}
-		for current := row.token; !current.isZero(); current = current.parent() {
+		for current := token; !current.isZero(); current = current.parent() {
 			tokenRow, ok := current.resolve()
 			if !ok {
 				break

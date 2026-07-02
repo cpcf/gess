@@ -629,12 +629,13 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 			t.Fatalf("terminal rows = %d, want %d", got, want)
 		}
 		row := terminal.rows.rows[0]
-		identity := terminal.terminalTokenIdentity(row.token)
+		token := terminal.rows.rowToken(row)
+		identity := terminal.terminalTokenIdentity(token)
 		compiledRule, ok := revision.rulesByRevisionID[rule.RevisionID()]
 		if !ok {
 			t.Fatal("compiled rule revision missing")
 		}
-		stored, _, ok := session.agenda.activationForTerminalTokenIdentity(compiledRule, row.token, identity)
+		stored, _, ok := session.agenda.activationForTerminalTokenIdentity(compiledRule, token, identity)
 		if !ok || stored.status != activationStatusPending {
 			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
 		}

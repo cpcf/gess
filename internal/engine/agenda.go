@@ -1456,8 +1456,9 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 			if row.token.isZero() {
 				continue
 			}
-			identity := terminal.terminalTokenIdentity(row.token)
-			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, row.token, identity); ok {
+			token := terminal.rows.rowToken(row)
+			identity := terminal.terminalTokenIdentity(token)
+			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, token, identity); ok {
 				existing.terminalID = terminalNode.id
 				existing.terminalRow = row.handle
 				if existing.status == activationStatusPending {
@@ -1480,7 +1481,7 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 				}
 				continue
 			}
-			created, err := newActivationFromTerminalTokenWithIdentity(rule, row.token, identity)
+			created, err := newActivationFromTerminalTokenWithIdentity(rule, token, identity)
 			if err != nil {
 				return nil, true, err
 			}

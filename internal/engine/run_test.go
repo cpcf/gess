@@ -1035,8 +1035,9 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 					return errors.New("audit terminal row was not retained")
 				}
 				row := terminal.rows.rows[0]
-				identity := terminal.terminalTokenIdentity(row.token)
-				activation, _, ok := session.agenda.activationForTerminalTokenIdentity(auditRule, row.token, identity)
+				token := terminal.rows.rowToken(row)
+				identity := terminal.terminalTokenIdentity(token)
+				activation, _, ok := session.agenda.activationForTerminalTokenIdentity(auditRule, token, identity)
 				if !ok || activation.status != activationStatusPending {
 					return errors.New("audit terminal token identity did not resolve to a pending activation")
 				}

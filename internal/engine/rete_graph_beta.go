@@ -7424,10 +7424,11 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 			if row.token.isZero() {
 				continue
 			}
+			token := terminal.rows.rowToken(row)
 			deltas = append(deltas, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
-				token:          row.token,
-				identity:       terminal.terminalTokenIdentity(row.token),
+				token:          token,
+				identity:       terminal.terminalTokenIdentity(token),
 				terminalID:     terminalNode.id,
 				terminalRow:    row.handle,
 			})
@@ -8894,7 +8895,7 @@ func (m *reteGraphBetaMemory) collectTerminalCandidates(ctx context.Context, rul
 		if row.token.isZero() {
 			continue
 		}
-		candidate, err := buildMatchCandidateFromTokenRef(rule, row.token)
+		candidate, err := buildMatchCandidateFromTokenRef(rule, terminal.rows.rowToken(row))
 		if err != nil {
 			return nil, err
 		}

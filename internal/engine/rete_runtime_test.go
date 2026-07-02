@@ -3813,7 +3813,7 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if terminalID == 0 {
 		t.Fatalf("terminal node for rule revision %q not found", rule.revisionID)
 	}
-	terminalToken := terminal.rows.rows[0].token
+	terminalToken := terminal.rows.rowToken(terminal.rows.rows[0])
 	if terminalToken.isZero() {
 		t.Fatal("retained terminal token is zero")
 	}
@@ -3919,7 +3919,7 @@ func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.
 		t.Fatalf("terminal memory = %#v, want one row", terminal)
 	}
 	row := terminal.rows.rows[0]
-	identity := terminal.terminalTokenIdentity(row.token)
+	identity := terminal.terminalTokenIdentity(terminal.rows.rowToken(row))
 	if identity.isZero() {
 		t.Fatal("terminal token identity is zero")
 	}
