@@ -413,10 +413,10 @@ func TestCompactAgendaEntryArenaResetInvalidatesHandles(t *testing.T) {
 	}
 }
 
-func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
+func TestAgendaTerminalTokenDeltaBatchObservesActivations(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)
-	session := mustSession(t, revision, "agenda-token-delta-batch-handle-session")
+	session := mustSession(t, revision, "agenda-token-delta-batch-observe-session")
 
 	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
@@ -437,49 +437,33 @@ func TestAgendaTerminalTokenDeltaBatchAttachesActivationHandles(t *testing.T) {
 		t.Fatalf("terminal token deltas = %#v, ok=%v, want two", tokens, ok)
 	}
 
-	type attachedActivation struct {
-		delta  reteTerminalTokenDelta
-		handle activationHandle
-	}
-	attached := make([]attachedActivation, 0, len(tokens))
+	observed := make([]*activation, 0, len(tokens))
 	agenda := newAgenda()
-	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(delta reteTerminalTokenDelta, handle activationHandle, _ *activation) {
-		attached = append(attached, attachedActivation{delta: delta, handle: handle})
+	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(act *activation) {
+		observed = append(observed, act)
 	}); err != nil {
 		t.Fatalf("applyTerminalTokenDeltasInternal: %v", err)
 	}
-	if got, want := len(attached), 2; got != want {
-		t.Fatalf("attached handles = %d, want %d", got, want)
+	if got, want := len(observed), 2; got != want {
+		t.Fatalf("observed activations = %d, want %d", got, want)
 	}
 	if got, want := len(agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations = %d, want %d", got, want)
 	}
-	for i, attachment := range attached {
-		if attachment.delta.terminalID == 0 || attachment.delta.terminalRow.isZero() {
-			t.Fatalf("attachment %d terminal ownership = %#v", i, attachment.delta)
+	for i, activation := range observed {
+		if activation == nil || activation.status != activationStatusPending {
+			t.Fatalf("observed activation %d = %#v, want pending", i, activation)
 		}
-		if attachment.handle.isZero() {
-			t.Fatalf("attachment %d handle is zero", i)
-		}
-		activation, ok := agenda.activationByHandlePtr(attachment.handle)
-		if !ok || activation.status != activationStatusPending {
-			t.Fatalf("attachment %d activation = %#v, ok=%v, want pending", i, activation, ok)
-		}
-		if activation.terminalID != attachment.delta.terminalID || activation.terminalRow != attachment.delta.terminalRow {
-			t.Fatalf("attachment %d activation terminal ownership = (%d, %#v), want (%d, %#v)", i, activation.terminalID, activation.terminalRow, attachment.delta.terminalID, attachment.delta.terminalRow)
+		if activation.terminalID == 0 || activation.terminalRow.isZero() {
+			t.Fatalf("observed activation %d terminal ownership = (%d, %#v), want nonzero", i, activation.terminalID, activation.terminalRow)
 		}
 	}
 
-	removed := make([]reteTerminalTokenDelta, len(attached))
-	for i, attachment := range attached {
-		removed[i] = attachment.delta
-		removed[i].activation = attachment.handle
-	}
-	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, removed, nil); err != nil {
-		t.Fatalf("remove by attached handles: %v", err)
+	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, cloneTerminalTokenDeltas(tokens), nil); err != nil {
+		t.Fatalf("remove by terminal token identity: %v", err)
 	}
 	if got := agenda.pendingActivations(); len(got) != 0 {
-		t.Fatalf("pending activations after handle removals = %#v, want none", got)
+		t.Fatalf("pending activations after terminal token removals = %#v, want none", got)
 	}
 }
 
@@ -612,13 +596,12 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 }
 
-func TestAgendaTerminalRowHandleDeactivatesOnRetractAndModify(t *testing.T) {
+func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) {
 	type terminalActivationState struct {
 		session  *Session
 		factID   FactID
 		terminal *reteGraphTerminalMemory
 		key      activationKey
-		handle   activationHandle
 	}
 	newState := func(t *testing.T, id SessionID) terminalActivationState {
 		t.Helper()
@@ -646,12 +629,14 @@ func TestAgendaTerminalRowHandleDeactivatesOnRetractAndModify(t *testing.T) {
 			t.Fatalf("terminal rows = %d, want %d", got, want)
 		}
 		row := terminal.rows.rows[0]
-		if row.activation.isZero() {
-			t.Fatal("terminal row activation handle is zero")
+		identity := terminal.terminalTokenIdentity(row.token)
+		compiledRule, ok := revision.rulesByRevisionID[rule.RevisionID()]
+		if !ok {
+			t.Fatal("compiled rule revision missing")
 		}
-		stored, ok := session.agenda.activationByHandlePtr(row.activation)
+		stored, _, ok := session.agenda.activationForTerminalTokenIdentity(compiledRule, row.token, identity)
 		if !ok || stored.status != activationStatusPending {
-			t.Fatalf("activation by terminal row handle = %#v, ok=%v; want pending", stored, ok)
+			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
 		}
 		if stored.terminalID == 0 || stored.terminalRow != row.handle {
 			t.Fatalf("stored terminal ownership = (%d, %#v), want nonzero terminal and row %#v", stored.terminalID, stored.terminalRow, row.handle)
@@ -661,7 +646,6 @@ func TestAgendaTerminalRowHandleDeactivatesOnRetractAndModify(t *testing.T) {
 			factID:   inserted.Fact.ID(),
 			terminal: terminal,
 			key:      stored.key,
-			handle:   row.activation,
 		}
 	}
 	assertDeactivated := func(t *testing.T, state terminalActivationState) {
@@ -671,9 +655,6 @@ func TestAgendaTerminalRowHandleDeactivatesOnRetractAndModify(t *testing.T) {
 		}
 		if got, want := state.terminal.rows.len(), 0; got != want {
 			t.Fatalf("terminal rows after mutation = %d, want %d", got, want)
-		}
-		if _, ok := state.session.agenda.activationByHandlePtr(state.handle); !ok {
-			t.Fatal("activation handle should still resolve to the deactivated compact entry")
 		}
 		stored, ok := state.session.agenda.activationByKeyPtr(state.key)
 		if !ok {

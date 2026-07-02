@@ -1034,13 +1034,11 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if terminal == nil || terminal.rows.len() != 1 {
 					return errors.New("audit terminal row was not retained")
 				}
-				handle := terminal.rows.rows[0].activation
-				if handle.isZero() {
-					return errors.New("audit terminal row did not receive activation handle")
-				}
-				activation, ok := session.agenda.activationByHandlePtr(handle)
+				row := terminal.rows.rows[0]
+				identity := terminal.terminalTokenIdentity(row.token)
+				activation, _, ok := session.agenda.activationForTerminalTokenIdentity(auditRule, row.token, identity)
 				if !ok || activation.status != activationStatusPending {
-					return errors.New("audit activation handle did not resolve to a pending activation")
+					return errors.New("audit terminal token identity did not resolve to a pending activation")
 				}
 				return nil
 			},

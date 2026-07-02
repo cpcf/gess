@@ -6337,37 +6337,22 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 		return ErrInvalidRuleset
 	}
 	if len(removed) <= 1 && len(added) <= 1 {
-		handle, err := s.agenda.applySingleTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
+		act, err := s.agenda.applySingleTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
 		if err != nil {
 			return err
 		}
 		if len(added) == 1 {
-			s.attachTerminalActivationHandle(added[0], handle, nil)
+			s.applyAutoFocusForActivation(act)
 		}
 		return nil
 	}
-	_, err := s.agenda.applyTerminalTokenDeltasInternal(ctx, s.revision, removed, added, false, s.attachTerminalActivationHandle)
+	_, err := s.agenda.applyTerminalTokenDeltasInternal(ctx, s.revision, removed, added, false, s.applyAutoFocusForActivation)
 	return err
 }
 
-func (s *Session) attachTerminalActivationHandle(token reteTerminalTokenDelta, handle activationHandle, act *activation) {
-	if s == nil || handle.isZero() {
-		return
-	}
-	if s.rete != nil && s.rete.graphBeta != nil {
-		s.rete.graphBeta.setTerminalActivationHandle(token.terminalID, token.terminalRow, handle)
-	}
-	s.applyAutoFocusForActivation(act, handle)
-}
-
-func (s *Session) applyAutoFocusForActivation(act *activation, handle activationHandle) {
+func (s *Session) applyAutoFocusForActivation(act *activation) {
 	if s == nil || s.revision == nil || !s.revision.hasAutoFocusRules() || len(s.listeners) > 0 {
 		return
-	}
-	if act == nil && !handle.isZero() && s.agenda != nil {
-		if resolved, ok := s.agenda.activationByHandlePtr(handle); ok {
-			act = resolved
-		}
 	}
 	if act == nil || act.status != activationStatusPending {
 		return

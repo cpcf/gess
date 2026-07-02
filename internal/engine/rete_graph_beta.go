@@ -307,7 +307,7 @@ type graphTokenRow struct {
 	joinKey        betaJoinKey
 	identity       graphTokenIdentityKey
 	identityNext   graphTokenRowID
-	activation     activationHandle
+	candidate      candidateIdentity
 	supportCount   int
 	branchSupport  terminalBranchSupport
 	branchOverflow *terminalBranchSupportOverflow
@@ -6013,10 +6013,9 @@ func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagati
 			m.appendRemovedTerminalDelta(&delta, reteTerminalTokenDelta{
 				ruleRevisionID: terminalNode.ruleRevisionID,
 				token:          row.token,
-				identity:       terminal.terminalTokenIdentity(row.token),
+				identity:       terminal.rowCandidateIdentity(row),
 				terminalID:     terminalNode.id,
 				terminalRow:    row.handle,
-				activation:     row.activation,
 			})
 			if counters != nil {
 				counters.recordTerminalDeltaRemoved()
@@ -7169,11 +7168,15 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 	if !terminal.needsBranchSupport() {
 		rowBranchID = -1
 	}
+	identity := candidateIdentity{}
+	if ruleTerminal {
+		identity = terminal.terminalTokenIdentity(token)
+	}
 	if m.initialAgenda != nil && terminal.singleBranch() {
-		handle = terminal.rows.insertFreshTerminalRow(token, rowBranchID)
+		handle = terminal.rows.insertFreshTerminalRow(token, rowBranchID, identity.key)
 		inserted = !handle.isZero()
 	} else {
-		handle, inserted = terminal.rows.insertTerminalRow(token, rowBranchID)
+		handle, inserted = terminal.rows.insertTerminalRow(token, rowBranchID, identity.key)
 	}
 	if !inserted {
 		if span != nil {
@@ -7196,7 +7199,6 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			span.recordTerminalDeltaEmittedForBranch(branchKey)
 		}
 	}
-	identity := terminal.terminalTokenIdentity(token)
 	added := reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          token,
@@ -7205,12 +7207,10 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 		terminalRow:    handle,
 	}
 	if m.initialAgenda != nil && m.initialAgendaErr == nil {
-		activation, err := m.initialAgenda.addInitialTerminalActivation(m.context(), m.revision, added)
+		_, err := m.initialAgenda.addInitialTerminalActivation(m.context(), m.revision, added)
 		if err != nil {
 			m.initialAgendaErr = err
 			delta.supported = false
-		} else if row := terminal.rows.rowByHandle(handle); row != nil {
-			row.activation = activation
 		}
 	}
 	if m.suppressTerminalDeltas {
@@ -7246,10 +7246,9 @@ func (m *reteGraphBetaMemory) removeTerminalTokensContainingFact(terminalID rete
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          row.token,
-			identity:       terminal.terminalTokenIdentity(row.token),
+			identity:       terminal.rowCandidateIdentity(row),
 			terminalID:     terminalID,
 			terminalRow:    row.handle,
-			activation:     row.activation,
 		})
 		if counters != nil {
 			counters.recordTerminalRowRemoved()
@@ -7326,10 +7325,9 @@ func (m *reteGraphBetaMemory) removeRuleTerminalToken(terminalID reteGraphTermin
 	m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
 		token:          removed.token,
-		identity:       terminal.terminalTokenIdentity(removed.token),
+		identity:       terminal.rowCandidateIdentity(removed),
 		terminalID:     terminalID,
 		terminalRow:    removed.handle,
-		activation:     removed.activation,
 	})
 	if counters != nil {
 		counters.recordTerminalRowRemoved()
@@ -7378,10 +7376,9 @@ func (m *reteGraphBetaMemory) removeTerminalTokenByHandle(terminalID reteGraphTe
 		m.appendRemovedTerminalDelta(delta, reteTerminalTokenDelta{
 			ruleRevisionID: ruleRevisionID,
 			token:          removed.token,
-			identity:       terminal.terminalTokenIdentity(removed.token),
+			identity:       terminal.rowCandidateIdentity(removed),
 			terminalID:     terminalID,
 			terminalRow:    removed.handle,
-			activation:     removed.activation,
 		})
 	}
 	if counters != nil {
@@ -7433,7 +7430,6 @@ func (m *reteGraphBetaMemory) currentTerminalTokenDeltas(ctx context.Context) ([
 				identity:       terminal.terminalTokenIdentity(row.token),
 				terminalID:     terminalNode.id,
 				terminalRow:    row.handle,
-				activation:     row.activation,
 			})
 		}
 	}
@@ -7768,22 +7764,6 @@ func (m *reteGraphBetaMemory) terminalAt(id reteGraphTerminalNodeID) *reteGraphT
 	return m.terminals[index]
 }
 
-func (m *reteGraphBetaMemory) setTerminalActivationHandle(terminalID reteGraphTerminalNodeID, rowHandle graphTokenRowHandle, activation activationHandle) bool {
-	if m == nil || rowHandle.isZero() || activation.isZero() {
-		return false
-	}
-	terminal := m.terminalAt(terminalID)
-	if terminal == nil {
-		return false
-	}
-	row := terminal.rows.rowByHandle(rowHandle)
-	if row == nil || row.token.isZero() || !row.isTerminal() {
-		return false
-	}
-	row.activation = activation
-	return true
-}
-
 func (m *reteGraphBetaMemory) terminalRuleRevision(id reteGraphTerminalNodeID) RuleRevisionID {
 	if terminal := m.terminalAt(id); terminal != nil {
 		return terminal.ruleRevisionID
@@ -7815,6 +7795,13 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentity(token tokenRef) candidat
 		}
 	}
 	return candidateIdentityForTerminalToken(t.rule, token)
+}
+
+func (t *reteGraphTerminalMemory) rowCandidateIdentity(row graphTokenRow) candidateIdentity {
+	if !row.candidate.isZero() {
+		return row.candidate
+	}
+	return t.terminalTokenIdentity(row.token)
 }
 
 func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (candidateIdentity, bool) {

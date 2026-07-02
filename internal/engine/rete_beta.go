@@ -717,7 +717,6 @@ type reteTerminalTokenDelta struct {
 	identity       candidateIdentity
 	terminalID     reteGraphTerminalNodeID
 	terminalRow    graphTokenRowHandle
-	activation     activationHandle
 	factIDs        []FactID
 	factVersions   []FactVersion
 }

@@ -32,7 +32,7 @@ func (h activationHandle) isZero() bool {
 
 type activationFingerprint uint64
 
-type activationAttachFunc func(reteTerminalTokenDelta, activationHandle, *activation)
+type activationObserveFunc func(*activation)
 
 type activationBucket struct {
 	first    *activation
@@ -1064,42 +1064,42 @@ func (a *agenda) applyTerminalTokenDeltasWithoutChanges(ctx context.Context, rev
 	return err
 }
 
-func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Ruleset, delta reteTerminalTokenDelta) (activationHandle, error) {
+func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Ruleset, delta reteTerminalTokenDelta) (*activation, error) {
 	if a == nil || revision == nil {
-		return activationHandle{}, ErrInvalidRuleset
+		return nil, ErrInvalidRuleset
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return activationHandle{}, err
+		return nil, err
 	}
 	if delta.token.isZero() {
-		return activationHandle{}, nil
+		return nil, nil
 	}
 	a.revision = revision
 	rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
 	if !ok {
-		return activationHandle{}, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+		return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		existing.terminalID = delta.terminalID
 		existing.terminalRow = delta.terminalRow
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 		}
-		return a.handleForActivationKey(key), nil
+		return existing, nil
 	}
 	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 	if err != nil {
-		return activationHandle{}, err
+		return nil, err
 	}
 	created.terminalID = delta.terminalID
 	created.terminalRow = delta.terminalRow
 	key := a.storePreparedActivation(created)
 	a.pending = append(a.pending, key)
-	return a.handleForActivationKey(key), nil
+	return created, nil
 }
 
 func (a *agenda) finishInitialTerminalActivations() {
@@ -1115,27 +1115,25 @@ func (a *agenda) finishInitialTerminalActivations() {
 	a.rebuildPendingActivationCache()
 }
 
-func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) (activationHandle, error) {
+func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) (*activation, error) {
 	if a == nil || revision == nil {
-		return activationHandle{}, ErrInvalidRuleset
+		return nil, ErrInvalidRuleset
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if err := ctx.Err(); err != nil {
-		return activationHandle{}, err
+		return nil, err
 	}
 	a.revision = revision
 	a.normalizePendingKeys()
 
 	if len(removed) == 1 {
 		delta := removed[0]
-		if !delta.activation.isZero() && a.deactivateActivationByHandle(delta.activation) {
-			// Terminal row ownership already identified the activation.
-		} else if !delta.token.isZero() {
+		if !delta.token.isZero() {
 			rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
 			if !ok {
-				return activationHandle{}, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+				return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 			}
 			existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
 			if ok {
@@ -1151,15 +1149,15 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	}
 
 	if len(added) != 1 {
-		return activationHandle{}, nil
+		return nil, nil
 	}
 	delta := added[0]
 	if delta.token.isZero() {
-		return activationHandle{}, nil
+		return nil, nil
 	}
 	rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
 	if !ok {
-		return activationHandle{}, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+		return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
@@ -1175,21 +1173,24 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 				a.pending = a.insertActivationKeySorted(a.pending, key, existing)
 			}
 		}
-		return a.handleForActivationKey(key), nil
+		return existing, nil
 	}
 	a.reservePendingActivationKeys(1)
 	created, err := newActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 	if err != nil {
-		return activationHandle{}, err
+		return nil, err
 	}
 	created.terminalID = delta.terminalID
 	created.terminalRow = delta.terminalRow
 	key := a.storePreparedActivation(created)
 	a.pending = a.insertActivationKeySorted(a.pending, key, created)
-	return a.handleForActivationKey(key), nil
+	if stored, ok := a.activationByKeyPtr(key); ok {
+		return stored, nil
+	}
+	return created, nil
 }
 
-func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool, attachActivation activationAttachFunc) ([]agendaChange, error) {
+func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta, collectChanges bool, observeActivation activationObserveFunc) ([]agendaChange, error) {
 	if a == nil || revision == nil {
 		return nil, ErrInvalidRuleset
 	}
@@ -1211,22 +1212,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 	for _, delta := range removed {
 		if err := ctx.Err(); err != nil {
 			return nil, err
-		}
-		if !delta.activation.isZero() {
-			if existing, ok := a.activationByHandlePtr(delta.activation); ok {
-				switch existing.status {
-				case activationStatusPending:
-					if !collectChanges {
-						existing.status = activationStatusDeactivated
-						a.lazyDeactivated++
-					} else {
-						removedKeys[existing.key] = struct{}{}
-					}
-				case activationStatusConsumed:
-					existing.status = activationStatusDeactivated
-				}
-				continue
-			}
 		}
 		if delta.token.isZero() {
 			continue
@@ -1328,8 +1313,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 					})
 				}
 			}
-			if attachActivation != nil {
-				attachActivation(delta, a.handleForActivationKey(key), existing)
+			if observeActivation != nil {
+				observeActivation(existing)
 			}
 			continue
 		}
@@ -1341,8 +1326,8 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		created.terminalRow = delta.terminalRow
 		key := a.storePreparedActivation(created)
 		a.pending = a.insertActivationKeySorted(a.pending, key, created)
-		if attachActivation != nil {
-			attachActivation(delta, a.handleForActivationKey(key), created)
+		if observeActivation != nil {
+			observeActivation(created)
 		}
 		if collectChanges {
 			activated = append(activated, agendaChange{
@@ -1493,7 +1478,6 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 						})
 					}
 				}
-				memory.setTerminalActivationHandle(terminalNode.id, row.handle, a.handleForActivationKey(key))
 				continue
 			}
 			created, err := newActivationFromTerminalTokenWithIdentity(rule, row.token, identity)
@@ -1513,7 +1497,6 @@ func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Rules
 					activation: a.compactChangeActivation(created),
 				})
 			}
-			memory.setTerminalActivationHandle(terminalNode.id, row.handle, a.handleForActivationKey(key))
 		}
 	}
 
@@ -1785,7 +1768,13 @@ func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDe
 	}
 	leftIdentity := candidateIdentityForTerminalTokenDelta(revision, left)
 	rightIdentity := candidateIdentityForTerminalTokenDelta(revision, right)
-	if leftIdentity != rightIdentity {
+	if leftIdentity.key != rightIdentity.key {
+		return false
+	}
+	if leftIdentity.generation != 0 && rightIdentity.generation != 0 && leftIdentity.generation != rightIdentity.generation {
+		return false
+	}
+	if leftIdentity.count != 0 && rightIdentity.count != 0 && leftIdentity.count != rightIdentity.count {
 		return false
 	}
 	if len(left.factIDs) > 0 || len(right.factIDs) > 0 || len(left.factVersions) > 0 || len(right.factVersions) > 0 {
@@ -2689,7 +2678,13 @@ func activationMatchesTerminalToken(current *activation, rule compiledRule, iden
 	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
-	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
+	if current.identity.key != identity.key {
+		return false
+	}
+	if identity.generation != 0 && current.identity.generation != identity.generation {
+		return false
+	}
+	if identity.count != 0 && current.identity.count != identity.count {
 		return false
 	}
 	if !current.token.isZero() {
@@ -2705,7 +2700,13 @@ func activationMatchesTerminalTokenDelta(current *activation, rule compiledRule,
 	if current.ruleRevisionID != rule.revisionID {
 		return false
 	}
-	if current.identity.key != identity.key || current.identity.generation != identity.generation || current.identity.count != identity.count {
+	if current.identity.key != identity.key {
+		return false
+	}
+	if identity.generation != 0 && current.identity.generation != identity.generation {
+		return false
+	}
+	if identity.count != 0 && current.identity.count != identity.count {
 		return false
 	}
 	if !current.token.isZero() && (len(delta.factIDs) > 0 || len(delta.factVersions) > 0) {
@@ -2858,23 +2859,6 @@ func (a *agenda) activationByHandlePtr(handle activationHandle) (*activation, bo
 		return nil, false
 	}
 	return a.activationByKeyPtr(handle.key)
-}
-
-func (a *agenda) deactivateActivationByHandle(handle activationHandle) bool {
-	existing, ok := a.activationByHandlePtr(handle)
-	if !ok {
-		return false
-	}
-	switch existing.status {
-	case activationStatusPending:
-		existing.status = activationStatusDeactivated
-		a.lazyDeactivated++
-	case activationStatusConsumed:
-		existing.status = activationStatusDeactivated
-	default:
-		return false
-	}
-	return true
 }
 
 func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
