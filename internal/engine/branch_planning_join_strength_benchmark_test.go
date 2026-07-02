@@ -44,17 +44,13 @@ func BenchmarkGraphRuleJoinStrengthPlanning(b *testing.B) {
 		if err := memory.resetFacts(context.Background(), nil); err != nil {
 			b.Fatalf("resetFacts: %v", err)
 		}
+		deltas := make([]reteTerminalTokenDelta, 0, expected)
 		for _, fact := range facts {
-			if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+			delta, err := memory.insertFact(context.Background(), fact, nil)
+			if err != nil {
 				b.Fatalf("insertFact: %v", err)
 			}
-		}
-		deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
-		if err != nil {
-			b.Fatalf("currentTerminalTokenDeltas: %v", err)
-		}
-		if !ok {
-			b.Fatal("currentTerminalTokenDeltas unavailable")
+			deltas = append(deltas, delta.added...)
 		}
 		if len(deltas) != expected {
 			b.Fatalf("terminal deltas = %d, want %d", len(deltas), expected)
@@ -72,13 +68,10 @@ func TestGraphRuleJoinStrengthPlanningReducesIntermediateTokens(t *testing.T) {
 	facts := joinStrengthFactSnapshots(t, revision, templates, roots, eventsPerRoot)
 	snapshot := collectJoinStrengthReplaySnapshot(t, revision, facts)
 	expectedTerminalRows := roots * eventsPerRoot
-	if got := snapshot.Counters.TerminalRowsRetained; got != expectedTerminalRows {
-		t.Fatalf("terminal rows retained = %d, want %d", got, expectedTerminalRows)
-	}
 	if got, want := snapshot.Counters.Totals.BetaJoinedTokensProduced, expectedTerminalRows+roots; got != want {
 		t.Fatalf("beta joined tokens produced = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Counters.GraphBetaMemory.TokenRows, expectedTerminalRows*2+roots*3; got != want {
+	if got, want := snapshot.Counters.GraphBetaMemory.TokenRows, expectedTerminalRows+roots*3; got != want {
 		t.Fatalf("graph token rows retained = %d, want %d", got, want)
 	}
 }
@@ -100,17 +93,13 @@ func TestGraphBetaArenaSkipsCopiedFactSpans(t *testing.T) {
 	if err := memory.resetFacts(context.Background(), nil); err != nil {
 		t.Fatalf("resetFacts: %v", err)
 	}
+	var deltas []reteTerminalTokenDelta
 	for _, fact := range facts {
-		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+		delta, err := memory.insertFact(context.Background(), fact, nil)
+		if err != nil {
 			t.Fatalf("insertFact: %v", err)
 		}
-	}
-	deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unavailable")
+		deltas = append(deltas, delta.added...)
 	}
 	if got, want := len(deltas), roots*eventsPerRoot; got != want {
 		t.Fatalf("terminal deltas = %d, want %d", got, want)
@@ -137,17 +126,13 @@ func TestTerminalTokenFastIdentityMatchesBindingTupleIdentity(t *testing.T) {
 	if err := memory.resetFacts(context.Background(), nil); err != nil {
 		t.Fatalf("resetFacts: %v", err)
 	}
+	var deltas []reteTerminalTokenDelta
 	for _, fact := range facts {
-		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
+		delta, err := memory.insertFact(context.Background(), fact, nil)
+		if err != nil {
 			t.Fatalf("insertFact: %v", err)
 		}
-	}
-	deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unavailable")
+		deltas = append(deltas, delta.added...)
 	}
 	if got, want := len(deltas), roots*eventsPerRoot; got != want {
 		t.Fatalf("terminal deltas = %d, want %d", got, want)

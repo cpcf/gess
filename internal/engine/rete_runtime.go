@@ -218,32 +218,6 @@ func (r *reteRuntime) match(ctx context.Context, source factSource) ([]ruleMatch
 	return nil, r.unsupportedRuntimeError()
 }
 
-func (r *reteRuntime) matchWithoutSnapshot(ctx context.Context, generation Generation) ([]ruleMatchResult, bool, error) {
-	if r == nil || r.revision == nil {
-		return nil, false, nil
-	}
-	if len(r.plan.rules) == 0 {
-		return nil, true, nil
-	}
-	if err := r.validateExecutableGraphBetaRuntime(); err != nil {
-		return nil, true, err
-	}
-	if r.supportsIncrementalAgenda() {
-		return r.graphBeta.matchWithoutSnapshot(ctx, generation)
-	}
-	return nil, false, nil
-}
-
-func (r *reteRuntime) currentTerminalTokenDeltas(ctx context.Context) ([]reteTerminalTokenDelta, bool, error) {
-	if r == nil || r.revision == nil || !r.supportsIncrementalAgenda() {
-		return nil, false, nil
-	}
-	if r.usesGraphBeta() && r.graphBeta != nil {
-		return r.graphBeta.currentTerminalTokenDeltas(ctx)
-	}
-	return nil, false, nil
-}
-
 func (r *reteRuntime) mayEmitBackchainDemandDeltas() bool {
 	if r == nil || !r.usesGraphBeta() || r.graph == nil {
 		return false
@@ -400,11 +374,6 @@ func (r *reteRuntime) supportsInitialAgendaReset() bool {
 	}
 	if len(r.graph.aggregateNodes) != 0 {
 		return false
-	}
-	for _, node := range r.graph.betaNodes {
-		if node.kind == reteGraphBetaNodeNot {
-			return false
-		}
 	}
 	return true
 }

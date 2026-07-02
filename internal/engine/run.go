@@ -91,7 +91,12 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 				return abort(RunFailed, 0, err)
 			}
 		} else {
-			return abort(RunFailed, 0, fmt.Errorf("%w: initial agenda cannot be reconciled by the graph runtime", ErrUnsupportedRuntime))
+			if _, err := s.reconcileAgenda(ctx, s); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					return abort(RunCanceled, 0, err)
+				}
+				return abort(RunFailed, 0, err)
+			}
 		}
 	}
 

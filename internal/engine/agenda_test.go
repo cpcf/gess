@@ -326,161 +326,29 @@ func TestAgendaTerminalTokenDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	}
 }
 
-func TestAgendaTerminalTokenDeltaBatchObservesActivations(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustAgendaRevision(t, 10)
-	session := mustSession(t, revision, "agenda-token-delta-batch-observe-session")
-
-	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
-		"name": "Ada",
-	}), mutationOrigin{}); err != nil {
-		t.Fatalf("insertFactImmediate Ada: %v", err)
-	}
-	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
-		"name": "Grace",
-	}), mutationOrigin{}); err != nil {
-		t.Fatalf("insertFactImmediate Grace: %v", err)
-	}
-
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok || len(tokens) != 2 {
-		t.Fatalf("terminal token deltas = %#v, ok=%v, want two", tokens, ok)
-	}
-
-	observed := make([]*activation, 0, len(tokens))
-	agenda := newAgenda()
-	if _, err := agenda.applyTerminalTokenDeltasInternal(ctx, revision, nil, cloneTerminalTokenDeltas(tokens), false, func(act *activation) {
-		observed = append(observed, act)
-	}); err != nil {
-		t.Fatalf("applyTerminalTokenDeltasInternal: %v", err)
-	}
-	if got, want := len(observed), 2; got != want {
-		t.Fatalf("observed activations = %d, want %d", got, want)
-	}
-	if got, want := len(agenda.pendingActivations()), 2; got != want {
-		t.Fatalf("pending activations = %d, want %d", got, want)
-	}
-	for i, activation := range observed {
-		if activation == nil || activation.status != activationStatusPending {
-			t.Fatalf("observed activation %d = %#v, want pending", i, activation)
-		}
-		if activation.token.isZero() || activation.identityKey == (candidateIdentityKey{}) {
-			t.Fatalf("observed activation %d identity/token = (%#v, %#v), want retained rule-token identity", i, activation.identityKey, activation.token)
-		}
-	}
-
-	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, cloneTerminalTokenDeltas(tokens), nil); err != nil {
-		t.Fatalf("remove by terminal token identity: %v", err)
-	}
-	if got := agenda.pendingActivations(); len(got) != 0 {
-		t.Fatalf("pending activations after terminal token removals = %#v, want none", got)
-	}
-}
-
 func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-no-row-arena-session")
 
-	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
-	}), mutationOrigin{}); err != nil {
-		t.Fatalf("insertFactImmediate: %v", err)
+	})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
 	}
 	if got := session.agenda.activationRows.count; got != 0 {
 		t.Fatalf("session terminal delta activationRows.count = %d, want 0", got)
 	}
-
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
+	var pending []*activation
+	session.agenda.forEachPendingActivation(func(stored *activation) bool {
+		pending = append(pending, stored)
+		return true
+	})
+	if got, want := len(pending), 1; got != want {
+		t.Fatalf("pending activations = %d, want %d", got, want)
 	}
-	if !ok || len(tokens) != 1 {
-		t.Fatalf("terminal token deltas = %#v, ok=%v, want one", tokens, ok)
-	}
-
-	deltaAgenda := newAgenda()
-	if _, err := deltaAgenda.applyTerminalTokenDeltas(ctx, revision, nil, cloneTerminalTokenDeltas(tokens)); err != nil {
-		t.Fatalf("applyTerminalTokenDeltas: %v", err)
-	}
-	if got := deltaAgenda.activationRows.count; got != 0 {
-		t.Fatalf("terminal delta activationRows.count = %d, want 0", got)
-	}
-
-	reconcileAgenda := newAgenda()
-	if _, err := reconcileAgenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens)); err != nil {
-		t.Fatalf("reconcileTerminalTokens: %v", err)
-	}
-	if got := reconcileAgenda.activationRows.count; got != 0 {
-		t.Fatalf("terminal reconcile activationRows.count = %d, want 0", got)
-	}
-
-	graphAgenda := newAgenda()
-	if _, ok, err := graphAgenda.reconcileGraphTerminalRows(ctx, revision, session.rete.graphBeta, true); err != nil {
-		t.Fatalf("reconcileGraphTerminalRows: %v", err)
-	} else if !ok {
-		t.Fatal("reconcileGraphTerminalRows unavailable")
-	}
-	if got := graphAgenda.activationRows.count; got != 0 {
-		t.Fatalf("graph terminal row reconcile activationRows.count = %d, want 0", got)
-	}
-}
-
-func TestAgendaInitialTerminalActivationRequeuesDeactivatedActivation(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustAgendaRevision(t, 10)
-	session := mustSession(t, revision, "agenda-initial-token-reactivation-session")
-
-	if _, _, err := session.insertFactImmediate(ctx, "", templateKey, mustFields(t, map[string]any{
-		"name": "Ada",
-	}), mutationOrigin{}); err != nil {
-		t.Fatalf("insertFactImmediate: %v", err)
-	}
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok || len(tokens) != 1 {
-		t.Fatalf("terminal token deltas = %#v, ok=%v, want one", tokens, ok)
-	}
-
-	agenda := newAgenda()
-	created, err := agenda.addInitialTerminalActivation(ctx, revision, tokens[0])
-	if err != nil {
-		t.Fatalf("addInitialTerminalActivation: %v", err)
-	}
-	if created == nil {
-		t.Fatal("created activation is nil")
-	}
-	if err := agenda.applyTerminalTokenDeltasWithoutChanges(ctx, revision, cloneTerminalTokenDeltas(tokens), nil); err != nil {
-		t.Fatalf("applyTerminalTokenDeltasWithoutChanges remove: %v", err)
-	}
-	if created.status != activationStatusDeactivated {
-		t.Fatalf("created activation status after remove = %v, want deactivated", created.status)
-	}
-	if got := agenda.pendingActivationCount(); got != 0 {
-		t.Fatalf("pending activations after remove = %d, want 0", got)
-	}
-
-	reactivated, err := agenda.addInitialTerminalActivation(ctx, revision, tokens[0])
-	if err != nil {
-		t.Fatalf("reactivate addInitialTerminalActivation: %v", err)
-	}
-	if reactivated != created {
-		t.Fatalf("reactivated activation = %p, want original %p", reactivated, created)
-	}
-	if got := agenda.pendingActivationCount(); got != 1 {
-		t.Fatalf("pending activations after reactivation = %d, want 1", got)
-	}
-	selected, ok := agenda.next()
-	if !ok {
-		t.Fatal("next after reactivation returned none")
-	}
-	if selected.activationID() != created.activationID() {
-		t.Fatalf("selected activation = %q, want %q", selected.activationID(), created.activationID())
+	if pending[0].token.isZero() || pending[0].payload != nil {
+		t.Fatalf("pending activation = %#v, want compact token-backed activation", pending[0])
 	}
 }
 
@@ -630,10 +498,9 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 
 func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) {
 	type terminalActivationState struct {
-		session  *Session
-		factID   FactID
-		terminal *reteGraphTerminalMemory
-		key      activationKey
+		session *Session
+		factID  FactID
+		key     activationKey
 	}
 	newState := func(t *testing.T, id SessionID) terminalActivationState {
 		t.Helper()
@@ -646,48 +513,31 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 		if err != nil {
 			t.Fatalf("AssertTemplate: %v", err)
 		}
-		if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+		var pending []*activation
+		session.agenda.forEachPendingActivation(func(stored *activation) bool {
+			pending = append(pending, stored)
+			return true
+		})
+		if got, want := len(pending), 1; got != want {
 			t.Fatalf("pending activations = %d, want %d", got, want)
 		}
-		rule, ok := revision.Rule("match-open-task")
-		if !ok {
-			t.Fatal("compiled rule missing")
-		}
-		terminal := session.rete.graphBeta.terminalForRule(rule.RevisionID())
-		if terminal == nil {
-			t.Fatal("terminal memory missing")
-		}
-		if got, want := terminal.rows.len(), 1; got != want {
-			t.Fatalf("terminal rows = %d, want %d", got, want)
-		}
-		row := terminal.rows.rows[0]
-		token := terminal.rows.rowToken(row)
-		identity := terminal.terminalTokenIdentity(token)
-		compiledRule, ok := revision.rulesByRevisionID[rule.RevisionID()]
-		if !ok {
-			t.Fatal("compiled rule revision missing")
-		}
-		stored, _, ok := session.agenda.activationForTerminalTokenIdentity(compiledRule, token, identity)
-		if !ok || stored.status != activationStatusPending {
-			t.Fatalf("activation by terminal token identity = %#v, ok=%v; want pending", stored, ok)
-		}
+		stored := pending[0]
 		if stored.token.isZero() || stored.identityKey == (candidateIdentityKey{}) {
 			t.Fatalf("stored activation identity/token = (%#v, %#v), want retained rule-token identity", stored.identityKey, stored.token)
 		}
+		if stored.payload != nil {
+			t.Fatalf("stored activation payload = %#v, want compact token-backed activation", stored.payload)
+		}
 		return terminalActivationState{
-			session:  session,
-			factID:   inserted.Fact.ID(),
-			terminal: terminal,
-			key:      stored.key,
+			session: session,
+			factID:  inserted.Fact.ID(),
+			key:     stored.key,
 		}
 	}
 	assertDeactivated := func(t *testing.T, state terminalActivationState) {
 		t.Helper()
 		if got := state.session.agenda.pendingActivations(); len(got) != 0 {
 			t.Fatalf("pending activations after mutation = %#v, want none", got)
-		}
-		if got, want := state.terminal.rows.len(), 0; got != want {
-			t.Fatalf("terminal rows after mutation = %d, want %d", got, want)
 		}
 		stored, ok := state.session.agenda.activationByKeyPtr(state.key)
 		if !ok {
@@ -823,26 +673,17 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 			t.Fatalf("AssertTemplate(%s): %v", bucket, err)
 		}
 	}
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unavailable")
-	}
-
-	agenda := newAgenda()
-	if _, err := agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens)); err != nil {
-		t.Fatalf("reconcileTerminalTokens: %v", err)
-	}
-	agenda.forEachPendingActivation(func(stored *activation) bool {
+	session.agenda.forEachPendingActivation(func(stored *activation) bool {
 		if stored.payload != nil {
 			t.Fatalf("stored graph activation kept public fields: %#v", stored)
+		}
+		if stored.token.isZero() {
+			t.Fatalf("stored graph activation lost token ref: %#v", stored)
 		}
 		return true
 	})
 
-	if _, selected, ok := agenda.nextInternalPtrForModule("ask"); !ok {
+	if _, selected, ok := session.agenda.nextInternalPtrForModule("ask"); !ok {
 		t.Fatal("nextInternalPtrForModule(ask) returned no activation")
 	} else if got := compactGraphActivationRuleName(t, revision, selected); got != "ask" {
 		t.Fatalf("focused activation = %q, want ask", got)
@@ -852,7 +693,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 
 	var got []string
 	for {
-		_, selected, ok := agenda.nextInternalPtr()
+		_, selected, ok := session.agenda.nextInternalPtr()
 		if !ok {
 			break
 		}
@@ -1025,135 +866,6 @@ func TestTokenArenaResetInvalidatesReusedRows(t *testing.T) {
 	}
 	if _, ok := next.resolve(); !ok {
 		t.Fatal("new token should resolve after reset")
-	}
-}
-
-func TestAgendaTerminalTokenReconcileMatchesCandidateReconcile(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustAgendaRevision(t, 10)
-	session := mustSession(t, revision, "agenda-terminal-token-reconcile-session")
-
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
-		"name": "Ada",
-	})); err != nil {
-		t.Fatalf("AssertTemplate(Ada): %v", err)
-	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
-		"name": "Bob",
-	})); err != nil {
-		t.Fatalf("AssertTemplate(Bob): %v", err)
-	}
-
-	snapshot := mustSnapshot(t, ctx, session)
-	results, err := session.rete.match(ctx, snapshot)
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-
-	candidateAgenda := newAgenda()
-	candidateChanges, err := candidateAgenda.reconcile(ctx, revision, results)
-	if err != nil {
-		t.Fatalf("candidate reconcile: %v", err)
-	}
-
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
-	}
-
-	terminalAgenda := newAgenda()
-	terminalChanges, err := terminalAgenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
-	if err != nil {
-		t.Fatalf("reconcileTerminalTokens: %v", err)
-	}
-
-	if !agendaChangesPublicEqual(terminalAgenda, terminalChanges, candidateAgenda, candidateChanges) {
-		t.Fatalf("terminal changes differ from candidate changes:\nterminal=%#v\ncandidate=%#v", terminalChanges, candidateChanges)
-	}
-	if !reflect.DeepEqual(terminalAgenda.pendingActivations(), candidateAgenda.pendingActivations()) {
-		t.Fatalf("terminal pending activations differ from candidate reconcile:\nterminal=%#v\ncandidate=%#v", terminalAgenda.pendingActivations(), candidateAgenda.pendingActivations())
-	}
-}
-
-func TestAgendaTerminalTokenReconcilePreservesConsumedAndDeactivatesMissingPending(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustAgendaRevision(t, 10)
-	session := mustSession(t, revision, "agenda-terminal-token-deactivate-session")
-
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
-		"name": "Ada",
-	})); err != nil {
-		t.Fatalf("AssertTemplate(Ada): %v", err)
-	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
-		"name": "Bob",
-	})); err != nil {
-		t.Fatalf("AssertTemplate(Bob): %v", err)
-	}
-
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
-	}
-
-	agenda := newAgenda()
-	changes, err := agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
-	if err != nil {
-		t.Fatalf("initial reconcileTerminalTokens: %v", err)
-	}
-	if got, want := len(changes), 2; got != want {
-		t.Fatalf("initial terminal changes = %d, want %d", got, want)
-	}
-
-	consumed, ok := agenda.next()
-	if !ok {
-		t.Fatal("next returned no activation")
-	}
-	if consumed.status != activationStatusConsumed {
-		t.Fatalf("consumed status = %v, want consumed", consumed.status)
-	}
-	remaining := agenda.pendingActivations()
-	if got, want := len(remaining), 1; got != want {
-		t.Fatalf("remaining pending activations = %d, want %d", got, want)
-	}
-
-	remainingFactIDs := remaining[0].factIDs()
-	if _, err := session.Retract(ctx, remainingFactIDs[0]); err != nil {
-		t.Fatalf("Retract: %v", err)
-	}
-	tokens, ok, err = session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas after retract: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unexpectedly unavailable after retract")
-	}
-
-	changes, err = agenda.reconcileTerminalTokens(ctx, revision, cloneTerminalTokenDeltas(tokens))
-	if err != nil {
-		t.Fatalf("reconcileTerminalTokens after retract: %v", err)
-	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("terminal changes after retract = %d, want %d", got, want)
-	}
-	if changes[0].kind != agendaChangeDeactivated {
-		t.Fatalf("change kind = %v, want deactivated", changes[0].kind)
-	}
-	changeActivation := agenda.publicActivation(&changes[0].activation)
-	if got, want := changeActivation.factIDs()[0], remainingFactIDs[0]; got != want {
-		t.Fatalf("deactivated fact ID = %q, want %q", got, want)
-	}
-	if got := agenda.pendingActivations(); len(got) != 0 {
-		t.Fatalf("pending activations after missing token reconcile = %#v, want none", got)
-	}
-	if got, ok := agenda.activationByKey(consumed.key); !ok || got.status != activationStatusConsumed {
-		t.Fatalf("consumed activation after missing token reconcile = %#v, ok=%v", got, ok)
 	}
 }
 
@@ -2085,6 +1797,38 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	}
 }
 
+func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session, err := NewSession(
+		revision,
+		WithEventListener(&testEventCollector{}),
+		WithInitialFacts(SessionInitialFact{
+			TemplateKey: templateKey,
+			Fields:      mustFields(t, map[string]any{"name": "Ada"}),
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.agendaReady || session.agendaDirty {
+		t.Fatalf("initial agenda state = ready %v dirty %v, want unready clean", session.agendaReady, session.agendaDirty)
+	}
+	if got := len(session.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("initial pending activations = %d, want 0 before boundary materialization", got)
+	}
+
+	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"name": "Bea"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if !session.agendaReady || session.agendaDirty {
+		t.Fatalf("agenda state after mutation = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	}
+	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after mutation = %d, want %d", got, want)
+	}
+}
+
 func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
@@ -2108,12 +1852,9 @@ func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 
-	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	changes, err := session.reconcileAgendaInternal(ctx)
 	if err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
+		t.Fatalf("initial reconcileAgendaInternal: %v", err)
 	}
 	if got, want := len(changes), 1; got != want {
 		t.Fatalf("initial changes = %d, want %d", got, want)
@@ -2184,16 +1925,6 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("initial pending activations = %d, want %d", got, want)
 	}
-	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
-	}
-	if got, want := len(changes), 0; got != want {
-		t.Fatalf("initial changes = %d, want %d", got, want)
-	}
 	beforeCounters := session.propagationCounterSnapshot().Totals
 
 	if _, err := session.Reset(ctx); err != nil {
@@ -2237,12 +1968,9 @@ func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testin
 	}
 	session.attachPropagationCounters()
 
-	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
+	changes, err := session.reconcileAgendaInternal(ctx)
 	if err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
+		t.Fatalf("initial reconcileAgendaInternal: %v", err)
 	}
 	if got, want := len(changes), 1; got != want {
 		t.Fatalf("initial changes = %d, want %d", got, want)
@@ -2321,10 +2049,8 @@ func TestSessionGraphResetAgendaSurvivesResetListenerCancellation(t *testing.T) 
 	}
 	session.attachPropagationCounters()
 
-	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	} else if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
+	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
+		t.Fatalf("initial reconcileAgendaInternal: %v", err)
 	}
 	beforeCounters := session.propagationCounterSnapshot().Totals
 

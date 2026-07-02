@@ -158,46 +158,6 @@ func TestCoverageLowerQueryConditionTreeParamsAcrossShapes(t *testing.T) {
 	}
 }
 
-func TestCoverageGraphTerminalRemovalByFactIndex(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustModifyFastPathRuleset(t)
-	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
-		TemplateKey: templateKey,
-		Fields: mustFields(t, map[string]any{
-			"age":    32,
-			"note":   "old",
-			"status": "active",
-		}),
-	}))
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	session.attachPropagationCounters()
-	snapshot := mustSnapshot(t, ctx, session)
-	facts := snapshot.FactsByTemplateKey(templateKey)
-	if len(facts) != 1 {
-		t.Fatalf("facts = %d, want 1", len(facts))
-	}
-	if revision.graph == nil || len(revision.graph.terminalNodes) != 1 {
-		t.Fatalf("terminal nodes = %d, want 1", len(revision.graph.terminalNodes))
-	}
-	delta := reteAgendaDelta{supported: true}
-	session.rete.graphBeta.removeTerminalTokensContainingFact(revision.graph.terminalNodes[0].id, facts[0].ID(), session.propagationCounters, &delta)
-	if got, want := len(delta.removed), 1; got != want {
-		t.Fatalf("removed terminal deltas = %d, want %d", got, want)
-	}
-	if delta.removed[0].identity.isZero() {
-		t.Fatal("removed terminal delta missing identity")
-	}
-	counters := session.propagationCounterSnapshot().Totals
-	if got, want := counters.TerminalRowsRemoved, 1; got != want {
-		t.Fatalf("terminal rows removed = %d, want %d", got, want)
-	}
-	if got, want := counters.TerminalDeltasRemoved, 1; got != want {
-		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
-	}
-}
-
 func TestCoverageAggregateStateResultsAcrossKinds(t *testing.T) {
 	ctx := context.Background()
 	amountExpression := compiledExpression{

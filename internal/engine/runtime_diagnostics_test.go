@@ -87,22 +87,16 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	if err != nil {
 		t.Fatalf("RuntimeDiagnostics: %v", err)
 	}
-	rule := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerRuleTerminal)
-	if rule.Owner == "" {
-		t.Fatalf("runtime diagnostics missing rule terminal owner: %#v", diagnostics.MemoryOwners)
-	}
 	queryOwner := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerQueryTerminal)
 	if queryOwner.Owner == "" {
 		t.Fatalf("runtime diagnostics missing query terminal owner: %#v", diagnostics.MemoryOwners)
 	}
-	if rule.Rows == 0 {
-		t.Fatalf("rule terminal rows = 0, want retained terminal rows: %#v", rule)
+	if rule := runtimeDiagnosticOwner(diagnostics, "rule-terminal"); rule.Owner != "" {
+		t.Fatalf("runtime diagnostics retained rule terminal owner: %#v", rule)
 	}
-	if rule.Buckets == 0 {
-		t.Fatalf("rule terminal buckets = 0, want retained identity buckets: %#v", rule)
-	}
-	if rule.Indexes == 0 {
-		t.Fatalf("rule terminal indexes = 0, want retained fact reverse indexes: %#v", rule)
+	agendaOwner := runtimeDiagnosticOwner(diagnostics, runtimeMemoryOwnerAgenda)
+	if agendaOwner.Owner == "" || agendaOwner.Rows == 0 {
+		t.Fatalf("runtime diagnostics missing agenda-owned activation state: %#v", diagnostics.MemoryOwners)
 	}
 	if queryOwner.Rows == 0 {
 		t.Fatalf("query terminal rows = 0, want retained query terminal rows: %#v", queryOwner)
@@ -113,7 +107,7 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	if queryOwner.Indexes == 0 {
 		t.Fatalf("query terminal indexes = 0, want retained fact reverse indexes: %#v", queryOwner)
 	}
-	for _, owner := range []RuntimeMemoryOwnerDiagnostics{rule, queryOwner} {
+	for _, owner := range []RuntimeMemoryOwnerDiagnostics{agendaOwner, queryOwner} {
 		if owner.Bytes == 0 {
 			t.Fatalf("%s bytes = 0, want retained byte estimate: %#v", owner.Owner, owner)
 		}

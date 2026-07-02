@@ -332,8 +332,8 @@ func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 1 || queryRows != 0 {
-		t.Fatalf("terminal rows before query = rule %d query %d, want rule 1 query 0", ruleRows, queryRows)
+	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
+		t.Fatalf("terminal rows before query = rule %d query %d, want rule 0 query 0", ruleRows, queryRows)
 	}
 
 	rows, err := session.QueryAll(ctx, "adult-query", nil)
@@ -344,8 +344,8 @@ func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) 
 		t.Fatalf("query rows = %d, want 1", len(rows))
 	}
 	assertQueryRowStringValue(t, rows[0], "id", "p1")
-	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 1 || queryRows != 0 {
-		t.Fatalf("terminal rows after query cleanup = rule %d query %d, want rule 1 query 0", ruleRows, queryRows)
+	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
+		t.Fatalf("terminal rows after query cleanup = rule %d query %d, want rule 0 query 0", ruleRows, queryRows)
 	}
 
 	result, err := session.Run(ctx)

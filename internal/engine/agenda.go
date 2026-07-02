@@ -112,6 +112,7 @@ type activation struct {
 	salience       int
 	maxRecency     Recency
 	totalRecency   Recency
+	supportCount   uint32
 	status         activationStatus
 	payload        *activationPayload
 }
@@ -138,6 +139,29 @@ func (a activation) Generation() Generation {
 
 func (a activation) activationID() ActivationID {
 	return activationIDForIdentityKey(a.identityKey, a.key.ordinal)
+}
+
+func (a *activation) incrementSupport() {
+	if a == nil {
+		return
+	}
+	if a.supportCount == 0 {
+		a.supportCount = 1
+		return
+	}
+	a.supportCount++
+}
+
+func (a *activation) decrementSupport() bool {
+	if a == nil {
+		return false
+	}
+	if a.supportCount <= 1 {
+		a.supportCount = 0
+		return true
+	}
+	a.supportCount--
+	return false
 }
 
 func (a *activation) ensureActivationID() ActivationID {
@@ -444,6 +468,9 @@ func (a *agenda) publicActivation(act *activation) activation {
 	}
 	out := *act
 	out.payload = nil
+	if out.supportCount == 0 {
+		out.supportCount = 1
+	}
 	out.setFactIDs(cloneActivationFactIDs(act))
 	out.setFactVersions(cloneActivationFactVersions(act))
 	out.token = tokenRef{}
@@ -475,6 +502,9 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 	}
 	out := *act
 	out.payload = nil
+	if out.supportCount == 0 {
+		out.supportCount = 1
+	}
 	out.setFactIDs(cloneActivationFactIDs(act))
 	if a != nil && a.revision != nil && !act.token.isZero() {
 		if rule, ok := a.revision.rulesByRevisionID[out.ruleRevisionID]; ok {
@@ -784,6 +814,14 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			if ok {
 				if existing.status == activationStatusPending {
 					seen[key] = struct{}{}
+				} else if existing.status == activationStatusDeactivated {
+					existing.status = activationStatusPending
+					a.enqueueActivation(existing)
+					seen[key] = struct{}{}
+					activated = append(activated, agendaChange{
+						kind:       agendaChangeActivated,
+						activation: a.compactChangeActivation(existing),
+					})
 				}
 				continue
 			}
@@ -918,6 +956,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		existing.incrementSupport()
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 			a.enqueueActivation(existing)
@@ -928,6 +967,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	if err != nil {
 		return nil, err
 	}
+	created.supportCount = 1
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
 	return created, nil
@@ -960,11 +1000,13 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 			}
 			existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
 			if ok {
-				switch existing.status {
-				case activationStatusPending:
+				deactivate := existing.decrementSupport()
+				switch {
+				case !deactivate:
+				case existing.status == activationStatusPending:
 					a.dequeueActivation(existing)
 					existing.status = activationStatusDeactivated
-				case activationStatusConsumed:
+				case existing.status == activationStatusConsumed:
 					existing.status = activationStatusDeactivated
 				}
 			}
@@ -984,6 +1026,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	}
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+		existing.incrementSupport()
 		if existing.status == activationStatusDeactivated {
 			existing.status = activationStatusPending
 			a.enqueueActivation(existing)
@@ -994,6 +1037,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
+	created.supportCount = 1
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
 	return created, nil
@@ -1027,8 +1071,12 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 		}
 		existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
-		if !ok || existing.status != activationStatusPending {
-			if ok && existing.status == activationStatusConsumed {
+		if !ok {
+			continue
+		}
+		deactivate := existing.decrementSupport()
+		if !deactivate || existing.status != activationStatusPending {
+			if deactivate && existing.status == activationStatusConsumed {
 				existing.status = activationStatusDeactivated
 			}
 			continue
@@ -1053,8 +1101,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		sortTerminalTokenDeltas(revision, added)
 	}
 
-	var previous reteTerminalTokenDelta
-	havePrevious := false
 	var activated []agendaChange
 	if collectChanges {
 		activated = a.deltaActivated[:0]
@@ -1070,13 +1116,9 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !ok {
 			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
 		}
-		if havePrevious && terminalTokenDeltasEqual(revision, previous, delta) {
-			continue
-		}
-		previous = delta
-		havePrevious = true
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
+			existing.incrementSupport()
 			if existing.status == activationStatusDeactivated {
 				existing.status = activationStatusPending
 				a.enqueueActivation(existing)
@@ -1097,6 +1139,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if err != nil {
 			return nil, err
 		}
+		created.supportCount = 1
 		a.storePreparedActivation(created)
 		a.enqueueActivation(created)
 		if observeActivation != nil {
@@ -1162,237 +1205,6 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		}
 	}
 	return nil
-}
-
-func (a *agenda) reconcileTerminalTokens(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) ([]agendaChange, error) {
-	return a.reconcileTerminalTokensInternal(ctx, revision, deltas, true)
-}
-
-func (a *agenda) reconcileTerminalTokensWithoutChanges(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta) error {
-	_, err := a.reconcileTerminalTokensInternal(ctx, revision, deltas, false)
-	return err
-}
-
-func (a *agenda) reconcileGraphTerminalRows(ctx context.Context, revision *Ruleset, memory *reteGraphBetaMemory, collectChanges bool) ([]agendaChange, bool, error) {
-	if a == nil || revision == nil {
-		return nil, true, ErrInvalidRuleset
-	}
-	if memory == nil || memory.graph == nil {
-		return nil, false, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, true, err
-	}
-	a.revision = revision
-
-	seen := a.reconcileSeen
-	if seen == nil {
-		seen = make(map[activationKey]struct{}, a.pendingActivationCount())
-	} else {
-		clear(seen)
-	}
-	var changes []agendaChange
-	var activated []agendaChange
-	if collectChanges {
-		changes = a.reconcileChanges[:0]
-		activated = a.reconcileActivated[:0]
-	}
-	for _, terminalNode := range memory.graph.terminalNodes {
-		if terminalNode.kind != reteGraphTerminalRule {
-			continue
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, true, err
-		}
-		rule, ok := revision.rulesByRevisionID[terminalNode.ruleRevisionID]
-		if !ok {
-			return nil, true, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, terminalNode.ruleRevisionID)
-		}
-		terminal := memory.terminalAt(terminalNode.id)
-		if terminal == nil {
-			continue
-		}
-		for _, row := range terminal.rows.rows {
-			if row.token.isZero() {
-				continue
-			}
-			token := terminal.rows.rowToken(row)
-			identity := terminal.terminalTokenIdentity(token)
-			if existing, key, ok := a.activationForTerminalTokenIdentity(rule, token, identity); ok {
-				if existing.status == activationStatusPending {
-					seen[key] = struct{}{}
-				} else if existing.status == activationStatusDeactivated {
-					existing.status = activationStatusPending
-					a.enqueueActivation(existing)
-					seen[key] = struct{}{}
-					if collectChanges {
-						activated = append(activated, agendaChange{
-							kind:       agendaChangeActivated,
-							activation: a.compactChangeActivation(existing),
-						})
-					}
-				}
-				continue
-			}
-			created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, token, identity)
-			if err != nil {
-				return nil, true, err
-			}
-			key := a.storePreparedActivation(created)
-			a.enqueueActivation(created)
-			seen[key] = struct{}{}
-			if collectChanges {
-				activated = append(activated, agendaChange{
-					kind:       agendaChangeActivated,
-					activation: a.compactChangeActivation(created),
-				})
-			}
-		}
-	}
-
-	a.forEachPendingActivation(func(existing *activation) bool {
-		key := existing.key
-		if _, ok := seen[key]; ok {
-			return true
-		}
-		a.dequeueActivation(existing)
-		existing.status = activationStatusDeactivated
-		if collectChanges {
-			changes = append(changes, agendaChange{
-				kind:       agendaChangeDeactivated,
-				activation: a.compactChangeActivation(existing),
-			})
-		}
-		return true
-	})
-
-	if collectChanges {
-		changes = append(changes, activated...)
-	}
-
-	a.reconcileSeen = seen
-	a.reconcileChanges = a.reconcileChanges[:0]
-	a.reconcileActivated = a.reconcileActivated[:0]
-	if collectChanges {
-		return append([]agendaChange(nil), changes...), true, nil
-	}
-	return nil, true, nil
-}
-
-func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *Ruleset, deltas []reteTerminalTokenDelta, collectChanges bool) ([]agendaChange, error) {
-	if a == nil || revision == nil {
-		return nil, ErrInvalidRuleset
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	a.revision = revision
-
-	seen := a.reconcileSeen
-	if seen == nil {
-		seen = make(map[activationKey]struct{}, max(a.pendingActivationCount(), len(deltas)))
-	} else {
-		clear(seen)
-	}
-	var changes []agendaChange
-	var activated []agendaChange
-	if collectChanges {
-		changes = a.reconcileChanges[:0]
-		activated = a.reconcileActivated[:0]
-	}
-
-	if a.propagationCounters != nil {
-		a.propagationCounters.recordAgendaSort()
-	}
-	sortTerminalTokenDeltas(revision, deltas)
-
-	var previous reteTerminalTokenDelta
-	havePrevious := false
-	for _, delta := range deltas {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if delta.token.isZero() {
-			continue
-		}
-		rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
-		if !ok {
-			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
-		}
-		if havePrevious && terminalTokenDeltasEqual(revision, previous, delta) {
-			continue
-		}
-		previous = delta
-		havePrevious = true
-
-		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-		existing, key, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity)
-		if ok {
-			if existing.status == activationStatusPending {
-				seen[key] = struct{}{}
-			} else if existing.status == activationStatusDeactivated {
-				existing.status = activationStatusPending
-				a.enqueueActivation(existing)
-				seen[key] = struct{}{}
-				if collectChanges {
-					activated = append(activated, agendaChange{
-						kind:       agendaChangeActivated,
-						activation: a.compactChangeActivation(existing),
-					})
-				}
-			}
-			continue
-		}
-		created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
-		if err != nil {
-			return nil, err
-		}
-		key = a.storePreparedActivation(created)
-		a.enqueueActivation(created)
-		seen[key] = struct{}{}
-		if collectChanges {
-			activated = append(activated, agendaChange{
-				kind:       agendaChangeActivated,
-				activation: a.compactChangeActivation(created),
-			})
-		}
-	}
-
-	a.forEachPendingActivation(func(existing *activation) bool {
-		key := existing.key
-		if _, ok := seen[key]; ok {
-			return true
-		}
-		a.dequeueActivation(existing)
-		existing.status = activationStatusDeactivated
-		if collectChanges {
-			changes = append(changes, agendaChange{
-				kind:       agendaChangeDeactivated,
-				activation: a.compactChangeActivation(existing),
-			})
-		}
-		return true
-	})
-
-	if collectChanges {
-		changes = append(changes, activated...)
-	}
-
-	a.reconcileSeen = seen
-	if !collectChanges {
-		a.reconcileChanges = a.reconcileChanges[:0]
-		a.reconcileActivated = a.reconcileActivated[:0]
-		return nil, nil
-	}
-	a.reconcileChanges = changes[:0]
-	a.reconcileActivated = activated[:0]
-	return append([]agendaChange(nil), changes...), nil
 }
 
 func agendaDeltaCandidateLess(revision *Ruleset, left, right matchCandidate) bool {
@@ -1690,8 +1502,10 @@ func activationRunSnapshot(current *activation) activation {
 	if current.token.isZero() {
 		out := *current
 		out.payload = nil
+		out.setBindings(cloneBindingTupleEntries(current.bindings()))
 		out.setFactIDs(cloneFactIDs(current.factIDs()))
 		out.setFactVersions(cloneFactVersions(current.factVersions()))
+		out.setPath(cloneIntPath(current.path()))
 		return out
 	}
 	return activation{
@@ -2471,6 +2285,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.salience = rule.salience
 	dst.maxRecency = candidate.maxRecency
 	dst.totalRecency = candidate.totalRecency
+	dst.supportCount = 1
 	dst.status = activationStatusPending
 }
 

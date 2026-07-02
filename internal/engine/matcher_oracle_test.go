@@ -122,19 +122,19 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 		return matchCandidate{}, fmt.Errorf("%w: empty binding set for rule %q", ErrMatcher, rule.name)
 	}
 
-	entries := make([]bindingTupleEntry, len(matches))
+	entries := make([]bindingTupleEntry, 0, len(matches))
 	maxRecency := Recency(0)
 	totalRecency := Recency(0)
-	for i, match := range matches {
+	for _, match := range matches {
 		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
-			return matchCandidate{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
+			continue
 		}
 		condition := rule.conditions[match.bindingSlot]
 		plan, ok := rule.conditionPlanForBindingSlot(match.bindingSlot)
 		if !ok {
 			return matchCandidate{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
 		}
-		entries[i] = bindingTupleEntry{
+		entries = append(entries, bindingTupleEntry{
 			binding:        condition.binding,
 			bindingSlot:    match.bindingSlot,
 			conditionOrder: condition.order,
@@ -144,7 +144,7 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 			factVersion:    match.fact.Version(),
 			value:          cloneValue(match.value),
 			hasValue:       match.hasValue,
-		}
+		})
 
 		if !match.hasValue {
 			recency := match.fact.Recency()
@@ -214,21 +214,16 @@ func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Genera
 	factIDs := make([]FactID, token.size)
 	factVersions := make([]FactVersion, token.size)
 	path := make([]int, token.pathLen)
-	if _, _, err := fillMatchToken(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
+	entryLen, pathLen, err := fillMatchToken(rule, entries, factIDs, factVersions, path, 0, 0, token)
+	if err != nil {
 		return matchCandidate{}, err
 	}
+	entries = entries[:entryLen]
+	factIDs = factIDs[:entryLen]
+	factVersions = factVersions[:entryLen]
+	path = path[:pathLen]
 
-	identity := candidateIdentity{
-		generation: generation,
-		count:      token.size,
-		key: candidateIdentityKey{
-			scopeHash: rule.identityScopeHash,
-			hash:      candidateIdentityHashFinish(token.identityState, token.size),
-		},
-	}
-	if identity.key.scopeHash == 0 {
-		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
-	}
+	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
 
 	return matchCandidate{
 		ruleID:         rule.id,
@@ -251,6 +246,9 @@ func fillMatchToken(rule compiledRule, entries []bindingTupleEntry, factIDs []Fa
 	entryIndex, pathIndex, err := fillMatchToken(rule, entries, factIDs, factVersions, path, entryIndex, pathIndex, token.parent)
 	if err != nil {
 		return entryIndex, pathIndex, err
+	}
+	if token.match.bindingSlot < 0 || token.match.bindingSlot >= len(rule.conditions) {
+		return entryIndex, pathIndex, nil
 	}
 	entry, err := bindingTupleEntryForMatch(rule, token.match)
 	if err != nil {

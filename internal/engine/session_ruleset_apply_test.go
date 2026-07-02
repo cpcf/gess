@@ -546,12 +546,6 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if got := afterApplyCounters.SteadyStateGraphRebuilds - beforeApplyCounters.SteadyStateGraphRebuilds; got != 0 {
 		t.Fatalf("apply steady-state graph rebuilds = +%d, want 0", got)
 	}
-	if got, want := afterApplyCounters.WholeTerminalScans-beforeApplyCounters.WholeTerminalScans, 1; got != want {
-		t.Fatalf("apply whole terminal scans = +%d, want +%d", got, want)
-	}
-	if got, want := afterApplyCounters.InitialWholeTerminalScans-beforeApplyCounters.InitialWholeTerminalScans, 1; got != want {
-		t.Fatalf("apply initial whole terminal scans = +%d, want +%d", got, want)
-	}
 	if got := afterApplyCounters.SteadyStateWholeTerminalScans - beforeApplyCounters.SteadyStateWholeTerminalScans; got != 0 {
 		t.Fatalf("apply steady-state whole terminal scans = +%d, want 0", got)
 	}

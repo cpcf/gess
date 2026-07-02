@@ -130,8 +130,19 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 	if token.isZero() {
 		return matchCandidate{}, fmt.Errorf("%w: empty token for rule %q", ErrMatcher, rule.name)
 	}
-	if len(rule.conditionPlans) == 0 || len(rule.conditions) == 0 {
+	if len(rule.conditionPlans) == 0 {
 		return matchCandidate{}, fmt.Errorf("%w: malformed compiled rule %q", ErrMatcher, rule.name)
+	}
+	if len(rule.conditions) == 0 {
+		identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, nil)
+		return matchCandidate{
+			ruleID:         rule.id,
+			ruleRevisionID: rule.revisionID,
+			identity:       identity,
+			generation:     generation,
+			maxRecency:     token.maxRecency(),
+			totalRecency:   token.totalRecency(),
+		}, nil
 	}
 
 	var entries []bindingTupleEntry
@@ -156,10 +167,13 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		path = make([]int, pathLen)
 	}
 	if !haveEntries {
-		_, filledPathLen, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token)
+		filledEntryLen, filledPathLen, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token)
 		if err != nil {
 			return matchCandidate{}, err
 		}
+		entries = entries[:filledEntryLen]
+		factIDs = factIDs[:filledEntryLen]
+		factVersions = factVersions[:filledEntryLen]
 		path = path[:filledPathLen]
 	}
 
@@ -206,6 +220,9 @@ func fillTokenRef(rule compiledRule, entries []bindingTupleEntry, factIDs []Fact
 	match, ok := row.conditionMatch()
 	if !ok {
 		return entryIndex, pathIndex, fmt.Errorf("%w: stale token for rule %q", ErrMatcher, rule.name)
+	}
+	if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
+		return entryIndex, pathIndex, nil
 	}
 	entry, err := bindingTupleEntryForMatch(rule, match)
 	if err != nil {

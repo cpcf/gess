@@ -234,22 +234,6 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 	})
 }
 
-func TestSessionReconcileAgendaRequiresReteRuntime(t *testing.T) {
-	ctx := context.Background()
-	revision, templateKey := mustAlphaMemoryRuleset(t, "adult-active", []FieldConstraintSpec{
-		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
-	})
-	session := mustSession(t, revision, "missing-runtime-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
-	}
-	session.rete = nil
-
-	if _, err := session.reconcileAgenda(ctx, session); !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("reconcileAgenda error = %v, want ErrUnsupportedRuntime", err)
-	}
-}
-
 func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnce(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -745,105 +729,6 @@ func TestSessionReconcileAgendaInternalSupportsNameAndTemplateTargets(t *testing
 	}
 }
 
-func TestSessionReconcileAgendaWithoutSnapshotUsesTerminalTokensForBetaPlans(t *testing.T) {
-	ctx := context.Background()
-	revision := mustCompileLoanUnderwritingRuleset(t, nil)
-	initials := loanUnderwritingTemplateInitialFacts(t)
-
-	terminalSession, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(initials...))
-	if err != nil {
-		t.Fatalf("NewSession(terminal): %v", err)
-	}
-	terminalSession.attachPropagationCounters()
-	snapshotSession, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(initials...))
-	if err != nil {
-		t.Fatalf("NewSession(snapshot): %v", err)
-	}
-
-	snapshot := mustSnapshot(t, ctx, snapshotSession)
-	snapshotChanges, err := snapshotSession.reconcileAgenda(ctx, snapshot)
-	if err != nil {
-		t.Fatalf("snapshot reconcileAgenda: %v", err)
-	}
-
-	terminalChanges, ok, err := terminalSession.reconcileAgendaWithoutSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatal("reconcileAgendaWithoutSnapshot unexpectedly unavailable for beta-backed session")
-	}
-
-	if !agendaChangesPublicEqual(terminalSession.agenda, terminalChanges, snapshotSession.agenda, snapshotChanges) {
-		t.Fatalf("terminal-token reconcile changes differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalChanges, snapshotChanges)
-	}
-	if !reflect.DeepEqual(terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations()) {
-		t.Fatalf("terminal-token pending activations differ from snapshot reconcile:\nterminal=%#v\nsnapshot=%#v", terminalSession.agenda.pendingActivations(), snapshotSession.agenda.pendingActivations())
-	}
-
-	counters := terminalSession.propagationCounterSnapshot().Totals
-	if got, want := counters.WholeTerminalScans, 1; got != want {
-		t.Fatalf("whole terminal scans = %d, want %d", got, want)
-	}
-	if got, want := counters.InitialWholeTerminalScans, 1; got != want {
-		t.Fatalf("initial whole terminal scans = %d, want %d", got, want)
-	}
-	if got := counters.SteadyStateWholeTerminalScans; got != 0 {
-		t.Fatalf("steady-state whole terminal scans = %d, want 0", got)
-	}
-	if got := counters.FullAgendaReconciles; got != 0 {
-		t.Fatalf("full agenda reconciles = %d, want 0 for terminal token reconcile", got)
-	}
-}
-
-func TestSessionReconcileAgendaWithoutSnapshotUsesGraphTerminalRowsWhenTerminalDeltasUnavailable(t *testing.T) {
-	ctx := context.Background()
-	revision := mustCompileLoanUnderwritingRuleset(t, nil)
-	session, err := NewSession(revision, WithEventListener(&testEventCollector{}), WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatal("session runtime is not graph beta-backed")
-	}
-	session.attachPropagationCounters()
-	session.rete.plan.incrementalAgendaSupported = false
-
-	changes, ok, err := session.reconcileAgendaWithoutSnapshot(ctx)
-	if err != nil {
-		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatalf("reconcileAgendaWithoutSnapshot unavailable, want graph terminal row reconcile")
-	}
-	if len(changes) == 0 {
-		t.Fatal("graph terminal row reconcile produced no agenda changes")
-	}
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state = ready %t dirty %t, want ready and clean", session.agendaReady, session.agendaDirty)
-	}
-
-	counters := session.propagationCounterSnapshot().Totals
-	if got, want := counters.FullAgendaReconciles, 0; got != want {
-		t.Fatalf("full agenda reconciles = %d, want %d", got, want)
-	}
-	if got, want := counters.InitialAgendaReconciles, 0; got != want {
-		t.Fatalf("initial agenda reconciles = %d, want %d", got, want)
-	}
-	if got := counters.SteadyStateAgendaReconciles; got != 0 {
-		t.Fatalf("steady-state agenda reconciles = %d, want 0", got)
-	}
-	if got, want := counters.OracleStyleMatchRequests, 0; got != want {
-		t.Fatalf("oracle-style match requests = %d, want %d", got, want)
-	}
-	if got, want := counters.InitialOracleStyleMatchRequests, 0; got != want {
-		t.Fatalf("initial oracle-style match requests = %d, want %d", got, want)
-	}
-	if got, want := counters.WholeTerminalScans, 1; got != want {
-		t.Fatalf("whole terminal scans = %d, want %d", got, want)
-	}
-}
-
 func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
@@ -860,11 +745,6 @@ func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testin
 	}
 	session.attachPropagationCounters()
 
-	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	} else if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
-	}
 	before := session.propagationCounterSnapshot().Totals
 	if !session.agendaReady || session.agendaDirty {
 		t.Fatalf("agenda state before unsupported delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
@@ -889,7 +769,6 @@ func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testin
 }
 
 func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
-	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
 	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
 		TemplateKey: templateKey,
@@ -904,11 +783,6 @@ func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 
-	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
-		t.Fatalf("initial reconcileAgendaWithoutSnapshot: %v", err)
-	} else if !ok {
-		t.Fatal("initial graph terminal reconcile unavailable")
-	}
 	before := session.propagationCounterSnapshot().Totals
 
 	if err := session.recordRunAgendaDelta(reteAgendaDelta{}); !errors.Is(err, ErrUnsupportedRuntime) {
@@ -1994,9 +1868,6 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 		t.Fatalf("pending activations after person = %d, want 1", got)
 	}
 	activationID := pending[0].activationID()
-	if got, want := terminalContributorBranchIDs(t, session, "or-support"), []int{0, 1}; !slices.Equal(got, want) {
-		t.Fatalf("terminal contributor branch IDs after person = %#v, want %#v", got, want)
-	}
 	if _, err := session.AssertTemplate(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
 		t.Fatalf("AssertTemplate block: %v", err)
 	}
@@ -2007,33 +1878,11 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	if pending[0].activationID() != activationID {
 		t.Fatalf("activation changed after one branch support disappeared: got %q want %q", pending[0].activationID(), activationID)
 	}
-	if got, want := terminalContributorBranchIDs(t, session, "or-support"), []int{0}; !slices.Equal(got, want) {
-		t.Fatalf("terminal contributor branch IDs after block = %#v, want %#v", got, want)
-	}
 	for _, event := range collector.Events() {
 		if event.Type == EventRuleDeactivated {
 			t.Fatalf("unexpected deactivation event while equivalent branch remained: %#v", event)
 		}
 	}
-}
-
-func terminalContributorBranchIDs(t testing.TB, session *Session, ruleName string) []int {
-	t.Helper()
-	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("session has no graph beta runtime")
-	}
-	rule, ok := session.revision.rules[ruleName]
-	if !ok {
-		t.Fatalf("rule %q not found", ruleName)
-	}
-	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
-	if terminal == nil {
-		t.Fatalf("terminal for rule %q not found", ruleName)
-	}
-	if got, want := terminal.rows.len(), 1; got != want {
-		t.Fatalf("terminal row count for rule %q = %d, want %d", ruleName, got, want)
-	}
-	return terminal.rows.terminalBranchIDs(0)
 }
 
 func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {
@@ -2485,10 +2334,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	}
 
 	session.attachPropagationCounters()
-	initialSnapshot := session.propagationCounterSnapshot()
-	if got, want := initialSnapshot.TerminalRowsRetained, 2; got != want {
-		t.Fatalf("terminal rows retained after attach = %d, want %d", got, want)
-	}
+	_ = session.propagationCounterSnapshot()
 	department := mustSessionFactByTemplateAndField(t, session, departmentKey, "id", "Engineering")
 	_, delta, err := session.retractImmediate(ctx, department.ID(), mutationOrigin{})
 	if err != nil {
@@ -2533,13 +2379,13 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 5; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 3; got != want {
 		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, 5; got != want {
+	if got, want := snapshot.Totals.RemovalRowsTouched, 3; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, 5; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 3; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
 }
@@ -2617,13 +2463,13 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	if got, want := snapshot.Totals.TerminalDeltasRemoved, 1; got != want {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
 		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, 2; got != want {
+	if got, want := snapshot.Totals.RemovalRowsTouched, 1; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, 2; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
 }
@@ -2685,13 +2531,13 @@ func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
 	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
 		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 0; got != want {
 		t.Fatalf("removal index lookups = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, 1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsTouched, 0; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 0; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
 }
@@ -2805,7 +2651,7 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t 
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
 		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 0; got != want {
 		t.Fatalf("removal index lookups = %d, want %d", got, want)
 	}
 }
@@ -3424,8 +3270,8 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
 		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
-		t.Fatalf("terminal rows retained after modify = %d, want %d", got, want)
+	if got := snapshot.TerminalRowsRetained; got != 0 {
+		t.Fatalf("terminal rows retained after modify = %d, want 0", got)
 	}
 }
 
@@ -3727,257 +3573,6 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	assertGraphBetaAlphaFactCount(t, session, "employee-department-office", 1, 1)
 }
 
-func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
-	ctx := context.Background()
-	workspace := NewWorkspace()
-	threshold := mustAddTemplate(t, workspace, TemplateSpec{
-		Name: "threshold",
-		Fields: []FieldSpec{
-			{Name: "group", Kind: ValueString, Required: true},
-			{Name: "score", Kind: ValueInt, Required: true},
-		},
-	})
-	candidate := mustAddTemplate(t, workspace, TemplateSpec{
-		Name: "candidate",
-		Fields: []FieldSpec{
-			{Name: "group", Kind: ValueString, Required: true},
-			{Name: "score", Kind: ValueInt, Required: true},
-		},
-	})
-	mustAddAction(t, workspace, ActionSpec{
-		Name: "mark",
-		Fn:   func(ActionContext) error { return nil },
-	})
-	mustAddRule(t, workspace, RuleSpec{
-		Name: "candidate-above-threshold",
-		Conditions: []RuleConditionSpec{
-			{
-				Binding: "threshold", Target: TemplateKeyFact(threshold.Key()),
-			},
-			{
-				Binding: "candidate",
-
-				JoinConstraints: []JoinConstraintSpec{
-					{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "threshold", Field: "group"}},
-					{Field: "score", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "threshold", Field: "score"}},
-				}, Target: TemplateKeyFact(candidate.Key()),
-			},
-		},
-		Actions: []RuleActionSpec{{Name: "mark"}},
-	})
-	revision := mustCompileWorkspace(t, workspace)
-	session, err := NewSession(revision, WithSessionID("graph-beta-terminal-memory-diagnostics"))
-	if err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("graph beta runtime = %#v, want graph beta support", session.rete)
-	}
-	session.attachPropagationCounters()
-
-	initialCounters := session.propagationCounterSnapshot()
-	if initialCounters.RuntimePath != propagationRuntimeGraphBeta {
-		t.Fatalf("runtime path = %q, want %q", initialCounters.RuntimePath, propagationRuntimeGraphBeta)
-	}
-	if got, want := initialCounters.TerminalRowsRetained, 0; got != want {
-		t.Fatalf("terminal rows retained = %d, want %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.TokenMemories, 1; got != want {
-		t.Fatalf("graph token memories = %d, want only initialized terminal memory %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.BetaTokenMemories, 0; got != want {
-		t.Fatalf("graph beta token memories = %d, want %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.TerminalTokenMemories, 1; got != want {
-		t.Fatalf("graph terminal token memories = %d, want %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.TokenRows, 0; got != want {
-		t.Fatalf("graph token rows = %d, want %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.TokenRowReserve, 0; got != want {
-		t.Fatalf("graph token row reserve = %d, want lazy initial reserve %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.JoinIndexReserve, 0; got != want {
-		t.Fatalf("graph join index reserve = %d, want lazy initial reserve %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.IdentityIndexReserve, 0; got != want {
-		t.Fatalf("graph identity index reserve = %d, want lazy initial reserve %d", got, want)
-	}
-	if got, want := initialCounters.GraphBetaMemory.FactIndexReserve, 0; got != want {
-		t.Fatalf("graph fact index reserve = %d, want lazy initial reserve %d", got, want)
-	}
-
-	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
-	if err != nil {
-		t.Fatalf("AssertTemplate threshold: %v", err)
-	}
-	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
-		t.Fatalf("AssertTemplate candidate: %v", err)
-	}
-	assertGraphBetaRuntimeParity(t, revision, session)
-
-	rule := revision.rules["candidate-above-threshold"]
-	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
-	if terminal == nil || terminal.rows.len() != 1 {
-		t.Fatalf("terminal memory = %#v, want one retained row", terminal)
-	}
-	var terminalID reteGraphTerminalNodeID
-	for _, node := range revision.graph.terminalNodes {
-		if node.ruleRevisionID == rule.revisionID {
-			terminalID = node.id
-			break
-		}
-	}
-	if terminalID == 0 {
-		t.Fatalf("terminal node for rule revision %q not found", rule.revisionID)
-	}
-	terminalToken := terminal.rows.rowToken(terminal.rows.rows[0])
-	if terminalToken.isZero() {
-		t.Fatal("retained terminal token is zero")
-	}
-
-	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
-		t.Fatalf("terminal rows inserted = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsDeduped, 0; got != want {
-		t.Fatalf("terminal rows deduped = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsRemoved, 0; got != want {
-		t.Fatalf("terminal rows removed = %d, want %d", got, want)
-	}
-	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
-		t.Fatalf("terminal rows retained = %d, want %d", got, want)
-	}
-	if got, want := snapshot.GraphBetaMemory.TokenRows, 4; got != want {
-		t.Fatalf("graph token rows = %d, want beta inputs plus terminal row %d", got, want)
-	}
-	if got, want := snapshot.GraphBetaMemory.JoinIndexKeys, 3; got != want {
-		t.Fatalf("graph join index keys = %d, want join and residual filter beta keys %d", got, want)
-	}
-	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 1; got != want {
-		t.Fatalf("graph identity index keys = %d, want terminal token identity only %d", got, want)
-	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 2; got != want {
-		t.Fatalf("graph fact index keys = %d, want terminal token facts only %d", got, want)
-	}
-
-	duplicateDelta := reteAgendaDelta{supported: true}
-	duplicateSpan := propagationCounterSpan{ledger: session.propagationCounters}
-	_, _ = session.rete.graphBeta.insertTerminalToken(terminalID, 0, terminalToken, &duplicateDelta, &duplicateSpan)
-	duplicateSpan.finish()
-	if len(duplicateDelta.added) != 0 {
-		t.Fatalf("duplicate terminal delta additions = %d, want 0", len(duplicateDelta.added))
-	}
-	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
-		t.Fatalf("terminal rows inserted after duplicate = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsDeduped, 1; got != want {
-		t.Fatalf("terminal rows deduped after duplicate = %d, want %d", got, want)
-	}
-	if got, want := snapshot.TerminalRowsRetained, 1; got != want {
-		t.Fatalf("terminal rows retained after duplicate = %d, want %d", got, want)
-	}
-	assertGraphBetaRuntimeParity(t, revision, session)
-
-	if _, err := session.Retract(ctx, thresholdFact.Fact.ID()); err != nil {
-		t.Fatalf("Retract threshold: %v", err)
-	}
-	assertGraphBetaRuntimeParity(t, revision, session)
-
-	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.TerminalRowsRemoved, 1; got != want {
-		t.Fatalf("terminal rows removed after retract = %d, want %d", got, want)
-	}
-	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
-		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
-	}
-
-	if _, err := session.Reset(ctx); err != nil {
-		t.Fatalf("Reset: %v", err)
-	}
-	assertGraphBetaRuntimeParity(t, revision, session)
-
-	snapshot = session.propagationCounterSnapshot()
-	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
-		t.Fatalf("terminal rows retained after reset = %d, want %d", got, want)
-	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexReserve, 0; got != want {
-		t.Fatalf("graph fact index reserve after reset = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsInserted, 1; got != want {
-		t.Fatalf("terminal rows inserted after reset = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsDeduped, 1; got != want {
-		t.Fatalf("terminal rows deduped after reset = %d, want %d", got, want)
-	}
-	if got, want := snapshot.Totals.TerminalRowsRemoved, 1; got != want {
-		t.Fatalf("terminal rows removed after reset = %d, want %d", got, want)
-	}
-}
-
-func TestReteRuntimeGraphBetaTerminalRowsAndAgendaShareTokenIdentity(t *testing.T) {
-	ctx := context.Background()
-	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
-	session := mustSession(t, revision, "graph-beta-terminal-agenda-identity-session")
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
-	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate department: %v", err)
-	}
-	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
-		t.Fatalf("reconcileAgendaInternal: %v", err)
-	}
-
-	rule := revision.rules["employee-department"]
-	terminal := session.rete.graphBeta.terminalForRule(rule.revisionID)
-	if terminal == nil || terminal.rows.len() != 1 {
-		t.Fatalf("terminal memory = %#v, want one row", terminal)
-	}
-	row := terminal.rows.rows[0]
-	identity := terminal.terminalTokenIdentity(terminal.rows.rowToken(row))
-	if identity.isZero() {
-		t.Fatal("terminal token identity is zero")
-	}
-
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok || len(tokens) != 1 {
-		t.Fatalf("terminal tokens = %#v, ok=%v, want one", tokens, ok)
-	}
-	if tokens[0].identity != identity {
-		t.Fatalf("terminal delta identity = %#v, want %#v", tokens[0].identity, identity)
-	}
-
-	var stored *activation
-	session.agenda.forEachPendingActivation(func(act *activation) bool {
-		stored = act
-		return false
-	})
-	if stored == nil {
-		t.Fatal("pending activation not found")
-	}
-	if stored.identityKey != identity.key {
-		t.Fatalf("activation identity key = %#v, want terminal token identity key %#v", stored.identityKey, identity.key)
-	}
-	duplicateTokens := append(cloneTerminalTokenDeltas(tokens), tokens[0])
-	agenda := newAgenda()
-	changes, err := agenda.reconcileTerminalTokens(ctx, revision, duplicateTokens)
-	if err != nil {
-		t.Fatalf("reconcile duplicate terminal tokens: %v", err)
-	}
-	if got, want := len(changes), 1; got != want {
-		t.Fatalf("duplicate terminal token changes = %d, want %d", got, want)
-	}
-	if got, want := agenda.pendingActivationCount(), 1; got != want {
-		t.Fatalf("duplicate terminal token pending keys = %d, want %d", got, want)
-	}
-}
-
 func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -4097,17 +3692,17 @@ func TestReteRuntimeGraphBetaTerminalTokenIdentityIndexesUseFactIdentity(t *test
 	assertGraphBetaRuntimeParity(t, revision, session)
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.GraphBetaMemory.TokenRows, 7; got != want {
-		t.Fatalf("graph token rows = %d, want join inputs, residual rows, and terminal rows %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.TokenRows, 5; got != want {
+		t.Fatalf("graph token rows = %d, want join inputs and residual rows %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 2; got != want {
-		t.Fatalf("graph identity index keys = %d, want terminal token identities only %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 0; got != want {
+		t.Fatalf("graph identity index keys = %d, want no retained rule-terminal identities %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeysMax, 2; got != want {
-		t.Fatalf("graph identity index keys max = %d, want two terminal identity keys %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeysMax, 0; got != want {
+		t.Fatalf("graph identity index keys max = %d, want no retained rule-terminal identity keys %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 3; got != want {
-		t.Fatalf("graph fact index keys = %d, want terminal token facts only %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 0; got != want {
+		t.Fatalf("graph fact index keys = %d, want no retained rule-terminal fact indexes %d", got, want)
 	}
 }
 
@@ -4182,13 +3777,13 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	if got, want := snapshot.Totals.NegativeTerminalRowsRemoved, 1; got != want {
 		t.Fatalf("negative terminal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 2; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
 		t.Fatalf("removal index lookups = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, 2; got != want {
+	if got, want := snapshot.Totals.RemovalRowsTouched, 1; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, 2; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
 }
@@ -5037,61 +4632,12 @@ func cloneTerminalTokenDeltas(deltas []reteTerminalTokenDelta) []reteTerminalTok
 	return out
 }
 
-func assertReteRuntimeMatchWithoutSnapshotParity(t *testing.T, session *Session) {
-	t.Helper()
-	if session == nil || session.rete == nil {
-		t.Fatal("session has no Rete runtime")
-	}
-
-	ctx := context.Background()
-	snapshot := mustSnapshot(t, ctx, session)
-	snapshotResults, err := session.rete.match(ctx, snapshot)
-	if err != nil {
-		t.Fatalf("snapshot match: %v", err)
-	}
-	snapshotResults = cloneRuleMatchResults(snapshotResults)
-	noSnapshotResults, ok, err := session.rete.matchWithoutSnapshot(ctx, session.Generation())
-	if err != nil {
-		t.Fatalf("matchWithoutSnapshot: %v", err)
-	}
-	if !ok {
-		t.Fatal("matchWithoutSnapshot unexpectedly unavailable for full beta-backed session")
-	}
-	if !ruleMatchResultsEqual(noSnapshotResults, snapshotResults) {
-		t.Fatalf("matchWithoutSnapshot results differ from snapshot match:\nno-snapshot=%#v\nsnapshot=%#v", noSnapshotResults, snapshotResults)
-	}
-}
-
 func assertGraphBetaRuntimeParity(t *testing.T, revision *Ruleset, session *Session) {
 	t.Helper()
 	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.rete)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(revision), session.rete)
-	assertReteRuntimeMatchWithoutSnapshotParity(t, session)
-}
-
-func ruleMatchResultsEqual(left, right []ruleMatchResult) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i].ruleID != right[i].ruleID ||
-			left[i].ruleRevisionID != right[i].ruleRevisionID ||
-			left[i].salience != right[i].salience ||
-			left[i].declarationOrder != right[i].declarationOrder {
-			return false
-		}
-		if len(left[i].candidates) != len(right[i].candidates) {
-			return false
-		}
-		for j := range left[i].candidates {
-			if !reflect.DeepEqual(left[i].candidates[j], right[i].candidates[j]) {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func cloneRuleMatchResults(results []ruleMatchResult) []ruleMatchResult {

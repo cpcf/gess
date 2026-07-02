@@ -1694,8 +1694,6 @@ func evaluateTokenActionStringCall2(ctx context.Context, value compiledTokenActi
 }
 
 func (s *Session) actionMatchesForActivation(activation activation, rule compiledRule) ([]conditionMatch, error) {
-	factIDs := cloneActivationFactIDs(&activation)
-	factVersions := cloneActivationFactVersions(&activation)
 	matches := s.actionMatchScratch
 	if cap(matches) < len(rule.conditions) {
 		matches = make([]conditionMatch, len(rule.conditions))
@@ -1705,6 +1703,47 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 		}
 		matches = matches[:len(rule.conditions)]
 	}
+	for i, condition := range rule.conditions {
+		matches[i].conditionID = condition.id
+		matches[i].bindingSlot = i
+	}
+	if entries := activation.bindings(); len(entries) > 0 {
+		for _, entry := range entries {
+			slot := entry.bindingSlot
+			if slot < 0 || slot >= len(rule.conditions) {
+				continue
+			}
+			matches[slot] = conditionMatch{
+				conditionID: entry.conditionID,
+				bindingSlot: slot,
+				value:       cloneValue(entry.value),
+				hasValue:    entry.hasValue,
+			}
+			if entry.hasValue || entry.factID.IsZero() {
+				continue
+			}
+			fact, ok := s.workingFactByID(entry.factID)
+			if !ok {
+				s.actionMatchScratch = matches
+				return nil, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
+			}
+			if fact.id.Generation() != activation.Generation() || fact.version != entry.factVersion {
+				s.actionMatchScratch = matches
+				return nil, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
+			}
+			condition := rule.conditions[slot]
+			matches[slot].fact = newConditionFactRefFromWorkingFactForTarget(fact, conditionTarget{
+				kind:        conditionTargetKindForRuleCondition(condition),
+				name:        condition.name,
+				templateKey: condition.templateKey,
+				templateID:  fact.templateID,
+			}, s.compactSlotStore)
+		}
+		s.actionMatchScratch = matches
+		return matches, nil
+	}
+	factIDs := cloneActivationFactIDs(&activation)
+	factVersions := cloneActivationFactVersions(&activation)
 	for i, condition := range rule.conditions {
 		if i >= len(factIDs) || i >= len(factVersions) {
 			s.actionMatchScratch = matches

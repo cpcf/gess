@@ -555,10 +555,10 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 		return reteAgendaDelta{}
 	}
 	if reteAgendaDeltaPayloadEmpty(left) {
-		return right
+		return cloneRetainedReteAgendaDelta(right)
 	}
 	if reteAgendaDeltaPayloadEmpty(right) {
-		return left
+		return cloneRetainedReteAgendaDelta(left)
 	}
 	left.added = mergeReteAgendaDeltaSlice(left.added, right.added)
 	left.removed = mergeReteAgendaDeltaSlice(left.removed, right.removed)
@@ -567,6 +567,16 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	left.resolvedDemands = mergeReteAgendaDeltaSlice(left.resolvedDemands, right.resolvedDemands)
 	left.resolvedOwners = mergeReteAgendaDeltaSlice(left.resolvedOwners, right.resolvedOwners)
 	return left
+}
+
+func cloneRetainedReteAgendaDelta(delta reteAgendaDelta) reteAgendaDelta {
+	delta.added = slices.Clone(delta.added)
+	delta.removed = slices.Clone(delta.removed)
+	delta.updated = slices.Clone(delta.updated)
+	delta.demands = slices.Clone(delta.demands)
+	delta.resolvedDemands = slices.Clone(delta.resolvedDemands)
+	delta.resolvedOwners = slices.Clone(delta.resolvedOwners)
+	return delta
 }
 
 func coalesceReteAgendaDelta(revision *Ruleset, delta reteAgendaDelta) reteAgendaDelta {

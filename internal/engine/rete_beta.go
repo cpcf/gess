@@ -341,6 +341,11 @@ func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenR
 		value:       match.value,
 		hasValue:    match.hasValue,
 	}
+	if entry.hasValue {
+		out.value = cloneValue(entry.value)
+		out.hasValue = true
+		return out
+	}
 	if !match.hasValue {
 		out.factID = match.fact.ID()
 		out.factVersion = match.fact.Version()

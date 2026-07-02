@@ -221,7 +221,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if useInitialAgenda {
 		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(context.Background(), state, state.generation, agenda)
 	} else {
-		_, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), state, state.generation)
+		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), state, state.generation)
 	}
 	if err != nil {
 		return nil, err
@@ -260,7 +260,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		slotStorage:            state.slotStorage,
 		compactSlotStore:       state.compactSlotStore,
 	}
-	if useInitialAgenda && session.agenda.pendingActivationCount() != 0 && initialDelta.supported && len(initialDelta.removed) == 0 && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
+	if useInitialAgenda && initialDelta.supported && len(initialDelta.removed) == 0 && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
 		session.agenda.finishInitialTerminalActivations()
 		session.agendaReady = true
 		session.agendaDirty = false
@@ -903,8 +903,11 @@ func (s *Session) insertTemplateValuesBatchWithContext(ctx context.Context, fn f
 		}
 	}
 	if batch.needsReconcile {
-		_, err := s.reconcileAgendaAfterMutation(ctx, batch.agendaDelta)
-		return err
+		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, len(s.listeners) > 0); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: unsupported agenda delta after template value batch", ErrUnsupportedRuntime)
+		}
 	}
 	return nil
 }
@@ -995,15 +998,18 @@ func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Conte
 	}
 	s.commitFactWorkspace(batch.state)
 	if batch.needsReconcile {
-		_, err := s.reconcileAgendaAfterMutation(ctx, batch.agendaDelta)
-		return err
+		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, len(s.listeners) > 0); err != nil {
+			return err
+		} else if !ok {
+			return fmt.Errorf("%w: unsupported agenda delta after prepared template value batch", ErrUnsupportedRuntime)
+		}
 	}
 	return nil
 }
 
 func accumulateReteAgendaDelta(current reteAgendaDelta, hasCurrent bool, next reteAgendaDelta) (reteAgendaDelta, bool) {
 	if !hasCurrent {
-		return next, true
+		return cloneRetainedReteAgendaDelta(next), true
 	}
 	return mergeReteAgendaDelta(current, next), true
 }
@@ -2400,27 +2406,12 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
-	var oldTerminalDeltas []reteTerminalTokenDelta
-	resetAgendaWithDeltas := false
 	mayEmitBackchainDemandDeltas := rete != nil && rete.mayEmitBackchainDemandDeltas()
 	resetAgendaWithInitialAgenda := len(s.listeners) == 0 && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
 	var initialAgenda *agenda
 	if resetAgendaWithInitialAgenda {
 		initialAgenda = newAgenda()
 		initialAgenda.propagationCounters = s.propagationCounters
-	}
-	if len(s.listeners) > 0 && !resetAgendaWithInitialAgenda && s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
-		tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		if ok {
-			oldTerminalDeltas = cloneStableTerminalTokenDeltas(s.revision, tokens)
-			if s.agenda != nil {
-				s.agenda.materializePendingTokenFacts(s.revision)
-			}
-			resetAgendaWithDeltas = true
-		}
 	}
 	var resetDemandDelta reteAgendaDelta
 	if resetAgendaWithInitialAgenda {
@@ -2437,26 +2428,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
 		resetAgendaWithInitialAgenda = false
-		resetAgendaWithDeltas = false
-	}
-	var newTerminalDeltas []reteTerminalTokenDelta
-	if resetAgendaWithDeltas {
-		tokens, ok, err := rete.currentTerminalTokenDeltas(ctx)
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		if !ok {
-			resetAgendaWithDeltas = false
-		} else {
-			newTerminalDeltas = tokens
-		}
 	}
 	if s.propagationCounters != nil {
 		s.propagationCounters.recordGraphRebuild(propagationCounterPhaseInitial)
 	}
 
 	oldGeneration := s.generation
-	s.agendaReady = resetAgendaWithDeltas
+	s.agendaReady = false
 	s.agendaDirty = false
 	s.resetFocusStack()
 	s.clearLogicalSupports()
@@ -2469,6 +2447,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, resetDemandDelta.resolvedOwners, mutationOrigin{}); err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
+		resetDemandDelta.resolvedDemands = nil
+		resetDemandDelta.resolvedOwners = nil
 	}
 	if len(resetDemandDelta.demands) > 0 {
 		demandState := s.activeFactWorkspace()
@@ -2478,12 +2458,10 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		s.commitFactWorkspace(demandState)
 		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
-			resetAgendaWithDeltas = false
 			s.agendaReady = false
 			s.agendaDirty = false
 		}
 	}
-	var resetDeactivations []agendaChange
 	var resetActivations []agendaChange
 	if resetAgendaWithInitialAgenda {
 		s.agenda = initialAgenda
@@ -2491,33 +2469,19 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.agendaReady = true
 		s.agendaDirty = false
 		s.syncPropagationCounters()
-	} else if resetAgendaWithDeltas {
-		resetCtx := context.Background()
-		var err error
-		resetDeactivations, err = s.agenda.applyTerminalTokenDeltas(resetCtx, s.revision, oldTerminalDeltas, nil)
+	}
+	if !resetAgendaWithInitialAgenda {
+		s.emitAgendaEvents(ctx, s.agenda.clear())
+		results, err := s.rete.match(ctx, s)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
-		if s.propagationCounters != nil {
-			s.propagationCounters.recordAgendaDeltaApplication()
+		resetActivations, err = s.agenda.reconcile(context.Background(), s.revision, results)
+		if err != nil {
+			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
-	}
-	if !resetAgendaWithInitialAgenda {
-		if resetAgendaWithDeltas {
-			s.agenda.reset()
-			s.agendaReady = true
-			s.agendaDirty = false
-			var err error
-			resetActivations, err = s.agenda.applyTerminalTokenDeltas(context.Background(), s.revision, nil, newTerminalDeltas)
-			if err != nil {
-				return ResetResult{Status: ResetValidationFailure, Before: before}, err
-			}
-			if s.propagationCounters != nil {
-				s.propagationCounters.recordAgendaDeltaApplication()
-			}
-		} else {
-			s.emitAgendaEvents(ctx, s.agenda.clear())
-		}
+		s.agendaReady = true
+		s.agendaDirty = false
 	}
 
 	result := ResetResult{
@@ -2529,9 +2493,6 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			Generation:    s.generation,
 			OldGeneration: oldGeneration,
 		},
-	}
-	if resetAgendaWithDeltas {
-		s.emitAgendaEvents(ctx, resetDeactivations)
 	}
 	if len(s.listeners) > 0 {
 		delta := MutationDelta{
@@ -2551,7 +2512,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		})
 		s.nextEventSequence++
 	}
-	if resetAgendaWithDeltas {
+	if !resetAgendaWithInitialAgenda {
 		s.applyAutoFocus(resetActivations)
 		s.emitAgendaEvents(ctx, resetActivations)
 	}
@@ -2638,31 +2599,17 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		s.propagationCounters.recordGraphRebuild(phase)
 	}
 
-	tokens, ok, err := rete.currentTerminalTokenDeltas(ctx)
+	var results []ruleMatchResult
+	if s.propagationCounters != nil {
+		s.propagationCounters.recordOracleStyleMatchRequest(phase)
+	}
+	results, err = rete.match(ctx, snapshot)
 	if err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
-	var results []ruleMatchResult
-	if s.propagationCounters != nil && ok {
-		s.propagationCounters.recordWholeTerminalScan(phase)
-	}
-	if !ok {
-		if s.propagationCounters != nil {
-			s.propagationCounters.recordOracleStyleMatchRequest(phase)
-		}
-		results, err = rete.match(ctx, snapshot)
-		if err != nil {
-			restoreApplyRulesetState()
-			return ApplyRulesetResult{}, err
-		}
-	}
 	activationRevisions := plan.activationRevisions()
-	if ok {
-		tokens = s.agenda.filterTerminalTokenDeltasForRulesetApply(next, tokens, activationRevisions)
-	} else {
-		results = s.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
-	}
+	results = s.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
 
 	s.revision = next
 	s.rete = rete
@@ -2671,26 +2618,6 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	}
 	s.syncPropagationCounters()
 	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
-	if ok {
-		changes, err := s.agenda.reconcileTerminalTokens(context.Background(), next, tokens)
-		if err != nil {
-			return ApplyRulesetResult{}, err
-		}
-		s.agendaReady = true
-		s.agendaDirty = false
-		s.applyAutoFocus(changes)
-		s.emitAgendaEvents(ctx, changes)
-
-		return ApplyRulesetResult{
-			Status:                 ApplyRulesetApplied,
-			PreviousRulesetID:      previousID,
-			CurrentRulesetID:       nextID,
-			AddedRuleRevisions:     plan.Added,
-			RemovedRuleRevisions:   plan.Removed,
-			ReplacedRuleRevisions:  plan.Replaced,
-			UnchangedRuleRevisions: plan.Unchanged,
-		}, nil
-	}
 	changes, err := s.agenda.reconcile(context.Background(), next, results)
 	if err != nil {
 		return ApplyRulesetResult{}, err
@@ -2733,6 +2660,9 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if s.agendaReady && !s.agendaDirty {
+		return nil, nil
 	}
 
 	if s.rete == nil {
@@ -2794,77 +2724,14 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
+	if s.agendaReady && !s.agendaDirty {
+		return nil, true, nil
+	}
 	if s.rete == nil {
 		return nil, false, nil
 	}
 
-	if s.rete.graphBeta != nil {
-		changes, ok, err := s.agenda.reconcileGraphTerminalRows(ctx, s.revision, s.rete.graphBeta, collectChanges)
-		if err != nil {
-			return nil, true, err
-		}
-		if ok {
-			phase := s.propagationCounterPhase()
-			if s.propagationCounters != nil {
-				s.propagationCounters.recordWholeTerminalScan(phase)
-			}
-			s.agendaReady = true
-			s.agendaDirty = false
-			if collectChanges {
-				s.applyAutoFocus(changes)
-				s.emitAgendaEvents(ctx, changes)
-			}
-			return changes, true, nil
-		}
-		return nil, true, fmt.Errorf("%w: direct graph terminal agenda build is unsupported for this graph shape", ErrUnsupportedRuntime)
-	}
-
-	tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		return nil, true, err
-	}
-	phase := s.propagationCounterPhase()
-	if ok {
-		if s.propagationCounters != nil {
-			s.propagationCounters.recordWholeTerminalScan(phase)
-		}
-		var changes []agendaChange
-		if collectChanges {
-			var err error
-			changes, err = s.agenda.reconcileTerminalTokens(ctx, s.revision, tokens)
-			if err != nil {
-				return nil, true, err
-			}
-		} else if err := s.agenda.reconcileTerminalTokensWithoutChanges(ctx, s.revision, tokens); err != nil {
-			return nil, true, err
-		}
-		s.agendaReady = true
-		s.agendaDirty = false
-		if collectChanges {
-			s.applyAutoFocus(changes)
-			s.emitAgendaEvents(ctx, changes)
-		}
-		return changes, true, nil
-	}
-
-	results, ok, err := s.rete.matchWithoutSnapshot(ctx, s.generation)
-	if err != nil || !ok {
-		return nil, ok, err
-	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordOracleStyleMatchRequest(phase)
-		s.propagationCounters.recordWholeTerminalScan(phase)
-		s.propagationCounters.recordFullAgendaReconcile(phase)
-	}
-	changes, err := s.agenda.reconcile(ctx, s.revision, results)
-	if err != nil {
-		return nil, true, err
-	}
-	s.agendaReady = true
-	s.agendaDirty = false
-	s.applyAutoFocus(changes)
-	s.emitAgendaEvents(ctx, changes)
-	return changes, true, nil
+	return nil, false, nil
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
@@ -2879,29 +2746,6 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 		return nil, nil
 	}
 	return s.reconcileAgendaInternal(ctx)
-}
-
-func cloneStableTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) []reteTerminalTokenDelta {
-	if len(deltas) == 0 {
-		return nil
-	}
-	out := make([]reteTerminalTokenDelta, 0, len(deltas))
-	for _, delta := range deltas {
-		cloned := delta
-		if revision != nil {
-			if rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]; ok {
-				if cloned.identity.isZero() {
-					cloned.identity = candidateIdentityForTerminalToken(rule, delta.token)
-				}
-				if factIDs, factVersions, ok := terminalTokenFactTuple(rule, delta.token); ok {
-					cloned.factIDs = cloneFactIDs(factIDs)
-					cloned.factVersions = cloneFactVersions(factVersions)
-				}
-			}
-		}
-		out = append(out, cloned)
-	}
-	return out
 }
 
 func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {

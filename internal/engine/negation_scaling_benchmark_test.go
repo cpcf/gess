@@ -176,8 +176,8 @@ func collectNegationScalingPropagationCounters(t testing.TB, revision *Ruleset, 
 	if snapshot.Totals.TerminalRowsInserted < tc.firedCount() {
 		t.Fatalf("terminal rows inserted = %d, want at least %d", snapshot.Totals.TerminalRowsInserted, tc.firedCount())
 	}
-	if snapshot.TerminalRowsRetained != tc.firedCount() {
-		t.Fatalf("terminal rows retained = %d, want %d", snapshot.TerminalRowsRetained, tc.firedCount())
+	if snapshot.TerminalRowsRetained != 0 {
+		t.Fatalf("terminal rows retained = %d, want 0", snapshot.TerminalRowsRetained)
 	}
 	return snapshot
 }

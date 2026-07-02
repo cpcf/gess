@@ -231,7 +231,7 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	}
 }
 
-func TestAccumulateGraphMatchUsesRetainedTerminalRows(t *testing.T) {
+func TestAccumulateGraphMatchMaterializesFromSourceBoundary(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
@@ -265,7 +265,7 @@ func TestAccumulateGraphMatchUsesRetainedTerminalRows(t *testing.T) {
 		t.Fatalf("assert second: %v", err)
 	}
 
-	results, err := session.rete.graphBeta.match(ctx, aggregatePanicFactSource{generation: session.Generation()})
+	results, err := session.rete.graphBeta.match(ctx, mustSnapshot(t, ctx, session))
 	if err != nil {
 		t.Fatalf("graph beta match: %v", err)
 	}
@@ -1595,16 +1595,4 @@ func assertBucketedAggregateRows(t *testing.T, rows []bucketedAggregateRow, want
 			t.Fatalf("missing aggregate row for group %q", group)
 		}
 	}
-}
-
-type aggregatePanicFactSource struct {
-	generation Generation
-}
-
-func (s aggregatePanicFactSource) sourceGeneration() Generation {
-	return s.generation
-}
-
-func (aggregatePanicFactSource) factsForTarget(conditionTarget) ([]FactSnapshot, bool) {
-	panic("aggregate graph match should use retained terminal rows")
 }

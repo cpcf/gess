@@ -125,16 +125,8 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if len(demands) != 1 {
 		t.Fatalf("demands before run = %d, want 1", len(demands))
 	}
-	demandID := demands[0].ID()
 	if session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatal("session runtime is not graph beta-backed")
-	}
-	terminalRows := session.rete.graphBeta.alpha.factOwnership[demandID].terminalRows
-	if len(terminalRows) != 1 {
-		t.Fatalf("generated demand terminal row handles = %d, want 1", len(terminalRows))
-	}
-	if row := session.rete.graphBeta.terminal(terminalRows[0].terminalID).rows.rowByHandle(terminalRows[0].handle); row == nil || row.token.isZero() {
-		t.Fatalf("generated demand terminal row handle resolved to %#v, want live terminal row", row)
 	}
 
 	result, err := session.Run(ctx)
@@ -146,9 +138,6 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	}
 	if consumed != 1 {
 		t.Fatalf("consume action fired %d times, want 1", consumed)
-	}
-	if rows := session.rete.graphBeta.alpha.factOwnership[demandID].terminalRows; len(rows) != 0 {
-		t.Fatalf("generated demand terminal row handles after run = %d, want 0", len(rows))
 	}
 	snapshot := mustSnapshot(t, ctx, session)
 	answers := snapshot.FactsByTemplateKey(answer.Key())

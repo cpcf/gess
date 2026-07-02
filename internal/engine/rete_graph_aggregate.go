@@ -131,13 +131,17 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 }
 
 func (m reteGraphAggregateMemory) openBucket(parent tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) {
-	if m.owner == nil || delta == nil || parent.isZero() {
+	if m.owner == nil || delta == nil {
 		if delta != nil {
 			delta.supported = false
 		}
 		return
 	}
-	if m.memory == nil {
+	if m.node == nil || m.memory == nil {
+		delta.supported = false
+		return
+	}
+	if parent.isZero() && m.node.outer.kind != reteGraphStageRoot && m.node.outer.kind != reteGraphStageUnknown {
 		delta.supported = false
 		return
 	}
@@ -153,13 +157,17 @@ func (m reteGraphAggregateMemory) openBucket(parent tokenRef, span *propagationC
 }
 
 func (m reteGraphAggregateMemory) removeBucket(parent tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m.owner == nil || delta == nil || parent.isZero() {
+	if m.owner == nil || delta == nil {
 		if delta != nil {
 			delta.supported = false
 		}
 		return
 	}
-	if m.memory == nil {
+	if m.node == nil || m.memory == nil {
+		delta.supported = false
+		return
+	}
+	if parent.isZero() && m.node.outer.kind != reteGraphStageRoot && m.node.outer.kind != reteGraphStageUnknown {
 		delta.supported = false
 		return
 	}

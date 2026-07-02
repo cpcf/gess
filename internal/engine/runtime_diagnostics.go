@@ -9,7 +9,6 @@ import (
 const runtimeMemoryOwnerAlpha = "alpha"
 const runtimeMemoryOwnerBeta = "beta"
 const runtimeMemoryOwnerFact = "fact"
-const runtimeMemoryOwnerRuleTerminal = "rule-terminal"
 const runtimeMemoryOwnerQueryTerminal = "query-terminal"
 const runtimeMemoryOwnerAgenda = "agenda"
 const runtimeMemoryOwnerAggregate = "aggregate"
@@ -201,7 +200,6 @@ func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDi
 	out.Rows += uint64(alphaFactSetRows(m.alpha.facts))
 	out.Rows += uint64(len(m.alpha.factOwnership))
 	out.Rows += uint64(len(m.alpha.factRouteStorage))
-	out.Rows += uint64(len(m.alpha.factTerminalStorage))
 
 	alphaOverflowBuckets := alphaFactSetOverflowBuckets(m.alpha.facts)
 	out.Buckets += uint64(alphaOverflowBuckets)
@@ -239,32 +237,21 @@ func (m *reteGraphBetaMemory) terminalMemoryOwnerDiagnostics() []RuntimeMemoryOw
 	if m == nil || m.graph == nil {
 		return nil
 	}
-	owners := map[string]*RuntimeMemoryOwnerDiagnostics{
-		runtimeMemoryOwnerRuleTerminal:  {Owner: runtimeMemoryOwnerRuleTerminal},
-		runtimeMemoryOwnerQueryTerminal: {Owner: runtimeMemoryOwnerQueryTerminal},
-	}
+	queryOwner := RuntimeMemoryOwnerDiagnostics{Owner: runtimeMemoryOwnerQueryTerminal}
 	for _, node := range m.graph.terminalNodes {
+		if node.kind != reteGraphTerminalQuery {
+			continue
+		}
 		terminal := m.terminalAt(node.id)
 		if terminal == nil {
 			continue
 		}
-		ownerName := runtimeMemoryOwnerRuleTerminal
-		if node.kind == reteGraphTerminalQuery {
-			ownerName = runtimeMemoryOwnerQueryTerminal
-			addTerminalMemoryOwnerDiagnostics(owners[ownerName], terminal.queryRows)
-			continue
-		}
-		addTerminalMemoryOwnerDiagnostics(owners[ownerName], terminal.rows)
+		addTerminalMemoryOwnerDiagnostics(&queryOwner, terminal.queryRows)
 	}
-	out := make([]RuntimeMemoryOwnerDiagnostics, 0, len(owners))
-	for _, ownerName := range []string{runtimeMemoryOwnerRuleTerminal, runtimeMemoryOwnerQueryTerminal} {
-		owner := owners[ownerName]
-		if owner == nil || (owner.Rows == 0 && owner.Buckets == 0 && owner.Indexes == 0 && owner.Bytes == 0 && owner.HighWater == 0) {
-			continue
-		}
-		out = append(out, *owner)
+	if queryOwner.Rows == 0 && queryOwner.Buckets == 0 && queryOwner.Indexes == 0 && queryOwner.Bytes == 0 && queryOwner.HighWater == 0 {
+		return nil
 	}
-	return out
+	return []RuntimeMemoryOwnerDiagnostics{queryOwner}
 }
 
 func addTerminalMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memory any) {
@@ -993,7 +980,6 @@ func alphaMemoryHighWater(m *reteGraphBetaMemory) int {
 	highWater += cap(m.alpha.conditions)
 	highWater += cap(m.alpha.factOwnershipIDs)
 	highWater += cap(m.alpha.factRouteStorage)
-	highWater += cap(m.alpha.factTerminalStorage)
 	return highWater
 }
 
@@ -1010,7 +996,6 @@ func alphaMemoryRetainedBytes(m *reteGraphBetaMemory) uint64 {
 	bytes += mapEntryBytes[FactID, alphaFactOwnershipRow](len(m.alpha.factOwnership))
 	bytes += sliceBytes[FactID](cap(m.alpha.factOwnershipIDs))
 	bytes += sliceBytes[reteGraphAlphaNodeID](cap(m.alpha.factRouteStorage))
-	bytes += sliceBytes[generatedTerminalRowHandle](cap(m.alpha.factTerminalStorage))
 	bytes += mapEntryBytes[ConditionID, int](len(m.alpha.factCounts))
 
 	for i := range m.alpha.facts {

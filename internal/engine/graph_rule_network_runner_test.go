@@ -390,17 +390,34 @@ func graphRuleNetworkReplay(t testing.TB, ctx context.Context, memory *reteGraph
 			t.Fatalf("%s insertFact: %v", phase, err)
 		}
 	}
-	deltas, ok, err := memory.currentTerminalTokenDeltas(ctx)
+	results, err := memory.match(ctx, graphRuleNetworkReplayFactSource(memory.revision, facts))
 	if err != nil {
-		t.Fatalf("%s currentTerminalTokenDeltas: %v", phase, err)
+		t.Fatalf("%s match: %v", phase, err)
 	}
-	if !ok {
-		t.Fatalf("%s currentTerminalTokenDeltas unavailable", phase)
+	if got := graphRuleNetworkResultCandidateCount(results); got != expected {
+		t.Fatalf("%s match candidates = %d, want %d", phase, got, expected)
 	}
-	if len(deltas) != expected {
-		t.Fatalf("%s terminal deltas = %d, want %d", phase, len(deltas), expected)
+	benchmarkGraphRuleResults = results
+}
+
+func graphRuleNetworkReplayFactSource(revision *Ruleset, facts []FactSnapshot) Snapshot {
+	generation := Generation(1)
+	for _, fact := range facts {
+		if fact.Generation() > generation {
+			generation = fact.Generation()
+		}
 	}
-	benchmarkGraphRuleTerminalDeltas = deltas
+	snapshot := newSnapshot("", revision.ID(), generation, facts)
+	snapshot.revision = revision
+	return snapshot
+}
+
+func graphRuleNetworkResultCandidateCount(results []ruleMatchResult) int {
+	total := 0
+	for _, result := range results {
+		total += len(result.candidates)
+	}
+	return total
 }
 
 func validateGraphRuleNetworkSeedRunHarnessSession(t testing.TB, session *Session, result RunResult, expected, initialFacts int, phase string) {

@@ -42,12 +42,14 @@ func TestRunSmoke(t *testing.T) {
 		"run: fired=",
 		"rete-memory: owner=alpha",
 		"rete-memory: owner=beta",
-		"rete-memory: owner=rule-terminal",
 		"query: name=inputs-by-bucket-0000000",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "rete-memory: owner=rule-terminal") {
+		t.Fatalf("output retained removed rule-terminal owner:\n%s", out.String())
 	}
 }
 

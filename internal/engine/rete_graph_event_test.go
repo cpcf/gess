@@ -287,8 +287,8 @@ func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}
-	if got := memory.memoryStats().TokenRows; got == 0 {
-		t.Fatal("token rows before clear = 0, want retained graph memory")
+	if got := len(memory.alpha.factCounts); got == 0 {
+		t.Fatal("alpha fact counts before clear = 0, want retained graph memory")
 	}
 
 	delta, err := memory.propagateEvent(ctx, newReteGraphClearEvent(Generation(9), mutationOrigin{}, nil))
@@ -341,16 +341,6 @@ func TestReteGraphResetFactsClearsThroughEventAndReassertsFacts(t *testing.T) {
 	}
 	if got := memory.sourceGeneration(); got != 10 {
 		t.Fatalf("source generation after reassert reset = %d, want 10", got)
-	}
-	deltas, ok, err := memory.currentTerminalTokenDeltas(ctx)
-	if err != nil {
-		t.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		t.Fatal("currentTerminalTokenDeltas unavailable")
-	}
-	if got, want := len(deltas), 1; got != want {
-		t.Fatalf("terminal deltas after reassert reset = %d, want %d", got, want)
 	}
 }
 

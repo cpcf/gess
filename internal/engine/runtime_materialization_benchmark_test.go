@@ -17,28 +17,23 @@ import (
 //     field/default copying, slot validation, and duplicate-key construction.
 //   - AgendaReconcile and AgendaInspectionScan track activation materialization,
 //     agenda.reconcile, and scan-based agenda inspection.
-//   - AgendaTerminalTokenPopulation tracks initial full agenda population from
-//     terminal tokens without candidate materialization.
-//   - AgendaTerminalTokenCollection and AgendaTerminalTokenReconcile split that
-//     path into collection and agenda materialization for scope comparison.
 //   - ReteAgendaDelta tracks incremental assert, modify, and retract after an
 //     agenda has been populated from Rete-generated activations.
 //   - AgendaTerminalTokenDelta tracks direct agenda application of prebuilt
 //     Rete terminal-token deltas without session setup dominating the result.
 var (
-	benchmarkSnapshot            Snapshot
-	benchmarkActionContext       ActionContext
-	benchmarkDuplicateKey        DuplicateKey
-	benchmarkTemplateFields      Fields
-	benchmarkTemplatePresence    map[string]FieldPresence
-	benchmarkTemplateSlots       []factSlot
-	benchmarkAgendaChanges       []agendaChange
-	benchmarkTerminalTokenDeltas []reteTerminalTokenDelta
-	benchmarkAgendaActivations   []activation
-	benchmarkAssertResult        AssertResult
-	benchmarkModifyResult        ModifyResult
-	benchmarkRetractResult       RetractResult
-	benchmarkRunResult           RunResult
+	benchmarkSnapshot          Snapshot
+	benchmarkActionContext     ActionContext
+	benchmarkDuplicateKey      DuplicateKey
+	benchmarkTemplateFields    Fields
+	benchmarkTemplatePresence  map[string]FieldPresence
+	benchmarkTemplateSlots     []factSlot
+	benchmarkAgendaChanges     []agendaChange
+	benchmarkAgendaActivations []activation
+	benchmarkAssertResult      AssertResult
+	benchmarkModifyResult      ModifyResult
+	benchmarkRetractResult     RetractResult
+	benchmarkRunResult         RunResult
 )
 
 func BenchmarkSnapshotConstructionLoanPublic(b *testing.B) {
@@ -358,79 +353,6 @@ func BenchmarkAgendaReconcileReteActivationsClaims(b *testing.B) {
 		changes, err := agenda.reconcile(context.Background(), revision, results)
 		if err != nil {
 			b.Fatalf("reconcile: %v", err)
-		}
-		benchmarkAgendaChanges = changes
-	}
-	if len(benchmarkAgendaChanges) == 0 {
-		b.Fatal("expected agenda changes")
-	}
-}
-
-func BenchmarkAgendaTerminalTokenPopulationLoan(b *testing.B) {
-	session := mustLoanUnderwritingBenchmarkSession(b)
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
-		if err != nil {
-			b.Fatalf("currentTerminalTokenDeltas: %v", err)
-		}
-		if !ok {
-			b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
-		}
-		agenda := newAgenda()
-		changes, err := agenda.reconcileTerminalTokens(context.Background(), session.revision, tokens)
-		if err != nil {
-			b.Fatalf("reconcileTerminalTokens: %v", err)
-		}
-		benchmarkAgendaChanges = changes
-	}
-	if len(benchmarkAgendaChanges) == 0 {
-		b.Fatal("expected agenda changes")
-	}
-}
-
-func BenchmarkAgendaTerminalTokenCollectionLoan(b *testing.B) {
-	session := mustLoanUnderwritingBenchmarkSession(b)
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
-		if err != nil {
-			b.Fatalf("currentTerminalTokenDeltas: %v", err)
-		}
-		if !ok {
-			b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
-		}
-		benchmarkTerminalTokenDeltas = tokens
-	}
-	if len(benchmarkTerminalTokenDeltas) == 0 {
-		b.Fatal("expected terminal token deltas")
-	}
-}
-
-func BenchmarkAgendaTerminalTokenReconcileLoan(b *testing.B) {
-	session := mustLoanUnderwritingBenchmarkSession(b)
-	tokens, ok, err := session.rete.currentTerminalTokenDeltas(context.Background())
-	if err != nil {
-		b.Fatalf("currentTerminalTokenDeltas: %v", err)
-	}
-	if !ok {
-		b.Fatal("currentTerminalTokenDeltas unexpectedly unavailable for beta-backed session")
-	}
-	seed := cloneTerminalTokenDeltas(tokens)
-	working := make([]reteTerminalTokenDelta, len(seed))
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		copy(working, seed)
-		agenda := newAgenda()
-		changes, err := agenda.reconcileTerminalTokens(context.Background(), session.revision, working)
-		if err != nil {
-			b.Fatalf("reconcileTerminalTokens: %v", err)
 		}
 		benchmarkAgendaChanges = changes
 	}
@@ -839,16 +761,16 @@ func TestReteGraphRemovalCountersUseIndexedRows(t *testing.T) {
 	if got := snapshot.Totals.TerminalDeltasRemoved; got != joinedTokens {
 		t.Fatalf("terminal deltas removed = %d, want %d", got, joinedTokens)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, joinedTokens+1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.RemovalRowsTouched; got < snapshot.Totals.RemovalRowsRemoved {
 		t.Fatalf("removal rows touched = %d, want at least rows removed %d", got, snapshot.Totals.RemovalRowsRemoved)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, joinedTokens+1; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 1; got != want {
 		t.Fatalf("removal index lookups = %d, want affected-token-limited %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, joinedTokens+1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsTouched, 1; got != want {
 		t.Fatalf("removal rows touched = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.NegativePropagationEvents, joinedTokens+1; got != want {
@@ -1440,10 +1362,8 @@ func runGraphNegativePropagationBenchmarkMutation(tb testing.TB, session *Sessio
 func assertGraphNegativePropagationCounterSnapshot(tb testing.TB, snapshot propagationCounterSnapshot, tc graphNegativePropagationBenchmarkCase, operation graphNegativePropagationOperation) {
 	tb.Helper()
 
-	affectedTerminals := tc.affectedTerminalRows()
 	affectedBetaRows := tc.affectedBetaRows()
-	affectedRows := affectedBetaRows + affectedTerminals
-	touchedRows := tc.removalRowsTouched()
+	affectedTerminals := tc.affectedTerminalRows()
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
 		tb.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
@@ -1462,38 +1382,26 @@ func assertGraphNegativePropagationCounterSnapshot(tb testing.TB, snapshot propa
 	if got, want := snapshot.Totals.NegativeRowsRemoved, affectedBetaRows; got != want {
 		tb.Fatalf("negative beta rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsRemoved, affectedRows; got != want {
+	if got, want := snapshot.Totals.RemovalRowsRemoved, affectedBetaRows; got != want {
 		tb.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
-	if got, wantMin := snapshot.Totals.RemovalRowsTouched, touchedRows; got < wantMin {
+	if got, wantMin := snapshot.Totals.RemovalRowsTouched, affectedBetaRows; got < wantMin {
 		tb.Fatalf("removal rows touched = %d, want at least affected join rows %d", got, wantMin)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, affectedRows; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, affectedBetaRows; got != want {
 		tb.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
 	}
-	if got, want := snapshot.Totals.NegativePropagationEvents, affectedRows; got != want {
+	if got, want := snapshot.Totals.NegativePropagationEvents, affectedBetaRows+affectedTerminals; got != want {
 		tb.Fatalf("negative propagation events = %d, want %d", got, want)
 	}
 	if got, want := snapshot.Totals.AgendaDeltaApplications, 1; got != want {
 		tb.Fatalf("agenda delta applications = %d, want %d", got, want)
 	}
-	switch operation {
-	case graphNegativePropagationRetract:
-		if got, want := snapshot.TerminalRowsRetained, tc.initialTerminalRows()-affectedTerminals; got != want {
-			tb.Fatalf("terminal rows retained = %d, want %d", got, want)
-		}
-		if got := snapshot.Totals.TerminalRowsInserted; got != 0 {
-			tb.Fatalf("terminal rows inserted = %d, want 0", got)
-		}
-	case graphNegativePropagationModify:
-		if got, want := snapshot.TerminalRowsRetained, tc.initialTerminalRows(); got != want {
-			tb.Fatalf("terminal rows retained = %d, want %d", got, want)
-		}
-	default:
+	if operation != graphNegativePropagationRetract && operation != graphNegativePropagationModify {
 		tb.Fatalf("unsupported operation %q", operation)
 	}
-	if snapshot.Totals.RemovalRowsTouched >= snapshot.TerminalRowsRetained {
-		tb.Fatalf("removal rows touched = %d, retained terminal rows = %d; want affected rows below retained graph size", snapshot.Totals.RemovalRowsTouched, snapshot.TerminalRowsRetained)
+	if got := snapshot.TerminalRowsRetained; got != 0 {
+		tb.Fatalf("terminal rows retained = %d, want 0", got)
 	}
 }
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-var benchmarkGraphRuleTerminalDeltas []reteTerminalTokenDelta
+var benchmarkGraphRuleResults []ruleMatchResult
 
 type graphRuleNetworkOrder string
 
@@ -41,7 +41,7 @@ func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 				b.ReportMetric(float64(tc.items), "items")
 				b.ReportMetric(float64(authoredOrderRootCount), "roots")
 				b.ReportMetric(float64(len(facts)), "facts/replay")
-				b.ReportMetric(float64(expected), "terminal-rows/replay")
+				b.ReportMetric(float64(expected), "matches/replay")
 				reportGraphRuleNetworkCounterMetrics(b, snapshot)
 			}()
 
@@ -63,17 +63,14 @@ func BenchmarkGraphRuleNetworkAuthoredOrderScaling(b *testing.B) {
 						b.Fatalf("insertFact: %v", err)
 					}
 				}
-				deltas, ok, err := memory.currentTerminalTokenDeltas(context.Background())
+				results, err := memory.match(context.Background(), graphRuleNetworkReplayFactSource(revision, facts))
 				if err != nil {
-					b.Fatalf("currentTerminalTokenDeltas: %v", err)
+					b.Fatalf("match: %v", err)
 				}
-				if !ok {
-					b.Fatal("currentTerminalTokenDeltas unavailable")
+				if got := graphRuleNetworkResultCandidateCount(results); got != expected {
+					b.Fatalf("match candidates = %d, want %d", got, expected)
 				}
-				if len(deltas) != expected {
-					b.Fatalf("terminal deltas = %d, want %d", len(deltas), expected)
-				}
-				benchmarkGraphRuleTerminalDeltas = deltas
+				benchmarkGraphRuleResults = results
 			}
 		})
 	}
@@ -90,9 +87,6 @@ func TestGraphRuleNetworkAuthoredOrderBenchmarkValidatesCounters(t *testing.T) {
 			revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
 			facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
 			snapshot := collectGraphRuleNetworkReplaySnapshot(t, revision, facts)
-			if got, want := snapshot.Counters.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
-				t.Fatalf("terminal rows retained = %d, want %d", got, want)
-			}
 			if snapshot.Counters.Totals.BetaBucketProbes == 0 {
 				t.Fatal("beta bucket probes = 0, want graph beta joins exercised")
 			}
@@ -101,9 +95,6 @@ func TestGraphRuleNetworkAuthoredOrderBenchmarkValidatesCounters(t *testing.T) {
 			}
 			if snapshot.Diagnostics.MaxBetaRows == 0 {
 				t.Fatal("max beta rows = 0, want per-node beta memory diagnostics")
-			}
-			if got, want := snapshot.Diagnostics.TotalTerminalBranchRows, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
-				t.Fatalf("terminal branch rows = %d, want %d", got, want)
 			}
 		})
 	}
@@ -162,9 +153,7 @@ func TestGraphRuleNetworkTemplateValueBatchSeedRuns(t *testing.T) {
 		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, graphRuleNetworkExpectedMatches(tc.depth, tc.items))
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
-		t.Fatalf("terminal rows retained = %d, want %d", got, want)
-	}
+	_ = snapshot
 }
 
 func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
@@ -199,9 +188,7 @@ func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
 		t.Fatalf("run result = (%v, %d), want (%v, %d)", result.Status, result.Fired, RunCompleted, graphRuleNetworkExpectedMatches(tc.depth, tc.items))
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.TerminalRowsRetained, graphRuleNetworkExpectedMatches(tc.depth, tc.items); got != want {
-		t.Fatalf("terminal rows retained = %d, want %d", got, want)
-	}
+	_ = snapshot
 }
 
 func graphRuleNetworkBenchmarkCases() []graphRuleNetworkCase {
