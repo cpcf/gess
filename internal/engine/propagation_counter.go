@@ -230,7 +230,6 @@ type propagationCounterLedger struct {
 	runtimePath          propagationRuntimePath
 	unsupportedReasons   map[string]int
 	terminalRowsRetained int
-	branchRowsRetained   map[propagationBranchKey]int
 	graphBetaMemory      reteGraphBetaMemoryStats
 }
 
@@ -250,7 +249,6 @@ type propagationCounterSnapshot struct {
 	ByOrigin             map[propagationOrigin]propagationCounterTotals
 	ByTemplateOrigin     map[propagationCounterKey]propagationCounterTotals
 	ByBranch             map[propagationBranchKey]propagationCounterTotals
-	BranchRowsRetained   map[propagationBranchKey]int
 	RuntimePath          propagationRuntimePath
 	UnsupportedReasons   map[string]int
 }
@@ -288,7 +286,6 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		ByOrigin:             make(map[propagationOrigin]propagationCounterTotals, len(l.byOrigin)),
 		ByTemplateOrigin:     make(map[propagationCounterKey]propagationCounterTotals, len(l.byTemplateOrigin)),
 		ByBranch:             make(map[propagationBranchKey]propagationCounterTotals, len(l.byBranch)),
-		BranchRowsRetained:   make(map[propagationBranchKey]int, len(l.branchRowsRetained)),
 		RuntimePath:          l.runtimePath,
 	}
 	if len(l.unsupportedReasons) > 0 {
@@ -313,11 +310,6 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 	for key, totals := range l.byBranch {
 		if totals != nil {
 			out.ByBranch[key] = *totals
-		}
-	}
-	for key, retained := range l.branchRowsRetained {
-		if retained > 0 {
-			out.BranchRowsRetained[key] = retained
 		}
 	}
 	return out
@@ -790,26 +782,6 @@ func (l *propagationCounterLedger) setTerminalRowsRetained(retained int) {
 	l.terminalRowsRetained = retained
 }
 
-func (l *propagationCounterLedger) setBranchRowsRetained(retained map[propagationBranchKey]int) {
-	if l == nil {
-		return
-	}
-	if len(retained) == 0 {
-		clear(l.branchRowsRetained)
-		return
-	}
-	if l.branchRowsRetained == nil {
-		l.branchRowsRetained = make(map[propagationBranchKey]int, len(retained))
-	} else {
-		clear(l.branchRowsRetained)
-	}
-	for key, count := range retained {
-		if key.valid() && count > 0 {
-			l.branchRowsRetained[key] = count
-		}
-	}
-}
-
 func (l *propagationCounterLedger) setGraphBetaMemoryStats(stats reteGraphBetaMemoryStats) {
 	if l == nil {
 		return
@@ -1030,7 +1002,6 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-origin-count", float64(len(s.ByOrigin)))
 	report("propagation-template-origin-count", float64(len(s.ByTemplateOrigin)))
 	report("propagation-branch-count", float64(len(s.ByBranch)))
-	report("propagation-branch-retained-count", float64(len(s.BranchRowsRetained)))
 	report("propagation-runtime-graph-beta", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeGraphBeta))
 	report("propagation-runtime-unsupported", propagationRuntimePathMetric(s.RuntimePath, propagationRuntimeUnsupported))
 	report("propagation-unsupported-reason-count", float64(len(s.UnsupportedReasons)))
@@ -1162,7 +1133,6 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-by-template=" + s.templateSummary(),
 		"propagation-by-origin=" + s.originSummary(),
 		"propagation-branch-count=" + strconv.Itoa(len(s.ByBranch)),
-		"propagation-branch-retained-count=" + strconv.Itoa(len(s.BranchRowsRetained)),
 	}
 	if summary := s.templateOriginSummary(); summary != "" {
 		fields = append(fields, "propagation-by-template-origin="+summary)
@@ -1265,36 +1235,20 @@ func (s propagationCounterSnapshot) templateOriginSummary() string {
 }
 
 func (s propagationCounterSnapshot) branchSummary() string {
-	if len(s.ByBranch) == 0 && len(s.BranchRowsRetained) == 0 {
+	if len(s.ByBranch) == 0 {
 		return ""
 	}
-	keys := make([]propagationBranchKey, 0, len(s.ByBranch)+len(s.BranchRowsRetained))
-	seen := make(map[propagationBranchKey]struct{}, len(s.ByBranch)+len(s.BranchRowsRetained))
+	keys := make([]propagationBranchKey, 0, len(s.ByBranch))
 	for key := range s.ByBranch {
-		keys = append(keys, key)
-		seen[key] = struct{}{}
-	}
-	for key := range s.BranchRowsRetained {
-		if _, ok := seen[key]; ok {
-			continue
-		}
 		keys = append(keys, key)
 	}
 	slicesSortBranchKeys(keys)
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		totals := s.ByBranch[key]
-		parts = append(parts, formatPropagationBranchDistributionEntry(key.String(), totals, s.BranchRowsRetained[key]))
+		parts = append(parts, formatPropagationDistributionEntry(key.String(), totals))
 	}
 	return strings.Join(parts, ";")
-}
-
-func formatPropagationBranchDistributionEntry(name string, totals propagationCounterTotals, retained int) string {
-	base := formatPropagationDistributionEntry(name, totals)
-	if len(base) == 0 || base[len(base)-1] != '}' {
-		return base
-	}
-	return base[:len(base)-1] + ",terminal-rows-retained=" + strconv.Itoa(retained) + "}"
 }
 
 func formatPropagationDistributionEntry(name string, totals propagationCounterTotals) string {

@@ -281,7 +281,6 @@ func collectJoinStrengthReplaySnapshot(t testing.TB, revision *Ruleset, facts []
 		span.finish()
 	}
 	ledger.setTerminalRowsRetained(memory.terminalRowCount())
-	ledger.setBranchRowsRetained(memory.terminalRowsRetainedByBranch())
 	ledger.setGraphBetaMemoryStats(memory.memoryStats())
 	return graphRuleNetworkReplaySnapshot{
 		Counters:    ledger.snapshot(),

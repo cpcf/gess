@@ -187,8 +187,6 @@ type reteGraphBetaMemoryDiagnostics struct {
 	MaxBetaJoinIndexKeys         int
 	MaxBetaJoinBucketDepth       int
 	MaxTerminalRows              int
-	TotalTerminalBranchRows      int
-	MaxTerminalBranchRows        int
 	WidestRetainedBetaTokenWidth int
 }
 
@@ -222,7 +220,6 @@ type reteGraphTerminalMemoryDiagnostics struct {
 	Input          reteGraphStageRef
 	TokenWidth     int
 	Rows           int
-	BranchRows     map[int]int
 }
 
 type reteGraphTokenMemoryDiagnostics struct {
@@ -6238,10 +6235,6 @@ func (m *reteGraphBetaMemory) terminalRowCount() int {
 	return total
 }
 
-func (m *reteGraphBetaMemory) terminalRowsRetainedByBranch() map[propagationBranchKey]int {
-	return nil
-}
-
 func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {
 	if m == nil {
 		return reteGraphBetaMemoryStats{}
@@ -6332,19 +6325,11 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 			QueryName:      node.queryName,
 			Input:          node.input,
 			TokenWidth:     m.graph.stageTokenWidth(node.input),
-			BranchRows:     make(map[int]int),
 		}
 		if terminal != nil && node.kind == reteGraphTerminalQuery {
 			diag.Rows = terminal.queryRows.len()
 		}
-		if len(diag.BranchRows) == 0 {
-			diag.BranchRows = nil
-		}
 		out.MaxTerminalRows = max(out.MaxTerminalRows, diag.Rows)
-		for _, rows := range diag.BranchRows {
-			out.TotalTerminalBranchRows += rows
-			out.MaxTerminalBranchRows = max(out.MaxTerminalBranchRows, rows)
-		}
 		out.Terminals = append(out.Terminals, diag)
 	}
 	return out

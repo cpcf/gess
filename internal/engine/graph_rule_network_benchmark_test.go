@@ -283,7 +283,6 @@ func collectGraphRuleNetworkReplaySnapshot(t testing.TB, revision *Ruleset, fact
 		span.finish()
 	}
 	ledger.setTerminalRowsRetained(memory.terminalRowCount())
-	ledger.setBranchRowsRetained(memory.terminalRowsRetainedByBranch())
 	ledger.setGraphBetaMemoryStats(memory.memoryStats())
 	return graphRuleNetworkReplaySnapshot{
 		Counters:    ledger.snapshot(),
@@ -323,8 +322,6 @@ func reportGraphRuleNetworkDiagnosticMetrics(b *testing.B, diagnostics reteGraph
 	b.ReportMetric(float64(diagnostics.WidestRetainedBetaTokenWidth), "widest-retained-beta-token-width")
 	b.ReportMetric(float64(len(diagnostics.Terminals)), "terminal-node-count")
 	b.ReportMetric(float64(diagnostics.MaxTerminalRows), "max-terminal-node-token-rows")
-	b.ReportMetric(float64(diagnostics.TotalTerminalBranchRows), "terminal-branch-rows-retained")
-	b.ReportMetric(float64(diagnostics.MaxTerminalBranchRows), "max-terminal-branch-rows")
 	for _, node := range diagnostics.BetaNodes {
 		prefix := fmt.Sprintf("beta-node-%d", node.ID)
 		b.ReportMetric(float64(node.TotalRows), prefix+"-token-rows")
@@ -338,9 +335,6 @@ func reportGraphRuleNetworkDiagnosticMetrics(b *testing.B, diagnostics reteGraph
 		prefix := fmt.Sprintf("terminal-node-%d", terminal.ID)
 		b.ReportMetric(float64(terminal.Rows), prefix+"-token-rows")
 		b.ReportMetric(float64(terminal.TokenWidth), prefix+"-token-width")
-		for branchID, rows := range terminal.BranchRows {
-			b.ReportMetric(float64(rows), fmt.Sprintf("%s-branch-%d-rows", prefix, branchID))
-		}
 	}
 }
 

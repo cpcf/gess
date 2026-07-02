@@ -7,7 +7,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -1429,15 +1428,9 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	if got, want := branchTotals.TerminalDeltasEmitted, snapshot.Totals.TerminalDeltasEmitted; got != want {
 		t.Fatalf("branch terminal deltas emitted = %d, want total %d", got, want)
 	}
-	if got, want := snapshot.BranchRowsRetained[branchKey], snapshot.TerminalRowsRetained; got != want {
-		t.Fatalf("branch terminal rows retained = %d, want total %d", got, want)
-	}
 	fields := strings.Join(snapshot.runnerFields(), "\n")
 	if !strings.Contains(fields, "propagation-by-branch=") {
 		t.Fatalf("runner fields missing branch summary: %s", fields)
-	}
-	if !strings.Contains(fields, "terminal-rows-retained="+strconv.Itoa(snapshot.TerminalRowsRetained)) {
-		t.Fatalf("runner fields missing branch retained rows: %s", fields)
 	}
 
 	if _, err := session.Modify(ctx, failingCandidate.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"group": "A", "score": 15})}); err != nil {

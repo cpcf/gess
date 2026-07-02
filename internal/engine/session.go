@@ -347,10 +347,8 @@ func (s *Session) syncPropagationCounters() {
 	}
 	if s.rete != nil && s.rete.graphBeta != nil {
 		s.propagationCounters.setTerminalRowsRetained(s.rete.graphBeta.terminalRowCount())
-		s.propagationCounters.setBranchRowsRetained(s.rete.graphBeta.terminalRowsRetainedByBranch())
 	} else {
 		s.propagationCounters.setTerminalRowsRetained(0)
-		s.propagationCounters.setBranchRowsRetained(nil)
 	}
 	path, unsupportedReasons := propagationRuntimeUnknown, map[string]int(nil)
 	if s.rete != nil {
