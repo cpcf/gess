@@ -2304,6 +2304,57 @@ func TestReteRuntimeTerminalDeltaCandidatesUseIndependentScratchLanes(t *testing
 	}
 }
 
+func TestReteRuntimeTerminalDeltaScratchUsesCompiledPathLen(t *testing.T) {
+	const conditionCount = 9
+	rule := compiledRule{
+		id:                "wide-rule",
+		revisionID:        "wide-rule-revision",
+		identityScopeHash: candidateIdentityScopeHash("wide-rule", "wide-rule-revision"),
+		conditions:        make([]RuleCondition, conditionCount),
+		conditionPlans:    make([]compiledConditionPlan, conditionCount),
+	}
+	arena := newTokenArena()
+	token := tokenRef{}
+	wantPath := make([]int, 0, conditionCount*2)
+	for i := range conditionCount {
+		id := ConditionID(fmt.Sprintf("c%d", i))
+		binding := fmt.Sprintf("b%d", i)
+		path := []int{i, i + conditionCount}
+		rule.conditions[i] = RuleCondition{id: id, binding: binding, order: i}
+		rule.conditionPlans[i] = compiledConditionPlan{
+			id:          id,
+			binding:     binding,
+			bindingSlot: i,
+			path:        path,
+		}
+		fact := FactSnapshot{id: newFactID(1, uint64(i+1)), version: FactVersion(i + 1), recency: Recency(i + 1), generation: 7}
+		match := conditionMatch{conditionID: id, bindingSlot: i, fact: newConditionFactRefFromSnapshot(fact)}
+		token = arena.add(token, rule.conditionPlans[i].bindingTupleEntry(match), match, fact.Recency(), fact.Generation())
+		wantPath = append(wantPath, path...)
+	}
+
+	runtime := &reteRuntime{revision: &Ruleset{
+		rulesByRevisionID: map[RuleRevisionID]compiledRule{rule.revisionID: rule},
+	}}
+	var scratch candidateScratch
+	candidates, err := runtime.candidatesForTerminalDeltas([]reteTerminalTokenDelta{{
+		ruleRevisionID: rule.revisionID,
+		token:          token,
+	}}, &scratch)
+	if err != nil {
+		t.Fatalf("candidatesForTerminalDeltas: %v", err)
+	}
+	if got, want := len(candidates), 1; got != want {
+		t.Fatalf("candidate count = %d, want %d", got, want)
+	}
+	if got := candidates[0].path; !slices.Equal(got, wantPath) {
+		t.Fatalf("candidate path = %#v, want %#v", got, wantPath)
+	}
+	if got, want := cap(scratch.path), len(wantPath); got < want {
+		t.Fatalf("scratch path capacity = %d, want at least %d", got, want)
+	}
+}
+
 func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	ctx := context.Background()
 	revision, noiseKey, employeeKey, departmentKey := mustBetaMemoryRuleset(t)

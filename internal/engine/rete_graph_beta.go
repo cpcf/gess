@@ -6714,34 +6714,26 @@ func (m *reteGraphBetaMemory) newTokenRowRef(parent tokenRef, source tokenRef, r
 	if m == nil || row == nil {
 		return tokenRef{}
 	}
-	pathStepLen, ok := tokenRowPathStepLen(source, row)
-	if !ok {
-		return tokenRef{}
-	}
 	if span != nil {
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
 		m.arena = newTokenArena()
 	}
-	return m.arena.addCompact(parent, row.tokenRowEntry(), match, recency, generation, pathStepLen)
+	return m.arena.addCompact(parent, row.tokenRowEntry(), match, recency, generation)
 }
 
 func (m *reteGraphBetaMemory) newTokenRowRefSource(parent tokenRef, source tokenRef, row *tokenRow, recency Recency, generation Generation, span *propagationCounterSpan) tokenRef {
 	if m == nil || row == nil {
 		return tokenRef{}
 	}
-	pathStepLen, ok := tokenRowPathStepLen(source, row)
-	if !ok {
-		return tokenRef{}
-	}
 	if span != nil {
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
 		m.arena = newTokenArena()
 	}
-	return m.arena.addCompactSource(parent, source, row.tokenRowEntry(), recency, generation, pathStepLen)
+	return m.arena.addCompactSource(parent, source, row.tokenRowEntry(), recency, generation)
 }
 
 func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propagationCounterSpan) tokenRef {
@@ -6842,16 +6834,6 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentity(token tokenRef) candidat
 		return candidateIdentity{}
 	}
 	if t.ruleConditionCount > 0 {
-		if row, ok := token.resolve(); ok && row.size == t.ruleConditionCount && row.orderedSlots {
-			return candidateIdentity{
-				generation: token.handle.arena.generation,
-				count:      row.size,
-				key: candidateIdentityKey{
-					scopeHash: t.ruleIdentityScopeHash,
-					hash:      candidateIdentityHashFinish(row.identityState, row.size),
-				},
-			}
-		}
 		if identity, ok := t.terminalTokenIdentitySmall(token); ok {
 			return identity
 		}
@@ -7055,11 +7037,7 @@ func queryAppendTokenRows(arena *tokenArena, parent tokenRef, token tokenRef) to
 	if !match.hasValue {
 		recency = match.fact.Recency()
 	}
-	pathStepLen, ok := tokenRowPathStepLen(token, row)
-	if !ok {
-		return tokenRef{}
-	}
-	return arena.addCompactSource(parent, token, row.tokenRowEntry(), recency, token.generation(), pathStepLen)
+	return arena.addCompactSource(parent, token, row.tokenRowEntry(), recency, token.generation())
 }
 
 func conditionMatchForEntry(match conditionMatch, entry bindingTupleEntry) conditionMatch {

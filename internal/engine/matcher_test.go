@@ -313,9 +313,6 @@ func TestMatchBindingSetsIncludeLinkedTokens(t *testing.T) {
 	if got, want := sets[0].token.size, 2; got != want {
 		t.Fatalf("binding set token size = %d, want %d", got, want)
 	}
-	if got, want := sets[0].token.pathLen, 2; got != want {
-		t.Fatalf("binding set token path length = %d, want %d", got, want)
-	}
 
 	candidate, err := buildMatchCandidate(rule, snapshot.Generation(), sets[0])
 	if err != nil {
@@ -323,6 +320,36 @@ func TestMatchBindingSetsIncludeLinkedTokens(t *testing.T) {
 	}
 	if got, want := candidate.path, []int{0, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("linked token candidate path = %#v, want %#v", got, want)
+	}
+}
+
+func TestTokenRefCandidatePathTrimsCompiledPathCapacity(t *testing.T) {
+	rule := compiledRule{
+		id:                "partial-rule",
+		revisionID:        "partial-rule-revision",
+		identityScopeHash: candidateIdentityScopeHash("partial-rule", "partial-rule-revision"),
+		conditions: []RuleCondition{
+			{id: "first", binding: "first", order: 0},
+			{id: "second", binding: "second", order: 1},
+		},
+		conditionPlans: []compiledConditionPlan{
+			{id: "first", binding: "first", bindingSlot: 0, path: []int{0, 10}},
+			{id: "second", binding: "second", bindingSlot: 1, path: []int{1, 11}},
+		},
+	}
+	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	match := conditionMatch{conditionID: "first", bindingSlot: 0, fact: newConditionFactRefFromSnapshot(fact)}
+	arena := newTokenArena()
+	token := arena.add(tokenRef{}, rule.conditionPlans[0].bindingTupleEntry(match), match, fact.Recency(), fact.Generation())
+
+	var scratch candidateScratch
+	scratch.reset(1, token.size(), compiledRuleTokenPathLen(rule))
+	candidate, err := buildMatchCandidateFromTokenRefWithScratch(rule, fact.Generation(), token, &scratch)
+	if err != nil {
+		t.Fatalf("buildMatchCandidateFromTokenRefWithScratch: %v", err)
+	}
+	if got, want := candidate.path, []int{0, 10}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("candidate path = %#v, want %#v", got, want)
 	}
 }
 

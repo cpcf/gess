@@ -139,7 +139,7 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 	var factVersions []FactVersion
 	var path []int
 	size := token.size()
-	pathLen := token.pathLen()
+	pathLen := compiledRuleTokenPathLen(rule)
 	haveEntries := false
 	if publicEntries, publicFactIDs, publicFactVersions, publicPath, ok := terminalTokenBindingTuple(rule, token); ok {
 		entries = publicEntries
@@ -156,9 +156,11 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		path = make([]int, pathLen)
 	}
 	if !haveEntries {
-		if _, _, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token); err != nil {
+		_, filledPathLen, err := fillTokenRef(rule, entries, factIDs, factVersions, path, 0, 0, token)
+		if err != nil {
 			return matchCandidate{}, err
 		}
+		path = path[:filledPathLen]
 	}
 
 	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
@@ -175,6 +177,18 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 		aggregateRecency: token.aggregateRecency(),
 		path:             path,
 	}, nil
+}
+
+func compiledRuleTokenPathLen(rule compiledRule) int {
+	pathLen := 0
+	for i := range rule.conditions {
+		plan, ok := rule.conditionPlanForBindingSlot(i)
+		if !ok {
+			continue
+		}
+		pathLen += len(plan.path)
+	}
+	return pathLen
 }
 
 func fillTokenRef(rule compiledRule, entries []bindingTupleEntry, factIDs []FactID, factVersions []FactVersion, path []int, entryIndex, pathIndex int, token tokenRef) (int, int, error) {

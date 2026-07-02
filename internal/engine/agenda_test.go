@@ -902,7 +902,7 @@ func TestTokenArenaMaterializesFactSpansAtBoundary(t *testing.T) {
 	}
 }
 
-func TestTerminalTokenIdentityUsesCachedOrderedSlots(t *testing.T) {
+func TestTerminalTokenIdentityUsesFastBindingMetadata(t *testing.T) {
 	rule := compiledRule{
 		id:                "rule",
 		revisionID:        "rule-revision",
@@ -926,27 +926,17 @@ func TestTerminalTokenIdentityUsesCachedOrderedSlots(t *testing.T) {
 	arena := newTokenArena()
 	firstToken := arena.add(tokenRef{}, firstEntry, firstMatch, firstFact.Recency(), firstFact.Generation())
 	token := arena.add(firstToken, secondEntry, secondMatch, secondFact.Recency(), secondFact.Generation())
-	if !token.orderedSlots() {
-		t.Fatal("ordered token did not record ordered binding slots")
-	}
 
-	cached, ok := candidateIdentityForTerminalTokenCached(rule, token)
-	if !ok {
-		t.Fatal("candidateIdentityForTerminalTokenCached did not accept ordered token")
-	}
 	fast, ok := candidateIdentityForTerminalTokenFast(rule, token)
 	if !ok {
 		t.Fatal("candidateIdentityForTerminalTokenFast did not accept ordered token")
 	}
-	if cached != fast {
-		t.Fatalf("cached identity = %#v, want existing fast identity %#v", cached, fast)
-	}
-	if got := candidateIdentityForTerminalToken(rule, token); got != cached {
-		t.Fatalf("terminal token identity = %#v, want cached %#v", got, cached)
+	if got := candidateIdentityForTerminalToken(rule, token); got != fast {
+		t.Fatalf("terminal token identity = %#v, want fast identity %#v", got, fast)
 	}
 }
 
-func TestTerminalTokenIdentityRejectsCachedOutOfOrderSlots(t *testing.T) {
+func TestTerminalTokenFastIdentityUsesBindingSlotsOutOfOrder(t *testing.T) {
 	rule := compiledRule{
 		id:                "rule",
 		revisionID:        "rule-revision",
@@ -970,12 +960,6 @@ func TestTerminalTokenIdentityRejectsCachedOutOfOrderSlots(t *testing.T) {
 	arena := newTokenArena()
 	secondToken := arena.add(tokenRef{}, secondEntry, secondMatch, secondFact.Recency(), secondFact.Generation())
 	token := arena.add(secondToken, firstEntry, firstMatch, firstFact.Recency(), firstFact.Generation())
-	if token.orderedSlots() {
-		t.Fatal("out-of-order token recorded ordered binding slots")
-	}
-	if _, ok := candidateIdentityForTerminalTokenCached(rule, token); ok {
-		t.Fatal("cached identity accepted out-of-order token")
-	}
 	fast, ok := candidateIdentityForTerminalTokenFast(rule, token)
 	if !ok {
 		t.Fatal("candidateIdentityForTerminalTokenFast did not accept out-of-order token")

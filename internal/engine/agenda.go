@@ -3221,9 +3221,6 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 }
 
 func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candidateIdentity {
-	if identity, ok := candidateIdentityForTerminalTokenCached(rule, token); ok {
-		return identity
-	}
 	if identity, ok := candidateIdentityForTerminalTokenFast(rule, token); ok {
 		return identity
 	}
@@ -3243,29 +3240,6 @@ func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candid
 		identity.key.scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
 	}
 	return identity
-}
-
-func candidateIdentityForTerminalTokenCached(rule compiledRule, token tokenRef) (candidateIdentity, bool) {
-	if token.isZero() || len(rule.conditions) == 0 {
-		return candidateIdentity{}, false
-	}
-	row, ok := token.resolve()
-	if !ok || row.size != len(rule.conditions) || !row.orderedSlots {
-		return candidateIdentity{}, false
-	}
-	generation := token.handle.arena.generation
-	scopeHash := rule.identityScopeHash
-	if scopeHash == 0 {
-		scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
-	}
-	return candidateIdentity{
-		generation: generation,
-		count:      row.size,
-		key: candidateIdentityKey{
-			scopeHash: scopeHash,
-			hash:      candidateIdentityHashFinish(row.identityState, row.size),
-		},
-	}, true
 }
 
 func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (candidateIdentity, bool) {
