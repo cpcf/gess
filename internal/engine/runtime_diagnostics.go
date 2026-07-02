@@ -387,10 +387,11 @@ func (a *agenda) consumedActivationRows() int {
 		return 0
 	}
 	consumed := 0
-	forEachAgendaActivation(a.activations, func(current *activation) {
+	a.forEachActivation(func(current *activation) bool {
 		if current.status == activationStatusConsumed {
 			consumed++
 		}
+		return true
 	})
 	return consumed
 }
@@ -400,29 +401,11 @@ func (a *agenda) agendaActivationEntryCount() int {
 		return 0
 	}
 	count := 0
-	forEachAgendaActivation(a.activations, func(*activation) {
+	a.forEachActivation(func(*activation) bool {
 		count++
+		return true
 	})
 	return count
-}
-
-func forEachAgendaActivation(buckets map[activationFingerprint]activationBucket, fn func(*activation)) {
-	if fn == nil {
-		return
-	}
-	for _, bucket := range buckets {
-		if bucket.first != nil {
-			fn(bucket.first)
-		}
-		if bucket.second != nil {
-			fn(bucket.second)
-		}
-		for _, current := range bucket.overflow {
-			if current != nil {
-				fn(current)
-			}
-		}
-	}
 }
 
 func (a *agenda) activationStoredInRows(act *activation) bool {
@@ -474,16 +457,14 @@ func agendaMemoryHighWater(a *agenda) int {
 	highWater += cap(a.purgeNextPending)
 	highWater += cap(a.purgeChanges)
 	highWater += cap(a.sortEntries)
-	for _, bucket := range a.activations {
+	highWater += cap(a.activationRefs)
+	for _, bucket := range a.activationCollisions {
 		highWater += cap(bucket.overflow)
 	}
 	for _, bucket := range a.byFactID {
 		highWater += cap(bucket.overflow)
 	}
 	for _, bucket := range a.byRevision {
-		highWater += cap(bucket.overflow)
-	}
-	for _, bucket := range a.purgeActivations {
 		highWater += cap(bucket.overflow)
 	}
 	return highWater
@@ -508,17 +489,20 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 			bytes += activationPayloadBytes(chunk[i].payload)
 		}
 	}
-	forEachAgendaActivation(a.activations, func(current *activation) {
+	a.forEachActivation(func(current *activation) bool {
 		if current == nil || a.activationStoredInRows(current) {
-			return
+			return true
 		}
 		bytes += uint64(unsafe.Sizeof(*current))
 		bytes += activationPayloadBytes(current.payload)
+		return true
 	})
-	bytes += mapEntryBytes[activationFingerprint, activationBucket](len(a.activations))
-	for _, bucket := range a.activations {
-		bytes += sliceBytes[*activation](cap(bucket.overflow))
+	bytes += mapEntryBytes[activationFingerprint, activationOrdinalRef](len(a.activations))
+	bytes += mapEntryBytes[activationFingerprint, activationCollisionBucket](len(a.activationCollisions))
+	for _, bucket := range a.activationCollisions {
+		bytes += sliceBytes[activationOrdinalRef](cap(bucket.overflow))
 	}
+	bytes += sliceBytes[*activation](cap(a.activationRefs))
 	bytes += sliceBytes[activationKey](cap(a.pending))
 	bytes += sliceBytes[*activation](cap(a.pendingActivation))
 	bytes += mapEntryBytes[FactID, activationKeyBucket](len(a.byFactID))
@@ -537,10 +521,6 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 	bytes += sliceBytes[activationKey](cap(a.deltaNextPending))
 	bytes += sliceBytes[agendaChange](cap(a.deltaChanges))
 	bytes += sliceBytes[agendaChange](cap(a.deltaActivated))
-	bytes += mapEntryBytes[activationFingerprint, activationBucket](len(a.purgeActivations))
-	for _, bucket := range a.purgeActivations {
-		bytes += sliceBytes[*activation](cap(bucket.overflow))
-	}
 	bytes += sliceBytes[activationKey](cap(a.purgeNextPending))
 	bytes += sliceBytes[agendaChange](cap(a.purgeChanges))
 	bytes += sliceBytes[activationSortEntry](cap(a.sortEntries))

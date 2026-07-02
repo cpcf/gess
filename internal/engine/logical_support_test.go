@@ -447,17 +447,16 @@ func consumedActivationForRuleRevision(t testing.TB, agenda *agenda, revisionID 
 	if agenda == nil {
 		t.Fatal("agenda is nil")
 	}
-	for _, bucket := range agenda.activations {
-		for _, current := range []*activation{bucket.first, bucket.second} {
-			if current != nil && current.ruleRevisionID == revisionID && current.status == activationStatusConsumed {
-				return current
-			}
+	var found *activation
+	agenda.forEachActivation(func(current *activation) bool {
+		if current != nil && current.ruleRevisionID == revisionID && current.status == activationStatusConsumed {
+			found = current
+			return false
 		}
-		for _, current := range bucket.overflow {
-			if current != nil && current.ruleRevisionID == revisionID && current.status == activationStatusConsumed {
-				return current
-			}
-		}
+		return true
+	})
+	if found != nil {
+		return found
 	}
 	t.Fatalf("consumed activation for rule revision %q not found", revisionID)
 	return nil

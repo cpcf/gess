@@ -34,10 +34,62 @@ type activationFingerprint uint64
 
 type activationObserveFunc func(*activation)
 
-type activationBucket struct {
-	first    *activation
-	second   *activation
-	overflow []*activation
+type activationOrdinalRef uint64
+
+func activationOrdinalRefForKey(key activationKey) activationOrdinalRef {
+	return activationOrdinalRef(key.ordinal + 1)
+}
+
+func (r activationOrdinalRef) isZero() bool {
+	return r == 0
+}
+
+func (r activationOrdinalRef) ordinal() uint64 {
+	if r == 0 {
+		return 0
+	}
+	return uint64(r - 1)
+}
+
+type activationCollisionBucket struct {
+	second   activationOrdinalRef
+	overflow []activationOrdinalRef
+	count    int
+}
+
+func (b activationCollisionBucket) len() int {
+	return b.count
+}
+
+func (b *activationCollisionBucket) append(ref activationOrdinalRef) {
+	if ref.isZero() {
+		return
+	}
+	switch b.count {
+	case 0:
+		b.second = ref
+	default:
+		if b.overflow == nil {
+			b.overflow = make([]activationOrdinalRef, 0, 4)
+		}
+		b.overflow = append(b.overflow, ref)
+	}
+	b.count++
+}
+
+func (b activationCollisionBucket) forEach(fn func(activationOrdinalRef) bool) bool {
+	if b.count == 0 || fn == nil {
+		return true
+	}
+	if !fn(b.second) {
+		return false
+	}
+	for i := 0; i < b.count-1 && i < len(b.overflow); i++ {
+		if !fn(b.overflow[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 const activationRowChunkSize = 256
@@ -706,21 +758,23 @@ func activationPathForRule(rule compiledRule) []int {
 }
 
 type agenda struct {
-	activations         map[activationFingerprint]activationBucket
-	activationRows      activationRows
-	terminalActivations activationRows
-	pending             []activationKey
-	pendingActivation   []*activation
-	pendingHead         int
-	lazyDeactivated     int
-	byFactID            map[FactID]activationKeyBucket
-	byRevision          map[RuleRevisionID]activationKeyBucket
-	tokenFactIndexDirty bool
-	revisionIndexDirty  bool
-	nextOrdinal         uint64
-	handleGeneration    uint32
-	revision            *Ruleset
-	propagationCounters *propagationCounterLedger
+	activations          map[activationFingerprint]activationOrdinalRef
+	activationCollisions map[activationFingerprint]activationCollisionBucket
+	activationRefs       []*activation
+	activationRows       activationRows
+	terminalActivations  activationRows
+	pending              []activationKey
+	pendingActivation    []*activation
+	pendingHead          int
+	lazyDeactivated      int
+	byFactID             map[FactID]activationKeyBucket
+	byRevision           map[RuleRevisionID]activationKeyBucket
+	tokenFactIndexDirty  bool
+	revisionIndexDirty   bool
+	nextOrdinal          uint64
+	handleGeneration     uint32
+	revision             *Ruleset
+	propagationCounters  *propagationCounterLedger
 
 	reconcileSeen        map[activationKey]struct{}
 	reconcileNextPending []activationKey
@@ -732,7 +786,6 @@ type agenda struct {
 	deltaChanges     []agendaChange
 	deltaActivated   []agendaChange
 
-	purgeActivations map[activationFingerprint]activationBucket
 	purgeNextPending []activationKey
 	purgeChanges     []agendaChange
 
@@ -741,7 +794,7 @@ type agenda struct {
 
 func newAgenda() *agenda {
 	return &agenda{
-		activations:      make(map[activationFingerprint]activationBucket),
+		activations:      make(map[activationFingerprint]activationOrdinalRef),
 		byFactID:         make(map[FactID]activationKeyBucket),
 		byRevision:       make(map[RuleRevisionID]activationKeyBucket),
 		handleGeneration: 1,
@@ -818,10 +871,18 @@ func (a *agenda) reset() {
 		return
 	}
 	if a.activations == nil {
-		a.activations = make(map[activationFingerprint]activationBucket)
+		a.activations = make(map[activationFingerprint]activationOrdinalRef)
 	} else {
 		clear(a.activations)
 	}
+	if a.activationCollisions != nil {
+		for fingerprint, bucket := range a.activationCollisions {
+			clear(bucket.overflow)
+			delete(a.activationCollisions, fingerprint)
+		}
+	}
+	clear(a.activationRefs)
+	a.activationRefs = a.activationRefs[:0]
 	a.resetPendingKeys()
 	a.lazyDeactivated = 0
 	a.activationRows.reset()
@@ -836,7 +897,6 @@ func (a *agenda) reset() {
 	} else {
 		clear(a.byRevision)
 	}
-	a.purgeActivations = nil
 	a.tokenFactIndexDirty = false
 	a.revisionIndexDirty = false
 	a.nextOrdinal = 0
@@ -1781,70 +1841,40 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 		})
 	}
 
-	nextActivations := a.purgeActivations
-	if nextActivations == nil {
-		nextActivations = make(map[activationFingerprint]activationBucket, len(a.activations))
-	} else {
-		clear(nextActivations)
-	}
+	nextActivations := make(map[activationFingerprint]activationOrdinalRef, len(a.activations))
+	var nextCollisions map[activationFingerprint]activationCollisionBucket
 	a.resetIndexesForRebuild()
 	oldPending := a.pending
-	oldActivationCount := len(a.activations)
 
-	for identityKey, bucket := range a.activations {
-		nextBucket := activationBucket{}
-		overflow := bucket.overflow[:0]
-		if current := bucket.first; current != nil {
-			if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
-				nextBucket.first = current
-				a.indexActivation(current)
+	a.forEachActivation(func(current *activation) bool {
+		if current == nil {
+			return true
+		}
+		if _, ok := revisionIDs[current.ruleRevisionID]; ok {
+			index := int(current.key.ordinal)
+			if index >= 0 && index < len(a.activationRefs) {
+				a.activationRefs[index] = nil
 			}
+			return true
 		}
-		if current := bucket.second; current != nil {
-			if _, ok := revisionIDs[current.ruleRevisionID]; !ok {
-				if nextBucket.first == nil {
-					nextBucket.first = current
-				} else {
-					nextBucket.second = current
-				}
-				a.indexActivation(current)
+		ref := activationOrdinalRefForKey(current.key)
+		first := nextActivations[current.key.fingerprint]
+		if first.isZero() {
+			nextActivations[current.key.fingerprint] = ref
+		} else {
+			if nextCollisions == nil {
+				nextCollisions = make(map[activationFingerprint]activationCollisionBucket)
 			}
+			bucket := nextCollisions[current.key.fingerprint]
+			bucket.append(ref)
+			nextCollisions[current.key.fingerprint] = bucket
 		}
-		for _, current := range bucket.overflow {
-			if current == nil {
-				continue
-			}
-			if _, ok := revisionIDs[current.ruleRevisionID]; ok {
-				continue
-			}
-			if nextBucket.first == nil {
-				nextBucket.first = current
-			} else if nextBucket.second == nil {
-				nextBucket.second = current
-			} else {
-				overflow = append(overflow, current)
-			}
-			a.indexActivation(current)
-		}
-		if len(bucket.overflow) > 0 {
-			clear(bucket.overflow[len(overflow):])
-		}
-		if len(overflow) > 0 {
-			nextBucket.overflow = overflow
-		}
-		if nextBucket.first != nil {
-			nextActivations[identityKey] = nextBucket
-		}
-	}
+		a.indexActivation(current)
+		return true
+	})
 
-	oldActivations := a.activations
 	a.activations = nextActivations
-	if len(nextActivations) == 0 || len(nextActivations)*4 < oldActivationCount {
-		a.purgeActivations = nil
-	} else {
-		clear(oldActivations)
-		a.purgeActivations = oldActivations
-	}
+	a.activationCollisions = nextCollisions
 
 	nextPending := a.purgeNextPending[:0]
 	for _, key := range oldPending {
@@ -2179,22 +2209,11 @@ func (a *agenda) rebuildIndexes() {
 		return
 	}
 	a.resetIndexesForRebuild()
-	for _, bucket := range a.activations {
-		if current := bucket.first; current != nil {
-			a.indexActivationFacts(current, false)
-			a.indexActivationRevision(current)
-		}
-		if current := bucket.second; current != nil {
-			a.indexActivationFacts(current, false)
-			a.indexActivationRevision(current)
-		}
-		for _, current := range bucket.overflow {
-			if current != nil {
-				a.indexActivationFacts(current, false)
-				a.indexActivationRevision(current)
-			}
-		}
-	}
+	a.forEachActivation(func(current *activation) bool {
+		a.indexActivationFacts(current, false)
+		a.indexActivationRevision(current)
+		return true
+	})
 	a.pruneEmptyIndexes()
 }
 
@@ -2207,19 +2226,10 @@ func (a *agenda) ensureFactIndex() {
 	} else {
 		resetActivationIndex(a.byFactID)
 	}
-	for _, bucket := range a.activations {
-		if current := bucket.first; current != nil {
-			a.indexActivationFacts(current, true)
-		}
-		if current := bucket.second; current != nil {
-			a.indexActivationFacts(current, true)
-		}
-		for _, current := range bucket.overflow {
-			if current != nil {
-				a.indexActivationFacts(current, true)
-			}
-		}
-	}
+	a.forEachActivation(func(current *activation) bool {
+		a.indexActivationFacts(current, true)
+		return true
+	})
 	pruneEmptyActivationIndex(a.byFactID)
 	a.tokenFactIndexDirty = false
 }
@@ -2233,19 +2243,10 @@ func (a *agenda) ensureRevisionIndex() {
 	} else {
 		resetActivationIndex(a.byRevision)
 	}
-	for _, bucket := range a.activations {
-		if current := bucket.first; current != nil {
-			a.indexActivationRevision(current)
-		}
-		if current := bucket.second; current != nil {
-			a.indexActivationRevision(current)
-		}
-		for _, current := range bucket.overflow {
-			if current != nil {
-				a.indexActivationRevision(current)
-			}
-		}
-	}
+	a.forEachActivation(func(current *activation) bool {
+		a.indexActivationRevision(current)
+		return true
+	})
 	pruneEmptyActivationIndex(a.byRevision)
 	a.revisionIndexDirty = false
 }
@@ -2524,17 +2525,16 @@ func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, 
 		return nil, activationKey{}, false
 	}
 	fingerprint := activationFingerprintForIdentityKey(candidate.identity.key)
-	bucket := a.activations[fingerprint]
-	if current := bucket.first; current != nil && activationMatchesCandidate(current, candidate) {
-		return current, current.key, true
-	}
-	if current := bucket.second; current != nil && activationMatchesCandidate(current, candidate) {
-		return current, current.key, true
-	}
-	for _, current := range bucket.overflow {
-		if current != nil && activationMatchesCandidate(current, candidate) {
-			return current, current.key, true
+	var found *activation
+	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+		if activationMatchesCandidate(current, candidate) {
+			found = current
+			return false
 		}
+		return true
+	})
+	if found != nil {
+		return found, found.key, true
 	}
 	return nil, activationKey{}, false
 }
@@ -2551,17 +2551,16 @@ func (a *agenda) activationForTerminalTokenIdentity(rule compiledRule, token tok
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
 	fingerprint := activationFingerprintForIdentityKey(identity.key)
-	bucket := a.activations[fingerprint]
-	if current := bucket.first; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
-		return current, current.key, true
-	}
-	if current := bucket.second; current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
-		return current, current.key, true
-	}
-	for _, current := range bucket.overflow {
-		if current != nil && activationMatchesTerminalToken(current, rule, identity, token) {
-			return current, current.key, true
+	var found *activation
+	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+		if activationMatchesTerminalToken(current, rule, identity, token) {
+			found = current
+			return false
 		}
+		return true
+	})
+	if found != nil {
+		return found, found.key, true
 	}
 	return nil, activationKey{}, false
 }
@@ -2575,17 +2574,16 @@ func (a *agenda) activationForTerminalTokenDelta(rule compiledRule, delta reteTe
 		identity = candidateIdentityForTerminalToken(rule, delta.token)
 	}
 	fingerprint := activationFingerprintForIdentityKey(identity.key)
-	bucket := a.activations[fingerprint]
-	if current := bucket.first; current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
-		return current, current.key, true
-	}
-	if current := bucket.second; current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
-		return current, current.key, true
-	}
-	for _, current := range bucket.overflow {
-		if current != nil && activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
-			return current, current.key, true
+	var found *activation
+	a.forEachActivationWithFingerprint(fingerprint, func(current *activation) bool {
+		if activationMatchesTerminalTokenDelta(current, rule, identity, delta) {
+			found = current
+			return false
 		}
+		return true
+	})
+	if found != nil {
+		return found, found.key, true
 	}
 	return nil, activationKey{}, false
 }
@@ -2734,29 +2732,51 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 	}
 	a.ensureHandleGeneration()
 	fingerprint := activationFingerprintForIdentityKey(act.identity.key)
-	bucket := a.activations[fingerprint]
 	key := activationKey{
 		fingerprint: fingerprint,
 		ordinal:     a.nextOrdinal,
 	}
 	a.nextOrdinal++
 	act.key = key
-	if bucket.first == nil {
-		bucket.first = act
-	} else if bucket.second == nil {
-		bucket.second = act
-	} else {
-		if bucket.overflow == nil {
-			bucket.overflow = make([]*activation, 0, 8)
-		}
-		bucket.overflow = append(bucket.overflow, act)
-	}
-	a.activations[fingerprint] = bucket
+	a.storeActivationRef(fingerprint, activationOrdinalRefForKey(key), act)
 	a.indexActivation(act)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
 	}
 	return key
+}
+
+func (a *agenda) storeActivationRef(fingerprint activationFingerprint, ref activationOrdinalRef, act *activation) {
+	if a == nil || ref.isZero() || act == nil {
+		return
+	}
+	ordinal := ref.ordinal()
+	if ordinal > uint64(int(^uint(0)>>1)) {
+		return
+	}
+	index := int(ordinal)
+	if index >= len(a.activationRefs) {
+		a.activationRefs = append(a.activationRefs, make([]*activation, index-len(a.activationRefs)+1)...)
+	}
+	a.activationRefs[index] = act
+	a.storeActivationOrdinalRef(fingerprint, ref)
+}
+
+func (a *agenda) storeActivationOrdinalRef(fingerprint activationFingerprint, ref activationOrdinalRef) {
+	if a == nil || ref.isZero() {
+		return
+	}
+	first := a.activations[fingerprint]
+	if first.isZero() {
+		a.activations[fingerprint] = ref
+		return
+	}
+	if a.activationCollisions == nil {
+		a.activationCollisions = make(map[activationFingerprint]activationCollisionBucket)
+	}
+	bucket := a.activationCollisions[fingerprint]
+	bucket.append(ref)
+	a.activationCollisions[fingerprint] = bucket
 }
 
 func (a *agenda) ensureHandleGeneration() uint32 {
@@ -2800,23 +2820,72 @@ func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
 	if a == nil {
 		return nil, false
 	}
-	return activationFromBuckets(a.activations, key)
+	ref := activationOrdinalRefForKey(key)
+	current, ok := a.activationByOrdinalRef(ref)
+	if !ok || current.key != key {
+		return nil, false
+	}
+	return current, true
 }
 
-func activationFromBuckets(buckets map[activationFingerprint]activationBucket, key activationKey) (*activation, bool) {
-	bucket := buckets[key.fingerprint]
-	if bucket.first != nil && bucket.first.key == key {
-		return bucket.first, true
+func (a *agenda) activationByOrdinalRef(ref activationOrdinalRef) (*activation, bool) {
+	if a == nil || ref.isZero() {
+		return nil, false
 	}
-	if bucket.second != nil && bucket.second.key == key {
-		return bucket.second, true
+	ordinal := ref.ordinal()
+	if ordinal > uint64(int(^uint(0)>>1)) {
+		return nil, false
 	}
-	for _, current := range bucket.overflow {
-		if current != nil && current.key == key {
-			return current, true
+	index := int(ordinal)
+	if index < 0 || index >= len(a.activationRefs) {
+		return nil, false
+	}
+	current := a.activationRefs[index]
+	return current, current != nil
+}
+
+func (a *agenda) forEachActivationWithFingerprint(fingerprint activationFingerprint, fn func(*activation) bool) {
+	if a == nil || fn == nil {
+		return
+	}
+	if current, ok := a.activationByOrdinalRef(a.activations[fingerprint]); ok {
+		if !fn(current) {
+			return
 		}
 	}
-	return nil, false
+	if bucket, ok := a.activationCollisions[fingerprint]; ok {
+		bucket.forEach(func(ref activationOrdinalRef) bool {
+			current, ok := a.activationByOrdinalRef(ref)
+			if !ok {
+				return true
+			}
+			return fn(current)
+		})
+	}
+}
+
+func (a *agenda) forEachActivation(fn func(*activation) bool) {
+	if a == nil || fn == nil {
+		return
+	}
+	for _, ref := range a.activations {
+		if current, ok := a.activationByOrdinalRef(ref); ok {
+			if !fn(current) {
+				return
+			}
+		}
+	}
+	for _, bucket := range a.activationCollisions {
+		if !bucket.forEach(func(ref activationOrdinalRef) bool {
+			current, ok := a.activationByOrdinalRef(ref)
+			if !ok {
+				return true
+			}
+			return fn(current)
+		}) {
+			return
+		}
+	}
 }
 
 func activationFingerprintForIdentityKey(key candidateIdentityKey) activationFingerprint {

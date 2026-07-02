@@ -1656,12 +1656,15 @@ func TestAgendaPurgeRuleRevisionsPromotesSurvivingOverflowActivation(t *testing.
 	if got := agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 || got[0].key != keptKey {
 		t.Fatalf("kept revision activations after purge = %#v, want kept activation", got)
 	}
-	bucket := agenda.activations[keptKey.fingerprint]
-	if bucket.first == nil || bucket.first.key != keptKey {
-		t.Fatalf("bucket first after purge = %#v, want kept activation", bucket.first)
+	ref := agenda.activations[keptKey.fingerprint]
+	if ref.isZero() {
+		t.Fatal("activation ref after purge is zero")
 	}
-	if len(bucket.overflow) != 0 {
-		t.Fatalf("bucket overflow after purge = %d, want 0", len(bucket.overflow))
+	if stored, ok := agenda.activationByOrdinalRef(ref); !ok || stored.key != keptKey {
+		t.Fatalf("activation ref after purge = (%#v, %v), want kept key %#v", stored, ok, keptKey)
+	}
+	if bucket := agenda.activationCollisions[keptKey.fingerprint]; bucket.len() != 0 {
+		t.Fatalf("collision bucket after purge = %d, want 0", bucket.len())
 	}
 }
 
