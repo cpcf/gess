@@ -123,7 +123,7 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	}
 }
 
-func TestSessionRuntimeDiagnosticsReportsAgendaEntriesAndTombstones(t *testing.T) {
+func TestSessionRuntimeDiagnosticsReportsReleasedAgendaAfterRun(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustRuntimeGuardRuleset(t)
 	session := mustSession(t, revision, "agenda-memory-diagnostics-session")
@@ -153,11 +153,11 @@ func TestSessionRuntimeDiagnosticsReportsAgendaEntriesAndTombstones(t *testing.T
 	if agenda.Owner == "" {
 		t.Fatalf("runtime diagnostics missing agenda owner: %#v", diagnostics.MemoryOwners)
 	}
-	if agenda.Rows == 0 {
-		t.Fatalf("agenda rows = 0, want retained activation entries: %#v", agenda)
+	if agenda.Rows != 0 {
+		t.Fatalf("agenda rows = %d, want no retained activation entries after run completion: %#v", agenda.Rows, agenda)
 	}
-	if agenda.Tombstones == 0 {
-		t.Fatalf("agenda tombstones = 0, want consumed activation tombstones: %#v", agenda)
+	if agenda.Tombstones != 0 {
+		t.Fatalf("agenda tombstones = %d, want no retained consumed activation tombstones after run completion: %#v", agenda.Tombstones, agenda)
 	}
 	if agenda.Bytes == 0 {
 		t.Fatalf("agenda bytes = 0, want retained byte estimate: %#v", agenda)

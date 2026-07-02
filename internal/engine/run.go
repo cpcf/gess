@@ -118,6 +118,9 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 		currentActivation, activation, ok := s.nextFocusedActivation()
 		if !ok {
 			s.mutationQueueMu.Unlock()
+			if s.agenda != nil {
+				s.agenda.compactConsumedActivationRows()
+			}
 			return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 		}
 		s.mutationQueueMu.Unlock()

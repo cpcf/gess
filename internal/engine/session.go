@@ -2637,6 +2637,12 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 			return ApplyRulesetResult{}, err
 		}
 	}
+	activationRevisions := plan.activationRevisions()
+	if ok {
+		tokens = s.agenda.filterTerminalTokenDeltasForRulesetApply(next, tokens, activationRevisions)
+	} else {
+		results = s.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
+	}
 
 	s.revision = next
 	s.rete = rete
@@ -3097,6 +3103,73 @@ type rulesetChangePlan struct {
 	Unchanged []RuleRevisionSummary
 
 	purgeRevisions map[RuleRevisionID]struct{}
+}
+
+func (p rulesetChangePlan) activationRevisions() map[RuleRevisionID]struct{} {
+	count := len(p.Added) + len(p.Replaced)
+	if count == 0 {
+		return nil
+	}
+	out := make(map[RuleRevisionID]struct{}, count)
+	for _, rule := range p.Added {
+		out[rule.RevisionID] = struct{}{}
+	}
+	for _, replacement := range p.Replaced {
+		out[replacement.NewRevisionID] = struct{}{}
+	}
+	return out
+}
+
+func (a *agenda) filterTerminalTokenDeltasForRulesetApply(revision *Ruleset, deltas []reteTerminalTokenDelta, activateRevisions map[RuleRevisionID]struct{}) []reteTerminalTokenDelta {
+	if len(deltas) == 0 {
+		return nil
+	}
+	out := deltas[:0]
+	for _, delta := range deltas {
+		if _, ok := activateRevisions[delta.ruleRevisionID]; ok {
+			out = append(out, delta)
+			continue
+		}
+		if a != nil && revision != nil {
+			rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+			if ok {
+				identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+				if _, _, exists := a.activationForTerminalTokenIdentity(rule, delta.token, identity); exists {
+					out = append(out, delta)
+				}
+			}
+		}
+	}
+	clear(deltas[len(out):])
+	return out
+}
+
+func (a *agenda) filterRuleMatchResultsForRulesetApply(results []ruleMatchResult, activateRevisions map[RuleRevisionID]struct{}) []ruleMatchResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := results[:0]
+	for _, result := range results {
+		if _, ok := activateRevisions[result.ruleRevisionID]; ok {
+			out = append(out, result)
+			continue
+		}
+		if a == nil {
+			continue
+		}
+		keep := false
+		for _, candidate := range result.candidates {
+			if _, _, ok := a.activationForCandidate(candidate); ok {
+				keep = true
+				break
+			}
+		}
+		if keep {
+			out = append(out, result)
+		}
+	}
+	clear(results[len(out):])
+	return out
 }
 
 func classifyRulesetChanges(current, next *Ruleset) (rulesetChangePlan, error) {

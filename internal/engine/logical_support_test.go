@@ -152,16 +152,16 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 	if !ok {
 		t.Fatal("derive rule missing")
 	}
-	stored := consumedActivationForRuleRevision(t, session.agenda, rule.RevisionID())
-	if stored.payload != nil {
-		t.Fatalf("stored consumed activation kept public fields: %#v", stored)
-	}
-	if stored.token.isZero() {
-		t.Fatal("stored consumed activation lost token ref")
+	if stored := consumedActivationForRuleRevision(session.agenda, rule.RevisionID()); stored != nil {
+		t.Fatalf("retained consumed activation = %#v, want support source owned by logical support memory", stored)
 	}
 
-	source := logicalSupportSourceFromActivation(*stored)
-	if source.generation != edges[0].Generation || source.ruleRevisionID != edges[0].RuleRevisionID || source.identityKey != stored.identityKey {
+	record, ok := session.logicalSupportEdges[edges[0].SupportID]
+	if !ok {
+		t.Fatalf("support edge record %q missing", edges[0].SupportID)
+	}
+	source := record.source
+	if source.generation != edges[0].Generation || source.ruleRevisionID != edges[0].RuleRevisionID {
 		t.Fatalf("source key = %#v, edge = %#v", source, edges[0])
 	}
 	if edges[0].ActivationID.IsZero() {
@@ -442,10 +442,9 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 	return revision, source.Key(), derived.Key(), child.Key()
 }
 
-func consumedActivationForRuleRevision(t testing.TB, agenda *agenda, revisionID RuleRevisionID) *activation {
-	t.Helper()
+func consumedActivationForRuleRevision(agenda *agenda, revisionID RuleRevisionID) *activation {
 	if agenda == nil {
-		t.Fatal("agenda is nil")
+		return nil
 	}
 	var found *activation
 	agenda.forEachActivation(func(current *activation) bool {
@@ -458,7 +457,6 @@ func consumedActivationForRuleRevision(t testing.TB, agenda *agenda, revisionID 
 	if found != nil {
 		return found
 	}
-	t.Fatalf("consumed activation for rule revision %q not found", revisionID)
 	return nil
 }
 

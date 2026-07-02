@@ -1351,6 +1351,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			}
 			continue
 		}
+
 		created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
@@ -1638,7 +1639,6 @@ func (a *agenda) reconcileTerminalTokensInternal(ctx context.Context, revision *
 			}
 			continue
 		}
-
 		created, err := a.newTerminalActivationFromTerminalTokenWithIdentity(rule, delta.token, identity)
 		if err != nil {
 			return nil, err
@@ -2830,6 +2830,55 @@ func (a *agenda) activationByOrdinalRef(ref activationOrdinalRef) (*activation, 
 	}
 	current := a.activationRefs[index]
 	return current, current != nil
+}
+
+func (a *agenda) compactConsumedActivationRows() {
+	if a == nil || len(a.activationRefs) == 0 {
+		return
+	}
+	a.normalizePendingKeys()
+	oldRefs := append([]*activation(nil), a.activationRefs...)
+	consumed := 0
+	for _, current := range oldRefs {
+		if current != nil && current.status == activationStatusConsumed {
+			consumed++
+		}
+	}
+	if consumed == 0 {
+		return
+	}
+
+	if a.activations == nil {
+		a.activations = make(map[activationFingerprint]activationOrdinalRef)
+	} else {
+		clear(a.activations)
+	}
+	if a.activationCollisions != nil {
+		for fingerprint, bucket := range a.activationCollisions {
+			clear(bucket.overflow)
+			delete(a.activationCollisions, fingerprint)
+		}
+	}
+	clear(a.activationRefs)
+	a.activationRefs = a.activationRefs[:0]
+	a.resetIndexesForRebuild()
+
+	var nextRows activationRows
+	for _, current := range oldRefs {
+		if current == nil {
+			continue
+		}
+		if current.status == activationStatusConsumed {
+			continue
+		}
+		stored := nextRows.add(*current)
+		a.storeActivationRef(stored.key.fingerprint, activationOrdinalRefForKey(stored.key), stored)
+		a.indexActivation(stored)
+	}
+
+	a.activationRows = nextRows
+	a.terminalActivations = activationRows{}
+	a.rebuildPendingActivationCache()
 }
 
 func (a *agenda) forEachActivationWithFingerprint(fingerprint activationFingerprint, fn func(*activation) bool) {
