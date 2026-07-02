@@ -97,7 +97,7 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	assertCapturedListValue(t, captured, []any{})
 }
 
-func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestListPatternModifyUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	event := mustAddTemplate(t, workspace, TemplateSpec{
@@ -156,7 +156,6 @@ func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
@@ -168,13 +167,13 @@ func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
 	if result.Status != ModifyChanged {
 		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after note modify = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after note modify = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
@@ -186,11 +185,8 @@ func TestListPatternModifyUnobservedSlotRefreshesActivation(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after note modify = %q, want %q", got, beforeActivationID)
-	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {

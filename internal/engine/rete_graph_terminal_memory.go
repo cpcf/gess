@@ -678,83 +678,6 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 	return handle, true
 }
 
-func (m *terminalTokenMemory) refreshTerminalTokensContainingFact(id FactID, updates []reteTerminalTokenUpdate, collectUpdates bool, identityForToken func(tokenRef) candidateIdentity, refresh func(graphTokenRow) (tokenRef, bool)) []reteTerminalTokenUpdate {
-	if m == nil || id.IsZero() || refresh == nil {
-		return updates
-	}
-	m.ensureFactRows()
-	bucket, ok := m.factRows.get(id)
-	if !ok || bucket.len() == 0 {
-		return updates
-	}
-	var previous graphTokenRowID
-	havePrevious := false
-	for i := 0; i < bucket.len(); i++ {
-		rowID, ok := bucket.at(i)
-		if !ok || (havePrevious && rowID == previous) {
-			continue
-		}
-		havePrevious = true
-		previous = rowID
-		row := m.row(rowID)
-		if row == nil {
-			continue
-		}
-		rowToken := m.rowToken(*row)
-		if rowToken.isZero() || !row.isTerminal() || !rowToken.containsFact(id) {
-			continue
-		}
-		beforeIdentityHash := row.identityHash
-		next, ok := refresh(m.graphTokenRow(rowID, *row))
-		if !ok || next.isZero() {
-			continue
-		}
-		before := rowToken
-		identity := candidateIdentity{}
-		if collectUpdates {
-			if identityForToken != nil {
-				identity = identityForToken(before)
-			}
-			identity.key.hash = row.candidateHash
-		}
-		m.replaceRowTokenWithPreviousIdentityHash(rowID, beforeIdentityHash, next)
-		if collectUpdates {
-			updates = append(updates, reteTerminalTokenUpdate{
-				before:   before,
-				after:    next,
-				identity: identity,
-			})
-		}
-	}
-	return updates
-}
-
-func (m *terminalTokenMemory) replaceRowToken(rowID graphTokenRowID, token tokenRef) {
-	m.replaceRowTokenWithPreviousIdentityHash(rowID, 0, token)
-}
-
-func (m *terminalTokenMemory) replaceRowTokenWithPreviousIdentityHash(rowID graphTokenRowID, previousIdentityHash uint64, token tokenRef) {
-	if m == nil || rowID < 0 || token.isZero() || !m.bindTokenArena(token) {
-		return
-	}
-	row := m.row(rowID)
-	if row == nil || row.token.isZero() {
-		return
-	}
-	nextIdentityHash := hashTokenIdentityBucketKey(token.identityKey())
-	if previousIdentityHash == 0 {
-		previousIdentityHash = row.identityHash
-	}
-	if previousIdentityHash != nextIdentityHash {
-		m.ensureIdentityRowsCapacity(len(m.rows))
-		m.removeIdentityHashIndexRow(previousIdentityHash, rowID)
-		m.appendIdentityHashIndexRow(nextIdentityHash, rowID)
-		row.identityHash = nextIdentityHash
-	}
-	row.token = terminalTokenRefFromToken(token)
-	m.markFactRowsDirty()
-}
-
 func (m *terminalTokenMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
 	if m == nil || id.IsZero() {
 		return 0
@@ -1292,37 +1215,6 @@ func (m *queryTerminalMemory) insertRow(token tokenRef) bool {
 	return true
 }
 
-func (m *queryTerminalMemory) refreshTokensContainingFact(id FactID, refresh func(tokenRef) (tokenRef, bool)) {
-	if m == nil || id.IsZero() || refresh == nil {
-		return
-	}
-	m.ensureFactRows()
-	bucket, ok := m.factRows.get(id)
-	if !ok || bucket.len() == 0 {
-		return
-	}
-	var previous graphTokenRowID
-	havePrevious := false
-	for i := 0; i < bucket.len(); i++ {
-		rowID, ok := bucket.at(i)
-		if !ok || (havePrevious && rowID == previous) {
-			continue
-		}
-		havePrevious = true
-		previous = rowID
-		row := m.row(rowID)
-		if row == nil || row.token.isZero() || row.supportCount <= 0 || !row.token.containsFact(id) {
-			continue
-		}
-		beforeIdentityHash := row.identityHash
-		next, ok := refresh(row.token)
-		if !ok || next.isZero() {
-			continue
-		}
-		m.replaceRowTokenWithPreviousIdentityHash(rowID, beforeIdentityHash, next)
-	}
-}
-
 func (m *queryTerminalMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
 	if m == nil || id.IsZero() {
 		return 0
@@ -1419,28 +1311,6 @@ func (m *queryTerminalMemory) removeToken(token tokenRef, counters *propagationC
 		return true
 	}
 	return false
-}
-
-func (m *queryTerminalMemory) replaceRowTokenWithPreviousIdentityHash(rowID graphTokenRowID, previousIdentityHash uint64, token tokenRef) {
-	if m == nil || rowID < 0 || token.isZero() {
-		return
-	}
-	row := m.row(rowID)
-	if row == nil || row.token.isZero() {
-		return
-	}
-	nextIdentityHash := hashTokenIdentityBucketKey(token.identityKey())
-	if previousIdentityHash == 0 {
-		previousIdentityHash = row.identityHash
-	}
-	if previousIdentityHash != nextIdentityHash {
-		m.ensureIdentityRowsCapacity(len(m.rows))
-		m.removeIdentityHashIndexRow(previousIdentityHash, rowID)
-		m.appendIdentityHashIndexRow(nextIdentityHash, rowID)
-		row.identityHash = nextIdentityHash
-	}
-	row.token = token
-	m.markFactRowsDirty()
 }
 
 func (m *queryTerminalMemory) removeRow(rowID graphTokenRowID, counters *propagationCounterLedger) {

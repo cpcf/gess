@@ -30,7 +30,7 @@ func TestBetaSideMemoryStoresNegativeBlockerCount(t *testing.T) {
 	}
 }
 
-func TestTokenArenaCopiedRowsOwnCopiedMatchUntilRefresh(t *testing.T) {
+func TestTokenArenaCopiedRowsOwnCopiedMatch(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{conditionID: "event", bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
@@ -60,25 +60,6 @@ func TestTokenArenaCopiedRowsOwnCopiedMatchUntilRefresh(t *testing.T) {
 		t.Fatalf("copied match condition ID = %q, want %q", got, want)
 	}
 
-	after := FactSnapshot{id: fact.ID(), version: 2, recency: 2, generation: 1}
-	refreshed, ok := memory.refreshTokenFactRefInPlace(copied, fact.ID(), newConditionFactRefFromSnapshot(after))
-	if !ok {
-		t.Fatal("refreshTokenFactRefInPlace returned false")
-	}
-	refreshedRow, ok := refreshed.resolve()
-	if !ok {
-		t.Fatal("refreshed token did not resolve")
-	}
-	if refreshedRow.fact.Version() != after.Version() {
-		t.Fatal("refreshed token row did not update owned fact")
-	}
-	refreshedMatch, ok := tokenRefAtSlot(refreshed, 0)
-	if !ok {
-		t.Fatal("refreshed token match did not resolve")
-	}
-	if got, want := refreshedMatch.fact.Version(), after.Version(); got != want {
-		t.Fatalf("refreshed match version = %d, want %d", got, want)
-	}
 	sourceMatch, ok := tokenRefAtSlot(source, 0)
 	if !ok {
 		t.Fatal("source token match did not resolve")
@@ -226,35 +207,6 @@ func TestBetaSideMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 }
 
-func TestBetaSideMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
-	arena := newTokenArena()
-	before := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
-	entry := bindingTupleEntry{bindingSlot: 0, factID: before.ID(), factVersion: before.Version()}
-	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
-
-	var memory betaSideMemory
-	if !memory.insert(token, betaJoinKey{}) {
-		t.Fatal("insert returned false")
-	}
-	after := FactSnapshot{id: before.ID(), version: 2, recency: 2, generation: 1}
-	owner := &reteGraphBetaMemory{arena: arena}
-	if ok := memory.refreshTokensContainingFact(before.ID(), func(row graphTokenRow) (tokenRef, bool) {
-		return owner.refreshTokenFactRefInPlace(row.token, before.ID(), newConditionFactRefFromSnapshot(after))
-	}); !ok {
-		t.Fatal("refreshTokensContainingFact returned false")
-	}
-	updated := arena.add(tokenRef{}, bindingTupleEntry{bindingSlot: 0, factID: after.ID(), factVersion: after.Version()}, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(after)}, after.Recency(), after.Generation())
-	if token.identityKey() != updated.identityKey() {
-		t.Fatalf("refreshed token identity key = %#v, want %#v", token.identityKey(), updated.identityKey())
-	}
-	if !memory.containsExactToken(token) {
-		t.Fatal("refreshed token handle missing from identity index")
-	}
-	if removed, ok := memory.removeToken(updated, nil); !ok || !tokenRefEqual(removed.token, updated) {
-		t.Fatalf("remove equivalent refreshed token = (%#v, %v), want refreshed token", removed, ok)
-	}
-}
-
 func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
@@ -348,32 +300,6 @@ func TestTerminalTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 	if removed, ok := memory.removeToken(firstToken, nil, 0); !ok || !tokenRefEqual(removed.token, firstToken) {
 		t.Fatalf("remove first after collision = (%#v, %v), want first token", removed, ok)
-	}
-}
-
-func TestTerminalTokenMemoryRefreshInPlaceRekeysIdentity(t *testing.T) {
-	arena := newTokenArena()
-	before := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
-	entry := bindingTupleEntry{bindingSlot: 0, factID: before.ID(), factVersion: before.Version()}
-	token := arena.add(tokenRef{}, entry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(before)}, before.Recency(), before.Generation())
-
-	var memory terminalTokenMemory
-	handle, inserted := memory.insertTerminalRow(token, 0, candidateIdentityKey{})
-	if !inserted {
-		t.Fatal("insertTerminalRow returned false")
-	}
-	after := FactSnapshot{id: before.ID(), version: 2, recency: 2, generation: 1}
-	owner := &reteGraphBetaMemory{arena: arena}
-	if _, ok := owner.refreshTokenFactRefInPlace(token, before.ID(), newConditionFactRefFromSnapshot(after)); !ok {
-		t.Fatal("refreshTokenFactRefInPlace returned false")
-	}
-	memory.replaceRowToken(0, token)
-	if row := memory.rowByHandle(handle); row == nil || row.identityHash != hashTokenIdentityBucketKey(token.identityKey()) {
-		t.Fatalf("refreshed terminal row = %#v, want updated identity hash", row)
-	}
-	updated := arena.add(tokenRef{}, bindingTupleEntry{bindingSlot: 0, factID: after.ID(), factVersion: after.Version()}, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(after)}, after.Recency(), after.Generation())
-	if removed, ok := memory.removeToken(updated, nil, 0); !ok || !tokenRefEqual(removed.token, updated) {
-		t.Fatalf("remove equivalent refreshed terminal token = (%#v, %v), want refreshed token", removed, ok)
 	}
 }
 

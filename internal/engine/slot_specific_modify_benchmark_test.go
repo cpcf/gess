@@ -447,7 +447,7 @@ func BenchmarkReteGraphSlotSpecificModifyMixedRefresh(b *testing.B) {
 	}
 }
 
-func TestReteGraphSlotSpecificModifyMixedRefreshUsesFastPath(t *testing.T) {
+func TestReteGraphSlotSpecificModifyMixedUsesRouteScopedEvents(t *testing.T) {
 	ctx := context.Background()
 	session, targets := mustSlotSpecificModifyMixedBenchmarkSession(t, "slot-specific-modify-mixed-refresh-test-session")
 	session.attachPropagationCounters()
@@ -465,8 +465,8 @@ func TestReteGraphSlotSpecificModifyMixedRefreshUsesFastPath(t *testing.T) {
 		if got := after.ModifyFastPathFallbacks - before.ModifyFastPathFallbacks; got != 0 {
 			t.Fatalf("Modify %s fast-path fallbacks = %d, want 0", target.name, got)
 		}
-		if got := after.ModifyFastPathSkips - before.ModifyFastPathSkips; got != 1 {
-			t.Fatalf("Modify %s fast-path skips = %d, want 1", target.name, got)
+		if got := after.ModifyFastPathSkips - before.ModifyFastPathSkips; got != 0 {
+			t.Fatalf("Modify %s fast-path skips = %d, want 0", target.name, got)
 		}
 	}
 }

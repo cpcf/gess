@@ -2748,7 +2748,7 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t 
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -2759,7 +2759,7 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t 
 	}
 }
 
-func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-matched-declared-unobserved-slot-session")
@@ -2778,7 +2778,6 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivat
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
@@ -2790,27 +2789,14 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivat
 	if result.Status != ModifyChanged {
 		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal token removals = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal token additions = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal token updates = %d, want %d", got, want)
-	}
-	if delta.updated[0].before.isZero() {
-		t.Fatal("terminal update before token is zero")
-	}
-	if delta.updated[0].after.isZero() {
-		t.Fatal("terminal update after token was not refreshed")
-	}
-	match, ok := tokenFactMatchForBindingSlot(delta.updated[0].after, 0)
-	if !ok {
-		t.Fatal("terminal update after token missing refreshed fact match")
-	}
-	if got, want := match.fact.Version(), result.Fact.Version(); got != want {
-		t.Fatalf("terminal update after token version = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
 		t.Fatalf("applyReteAgendaDelta: %v", err)
@@ -2821,19 +2807,16 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivat
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after unobserved modify = %q, want %q", got, beforeActivationID)
-	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
 		t.Fatalf("modify fast-path fallbacks = %d, want 0", got)
 	}
 	if _, err := session.Run(ctx); err != nil {
-		t.Fatalf("Run after token refresh: %v", err)
+		t.Fatalf("Run after route-scoped modify: %v", err)
 	}
 
 	result, delta, err = session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
@@ -2856,7 +2839,7 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotRefreshesActivat
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
-func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	person := mustAddTemplate(t, workspace, TemplateSpec{
@@ -2901,7 +2884,6 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, inserted.Fact.ID(), FactPatch{
@@ -2913,13 +2895,13 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivati
 	if result.Status != ModifyChanged {
 		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after note modify = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after note modify = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
@@ -2931,11 +2913,8 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after note modify = %q, want %q", got, beforeActivationID)
-	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -2965,7 +2944,7 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotRefreshesActivati
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
-func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustBetaModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-joined-declared-unobserved-slot-session")
@@ -2987,7 +2966,6 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
@@ -2999,13 +2977,13 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivati
 	if result.Status != ModifyChanged {
 		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal token removals = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal token additions = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal token updates = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
@@ -3017,15 +2995,12 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after joined unobserved modify = %q, want %q", got, beforeActivationID)
-	}
 	if _, err := session.Run(ctx); err != nil {
-		t.Fatalf("Run after joined token refresh: %v", err)
+		t.Fatalf("Run after joined route-scoped modify: %v", err)
 	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -3052,7 +3027,7 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotRefreshesActivati
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
-func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	revision, eventKey := mustFilterModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-filter-declared-unobserved-slot-session")
@@ -3071,7 +3046,6 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, event.Fact.ID(), FactPatch{
@@ -3083,13 +3057,13 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivati
 	if result.Status != ModifyChanged {
 		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal token removals = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal token additions = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal token updates = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
@@ -3101,15 +3075,12 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivati
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after filter unobserved modify = %q, want %q", got, beforeActivationID)
-	}
 	if _, err := session.Run(ctx); err != nil {
-		t.Fatalf("Run after filter token refresh: %v", err)
+		t.Fatalf("Run after filter route-scoped modify: %v", err)
 	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -3136,7 +3107,7 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotRefreshesActivati
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
-func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotRefreshesActivation(t *testing.T) {
+func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotReplacesActivation(t *testing.T) {
 	ctx := context.Background()
 	revision, customerKey, _ := mustNegationModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-negation-left-declared-unobserved-slot-session")
@@ -3154,7 +3125,6 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotRefreshesAc
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	beforeActivationID := pending[0].activationID()
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, customer.Fact.ID(), FactPatch{
@@ -3166,13 +3136,13 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotRefreshesAc
 	if result.Status != ModifyChanged {
 		t.Fatalf("modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal token removals = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal token removals = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal token additions = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal token updates = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(ctx, delta); err != nil {
@@ -3184,12 +3154,9 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotRefreshesAc
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
-	if got := pending[0].activationID(); got != beforeActivationID {
-		t.Fatalf("activation ID after negative left unobserved modify = %q, want %q", got, beforeActivationID)
-	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -3243,7 +3210,7 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after code modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {

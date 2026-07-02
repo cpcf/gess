@@ -376,6 +376,22 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 		t.Fatalf("rows before modify = %d, want %d", got, want)
 	}
 	assertQueryRowStringValue(t, rows[0], "note", "old")
+	query, ok := revision.query("employees-by-dept")
+	if !ok {
+		t.Fatal("compiled query missing")
+	}
+	compiledArgs, err := query.compileArgs(QueryArgs{"dept": "Engineering"})
+	if err != nil {
+		t.Fatalf("compile query args: %v", err)
+	}
+	trigger := session.queryTriggerFact(query, &compiledArgs)
+	memory := session.rete.graphBeta
+	if _, err := memory.insertFactInternal(ctx, trigger, nil, false); err != nil {
+		t.Fatalf("insert query trigger: %v", err)
+	}
+	if got, want := queryTerminalRowsRetained(memory, query.name), 1; got != want {
+		t.Fatalf("retained query rows before modify = %d, want %d", got, want)
+	}
 
 	session.attachPropagationCounters()
 	result, delta, err := session.modifyImmediate(ctx, employee.Fact.ID(), FactPatch{
@@ -396,6 +412,17 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	if got := len(delta.updated); got != 0 {
 		t.Fatalf("rule terminal token updates = %d, want 0 for query terminal", got)
 	}
+	if got, want := queryTerminalRowsRetained(memory, query.name), 1; got != want {
+		t.Fatalf("retained query rows after modify = %d, want %d", got, want)
+	}
+	retainedRows, err := memory.materializeQueryTerminalRows(ctx, query, &compiledArgs, Snapshot{revision: revision}, revision.graph.queryTerminalIDs[query.name], trigger.ID())
+	if err != nil {
+		t.Fatalf("materialize retained rows after modify: %v", err)
+	}
+	if got, want := len(retainedRows), 1; got != want {
+		t.Fatalf("retained rows after modify = %d, want %d", got, want)
+	}
+	assertQueryRowStringValue(t, retainedRows[0], "note", "new")
 	rows, err = session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
 	if err != nil {
 		t.Fatalf("QueryAll after note modify: %v", err)
@@ -406,7 +433,7 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	assertQueryRowStringValue(t, rows[0], "note", "new")
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -456,7 +483,7 @@ func TestSessionJoinedQueryModifyJoinKeyUsesRouteScopedEventsAndRetractsRow(t *t
 	}
 
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {

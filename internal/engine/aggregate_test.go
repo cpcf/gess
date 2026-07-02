@@ -399,7 +399,7 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 		t.Fatal("apply note delta unexpectedly skipped")
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -998,7 +998,7 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 		t.Fatal("apply note delta unexpectedly skipped")
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -1140,13 +1140,13 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	if result.Status != ModifyChanged {
 		t.Fatalf("note modify status = %v, want %v", result.Status, ModifyChanged)
 	}
-	if got := len(delta.removed); got != 0 {
-		t.Fatalf("terminal removals after note modify = %d, want 0", got)
+	if got, want := len(delta.removed), 1; got != want {
+		t.Fatalf("terminal removals after note modify = %d, want %d", got, want)
 	}
-	if got := len(delta.added); got != 0 {
-		t.Fatalf("terminal additions after note modify = %d, want 0", got)
+	if got, want := len(delta.added), 1; got != want {
+		t.Fatalf("terminal additions after note modify = %d, want %d", got, want)
 	}
-	if got, want := len(delta.updated), 1; got != want {
+	if got, want := len(delta.updated), 0; got != want {
 		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
@@ -1158,7 +1158,7 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}
 	snapshot := session.propagationCounterSnapshot()
-	if got, want := snapshot.Totals.ModifyFastPathSkips, 1; got != want {
+	if got, want := snapshot.Totals.ModifyFastPathSkips, 0; got != want {
 		t.Fatalf("modify fast-path skips after note modify = %d, want %d", got, want)
 	}
 	if got := snapshot.Totals.ModifyFastPathFallbacks; got != 0 {
@@ -1528,9 +1528,8 @@ func assertCollectedValue(t *testing.T, got Value, want []Value) {
 	}
 }
 
-func TestAggregateBucketTableRekeysAndReusesRows(t *testing.T) {
+func TestAggregateBucketTableRecyclesRows(t *testing.T) {
 	firstKey := graphTokenIdentityKey{size: 1, generation: 1, identityState: 11}
-	secondKey := graphTokenIdentityKey{size: 1, generation: 1, identityState: 22}
 	table := reteGraphAggregateBucketTable{
 		rows: []reteGraphAggregateBucket{{id: 0}},
 		ids:  map[graphTokenIdentityKey]reteGraphAggregateBucketID{firstKey: 0},
@@ -1541,17 +1540,7 @@ func TestAggregateBucketTableRekeysAndReusesRows(t *testing.T) {
 	if !ok {
 		t.Fatal("initial bucket lookup failed")
 	}
-	if !table.rekey(firstKey, secondKey, bucket) {
-		t.Fatal("rekey failed")
-	}
-	if _, ok := table.get(firstKey); ok {
-		t.Fatal("old key still resolves after rekey")
-	}
-	if got, ok := table.get(secondKey); !ok || got != bucket {
-		t.Fatalf("new key lookup = %#v, %v; want original bucket", got, ok)
-	}
-
-	removed, ok := table.remove(secondKey)
+	removed, ok := table.remove(firstKey)
 	if !ok || removed != bucket {
 		t.Fatalf("remove = %#v, %v; want original bucket", removed, ok)
 	}

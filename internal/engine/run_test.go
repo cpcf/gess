@@ -1537,7 +1537,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		}
 	})
 
-	t.Run("supported token update delta", func(t *testing.T) {
+	t.Run("supported route-scoped modify delta", func(t *testing.T) {
 		workspace := NewWorkspace()
 		trigger := mustAddTemplate(t, workspace, TemplateSpec{
 			Name: "trigger",
@@ -1574,17 +1574,17 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 					return errors.New("person was not modified")
 				}
 				if session.agendaDirty {
-					return errors.New("supported token update dirtied agenda")
+					return errors.New("supported route-scoped modify dirtied agenda")
 				}
 				if !session.agendaReady {
-					return errors.New("supported token update cleared agenda readiness")
+					return errors.New("supported route-scoped modify cleared agenda readiness")
 				}
 				if !session.runAgendaPending {
-					return errors.New("supported token update did not record run delta")
+					return errors.New("supported route-scoped modify did not record run delta")
 				}
 				snapshot := session.propagationCounterSnapshot()
-				if snapshot.Totals.ModifyFastPathSkips != 1 {
-					return errors.New("person modify did not use fast-path token update")
+				if snapshot.Totals.ModifyFastPathSkips != 0 {
+					return errors.New("route-scoped modify was incorrectly counted as a skip")
 				}
 				return nil
 			},
@@ -1613,7 +1613,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Actions: []RuleActionSpec{{Name: "record-person"}},
 		})
 		revision := mustCompileWorkspace(t, workspace)
-		session = mustSession(t, revision, "run-supported-token-update-delta-session")
+		session = mustSession(t, revision, "run-supported-route-scoped-modify-delta-session")
 		inserted, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"id":     "p-1",
 			"status": "active",
@@ -1639,10 +1639,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
 		if session.runAgendaPending {
-			t.Fatal("run delta remained pending after token update run")
+			t.Fatal("run delta remained pending after route-scoped modify run")
 		}
 		if session.agendaDirty || !session.agendaReady {
-			t.Fatalf("agenda state after token update run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+			t.Fatalf("agenda state after route-scoped modify run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
 		}
 	})
 
