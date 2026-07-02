@@ -1230,6 +1230,17 @@ func (tc graphNegativePropagationBenchmarkCase) affectedBetaRows() int {
 	}
 }
 
+func (tc graphNegativePropagationBenchmarkCase) removalRowsTouched() int {
+	touched := tc.affectedBetaRows() + tc.affectedTerminalRows()
+	switch tc.betaDepth {
+	case 0:
+		touched += 2 * tc.level1Width * tc.level2Width
+	case 1:
+		touched += 4 * tc.level2Width
+	}
+	return touched
+}
+
 func (tc graphNegativePropagationBenchmarkCase) initialTerminalRows() int {
 	return 2*tc.level1Width*tc.level2Width*tc.level3Width + tc.retainedGroups
 }
@@ -1434,6 +1445,7 @@ func assertGraphNegativePropagationCounterSnapshot(tb testing.TB, snapshot propa
 	affectedTerminals := tc.affectedTerminalRows()
 	affectedBetaRows := tc.affectedBetaRows()
 	affectedRows := affectedBetaRows + affectedTerminals
+	touchedRows := tc.removalRowsTouched()
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
 		tb.Fatalf("runtime path = %q, want %q", snapshot.RuntimePath, propagationRuntimeGraphBeta)
 	}
@@ -1455,8 +1467,8 @@ func assertGraphNegativePropagationCounterSnapshot(tb testing.TB, snapshot propa
 	if got, want := snapshot.Totals.RemovalRowsRemoved, affectedRows; got != want {
 		tb.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsTouched, affectedRows; got != want {
-		tb.Fatalf("removal rows touched = %d, want topology-limited %d", got, want)
+	if got, want := snapshot.Totals.RemovalRowsTouched, touchedRows; got != want {
+		tb.Fatalf("removal rows touched = %d, want join-bucket-limited %d", got, want)
 	}
 	if got, want := snapshot.Totals.RemovalIndexLookups, affectedRows; got != want {
 		tb.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)

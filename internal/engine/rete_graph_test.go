@@ -455,6 +455,71 @@ func TestReteGraphSharesEquivalentAlphaAndBetaStages(t *testing.T) {
 	if summary.TerminalNodes[3].input != (reteGraphStageRef{kind: reteGraphStageBeta, id: int(summary.BetaNodes[0].id)}) {
 		t.Fatalf("terminal 4 input = %#v, want shared beta %#v", summary.TerminalNodes[3].input, summary.BetaNodes[0].id)
 	}
+	assertReteGraphHasNoDuplicateStageEdges(t, revision.graph)
+}
+
+func assertReteGraphHasNoDuplicateStageEdges(t testing.TB, graph *reteGraph) {
+	t.Helper()
+
+	for _, node := range graph.alphaNodes {
+		assertReteGraphStageHasNoDuplicateEdges(t, graph, reteGraphStageRef{kind: reteGraphStageAlpha, id: int(node.id)})
+	}
+	for _, node := range graph.betaNodes {
+		assertReteGraphStageHasNoDuplicateEdges(t, graph, reteGraphStageRef{kind: reteGraphStageBeta, id: int(node.id)})
+	}
+	for _, node := range graph.aggregateNodes {
+		assertReteGraphStageHasNoDuplicateEdges(t, graph, reteGraphStageRef{kind: reteGraphStageAggregate, id: int(node.id)})
+	}
+}
+
+func assertReteGraphStageHasNoDuplicateEdges(t testing.TB, graph *reteGraph, stage reteGraphStageRef) {
+	t.Helper()
+
+	successors := make(map[struct {
+		id   reteGraphBetaNodeID
+		side reteGraphBetaInputSide
+	}]struct{}, len(graph.stageSuccessors(stage)))
+	for _, successor := range graph.stageSuccessors(stage) {
+		key := struct {
+			id   reteGraphBetaNodeID
+			side reteGraphBetaInputSide
+		}{id: successor.betaNodeID, side: successor.side}
+		if _, ok := successors[key]; ok {
+			t.Fatalf("stage %#v has duplicate successor %#v", stage, key)
+		}
+		successors[key] = struct{}{}
+	}
+
+	terminals := make(map[struct {
+		id       reteGraphTerminalNodeID
+		branchID int
+	}]struct{}, len(graph.stageTerminals(stage)))
+	for _, terminal := range graph.stageTerminals(stage) {
+		key := struct {
+			id       reteGraphTerminalNodeID
+			branchID int
+		}{id: terminal.terminalID, branchID: terminal.branchID}
+		if _, ok := terminals[key]; ok {
+			t.Fatalf("stage %#v has duplicate terminal %#v", stage, key)
+		}
+		terminals[key] = struct{}{}
+	}
+
+	aggregateInputs := make(map[reteGraphAggregateNodeID]struct{}, len(graph.stageAggregateInputs(stage)))
+	for _, id := range graph.stageAggregateInputs(stage) {
+		if _, ok := aggregateInputs[id]; ok {
+			t.Fatalf("stage %#v has duplicate aggregate input %d", stage, id)
+		}
+		aggregateInputs[id] = struct{}{}
+	}
+
+	aggregateOuters := make(map[reteGraphAggregateNodeID]struct{}, len(graph.stageAggregateOuters(stage)))
+	for _, id := range graph.stageAggregateOuters(stage) {
+		if _, ok := aggregateOuters[id]; ok {
+			t.Fatalf("stage %#v has duplicate aggregate outer %d", stage, id)
+		}
+		aggregateOuters[id] = struct{}{}
+	}
 }
 
 func TestReteGraphTreatsFlatAndTreeConditionsEquivalently(t *testing.T) {

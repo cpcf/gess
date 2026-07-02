@@ -539,11 +539,10 @@ func addBetaSideMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memor
 		return
 	}
 	joinBuckets := memory.indexes.keyCount()
-	identityBuckets := memory.identityRows.keyCount()
 	factIndexes := memory.factIndexKeyCount()
 
 	out.Rows += uint64(len(memory.rows))
-	out.Buckets += uint64(joinBuckets + identityBuckets)
+	out.Buckets += uint64(joinBuckets)
 	out.Indexes += uint64(factIndexes)
 	out.HighWater += uint64(betaSideMemoryHighWater(memory))
 	out.Bytes += betaSideMemoryRetainedBytes(memory)
@@ -556,8 +555,6 @@ func betaSideMemoryHighWater(memory betaSideMemory) int {
 	highWater += cap(memory.indexes.heads)
 	highWater += cap(memory.indexes.tails)
 	highWater += cap(memory.indexes.touched)
-	highWater += cap(memory.identityRows.heads)
-	highWater += cap(memory.identityRows.touched)
 	highWater += cap(memory.factRows.entries)
 	highWater += cap(memory.factRows.touched)
 	highWater += cap(memory.factLinks)
@@ -571,7 +568,6 @@ func betaSideMemoryRetainedBytes(memory betaSideMemory) uint64 {
 	bytes += sliceBytes[betaTokenRowHandleEntry](cap(memory.rowHandles))
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinHeadTableBytes(memory.indexes)
-	bytes += tokenIdentityHeadTableBytes(memory.identityRows)
 	bytes += betaFactHeadTableBytes(memory.factRows)
 	bytes += sliceBytes[betaFactLinkRow](cap(memory.factLinks))
 	bytes += sliceBytes[betaFactLinkID](cap(memory.freeFactLinks))

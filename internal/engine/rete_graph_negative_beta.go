@@ -107,11 +107,11 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 	return true, nil
 }
 
-func (m reteGraphNegativeBetaMemory) removeLeft(token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+func (m reteGraphNegativeBetaMemory) removeLeft(joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
 	if m.owner == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false
 	}
-	removedRow, removedOK := m.memory.left.removeToken(token, counters)
+	removedRow, removedOK := m.memory.left.removeTokenWithJoinKey(token, joinKey, counters)
 	if !removedOK {
 		return true
 	}
@@ -130,7 +130,7 @@ func (m reteGraphNegativeBetaMemory) removeRight(joinKey betaJoinKey, token toke
 	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false
 	}
-	removedRow, removedOK := m.memory.right.removeToken(token, counters)
+	removedRow, removedOK := m.memory.right.removeTokenWithJoinKey(token, joinKey, counters)
 	if !removedOK {
 		return true
 	}

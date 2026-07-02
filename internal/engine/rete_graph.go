@@ -1457,6 +1457,9 @@ func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor ret
 	if g == nil || source.kind == reteGraphStageUnknown || successor.betaNodeID <= 0 {
 		return
 	}
+	if g.stageHasSuccessor(source, successor) {
+		return
+	}
 	g.successorsByStage[source] = append(g.successorsByStage[source], successor)
 	edges := g.stageEdges(source)
 	if edges != nil {
@@ -1464,8 +1467,23 @@ func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor ret
 	}
 }
 
+func (g *reteGraph) stageHasSuccessor(source reteGraphStageRef, successor reteGraphStageSuccessor) bool {
+	if g == nil || source.kind == reteGraphStageUnknown || successor.betaNodeID <= 0 {
+		return false
+	}
+	for _, existing := range g.stageSuccessors(source) {
+		if existing.betaNodeID == successor.betaNodeID && existing.side == successor.side {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphTerminalRoute) {
 	if g == nil || source.kind == reteGraphStageUnknown || terminal.terminalID <= 0 {
+		return
+	}
+	if g.stageHasTerminal(source, terminal) {
 		return
 	}
 	if index := int(terminal.terminalID) - 1; index >= 0 && index < len(g.terminalNodes) {
@@ -1484,8 +1502,23 @@ func (g *reteGraph) appendTerminal(source reteGraphStageRef, terminal reteGraphT
 	}
 }
 
+func (g *reteGraph) stageHasTerminal(source reteGraphStageRef, terminal reteGraphTerminalRoute) bool {
+	if g == nil || source.kind == reteGraphStageUnknown || terminal.terminalID <= 0 {
+		return false
+	}
+	for _, existing := range g.stageTerminals(source) {
+		if existing.terminalID == terminal.terminalID && existing.branchID == terminal.branchID {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *reteGraph) appendStageAggregateInput(source reteGraphStageRef, id reteGraphAggregateNodeID) {
 	if g == nil || source.kind == reteGraphStageUnknown || id <= 0 {
+		return
+	}
+	if slices.Contains(g.stageAggregateInputs(source), id) {
 		return
 	}
 	edges := g.stageEdges(source)
@@ -1496,6 +1529,9 @@ func (g *reteGraph) appendStageAggregateInput(source reteGraphStageRef, id reteG
 
 func (g *reteGraph) appendStageAggregateOuter(source reteGraphStageRef, id reteGraphAggregateNodeID) {
 	if g == nil || source.kind == reteGraphStageUnknown || id <= 0 {
+		return
+	}
+	if slices.Contains(g.stageAggregateOuters(source), id) {
 		return
 	}
 	edges := g.stageEdges(source)

@@ -237,19 +237,17 @@ type reteGraphTokenMemoryDiagnostics struct {
 }
 
 type betaSideMemory struct {
-	rows                 []betaTokenRow
-	rowHandles           []betaTokenRowHandleEntry
-	indexes              betaJoinHeadTable
-	identityRows         tokenIdentityHeadTable
-	factRows             betaFactHeadTable
-	factLinks            []betaFactLinkRow
-	freeFactLinks        []betaFactLinkID
-	rowReserve           int
-	joinIndexReserve     int
-	identityIndexReserve int
-	factIndexReserve     int
-	factRowsDirty        bool
-	freeRowHandles       []graphTokenRowHandleID
+	rows             []betaTokenRow
+	rowHandles       []betaTokenRowHandleEntry
+	indexes          betaJoinHeadTable
+	factRows         betaFactHeadTable
+	factLinks        []betaFactLinkRow
+	freeFactLinks    []betaFactLinkID
+	rowReserve       int
+	joinIndexReserve int
+	factIndexReserve int
+	factRowsDirty    bool
+	freeRowHandles   []graphTokenRowHandleID
 }
 
 type graphTokenRowID int
@@ -308,8 +306,6 @@ type betaTokenRow struct {
 	token        tokenRef
 	joinKey      betaJoinKey
 	joinNext     graphTokenRowID
-	identity     graphTokenIdentityKey
-	identityNext graphTokenRowID
 	blockerCount int
 }
 
@@ -359,7 +355,7 @@ func (r betaTokenRow) toGraphTokenRow() graphTokenRow {
 		handle:       r.handle,
 		token:        r.token,
 		joinKey:      r.joinKey,
-		identity:     r.identity,
+		identity:     tokenRefKey(r.token),
 		supportCount: r.blockerCount,
 	}
 }
@@ -928,7 +924,6 @@ func (m *betaSideMemory) clear() {
 	}
 	m.rows = m.rows[:0]
 	m.indexes.clear()
-	m.identityRows.clear()
 	m.factRows.clear()
 	clear(m.factLinks)
 	m.factLinks = m.factLinks[:0]
@@ -1089,20 +1084,6 @@ func (m *betaSideMemory) appendJoinIndexRow(key betaJoinKey, id graphTokenRowID)
 	}
 	tail.joinNext = ref
 	m.indexes.setTail(key, ref)
-}
-
-func (m *betaSideMemory) appendIdentityIndexRow(key graphTokenIdentityKey, id graphTokenRowID) {
-	if m == nil {
-		return
-	}
-	row := m.row(id)
-	if row == nil {
-		return
-	}
-	hash := hashTokenIdentityBucketKey(key)
-	head := m.identityRows.headHash(hash)
-	row.identityNext = head
-	m.identityRows.setHeadHash(hash, graphTokenRowIDRef(id))
 }
 
 func (m *betaSideMemory) appendFactIndexRow(key FactID, id graphTokenRowID) {
@@ -1316,36 +1297,18 @@ func (m *betaSideMemory) insertRowWithNegativeBlockerCount(token tokenRef, joinK
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}, false
 	}
-	identity := tokenRefKey(token)
-	identityHash := hashTokenIdentityBucketKey(identity)
-	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
-		row := m.row(rowID)
-		if row != nil {
-			ref = row.identityNext
-		} else {
-			ref = 0
-		}
-		if row != nil && row.identity == identity && tokenRefEqual(row.token, token) {
-			return row.handle, false
-		}
-	}
-
 	rowID := graphTokenRowID(len(m.rows))
 	m.ensureRowCapacity(int(rowID) + 1)
 	m.ensureJoinRowsCapacity(int(rowID) + 1)
-	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	m.rows[rowID] = betaTokenRow{
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
-		identity:     identity,
 		blockerCount: negativeBlockerCount,
 	}
 	m.appendJoinIndexRow(joinKey, rowID)
-	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return handle, true
 }
@@ -1354,44 +1317,32 @@ func (m *betaSideMemory) insertFreshRowWithNegativeBlockerCount(token tokenRef, 
 	if m == nil || token.isZero() {
 		return graphTokenRowHandle{}
 	}
-	identity := tokenRefKey(token)
 	rowID := graphTokenRowID(len(m.rows))
 	m.ensureRowCapacity(int(rowID) + 1)
 	m.ensureJoinRowsCapacity(int(rowID) + 1)
-	m.ensureIdentityRowsCapacity(int(rowID) + 1)
 	m.rows = m.rows[:int(rowID)+1]
 	handle := m.allocateRowHandle(rowID)
 	m.rows[rowID] = betaTokenRow{
 		handle:       handle,
 		token:        token,
 		joinKey:      joinKey,
-		identity:     identity,
 		blockerCount: negativeBlockerCount,
 	}
 	m.appendJoinIndexRow(joinKey, rowID)
-	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return handle
 }
 
 func (m *betaSideMemory) containsExactToken(token tokenRef) bool {
-	if m == nil || token.isZero() || m.identityRows.keyCount() == 0 {
+	if m == nil || token.isZero() {
 		return false
 	}
 	if _, ok := token.resolve(); !ok {
 		return false
 	}
-	identity := tokenRefKey(token)
-	identityHash := hashTokenIdentityBucketKey(identity)
-	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
-		row := m.row(rowID)
-		if row != nil {
-			ref = row.identityNext
-		} else {
-			ref = 0
-		}
-		if row != nil && row.identity == identity && row.token.handle == token.handle {
+	for i := range m.rows {
+		row := &m.rows[i]
+		if row.token.handle == token.handle {
 			return true
 		}
 	}
@@ -1453,22 +1404,9 @@ func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounte
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	identity := tokenRefKey(token)
-	identityHash := hashTokenIdentityBucketKey(identity)
-	if m.identityRows.headHash(identityHash) == 0 {
-		return graphTokenRow{}, false
-	}
-	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
-		row := m.row(rowID)
-		if row != nil {
-			ref = row.identityNext
-		} else {
-			ref = 0
-		}
-		if row == nil || row.identity != identity {
-			continue
-		}
+	for rowIndex := range m.rows {
+		rowID := graphTokenRowID(rowIndex)
+		row := &m.rows[rowIndex]
 		if counters != nil {
 			counters.recordRemovalRowTouched()
 		}
@@ -1480,6 +1418,38 @@ func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounte
 		return removed, true
 	}
 	return graphTokenRow{}, false
+}
+
+func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (graphTokenRow, bool) {
+	if m == nil || token.isZero() {
+		return graphTokenRow{}, false
+	}
+	if counters != nil {
+		counters.recordRemovalIndexLookup()
+	}
+	var removed graphTokenRow
+	var removedID graphTokenRowID
+	found := false
+	m.forEachJoinRow(joinKey, func(rowID graphTokenRowID, row *betaTokenRow) bool {
+		if row == nil {
+			return true
+		}
+		if counters != nil {
+			counters.recordRemovalRowTouched()
+		}
+		if !tokenRefEqual(row.token, token) {
+			return true
+		}
+		removed = row.toGraphTokenRow()
+		removedID = rowID
+		found = true
+		return false
+	})
+	if !found {
+		return graphTokenRow{}, false
+	}
+	m.removeRow(removedID, counters)
+	return removed, true
 }
 
 func (m *betaSideMemory) removeTokenByHandle(handle graphTokenRowHandle, counters *propagationCounterLedger, branchID int) (graphTokenRow, bool, bool) {
@@ -1542,7 +1512,6 @@ func (m *betaSideMemory) removeRow(rowID graphTokenRowID, counters *propagationC
 	}
 	removed := m.rows[index]
 	m.removeJoinIndexRow(removed.joinKey, rowID)
-	m.removeIdentityIndexRow(removed.identity, rowID)
 	if !m.factRowsDirty {
 		m.removeTokenFacts(removed.token, rowID)
 	}
@@ -1555,7 +1524,6 @@ func (m *betaSideMemory) removeRow(rowID graphTokenRowID, counters *propagationC
 			counters.recordRemovalRowMoved()
 		}
 		m.replaceJoinIndexRow(moved.joinKey, graphTokenRowID(last), rowID)
-		m.replaceIdentityIndexRow(moved.identity, graphTokenRowID(last), rowID)
 		if !m.factRowsDirty {
 			m.replaceTokenFactRows(moved.token, graphTokenRowID(last), rowID)
 		}
@@ -1658,86 +1626,6 @@ func (m *betaSideMemory) replaceJoinIndexRow(key betaJoinKey, oldID, newID graph
 			return true
 		}
 		ref = current.joinNext
-	}
-	return false
-}
-
-func (m *betaSideMemory) ensureIdentityRowsCapacity(rowCapacity int) {
-	if m == nil {
-		return
-	}
-	if m.identityRows.reserve(max(8, rowCapacity)) {
-		m.rebuildIdentityRows()
-	}
-}
-
-func (m *betaSideMemory) rebuildIdentityRows() {
-	if m == nil {
-		return
-	}
-	m.identityRows.clear()
-	for index := range m.rows {
-		m.rows[index].identityNext = 0
-	}
-	for index := range m.rows {
-		row := &m.rows[index]
-		if row.token.isZero() {
-			continue
-		}
-		m.appendIdentityIndexRow(row.identity, graphTokenRowID(index))
-	}
-}
-
-func (m *betaSideMemory) removeIdentityIndexRow(identity graphTokenIdentityKey, rowID graphTokenRowID) bool {
-	if m == nil || len(m.identityRows.heads) == 0 {
-		return false
-	}
-	hash := hashTokenIdentityBucketKey(identity)
-	var previous *betaTokenRow
-	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
-		current := m.row(currentID)
-		if current == nil {
-			break
-		}
-		next := current.identityNext
-		if currentID == rowID {
-			if previous == nil {
-				m.identityRows.setHeadHash(hash, next)
-			} else {
-				previous.identityNext = next
-			}
-			current.identityNext = 0
-			return true
-		}
-		previous = current
-		ref = next
-	}
-	return false
-}
-
-func (m *betaSideMemory) replaceIdentityIndexRow(identity graphTokenIdentityKey, oldID, newID graphTokenRowID) bool {
-	if m == nil || len(m.identityRows.heads) == 0 || oldID == newID {
-		return false
-	}
-	hash := hashTokenIdentityBucketKey(identity)
-	oldRef := graphTokenRowIDRef(oldID)
-	newRef := graphTokenRowIDRef(newID)
-	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
-		current := m.row(currentID)
-		if current == nil {
-			break
-		}
-		if ref == oldRef {
-			m.identityRows.setHeadHash(hash, newRef)
-			return true
-		}
-		if current.identityNext == oldRef {
-			current.identityNext = newRef
-			return true
-		}
-		ref = current.identityNext
 	}
 	return false
 }
@@ -5181,7 +5069,7 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		if err != nil || !ok {
 			return false
 		}
-		removedRow, removedOK := nodeMemory.left.removeToken(token, counters)
+		removedRow, removedOK := nodeMemory.left.removeTokenWithJoinKey(token, joinKey, counters)
 		removed, ok = removedRow.token, removedOK
 	case reteGraphBetaInputRight:
 		var err error
@@ -5189,7 +5077,7 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		if err != nil || !ok {
 			return false
 		}
-		removedRow, removedOK := nodeMemory.right.removeToken(token, counters)
+		removedRow, removedOK := nodeMemory.right.removeTokenWithJoinKey(token, joinKey, counters)
 		removed, ok = removedRow.token, removedOK
 	default:
 		return false
@@ -5248,7 +5136,7 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputToken(nodeID reteGraphBetaNod
 		return false
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	removedRow, removedOK := nodeMemory.left.removeToken(token, counters)
+	removedRow, removedOK := nodeMemory.left.removeTokenWithJoinKey(token, betaJoinKey{}, counters)
 	if !removedOK {
 		return true
 	}
@@ -5266,7 +5154,11 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 	negativeMemory := m.negativeBetaMemory(nodeID, node)
 	switch side {
 	case reteGraphBetaInputLeft:
-		return negativeMemory.removeLeft(token, counters, delta)
+		joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(m.context(), node, token, nil)
+		if err != nil || !ok {
+			return false
+		}
+		return negativeMemory.removeLeft(joinKey, token, counters, delta)
 	case reteGraphBetaInputRight:
 		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, nil)
 		if err != nil || !ok {
@@ -7612,12 +7504,6 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaSideMemory) {
 	s.JoinIndexKeysMax = max(s.JoinIndexKeysMax, joinKeys)
 	s.JoinIndexReserveMax = max(s.JoinIndexReserveMax, memory.joinIndexReserve)
 
-	identityKeys := memory.identityRows.keyCount()
-	s.IdentityIndexKeys += identityKeys
-	s.IdentityIndexReserve += memory.identityIndexReserve
-	s.IdentityIndexKeysMax = max(s.IdentityIndexKeysMax, identityKeys)
-	s.IdentityIndexReserveMax = max(s.IdentityIndexReserveMax, memory.identityIndexReserve)
-
 	factKeys := memory.factIndexKeyCount()
 	s.FactIndexKeys += factKeys
 	s.FactIndexReserve += memory.factIndexReserve
@@ -7690,10 +7576,9 @@ func (m *reteGraphBetaMemory) betaNodeMemoryAt(id reteGraphBetaNodeID) *reteGrap
 
 func (m betaSideMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	diag := reteGraphTokenMemoryDiagnostics{
-		Rows:              len(m.rows),
-		JoinIndexKeys:     m.indexes.keyCount(),
-		IdentityIndexKeys: m.identityRows.keyCount(),
-		FactIndexKeys:     m.factIndexKeyCount(),
+		Rows:          len(m.rows),
+		JoinIndexKeys: m.indexes.keyCount(),
+		FactIndexKeys: m.factIndexKeyCount(),
 	}
 	seen := make(map[betaJoinKey]struct{}, m.indexes.keyCount())
 	for _, row := range m.rows {

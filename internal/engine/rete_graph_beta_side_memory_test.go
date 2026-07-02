@@ -134,7 +134,7 @@ func TestTokenRefIdentityKeyUsesArenaMetadata(t *testing.T) {
 	}
 }
 
-func TestBetaSideMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
+func TestBetaSideMemoryAppendsEquivalentReconstructedToken(t *testing.T) {
 	arena := newTokenArena()
 	fact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	entry := bindingTupleEntry{bindingSlot: 0, factID: fact.ID(), factVersion: fact.Version()}
@@ -154,14 +154,17 @@ func TestBetaSideMemoryDedupesEquivalentReconstructedToken(t *testing.T) {
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
-	if memory.insert(secondToken, betaJoinKey{}) {
-		t.Fatal("insert(equivalent second) returned true, want duplicate suppression")
+	if !memory.insert(secondToken, betaJoinKey{}) {
+		t.Fatal("insert(equivalent second) returned false")
 	}
-	if got, want := len(memory.rows), 1; got != want {
+	if got, want := len(memory.rows), 2; got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
-	if removed, ok := memory.removeToken(secondToken, nil); !ok || !tokenRefEqual(removed.token, firstToken) {
-		t.Fatalf("remove equivalent token = (%#v, %v), want first token", removed, ok)
+	if removed, ok := memory.removeTokenWithJoinKey(secondToken, betaJoinKey{}, nil); !ok || !tokenRefEqual(removed.token, firstToken) {
+		t.Fatalf("remove equivalent token = (%#v, %v), want an equivalent token", removed, ok)
+	}
+	if got, want := len(memory.rows), 1; got != want {
+		t.Fatalf("rows after removal = %d, want %d", got, want)
 	}
 }
 
@@ -340,6 +343,41 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	}
 	if removed := memory.removeContainingFact(secondFact.ID(), counters); removed != 1 {
 		t.Fatalf("removed moved row = %d, want 1", removed)
+	}
+}
+
+func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesSwapRemoval(t *testing.T) {
+	arena := newTokenArena()
+	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
+	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
+	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
+	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
+	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
+	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
+	firstKey := betaJoinKey{intValue: 10}
+	secondKey := betaJoinKey{intValue: 20}
+
+	var memory betaSideMemory
+	if !memory.insert(firstToken, firstKey) {
+		t.Fatal("insert(first) returned false")
+	}
+	if !memory.insert(secondToken, secondKey) {
+		t.Fatal("insert(second) returned false")
+	}
+
+	counters := newPropagationCounterLedger()
+	if removed, ok := memory.removeTokenWithJoinKey(firstToken, firstKey, counters); !ok || !tokenRefEqual(removed.token, firstToken) {
+		t.Fatalf("remove first = (%#v, %v), want first token", removed, ok)
+	}
+	snapshot := counters.snapshot()
+	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+		t.Fatalf("removal rows moved = %d, want %d", got, want)
+	}
+	if removed, ok := memory.removeTokenWithJoinKey(secondToken, secondKey, counters); !ok || !tokenRefEqual(removed.token, secondToken) {
+		t.Fatalf("remove moved second = (%#v, %v), want second token", removed, ok)
+	}
+	if got := len(memory.rows); got != 0 {
+		t.Fatalf("rows after removing moved token = %d, want 0", got)
 	}
 }
 

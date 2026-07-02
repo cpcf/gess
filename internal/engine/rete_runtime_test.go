@@ -2533,7 +2533,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if got, want := snapshot.TerminalRowsRetained, 0; got != want {
 		t.Fatalf("terminal rows retained after retract = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalIndexLookups, 6; got != want {
+	if got, want := snapshot.Totals.RemovalIndexLookups, 5; got != want {
 		t.Fatalf("removal index lookups = %d, want topology-limited %d", got, want)
 	}
 	if got, want := snapshot.Totals.RemovalRowsTouched, 5; got != want {
@@ -3855,8 +3855,8 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := snapshot.GraphBetaMemory.JoinIndexKeys, 3; got != want {
 		t.Fatalf("graph join index keys = %d, want join and residual filter beta keys %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 4; got != want {
-		t.Fatalf("graph identity index keys = %d, want each retained token identity %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 1; got != want {
+		t.Fatalf("graph identity index keys = %d, want terminal token identity only %d", got, want)
 	}
 	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 6; got != want {
 		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
@@ -4036,7 +4036,7 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
 
-func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
+func TestReteRuntimeGraphBetaTerminalTokenIdentityIndexesUseFactIdentity(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	threshold := mustAddTemplate(t, workspace, TemplateSpec{
@@ -4099,11 +4099,11 @@ func TestReteRuntimeGraphBetaTokenIdentityIndexesUseFactIdentity(t *testing.T) {
 	if got, want := snapshot.GraphBetaMemory.TokenRows, 7; got != want {
 		t.Fatalf("graph token rows = %d, want join inputs, residual rows, and terminal rows %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 7; got != want {
-		t.Fatalf("graph identity index keys = %d, want one key per retained token %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 2; got != want {
+		t.Fatalf("graph identity index keys = %d, want terminal token identities only %d", got, want)
 	}
 	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeysMax, 2; got != want {
-		t.Fatalf("graph identity index keys max = %d, want two keys in right/terminal memories %d", got, want)
+		t.Fatalf("graph identity index keys max = %d, want two terminal identity keys %d", got, want)
 	}
 	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 9; got != want {
 		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
