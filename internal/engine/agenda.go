@@ -173,14 +173,14 @@ func (h compactAgendaEntryHandle) index() int {
 }
 
 type compactAgendaEntry struct {
-	key              activationKey
-	ruleRevisionID   RuleRevisionID
-	identityKey      candidateIdentityKey
-	token            tokenRef
-	salience         int
-	maxRecency       Recency
-	aggregateRecency Recency
-	status           activationStatus
+	key            activationKey
+	ruleRevisionID RuleRevisionID
+	identityKey    candidateIdentityKey
+	token          tokenRef
+	salience       int
+	maxRecency     Recency
+	totalRecency   Recency
+	status         activationStatus
 }
 
 type compactAgendaEntryRow struct {
@@ -389,15 +389,15 @@ func (s activationStatus) String() string {
 }
 
 type activation struct {
-	key              activationKey
-	ruleRevisionID   RuleRevisionID
-	identityKey      candidateIdentityKey
-	token            tokenRef
-	salience         int
-	maxRecency       Recency
-	aggregateRecency Recency
-	status           activationStatus
-	payload          *activationPayload
+	key            activationKey
+	ruleRevisionID RuleRevisionID
+	identityKey    candidateIdentityKey
+	token          tokenRef
+	salience       int
+	maxRecency     Recency
+	totalRecency   Recency
+	status         activationStatus
+	payload        *activationPayload
 }
 
 type activationPayload struct {
@@ -1417,7 +1417,7 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		}
 		existing.token = update.after
 		existing.maxRecency = update.after.maxRecency()
-		existing.aggregateRecency = update.after.aggregateRecency()
+		existing.totalRecency = update.after.totalRecency()
 		if existing.status == activationStatusPending {
 			refreshPendingOrder = true
 			continue
@@ -2054,14 +2054,14 @@ func activationRunSnapshot(current *activation) activation {
 		return out
 	}
 	return activation{
-		key:              current.key,
-		ruleRevisionID:   current.ruleRevisionID,
-		identityKey:      current.identityKey,
-		token:            current.token,
-		salience:         current.salience,
-		maxRecency:       current.maxRecency,
-		aggregateRecency: current.aggregateRecency,
-		status:           current.status,
+		key:            current.key,
+		ruleRevisionID: current.ruleRevisionID,
+		identityKey:    current.identityKey,
+		token:          current.token,
+		salience:       current.salience,
+		maxRecency:     current.maxRecency,
+		totalRecency:   current.totalRecency,
+		status:         current.status,
 	}
 }
 
@@ -2455,8 +2455,8 @@ func activationLess(left, right *activation) bool {
 	if left.maxRecency != right.maxRecency {
 		return left.maxRecency > right.maxRecency
 	}
-	if left.aggregateRecency != right.aggregateRecency {
-		return left.aggregateRecency > right.aggregateRecency
+	if left.totalRecency != right.totalRecency {
+		return left.totalRecency > right.totalRecency
 	}
 	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
@@ -2489,8 +2489,8 @@ func (a *agenda) activationLess(left, right *activation) bool {
 	if left.maxRecency != right.maxRecency {
 		return left.maxRecency > right.maxRecency
 	}
-	if left.aggregateRecency != right.aggregateRecency {
-		return left.aggregateRecency > right.aggregateRecency
+	if left.totalRecency != right.totalRecency {
+		return left.totalRecency > right.totalRecency
 	}
 	if a != nil && a.revision != nil && left.ruleRevisionID != right.ruleRevisionID {
 		leftRule, leftOK := a.revision.rulesByRevisionID[left.ruleRevisionID]
@@ -3164,7 +3164,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.setFactVersions(cloneFactVersions(candidate.factVersions))
 	dst.salience = rule.salience
 	dst.maxRecency = candidate.maxRecency
-	dst.aggregateRecency = candidate.aggregateRecency
+	dst.totalRecency = candidate.totalRecency
 	dst.status = activationStatusPending
 }
 
@@ -3215,7 +3215,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.token = token
 	dst.salience = rule.salience
 	dst.maxRecency = row.maxRecency
-	dst.aggregateRecency = row.aggregateRecency
+	dst.totalRecency = row.totalRecency
 	dst.status = activationStatusPending
 	return nil
 }

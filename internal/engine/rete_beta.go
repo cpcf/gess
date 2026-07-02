@@ -41,15 +41,15 @@ type tokenRowEntry struct {
 }
 
 type tokenRow struct {
-	parent           tokenParentHandle
-	bindingSlot      int
-	fact             *conditionFactRef
-	value            Value
-	hasValue         bool
-	size             int
-	maxRecency       Recency
-	aggregateRecency Recency
-	identityState    uint64
+	parent        tokenParentHandle
+	bindingSlot   int
+	fact          *conditionFactRef
+	value         Value
+	hasValue      bool
+	size          int
+	maxRecency    Recency
+	totalRecency  Recency
+	identityState uint64
 }
 
 type tokenIdentityKey = graphTokenIdentityKey
@@ -176,7 +176,7 @@ func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch,
 	row.fact = a.internFactRef(match.fact, match.hasValue)
 	row.size = 1
 	row.maxRecency = recency
-	row.aggregateRecency = recency
+	row.totalRecency = recency
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(candidateIdentityHashStart(tokenGeneration), entry)
 
@@ -227,12 +227,12 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 		row.parent = tokenParentHandle{rowID: parent.handle.rowID}
 		row.size = parentRow.size + 1
 		row.maxRecency = max(recency, parentRow.maxRecency)
-		row.aggregateRecency = addRecency(parentRow.aggregateRecency, recency)
+		row.totalRecency = addRecency(parentRow.totalRecency, recency)
 		row.identityState = parentRow.identityState
 	} else {
 		row.size = 1
 		row.maxRecency = recency
-		row.aggregateRecency = recency
+		row.totalRecency = recency
 		row.identityState = candidateIdentityHashStart(tokenGeneration)
 	}
 	row.setEntry(entry)
@@ -449,12 +449,12 @@ func (r tokenRef) maxRecency() Recency {
 	return row.maxRecency
 }
 
-func (r tokenRef) aggregateRecency() Recency {
+func (r tokenRef) totalRecency() Recency {
 	row, ok := r.resolve()
 	if !ok {
 		return 0
 	}
-	return row.aggregateRecency
+	return row.totalRecency
 }
 
 func (r tokenRef) generation() Generation {

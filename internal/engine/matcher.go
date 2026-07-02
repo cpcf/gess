@@ -19,16 +19,16 @@ type ruleMatchResult struct {
 }
 
 type matchCandidate struct {
-	ruleID           RuleID
-	ruleRevisionID   RuleRevisionID
-	identity         candidateIdentity
-	bindingTuple     []bindingTupleEntry
-	factIDs          []FactID
-	factVersions     []FactVersion
-	generation       Generation
-	maxRecency       Recency
-	aggregateRecency Recency
-	path             []int
+	ruleID         RuleID
+	ruleRevisionID RuleRevisionID
+	identity       candidateIdentity
+	bindingTuple   []bindingTupleEntry
+	factIDs        []FactID
+	factVersions   []FactVersion
+	generation     Generation
+	maxRecency     Recency
+	totalRecency   Recency
+	path           []int
 }
 
 type bindingTupleEntry struct {
@@ -166,16 +166,16 @@ func buildMatchCandidateFromTokenRefWithScratch(rule compiledRule, generation Ge
 	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
 
 	return matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		identity:         identity,
-		bindingTuple:     entries,
-		factIDs:          factIDs,
-		factVersions:     factVersions,
-		generation:       generation,
-		maxRecency:       token.maxRecency(),
-		aggregateRecency: token.aggregateRecency(),
-		path:             path,
+		ruleID:         rule.id,
+		ruleRevisionID: rule.revisionID,
+		identity:       identity,
+		bindingTuple:   entries,
+		factIDs:        factIDs,
+		factVersions:   factVersions,
+		generation:     generation,
+		maxRecency:     token.maxRecency(),
+		totalRecency:   token.totalRecency(),
+		path:           path,
 	}, nil
 }
 

@@ -116,8 +116,8 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		if candidate.maxRecency != []Recency{first.Fact.Recency(), second.Fact.Recency(), third.Fact.Recency()}[i] {
 			t.Fatalf("match-person candidate %d max recency = %d", i, candidate.maxRecency)
 		}
-		if candidate.aggregateRecency != candidate.maxRecency {
-			t.Fatalf("match-person candidate %d aggregate recency = %d, want %d", i, candidate.aggregateRecency, candidate.maxRecency)
+		if candidate.totalRecency != candidate.maxRecency {
+			t.Fatalf("match-person candidate %d total recency = %d, want %d", i, candidate.totalRecency, candidate.maxRecency)
 		}
 		if got, want := candidate.path, []int{0}; len(got) != len(want) || got[0] != want[0] {
 			t.Fatalf("match-person candidate %d path = %#v, want %#v", i, got, want)
@@ -149,7 +149,7 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		{second.Fact.Version(), third.Fact.Version()},
 	}
 	wantMaxRecency := []Recency{third.Fact.Recency(), second.Fact.Recency(), third.Fact.Recency()}
-	wantAggregateRecency := []Recency{Recency(uint64(first.Fact.Recency()) + uint64(third.Fact.Recency())), Recency(uint64(second.Fact.Recency()) + uint64(first.Fact.Recency())), Recency(uint64(second.Fact.Recency()) + uint64(third.Fact.Recency()))}
+	wantTotalRecency := []Recency{Recency(uint64(first.Fact.Recency()) + uint64(third.Fact.Recency())), Recency(uint64(second.Fact.Recency()) + uint64(first.Fact.Recency())), Recency(uint64(second.Fact.Recency()) + uint64(third.Fact.Recency()))}
 
 	for i, candidate := range results[1].candidates {
 		if got, want := len(candidate.bindingTuple), 2; got != want {
@@ -182,8 +182,8 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		if candidate.maxRecency != wantMaxRecency[i] {
 			t.Fatalf("age-pairs candidate %d max recency = %d, want %d", i, candidate.maxRecency, wantMaxRecency[i])
 		}
-		if candidate.aggregateRecency != wantAggregateRecency[i] {
-			t.Fatalf("age-pairs candidate %d aggregate recency = %d, want %d", i, candidate.aggregateRecency, wantAggregateRecency[i])
+		if candidate.totalRecency != wantTotalRecency[i] {
+			t.Fatalf("age-pairs candidate %d total recency = %d, want %d", i, candidate.totalRecency, wantTotalRecency[i])
 		}
 		if got, want := candidate.path, []int{0, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("age-pairs candidate %d path = %#v, want %#v", i, got, want)

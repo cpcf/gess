@@ -451,15 +451,15 @@ func TestCoverageAgendaActivationFromCandidateAndTerminalToken(t *testing.T) {
 	}
 
 	candidate := matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		generation:       fact.Generation(),
-		identity:         candidateIdentityForTerminalToken(rule, token),
-		bindingTuple:     []bindingTupleEntry{entry},
-		factIDs:          []FactID{fact.ID()},
-		factVersions:     []FactVersion{fact.Version()},
-		maxRecency:       fact.Recency(),
-		aggregateRecency: fact.Recency(),
+		ruleID:         rule.id,
+		ruleRevisionID: rule.revisionID,
+		generation:     fact.Generation(),
+		identity:       candidateIdentityForTerminalToken(rule, token),
+		bindingTuple:   []bindingTupleEntry{entry},
+		factIDs:        []FactID{fact.ID()},
+		factVersions:   []FactVersion{fact.Version()},
+		maxRecency:     fact.Recency(),
+		totalRecency:   fact.Recency(),
 	}
 	candidateActivation := activationFromCandidate(rule, candidate)
 	if candidateActivation.identityKey != activation.identityKey || candidateActivation.factIDs()[0] != fact.ID() {

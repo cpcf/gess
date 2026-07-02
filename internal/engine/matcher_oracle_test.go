@@ -63,13 +63,13 @@ type bindingSet struct {
 }
 
 type matchToken struct {
-	parent           *matchToken
-	match            conditionMatch
-	size             int
-	pathLen          int
-	maxRecency       Recency
-	aggregateRecency Recency
-	identityState    uint64
+	parent        *matchToken
+	match         conditionMatch
+	size          int
+	pathLen       int
+	maxRecency    Recency
+	totalRecency  Recency
+	identityState uint64
 }
 
 type aggregateValueBinding struct {
@@ -124,7 +124,7 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 
 	entries := make([]bindingTupleEntry, len(matches))
 	maxRecency := Recency(0)
-	aggregateRecency := Recency(0)
+	totalRecency := Recency(0)
 	for i, match := range matches {
 		if match.bindingSlot < 0 || match.bindingSlot >= len(rule.conditions) {
 			return matchCandidate{}, fmt.Errorf("%w: malformed binding slot %d for rule %q", ErrMatcher, match.bindingSlot, rule.name)
@@ -151,7 +151,7 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 			if recency > maxRecency {
 				maxRecency = recency
 			}
-			aggregateRecency = addRecency(aggregateRecency, recency)
+			totalRecency = addRecency(totalRecency, recency)
 		}
 	}
 
@@ -185,16 +185,16 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 	identity := candidateIdentityFor(rule.id, rule.revisionID, rule.identityScopeHash, generation, entries)
 
 	return matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		identity:         identity,
-		bindingTuple:     entries,
-		factIDs:          factIDs,
-		factVersions:     factVersions,
-		generation:       generation,
-		maxRecency:       maxRecency,
-		aggregateRecency: aggregateRecency,
-		path:             path,
+		ruleID:         rule.id,
+		ruleRevisionID: rule.revisionID,
+		identity:       identity,
+		bindingTuple:   entries,
+		factIDs:        factIDs,
+		factVersions:   factVersions,
+		generation:     generation,
+		maxRecency:     maxRecency,
+		totalRecency:   totalRecency,
+		path:           path,
 	}, nil
 }
 
@@ -231,16 +231,16 @@ func buildMatchCandidateFromTokenGeneration(rule compiledRule, generation Genera
 	}
 
 	return matchCandidate{
-		ruleID:           rule.id,
-		ruleRevisionID:   rule.revisionID,
-		identity:         identity,
-		bindingTuple:     entries,
-		factIDs:          factIDs,
-		factVersions:     factVersions,
-		generation:       generation,
-		maxRecency:       token.maxRecency,
-		aggregateRecency: token.aggregateRecency,
-		path:             path,
+		ruleID:         rule.id,
+		ruleRevisionID: rule.revisionID,
+		identity:       identity,
+		bindingTuple:   entries,
+		factIDs:        factIDs,
+		factVersions:   factVersions,
+		generation:     generation,
+		maxRecency:     token.maxRecency,
+		totalRecency:   token.totalRecency,
+		path:           path,
 	}, nil
 }
 
@@ -277,13 +277,13 @@ func makeMatchToken(parent *matchToken, entry bindingTupleEntry, match condition
 		token.size = 1
 		token.pathLen = len(entry.conditionPath)
 		token.maxRecency = recency
-		token.aggregateRecency = recency
+		token.totalRecency = recency
 		token.identityState = candidateIdentityHashStart(generation)
 	} else {
 		token.size = parent.size + 1
 		token.pathLen = parent.pathLen + len(entry.conditionPath)
 		token.maxRecency = max(recency, parent.maxRecency)
-		token.aggregateRecency = addRecency(parent.aggregateRecency, recency)
+		token.totalRecency = addRecency(parent.totalRecency, recency)
 		token.identityState = parent.identityState
 	}
 	token.identityState = candidateIdentityHashStep(token.identityState, entry)

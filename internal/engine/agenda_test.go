@@ -333,13 +333,13 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 		t.Fatalf("arena row capacity = %d, want at least 2", cap(arena.rows))
 	}
 	first := compactAgendaEntry{
-		key:              activationKey{fingerprint: 10, ordinal: 1},
-		ruleRevisionID:   "rule-1@1",
-		identityKey:      candidateIdentityKey{scopeHash: 5, hash: 6},
-		salience:         11,
-		maxRecency:       12,
-		aggregateRecency: 13,
-		status:           activationStatusPending,
+		key:            activationKey{fingerprint: 10, ordinal: 1},
+		ruleRevisionID: "rule-1@1",
+		identityKey:    candidateIdentityKey{scopeHash: 5, hash: 6},
+		salience:       11,
+		maxRecency:     12,
+		totalRecency:   13,
+		status:         activationStatusPending,
 	}
 	firstHandle, stored := arena.add(first)
 	if firstHandle.isZero() {
@@ -1856,34 +1856,34 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 func TestActivationLessOrdersBySalienceRecencyAndCompactIdentity(t *testing.T) {
 	acts := []activation{
 		{
-			salience:         20,
-			maxRecency:       1,
-			aggregateRecency: 1,
-			identityKey:      candidateIdentityKey{hash: 5},
+			salience:     20,
+			maxRecency:   1,
+			totalRecency: 1,
+			identityKey:  candidateIdentityKey{hash: 5},
 		},
 		{
-			salience:         10,
-			maxRecency:       9,
-			aggregateRecency: 9,
-			identityKey:      candidateIdentityKey{hash: 4},
+			salience:     10,
+			maxRecency:   9,
+			totalRecency: 9,
+			identityKey:  candidateIdentityKey{hash: 4},
 		},
 		{
-			salience:         10,
-			maxRecency:       9,
-			aggregateRecency: 8,
-			identityKey:      candidateIdentityKey{hash: 3},
+			salience:     10,
+			maxRecency:   9,
+			totalRecency: 8,
+			identityKey:  candidateIdentityKey{hash: 3},
 		},
 		{
-			salience:         10,
-			maxRecency:       9,
-			aggregateRecency: 8,
-			identityKey:      candidateIdentityKey{hash: 2},
+			salience:     10,
+			maxRecency:   9,
+			totalRecency: 8,
+			identityKey:  candidateIdentityKey{hash: 2},
 		},
 		{
-			salience:         10,
-			maxRecency:       9,
-			aggregateRecency: 8,
-			identityKey:      candidateIdentityKey{hash: 1},
+			salience:     10,
+			maxRecency:   9,
+			totalRecency: 8,
+			identityKey:  candidateIdentityKey{hash: 1},
 		},
 	}
 
@@ -1902,9 +1902,9 @@ func TestActivationLessOrdersBySalienceRecencyAndCompactIdentity(t *testing.T) {
 
 func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 	base := activation{
-		salience:         10,
-		maxRecency:       9,
-		aggregateRecency: 8,
+		salience:     10,
+		maxRecency:   9,
+		totalRecency: 8,
 	}
 	tests := []struct {
 		name  string
@@ -2553,15 +2553,15 @@ func compactAgendaChangeActivationForCompare(owner *agenda, act *activation) act
 
 func mustCollisionCandidate(ruleID RuleID, revisionID RuleRevisionID, identity candidateIdentity, factID FactID, version FactVersion, recency Recency) matchCandidate {
 	return matchCandidate{
-		ruleID:           ruleID,
-		ruleRevisionID:   revisionID,
-		identity:         identity,
-		factIDs:          []FactID{factID},
-		factVersions:     []FactVersion{version},
-		generation:       identity.generation,
-		maxRecency:       recency,
-		aggregateRecency: recency,
-		path:             []int{0},
+		ruleID:         ruleID,
+		ruleRevisionID: revisionID,
+		identity:       identity,
+		factIDs:        []FactID{factID},
+		factVersions:   []FactVersion{version},
+		generation:     identity.generation,
+		maxRecency:     recency,
+		totalRecency:   recency,
+		path:           []int{0},
 		bindingTuple: []bindingTupleEntry{
 			{
 				binding:        "person",

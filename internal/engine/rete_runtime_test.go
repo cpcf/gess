@@ -4925,7 +4925,7 @@ func assertMatchCandidateEqual(t testing.TB, resultIndex, candidateIndex int, le
 		left.identity != right.identity ||
 		left.generation != right.generation ||
 		left.maxRecency != right.maxRecency ||
-		left.aggregateRecency != right.aggregateRecency {
+		left.totalRecency != right.totalRecency {
 		t.Fatalf("candidate %d/%d metadata differs:\n%s=%#v\n%s=%#v", resultIndex, candidateIndex, leftName, left, rightName, right)
 	}
 	if !reflect.DeepEqual(left.bindingTuple, right.bindingTuple) {
@@ -4953,16 +4953,16 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 	records := make([]activationParityRecord, len(activations))
 	for i, activation := range activations {
 		records[i] = activationParityRecord{
-			ruleRevisionID:   activation.ruleRevisionID,
-			generation:       activation.Generation(),
-			identityKey:      activation.identityKey,
-			bindings:         activation.bindings(),
-			factIDs:          activation.factIDs(),
-			factVersions:     activation.factVersions(),
-			path:             activation.path(),
-			maxRecency:       activation.maxRecency,
-			aggregateRecency: activation.aggregateRecency,
-			salience:         activation.salience,
+			ruleRevisionID: activation.ruleRevisionID,
+			generation:     activation.Generation(),
+			identityKey:    activation.identityKey,
+			bindings:       activation.bindings(),
+			factIDs:        activation.factIDs(),
+			factVersions:   activation.factVersions(),
+			path:           activation.path(),
+			maxRecency:     activation.maxRecency,
+			totalRecency:   activation.totalRecency,
+			salience:       activation.salience,
 		}
 	}
 	return records
@@ -5119,16 +5119,16 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 	records := make([]activationParityRecord, len(activations))
 	for i, activation := range activations {
 		records[i] = activationParityRecord{
-			ruleRevisionID:   activation.ruleRevisionID,
-			generation:       activation.Generation(),
-			identityKey:      activation.identityKey,
-			bindings:         activation.bindings(),
-			factIDs:          activation.factIDs(),
-			factVersions:     activation.factVersions(),
-			path:             activation.path(),
-			maxRecency:       activation.maxRecency,
-			aggregateRecency: activation.aggregateRecency,
-			salience:         activation.salience,
+			ruleRevisionID: activation.ruleRevisionID,
+			generation:     activation.Generation(),
+			identityKey:    activation.identityKey,
+			bindings:       activation.bindings(),
+			factIDs:        activation.factIDs(),
+			factVersions:   activation.factVersions(),
+			path:           activation.path(),
+			maxRecency:     activation.maxRecency,
+			totalRecency:   activation.totalRecency,
+			salience:       activation.salience,
 		}
 	}
 	return records
@@ -5143,7 +5143,7 @@ type activationParityRecord struct {
 	factVersions     []FactVersion
 	path             []int
 	maxRecency       Recency
-	aggregateRecency Recency
+	totalRecency     Recency
 	declarationOrder int
 	salience         int
 }
