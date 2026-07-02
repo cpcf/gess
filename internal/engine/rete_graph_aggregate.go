@@ -58,7 +58,12 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 			delta.supported = false
 			return
 		}
-		if bucket.addCountOnlyMember(token) {
+		inserted, ok := bucket.addCountOnlyMember(token, m.node.inputEntry.bindingSlot)
+		if !ok {
+			delta.supported = false
+			return
+		}
+		if inserted {
 			m.owner.refreshAggregateOutputDeferred(m.id, bucket, span, nil, delta)
 		}
 		return
@@ -233,18 +238,16 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		}
 		changed := false
 		if !aggregateSpecsNeedInputValues(m.node.specs) {
-			kept := 0
-			count := bucket.countOnlyMemberCount()
-			for i := range count {
-				token := bucket.countOnlyMemberAt(i)
-				if !token.containsFact(factID) {
-					bucket.setCountOnlyMemberAt(kept, token)
-					kept++
+			for key, memberFactID := range bucket.countOnlyMembers {
+				if memberFactID != factID {
 					continue
+				}
+				delete(bucket.countOnlyMembers, key)
+				if bucket.count > 0 {
+					bucket.count--
 				}
 				changed = true
 			}
-			bucket.truncateCountOnlyMembers(kept)
 		} else if len(bucket.members) > 0 {
 			for key, member := range bucket.members {
 				if !member.token.containsFact(factID) {

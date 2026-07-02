@@ -338,7 +338,7 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	if out == nil || bucket == nil {
 		return
 	}
-	members := len(bucket.members) + bucket.countOnlyMemberCount()
+	members := len(bucket.members) + len(bucket.countOnlyMembers)
 	resultTokens := 0
 	if !bucket.token.isZero() {
 		resultTokens = 1
@@ -346,12 +346,11 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	out.Rows += uint64(1 + members + resultTokens)
 	out.Indexes += uint64(len(bucket.members))
 	out.HighWater += uint64(1 + members + resultTokens)
-	out.HighWater += uint64(cap(bucket.countOnlyRest))
 	out.HighWater += uint64(cap(bucket.extrema))
 	out.HighWater += uint64(cap(bucket.collects))
 	out.HighWater += uint64(cap(bucket.values))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
-	out.Bytes += sliceBytes[tokenRef](cap(bucket.countOnlyRest))
+	out.Bytes += mapEntryBytes[graphTokenIdentityKey, FactID](len(bucket.countOnlyMembers))
 	out.Bytes += sliceBytes[reteGraphAggregateExtremum](cap(bucket.extrema))
 	for _, extremum := range bucket.extrema {
 		out.Bytes += mapEntryBytes[string, reteGraphAggregateExtremumValue](len(extremum.values))
