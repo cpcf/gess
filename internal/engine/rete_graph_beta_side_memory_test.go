@@ -338,7 +338,7 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 		t.Fatalf("rows after removal = %d, want 1", got)
 	}
 	if !memory.containsExactToken(secondToken) {
-		t.Fatal("moved token is missing from identity index")
+		t.Fatal("moved token is missing from beta memory")
 	}
 	if removed := memory.removeContainingFact(secondFact.ID(), counters); removed != 1 {
 		t.Fatalf("removed moved row = %d, want 1", removed)
@@ -377,51 +377,6 @@ func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesSwapRemoval(t *testing.T) {
 	}
 	if got := len(memory.rows); got != 0 {
 		t.Fatalf("rows after removing moved token = %d, want 0", got)
-	}
-}
-
-func TestBetaSideMemoryRowHandlesSurviveSwapRemoval(t *testing.T) {
-	arena := newTokenArena()
-	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
-	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
-	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
-	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
-	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
-	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
-
-	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
-		t.Fatal("insert(first) returned false")
-	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
-		t.Fatal("insert(second) returned false")
-	}
-	firstHandle := memory.rows[0].handle
-	secondHandle := memory.rows[1].handle
-	if firstHandle.isZero() || secondHandle.isZero() {
-		t.Fatalf("row handles = %v %v, want non-zero", firstHandle, secondHandle)
-	}
-
-	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
-		t.Fatalf("removed rows = %d, want 1", removed)
-	}
-	if row := memory.rowByHandle(firstHandle); row != nil {
-		t.Fatalf("removed row handle resolved to %#v", row)
-	}
-	moved := memory.rowByHandle(secondHandle)
-	if moved == nil {
-		t.Fatal("moved row handle did not resolve")
-	}
-	if got, ok := memory.rowIDByHandle(secondHandle); !ok || got != graphTokenRowID(0) {
-		t.Fatalf("moved row id = %d, ok=%v, want 0 and true", got, ok)
-	}
-	if !tokenRefEqual(moved.token, secondToken) {
-		t.Fatal("moved row handle resolved the wrong token")
-	}
-
-	memory.clear()
-	if row := memory.rowByHandle(secondHandle); row != nil {
-		t.Fatalf("cleared row handle resolved to %#v", row)
 	}
 }
 
@@ -524,47 +479,6 @@ func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
 	}
 	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(memory.rowToken(*row), secondToken) {
 		t.Fatalf("reused terminal handle resolved to %#v, want second token", row)
-	}
-}
-
-func TestBetaSideMemoryRowHandlesReuseWithGeneration(t *testing.T) {
-	arena := newTokenArena()
-	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
-	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
-	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version()}
-	secondEntry := bindingTupleEntry{bindingSlot: 0, factID: secondFact.ID(), factVersion: secondFact.Version()}
-	firstToken := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
-	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
-
-	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
-		t.Fatal("insert(first) returned false")
-	}
-	firstHandle := memory.rows[0].handle
-	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
-		t.Fatalf("removed rows = %d, want 1", removed)
-	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
-		t.Fatal("insert(second) returned false")
-	}
-	secondHandle := memory.rows[0].handle
-	if firstHandle.id != secondHandle.id {
-		t.Fatalf("reused handle id = %d, want %d", secondHandle.id, firstHandle.id)
-	}
-	if firstHandle.generation == secondHandle.generation {
-		t.Fatalf("reused handle generation = %d, want different from stale generation", secondHandle.generation)
-	}
-	if row := memory.rowByHandle(firstHandle); row != nil {
-		t.Fatalf("stale row handle resolved to %#v", row)
-	}
-	if row := memory.rowByHandle(secondHandle); row == nil || !tokenRefEqual(row.token, secondToken) {
-		t.Fatalf("fresh row handle resolved to %#v, want second token", row)
-	}
-}
-
-func TestBetaSideMemoryRowHandleEntryIsCompact(t *testing.T) {
-	if got, want := unsafe.Sizeof(betaTokenRowHandleEntry{}), uintptr(8); got != want {
-		t.Fatalf("beta row handle entry size = %d, want %d", got, want)
 	}
 }
 

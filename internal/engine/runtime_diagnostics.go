@@ -202,7 +202,6 @@ func (m *reteGraphBetaMemory) alphaMemoryOwnerDiagnostics() RuntimeMemoryOwnerDi
 	out.Rows += uint64(len(m.alpha.factOwnership))
 	out.Rows += uint64(len(m.alpha.factRouteStorage))
 	out.Rows += uint64(len(m.alpha.factTerminalStorage))
-	out.Rows += uint64(len(m.alpha.factBetaStorage))
 
 	alphaOverflowBuckets := alphaFactSetOverflowBuckets(m.alpha.facts)
 	out.Buckets += uint64(alphaOverflowBuckets)
@@ -548,8 +547,6 @@ func addBetaSideMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memor
 
 func betaSideMemoryHighWater(memory betaSideMemory) int {
 	highWater := cap(memory.rows)
-	highWater += cap(memory.rowHandles)
-	highWater += cap(memory.freeRowHandles)
 	highWater += cap(memory.indexes.heads)
 	highWater += cap(memory.indexes.tails)
 	highWater += cap(memory.indexes.touched)
@@ -559,8 +556,6 @@ func betaSideMemoryHighWater(memory betaSideMemory) int {
 func betaSideMemoryRetainedBytes(memory betaSideMemory) uint64 {
 	var bytes uint64
 	bytes += sliceBytes[betaTokenRow](cap(memory.rows))
-	bytes += sliceBytes[betaTokenRowHandleEntry](cap(memory.rowHandles))
-	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinHeadTableBytes(memory.indexes)
 	return bytes
 }
@@ -614,7 +609,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 		return 0
 	}
 	highWater := 0
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree"} {
+	for _, name := range []string{"rows", "freeRowIDs", "bucketRestFree"} {
 		highWater += reflectSliceCap(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
@@ -647,7 +642,7 @@ func reflectTokenMemoryRetainedBytes(memory any) uint64 {
 		return 0
 	}
 	var bytes uint64
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree"} {
+	for _, name := range []string{"rows", "freeRowIDs", "bucketRestFree"} {
 		bytes += reflectSliceBytes(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
@@ -945,7 +940,6 @@ func alphaMemoryHighWater(m *reteGraphBetaMemory) int {
 	highWater += cap(m.alpha.factOwnershipIDs)
 	highWater += cap(m.alpha.factRouteStorage)
 	highWater += cap(m.alpha.factTerminalStorage)
-	highWater += cap(m.alpha.factBetaStorage)
 	return highWater
 }
 
@@ -963,7 +957,6 @@ func alphaMemoryRetainedBytes(m *reteGraphBetaMemory) uint64 {
 	bytes += sliceBytes[FactID](cap(m.alpha.factOwnershipIDs))
 	bytes += sliceBytes[reteGraphAlphaNodeID](cap(m.alpha.factRouteStorage))
 	bytes += sliceBytes[generatedTerminalRowHandle](cap(m.alpha.factTerminalStorage))
-	bytes += sliceBytes[generatedBetaRowHandle](cap(m.alpha.factBetaStorage))
 	bytes += mapEntryBytes[ConditionID, int](len(m.alpha.factCounts))
 
 	for i := range m.alpha.facts {
