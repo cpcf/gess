@@ -338,31 +338,18 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	if out == nil || bucket == nil {
 		return
 	}
-	members := len(bucket.members) + len(bucket.countOnlyMembers) + len(bucket.scalarMembers)
+	members := len(bucket.countOnlyMembers) + len(bucket.scalarMembers)
 	resultTokens := 0
 	if !bucket.token.isZero() {
 		resultTokens = 1
 	}
 	out.Rows += uint64(1 + members + resultTokens)
-	out.Indexes += uint64(len(bucket.members))
 	out.HighWater += uint64(1 + members + resultTokens)
-	out.HighWater += uint64(cap(bucket.extrema))
-	out.HighWater += uint64(cap(bucket.collects))
-	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, FactID](len(bucket.countOnlyMembers))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateScalarMember](len(bucket.scalarMembers))
 	for _, member := range bucket.scalarMembers {
-		out.HighWater += uint64(cap(member.values))
-		out.Bytes += sliceBytes[Value](cap(member.values))
-	}
-	out.Bytes += sliceBytes[reteGraphAggregateExtremum](cap(bucket.extrema))
-	for _, extremum := range bucket.extrema {
-		out.Bytes += mapEntryBytes[string, reteGraphAggregateExtremumValue](len(extremum.values))
-	}
-	out.Bytes += sliceBytes[[]reteGraphAggregateCollectEntry](cap(bucket.collects))
-	for _, collect := range bucket.collects {
-		out.HighWater += uint64(cap(collect))
-		out.Bytes += sliceBytes[reteGraphAggregateCollectEntry](cap(collect))
+		out.HighWater += uint64(1 + cap(member.rest))
+		out.Bytes += sliceBytes[Value](cap(member.rest))
 	}
 }
 

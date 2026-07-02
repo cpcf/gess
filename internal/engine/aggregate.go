@@ -101,6 +101,7 @@ type compiledAggregateSpec struct {
 	binding    string
 	expression compiledExpression
 	hasExpr    bool
+	valueIndex int
 }
 
 type compiledAggregatePlan struct {
@@ -116,6 +117,7 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 	out := make([]compiledAggregateSpec, 0, len(specs))
 	resultConditions := make([]RuleCondition, 0, len(specs))
 	seen := make(map[string]struct{}, len(specs))
+	valueIndexes := make(map[string]int)
 	for i, spec := range specs {
 		normalized := spec.clone()
 		if !validAggregateKind(normalized.kind) {
@@ -130,8 +132,9 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 		seen[normalized.binding] = struct{}{}
 
 		compiled := compiledAggregateSpec{
-			kind:    normalized.kind,
-			binding: normalized.binding,
+			kind:       normalized.kind,
+			binding:    normalized.binding,
+			valueIndex: -1,
 		}
 		if normalized.kind != AggregateCount {
 			if normalized.expression == nil {
@@ -143,6 +146,13 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 			}
 			compiled.expression = expression
 			compiled.hasExpr = true
+			key := serializeCompiledExpression(expression)
+			valueIndex, ok := valueIndexes[key]
+			if !ok {
+				valueIndex = len(valueIndexes)
+				valueIndexes[key] = valueIndex
+			}
+			compiled.valueIndex = valueIndex
 		}
 		out = append(out, compiled)
 		resultConditions = append(resultConditions, RuleCondition{
