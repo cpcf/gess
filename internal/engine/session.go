@@ -2402,8 +2402,14 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	var oldTerminalDeltas []reteTerminalTokenDelta
 	resetAgendaWithDeltas := false
-	mayEmitBackchainDemandDeltas := s.rete != nil && s.rete.mayEmitBackchainDemandDeltas()
-	if s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
+	mayEmitBackchainDemandDeltas := rete != nil && rete.mayEmitBackchainDemandDeltas()
+	resetAgendaWithInitialAgenda := len(s.listeners) == 0 && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
+	var initialAgenda *agenda
+	if resetAgendaWithInitialAgenda {
+		initialAgenda = newAgenda()
+		initialAgenda.propagationCounters = s.propagationCounters
+	}
+	if !resetAgendaWithInitialAgenda && s.agendaReady && !s.agendaDirty && s.rete != nil && !mayEmitBackchainDemandDeltas {
 		tokens, ok, err := s.rete.currentTerminalTokenDeltas(ctx)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
@@ -2416,7 +2422,12 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			resetAgendaWithDeltas = true
 		}
 	}
-	resetDemandDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
+	var resetDemandDelta reteAgendaDelta
+	if resetAgendaWithInitialAgenda {
+		resetDemandDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(ctx, next, next.generation, initialAgenda)
+	} else {
+		resetDemandDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
+	}
 	if err != nil {
 		if s.rete != nil {
 			rollbackState := s.activeFactWorkspace()
@@ -2425,6 +2436,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
 	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
+		resetAgendaWithInitialAgenda = false
 		resetAgendaWithDeltas = false
 	}
 	var newTerminalDeltas []reteTerminalTokenDelta
@@ -2473,7 +2485,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	var resetDeactivations []agendaChange
 	var resetActivations []agendaChange
-	if resetAgendaWithDeltas {
+	if resetAgendaWithInitialAgenda {
+		s.agenda = initialAgenda
+		s.agenda.finishInitialTerminalActivations()
+		s.agendaReady = true
+		s.agendaDirty = false
+		s.syncPropagationCounters()
+	} else if resetAgendaWithDeltas {
 		resetCtx := context.Background()
 		var err error
 		resetDeactivations, err = s.agenda.applyTerminalTokenDeltas(resetCtx, s.revision, oldTerminalDeltas, nil)
@@ -2484,20 +2502,22 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			s.propagationCounters.recordAgendaDeltaApplication()
 		}
 	}
-	if resetAgendaWithDeltas {
-		s.agenda.reset()
-		s.agendaReady = true
-		s.agendaDirty = false
-		var err error
-		resetActivations, err = s.agenda.applyTerminalTokenDeltas(context.Background(), s.revision, nil, newTerminalDeltas)
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
+	if !resetAgendaWithInitialAgenda {
+		if resetAgendaWithDeltas {
+			s.agenda.reset()
+			s.agendaReady = true
+			s.agendaDirty = false
+			var err error
+			resetActivations, err = s.agenda.applyTerminalTokenDeltas(context.Background(), s.revision, nil, newTerminalDeltas)
+			if err != nil {
+				return ResetResult{Status: ResetValidationFailure, Before: before}, err
+			}
+			if s.propagationCounters != nil {
+				s.propagationCounters.recordAgendaDeltaApplication()
+			}
+		} else {
+			s.emitAgendaEvents(ctx, s.agenda.clear())
 		}
-		if s.propagationCounters != nil {
-			s.propagationCounters.recordAgendaDeltaApplication()
-		}
-	} else {
-		s.emitAgendaEvents(ctx, s.agenda.clear())
 	}
 
 	result := ResetResult{

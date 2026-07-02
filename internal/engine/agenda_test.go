@@ -2288,6 +2288,9 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	if got, want := afterCounters.WholeTerminalScans, beforeCounters.WholeTerminalScans; got != want {
 		t.Fatalf("reset whole terminal scans = %d, want unchanged %d", got, want)
 	}
+	if got, want := afterCounters.AgendaDeltaApplications, beforeCounters.AgendaDeltaApplications; got != want {
+		t.Fatalf("reset agenda delta applications = %d, want unchanged %d", got, want)
+	}
 }
 
 func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testing.T) {
