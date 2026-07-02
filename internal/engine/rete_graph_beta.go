@@ -8408,11 +8408,11 @@ func (m *reteGraphBetaMemory) terminalRowsRetainedByBranch() map[propagationBran
 			}
 			continue
 		}
-		for _, row := range terminal.rows.rows {
+		for rowIndex, row := range terminal.rows.rows {
 			if row.token.isZero() {
 				continue
 			}
-			row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+			terminal.rows.forEachTerminalBranchSupport(graphTokenRowID(rowIndex), func(support terminalBranchSupport) {
 				if support.count <= 0 {
 					return
 				}
@@ -8523,11 +8523,11 @@ func (m *reteGraphBetaMemory) diagnostics() reteGraphBetaMemoryDiagnostics {
 				if terminal.singleBranch() {
 					diag.BranchRows[terminal.singleBranchID] = terminal.rows.len()
 				} else {
-					for _, row := range terminal.rows.rows {
+					for rowIndex, row := range terminal.rows.rows {
 						if row.token.isZero() {
 							continue
 						}
-						row.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
+						terminal.rows.forEachTerminalBranchSupport(graphTokenRowID(rowIndex), func(support terminalBranchSupport) {
 							if support.count <= 0 {
 								return
 							}

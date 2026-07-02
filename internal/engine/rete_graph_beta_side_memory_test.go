@@ -287,8 +287,12 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if got, want := row.supportCount, 2; got != want {
 		t.Fatalf("support count = %d, want %d", got, want)
 	}
-	if !row.hasTerminalBranchSupport(10) || !row.hasTerminalBranchSupport(20) {
-		t.Fatalf("branch support missing after duplicate insert: %#v", row.terminalBranchIDs())
+	rowID, ok := memory.rowIDByHandle(firstHandle)
+	if !ok {
+		t.Fatal("terminal row id missing")
+	}
+	if !memory.hasTerminalBranchSupport(rowID, 10) || !memory.hasTerminalBranchSupport(rowID, 20) {
+		t.Fatalf("branch support missing after duplicate insert: %#v", memory.terminalBranchIDs(rowID))
 	}
 	if removed, deleted, consumed := memory.removeTokenByHandle(firstHandle, nil, 20); !consumed || deleted || !removed.token.isZero() {
 		t.Fatalf("remove duplicate support = removed=%#v deleted=%v consumed=%v, want support decrement", removed, deleted, consumed)
@@ -300,8 +304,8 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if got, want := row.supportCount, 1; got != want {
 		t.Fatalf("support count after decrement = %d, want %d", got, want)
 	}
-	if row.hasTerminalBranchSupport(20) {
-		t.Fatalf("branch 20 still supported after decrement: %#v", row.terminalBranchIDs())
+	if memory.hasTerminalBranchSupport(rowID, 20) {
+		t.Fatalf("branch 20 still supported after decrement: %#v", memory.terminalBranchIDs(rowID))
 	}
 	if removed, ok := memory.removeToken(firstToken, nil, 10); !ok || !tokenRefEqual(removed.token, firstToken) {
 		t.Fatalf("remove final support = (%#v, %v), want first token", removed, ok)

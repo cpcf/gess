@@ -2033,7 +2033,7 @@ func terminalContributorBranchIDs(t testing.TB, session *Session, ruleName strin
 	if got, want := terminal.rows.len(), 1; got != want {
 		t.Fatalf("terminal row count for rule %q = %d, want %d", ruleName, got, want)
 	}
-	return terminal.rows.rows[0].terminalBranchIDs()
+	return terminal.rows.terminalBranchIDs(0)
 }
 
 func TestReteRuntimeRejectsMalformedExpressionPredicateShapes(t *testing.T) {

@@ -11,6 +11,7 @@ type terminalTokenMemory struct {
 	factIndexReserve     int
 	factRowsDirty        bool
 	bucketRestFree       [][]graphTokenRowID
+	branchRows           []*terminalBranchSupportState
 }
 
 type terminalTokenRow struct {
@@ -20,13 +21,145 @@ type terminalTokenRow struct {
 	identityNext graphTokenRowID
 	candidateKey candidateIdentityKey
 	supportCount int
-	branches     *terminalBranchSupportState
 }
 
 type terminalBranchSupportState struct {
 	primary  terminalBranchSupport
 	overflow *terminalBranchSupportOverflow
 	count    int
+}
+
+func (s *terminalBranchSupportState) overflowItems() []terminalBranchSupport {
+	if s == nil || s.overflow == nil {
+		return nil
+	}
+	return s.overflow.items
+}
+
+func (s *terminalBranchSupportState) add(branchID int) {
+	if s == nil || branchID < 0 {
+		return
+	}
+	if s.count == 0 {
+		s.primary = terminalBranchSupport{branchID: branchID, count: 1}
+		s.count = 1
+		return
+	}
+	if s.primary.branchID == branchID {
+		s.primary.count++
+		return
+	}
+	overflow := s.overflowItems()
+	for i := 0; i < s.count-1 && i < len(overflow); i++ {
+		if overflow[i].branchID == branchID {
+			overflow[i].count++
+			return
+		}
+	}
+	if s.overflow == nil {
+		s.overflow = &terminalBranchSupportOverflow{}
+	}
+	s.overflow.items = append(s.overflow.items, terminalBranchSupport{branchID: branchID, count: 1})
+	s.count++
+}
+
+func (s *terminalBranchSupportState) has(branchID int) bool {
+	if branchID < 0 || s == nil || s.count == 0 {
+		return false
+	}
+	if s.primary.branchID == branchID && s.primary.count > 0 {
+		return true
+	}
+	overflow := s.overflowItems()
+	for i := 0; i < s.count-1 && i < len(overflow); i++ {
+		support := overflow[i]
+		if support.branchID == branchID && support.count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *terminalBranchSupportState) remove(branchID int) bool {
+	if s == nil || branchID < 0 || s.count == 0 {
+		return false
+	}
+	if s.primary.branchID == branchID {
+		s.primary.count--
+		if s.primary.count > 0 {
+			return true
+		}
+		s.removeAt(0)
+		return s.count > 0
+	}
+	overflow := s.overflowItems()
+	for i := 0; i < s.count-1 && i < len(overflow); i++ {
+		if overflow[i].branchID != branchID {
+			continue
+		}
+		overflow[i].count--
+		if overflow[i].count > 0 {
+			return true
+		}
+		s.removeAt(i + 1)
+		return s.count > 0
+	}
+	return s.count > 0
+}
+
+func (s *terminalBranchSupportState) removeAt(index int) {
+	if s == nil || index < 0 || index >= s.count {
+		return
+	}
+	overflow := s.overflowItems()
+	overflowCount := min(s.count-1, len(overflow))
+	if s.count == 1 || overflowCount == 0 {
+		*s = terminalBranchSupportState{}
+		return
+	}
+	if index > overflowCount {
+		return
+	}
+	lastOverflow := overflowCount - 1
+	last := overflow[lastOverflow]
+	overflow[lastOverflow] = terminalBranchSupport{}
+	overflow = overflow[:lastOverflow]
+	if index == 0 {
+		s.primary = last
+	} else if index-1 < len(overflow) {
+		overflow[index-1] = last
+	}
+	s.count = overflowCount
+	if len(overflow) == 0 {
+		s.overflow = nil
+	} else {
+		s.overflow.items = overflow
+	}
+}
+
+func (s *terminalBranchSupportState) ids() []int {
+	if s == nil || s.count == 0 {
+		return nil
+	}
+	out := make([]int, 0, s.count)
+	s.forEach(func(support terminalBranchSupport) {
+		if support.count <= 0 {
+			return
+		}
+		out = append(out, support.branchID)
+	})
+	return out
+}
+
+func (s *terminalBranchSupportState) forEach(fn func(terminalBranchSupport)) {
+	if s == nil || s.count == 0 || fn == nil {
+		return
+	}
+	fn(s.primary)
+	overflow := s.overflowItems()
+	for i := 0; i < s.count-1 && i < len(overflow); i++ {
+		fn(overflow[i])
+	}
 }
 
 type queryTerminalMemory struct {
@@ -55,11 +188,6 @@ func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
 		candidate:    candidateIdentity{key: r.candidateKey},
 		supportCount: r.supportCount,
 	}
-	if r.branches != nil {
-		row.branchSupport = r.branches.primary
-		row.branchOverflow = r.branches.overflow
-		row.branchCount = r.branches.count
-	}
 	return row
 }
 
@@ -67,139 +195,66 @@ func (r terminalTokenRow) isTerminal() bool {
 	return r.supportCount > 0
 }
 
-func (r terminalTokenRow) terminalBranchOverflowItems() []terminalBranchSupport {
-	if r.branches == nil || r.branches.overflow == nil {
+func (m *terminalTokenMemory) branchState(rowID graphTokenRowID) *terminalBranchSupportState {
+	if m == nil || rowID < 0 || int(rowID) >= len(m.branchRows) {
 		return nil
 	}
-	return r.branches.overflow.items
+	return m.branchRows[rowID]
 }
 
-func (r *terminalTokenRow) addTerminalBranchSupport(branchID int) {
-	if r == nil || branchID < 0 {
+func (m *terminalTokenMemory) ensureBranchRowsCapacity(rowID graphTokenRowID) {
+	if m == nil || rowID < 0 || int(rowID) < len(m.branchRows) {
 		return
 	}
-	if r.branches == nil {
-		r.branches = &terminalBranchSupportState{}
-	}
-	if r.branches.count == 0 {
-		r.branches.primary = terminalBranchSupport{branchID: branchID, count: 1}
-		r.branches.count = 1
-		return
-	}
-	if r.branches.primary.branchID == branchID {
-		r.branches.primary.count++
-		return
-	}
-	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
-		if overflow[i].branchID == branchID {
-			overflow[i].count++
-			return
-		}
-	}
-	if r.branches.overflow == nil {
-		r.branches.overflow = &terminalBranchSupportOverflow{}
-	}
-	r.branches.overflow.items = append(r.branches.overflow.items, terminalBranchSupport{branchID: branchID, count: 1})
-	r.branches.count++
+	next := make([]*terminalBranchSupportState, len(m.rows))
+	copy(next, m.branchRows)
+	m.branchRows = next
 }
 
-func (r terminalTokenRow) hasTerminalBranchSupport(branchID int) bool {
-	if branchID < 0 || r.branches == nil || r.branches.count == 0 {
-		return false
+func (m *terminalTokenMemory) addTerminalBranchSupport(rowID graphTokenRowID, branchID int) {
+	if m == nil || rowID < 0 || branchID < 0 {
+		return
 	}
-	if r.branches.primary.branchID == branchID && r.branches.primary.count > 0 {
-		return true
+	m.ensureBranchRowsCapacity(rowID)
+	if int(rowID) >= len(m.branchRows) {
+		return
 	}
-	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
-		support := overflow[i]
-		if support.branchID == branchID && support.count > 0 {
-			return true
-		}
+	if m.branchRows[rowID] == nil {
+		m.branchRows[rowID] = &terminalBranchSupportState{}
 	}
-	return false
+	m.branchRows[rowID].add(branchID)
 }
 
-func (r *terminalTokenRow) removeTerminalBranchSupport(branchID int) {
-	if r == nil || branchID < 0 || r.branches == nil || r.branches.count == 0 {
+func (m *terminalTokenMemory) hasTerminalBranchSupport(rowID graphTokenRowID, branchID int) bool {
+	return m.branchState(rowID).has(branchID)
+}
+
+func (m *terminalTokenMemory) removeTerminalBranchSupport(rowID graphTokenRowID, branchID int) {
+	state := m.branchState(rowID)
+	if state == nil {
 		return
 	}
-	if r.branches.primary.branchID == branchID {
-		r.branches.primary.count--
-		if r.branches.primary.count > 0 {
-			return
-		}
-		r.removeTerminalBranchSupportAt(0)
-		return
-	}
-	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
-		if overflow[i].branchID != branchID {
-			continue
-		}
-		overflow[i].count--
-		if overflow[i].count > 0 {
-			return
-		}
-		r.removeTerminalBranchSupportAt(i + 1)
-		return
+	if !state.remove(branchID) {
+		m.branchRows[rowID] = nil
 	}
 }
 
-func (r *terminalTokenRow) removeTerminalBranchSupportAt(index int) {
-	if r == nil || r.branches == nil || index < 0 || index >= r.branches.count {
-		return
-	}
-	overflow := r.terminalBranchOverflowItems()
-	overflowCount := min(r.branches.count-1, len(overflow))
-	if r.branches.count == 1 || overflowCount == 0 {
-		r.branches = nil
-		return
-	}
-	if index > overflowCount {
-		return
-	}
-	lastOverflow := overflowCount - 1
-	last := overflow[lastOverflow]
-	overflow[lastOverflow] = terminalBranchSupport{}
-	overflow = overflow[:lastOverflow]
-	if index == 0 {
-		r.branches.primary = last
-	} else if index-1 < len(overflow) {
-		overflow[index-1] = last
-	}
-	r.branches.count = overflowCount
-	if len(overflow) == 0 {
-		r.branches.overflow = nil
-	} else {
-		r.branches.overflow.items = overflow
-	}
+func (m *terminalTokenMemory) terminalBranchIDs(rowID graphTokenRowID) []int {
+	return m.branchState(rowID).ids()
 }
 
-func (r terminalTokenRow) terminalBranchIDs() []int {
-	if r.branches == nil || r.branches.count == 0 {
-		return nil
+func (m *terminalTokenMemory) forEachTerminalBranchSupport(rowID graphTokenRowID, fn func(terminalBranchSupport)) {
+	m.branchState(rowID).forEach(fn)
+}
+
+func (m *terminalTokenMemory) graphTokenRow(rowID graphTokenRowID, row terminalTokenRow) graphTokenRow {
+	out := row.toGraphTokenRow()
+	if state := m.branchState(rowID); state != nil && state.count > 0 {
+		out.branchSupport = state.primary
+		out.branchOverflow = state.overflow
+		out.branchCount = state.count
 	}
-	out := make([]int, 0, r.branches.count)
-	r.forEachTerminalBranchSupport(func(support terminalBranchSupport) {
-		if support.count <= 0 {
-			return
-		}
-		out = append(out, support.branchID)
-	})
 	return out
-}
-
-func (r terminalTokenRow) forEachTerminalBranchSupport(fn func(terminalBranchSupport)) {
-	if r.branches == nil || r.branches.count == 0 || fn == nil {
-		return
-	}
-	fn(r.branches.primary)
-	overflow := r.terminalBranchOverflowItems()
-	for i := 0; i < r.branches.count-1 && i < len(overflow); i++ {
-		fn(overflow[i])
-	}
 }
 
 func (m *terminalTokenMemory) ensureRowCapacity(rowCapacity int) {
@@ -302,6 +357,9 @@ func (m *terminalTokenMemory) clearRowForReuse(rowID graphTokenRowID) {
 		generation = 1
 	}
 	*row = terminalTokenRow{handle: graphTokenRowHandle{id: graphTokenRowHandleID(uint32(rowID) + 1), generation: generation}}
+	if int(rowID) < len(m.branchRows) {
+		m.branchRows[rowID] = nil
+	}
 	m.freeRowIDs = append(m.freeRowIDs, rowID)
 }
 
@@ -417,8 +475,8 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 		candidateKey: candidateKey,
 		supportCount: 1,
 	}
-	row.addTerminalBranchSupport(branchID)
 	m.rows[rowID] = row
+	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return handle
@@ -445,8 +503,8 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 			if row.candidateKey == (candidateIdentityKey{}) {
 				row.candidateKey = candidateKey
 			}
-			if !row.hasTerminalBranchSupport(branchID) {
-				row.addTerminalBranchSupport(branchID)
+			if !m.hasTerminalBranchSupport(rowID, branchID) {
+				m.addTerminalBranchSupport(rowID, branchID)
 			}
 			return row.handle, false
 		}
@@ -454,7 +512,7 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 			row.candidateKey = candidateKey
 		}
 		row.supportCount++
-		row.addTerminalBranchSupport(branchID)
+		m.addTerminalBranchSupport(rowID, branchID)
 		return row.handle, false
 	}
 
@@ -471,8 +529,8 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 		candidateKey: candidateKey,
 		supportCount: 1,
 	}
-	row.addTerminalBranchSupport(branchID)
 	m.rows[rowID] = row
+	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(identity, rowID)
 	m.markFactRowsDirty()
 	return handle, true
@@ -501,7 +559,7 @@ func (m *terminalTokenMemory) refreshTerminalTokensContainingFact(id FactID, upd
 			continue
 		}
 		beforeIdentityHash := row.identityHash
-		next, ok := refresh(row.toGraphTokenRow())
+		next, ok := refresh(m.graphTokenRow(rowID, *row))
 		if !ok || next.isZero() {
 			continue
 		}
@@ -602,7 +660,7 @@ func (m *terminalTokenMemory) removeTokensContainingFact(id FactID, counters *pr
 		}
 		row := m.row(rowID)
 		if row != nil && !row.token.isZero() && row.token.containsFact(id) && fn != nil {
-			fn(row.toGraphTokenRow())
+			fn(m.graphTokenRow(rowID, *row))
 		}
 		m.removeRow(rowID, counters)
 		removed++
@@ -644,10 +702,10 @@ func (m *terminalTokenMemory) removeToken(token tokenRef, counters *propagationC
 		}
 		if row.isTerminal() && row.supportCount > 1 {
 			row.supportCount--
-			row.removeTerminalBranchSupport(branchID)
+			m.removeTerminalBranchSupport(rowID, branchID)
 			return graphTokenRow{}, false
 		}
-		removed := row.toGraphTokenRow()
+		removed := m.graphTokenRow(rowID, *row)
 		m.removeRow(rowID, counters)
 		return removed, true
 	}
@@ -671,10 +729,10 @@ func (m *terminalTokenMemory) removeTokenByHandle(handle graphTokenRowHandle, co
 	}
 	if row.isTerminal() && row.supportCount > 1 {
 		row.supportCount--
-		row.removeTerminalBranchSupport(branchID)
+		m.removeTerminalBranchSupport(rowID, branchID)
 		return graphTokenRow{}, false, true
 	}
-	removed := row.toGraphTokenRow()
+	removed := m.graphTokenRow(rowID, *row)
 	m.removeRow(rowID, counters)
 	return removed, true, true
 }
@@ -708,7 +766,7 @@ func (m *terminalTokenMemory) forEachTokenContainingFact(id FactID, counters *pr
 			continue
 		}
 		if fn != nil {
-			fn(row.toGraphTokenRow())
+			fn(m.graphTokenRow(rowID, *row))
 		}
 	}
 }
