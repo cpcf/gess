@@ -322,7 +322,6 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	if !memory.insert(secondToken, betaJoinKey{}) {
 		t.Fatal("insert(second) returned false")
 	}
-	memory.ensureFactRows()
 
 	counters := newPropagationCounterLedger()
 	if removed := memory.removeContainingFact(firstFact.ID(), counters); removed != 1 {
@@ -575,7 +574,7 @@ func TestTerminalTokenRowIsCompact(t *testing.T) {
 	}
 }
 
-func TestBetaSideMemoryReusesFactLinkStorage(t *testing.T) {
+func TestBetaSideMemoryScansFactRemovalWithoutReverseIndex(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -588,30 +587,24 @@ func TestBetaSideMemoryReusesFactLinkStorage(t *testing.T) {
 	if !memory.insert(firstToken, betaJoinKey{}) {
 		t.Fatal("insert(first) returned false")
 	}
-	memory.ensureFactRows()
-	if got := len(memory.factLinks); got != 1 {
-		t.Fatalf("fact link rows = %d, want 1", got)
+	if !memory.insert(secondToken, betaJoinKey{}) {
+		t.Fatal("insert(second) returned false")
+	}
+	if got := memory.factIndexKeyCount(); got != 0 {
+		t.Fatalf("beta fact index keys = %d, want no retained fact index", got)
 	}
 	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
 		t.Fatalf("removed rows = %d, want 1", removed)
 	}
-	if got := len(memory.freeFactLinks); got != 1 {
-		t.Fatalf("free fact links = %d, want 1", got)
+	if got, want := len(memory.rows), 1; got != want {
+		t.Fatalf("rows after first fact removal = %d, want %d", got, want)
 	}
-
-	if !memory.insert(secondToken, betaJoinKey{}) {
-		t.Fatal("insert(second) returned false")
-	}
-	memory.ensureFactRows()
-	if got := len(memory.factLinks); got != 1 {
-		t.Fatalf("fact link rows after reuse = %d, want 1", got)
-	}
-	if got := len(memory.freeFactLinks); got != 0 {
-		t.Fatalf("free fact links after reuse = %d, want 0", got)
+	if removed := memory.removeContainingFact(secondFact.ID(), nil); removed != 1 {
+		t.Fatalf("removed second rows = %d, want 1", removed)
 	}
 }
 
-func TestBetaSideMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
+func TestBetaSideMemoryFactScanFindsParentFacts(t *testing.T) {
 	arena := newTokenArena()
 	parentFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	childFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -624,12 +617,11 @@ func TestBetaSideMemoryFactReverseIndexFindsParentFacts(t *testing.T) {
 	if !memory.insert(child, betaJoinKey{}) {
 		t.Fatal("insert(child) returned false")
 	}
-	memory.ensureFactRows()
 	if got := memory.factRowCount(parentFact.ID()); got != 1 {
-		t.Fatalf("parent fact reverse rows = %d, want 1", got)
+		t.Fatalf("parent fact scan rows = %d, want 1", got)
 	}
 	if got := memory.factRowCount(childFact.ID()); got != 1 {
-		t.Fatalf("child fact reverse rows = %d, want 1", got)
+		t.Fatalf("child fact scan rows = %d, want 1", got)
 	}
 	if removed := memory.removeContainingFact(parentFact.ID(), nil); removed != 1 {
 		t.Fatalf("removed rows for parent fact = %d, want 1", removed)

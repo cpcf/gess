@@ -539,11 +539,9 @@ func addBetaSideMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memor
 		return
 	}
 	joinBuckets := memory.indexes.keyCount()
-	factIndexes := memory.factIndexKeyCount()
 
 	out.Rows += uint64(len(memory.rows))
 	out.Buckets += uint64(joinBuckets)
-	out.Indexes += uint64(factIndexes)
 	out.HighWater += uint64(betaSideMemoryHighWater(memory))
 	out.Bytes += betaSideMemoryRetainedBytes(memory)
 }
@@ -555,10 +553,6 @@ func betaSideMemoryHighWater(memory betaSideMemory) int {
 	highWater += cap(memory.indexes.heads)
 	highWater += cap(memory.indexes.tails)
 	highWater += cap(memory.indexes.touched)
-	highWater += cap(memory.factRows.entries)
-	highWater += cap(memory.factRows.touched)
-	highWater += cap(memory.factLinks)
-	highWater += cap(memory.freeFactLinks)
 	return highWater
 }
 
@@ -568,9 +562,6 @@ func betaSideMemoryRetainedBytes(memory betaSideMemory) uint64 {
 	bytes += sliceBytes[betaTokenRowHandleEntry](cap(memory.rowHandles))
 	bytes += sliceBytes[graphTokenRowHandleID](cap(memory.freeRowHandles))
 	bytes += betaJoinHeadTableBytes(memory.indexes)
-	bytes += betaFactHeadTableBytes(memory.factRows)
-	bytes += sliceBytes[betaFactLinkRow](cap(memory.factLinks))
-	bytes += sliceBytes[betaFactLinkID](cap(memory.freeFactLinks))
 	return bytes
 }
 
@@ -601,13 +592,6 @@ func factTokenBucketTableBytes(table factTokenBucketTable) uint64 {
 	return bytes
 }
 
-func betaFactHeadTableBytes(table betaFactHeadTable) uint64 {
-	var bytes uint64
-	bytes += sliceBytes[betaFactHeadEntry](cap(table.entries))
-	bytes += sliceBytes[int](cap(table.touched))
-	return bytes
-}
-
 func bucketRestFreeBytes(rests [][]graphTokenRowID) uint64 {
 	bytes := sliceBytes[[]graphTokenRowID](cap(rests))
 	for _, rest := range rests {
@@ -630,7 +614,7 @@ func reflectTokenMemoryHighWater(memory any) int {
 		return 0
 	}
 	highWater := 0
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree", "factLinks", "freeFactLinks"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree"} {
 		highWater += reflectSliceCap(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {
@@ -663,7 +647,7 @@ func reflectTokenMemoryRetainedBytes(memory any) uint64 {
 		return 0
 	}
 	var bytes uint64
-	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree", "factLinks", "freeFactLinks"} {
+	for _, name := range []string{"rows", "rowHandles", "freeRowHandles", "freeRowIDs", "bucketRestFree"} {
 		bytes += reflectSliceBytes(value.FieldByName(name))
 	}
 	for _, name := range []string{"indexes", "identityRows", "factRows"} {

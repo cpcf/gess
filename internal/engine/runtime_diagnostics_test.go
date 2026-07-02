@@ -35,10 +35,10 @@ func TestSessionRuntimeDiagnosticsReportsBetaMemoryOwner(t *testing.T) {
 		t.Fatalf("beta rows = 0, want retained beta token rows: %#v", beta)
 	}
 	if beta.Buckets == 0 {
-		t.Fatalf("beta buckets = 0, want retained join or identity buckets: %#v", beta)
+		t.Fatalf("beta buckets = 0, want retained join buckets: %#v", beta)
 	}
-	if beta.Indexes == 0 {
-		t.Fatalf("beta indexes = 0, want retained fact reverse indexes: %#v", beta)
+	if beta.Indexes != 0 {
+		t.Fatalf("beta indexes = %d, want no retained beta fact reverse indexes: %#v", beta.Indexes, beta)
 	}
 	if beta.Bytes == 0 {
 		t.Fatalf("beta bytes = 0, want retained byte estimate: %#v", beta)

@@ -3858,8 +3858,8 @@ func TestReteRuntimeGraphBetaTerminalMemoryDiagnostics(t *testing.T) {
 	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeys, 1; got != want {
 		t.Fatalf("graph identity index keys = %d, want terminal token identity only %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 6; got != want {
-		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 2; got != want {
+		t.Fatalf("graph fact index keys = %d, want terminal token facts only %d", got, want)
 	}
 
 	duplicateDelta := reteAgendaDelta{supported: true}
@@ -4105,8 +4105,8 @@ func TestReteRuntimeGraphBetaTerminalTokenIdentityIndexesUseFactIdentity(t *test
 	if got, want := snapshot.GraphBetaMemory.IdentityIndexKeysMax, 2; got != want {
 		t.Fatalf("graph identity index keys max = %d, want two terminal identity keys %d", got, want)
 	}
-	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 9; got != want {
-		t.Fatalf("graph fact index keys = %d, want beta fact rows plus terminal token facts %d", got, want)
+	if got, want := snapshot.GraphBetaMemory.FactIndexKeys, 3; got != want {
+		t.Fatalf("graph fact index keys = %d, want terminal token facts only %d", got, want)
 	}
 }
 
