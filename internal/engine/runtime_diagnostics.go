@@ -348,7 +348,6 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 	out.HighWater += uint64(1 + members + resultTokens)
 	out.HighWater += uint64(cap(bucket.extrema))
 	out.HighWater += uint64(cap(bucket.collects))
-	out.HighWater += uint64(cap(bucket.values))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, reteGraphAggregateMember](len(bucket.members))
 	out.Bytes += mapEntryBytes[graphTokenIdentityKey, FactID](len(bucket.countOnlyMembers))
 	out.Bytes += sliceBytes[reteGraphAggregateExtremum](cap(bucket.extrema))
@@ -360,7 +359,6 @@ func addAggregateBucketOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, buck
 		out.HighWater += uint64(cap(collect))
 		out.Bytes += sliceBytes[reteGraphAggregateCollectEntry](cap(collect))
 	}
-	out.Bytes += sliceBytes[Value](cap(bucket.values))
 }
 
 func (a *agenda) consumedActivationRows() int {

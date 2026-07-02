@@ -89,7 +89,6 @@ type reteGraphAggregateBucket struct {
 	extrema          []reteGraphAggregateExtremum
 	collects         [][]reteGraphAggregateCollectEntry
 	token            tokenRef
-	values           []Value
 	hasValue         bool
 }
 
@@ -1569,8 +1568,6 @@ func (m *reteGraphAggregateBucket) clear() {
 	clear(m.collects)
 	m.collects = m.collects[:0]
 	m.token = tokenRef{}
-	clear(m.values)
-	m.values = m.values[:0]
 	m.hasValue = false
 }
 
@@ -2830,7 +2827,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
 	values, ok := memory.bucketResults(node, bucket)
-	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateValuesEqual(bucket.values, values) {
+	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateOutputTokenValuesEqual(bucket.token, node, values) {
 		return
 	}
 	if !bucket.token.isZero() {
@@ -2839,7 +2836,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		bucket.hasValue = false
 	}
 	if !ok || len(values) != len(node.entries) {
-		bucket.values = bucket.values[:0]
 		return
 	}
 	token := bucket.parent
@@ -2861,7 +2857,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		}
 	}
 	bucket.token = token
-	bucket.values = append(bucket.values[:0], values...)
 	bucket.hasValue = true
 	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
 		delta.supported = false
@@ -2878,12 +2873,13 @@ func (m *reteGraphBetaMemory) aggregateGeneration() Generation {
 	return 1
 }
 
-func aggregateValuesEqual(left, right []Value) bool {
-	if len(left) != len(right) {
+func aggregateOutputTokenValuesEqual(token tokenRef, node *reteGraphAggregateNode, values []Value) bool {
+	if token.isZero() || node == nil || len(values) != len(node.entries) {
 		return false
 	}
-	for i := range left {
-		if !left[i].Equal(right[i]) {
+	for i, value := range values {
+		match, ok := token.matchAt(node.bindingSlot + i)
+		if !ok || !match.hasValue || !match.value.Equal(value) {
 			return false
 		}
 	}
