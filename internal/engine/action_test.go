@@ -1213,8 +1213,8 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	if ruleRevisionID != selected.ruleRevisionID {
 		t.Fatalf("action context rule revision ID = %q, want %q", ruleRevisionID, selected.ruleRevisionID)
 	}
-	if generation != selected.generation {
-		t.Fatalf("action context generation = %d, want %d", generation, selected.generation)
+	if generation != selected.Generation() {
+		t.Fatalf("action context generation = %d, want %d", generation, selected.Generation())
 	}
 	if len(initialBoundFacts) != 1 || len(laterBoundFacts) != 1 {
 		t.Fatalf("bound facts lengths = %d and %d, want 1 and 1", len(initialBoundFacts), len(laterBoundFacts))

@@ -106,7 +106,7 @@ func logicalSupportSourceFromPropagationEvent(event reteGraphPropagationEvent) (
 
 func logicalSupportSourceFromActivation(activation activation) logicalSupportSourceKey {
 	return logicalSupportSourceKey{
-		generation:     activation.generation,
+		generation:     activation.Generation(),
 		ruleRevisionID: activation.ruleRevisionID,
 		identityKey:    activation.identityKey,
 	}

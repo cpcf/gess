@@ -357,8 +357,8 @@ func TestSessionResetRebuildsAgendaForInitialFacts(t *testing.T) {
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
-	if pending[0].generation != 2 {
-		t.Fatalf("pending activation generation = %d, want 2", pending[0].generation)
+	if pending[0].Generation() != 2 {
+		t.Fatalf("pending activation generation = %d, want 2", pending[0].Generation())
 	}
 
 	events := collector.Events()

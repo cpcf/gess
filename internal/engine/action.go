@@ -47,7 +47,7 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 		activationKey:  activation.identityKey,
 		activationOrd:  activation.key.ordinal,
 		ruleRevisionID: activation.ruleRevisionID,
-		generation:     activation.generation,
+		generation:     activation.Generation(),
 	}
 	if len(entries) > 0 {
 		out.bindings = &actionContextBindingState{
@@ -1719,7 +1719,7 @@ func (s *Session) actionMatchesForActivation(activation activation, rule compile
 			s.actionMatchScratch = matches
 			return nil, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 		}
-		if fact.id.Generation() != activation.generation || fact.version != factVersions[i] {
+		if fact.id.Generation() != activation.Generation() || fact.version != factVersions[i] {
 			s.actionMatchScratch = matches
 			return nil, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 		}
@@ -1787,7 +1787,7 @@ func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Conte
 		if !ok {
 			return ActionContext{}, fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
-		if fact.id.Generation() != activation.generation || fact.version != entry.factVersion {
+		if fact.id.Generation() != activation.Generation() || fact.version != entry.factVersion {
 			return ActionContext{}, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
 		entries[i] = entry
@@ -1819,7 +1819,7 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 			if !ok {
 				return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 			}
-			if fact.id.Generation() != activation.generation || fact.version != match.fact.Version() {
+			if fact.id.Generation() != activation.Generation() || fact.version != match.fact.Version() {
 				return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, factID, activation.activationID())
 			}
 		}
@@ -1837,7 +1837,7 @@ func (s *Session) validateActivationTokenFacts(rule compiledRule, activation act
 		if !ok {
 			return fmt.Errorf("%w: missing fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
-		if fact.id.Generation() != activation.generation || fact.version != entry.factVersion {
+		if fact.id.Generation() != activation.Generation() || fact.version != entry.factVersion {
 			return fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, activation.activationID())
 		}
 	}

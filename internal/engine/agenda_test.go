@@ -335,7 +335,6 @@ func TestCompactAgendaEntryArenaReusesIntegerHandlesWithGeneration(t *testing.T)
 	first := compactAgendaEntry{
 		key:              activationKey{fingerprint: 10, ordinal: 1},
 		ruleRevisionID:   "rule-1@1",
-		generation:       4,
 		identityKey:      candidateIdentityKey{scopeHash: 5, hash: 6},
 		salience:         11,
 		maxRecency:       12,
@@ -1767,8 +1766,8 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if pending[0].activationID() == selected.activationID() {
 		t.Fatalf("reset reused consumed activation ID %q", selected.activationID())
 	}
-	if pending[0].generation != 2 {
-		t.Fatalf("reset activation generation = %d, want 2", pending[0].generation)
+	if pending[0].Generation() != 2 {
+		t.Fatalf("reset activation generation = %d, want 2", pending[0].Generation())
 	}
 	byRevision := session.agenda.activationsByRuleRevisionID(selected.ruleRevisionID)
 	if got, want := len(byRevision), 1; got != want {
@@ -1988,7 +1987,6 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 	activation := activation{
 		ruleRevisionID: RuleRevisionID("revision"),
-		generation:     1,
 		identityKey:    candidateIdentityKey{scopeHash: 1, hash: 2},
 		key:            activationKey{ordinal: 3},
 	}
@@ -2134,8 +2132,8 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if pending[0].activationID() == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
-	if pending[0].generation != 2 {
-		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].generation)
+	if pending[0].Generation() != 2 {
+		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].Generation())
 	}
 
 	snapshot = mustSnapshot(t, context.Background(), session)
@@ -2208,8 +2206,8 @@ func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
 	if pending[0].activationID() == initialID {
 		t.Fatalf("post-reset activation reused old activation ID %q", initialID)
 	}
-	if pending[0].generation != 2 {
-		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].generation)
+	if pending[0].Generation() != 2 {
+		t.Fatalf("post-reset activation generation = %d, want 2", pending[0].Generation())
 	}
 
 	events := collector.Events()

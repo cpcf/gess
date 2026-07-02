@@ -4936,7 +4936,7 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 	for i, activation := range activations {
 		records[i] = activationParityRecord{
 			ruleRevisionID:   activation.ruleRevisionID,
-			generation:       activation.generation,
+			generation:       activation.Generation(),
 			identityKey:      activation.identityKey,
 			bindings:         activation.bindings(),
 			factIDs:          activation.factIDs(),
@@ -5102,7 +5102,7 @@ func activationParityRecordsFromActivations(activations []activation) []activati
 	for i, activation := range activations {
 		records[i] = activationParityRecord{
 			ruleRevisionID:   activation.ruleRevisionID,
-			generation:       activation.generation,
+			generation:       activation.Generation(),
 			identityKey:      activation.identityKey,
 			bindings:         activation.bindings(),
 			factIDs:          activation.factIDs(),

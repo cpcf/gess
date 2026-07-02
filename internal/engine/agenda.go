@@ -175,7 +175,6 @@ func (h compactAgendaEntryHandle) index() int {
 type compactAgendaEntry struct {
 	key              activationKey
 	ruleRevisionID   RuleRevisionID
-	generation       Generation
 	identityKey      candidateIdentityKey
 	token            tokenRef
 	salience         int
@@ -392,7 +391,6 @@ func (s activationStatus) String() string {
 type activation struct {
 	key              activationKey
 	ruleRevisionID   RuleRevisionID
-	generation       Generation
 	identityKey      candidateIdentityKey
 	token            tokenRef
 	salience         int
@@ -416,6 +414,10 @@ func (a activation) mutationOrigin() mutationOrigin {
 		activationIdentityKey: a.identityKey,
 		activationOrdinal:     a.key.ordinal,
 	}
+}
+
+func (a activation) Generation() Generation {
+	return activationGeneration(&a)
 }
 
 func (a activation) activationID() ActivationID {
@@ -571,7 +573,7 @@ func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, 
 		Sequence:       sequence,
 		Timestamp:      timestamp,
 		Type:           eventType,
-		Generation:     c.activation.generation,
+		Generation:     c.activation.Generation(),
 		Recency:        c.activation.maxRecency,
 		RuleID:         ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
@@ -1413,7 +1415,6 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 			continue
 		}
 		existing.token = update.after
-		existing.generation = tokenRefGeneration(update.after)
 		existing.maxRecency = update.after.maxRecency()
 		existing.aggregateRecency = update.after.aggregateRecency()
 		if existing.status == activationStatusPending {
@@ -2055,7 +2056,6 @@ func activationRunSnapshot(current *activation) activation {
 	return activation{
 		key:              current.key,
 		ruleRevisionID:   current.ruleRevisionID,
-		generation:       current.generation,
 		identityKey:      current.identityKey,
 		token:            current.token,
 		salience:         current.salience,
@@ -3006,6 +3006,20 @@ func activationFactVersionCount(act *activation) int {
 	return len(act.factVersions())
 }
 
+func activationGeneration(act *activation) Generation {
+	if act == nil {
+		return 0
+	}
+	if !act.token.isZero() {
+		return tokenRefGeneration(act.token)
+	}
+	factIDs := act.factIDs()
+	if len(factIDs) == 0 {
+		return 0
+	}
+	return factIDs[0].Generation()
+}
+
 func fillTokenRefFactIDs(factIDs []FactID, index int, token tokenRef) int {
 	if token.isZero() {
 		return index
@@ -3051,7 +3065,6 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 		return
 	}
 	dst.ruleRevisionID = candidate.ruleRevisionID
-	dst.generation = candidate.generation
 	dst.identityKey = candidate.identity.key
 	dst.payload = nil
 	dst.setBindings(cloneBindingTupleEntries(candidate.bindingTuple))
@@ -3106,7 +3119,6 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
 	dst.ruleRevisionID = rule.revisionID
-	dst.generation = token.generation()
 	dst.identityKey = identity.key
 	dst.token = token
 	dst.salience = rule.salience
