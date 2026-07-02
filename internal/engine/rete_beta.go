@@ -47,7 +47,6 @@ type tokenRow struct {
 	value            Value
 	hasValue         bool
 	size             int
-	factSpanStart    int
 	pathLen          int
 	maxRecency       Recency
 	aggregateRecency Recency
@@ -58,15 +57,12 @@ type tokenRow struct {
 type tokenIdentityKey = graphTokenIdentityKey
 
 type tokenArena struct {
-	chunks        [][]tokenRow
-	factRefs      []conditionFactRef
-	factRefIndex  map[tokenFactRefKey]int
-	factIDs       []FactID
-	factVersions  []FactVersion
-	count         int
-	epoch         uint64
-	generation    Generation
-	keepFactSpans bool
+	chunks       [][]tokenRow
+	factRefs     []conditionFactRef
+	factRefIndex map[tokenFactRefKey]int
+	count        int
+	epoch        uint64
+	generation   Generation
 }
 
 type tokenArenaRowID uint32
@@ -78,10 +74,6 @@ type tokenFactRefKey struct {
 }
 
 func newTokenArena() *tokenArena {
-	return &tokenArena{epoch: 1, keepFactSpans: true}
-}
-
-func newTokenArenaWithoutFactSpans() *tokenArena {
 	return &tokenArena{epoch: 1}
 }
 
@@ -92,20 +84,6 @@ func (a *tokenArena) reserve(rowCapacity int) {
 	chunkCount := (rowCapacity + reteBetaMatchTokenChunkSize - 1) / reteBetaMatchTokenChunkSize
 	for len(a.chunks) < chunkCount {
 		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
-	}
-	if !a.keepFactSpans {
-		return
-	}
-	spanCapacity := rowCapacity
-	if spanCapacity > cap(a.factIDs) {
-		factIDs := make([]FactID, len(a.factIDs), spanCapacity)
-		copy(factIDs, a.factIDs)
-		a.factIDs = factIDs
-	}
-	if spanCapacity > cap(a.factVersions) {
-		factVersions := make([]FactVersion, len(a.factVersions), spanCapacity)
-		copy(factVersions, a.factVersions)
-		a.factVersions = factVersions
 	}
 }
 
@@ -126,14 +104,6 @@ func (a *tokenArena) reset() {
 	if a.factRefIndex != nil {
 		clear(a.factRefIndex)
 	}
-	for i := range a.factIDs {
-		a.factIDs[i] = FactID{}
-	}
-	a.factIDs = a.factIDs[:0]
-	for i := range a.factVersions {
-		a.factVersions[i] = 0
-	}
-	a.factVersions = a.factVersions[:0]
 	a.count = 0
 	a.generation = 0
 	a.epoch++
@@ -210,7 +180,6 @@ func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch,
 	row.pathLen = pathStepLen
 	row.maxRecency = recency
 	row.aggregateRecency = recency
-	row.factSpanStart = a.appendFactSpan(nil, match)
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(candidateIdentityHashStart(tokenGeneration), entry)
 	row.orderedSlots = entry.bindingSlot == 0
@@ -274,7 +243,6 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 		row.identityState = candidateIdentityHashStart(tokenGeneration)
 		row.orderedSlots = entry.bindingSlot == 0
 	}
-	row.factSpanStart = a.appendFactSpan(parentRow, match)
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
 
@@ -414,30 +382,6 @@ func tokenRowPathStepLen(token tokenRef, row *tokenRow) (int, bool) {
 	return stepLen, true
 }
 
-func (a *tokenArena) appendFactSpan(parent *tokenRow, match conditionMatch) int {
-	if a == nil || !a.keepFactSpans {
-		return -1
-	}
-	start := len(a.factIDs)
-	if parent != nil {
-		parentEnd := parent.factSpanStart + parent.size
-		if parent.factSpanStart < 0 || parentEnd > len(a.factIDs) || parentEnd > len(a.factVersions) {
-			return -1
-		}
-		a.factIDs = append(a.factIDs, a.factIDs[parent.factSpanStart:parentEnd]...)
-		a.factVersions = append(a.factVersions, a.factVersions[parent.factSpanStart:parentEnd]...)
-	}
-	var id FactID
-	var version FactVersion
-	if !match.hasValue {
-		id = match.fact.ID()
-		version = match.fact.Version()
-	}
-	a.factIDs = append(a.factIDs, id)
-	a.factVersions = append(a.factVersions, version)
-	return start
-}
-
 func (a *tokenArena) addSeed(generation Generation) tokenRef {
 	if a == nil {
 		return tokenRef{}
@@ -457,7 +401,6 @@ func (a *tokenArena) addSeed(generation Generation) tokenRef {
 	}
 	a.chunks[chunkIndex] = chunk
 	row := &a.chunks[chunkIndex][len(chunk)-1]
-	row.factSpanStart = -1
 	row.identityState = candidateIdentityHashStart(generation)
 	row.orderedSlots = true
 	a.count++
@@ -498,28 +441,6 @@ func (a *tokenArena) rowByID(id tokenArenaRowID) (*tokenRow, bool) {
 		return nil, false
 	}
 	return &a.chunks[chunkIndex][rowIndex], true
-}
-
-func (r *tokenRow) factIDs(arena *tokenArena) []FactID {
-	if r == nil || arena == nil || r.size <= 0 {
-		return nil
-	}
-	end := r.factSpanStart + r.size
-	if r.factSpanStart < 0 || end > len(arena.factIDs) {
-		return nil
-	}
-	return arena.factIDs[r.factSpanStart:end]
-}
-
-func (r *tokenRow) factVersions(arena *tokenArena) []FactVersion {
-	if r == nil || arena == nil || r.size <= 0 {
-		return nil
-	}
-	end := r.factSpanStart + r.size
-	if r.factSpanStart < 0 || end > len(arena.factVersions) {
-		return nil
-	}
-	return arena.factVersions[r.factSpanStart:end]
 }
 
 func (r tokenRef) resolve() (*tokenRow, bool) {
@@ -638,21 +559,11 @@ func (r tokenRef) containsFact(id FactID) bool {
 }
 
 func (r tokenRef) factIDs() ([]FactID, bool) {
-	row, ok := r.resolve()
-	if !ok {
-		return nil, false
-	}
-	factIDs := row.factIDs(r.handle.arena)
-	return factIDs, len(factIDs) == row.size
+	return nil, false
 }
 
 func (r tokenRef) factVersions() ([]FactVersion, bool) {
-	row, ok := r.resolve()
-	if !ok {
-		return nil, false
-	}
-	factVersions := row.factVersions(r.handle.arena)
-	return factVersions, len(factVersions) == row.size
+	return nil, false
 }
 
 type reteAgendaDelta struct {

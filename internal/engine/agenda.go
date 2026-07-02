@@ -3119,6 +3119,9 @@ func fillTokenRefFactIDs(factIDs []FactID, index int, token tokenRef) int {
 	if !ok {
 		return index
 	}
+	if index >= len(factIDs) {
+		return index
+	}
 	factIDs[index] = match.fact.ID()
 	return index + 1
 }
@@ -3134,6 +3137,9 @@ func fillTokenRefFactVersions(factVersions []FactVersion, index int, token token
 	index = fillTokenRefFactVersions(factVersions, index, token.parent())
 	match, ok := row.conditionMatch()
 	if !ok {
+		return index
+	}
+	if index >= len(factVersions) {
 		return index
 	}
 	factVersions[index] = match.fact.Version()

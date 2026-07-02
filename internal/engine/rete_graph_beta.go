@@ -729,7 +729,7 @@ func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount 
 		nodes:      make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
 		aggregates: make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
 		terminals:  make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
-		arena:      newTokenArenaWithoutFactSpans(),
+		arena:      newTokenArena(),
 	}
 	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(0)
@@ -1953,7 +1953,7 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, len(facts)))
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	} else {
 		m.arena.reset()
 	}
@@ -2007,7 +2007,7 @@ func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx conte
 		m.reserveAlphaFacts(graphBetaAlphaFactCapacity(m.revision, m.graph, factCount))
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	} else {
 		m.arena.reset()
 	}
@@ -3385,7 +3385,7 @@ func (m *reteGraphBetaMemory) newAlphaSourceTokenRef(entry bindingTupleEntry, ma
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	}
 	return m.arena.addAlphaSource(entry, match, match.fact.Recency(), match.fact.Generation())
 }
@@ -6705,7 +6705,7 @@ func (m *reteGraphBetaMemory) newTokenRef(parent tokenRef, entry bindingTupleEnt
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	}
 	return m.arena.add(parent, entry, match, recency, generation)
 }
@@ -6722,7 +6722,7 @@ func (m *reteGraphBetaMemory) newTokenRowRef(parent tokenRef, source tokenRef, r
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	}
 	return m.arena.addCompact(parent, row.tokenRowEntry(), match, recency, generation, pathStepLen)
 }
@@ -6739,7 +6739,7 @@ func (m *reteGraphBetaMemory) newTokenRowRefSource(parent tokenRef, source token
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	}
 	return m.arena.addCompactSource(parent, source, row.tokenRowEntry(), recency, generation, pathStepLen)
 }
@@ -6752,7 +6752,7 @@ func (m *reteGraphBetaMemory) newRootTokenRef(generation Generation, span *propa
 		span.recordTokenCreated()
 	}
 	if m.arena == nil {
-		m.arena = newTokenArenaWithoutFactSpans()
+		m.arena = newTokenArena()
 	}
 	return m.arena.addSeed(generation)
 }

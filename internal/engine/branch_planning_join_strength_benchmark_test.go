@@ -118,12 +118,6 @@ func TestGraphBetaArenaSkipsCopiedFactSpans(t *testing.T) {
 	if memory.arena == nil || memory.arena.rowCount() == 0 {
 		t.Fatalf("graph beta arena row count = %d, want retained token rows", memory.arena.rowCount())
 	}
-	if got := len(memory.arena.factIDs); got != 0 {
-		t.Fatalf("graph beta arena fact id spans = %d, want 0", got)
-	}
-	if got := len(memory.arena.factVersions); got != 0 {
-		t.Fatalf("graph beta arena fact version spans = %d, want 0", got)
-	}
 }
 
 func TestTerminalTokenFastIdentityMatchesBindingTupleIdentity(t *testing.T) {

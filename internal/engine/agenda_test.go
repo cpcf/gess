@@ -857,7 +857,7 @@ func TestAgendaTerminalTokenFactIndexMaterializesLazily(t *testing.T) {
 	}
 }
 
-func TestTokenArenaCachesFactSpans(t *testing.T) {
+func TestTokenArenaMaterializesFactSpansAtBoundary(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 5, recency: 11, generation: 1}
@@ -878,24 +878,24 @@ func TestTokenArenaCachesFactSpans(t *testing.T) {
 	if got, want := cloneActivationFactVersions(&activation{token: second}), []FactVersion{firstFact.Version(), secondFact.Version()}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cached token fact versions = %#v, want %#v", got, want)
 	}
-	if got, ok := second.factIDs(); !ok || !slices.Equal(got, []FactID{firstFact.ID(), secondFact.ID()}) {
-		t.Fatalf("token fact IDs = %#v, %v; want cached joined fact IDs", got, ok)
+	if got, ok := second.factIDs(); ok || got != nil {
+		t.Fatalf("token cached fact IDs = %#v, %v; want unavailable", got, ok)
 	}
-	if got, ok := second.factVersions(); !ok || !slices.Equal(got, []FactVersion{firstFact.Version(), secondFact.Version()}) {
-		t.Fatalf("token fact versions = %#v, %v; want cached joined fact versions", got, ok)
+	if got, ok := second.factVersions(); ok || got != nil {
+		t.Fatalf("token cached fact versions = %#v, %v; want unavailable", got, ok)
 	}
 
 	valueEntry := bindingTupleEntry{bindingSlot: 2, value: newIntValue(42), hasValue: true, conditionPath: []int{2}}
 	valueToken := arena.add(second, valueEntry, conditionMatch{bindingSlot: 2, value: newIntValue(42), hasValue: true}, 0, secondFact.Generation())
-	if got, ok := valueToken.factIDs(); !ok || !slices.Equal(got, []FactID{firstFact.ID(), secondFact.ID(), FactID{}}) {
-		t.Fatalf("value token fact IDs = %#v, %v; want cached joined fact IDs with zero value row", got, ok)
+	if got, want := cloneActivationFactIDs(&activation{token: valueToken}), []FactID{firstFact.ID(), secondFact.ID(), FactID{}}; !slices.Equal(got, want) {
+		t.Fatalf("value token materialized fact IDs = %#v; want %#v", got, want)
 	}
 
 	otherArena := newTokenArena()
 	otherFirst := otherArena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
 	otherSecond := otherArena.add(otherFirst, secondEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 	if !tokenRefEqual(second, otherSecond) {
-		t.Fatal("equivalent token refs with cached fact spans should compare equal")
+		t.Fatal("equivalent token refs should compare equal")
 	}
 	if !terminalTokenFactVersionsEqual(second, otherSecond) {
 		t.Fatal("equivalent terminal token fact spans should compare equal")
