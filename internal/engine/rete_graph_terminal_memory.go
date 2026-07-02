@@ -18,9 +18,9 @@ type terminalTokenRow struct {
 	handle       graphTokenRowHandle
 	token        tokenRef
 	identityHash uint64
-	identityNext graphTokenRowID
+	identityNext uint32
+	supportCount uint32
 	candidateKey candidateIdentityKey
-	supportCount int
 }
 
 type terminalBranchSupportState struct {
@@ -176,8 +176,8 @@ type queryTerminalMemory struct {
 type queryTerminalRow struct {
 	token        tokenRef
 	identityHash uint64
-	identityNext graphTokenRowID
-	supportCount int
+	identityNext uint32
+	supportCount uint32
 }
 
 func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
@@ -186,13 +186,38 @@ func (r terminalTokenRow) toGraphTokenRow() graphTokenRow {
 		token:        r.token,
 		identity:     r.token.identityKey(),
 		candidate:    candidateIdentity{key: r.candidateKey},
-		supportCount: r.supportCount,
+		supportCount: int(r.supportCount),
 	}
 	return row
 }
 
 func (r terminalTokenRow) isTerminal() bool {
 	return r.supportCount > 0
+}
+
+func terminalIdentityRef(id graphTokenRowID) uint32 {
+	if id < 0 || uint64(id) >= uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(id) + 1
+}
+
+func terminalIdentityRefID(ref uint32) graphTokenRowID {
+	if ref == 0 {
+		return -1
+	}
+	return graphTokenRowID(ref - 1)
+}
+
+func terminalIdentityRefValue(ref graphTokenRowID) uint32 {
+	if ref <= 0 || uint64(ref) > uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(ref)
+}
+
+func terminalIdentityGraphRef(ref uint32) graphTokenRowID {
+	return graphTokenRowID(ref)
 }
 
 func (m *terminalTokenMemory) branchState(rowID graphTokenRowID) *terminalBranchSupportState {
@@ -397,7 +422,7 @@ func (m *terminalTokenMemory) appendIdentityHashIndexRow(hash uint64, id graphTo
 		return
 	}
 	head := m.identityRows.headHash(hash)
-	row.identityNext = head
+	row.identityNext = terminalIdentityRefValue(head)
 	m.identityRows.setHeadHash(hash, graphTokenRowIDRef(id))
 }
 
@@ -489,10 +514,10 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, ca
 	identity := tokenRefKey(token)
 	identityHash := hashTokenIdentityBucketKey(identity)
 	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
+		rowID := terminalIdentityRefID(uint32(ref))
 		row := m.row(rowID)
 		if row != nil {
-			ref = row.identityNext
+			ref = terminalIdentityGraphRef(row.identityNext)
 		} else {
 			ref = 0
 		}
@@ -684,10 +709,10 @@ func (m *terminalTokenMemory) removeToken(token tokenRef, counters *propagationC
 		return graphTokenRow{}, false
 	}
 	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
+		rowID := terminalIdentityRefID(uint32(ref))
 		row := m.row(rowID)
 		if row != nil {
-			ref = row.identityNext
+			ref = terminalIdentityGraphRef(row.identityNext)
 		} else {
 			ref = 0
 		}
@@ -830,7 +855,7 @@ func (m *terminalTokenMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 	}
 	var previous *terminalTokenRow
 	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
+		currentID := terminalIdentityRefID(uint32(ref))
 		current := m.row(currentID)
 		if current == nil {
 			break
@@ -838,7 +863,7 @@ func (m *terminalTokenMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 		next := current.identityNext
 		if currentID == rowID {
 			if previous == nil {
-				m.identityRows.setHeadHash(hash, next)
+				m.identityRows.setHeadHash(hash, terminalIdentityGraphRef(next))
 			} else {
 				previous.identityNext = next
 			}
@@ -846,7 +871,7 @@ func (m *terminalTokenMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 			return true
 		}
 		previous = current
-		ref = next
+		ref = terminalIdentityGraphRef(next)
 	}
 	return false
 }
@@ -858,7 +883,7 @@ func (m *terminalTokenMemory) replaceIdentityHashIndexRow(hash uint64, oldID, ne
 	oldRef := graphTokenRowIDRef(oldID)
 	newRef := graphTokenRowIDRef(newID)
 	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
+		currentID := terminalIdentityRefID(uint32(ref))
 		current := m.row(currentID)
 		if current == nil {
 			break
@@ -867,11 +892,11 @@ func (m *terminalTokenMemory) replaceIdentityHashIndexRow(hash uint64, oldID, ne
 			m.identityRows.setHeadHash(hash, newRef)
 			return true
 		}
-		if current.identityNext == oldRef {
-			current.identityNext = newRef
+		if terminalIdentityGraphRef(current.identityNext) == oldRef {
+			current.identityNext = terminalIdentityRefValue(newRef)
 			return true
 		}
-		ref = current.identityNext
+		ref = terminalIdentityGraphRef(current.identityNext)
 	}
 	return false
 }
@@ -1110,10 +1135,10 @@ func (m *queryTerminalMemory) insertRow(token tokenRef) bool {
 	}
 	identityHash := hashTokenIdentityBucketKey(token.identityKey())
 	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
+		rowID := terminalIdentityRefID(uint32(ref))
 		row := m.row(rowID)
 		if row != nil {
-			ref = row.identityNext
+			ref = terminalIdentityGraphRef(row.identityNext)
 		} else {
 			ref = 0
 		}
@@ -1241,10 +1266,10 @@ func (m *queryTerminalMemory) removeToken(token tokenRef, counters *propagationC
 		return false
 	}
 	for ref := m.identityRows.headHash(identityHash); ref != 0; {
-		rowID := graphTokenRowRefID(ref)
+		rowID := terminalIdentityRefID(uint32(ref))
 		row := m.row(rowID)
 		if row != nil {
-			ref = row.identityNext
+			ref = terminalIdentityGraphRef(row.identityNext)
 		} else {
 			ref = 0
 		}
@@ -1361,7 +1386,7 @@ func (m *queryTerminalMemory) appendIdentityHashIndexRow(hash uint64, id graphTo
 		return
 	}
 	head := m.identityRows.headHash(hash)
-	row.identityNext = head
+	row.identityNext = terminalIdentityRefValue(head)
 	m.identityRows.setHeadHash(hash, graphTokenRowIDRef(id))
 }
 
@@ -1371,7 +1396,7 @@ func (m *queryTerminalMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 	}
 	var previous *queryTerminalRow
 	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
+		currentID := terminalIdentityRefID(uint32(ref))
 		current := m.row(currentID)
 		if current == nil {
 			break
@@ -1379,7 +1404,7 @@ func (m *queryTerminalMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 		next := current.identityNext
 		if currentID == rowID {
 			if previous == nil {
-				m.identityRows.setHeadHash(hash, next)
+				m.identityRows.setHeadHash(hash, terminalIdentityGraphRef(next))
 			} else {
 				previous.identityNext = next
 			}
@@ -1387,7 +1412,7 @@ func (m *queryTerminalMemory) removeIdentityHashIndexRow(hash uint64, rowID grap
 			return true
 		}
 		previous = current
-		ref = next
+		ref = terminalIdentityGraphRef(next)
 	}
 	return false
 }
@@ -1399,7 +1424,7 @@ func (m *queryTerminalMemory) replaceIdentityHashIndexRow(hash uint64, oldID, ne
 	oldRef := graphTokenRowIDRef(oldID)
 	newRef := graphTokenRowIDRef(newID)
 	for ref := m.identityRows.headHash(hash); ref != 0; {
-		currentID := graphTokenRowRefID(ref)
+		currentID := terminalIdentityRefID(uint32(ref))
 		current := m.row(currentID)
 		if current == nil {
 			break
@@ -1408,11 +1433,11 @@ func (m *queryTerminalMemory) replaceIdentityHashIndexRow(hash uint64, oldID, ne
 			m.identityRows.setHeadHash(hash, newRef)
 			return true
 		}
-		if current.identityNext == oldRef {
-			current.identityNext = newRef
+		if terminalIdentityGraphRef(current.identityNext) == oldRef {
+			current.identityNext = terminalIdentityRefValue(newRef)
 			return true
 		}
-		ref = current.identityNext
+		ref = terminalIdentityGraphRef(current.identityNext)
 	}
 	return false
 }

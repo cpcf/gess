@@ -284,7 +284,7 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if row == nil {
 		t.Fatal("terminal row missing")
 	}
-	if got, want := row.supportCount, 2; got != want {
+	if got, want := int(row.supportCount), 2; got != want {
 		t.Fatalf("support count = %d, want %d", got, want)
 	}
 	rowID, ok := memory.rowIDByHandle(firstHandle)
@@ -301,7 +301,7 @@ func TestTerminalTokenMemoryDedupesEquivalentReconstructedTokenSupport(t *testin
 	if row == nil {
 		t.Fatal("terminal row missing after support decrement")
 	}
-	if got, want := row.supportCount, 1; got != want {
+	if got, want := int(row.supportCount), 1; got != want {
 		t.Fatalf("support count after decrement = %d, want %d", got, want)
 	}
 	if memory.hasTerminalBranchSupport(rowID, 20) {
