@@ -15,7 +15,11 @@ func TestBetaSideMemoryStoresNegativeBlockerCount(t *testing.T) {
 	if !memory.insertWithNegativeBlockerCount(token, betaJoinKey{}, 2) {
 		t.Fatal("insertWithNegativeBlockerCount returned false")
 	}
-	row := memory.row(0)
+	var row *betaTokenRow
+	memory.forEachRow(func(candidate *betaTokenRow) bool {
+		row = candidate
+		return false
+	})
 	if row == nil {
 		t.Fatal("negative row was not retained")
 	}
@@ -157,13 +161,13 @@ func TestBetaSideMemoryAppendsEquivalentReconstructedToken(t *testing.T) {
 	if !memory.insert(secondToken, betaJoinKey{}) {
 		t.Fatal("insert(equivalent second) returned false")
 	}
-	if got, want := len(memory.rows), 2; got != want {
+	if got, want := memory.len(), 2; got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
 	if removed, ok := memory.removeTokenWithJoinKey(secondToken, betaJoinKey{}, nil); !ok || !tokenRefEqual(removed.token, firstToken) {
 		t.Fatalf("remove equivalent token = (%#v, %v), want an equivalent token", removed, ok)
 	}
-	if got, want := len(memory.rows), 1; got != want {
+	if got, want := memory.len(), 1; got != want {
 		t.Fatalf("rows after removal = %d, want %d", got, want)
 	}
 }
@@ -199,7 +203,7 @@ func TestBetaSideMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	if !memory.insert(secondToken, betaJoinKey{}) {
 		t.Fatal("insert(colliding second) returned false")
 	}
-	if got, want := len(memory.rows), 2; got != want {
+	if got, want := memory.len(), 2; got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
 	if removed, ok := memory.removeToken(secondToken, nil); !ok || !tokenRefEqual(removed.token, secondToken) {
@@ -334,7 +338,7 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
 		t.Fatalf("removal rows moved = %d, want %d", got, want)
 	}
-	if got := len(memory.rows); got != 1 {
+	if got := memory.len(); got != 1 {
 		t.Fatalf("rows after removal = %d, want 1", got)
 	}
 	if !memory.containsExactToken(secondToken) {
@@ -375,7 +379,7 @@ func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesSwapRemoval(t *testing.T) {
 	if removed, ok := memory.removeTokenWithJoinKey(secondToken, secondKey, counters); !ok || !tokenRefEqual(removed.token, secondToken) {
 		t.Fatalf("remove moved second = (%#v, %v), want second token", removed, ok)
 	}
-	if got := len(memory.rows); got != 0 {
+	if got := memory.len(); got != 0 {
 		t.Fatalf("rows after removing moved token = %d, want 0", got)
 	}
 }
@@ -510,7 +514,7 @@ func TestBetaSideMemoryScansFactRemovalWithoutReverseIndex(t *testing.T) {
 	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
 		t.Fatalf("removed rows = %d, want 1", removed)
 	}
-	if got, want := len(memory.rows), 1; got != want {
+	if got, want := memory.len(), 1; got != want {
 		t.Fatalf("rows after first fact removal = %d, want %d", got, want)
 	}
 	if removed := memory.removeContainingFact(secondFact.ID(), nil); removed != 1 {

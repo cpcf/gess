@@ -6,98 +6,102 @@ const (
 	graphTokenBucketDeleted
 )
 
-type betaJoinHeadTable struct {
-	heads   []graphTokenRowID
-	tails   []graphTokenRowID
-	touched []int
-	count   int
+type betaJoinBucketTable struct {
+	buckets   []betaJoinTokenBucket
+	touched   []int
+	slotCount int
+	rowCount  int
 }
 
-func (t *betaJoinHeadTable) reserve(capacity int) bool {
+func (t *betaJoinBucketTable) reserve(capacity int) bool {
 	if capacity <= 0 {
 		return false
 	}
 	slotCapacity := graphTokenBucketSlotCapacity(capacity)
-	if slotCapacity <= len(t.heads) {
+	if slotCapacity <= len(t.buckets) {
 		return false
 	}
-	headCapacity := graphTokenBucketPowerOfTwo(max(8, slotCapacity))
-	t.heads = make([]graphTokenRowID, headCapacity)
-	t.tails = make([]graphTokenRowID, headCapacity)
+	old := t.buckets
+	t.buckets = make([]betaJoinTokenBucket, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
 	t.touched = t.touched[:0]
-	t.count = 0
+	t.slotCount = 0
+	t.rowCount = 0
+	for i := range old {
+		for rowIndex := range old[i].rows {
+			t.appendRehashed(old[i].rows[rowIndex])
+		}
+		old[i].clear()
+	}
 	return true
 }
 
-func (t *betaJoinHeadTable) clear() {
-	if t == nil || len(t.heads) == 0 {
+func (t *betaJoinBucketTable) clear() {
+	if t == nil || len(t.buckets) == 0 {
 		return
 	}
 	for _, index := range t.touched {
-		if index >= 0 && index < len(t.heads) {
-			t.heads[index] = 0
-			t.tails[index] = 0
+		if index >= 0 && index < len(t.buckets) {
+			t.buckets[index].clear()
 		}
 	}
 	t.touched = t.touched[:0]
-	t.count = 0
+	t.slotCount = 0
+	t.rowCount = 0
 }
 
-func (t *betaJoinHeadTable) isEmpty() bool {
-	return t == nil || t.count == 0
+func (t *betaJoinBucketTable) isEmpty() bool {
+	return t == nil || t.rowCount == 0
 }
 
-func (t *betaJoinHeadTable) keyCount() int {
+func (t *betaJoinBucketTable) keyCount() int {
 	if t == nil {
 		return 0
 	}
-	return t.count
+	return t.slotCount
 }
 
-func (t *betaJoinHeadTable) head(key betaJoinKey) graphTokenRowID {
-	if t == nil || len(t.heads) == 0 {
+func (t *betaJoinBucketTable) len() int {
+	if t == nil {
 		return 0
 	}
-	return t.heads[t.slot(key)]
+	return t.rowCount
 }
 
-func (t *betaJoinHeadTable) tail(key betaJoinKey) graphTokenRowID {
-	if t == nil || len(t.tails) == 0 {
-		return 0
+func (t *betaJoinBucketTable) bucket(key betaJoinKey) *betaJoinTokenBucket {
+	if t == nil || len(t.buckets) == 0 {
+		return nil
 	}
-	return t.tails[t.slot(key)]
+	return &t.buckets[t.slot(key)]
 }
 
-func (t *betaJoinHeadTable) setHead(key betaJoinKey, head graphTokenRowID) {
-	if t == nil || len(t.heads) == 0 {
+func (t *betaJoinBucketTable) slot(key betaJoinKey) int {
+	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.buckets)-1))
+}
+
+func (t *betaJoinBucketTable) appendRehashed(row betaTokenRow) {
+	if t == nil || len(t.buckets) == 0 || row.token.isZero() {
 		return
 	}
-	index := t.slot(key)
-	t.setHeadAt(index, head)
-}
-
-func (t *betaJoinHeadTable) setTail(key betaJoinKey, tail graphTokenRowID) {
-	if t == nil || len(t.tails) == 0 {
-		return
-	}
-	t.tails[t.slot(key)] = tail
-}
-
-func (t *betaJoinHeadTable) setHeadAt(index int, head graphTokenRowID) {
-	if t.heads[index] == 0 && head != 0 {
+	index := t.slot(row.joinKey)
+	bucket := &t.buckets[index]
+	if len(bucket.rows) == 0 {
 		t.touched = append(t.touched, index)
-		t.count++
-	} else if t.heads[index] != 0 && head == 0 {
-		t.count--
+		t.slotCount++
 	}
-	t.heads[index] = head
-	if head == 0 {
-		t.tails[index] = 0
-	}
+	bucket.rows = append(bucket.rows, row)
+	t.rowCount++
 }
 
-func (t *betaJoinHeadTable) slot(key betaJoinKey) int {
-	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.heads)-1))
+type betaJoinTokenBucket struct {
+	rows []betaTokenRow
+}
+
+func (b *betaJoinTokenBucket) clear() {
+	if b == nil || len(b.rows) == 0 {
+		return
+	}
+	clear(b.rows)
+	b.rows = b.rows[:0]
 }
 
 type tokenIdentityHeadTable struct {
