@@ -33,7 +33,6 @@ func (h tokenParentHandle) isZero() bool {
 }
 
 type tokenRowEntry struct {
-	conditionID ConditionID
 	bindingSlot int
 	factID      FactID
 	factVersion FactVersion
@@ -43,7 +42,6 @@ type tokenRowEntry struct {
 
 type tokenRow struct {
 	parent           tokenParentHandle
-	conditionID      ConditionID
 	bindingSlot      int
 	fact             *conditionFactRef
 	value            Value
@@ -153,19 +151,14 @@ func (a *tokenArena) addAlphaSource(entry bindingTupleEntry, match conditionMatc
 		return tokenRef{}
 	}
 	rowEntry := tokenRowEntry{
-		conditionID: entry.conditionID,
 		bindingSlot: entry.bindingSlot,
 		value:       match.value,
 		hasValue:    match.hasValue,
-	}
-	if rowEntry.conditionID == "" {
-		rowEntry.conditionID = match.conditionID
 	}
 	if !match.hasValue {
 		rowEntry.factID = match.fact.ID()
 		rowEntry.factVersion = match.fact.Version()
 	}
-	match.conditionID = rowEntry.conditionID
 	match.bindingSlot = rowEntry.bindingSlot
 	return a.addSourceCompact(rowEntry, match, recency, generation, len(entry.conditionPath))
 }
@@ -350,7 +343,6 @@ func (r *tokenRow) conditionMatch() (conditionMatch, bool) {
 		fact = *r.fact
 	}
 	return conditionMatch{
-		conditionID: r.conditionID,
 		bindingSlot: r.bindingSlot,
 		fact:        fact,
 		value:       r.value,
@@ -362,7 +354,6 @@ func (r *tokenRow) setEntry(entry tokenRowEntry) {
 	if r == nil {
 		return
 	}
-	r.conditionID = entry.conditionID
 	r.bindingSlot = entry.bindingSlot
 	r.value = entry.value
 	r.hasValue = entry.hasValue
@@ -373,7 +364,6 @@ func (r *tokenRow) tokenRowEntry() tokenRowEntry {
 		return tokenRowEntry{}
 	}
 	out := tokenRowEntry{
-		conditionID: r.conditionID,
 		bindingSlot: r.bindingSlot,
 		value:       r.value,
 		hasValue:    r.hasValue,
@@ -387,13 +377,9 @@ func (r *tokenRow) tokenRowEntry() tokenRowEntry {
 
 func tokenRowEntryForMatch(entry bindingTupleEntry, match conditionMatch) tokenRowEntry {
 	out := tokenRowEntry{
-		conditionID: entry.conditionID,
 		bindingSlot: entry.bindingSlot,
 		value:       match.value,
 		hasValue:    match.hasValue,
-	}
-	if out.conditionID == "" {
-		out.conditionID = match.conditionID
 	}
 	if !match.hasValue {
 		out.factID = match.fact.ID()

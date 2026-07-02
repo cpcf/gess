@@ -56,8 +56,8 @@ func TestTokenArenaCopiedRowsOwnCopiedMatch(t *testing.T) {
 	if got, want := copiedMatch.fact.ID(), fact.ID(); got != want {
 		t.Fatalf("copied match fact ID = %q, want %q", got, want)
 	}
-	if got, want := copiedMatch.conditionID, ConditionID("event"); got != want {
-		t.Fatalf("copied match condition ID = %q, want %q", got, want)
+	if got, want := copiedMatch.bindingSlot, 0; got != want {
+		t.Fatalf("copied match binding slot = %d, want %d", got, want)
 	}
 
 	sourceMatch, ok := tokenRefAtSlot(source, 0)
