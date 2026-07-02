@@ -193,6 +193,12 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 	if s.revision != nil {
 		rulesetID = s.revision.ID()
 	}
+	ruleID := RuleID("")
+	if s.revision != nil {
+		if rule, ok := s.revision.rulesByRevisionID[activation.ruleRevisionID]; ok {
+			ruleID = rule.id
+		}
+	}
 	s.nextEventSequence++
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
@@ -204,7 +210,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		Severity:       EventSeverityInfo,
 		Generation:     activation.generation,
 		Recency:        activation.maxRecency,
-		RuleID:         activation.ruleID,
+		RuleID:         ruleID,
 		RuleRevisionID: activation.ruleRevisionID,
 		ActivationID:   activation.activationID(),
 		FactIDs:        cloneActivationFactIDs(&activation),

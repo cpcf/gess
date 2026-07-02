@@ -339,7 +339,6 @@ func (s activationStatus) String() string {
 
 type activation struct {
 	key              activationKey
-	ruleID           RuleID
 	ruleRevisionID   RuleRevisionID
 	generation       Generation
 	identity         candidateIdentity
@@ -361,7 +360,6 @@ type activationPayload struct {
 func (a activation) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
 		ActivationID:          a.activationID(),
-		RuleID:                a.ruleID,
 		RuleRevisionID:        a.ruleRevisionID,
 		activationIdentityKey: a.identity.key,
 		activationOrdinal:     a.key.ordinal,
@@ -506,6 +504,10 @@ type agendaChange struct {
 }
 
 func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence uint64, timestamp time.Time) Event {
+	return c.eventWithRuleID(sessionID, rulesetID, "", sequence, timestamp)
+}
+
+func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, ruleID RuleID, sequence uint64, timestamp time.Time) Event {
 	eventType := EventRuleActivated
 	if c.kind == agendaChangeDeactivated {
 		eventType = EventRuleDeactivated
@@ -519,7 +521,7 @@ func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence u
 		Type:           eventType,
 		Generation:     c.activation.generation,
 		Recency:        c.activation.maxRecency,
-		RuleID:         c.activation.ruleID,
+		RuleID:         ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
 		ActivationID:   c.activation.activationID(),
 		FactIDs:        cloneActivationFactIDs(&c.activation),
@@ -531,9 +533,6 @@ func (a *agenda) publicActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
-	if out.ruleID.IsZero() {
-		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
-	}
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
 	out.setFactVersions(cloneActivationFactVersions(act))
@@ -565,9 +564,6 @@ func (a *agenda) compactChangeActivation(act *activation) activation {
 		return activation{}
 	}
 	out := *act
-	if out.ruleID.IsZero() {
-		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
-	}
 	out.payload = nil
 	out.setFactIDs(cloneActivationFactIDs(act))
 	if a != nil && a.revision != nil && !act.token.isZero() {
@@ -1990,11 +1986,7 @@ func compactConsumedTokenActivation(current *activation) {
 }
 
 func (a *agenda) activationRunSnapshot(current *activation) activation {
-	out := activationRunSnapshot(current)
-	if out.ruleID.IsZero() {
-		out.ruleID = a.ruleIDForRevision(out.ruleRevisionID)
-	}
-	return out
+	return activationRunSnapshot(current)
 }
 
 func (a *agenda) activationModule(act *activation) ModuleName {
@@ -2032,7 +2024,6 @@ func activationRunSnapshot(current *activation) activation {
 	}
 	return activation{
 		key:              current.key,
-		ruleID:           current.ruleID,
 		ruleRevisionID:   current.ruleRevisionID,
 		generation:       current.generation,
 		identity:         current.identity,
@@ -2606,9 +2597,6 @@ func activationMatchesCandidate(current *activation, candidate matchCandidate) b
 	if current.ruleRevisionID != candidate.ruleRevisionID {
 		return false
 	}
-	if !current.ruleID.IsZero() && current.ruleID != candidate.ruleID {
-		return false
-	}
 	if current.identity.key != candidate.identity.key || current.identity.generation != candidate.identity.generation || current.identity.count != candidate.identity.count {
 		return false
 	}
@@ -3005,7 +2993,6 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	if dst == nil {
 		return
 	}
-	dst.ruleID = candidate.ruleID
 	dst.ruleRevisionID = candidate.ruleRevisionID
 	dst.generation = candidate.generation
 	dst.identity = candidate.identity
@@ -3041,7 +3028,6 @@ func (a *agenda) newTerminalActivationFromTerminalTokenWithIdentity(rule compile
 		a.terminalActivations.truncate(rowCount)
 		return nil, err
 	}
-	out.ruleID = ""
 	return out, nil
 }
 
@@ -3062,7 +3048,6 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, token)
 	}
-	dst.ruleID = rule.id
 	dst.ruleRevisionID = rule.revisionID
 	dst.generation = token.generation()
 	dst.identity = identity

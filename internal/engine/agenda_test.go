@@ -44,7 +44,7 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 		t.Fatal("compiled rule missing")
 	}
 
-	event := changes[0].event(session.ID(), revision.ID(), 1, time.Unix(1, 0).UTC())
+	event := changes[0].eventWithRuleID(session.ID(), revision.ID(), rule.ID(), 1, time.Unix(1, 0).UTC())
 	if event.Type != EventRuleActivated {
 		t.Fatalf("event type = %q, want %q", event.Type, EventRuleActivated)
 	}
@@ -537,10 +537,8 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if pending[0].activationID().IsZero() {
 		t.Fatal("public pending activation ID is zero")
 	}
-	if stored, ok := agenda.activationByKeyPtr(pending[0].key); !ok {
+	if _, ok := agenda.activationByKeyPtr(pending[0].key); !ok {
 		t.Fatal("stored pending activation missing")
-	} else if !stored.ruleID.IsZero() {
-		t.Fatalf("stored pending activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
 
 	selected, ok := agenda.next()
@@ -551,8 +549,8 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 		t.Fatal("selected public activation ID is zero")
 	}
 	rule := revision.rulesByRevisionID[selected.ruleRevisionID]
-	if selected.ruleID != rule.id {
-		t.Fatalf("selected rule ID = %q, want %q", selected.ruleID, rule.id)
+	if rule.id.IsZero() {
+		t.Fatal("selected rule ID could not be derived")
 	}
 	stored, ok := agenda.activationByKeyPtr(selected.key)
 	if !ok {
@@ -560,9 +558,6 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	}
 	if stored.status != activationStatusConsumed {
 		t.Fatalf("stored activation status = %v, want consumed", stored.status)
-	}
-	if !stored.ruleID.IsZero() {
-		t.Fatalf("stored consumed activation cached rule ID = %q, want derived only", stored.ruleID)
 	}
 	if stored.payload != nil {
 		t.Fatalf("stored consumed activation payload = %#v, want nil", stored.payload)
@@ -573,13 +568,13 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if got := stored.mutationOrigin().activationID(); got != selected.activationID() {
 		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.activationID())
 	}
-	actionCtx := newActionContext(ctx, nil, selected, nil)
+	actionCtx := newTokenActionContext(ctx, nil, selected, rule)
 	origin := actionCtx.mutationOrigin()
 	if !origin.ActivationID.IsZero() {
 		t.Fatalf("action mutation origin cached ID = %q, want compact derived identity", origin.ActivationID)
 	}
-	if origin.RuleID != selected.ruleID {
-		t.Fatalf("action mutation origin rule ID = %q, want %q", origin.RuleID, selected.ruleID)
+	if origin.RuleID != rule.id {
+		t.Fatalf("action mutation origin rule ID = %q, want %q", origin.RuleID, rule.id)
 	}
 	if got := origin.activationID(); got != selected.activationID() {
 		t.Fatalf("action mutation origin activation ID = %q, want %q", got, selected.activationID())
@@ -798,7 +793,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 		if !ok {
 			t.Fatalf("stored activation for key %#v missing", pending)
 		}
-		if !stored.ruleID.IsZero() || stored.payload != nil {
+		if stored.payload != nil {
 			t.Fatalf("stored graph activation kept public fields: %#v", stored)
 		}
 	}
@@ -2010,7 +2005,6 @@ func TestActivationLessOrdersLazyActivationsByCompactIdentity(t *testing.T) {
 
 func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 	activation := activation{
-		ruleID:         RuleID("rule"),
 		ruleRevisionID: RuleRevisionID("revision"),
 		generation:     1,
 		identity:       candidateIdentity{key: candidateIdentityKey{scopeHash: 1, hash: 2}},
@@ -2022,7 +2016,7 @@ func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 		activation: activation,
 	}
 
-	event := change.event(SessionID("session"), RulesetID("ruleset"), 3, time.Unix(2, 0).UTC())
+	event := change.eventWithRuleID(SessionID("session"), RulesetID("ruleset"), RuleID("rule"), 3, time.Unix(2, 0).UTC())
 	if event.Type != EventRuleActivated {
 		t.Fatalf("event type = %q, want %q", event.Type, EventRuleActivated)
 	}

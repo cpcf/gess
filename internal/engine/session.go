@@ -3207,8 +3207,14 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 		rulesetID = s.revision.ID()
 	}
 	for _, change := range changes {
+		ruleID := RuleID("")
+		if s.revision != nil {
+			if rule, ok := s.revision.rulesByRevisionID[change.activation.ruleRevisionID]; ok {
+				ruleID = rule.id
+			}
+		}
 		s.nextEventSequence++
-		s.emitEvent(ctx, change.event(s.id, rulesetID, s.nextEventSequence, s.eventClock()))
+		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, s.nextEventSequence, s.eventClock()))
 	}
 }
 

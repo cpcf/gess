@@ -46,7 +46,6 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 		session:        session,
 		activationKey:  activation.identity.key,
 		activationOrd:  activation.key.ordinal,
-		ruleID:         activation.ruleID,
 		ruleRevisionID: activation.ruleRevisionID,
 		generation:     activation.generation,
 	}
@@ -66,6 +65,7 @@ func newActionContext(ctx context.Context, session *Session, activation activati
 
 func newTokenActionContext(ctx context.Context, session *Session, activation activation, rule compiledRule) ActionContext {
 	out := newActionContext(ctx, session, activation, nil)
+	out.ruleID = rule.id
 	if !activation.token.isZero() {
 		bindings := &actionContextBindingState{}
 		bindings.resetToken(rule, activation.token)
@@ -76,6 +76,7 @@ func newTokenActionContext(ctx context.Context, session *Session, activation act
 
 func newTokenActionContextWithBindingState(ctx context.Context, session *Session, activation activation, rule compiledRule, bindings *actionContextBindingState) ActionContext {
 	out := newActionContext(ctx, session, activation, nil)
+	out.ruleID = rule.id
 	if !activation.token.isZero() && bindings != nil {
 		bindings.resetToken(rule, activation.token)
 		out.bindings = bindings
@@ -1293,10 +1294,6 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 	if !ok {
 		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
-	if rule.id != activation.ruleID {
-		return fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
-	}
-
 	skipBindingFreeze := rule.allActionsSkipBindingFreeze
 	var actionCtx ActionContext
 	actionCtxReady := false
@@ -1341,10 +1338,10 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 			actionErr = fmt.Errorf("%w: unsupported action %q", ErrInvalidRuleset, actionSpec.name)
 		}
 		if actionErr != nil {
-			_, _ = s.removeLogicalSupportsForSources(ctx, []logicalSupportSourceKey{logicalSupportSourceFromActivation(activation)}, activation.mutationOrigin())
+			_, _ = s.removeLogicalSupportsForSources(ctx, []logicalSupportSourceKey{logicalSupportSourceFromActivation(activation)}, mutationOriginForRuleActivation(rule, activation))
 			return &ActionFailureError{
 				RunID:          runID,
-				RuleID:         activation.ruleID,
+				RuleID:         rule.id,
 				RuleRevisionID: activation.ruleRevisionID,
 				ActivationID:   activation.activationID(),
 				ActionName:     actionSpec.name,
@@ -1366,7 +1363,7 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 	if err != nil {
 		return err
 	}
-	origin := activation.mutationOrigin()
+	origin := mutationOriginForRuleActivation(rule, activation)
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return ErrConcurrencyMisuse
@@ -1439,7 +1436,7 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 }
 
 func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
-	origin := activation.mutationOrigin()
+	origin := mutationOriginForRuleActivation(rule, activation)
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return ErrConcurrencyMisuse
@@ -1764,9 +1761,6 @@ func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Conte
 	if !ok {
 		return ActionContext{}, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, activation.ruleRevisionID)
 	}
-	if rule.id != activation.ruleID {
-		return ActionContext{}, fmt.Errorf("%w: rule metadata mismatch for revision %q", ErrMatcher, activation.ruleRevisionID)
-	}
 	factCount := activationFactCount(&activation)
 	if activation.token.isZero() && len(activation.bindings()) == 0 && (factCount != activationFactVersionCount(&activation) || factCount != len(rule.conditions)) {
 		return ActionContext{}, fmt.Errorf("%w: malformed activation for rule %q", ErrMatcher, rule.name)
@@ -1799,7 +1793,9 @@ func (s *Session) actionContextForActivationWithScratchTrusted(ctx context.Conte
 		entries[i] = entry
 	}
 
-	return newActionContext(ctx, s, activation, entries), nil
+	out := newActionContext(ctx, s, activation, entries)
+	out.ruleID = rule.id
+	return out, nil
 }
 
 func (s *Session) validateActivationTokenFacts(rule compiledRule, activation activation, trustTokenActivation bool) error {

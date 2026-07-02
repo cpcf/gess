@@ -220,6 +220,7 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 	if !ok {
 		t.Fatal("expected pending activation")
 	}
+	oldRuleID := revision1.rulesByRevisionID[oldActivation.ruleRevisionID].id
 
 	if err := workspace.ReplaceRule(RuleSpec{
 		Name:     "match-person",
@@ -247,8 +248,8 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 	if len(result.ReplacedRuleRevisions) != 1 {
 		t.Fatalf("replaced revisions = %#v, want one", result.ReplacedRuleRevisions)
 	}
-	if replacement := result.ReplacedRuleRevisions[0]; replacement.RuleID != oldActivation.ruleID || replacement.OldRevisionID != oldActivation.ruleRevisionID || replacement.NewRevisionID != rule2.RevisionID() {
-		t.Fatalf("replacement metadata = %#v, want rule %q %q -> %q", replacement, oldActivation.ruleID, oldActivation.ruleRevisionID, rule2.RevisionID())
+	if replacement := result.ReplacedRuleRevisions[0]; replacement.RuleID != oldRuleID || replacement.OldRevisionID != oldActivation.ruleRevisionID || replacement.NewRevisionID != rule2.RevisionID() {
+		t.Fatalf("replacement metadata = %#v, want rule %q %q -> %q", replacement, oldRuleID, oldActivation.ruleRevisionID, rule2.RevisionID())
 	}
 	if len(result.AddedRuleRevisions) != 0 || len(result.RemovedRuleRevisions) != 0 || len(result.UnchangedRuleRevisions) != 0 {
 		t.Fatalf("unexpected apply metadata: added=%#v removed=%#v unchanged=%#v", result.AddedRuleRevisions, result.RemovedRuleRevisions, result.UnchangedRuleRevisions)

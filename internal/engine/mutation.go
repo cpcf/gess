@@ -139,10 +139,13 @@ func (o mutationOrigin) matchesActivation(act *activation) bool {
 	if o.RuleRevisionID != act.ruleRevisionID {
 		return false
 	}
-	if !o.RuleID.IsZero() && !act.ruleID.IsZero() && o.RuleID != act.ruleID {
-		return false
-	}
 	return o.activationID() == act.activationID()
+}
+
+func mutationOriginForRuleActivation(rule compiledRule, act activation) mutationOrigin {
+	origin := act.mutationOrigin()
+	origin.RuleID = rule.id
+	return origin
 }
 
 type MutationDelta struct {
