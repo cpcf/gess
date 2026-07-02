@@ -142,8 +142,8 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if got, want := len(removed.removed), 1; got != want {
 		t.Fatalf("modify-remove terminal removals = %d, want %d", got, want)
 	}
-	if got, want := len(memory.facts), 1; got != want {
-		t.Fatalf("source facts after modify-remove = %d, want %d", got, want)
+	if got, want := memory.sourceGeneration(), before.Generation(); got != want {
+		t.Fatalf("source generation after modify-remove = %d, want %d", got, want)
 	}
 
 	added, err := memory.propagateEvent(ctx, newReteGraphModifyAddEvent(event))
@@ -153,12 +153,8 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if got, want := len(added.added), 1; got != want {
 		t.Fatalf("modify-add terminal additions = %d, want %d", got, want)
 	}
-	if got, want := len(memory.facts), 1; got != want {
-		t.Fatalf("source facts after modify-add = %d, want %d", got, want)
-	}
-	note, ok := memory.facts[0].Field("note")
-	if !ok || !note.Equal(mustValue(t, "old")) {
-		t.Fatalf("source fact note after modify events = %v, ok=%t, want old", note, ok)
+	if got, want := memory.sourceGeneration(), after.Generation(); got != want {
+		t.Fatalf("source generation after modify-add = %d, want %d", got, want)
 	}
 }
 
@@ -267,12 +263,15 @@ func TestReteGraphResetFactsClearsThroughEventAndReassertsFacts(t *testing.T) {
 	if got := memory.memoryStats().TokenRows; got != 0 {
 		t.Fatalf("token rows after empty reset = %d, want 0", got)
 	}
-	if got := len(memory.facts); got != 0 {
-		t.Fatalf("source facts after empty reset = %d, want 0", got)
+	if got := memory.sourceGeneration(); got != 9 {
+		t.Fatalf("source generation after empty reset = %d, want 9", got)
 	}
 
 	if err := memory.resetFactsForGeneration(ctx, facts, Generation(10)); err != nil {
 		t.Fatalf("resetFactsForGeneration(facts): %v", err)
+	}
+	if got := memory.sourceGeneration(); got != 10 {
+		t.Fatalf("source generation after reassert reset = %d, want 10", got)
 	}
 	deltas, ok, err := memory.currentTerminalTokenDeltas(ctx)
 	if err != nil {

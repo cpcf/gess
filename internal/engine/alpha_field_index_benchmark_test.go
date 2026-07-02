@@ -111,7 +111,7 @@ func BenchmarkAlphaLiteralEqualityGraphResetAndCandidateScan(b *testing.B) {
 		if err := runtime.resetGraphBeta(ctx, facts); err != nil {
 			b.Fatalf("resetGraphBeta: %v", err)
 		}
-		candidates, err := rule.matchCandidates(ctx, runtime.graphBeta)
+		candidates, err := rule.matchCandidates(ctx, session)
 		if err != nil {
 			b.Fatalf("matchCandidates: %v", err)
 		}

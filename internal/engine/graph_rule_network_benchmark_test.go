@@ -120,37 +120,22 @@ func TestGraphRuleNetworkDiagnosticsBoundDepthGrowth(t *testing.T) {
 	}
 }
 
-func TestGraphRuleNetworkReplayBuildsFactSourceIndexesLazily(t *testing.T) {
+func TestGraphRuleNetworkSessionOwnsFactSourceIndexes(t *testing.T) {
+	ctx := context.Background()
 	tc := graphRuleNetworkCase{order: graphRuleNetworkSelective, depth: 4, items: 256}
 	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
-	facts := graphRuleNetworkFactSnapshots(t, revision, templates, tc.items)
-	memory, err := newReteGraphBetaMemory(context.Background(), revision, revision.graph, nil)
-	if err != nil {
-		t.Fatalf("newReteGraphBetaMemory: %v", err)
-	}
-	if memory == nil {
-		t.Fatal("newReteGraphBetaMemory returned nil")
-	}
-	if err := memory.resetFacts(context.Background(), nil); err != nil {
-		t.Fatalf("resetFacts: %v", err)
-	}
-	for _, fact := range facts {
-		if _, err := memory.insertFact(context.Background(), fact, nil); err != nil {
-			t.Fatalf("insertFact: %v", err)
+	session := mustSession(t, revision, "graph-rule-network-fact-source-index-session")
+	for _, fact := range graphRuleNetworkFactSnapshots(t, revision, templates, tc.items) {
+		if _, err := session.AssertTemplate(ctx, fact.TemplateKey(), fact.Fields()); err != nil {
+			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey(), err)
 		}
 	}
-	if !memory.factTargetIndexesDirty {
-		t.Fatal("fact target indexes should stay dirty until generic fact source access")
-	}
-	eventFacts, ok := memory.factsForTarget(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templates.event})
+	eventFacts, ok := session.factsForTarget(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templates.event})
 	if !ok {
-		t.Fatal("factsForTarget returned !ok")
+		t.Fatal("session factsForTarget returned !ok")
 	}
 	if got, want := len(eventFacts), tc.items; got != want {
 		t.Fatalf("event facts = %d, want %d", got, want)
-	}
-	if memory.factTargetIndexesDirty {
-		t.Fatal("fact target indexes remained dirty after factsForTarget")
 	}
 }
 
