@@ -1331,7 +1331,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
 		span = &counterSpan
 	}
-	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, snapshot, origin, span)
+	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, fact, snapshot, state.compactSlotStore, origin, span)
 	if err != nil {
 		if span != nil {
 			span.finish()
@@ -1439,7 +1439,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
 		span = &counterSpan
 	}
-	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, snapshot, origin, span)
+	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, fact, snapshot, state.compactSlotStore, origin, span)
 	if err != nil {
 		if span != nil {
 			span.finish()
@@ -2966,11 +2966,11 @@ func (s *Session) restoreReteAfterPropagationFailure() {
 	_ = s.rebuildReteRuntimeFromWorkspace(context.Background(), s.revision, &state, s.generation)
 }
 
-func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
+func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact *workingFact, snapshot FactSnapshot, compactSlotStore *factCompactSlotStore, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if s == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.name, fact.templateKey) {
+	if s.revision != nil && !s.revision.factMayAffectReteByTarget(snapshot.name, snapshot.templateKey) {
 		return reteAgendaDelta{}, nil
 	}
 	if s.rete == nil {
@@ -2978,7 +2978,10 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact FactSnaps
 		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.generation)
 	}
 	if s.rete.usesGraphBeta() {
-		return s.rete.insertBetaFactWithOrigin(ctx, fact, origin, span)
+		if s.rete.graphBeta != nil {
+			s.rete.graphBeta.compactSlotStore = compactSlotStore
+		}
+		return s.rete.insertBetaWorkingFactWithOrigin(ctx, fact, snapshot, origin, span)
 	}
 	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
 }

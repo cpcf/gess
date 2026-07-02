@@ -437,6 +437,22 @@ func (r *reteRuntime) insertBetaFact(ctx context.Context, fact FactSnapshot, spa
 	return r.insertBetaFactWithOrigin(ctx, fact, mutationOrigin{}, span)
 }
 
+func (r *reteRuntime) insertBetaWorkingFactWithOrigin(ctx context.Context, fact *workingFact, snapshot FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
+	if r == nil || fact == nil {
+		return reteAgendaDelta{}, nil
+	}
+	incrementalAgendaSupported := r.supportsIncrementalAgenda()
+	if r.usesGraphBeta() && r.graphBeta != nil {
+		delta, err := r.graphBeta.insertWorkingFact(ctx, fact, snapshot, span)
+		if err != nil {
+			return delta, err
+		}
+		delta.supported = delta.supported && incrementalAgendaSupported
+		return delta, nil
+	}
+	return r.insertBetaFactWithOrigin(ctx, snapshot, origin, span)
+}
+
 func (r *reteRuntime) insertBetaFactGenerated(ctx context.Context, fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
 	if r == nil || fact == nil {
 		return reteAgendaDelta{}, nil

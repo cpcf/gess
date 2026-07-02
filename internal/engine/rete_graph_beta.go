@@ -2526,6 +2526,10 @@ func (m *reteGraphBetaMemory) insertFact(ctx context.Context, fact FactSnapshot,
 	return m.insertFactInternal(ctx, fact, span, true)
 }
 
+func (m *reteGraphBetaMemory) insertWorkingFact(ctx context.Context, fact *workingFact, snapshot FactSnapshot, span *propagationCounterSpan) (reteAgendaDelta, error) {
+	return m.insertWorkingFactInternal(ctx, fact, snapshot, span, true)
+}
+
 func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan, updateSource bool) (reteAgendaDelta, error) {
 	if m == nil || m.graph == nil {
 		return reteAgendaDelta{}, nil
