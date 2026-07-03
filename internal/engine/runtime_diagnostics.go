@@ -520,7 +520,7 @@ func addBetaSideMemoryOwnerDiagnostics(out *RuntimeMemoryOwnerDiagnostics, memor
 
 func betaSideMemoryHighWater(memory betaSideMemory) int {
 	highWater := memory.rowCapacity()
-	highWater += cap(memory.indexes.buckets)
+	highWater += cap(memory.indexes.heads)
 	highWater += cap(memory.indexes.touched)
 	return highWater
 }
@@ -581,11 +581,11 @@ func negativeBetaRightMemoryRetainedBytes(memory negativeBetaRightMemory) uint64
 
 func betaJoinBucketTableBytes(table betaJoinBucketTable) uint64 {
 	var bytes uint64
-	bytes += sliceBytes[betaJoinTokenBucket](cap(table.buckets))
+	bytes += sliceBytes[int32](cap(table.heads))
 	bytes += sliceBytes[int](cap(table.touched))
-	for i := range table.buckets {
-		bytes += sliceBytes[betaTokenRow](cap(table.buckets[i].rows))
-	}
+	bytes += sliceBytes[betaTokenRow](cap(table.rows))
+	bytes += sliceBytes[int32](cap(table.next))
+	bytes += sliceBytes[int32](cap(table.prev))
 	return bytes
 }
 

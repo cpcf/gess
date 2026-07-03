@@ -770,11 +770,7 @@ func (m *betaSideMemory) rowCapacity() int {
 	if m == nil {
 		return 0
 	}
-	capacity := 0
-	for bucketIndex := range m.indexes.buckets {
-		capacity += cap(m.indexes.buckets[bucketIndex].rows)
-	}
-	return capacity
+	return cap(m.indexes.rows)
 }
 
 func (s *reteGraphAlphaFactSet) reserve(capacity int) {
@@ -867,31 +863,22 @@ func (m *betaSideMemory) forEachJoinRow(key betaJoinKey, fn func(graphTokenRowID
 	if m == nil || fn == nil || m.indexes.isEmpty() {
 		return
 	}
-	bucket := m.indexes.bucket(key)
-	if bucket == nil {
-		return
-	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row == nil || row.joinKey != key {
-			continue
-		}
-		if !fn(graphTokenRowID(rowIndex), row) {
-			return
-		}
-	}
+	m.indexes.forEachChainRow(key, func(ref int32, row *betaTokenRow) bool {
+		return fn(graphTokenRowID(ref-1), row)
+	})
 }
 
 func (m *betaSideMemory) forEachRow(fn func(*betaTokenRow) bool) {
 	if m == nil || fn == nil {
 		return
 	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if !fn(&bucket.rows[rowIndex]) {
-				return
-			}
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if row.token.isZero() {
+			continue
+		}
+		if !fn(row) {
+			return
 		}
 	}
 }
@@ -900,23 +887,10 @@ func (m *betaSideMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
 	if m == nil || token.isZero() {
 		return false
 	}
-	if m.indexes.reserve(max(8, m.indexes.len()+1)) {
-		m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.buckets))
-	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
+	if !m.indexes.insert(betaTokenRow{token: token, joinKey: joinKey}) {
 		return false
 	}
-	slot := m.indexes.slot(joinKey)
-	if len(bucket.rows) == 0 {
-		m.indexes.touched = append(m.indexes.touched, slot)
-		m.indexes.slotCount++
-	}
-	bucket.rows = append(bucket.rows, betaTokenRow{
-		token:   token,
-		joinKey: joinKey,
-	})
-	m.indexes.rowCount++
+	m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.heads))
 	m.rowReserve = max(m.rowReserve, m.indexes.len())
 	return true
 }
@@ -928,12 +902,10 @@ func (m *betaSideMemory) containsExactToken(token tokenRef) bool {
 	if _, ok := token.resolve(); !ok {
 		return false
 	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if bucket.rows[rowIndex].token.handle == token.handle {
-				return true
-			}
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if !row.token.isZero() && row.token.handle == token.handle {
+			return true
 		}
 	}
 	return false
@@ -946,23 +918,15 @@ func (m *betaSideMemory) removeContainingFact(id FactID, counters *propagationCo
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	removed := 0
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := 0; rowIndex < len(bucket.rows); {
-			row := &bucket.rows[rowIndex]
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			if row.token.isZero() || !row.token.containsFact(id) {
-				rowIndex++
-				continue
-			}
-			m.removeBucketRow(bucket, rowIndex, counters)
-			removed++
-		}
+	var onTouch func()
+	var onRemove func(betaTokenRow)
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
+		onRemove = func(betaTokenRow) { counters.recordRemovalRowRemoved() }
 	}
-	return removed
+	return m.indexes.removeMatching(func(row *betaTokenRow) bool {
+		return row.token.containsFact(id)
+	}, onTouch, onRemove)
 }
 
 func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(betaTokenRow)) int {
@@ -972,26 +936,20 @@ func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propaga
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	removed := 0
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := 0; rowIndex < len(bucket.rows); {
-			row := &bucket.rows[rowIndex]
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			if row.token.isZero() || !row.token.containsFact(id) {
-				rowIndex++
-				continue
-			}
-			if fn != nil {
-				fn(*row)
-			}
-			m.removeBucketRow(bucket, rowIndex, counters)
-			removed++
-		}
+	var onTouch func()
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
 	}
-	return removed
+	return m.indexes.removeMatching(func(row *betaTokenRow) bool {
+		return row.token.containsFact(id)
+	}, onTouch, func(row betaTokenRow) {
+		if counters != nil {
+			counters.recordRemovalRowRemoved()
+		}
+		if fn != nil {
+			fn(row)
+		}
+	})
 }
 
 func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounterLedger, branchIDs ...int) (betaTokenRow, bool) {
@@ -1001,20 +959,20 @@ func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounte
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			row := &bucket.rows[rowIndex]
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			if !tokenRefEqual(row.token, token) {
-				continue
-			}
-			removed := *row
-			m.removeBucketRow(bucket, rowIndex, counters)
-			return removed, true
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if row.token.isZero() {
+			continue
 		}
+		if counters != nil {
+			counters.recordRemovalRowTouched()
+		}
+		if !tokenRefEqual(row.token, token) {
+			continue
+		}
+		removed := *row
+		m.removeArenaRow(int32(rowIndex+1), counters)
+		return removed, true
 	}
 	return betaTokenRow{}, false
 }
@@ -1026,26 +984,24 @@ func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoin
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
-		return betaTokenRow{}, false
-	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row.joinKey != joinKey {
-			continue
-		}
+	found := int32(0)
+	removed := betaTokenRow{}
+	m.indexes.forEachChainRow(joinKey, func(ref int32, row *betaTokenRow) bool {
 		if counters != nil {
 			counters.recordRemovalRowTouched()
 		}
 		if !tokenRefEqual(row.token, token) {
-			continue
+			return true
 		}
-		removed := *row
-		m.removeBucketRow(bucket, rowIndex, counters)
-		return removed, true
+		found = ref
+		removed = *row
+		return false
+	})
+	if found == 0 {
+		return betaTokenRow{}, false
 	}
-	return betaTokenRow{}, false
+	m.removeArenaRow(found, counters)
+	return removed, true
 }
 
 func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(betaTokenRow)) {
@@ -1055,39 +1011,26 @@ func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propaga
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			row := &bucket.rows[rowIndex]
-			if row.token.isZero() || !row.token.containsFact(id) {
-				continue
-			}
-			if fn != nil {
-				fn(*row)
-			}
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if row.token.isZero() {
+			continue
+		}
+		if counters != nil {
+			counters.recordRemovalRowTouched()
+		}
+		if !row.token.containsFact(id) {
+			continue
+		}
+		if fn != nil {
+			fn(*row)
 		}
 	}
 }
 
-func (m *betaSideMemory) removeBucketRow(bucket *betaJoinTokenBucket, rowIndex int, counters *propagationCounterLedger) {
-	if m == nil || bucket == nil || rowIndex < 0 || rowIndex >= len(bucket.rows) {
+func (m *betaSideMemory) removeArenaRow(ref int32, counters *propagationCounterLedger) {
+	if m == nil || !m.indexes.unlink(ref) {
 		return
-	}
-	last := len(bucket.rows) - 1
-	if rowIndex != last {
-		bucket.rows[rowIndex] = bucket.rows[last]
-		if counters != nil {
-			counters.recordRemovalRowMoved()
-		}
-	}
-	bucket.rows[last] = betaTokenRow{}
-	bucket.rows = bucket.rows[:last]
-	m.indexes.rowCount--
-	if len(bucket.rows) == 0 {
-		m.indexes.slotCount--
 	}
 	if counters != nil {
 		counters.recordRemovalRowRemoved()
@@ -1099,15 +1042,12 @@ func (m *betaSideMemory) factRowCount(id FactID) int {
 		return 0
 	}
 	count := 0
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			row := &bucket.rows[rowIndex]
-			if row.token.isZero() || !row.token.containsFact(id) {
-				continue
-			}
-			count++
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if row.token.isZero() || !row.token.containsFact(id) {
+			continue
 		}
+		count++
 	}
 	return count
 }

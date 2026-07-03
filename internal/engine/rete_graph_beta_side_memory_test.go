@@ -310,7 +310,7 @@ func TestTerminalTokenMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 }
 
-func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
+func TestBetaSideMemoryIndexedRemovalKeepsCollidingRows(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -335,7 +335,7 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	if got, want := snapshot.Totals.RemovalRowsRemoved, 1; got != want {
 		t.Fatalf("removal rows removed = %d, want %d", got, want)
 	}
-	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsMoved, 0; got != want {
 		t.Fatalf("removal rows moved = %d, want %d", got, want)
 	}
 	if got := memory.len(); got != 1 {
@@ -349,7 +349,7 @@ func TestBetaSideMemoryRecordsRowMovementDuringIndexedRemoval(t *testing.T) {
 	}
 }
 
-func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesSwapRemoval(t *testing.T) {
+func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesBucketCollision(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 1, recency: 1, generation: 1}
 	secondFact := FactSnapshot{id: newFactID(1, 2), version: 1, recency: 2, generation: 1}
@@ -373,7 +373,7 @@ func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesSwapRemoval(t *testing.T) {
 		t.Fatalf("remove first = (%#v, %v), want first token", removed, ok)
 	}
 	snapshot := counters.snapshot()
-	if got, want := snapshot.Totals.RemovalRowsMoved, 1; got != want {
+	if got, want := snapshot.Totals.RemovalRowsMoved, 0; got != want {
 		t.Fatalf("removal rows moved = %d, want %d", got, want)
 	}
 	if removed, ok := memory.removeTokenWithJoinKey(secondToken, secondKey, counters); !ok || !tokenRefEqual(removed.token, secondToken) {

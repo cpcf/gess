@@ -6,8 +6,16 @@ const (
 	graphTokenBucketDeleted
 )
 
+// betaJoinBucketTable stores join rows in one shared arena with per-slot
+// chain links, so table growth rebuilds slot heads without reallocating or
+// copying row storage. Free arena rows are zeroed and linked through freeHead.
 type betaJoinBucketTable struct {
-	buckets   []betaJoinTokenBucket
+	heads     []int32
+	tails     []int32
+	rows      []betaTokenRow
+	next      []int32
+	prev      []int32
+	freeHead  int32
 	touched   []int
 	slotCount int
 	rowCount  int
@@ -18,33 +26,153 @@ func (t *betaJoinBucketTable) reserve(capacity int) bool {
 		return false
 	}
 	slotCapacity := graphTokenBucketSlotCapacity(capacity)
-	if slotCapacity <= len(t.buckets) {
+	if slotCapacity <= len(t.heads) {
 		return false
 	}
-	old := t.buckets
-	t.buckets = make([]betaJoinTokenBucket, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
+	t.heads = make([]int32, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
+	t.tails = make([]int32, len(t.heads))
 	t.touched = t.touched[:0]
 	t.slotCount = 0
-	t.rowCount = 0
-	for i := range old {
-		for rowIndex := range old[i].rows {
-			t.appendRehashed(old[i].rows[rowIndex])
+	t.freeHead = 0
+	live := 0
+	for i := range t.rows {
+		if t.rows[i].token.isZero() {
+			t.next[i] = t.freeHead
+			t.freeHead = int32(i + 1)
+			continue
 		}
-		old[i].clear()
+		t.chainRow(int32(i + 1))
+		live++
 	}
+	t.rowCount = live
 	return true
 }
 
+func (t *betaJoinBucketTable) chainRow(ref int32) {
+	slot := t.slot(t.rows[ref-1].joinKey)
+	t.next[ref-1] = 0
+	if t.heads[slot] == 0 {
+		t.touched = append(t.touched, slot)
+		t.slotCount++
+		t.heads[slot] = ref
+		t.tails[slot] = ref
+		t.prev[ref-1] = 0
+		return
+	}
+	tail := t.tails[slot]
+	t.next[tail-1] = ref
+	t.prev[ref-1] = tail
+	t.tails[slot] = ref
+}
+
+func (t *betaJoinBucketTable) insert(row betaTokenRow) bool {
+	if t == nil || row.token.isZero() {
+		return false
+	}
+	t.reserve(max(8, t.rowCount+1))
+	var ref int32
+	if t.freeHead != 0 {
+		ref = t.freeHead
+		t.freeHead = t.next[ref-1]
+		t.rows[ref-1] = row
+	} else {
+		t.rows = append(t.rows, row)
+		t.next = append(t.next, 0)
+		t.prev = append(t.prev, 0)
+		ref = int32(len(t.rows))
+	}
+	t.chainRow(ref)
+	t.rowCount++
+	return true
+}
+
+func (t *betaJoinBucketTable) unlink(ref int32) bool {
+	if t == nil || ref <= 0 || int(ref) > len(t.rows) || t.rows[ref-1].token.isZero() {
+		return false
+	}
+	slot := t.slot(t.rows[ref-1].joinKey)
+	next := t.next[ref-1]
+	prev := t.prev[ref-1]
+	if prev == 0 {
+		t.heads[slot] = next
+	} else {
+		t.next[prev-1] = next
+	}
+	if next != 0 {
+		t.prev[next-1] = prev
+	}
+	if t.tails[slot] == ref {
+		t.tails[slot] = prev
+	}
+	if t.heads[slot] == 0 {
+		t.slotCount--
+	}
+	t.rows[ref-1] = betaTokenRow{}
+	t.next[ref-1] = t.freeHead
+	t.prev[ref-1] = 0
+	t.freeHead = ref
+	t.rowCount--
+	return true
+}
+
+// removeMatching walks every touched slot chain once, unlinking rows the
+// match function selects with O(1) per removal. onRemove sees the removed row
+// before it is recycled; onTouch runs per live row visited.
+func (t *betaJoinBucketTable) removeMatching(match func(*betaTokenRow) bool, onTouch func(), onRemove func(betaTokenRow)) int {
+	if t == nil || match == nil || t.rowCount == 0 {
+		return 0
+	}
+	removed := 0
+	for i := range t.rows {
+		row := &t.rows[i]
+		if row.token.isZero() {
+			continue
+		}
+		if onTouch != nil {
+			onTouch()
+		}
+		if !match(row) {
+			continue
+		}
+		if onRemove != nil {
+			onRemove(*row)
+		}
+		t.unlink(int32(i + 1))
+		removed++
+	}
+	return removed
+}
+
+func (t *betaJoinBucketTable) forEachChainRow(key betaJoinKey, fn func(ref int32, row *betaTokenRow) bool) {
+	if t == nil || fn == nil || t.rowCount == 0 || len(t.heads) == 0 {
+		return
+	}
+	for ref := t.heads[t.slot(key)]; ref != 0; {
+		nextRef := t.next[ref-1]
+		row := &t.rows[ref-1]
+		if row.joinKey == key && !fn(ref, row) {
+			return
+		}
+		ref = nextRef
+	}
+}
+
 func (t *betaJoinBucketTable) clear() {
-	if t == nil || len(t.buckets) == 0 {
+	if t == nil {
 		return
 	}
 	for _, index := range t.touched {
-		if index >= 0 && index < len(t.buckets) {
-			t.buckets[index].clear()
+		if index >= 0 && index < len(t.heads) {
+			t.heads[index] = 0
+			t.tails[index] = 0
 		}
 	}
 	t.touched = t.touched[:0]
+	clear(t.rows)
+	t.rows = t.rows[:0]
+	t.next = t.next[:0]
+	t.prev = t.prev[:0]
+	t.freeHead = 0
 	t.slotCount = 0
 	t.rowCount = 0
 }
@@ -67,41 +195,8 @@ func (t *betaJoinBucketTable) len() int {
 	return t.rowCount
 }
 
-func (t *betaJoinBucketTable) bucket(key betaJoinKey) *betaJoinTokenBucket {
-	if t == nil || len(t.buckets) == 0 {
-		return nil
-	}
-	return &t.buckets[t.slot(key)]
-}
-
 func (t *betaJoinBucketTable) slot(key betaJoinKey) int {
-	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.buckets)-1))
-}
-
-func (t *betaJoinBucketTable) appendRehashed(row betaTokenRow) {
-	if t == nil || len(t.buckets) == 0 || row.token.isZero() {
-		return
-	}
-	index := t.slot(row.joinKey)
-	bucket := &t.buckets[index]
-	if len(bucket.rows) == 0 {
-		t.touched = append(t.touched, index)
-		t.slotCount++
-	}
-	bucket.rows = append(bucket.rows, row)
-	t.rowCount++
-}
-
-type betaJoinTokenBucket struct {
-	rows []betaTokenRow
-}
-
-func (b *betaJoinTokenBucket) clear() {
-	if b == nil || len(b.rows) == 0 {
-		return
-	}
-	clear(b.rows)
-	b.rows = b.rows[:0]
+	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.heads)-1))
 }
 
 type tokenIdentityHeadTable struct {
