@@ -727,6 +727,10 @@ func hashBetaJoinTokenBucketKey(key betaJoinKey) uint64 {
 	hash = hashBetaJoinTokenBucketValue(hash, key.kind, key.boolValue, key.intValue, key.floatBits, key.stringValue)
 	hash = graphTokenBucketMixAdd(hash, uint64(key.secondKind))
 	hash = hashBetaJoinTokenBucketValue(hash, key.secondKind, key.secondBoolValue, key.secondIntValue, key.secondFloatBits, key.secondStringValue)
+	if key.thirdKind != betaJoinKeyUnknown {
+		hash = graphTokenBucketMixAdd(hash, uint64(key.thirdKind))
+		hash = hashBetaJoinTokenBucketValue(hash, key.thirdKind, key.thirdBoolValue, key.thirdIntValue, key.thirdFloatBits, key.thirdStringValue)
+	}
 	return hash
 }
 

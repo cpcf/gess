@@ -609,6 +609,11 @@ type betaJoinKey struct {
 	secondIntValue    int64
 	secondFloatBits   uint64
 	secondStringValue string
+	thirdKind         betaJoinKeyKind
+	thirdBoolValue    bool
+	thirdIntValue     int64
+	thirdFloatBits    uint64
+	thirdStringValue  string
 }
 
 const reteBetaMatchTokenChunkSize = 64
@@ -736,22 +741,32 @@ func betaJoinKeyForPlanWithError(plan compiledConditionPlan, valueForJoin func(j
 		}, true, nil
 	}
 
-	if len(plan.joins) == 2 {
-		firstJoin := plan.joins[0]
-		secondJoin := plan.joins[1]
-		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false, nil
+	if len(plan.joins) == 2 || len(plan.joins) == 3 {
+		for _, join := range plan.joins {
+			if join.indexKind != joinIndexEquality {
+				return betaJoinKey{}, false, nil
+			}
 		}
-		firstValue, ok, err := valueForJoin(firstJoin)
+		firstValue, ok, err := valueForJoin(plan.joins[0])
 		if err != nil || !ok {
 			return betaJoinKey{}, false, err
 		}
-		secondValue, ok, err := valueForJoin(secondJoin)
+		secondValue, ok, err := valueForJoin(plan.joins[1])
 		if err != nil || !ok {
 			return betaJoinKey{}, false, err
 		}
-		if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
-			return key, true, nil
+		if len(plan.joins) == 2 {
+			if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
+				return key, true, nil
+			}
+		} else {
+			thirdValue, ok, err := valueForJoin(plan.joins[2])
+			if err != nil || !ok {
+				return betaJoinKey{}, false, err
+			}
+			if key, ok := betaJoinKeyForThreeValues(firstValue, secondValue, thirdValue); ok {
+				return key, true, nil
+			}
 		}
 	}
 
@@ -788,6 +803,23 @@ func betaJoinKeyForTwoValues(first, second Value) (betaJoinKey, bool) {
 	firstKey.secondFloatBits = secondKey.floatBits
 	firstKey.secondStringValue = secondKey.stringValue
 	return firstKey, true
+}
+
+func betaJoinKeyForThreeValues(first, second, third Value) (betaJoinKey, bool) {
+	key, ok := betaJoinKeyForTwoValues(first, second)
+	if !ok {
+		return betaJoinKey{}, false
+	}
+	thirdKey, ok := betaJoinKeyForValue(third)
+	if !ok || thirdKey.kind == betaJoinKeyCanonical {
+		return betaJoinKey{}, false
+	}
+	key.thirdKind = thirdKey.kind
+	key.thirdBoolValue = thirdKey.boolValue
+	key.thirdIntValue = thirdKey.intValue
+	key.thirdFloatBits = thirdKey.floatBits
+	key.thirdStringValue = thirdKey.stringValue
+	return key, true
 }
 
 func betaJoinKeyForSingleValue(value Value) (betaJoinKey, bool) {
