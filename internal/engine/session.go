@@ -3351,7 +3351,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	}
 
 	currentDupIndex := fact.duplicateIndexForRevision(s.revision, state.compactSlotStore)
-	modifyMark := state.markFactModify(fact, duplicatePolicy != DuplicateAllow && currentDupIndex != newDupIndex)
+	modifyMark := state.markFactModify(fact, currentDupIndex, newDupIndex, duplicatePolicy != DuplicateAllow && currentDupIndex != newDupIndex)
 	state.recency++
 
 	if duplicatePolicy != DuplicateAllow && currentDupIndex != newDupIndex {
@@ -3923,8 +3923,21 @@ type factWorkspaceModifyMark struct {
 	factIndex              int
 	fact                   workingFact
 	compactSlotStoreLen    int
-	factsByDuplicate       duplicateIndexes
-	restoreDuplicateIndex  bool
+	duplicateIndexUndo     duplicateIndexModifyUndo
+}
+
+// duplicateIndexModifyUndo records the point mutation a fact modify applies to
+// the duplicate indexes (remove under oldKey, add under newKey) so rollback can
+// reverse it without cloning the whole index.
+type duplicateIndexModifyUndo struct {
+	tracked    bool
+	factID     FactID
+	oldKey     duplicateIndexKey
+	oldHeld    bool
+	newKey     duplicateIndexKey
+	newHeld    bool
+	newPrevHad bool
+	newPrevID  FactID
 }
 
 type duplicateSingleIntIndexKey struct {
@@ -4147,6 +4160,60 @@ func (i duplicateIndexes) get(key duplicateIndexKey) (FactID, bool) {
 	default:
 		factID, ok := i.scalars[key]
 		return factID, ok
+	}
+}
+
+func (i duplicateIndexes) holdsFact(key duplicateIndexKey, factID FactID) bool {
+	if key.isZero() || factID.IsZero() {
+		return false
+	}
+	switch key.kind {
+	case duplicateIndexStringStringInt:
+		held := false
+		i.string2Int.forEachFactID(key, func(id FactID) bool {
+			if id == factID {
+				held = true
+				return false
+			}
+			return true
+		})
+		return held
+	case duplicateIndexStructural:
+		held := false
+		i.structural.forEachFactID(duplicateStructuralIndexKey{templateKey: key.templateKey, hash: key.hash}, func(id FactID) bool {
+			if id == factID {
+				held = true
+				return false
+			}
+			return true
+		})
+		return held
+	default:
+		existing, ok := i.get(key)
+		return ok && existing == factID
+	}
+}
+
+func (i *duplicateIndexes) applyModifyUndo(undo duplicateIndexModifyUndo) {
+	if i == nil || !undo.tracked {
+		return
+	}
+	if !undo.newKey.isZero() {
+		switch undo.newKey.kind {
+		case duplicateIndexStringStringInt, duplicateIndexStructural:
+			if !undo.newHeld {
+				i.deleteFact(undo.newKey, undo.factID)
+			}
+		default:
+			if undo.newPrevHad {
+				i.set(undo.newKey, undo.newPrevID)
+			} else {
+				i.deleteFact(undo.newKey, undo.factID)
+			}
+		}
+	}
+	if undo.oldHeld {
+		i.set(undo.oldKey, undo.factID)
 	}
 }
 
@@ -5195,7 +5262,7 @@ func (w *factWorkspace) rollbackGeneratedFactInsert(mark factWorkspaceInsertMark
 	w.rollbackGeneratedCompactFactSlots(mark.compactSlotStoreLen)
 }
 
-func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex bool) factWorkspaceModifyMark {
+func (w *factWorkspace) markFactModify(fact *workingFact, currentDupIndex, newDupIndex duplicateIndexKey, trackDuplicateIndex bool) factWorkspaceModifyMark {
 	if w == nil || fact == nil {
 		return factWorkspaceModifyMark{factIndex: -1}
 	}
@@ -5209,11 +5276,22 @@ func (w *factWorkspace) markFactModify(fact *workingFact, restoreDuplicateIndex 
 		factIndex:              index,
 		fact:                   *fact,
 		compactSlotStoreLen:    w.compactSlotStore.len(),
-		restoreDuplicateIndex:  restoreDuplicateIndex,
 	}
 	mark.fact.payload = cloneWorkingFactPayload(fact.payload)
-	if restoreDuplicateIndex {
-		mark.factsByDuplicate = cloneDuplicateIndexes(w.factsByDuplicate)
+	if trackDuplicateIndex {
+		undo := duplicateIndexModifyUndo{tracked: true, factID: fact.id, oldKey: currentDupIndex, newKey: newDupIndex}
+		if !currentDupIndex.isZero() {
+			undo.oldHeld = w.factsByDuplicate.holdsFact(currentDupIndex, fact.id)
+		}
+		if !newDupIndex.isZero() {
+			switch newDupIndex.kind {
+			case duplicateIndexStringStringInt, duplicateIndexStructural:
+				undo.newHeld = w.factsByDuplicate.holdsFact(newDupIndex, fact.id)
+			default:
+				undo.newPrevID, undo.newPrevHad = w.factsByDuplicate.get(newDupIndex)
+			}
+		}
+		mark.duplicateIndexUndo = undo
 	}
 	return mark
 }
@@ -5224,9 +5302,7 @@ func (w *factWorkspace) rollbackFactModify(mark factWorkspaceModifyMark) {
 	}
 	w.recency = mark.recency
 	w.factTargetIndexesDirty = mark.factTargetIndexesDirty
-	if mark.restoreDuplicateIndex {
-		w.factsByDuplicate = mark.factsByDuplicate
-	}
+	w.factsByDuplicate.applyModifyUndo(mark.duplicateIndexUndo)
 	if mark.factIndex >= 0 && mark.factIndex < len(w.facts) {
 		w.facts[mark.factIndex] = mark.fact
 	} else if row, generated := decodeCompactFactRow(mark.factIndex); generated {
