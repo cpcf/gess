@@ -9,16 +9,116 @@ const (
 // betaJoinBucketTable stores join rows in one shared arena with per-slot
 // chain links, so table growth rebuilds slot heads without reallocating or
 // copying row storage. Free arena rows are zeroed and linked through freeHead.
+// byIdentity indexes live rows by token identity hash; it is built on the
+// first token removal so insert-only memories never pay for it.
 type betaJoinBucketTable struct {
-	heads     []int32
-	tails     []int32
-	rows      []betaTokenRow
-	next      []int32
-	prev      []int32
-	freeHead  int32
-	touched   []int
-	slotCount int
-	rowCount  int
+	heads      []int32
+	tails      []int32
+	rows       []betaTokenRow
+	next       []int32
+	prev       []int32
+	byIdentity map[uint64][]int32
+	freeHead   int32
+	touched    []int
+	slotCount  int
+	rowCount   int
+}
+
+func (t *betaJoinBucketTable) ensureIdentityIndex() {
+	if t.byIdentity != nil {
+		return
+	}
+	t.byIdentity = make(map[uint64][]int32, t.rowCount)
+	for i := range t.rows {
+		if t.rows[i].token.isZero() {
+			continue
+		}
+		state := t.rows[i].token.identityState()
+		t.byIdentity[state] = append(t.byIdentity[state], int32(i+1))
+	}
+}
+
+func (t *betaJoinBucketTable) indexIdentity(ref int32) {
+	if t.byIdentity == nil {
+		return
+	}
+	state := t.rows[ref-1].token.identityState()
+	t.byIdentity[state] = append(t.byIdentity[state], ref)
+}
+
+func (t *betaJoinBucketTable) unindexIdentity(ref int32) {
+	if t.byIdentity == nil {
+		return
+	}
+	state := t.rows[ref-1].token.identityState()
+	refs := t.byIdentity[state]
+	for i, existing := range refs {
+		if existing != ref {
+			continue
+		}
+		refs[i] = refs[len(refs)-1]
+		refs = refs[:len(refs)-1]
+		if len(refs) == 0 {
+			delete(t.byIdentity, state)
+		} else {
+			t.byIdentity[state] = refs
+		}
+		return
+	}
+}
+
+// removeIdentityToken unlinks the first row structurally equal to token,
+// using the identity index instead of scanning slot chains. The filter, when
+// non-nil, must also accept the row.
+func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*betaTokenRow) bool, onTouch func()) (betaTokenRow, bool) {
+	if t == nil || token.isZero() {
+		return betaTokenRow{}, false
+	}
+	if _, ok := token.resolve(); !ok {
+		return t.removeIdentityTokenScan(token, filter, onTouch)
+	}
+	t.ensureIdentityIndex()
+	for _, ref := range t.byIdentity[token.identityState()] {
+		row := &t.rows[ref-1]
+		if row.token.isZero() {
+			continue
+		}
+		if onTouch != nil {
+			onTouch()
+		}
+		if !tokenRefEqual(row.token, token) {
+			continue
+		}
+		if filter != nil && !filter(row) {
+			continue
+		}
+		removed := *row
+		t.unlink(ref)
+		return removed, true
+	}
+	return betaTokenRow{}, false
+}
+
+func (t *betaJoinBucketTable) removeIdentityTokenScan(token tokenRef, filter func(*betaTokenRow) bool, onTouch func()) (betaTokenRow, bool) {
+	for i := range t.rows {
+		row := &t.rows[i]
+		if row.token.isZero() {
+			continue
+		}
+		if onTouch != nil {
+			onTouch()
+		}
+		if !tokenRefEqual(row.token, token) {
+			continue
+		}
+		if filter != nil && !filter(row) {
+			continue
+		}
+		removed := *row
+		t.unlink(int32(i + 1))
+		return removed, true
+	}
+	return betaTokenRow{}, false
 }
 
 func (t *betaJoinBucketTable) reserve(capacity int) bool {
@@ -82,6 +182,7 @@ func (t *betaJoinBucketTable) insert(row betaTokenRow) bool {
 		ref = int32(len(t.rows))
 	}
 	t.chainRow(ref)
+	t.indexIdentity(ref)
 	t.rowCount++
 	return true
 }
@@ -90,6 +191,7 @@ func (t *betaJoinBucketTable) unlink(ref int32) bool {
 	if t == nil || ref <= 0 || int(ref) > len(t.rows) || t.rows[ref-1].token.isZero() {
 		return false
 	}
+	t.unindexIdentity(ref)
 	slot := t.slot(t.rows[ref-1].joinKey)
 	next := t.next[ref-1]
 	prev := t.prev[ref-1]
@@ -172,6 +274,7 @@ func (t *betaJoinBucketTable) clear() {
 	t.rows = t.rows[:0]
 	t.next = t.next[:0]
 	t.prev = t.prev[:0]
+	t.byIdentity = nil
 	t.freeHead = 0
 	t.slotCount = 0
 	t.rowCount = 0
