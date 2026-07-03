@@ -68,6 +68,19 @@ func (r *activationRows) addEmpty() *activation {
 	return row
 }
 
+// recycle zeroes all rows and keeps chunk capacity for reuse. Callers must
+// have released or moved any retained token chains first.
+func (r *activationRows) recycle() {
+	if r == nil {
+		return
+	}
+	for chunkIndex, chunk := range r.chunks {
+		clear(chunk)
+		r.chunks[chunkIndex] = chunk[:0]
+	}
+	r.count = 0
+}
+
 func (r *activationRows) truncate(count int) {
 	if r == nil || count < 0 || count >= r.count {
 		return
@@ -673,6 +686,9 @@ type agenda struct {
 	purgeChanges []agendaChange
 
 	pendingScratch []*activation
+
+	activationRowsSpare activationRows
+	activationsSpare    []*activation
 }
 
 func newAgenda() *agenda {
@@ -2120,17 +2136,52 @@ func (a *agenda) activationByKeyPtr(key activationKey) (*activation, bool) {
 }
 
 func (a *agenda) compactConsumedActivationRows() {
+	if a == nil {
+		return
+	}
+	a.compactActivationStorage()
+	if a.pendingActivationCount() == 0 {
+		a.releaseCompletedRunStorage()
+	}
+}
+
+const compactRetiredActivationFloor = 64
+
+// maybeCompactActivationStorage compacts retired activation rows mid-run once
+// they outnumber pending work. Safe only at the fire boundary, when no
+// activation pointers are held outside the agenda's own storage.
+func (a *agenda) maybeCompactActivationStorage() {
+	if a == nil {
+		return
+	}
+	pending := a.pendingActivationCount()
+	retired := a.activationRows.count + a.terminalActivations.count - pending
+	if retired <= max(compactRetiredActivationFloor, 4*pending) {
+		return
+	}
+	a.compactActivationStorage()
+}
+
+// compactActivationStorage drops consumed and deactivated activation rows,
+// releasing their token chains, and rebuilds the lookup, ref slice, and module
+// queues over the surviving pending activations. Storage from the previous
+// compaction is recycled so repeated mid-run compaction does not churn.
+func (a *agenda) compactActivationStorage() {
 	if a == nil || len(a.activations) == 0 {
 		return
 	}
-	oldActivations := append([]*activation(nil), a.activations...)
+	oldActivations := a.activations
 	pendingCount := a.pendingActivationCount()
 
-	a.activationLookup = make(map[activationLookupKey]activationLookupBucket, pendingCount)
-	a.activations = make([]*activation, 0, pendingCount)
+	a.clearActivationLookup()
+	if a.activationLookup == nil {
+		a.activationLookup = make(map[activationLookupKey]activationLookupBucket, pendingCount)
+	}
+	a.activations = a.activationsSpare[:0]
 	a.resetModuleQueues()
 
-	var nextRows activationRows
+	nextRows := a.activationRowsSpare
+	a.activationRowsSpare = activationRows{}
 	for _, current := range oldActivations {
 		if current == nil {
 			continue
@@ -2145,11 +2196,13 @@ func (a *agenda) compactConsumedActivationRows() {
 		a.enqueueActivation(stored)
 	}
 
+	oldRows := a.activationRows
 	a.activationRows = nextRows
-	a.terminalActivations = activationRows{}
-	if a.pendingActivationCount() == 0 {
-		a.releaseCompletedRunStorage()
-	}
+	oldRows.recycle()
+	a.activationRowsSpare = oldRows
+	a.terminalActivations.recycle()
+	clear(oldActivations)
+	a.activationsSpare = oldActivations[:0]
 }
 
 func (a *agenda) releaseCompletedRunStorage() {
@@ -2160,6 +2213,8 @@ func (a *agenda) releaseCompletedRunStorage() {
 	a.activations = nil
 	a.activationRows = activationRows{}
 	a.terminalActivations = activationRows{}
+	a.activationRowsSpare = activationRows{}
+	a.activationsSpare = nil
 	a.moduleQueues = nil
 	a.reconcileSeen = nil
 	a.reconcileChanges = nil
