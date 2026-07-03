@@ -4131,7 +4131,6 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 	default:
 		return false, nil
 	}
-	return true, nil
 }
 
 func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
@@ -4149,32 +4148,20 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 		return m.removeNegativeBetaInputToken(nodeID, side, node, token, counters, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	var joinKey betaJoinKey
+	var removedRow betaTokenRow
 	var ok bool
-	var removed tokenRef
 	switch side {
 	case reteGraphBetaInputLeft:
-		var err error
-		joinKey, ok, err = graphBetaJoinKeyForLeftTokenWithContext(m.context(), node, token, nil)
-		if err != nil || !ok {
-			return false
-		}
-		removedRow, removedOK := nodeMemory.left.removeTokenWithJoinKey(token, joinKey, counters)
-		removed, ok = removedRow.token, removedOK
+		removedRow, ok = nodeMemory.left.removeToken(token, counters)
 	case reteGraphBetaInputRight:
-		var err error
-		joinKey, ok, err = graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, nil)
-		if err != nil || !ok {
-			return false
-		}
-		removedRow, removedOK := nodeMemory.right.removeTokenWithJoinKey(token, joinKey, counters)
-		removed, ok = removedRow.token, removedOK
+		removedRow, ok = nodeMemory.right.removeToken(token, counters)
 	default:
 		return false
 	}
 	if !ok {
 		return true
 	}
+	joinKey, removed := removedRow.joinKey, removedRow.token
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
 	}
@@ -4208,21 +4195,12 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 	negativeMemory := m.negativeBetaMemory(nodeID, node)
 	switch side {
 	case reteGraphBetaInputLeft:
-		joinKey, ok, err := graphBetaJoinKeyForLeftTokenWithContext(m.context(), node, token, nil)
-		if err != nil || !ok {
-			return false
-		}
-		return negativeMemory.removeLeft(joinKey, token, counters, delta)
+		return negativeMemory.removeLeftToken(token, counters, delta)
 	case reteGraphBetaInputRight:
-		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, nil)
-		if err != nil || !ok {
-			return false
-		}
-		return negativeMemory.removeRight(joinKey, token, counters, delta)
+		return negativeMemory.removeRightToken(token, counters, delta)
 	default:
 		return false
 	}
-	return true
 }
 
 func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -6194,7 +6172,7 @@ func (m *reteGraphBetaMemory) memoryStats() reteGraphBetaMemoryStats {
 		stats.BetaTokenMemories++
 		stats.addNegativeBetaLeftMemory(node.negative.left)
 		stats.BetaTokenMemories++
-		stats.addNegativeBetaRightMemory(node.negative.right)
+		stats.addTokenMemory(node.negative.right)
 		stats.BetaTokenMemories++
 	}
 	for _, terminal := range m.terminals {
@@ -6304,26 +6282,6 @@ func (s *reteGraphBetaMemoryStats) addTokenMemory(memory betaSideMemory) {
 }
 
 func (s *reteGraphBetaMemoryStats) addNegativeBetaLeftMemory(memory negativeBetaLeftMemory) {
-	if s == nil {
-		return
-	}
-	s.TokenMemories++
-	rowCount := memory.len()
-	rowCapacity := memory.rowCapacity()
-	s.TokenRows += rowCount
-	s.TokenRowCapacity += rowCapacity
-	s.TokenRowReserve += memory.rowReserve
-	s.TokenRowCapacityMax = max(s.TokenRowCapacityMax, rowCapacity)
-	s.TokenRowReserveMax = max(s.TokenRowReserveMax, memory.rowReserve)
-
-	joinKeys := memory.indexes.keyCount()
-	s.JoinIndexKeys += joinKeys
-	s.JoinIndexReserve += memory.joinIndexReserve
-	s.JoinIndexKeysMax = max(s.JoinIndexKeysMax, joinKeys)
-	s.JoinIndexReserveMax = max(s.JoinIndexReserveMax, memory.joinIndexReserve)
-}
-
-func (s *reteGraphBetaMemoryStats) addNegativeBetaRightMemory(memory negativeBetaRightMemory) {
 	if s == nil {
 		return
 	}

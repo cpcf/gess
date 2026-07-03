@@ -9,17 +9,11 @@ type reteGraphNegativeBetaMemory struct {
 
 type reteGraphNegativeBetaNodeMemory struct {
 	left  negativeBetaLeftMemory
-	right negativeBetaRightMemory
+	right betaSideMemory
 }
 
 type negativeBetaLeftMemory struct {
 	indexes          negativeBetaLeftBucketTable
-	rowReserve       int
-	joinIndexReserve int
-}
-
-type negativeBetaRightMemory struct {
-	indexes          negativeBetaRightBucketTable
 	rowReserve       int
 	joinIndexReserve int
 }
@@ -31,31 +25,22 @@ type negativeBetaLeftRow struct {
 	output       tokenRef
 }
 
-type negativeBetaRightRow struct {
-	token   tokenRef
-	joinKey betaJoinKey
-}
-
+// negativeBetaLeftBucketTable mirrors betaJoinBucketTable: rows live in one
+// shared arena with per-slot chain links, free rows are recycled through
+// freeHead, and byIdentity indexes live rows by token identity hash on the
+// first token removal. Unlinked rows release both the input token and the
+// negative output token.
 type negativeBetaLeftBucketTable struct {
-	buckets   []negativeBetaLeftBucket
-	touched   []int
-	slotCount int
-	rowCount  int
-}
-
-type negativeBetaRightBucketTable struct {
-	buckets   []negativeBetaRightBucket
-	touched   []int
-	slotCount int
-	rowCount  int
-}
-
-type negativeBetaLeftBucket struct {
-	rows []negativeBetaLeftRow
-}
-
-type negativeBetaRightBucket struct {
-	rows []negativeBetaRightRow
+	heads      []int32
+	tails      []int32
+	rows       []negativeBetaLeftRow
+	next       []int32
+	prev       []int32
+	byIdentity map[uint64][]int32
+	freeHead   int32
+	touched    []int
+	slotCount  int
+	rowCount   int
 }
 
 func (m *reteGraphBetaMemory) negativeBetaMemory(nodeID reteGraphBetaNodeID, node *reteGraphBetaNode) reteGraphNegativeBetaMemory {
@@ -150,11 +135,11 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 	return true, nil
 }
 
-func (m reteGraphNegativeBetaMemory) removeLeft(joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+func (m reteGraphNegativeBetaMemory) removeLeftToken(token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
 	if m.owner == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false
 	}
-	removedRow, removedOK := m.memory.left.removeTokenWithJoinKey(token, joinKey, counters)
+	removedRow, removedOK := m.memory.left.removeToken(token, counters)
 	if !removedOK {
 		return true
 	}
@@ -169,23 +154,27 @@ func (m reteGraphNegativeBetaMemory) removeLeft(joinKey betaJoinKey, token token
 	return true
 }
 
-func (m reteGraphNegativeBetaMemory) removeRight(joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
+func (m reteGraphNegativeBetaMemory) removeRightToken(token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
 	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false
 	}
-	removedRow, removedOK := m.memory.right.removeTokenWithJoinKey(token, joinKey, counters)
+	removedRow, removedOK := m.memory.right.removeToken(token, counters)
 	if !removedOK {
 		return true
 	}
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
 	}
-	currentMatch, ok := m.rightLastMatch(removedRow.token)
+	return m.unblockLeftRows(removedRow.joinKey, removedRow.token, delta)
+}
+
+func (m reteGraphNegativeBetaMemory) unblockLeftRows(joinKey betaJoinKey, right tokenRef, delta *reteAgendaDelta) bool {
+	currentMatch, ok := m.rightLastMatch(right)
 	if !ok {
 		return false
 	}
 	m.memory.left.forEachJoinRow(joinKey, func(leftRow *negativeBetaLeftRow) bool {
-		matched, err := m.leftRightMatch(leftRow, removedRow.token, currentMatch, nil)
+		matched, err := m.leftRightMatch(leftRow, right, currentMatch, nil)
 		if err != nil {
 			delta.supported = false
 			return false
@@ -245,18 +234,15 @@ func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counte
 	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || id.IsZero() {
 		return false
 	}
-	var tokens []tokenRef
-	m.memory.right.forEachTokenContainingFact(id, counters, func(row negativeBetaRightRow) {
-		if !row.token.isZero() {
-			tokens = append(tokens, row.token)
-		}
+	var removedRows []betaTokenRow
+	m.memory.right.removeTokensContainingFact(id, counters, func(row betaTokenRow) {
+		removedRows = append(removedRows, row)
 	})
-	for _, token := range tokens {
-		joinKey, ok, err := graphBetaJoinKeyForRightTokenWithContext(m.owner.context(), m.node, token, nil)
-		if err != nil || !ok {
-			return false
+	for _, row := range removedRows {
+		if counters != nil {
+			counters.recordNegativeRowRemoved()
 		}
-		if !m.removeRight(joinKey, token, counters, delta) {
+		if !m.unblockLeftRows(row.joinKey, row.token, delta) {
 			return false
 		}
 	}
@@ -273,7 +259,7 @@ func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, le
 	}
 	count := 0
 	supported := true
-	m.memory.right.forEachJoinRow(joinKey, func(rightRow *negativeBetaRightRow) bool {
+	m.memory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
@@ -367,11 +353,7 @@ func (m *negativeBetaLeftMemory) rowCapacity() int {
 	if m == nil {
 		return 0
 	}
-	capacity := 0
-	for bucketIndex := range m.indexes.buckets {
-		capacity += cap(m.indexes.buckets[bucketIndex].rows)
-	}
-	return capacity
+	return cap(m.indexes.rows)
 }
 
 func (m *negativeBetaLeftMemory) joinRowCount(key betaJoinKey) int {
@@ -387,13 +369,18 @@ func (m *negativeBetaLeftMemory) forEachJoinRow(key betaJoinKey, fn func(*negati
 	if m == nil || fn == nil || m.indexes.isEmpty() {
 		return
 	}
-	bucket := m.indexes.bucket(key)
-	if bucket == nil {
+	m.indexes.forEachChainRow(key, func(_ int32, row *negativeBetaLeftRow) bool {
+		return fn(row)
+	})
+}
+
+func (m *negativeBetaLeftMemory) forEachRow(fn func(*negativeBetaLeftRow) bool) {
+	if m == nil || fn == nil {
 		return
 	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row.joinKey != key {
+	for rowIndex := range m.indexes.rows {
+		row := &m.indexes.rows[rowIndex]
+		if row.token.isZero() {
 			continue
 		}
 		if !fn(row) {
@@ -402,74 +389,42 @@ func (m *negativeBetaLeftMemory) forEachJoinRow(key betaJoinKey, fn func(*negati
 	}
 }
 
-func (m *negativeBetaLeftMemory) forEachRow(fn func(*negativeBetaLeftRow) bool) {
-	if m == nil || fn == nil {
-		return
-	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if !fn(&bucket.rows[rowIndex]) {
-				return
-			}
-		}
-	}
-}
-
 func (m *negativeBetaLeftMemory) insert(token tokenRef, joinKey betaJoinKey, blockerCount int) (*negativeBetaLeftRow, bool) {
 	if m == nil || token.isZero() {
 		return nil, false
 	}
-	if m.indexes.reserve(max(8, m.indexes.len()+1)) {
-		m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.buckets))
-	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
-		return nil, false
-	}
-	slot := m.indexes.slot(joinKey)
-	if len(bucket.rows) == 0 {
-		m.indexes.touched = append(m.indexes.touched, slot)
-		m.indexes.slotCount++
-	}
-	bucket.rows = append(bucket.rows, negativeBetaLeftRow{
+	ref, inserted := m.indexes.insert(negativeBetaLeftRow{
 		token:        token,
 		joinKey:      joinKey,
 		blockerCount: blockerCount,
 	})
-	m.indexes.rowCount++
+	if !inserted {
+		return nil, false
+	}
+	m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.heads))
 	m.rowReserve = max(m.rowReserve, m.indexes.len())
-	token.retain()
-	return &bucket.rows[len(bucket.rows)-1], true
+	return &m.indexes.rows[ref-1], true
 }
 
-func (m *negativeBetaLeftMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (negativeBetaLeftRow, bool) {
+func (m *negativeBetaLeftMemory) removeToken(token tokenRef, counters *propagationCounterLedger) (negativeBetaLeftRow, bool) {
 	if m == nil || token.isZero() {
 		return negativeBetaLeftRow{}, false
 	}
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
+	var onTouch func()
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
+	}
+	removed, ok := m.indexes.removeIdentityToken(token, onTouch)
+	if !ok {
 		return negativeBetaLeftRow{}, false
 	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row.joinKey != joinKey {
-			continue
-		}
-		if counters != nil {
-			counters.recordRemovalRowTouched()
-		}
-		if !tokenRefEqual(row.token, token) {
-			continue
-		}
-		removed := *row
-		m.removeBucketRow(bucket, rowIndex, counters)
-		return removed, true
+	if counters != nil {
+		counters.recordRemovalRowRemoved()
 	}
-	return negativeBetaLeftRow{}, false
+	return removed, true
 }
 
 func (m *negativeBetaLeftMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(negativeBetaLeftRow)) int {
@@ -479,47 +434,20 @@ func (m *negativeBetaLeftMemory) removeTokensContainingFact(id FactID, counters 
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	removed := 0
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := 0; rowIndex < len(bucket.rows); {
-			row := &bucket.rows[rowIndex]
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			if row.token.isZero() || !row.token.containsFact(id) {
-				rowIndex++
-				continue
-			}
-			if fn != nil {
-				fn(*row)
-			}
-			m.removeBucketRow(bucket, rowIndex, counters)
-			removed++
-		}
+	var onTouch func()
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
 	}
-	return removed
-}
-
-func (m *negativeBetaLeftMemory) removeBucketRow(bucket *negativeBetaLeftBucket, rowIndex int, counters *propagationCounterLedger) {
-	if m == nil || bucket == nil || rowIndex < 0 || rowIndex >= len(bucket.rows) {
-		return
-	}
-	bucket.rows[rowIndex].token.release()
-	bucket.rows[rowIndex].output.release()
-	last := len(bucket.rows) - 1
-	if rowIndex != last {
-		bucket.rows[rowIndex] = bucket.rows[last]
+	return m.indexes.removeMatching(func(row *negativeBetaLeftRow) bool {
+		return row.token.containsFact(id)
+	}, onTouch, func(row negativeBetaLeftRow) {
 		if counters != nil {
-			counters.recordRemovalRowMoved()
+			counters.recordRemovalRowRemoved()
 		}
-	}
-	bucket.rows[last] = negativeBetaLeftRow{}
-	bucket.rows = bucket.rows[:last]
-	m.indexes.rowCount--
-	if len(bucket.rows) == 0 {
-		m.indexes.slotCount--
-	}
+		if fn != nil {
+			fn(row)
+		}
+	})
 }
 
 func (m negativeBetaLeftMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
@@ -544,221 +472,94 @@ func (m negativeBetaLeftMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
 	return diag
 }
 
-func (m *negativeBetaRightMemory) clear() {
-	if m == nil {
+func (t *negativeBetaLeftBucketTable) ensureIdentityIndex() {
+	if t.byIdentity != nil {
 		return
 	}
-	m.indexes.clear()
-}
-
-func (m *negativeBetaRightMemory) len() int {
-	if m == nil {
-		return 0
-	}
-	return m.indexes.len()
-}
-
-func (m *negativeBetaRightMemory) rowCapacity() int {
-	if m == nil {
-		return 0
-	}
-	capacity := 0
-	for bucketIndex := range m.indexes.buckets {
-		capacity += cap(m.indexes.buckets[bucketIndex].rows)
-	}
-	return capacity
-}
-
-func (m *negativeBetaRightMemory) joinRowCount(key betaJoinKey) int {
-	count := 0
-	m.forEachJoinRow(key, func(*negativeBetaRightRow) bool {
-		count++
-		return true
-	})
-	return count
-}
-
-func (m *negativeBetaRightMemory) forEachJoinRow(key betaJoinKey, fn func(*negativeBetaRightRow) bool) {
-	if m == nil || fn == nil || m.indexes.isEmpty() {
-		return
-	}
-	bucket := m.indexes.bucket(key)
-	if bucket == nil {
-		return
-	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row.joinKey != key {
+	t.byIdentity = make(map[uint64][]int32, t.rowCount)
+	for i := range t.rows {
+		if t.rows[i].token.isZero() {
 			continue
 		}
-		if !fn(row) {
-			return
-		}
+		state := t.rows[i].token.identityState()
+		t.byIdentity[state] = append(t.byIdentity[state], int32(i+1))
 	}
 }
 
-func (m *negativeBetaRightMemory) forEachRow(fn func(*negativeBetaRightRow) bool) {
-	if m == nil || fn == nil {
+func (t *negativeBetaLeftBucketTable) indexIdentity(ref int32) {
+	if t.byIdentity == nil {
 		return
 	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if !fn(&bucket.rows[rowIndex]) {
-				return
-			}
-		}
-	}
+	state := t.rows[ref-1].token.identityState()
+	t.byIdentity[state] = append(t.byIdentity[state], ref)
 }
 
-func (m *negativeBetaRightMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
-	if m == nil || token.isZero() {
-		return false
+func (t *negativeBetaLeftBucketTable) unindexIdentity(ref int32) {
+	if t.byIdentity == nil {
+		return
 	}
-	if m.indexes.reserve(max(8, m.indexes.len()+1)) {
-		m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.buckets))
-	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
-		return false
-	}
-	slot := m.indexes.slot(joinKey)
-	if len(bucket.rows) == 0 {
-		m.indexes.touched = append(m.indexes.touched, slot)
-		m.indexes.slotCount++
-	}
-	bucket.rows = append(bucket.rows, negativeBetaRightRow{
-		token:   token,
-		joinKey: joinKey,
-	})
-	m.indexes.rowCount++
-	m.rowReserve = max(m.rowReserve, m.indexes.len())
-	token.retain()
-	return true
-}
-
-func (m *negativeBetaRightMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (negativeBetaRightRow, bool) {
-	if m == nil || token.isZero() {
-		return negativeBetaRightRow{}, false
-	}
-	if counters != nil {
-		counters.recordRemovalIndexLookup()
-	}
-	bucket := m.indexes.bucket(joinKey)
-	if bucket == nil {
-		return negativeBetaRightRow{}, false
-	}
-	for rowIndex := range bucket.rows {
-		row := &bucket.rows[rowIndex]
-		if row.joinKey != joinKey {
+	state := t.rows[ref-1].token.identityState()
+	refs := t.byIdentity[state]
+	for i, existing := range refs {
+		if existing != ref {
 			continue
 		}
-		if counters != nil {
-			counters.recordRemovalRowTouched()
+		refs[i] = refs[len(refs)-1]
+		refs = refs[:len(refs)-1]
+		if len(refs) == 0 {
+			delete(t.byIdentity, state)
+		} else {
+			t.byIdentity[state] = refs
+		}
+		return
+	}
+}
+
+// removeIdentityToken unlinks the first row structurally equal to token,
+// using the identity index instead of scanning slot chains.
+func (t *negativeBetaLeftBucketTable) removeIdentityToken(token tokenRef, onTouch func()) (negativeBetaLeftRow, bool) {
+	if t == nil || token.isZero() {
+		return negativeBetaLeftRow{}, false
+	}
+	if _, ok := token.resolve(); !ok {
+		return t.removeIdentityTokenScan(token, onTouch)
+	}
+	t.ensureIdentityIndex()
+	for _, ref := range t.byIdentity[token.identityState()] {
+		row := &t.rows[ref-1]
+		if row.token.isZero() {
+			continue
+		}
+		if onTouch != nil {
+			onTouch()
 		}
 		if !tokenRefEqual(row.token, token) {
 			continue
 		}
 		removed := *row
-		m.removeBucketRow(bucket, rowIndex, counters)
+		t.unlink(ref)
 		return removed, true
 	}
-	return negativeBetaRightRow{}, false
+	return negativeBetaLeftRow{}, false
 }
 
-func (m *negativeBetaRightMemory) forEachTokenContainingFact(id FactID, counters *propagationCounterLedger, fn func(negativeBetaRightRow)) {
-	if m == nil || id.IsZero() {
-		return
-	}
-	if counters != nil {
-		counters.recordRemovalIndexLookup()
-	}
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := range bucket.rows {
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			row := &bucket.rows[rowIndex]
-			if row.token.isZero() || !row.token.containsFact(id) {
-				continue
-			}
-			if fn != nil {
-				fn(*row)
-			}
-		}
-	}
-}
-
-func (m *negativeBetaRightMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(negativeBetaRightRow)) int {
-	if m == nil || id.IsZero() {
-		return 0
-	}
-	if counters != nil {
-		counters.recordRemovalIndexLookup()
-	}
-	removed := 0
-	for bucketIndex := range m.indexes.buckets {
-		bucket := &m.indexes.buckets[bucketIndex]
-		for rowIndex := 0; rowIndex < len(bucket.rows); {
-			row := &bucket.rows[rowIndex]
-			if counters != nil {
-				counters.recordRemovalRowTouched()
-			}
-			if row.token.isZero() || !row.token.containsFact(id) {
-				rowIndex++
-				continue
-			}
-			if fn != nil {
-				fn(*row)
-			}
-			m.removeBucketRow(bucket, rowIndex, counters)
-			removed++
-		}
-	}
-	return removed
-}
-
-func (m *negativeBetaRightMemory) removeBucketRow(bucket *negativeBetaRightBucket, rowIndex int, counters *propagationCounterLedger) {
-	if m == nil || bucket == nil || rowIndex < 0 || rowIndex >= len(bucket.rows) {
-		return
-	}
-	bucket.rows[rowIndex].token.release()
-	last := len(bucket.rows) - 1
-	if rowIndex != last {
-		bucket.rows[rowIndex] = bucket.rows[last]
-		if counters != nil {
-			counters.recordRemovalRowMoved()
-		}
-	}
-	bucket.rows[last] = negativeBetaRightRow{}
-	bucket.rows = bucket.rows[:last]
-	m.indexes.rowCount--
-	if len(bucket.rows) == 0 {
-		m.indexes.slotCount--
-	}
-}
-
-func (m negativeBetaRightMemory) diagnostics() reteGraphTokenMemoryDiagnostics {
-	diag := reteGraphTokenMemoryDiagnostics{
-		Rows:          m.len(),
-		JoinIndexKeys: m.indexes.keyCount(),
-	}
-	seen := make(map[betaJoinKey]struct{}, m.indexes.keyCount())
-	m.forEachRow(func(row *negativeBetaRightRow) bool {
+func (t *negativeBetaLeftBucketTable) removeIdentityTokenScan(token tokenRef, onTouch func()) (negativeBetaLeftRow, bool) {
+	for i := range t.rows {
+		row := &t.rows[i]
 		if row.token.isZero() {
-			return true
+			continue
 		}
-		if _, ok := seen[row.joinKey]; ok {
-			return true
+		if onTouch != nil {
+			onTouch()
 		}
-		seen[row.joinKey] = struct{}{}
-		depth := m.joinRowCount(row.joinKey)
-		diag.JoinBucketDepthTotal += depth
-		diag.JoinBucketDepthMax = max(diag.JoinBucketDepthMax, depth)
-		return true
-	})
-	return diag
+		if !tokenRefEqual(row.token, token) {
+			continue
+		}
+		removed := *row
+		t.unlink(int32(i + 1))
+		return removed, true
+	}
+	return negativeBetaLeftRow{}, false
 }
 
 func (t *negativeBetaLeftBucketTable) reserve(capacity int) bool {
@@ -766,33 +567,159 @@ func (t *negativeBetaLeftBucketTable) reserve(capacity int) bool {
 		return false
 	}
 	slotCapacity := graphTokenBucketSlotCapacity(capacity)
-	if slotCapacity <= len(t.buckets) {
+	if slotCapacity <= len(t.heads) {
 		return false
 	}
-	old := t.buckets
-	t.buckets = make([]negativeBetaLeftBucket, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
+	t.heads = make([]int32, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
+	t.tails = make([]int32, len(t.heads))
 	t.touched = t.touched[:0]
 	t.slotCount = 0
-	t.rowCount = 0
-	for i := range old {
-		for rowIndex := range old[i].rows {
-			t.appendRehashed(old[i].rows[rowIndex])
+	t.freeHead = 0
+	live := 0
+	for i := range t.rows {
+		if t.rows[i].token.isZero() {
+			t.next[i] = t.freeHead
+			t.freeHead = int32(i + 1)
+			continue
 		}
-		old[i].clear()
+		t.chainRow(int32(i + 1))
+		live++
 	}
+	t.rowCount = live
 	return true
 }
 
+func (t *negativeBetaLeftBucketTable) chainRow(ref int32) {
+	slot := t.slot(t.rows[ref-1].joinKey)
+	t.next[ref-1] = 0
+	if t.heads[slot] == 0 {
+		t.touched = append(t.touched, slot)
+		t.slotCount++
+		t.heads[slot] = ref
+		t.tails[slot] = ref
+		t.prev[ref-1] = 0
+		return
+	}
+	tail := t.tails[slot]
+	t.next[tail-1] = ref
+	t.prev[ref-1] = tail
+	t.tails[slot] = ref
+}
+
+func (t *negativeBetaLeftBucketTable) insert(row negativeBetaLeftRow) (int32, bool) {
+	if t == nil || row.token.isZero() {
+		return 0, false
+	}
+	t.reserve(max(8, t.rowCount+1))
+	var ref int32
+	if t.freeHead != 0 {
+		ref = t.freeHead
+		t.freeHead = t.next[ref-1]
+		t.rows[ref-1] = row
+	} else {
+		t.rows = append(t.rows, row)
+		t.next = append(t.next, 0)
+		t.prev = append(t.prev, 0)
+		ref = int32(len(t.rows))
+	}
+	t.chainRow(ref)
+	t.indexIdentity(ref)
+	t.rowCount++
+	row.token.retain()
+	return ref, true
+}
+
+func (t *negativeBetaLeftBucketTable) unlink(ref int32) bool {
+	if t == nil || ref <= 0 || int(ref) > len(t.rows) || t.rows[ref-1].token.isZero() {
+		return false
+	}
+	t.unindexIdentity(ref)
+	slot := t.slot(t.rows[ref-1].joinKey)
+	next := t.next[ref-1]
+	prev := t.prev[ref-1]
+	if prev == 0 {
+		t.heads[slot] = next
+	} else {
+		t.next[prev-1] = next
+	}
+	if next != 0 {
+		t.prev[next-1] = prev
+	}
+	if t.tails[slot] == ref {
+		t.tails[slot] = prev
+	}
+	if t.heads[slot] == 0 {
+		t.slotCount--
+	}
+	t.rows[ref-1].token.release()
+	t.rows[ref-1].output.release()
+	t.rows[ref-1] = negativeBetaLeftRow{}
+	t.next[ref-1] = t.freeHead
+	t.prev[ref-1] = 0
+	t.freeHead = ref
+	t.rowCount--
+	return true
+}
+
+// removeMatching walks every live row once, unlinking rows the match function
+// selects with O(1) per removal. onRemove sees the removed row before it is
+// recycled; onTouch runs per live row visited.
+func (t *negativeBetaLeftBucketTable) removeMatching(match func(*negativeBetaLeftRow) bool, onTouch func(), onRemove func(negativeBetaLeftRow)) int {
+	if t == nil || match == nil || t.rowCount == 0 {
+		return 0
+	}
+	removed := 0
+	for i := range t.rows {
+		row := &t.rows[i]
+		if row.token.isZero() {
+			continue
+		}
+		if onTouch != nil {
+			onTouch()
+		}
+		if !match(row) {
+			continue
+		}
+		if onRemove != nil {
+			onRemove(*row)
+		}
+		t.unlink(int32(i + 1))
+		removed++
+	}
+	return removed
+}
+
+func (t *negativeBetaLeftBucketTable) forEachChainRow(key betaJoinKey, fn func(ref int32, row *negativeBetaLeftRow) bool) {
+	if t == nil || fn == nil || t.rowCount == 0 || len(t.heads) == 0 {
+		return
+	}
+	for ref := t.heads[t.slot(key)]; ref != 0; {
+		nextRef := t.next[ref-1]
+		row := &t.rows[ref-1]
+		if row.joinKey == key && !fn(ref, row) {
+			return
+		}
+		ref = nextRef
+	}
+}
+
 func (t *negativeBetaLeftBucketTable) clear() {
-	if t == nil || len(t.buckets) == 0 {
+	if t == nil {
 		return
 	}
 	for _, index := range t.touched {
-		if index >= 0 && index < len(t.buckets) {
-			t.buckets[index].clear()
+		if index >= 0 && index < len(t.heads) {
+			t.heads[index] = 0
+			t.tails[index] = 0
 		}
 	}
 	t.touched = t.touched[:0]
+	clear(t.rows)
+	t.rows = t.rows[:0]
+	t.next = t.next[:0]
+	t.prev = t.prev[:0]
+	t.byIdentity = nil
+	t.freeHead = 0
 	t.slotCount = 0
 	t.rowCount = 0
 }
@@ -815,122 +742,6 @@ func (t *negativeBetaLeftBucketTable) len() int {
 	return t.rowCount
 }
 
-func (t *negativeBetaLeftBucketTable) bucket(key betaJoinKey) *negativeBetaLeftBucket {
-	if t == nil || len(t.buckets) == 0 {
-		return nil
-	}
-	return &t.buckets[t.slot(key)]
-}
-
 func (t *negativeBetaLeftBucketTable) slot(key betaJoinKey) int {
-	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.buckets)-1))
-}
-
-func (t *negativeBetaLeftBucketTable) appendRehashed(row negativeBetaLeftRow) {
-	if t == nil || len(t.buckets) == 0 || row.token.isZero() {
-		return
-	}
-	index := t.slot(row.joinKey)
-	bucket := &t.buckets[index]
-	if len(bucket.rows) == 0 {
-		t.touched = append(t.touched, index)
-		t.slotCount++
-	}
-	bucket.rows = append(bucket.rows, row)
-	t.rowCount++
-}
-
-func (b *negativeBetaLeftBucket) clear() {
-	if b == nil || len(b.rows) == 0 {
-		return
-	}
-	clear(b.rows)
-	b.rows = b.rows[:0]
-}
-
-func (t *negativeBetaRightBucketTable) reserve(capacity int) bool {
-	if capacity <= 0 {
-		return false
-	}
-	slotCapacity := graphTokenBucketSlotCapacity(capacity)
-	if slotCapacity <= len(t.buckets) {
-		return false
-	}
-	old := t.buckets
-	t.buckets = make([]negativeBetaRightBucket, graphTokenBucketPowerOfTwo(max(8, slotCapacity)))
-	t.touched = t.touched[:0]
-	t.slotCount = 0
-	t.rowCount = 0
-	for i := range old {
-		for rowIndex := range old[i].rows {
-			t.appendRehashed(old[i].rows[rowIndex])
-		}
-		old[i].clear()
-	}
-	return true
-}
-
-func (t *negativeBetaRightBucketTable) clear() {
-	if t == nil || len(t.buckets) == 0 {
-		return
-	}
-	for _, index := range t.touched {
-		if index >= 0 && index < len(t.buckets) {
-			t.buckets[index].clear()
-		}
-	}
-	t.touched = t.touched[:0]
-	t.slotCount = 0
-	t.rowCount = 0
-}
-
-func (t *negativeBetaRightBucketTable) isEmpty() bool {
-	return t == nil || t.rowCount == 0
-}
-
-func (t *negativeBetaRightBucketTable) keyCount() int {
-	if t == nil {
-		return 0
-	}
-	return t.slotCount
-}
-
-func (t *negativeBetaRightBucketTable) len() int {
-	if t == nil {
-		return 0
-	}
-	return t.rowCount
-}
-
-func (t *negativeBetaRightBucketTable) bucket(key betaJoinKey) *negativeBetaRightBucket {
-	if t == nil || len(t.buckets) == 0 {
-		return nil
-	}
-	return &t.buckets[t.slot(key)]
-}
-
-func (t *negativeBetaRightBucketTable) slot(key betaJoinKey) int {
-	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.buckets)-1))
-}
-
-func (t *negativeBetaRightBucketTable) appendRehashed(row negativeBetaRightRow) {
-	if t == nil || len(t.buckets) == 0 || row.token.isZero() {
-		return
-	}
-	index := t.slot(row.joinKey)
-	bucket := &t.buckets[index]
-	if len(bucket.rows) == 0 {
-		t.touched = append(t.touched, index)
-		t.slotCount++
-	}
-	bucket.rows = append(bucket.rows, row)
-	t.rowCount++
-}
-
-func (b *negativeBetaRightBucket) clear() {
-	if b == nil || len(b.rows) == 0 {
-		return
-	}
-	clear(b.rows)
-	b.rows = b.rows[:0]
+	return int(hashBetaJoinTokenBucketKey(key) & uint64(len(t.heads)-1))
 }
