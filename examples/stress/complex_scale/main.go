@@ -169,18 +169,19 @@ func runShape(ctx context.Context, out io.Writer, cfg config) error {
 		return nil
 	}
 
+	stopCPU, err := startCPUProfile(cfg.RunCPUProfile)
+	if err != nil {
+		return err
+	}
 	start = time.Now()
 	session, err := sess.New(ruleset, sess.WithInitialFacts(dsl.InitialFacts(doc)...))
 	if err != nil {
 		return err
 	}
 	defer session.Close()
-	fmt.Fprintf(out, "session: duration=%s\n", time.Since(start))
+	sessionElapsed := time.Since(start)
+	fmt.Fprintf(out, "session: duration=%s\n", sessionElapsed)
 
-	stopCPU, err := startCPUProfile(cfg.RunCPUProfile)
-	if err != nil {
-		return err
-	}
 	start = time.Now()
 	result, err := session.Run(ctx)
 	stopErr := stopCPU()
@@ -190,7 +191,9 @@ func runShape(ctx context.Context, out io.Writer, cfg config) error {
 	if stopErr != nil {
 		return stopErr
 	}
-	fmt.Fprintf(out, "run: fired=%d duration=%s\n", result.Fired, time.Since(start))
+	fireElapsed := time.Since(start)
+	fmt.Fprintf(out, "fire: fired=%d duration=%s\n", result.Fired, fireElapsed)
+	fmt.Fprintf(out, "run: fired=%d duration=%s\n", result.Fired, sessionElapsed+fireElapsed)
 	writeMemory(out, "after-run", &memoryMark)
 	if err := writeRuntimeDiagnostics(ctx, out, session); err != nil {
 		return err
@@ -634,11 +637,16 @@ public final class ComplexScaleJessRunner {
       return;
     }
 
+    start = System.nanoTime();
     engine.reset();
+    long resetElapsed = System.nanoTime() - start;
+    System.out.println("reset: duration=" + resetElapsed + "ns");
+
     start = System.nanoTime();
     int fired = engine.run();
-    long runElapsed = System.nanoTime() - start;
-    System.out.println("run: fired=" + fired + " duration=" + runElapsed + "ns");
+    long fireElapsed = System.nanoTime() - start;
+    System.out.println("fire: fired=" + fired + " duration=" + fireElapsed + "ns");
+    System.out.println("run: fired=" + fired + " duration=" + (resetElapsed + fireElapsed) + "ns");
     writeMemory("after-run");
 
     for (int i = 0; i < querySamples; i++) {
