@@ -50,7 +50,6 @@ type propagationCounterTotals struct {
 	TokensCreated                       int
 	TerminalDeltasEmitted               int
 	AgendaDeltaApplications             int
-	AgendaSorts                         int
 	ActivationsStored                   int
 	RemovalIndexLookups                 int
 	RemovalRowsTouched                  int
@@ -119,7 +118,6 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.TokensCreated += other.TokensCreated
 	t.TerminalDeltasEmitted += other.TerminalDeltasEmitted
 	t.AgendaDeltaApplications += other.AgendaDeltaApplications
-	t.AgendaSorts += other.AgendaSorts
 	t.ActivationsStored += other.ActivationsStored
 	t.RemovalIndexLookups += other.RemovalIndexLookups
 	t.RemovalRowsTouched += other.RemovalRowsTouched
@@ -587,13 +585,6 @@ func (l *propagationCounterLedger) recordAgendaDeltaApplication() {
 	l.totals.AgendaDeltaApplications++
 }
 
-func (l *propagationCounterLedger) recordAgendaSort() {
-	if l == nil {
-		return
-	}
-	l.totals.AgendaSorts++
-}
-
 func (l *propagationCounterLedger) recordActivationStored() {
 	if l == nil {
 		return
@@ -917,7 +908,6 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-graph-fact-index-keys-max", float64(s.GraphBetaMemory.FactIndexKeysMax))
 	report("propagation-graph-fact-index-reserve-max", float64(s.GraphBetaMemory.FactIndexReserveMax))
 	report("propagation-agenda-delta-applications", float64(s.Totals.AgendaDeltaApplications))
-	report("propagation-agenda-sorts", float64(s.Totals.AgendaSorts))
 	report("propagation-activations-stored", float64(s.Totals.ActivationsStored))
 	report("propagation-removal-index-lookups", float64(s.Totals.RemovalIndexLookups))
 	report("propagation-removal-rows-touched", float64(s.Totals.RemovalRowsTouched))
@@ -981,7 +971,6 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-terminal-rows-deduped/rhs-assert", float64(s.Totals.TerminalRowsDeduped)/rhsAsserts)
 	report("propagation-terminal-rows-removed/rhs-assert", float64(s.Totals.TerminalRowsRemoved)/rhsAsserts)
 	report("propagation-agenda-delta-applications/rhs-assert", float64(s.Totals.AgendaDeltaApplications)/rhsAsserts)
-	report("propagation-agenda-sorts/rhs-assert", float64(s.Totals.AgendaSorts)/rhsAsserts)
 	report("propagation-activations-stored/rhs-assert", float64(s.Totals.ActivationsStored)/rhsAsserts)
 	report("propagation-beta-left-input-inserts/rhs-assert", float64(s.Totals.BetaLeftInputInserts)/rhsAsserts)
 	report("propagation-beta-right-input-inserts/rhs-assert", float64(s.Totals.BetaRightInputInserts)/rhsAsserts)
@@ -1054,7 +1043,6 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-graph-fact-index-keys-max=" + strconv.Itoa(s.GraphBetaMemory.FactIndexKeysMax),
 		"propagation-graph-fact-index-reserve-max=" + strconv.Itoa(s.GraphBetaMemory.FactIndexReserveMax),
 		"propagation-agenda-delta-applications=" + strconv.Itoa(s.Totals.AgendaDeltaApplications),
-		"propagation-agenda-sorts=" + strconv.Itoa(s.Totals.AgendaSorts),
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
 		"propagation-modify-fast-path-skips=" + strconv.Itoa(s.Totals.ModifyFastPathSkips),
 		"propagation-modify-fast-path-fallbacks=" + strconv.Itoa(s.Totals.ModifyFastPathFallbacks),
@@ -1272,7 +1260,6 @@ func formatPropagationDistributionEntry(name string, totals propagationCounterTo
 		"terminal-rows-deduped=" + strconv.Itoa(totals.TerminalRowsDeduped) + "," +
 		"terminal-rows-removed=" + strconv.Itoa(totals.TerminalRowsRemoved) + "," +
 		"agenda-delta-applications=" + strconv.Itoa(totals.AgendaDeltaApplications) + "," +
-		"agenda-sorts=" + strconv.Itoa(totals.AgendaSorts) + "," +
 		"activations-stored=" + strconv.Itoa(totals.ActivationsStored) + "," +
 		"terminal-rows-inserted=" + strconv.Itoa(totals.TerminalRowsInserted) + "," +
 		"terminal-rows-deduped=" + strconv.Itoa(totals.TerminalRowsDeduped) + "," +

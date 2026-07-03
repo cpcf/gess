@@ -1148,13 +1148,6 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		a.compactDeactivatedTokenActivation(existing)
 	}
 
-	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
-		if a.propagationCounters != nil {
-			a.propagationCounters.recordAgendaSort()
-		}
-		sortTerminalTokenDeltas(revision, added)
-	}
-
 	var activated []agendaChange
 	if collectChanges {
 		activated = a.deltaActivated[:0]
@@ -1296,54 +1289,6 @@ func sortMatchCandidates(revision *Ruleset, candidates []matchCandidate) {
 			agendaDeltaCandidateLess(revision, right, left),
 		)
 	})
-}
-
-func agendaDeltaTerminalTokenLess(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
-	if revision != nil {
-		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]
-		rightRule, rightOK := revision.rulesByRevisionID[right.ruleRevisionID]
-		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
-			return leftRule.declarationOrder < rightRule.declarationOrder
-		}
-	}
-	compare := compareTerminalTokenDeltaFacts(left, right)
-	if compare != 0 {
-		return compare < 0
-	}
-	if revision != nil && left.ruleRevisionID != right.ruleRevisionID {
-		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]
-		rightRule, rightOK := revision.rulesByRevisionID[right.ruleRevisionID]
-		if leftOK && rightOK && leftRule.id != rightRule.id {
-			return leftRule.id < rightRule.id
-		}
-	}
-	return left.ruleRevisionID < right.ruleRevisionID
-}
-
-func compareTerminalTokenDeltaFacts(left, right reteTerminalTokenDelta) int {
-	if len(left.factIDs) > 0 || len(right.factIDs) > 0 || len(left.factVersions) > 0 || len(right.factVersions) > 0 {
-		return compareFactVersionSlices(left.factIDs, left.factVersions, right.factIDs, right.factVersions)
-	}
-	return compareTerminalTokenFacts(left.token, right.token)
-}
-
-func sortTerminalTokenDeltas(revision *Ruleset, deltas []reteTerminalTokenDelta) {
-	slices.SortStableFunc(deltas, func(left, right reteTerminalTokenDelta) int {
-		return compareTerminalTokenDeltaOrder(revision, left, right)
-	})
-}
-
-func terminalTokenDeltasSorted(revision *Ruleset, deltas []reteTerminalTokenDelta) bool {
-	return slices.IsSortedFunc(deltas, func(left, right reteTerminalTokenDelta) int {
-		return compareTerminalTokenDeltaOrder(revision, left, right)
-	})
-}
-
-func compareTerminalTokenDeltaOrder(revision *Ruleset, left, right reteTerminalTokenDelta) int {
-	return compareLess(
-		agendaDeltaTerminalTokenLess(revision, left, right),
-		agendaDeltaTerminalTokenLess(revision, right, left),
-	)
 }
 
 func terminalTokenDeltasEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
@@ -2056,45 +2001,6 @@ func factVersionSlicesEqual(leftIDs []FactID, leftVersions []FactVersion, rightI
 		}
 	}
 	return true
-}
-
-func compareFactVersionSlices(leftIDs []FactID, leftVersions []FactVersion, rightIDs []FactID, rightVersions []FactVersion) int {
-	n := min(len(leftIDs), len(rightIDs))
-	for i := range n {
-		if leftIDs[i] != rightIDs[i] {
-			if factIDLess(leftIDs[i], rightIDs[i]) {
-				return -1
-			}
-			return 1
-		}
-		leftVersion := FactVersion(0)
-		if i < len(leftVersions) {
-			leftVersion = leftVersions[i]
-		}
-		rightVersion := FactVersion(0)
-		if i < len(rightVersions) {
-			rightVersion = rightVersions[i]
-		}
-		if leftVersion != rightVersion {
-			if leftVersion < rightVersion {
-				return -1
-			}
-			return 1
-		}
-	}
-	if len(leftIDs) != len(rightIDs) {
-		if len(leftIDs) < len(rightIDs) {
-			return -1
-		}
-		return 1
-	}
-	if len(leftVersions) != len(rightVersions) {
-		if len(leftVersions) < len(rightVersions) {
-			return -1
-		}
-		return 1
-	}
-	return 0
 }
 
 func (a *agenda) storeActivation(act *activation) activationKey {
@@ -2913,61 +2819,6 @@ func nextPublicTokenFact(token *tokenRef) (id FactID, version FactVersion, hasFa
 		return id, version, true, true
 	}
 	return FactID{}, 0, false, true
-}
-
-func compareTerminalTokenFacts(left, right tokenRef) int {
-	if left.isZero() || right.isZero() {
-		switch {
-		case left.isZero() && right.isZero():
-			return 0
-		case left.isZero():
-			return -1
-		default:
-			return 1
-		}
-	}
-	leftRow, leftOK := left.resolve()
-	rightRow, rightOK := right.resolve()
-	if !leftOK || !rightOK {
-		return 0
-	}
-	return compareTerminalTokenRows(left.handle.arena, leftRow, right.handle.arena, rightRow)
-}
-
-// compareTerminalTokenRows compares two resolved token chains root-first,
-// resolving each row once. A stale parent handle contributes 0 for that
-// subtree, matching the tokenRef-based comparison it replaces.
-func compareTerminalTokenRows(leftArena *tokenArena, leftRow *tokenRow, rightArena *tokenArena, rightRow *tokenRow) int {
-	switch {
-	case leftRow.parent.isZero() && rightRow.parent.isZero():
-	case leftRow.parent.isZero():
-		return -1
-	case rightRow.parent.isZero():
-		return 1
-	default:
-		leftParent, leftOK := leftArena.parentRow(leftRow)
-		rightParent, rightOK := rightArena.parentRow(rightRow)
-		if leftOK && rightOK {
-			if compare := compareTerminalTokenRows(leftArena, leftParent, rightArena, rightParent); compare != 0 {
-				return compare
-			}
-		}
-	}
-	leftID, leftVersion := leftRow.factIdentity()
-	rightID, rightVersion := rightRow.factIdentity()
-	if leftID != rightID {
-		if factIDLess(leftID, rightID) {
-			return -1
-		}
-		return 1
-	}
-	if leftVersion != rightVersion {
-		if leftVersion < rightVersion {
-			return -1
-		}
-		return 1
-	}
-	return 0
 }
 
 func cloneFactVersions(versions []FactVersion) []FactVersion {
