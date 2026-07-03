@@ -5456,33 +5456,36 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (ca
 	var valueEntries [8]tokenRowEntry
 	var seen uint8
 	var values uint8
-	for current := token; !current.isZero(); current = current.parent() {
-		row, ok := current.resolve()
-		if !ok {
-			return candidateIdentity{}, false
-		}
+	row, ok := token.resolve()
+	if !ok {
+		return candidateIdentity{}, false
+	}
+	arena := token.handle.arena
+	for row != nil {
 		slot := row.bindingSlot
-		if slot < 0 {
-			continue
-		}
-		if slot >= t.ruleConditionCount {
-			return candidateIdentity{}, false
-		}
-		mask := uint8(1 << uint(slot))
-		if seen&mask != 0 {
-			return candidateIdentity{}, false
-		}
-		if row.hasValue {
-			valueEntries[slot] = row.tokenRowEntry()
-			values |= mask
-		} else {
-			if row.fact == nil {
+		if slot >= 0 {
+			if slot >= t.ruleConditionCount {
 				return candidateIdentity{}, false
 			}
-			factIDs[slot] = row.fact.ID()
-			factVersions[slot] = row.fact.Version()
+			mask := uint8(1 << uint(slot))
+			if seen&mask != 0 {
+				return candidateIdentity{}, false
+			}
+			if row.hasValue {
+				valueEntries[slot] = row.tokenRowEntry()
+				values |= mask
+			} else {
+				if row.fact == nil {
+					return candidateIdentity{}, false
+				}
+				factIDs[slot] = row.fact.ID()
+				factVersions[slot] = row.fact.Version()
+			}
+			seen |= mask
 		}
-		seen |= mask
+		if row, ok = arena.parentRow(row); !ok {
+			return candidateIdentity{}, false
+		}
 	}
 	if seen != uint8(1<<uint(t.ruleConditionCount))-1 {
 		return candidateIdentity{}, false
