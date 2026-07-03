@@ -1834,6 +1834,9 @@ func (f *workingFact) nameForRevision(revision *Ruleset) string {
 		return name
 	}
 	if revision != nil {
+		if template, ok := f.templateRefForRevision(revision); ok {
+			return template.name
+		}
 		if template, ok := f.templateForRevision(revision); ok {
 			return template.Name()
 		}
@@ -1874,6 +1877,9 @@ func (f *workingFact) templateKeyForRevision(revision *Ruleset) TemplateKey {
 	if key := f.storedTemplateKey(); key != "" {
 		return key
 	}
+	if template, ok := f.templateRefForRevision(revision); ok {
+		return template.Key()
+	}
 	if template, ok := f.templateForRevision(revision); ok {
 		return template.Key()
 	}
@@ -1893,9 +1899,23 @@ func (f *workingFact) templateForRevision(revision *Ruleset) (Template, bool) {
 	return Template{}, false
 }
 
+// templateRefForRevision resolves the compiled template without copying it;
+// the returned pointer aliases immutable post-compile state. It only serves
+// facts carrying a template ID, which every validated template fact does;
+// key-only facts must use templateForRevision.
+func (f *workingFact) templateRefForRevision(revision *Ruleset) (*Template, bool) {
+	if f == nil || revision == nil || f.templateID == 0 {
+		return nil, false
+	}
+	return revision.templateRefByID(f.templateID)
+}
+
 func (f *workingFact) fieldSpecsForRevision(revision *Ruleset, compactSlotStore *factCompactSlotStore) []FieldSpec {
 	if f == nil || f.fieldSlotCount(compactSlotStore) == 0 || revision == nil {
 		return nil
+	}
+	if template, ok := f.templateRefForRevision(revision); ok {
+		return template.fields
 	}
 	template, ok := f.templateForRevision(revision)
 	if !ok {

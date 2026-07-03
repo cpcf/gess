@@ -809,14 +809,23 @@ func (r *Ruleset) templateIDByName(name string) (templateID, bool) {
 }
 
 func (r *Ruleset) templateByID(id templateID) (Template, bool) {
+	if ref, ok := r.templateRefByID(id); ok {
+		return *ref, true
+	}
+	return Template{}, false
+}
+
+// templateRefByID avoids copying the compiled template; the returned
+// pointer aliases immutable post-compile state and must not be mutated.
+func (r *Ruleset) templateRefByID(id templateID) (*Template, bool) {
 	if r == nil || id == 0 {
-		return Template{}, false
+		return nil, false
 	}
 	index := int(id) - 1
 	if index < 0 || index >= len(r.templatesByID) {
-		return Template{}, false
+		return nil, false
 	}
-	return r.templatesByID[index], true
+	return &r.templatesByID[index], true
 }
 
 func (r *Ruleset) estimatedRunSlotCapacity(factCapacity int) int {
