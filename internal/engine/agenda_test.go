@@ -1271,14 +1271,14 @@ func TestAgendaPurgeRuleRevisionsKeepsSurvivingLookupActivation(t *testing.T) {
 	if got := agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 || got[0].key != keptKey {
 		t.Fatalf("kept revision activations after purge = %#v, want kept activation", got)
 	}
-	refs := agenda.activationLookup[activationLookupKey{
+	bucket := agenda.activationLookup[activationLookupKey{
 		ruleRevisionID: kept.ruleRevisionID,
 		identityKey:    kept.identityKey,
 	}]
-	if len(refs) != 1 {
-		t.Fatalf("activation lookup refs after purge = %#v, want one", refs)
+	if bucket.first == nil || len(bucket.rest) != 0 {
+		t.Fatalf("activation lookup bucket after purge = %#v, want one", bucket)
 	}
-	if stored := refs[0]; stored == nil || stored.key != keptKey {
+	if stored := bucket.first; stored.key != keptKey {
 		t.Fatalf("activation lookup ref after purge = %#v, want kept key %#v", stored, keptKey)
 	}
 }

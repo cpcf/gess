@@ -645,8 +645,13 @@ func activationPathForRule(rule compiledRule) []int {
 	return path
 }
 
+type activationLookupBucket struct {
+	first *activation
+	rest  []*activation
+}
+
 type agenda struct {
-	activationLookup    map[activationLookupKey][]*activation
+	activationLookup    map[activationLookupKey]activationLookupBucket
 	activations         []*activation
 	activationRows      activationRows
 	terminalActivations activationRows
@@ -670,7 +675,7 @@ type agenda struct {
 
 func newAgenda() *agenda {
 	return &agenda{
-		activationLookup: make(map[activationLookupKey][]*activation),
+		activationLookup: make(map[activationLookupKey]activationLookupBucket),
 		moduleQueues:     make(map[ModuleName]*agendaModuleQueue),
 		handleGeneration: 1,
 	}
@@ -759,7 +764,7 @@ func (a *agenda) reset() {
 		return
 	}
 	if a.activationLookup == nil {
-		a.activationLookup = make(map[activationLookupKey][]*activation)
+		a.activationLookup = make(map[activationLookupKey]activationLookupBucket)
 	} else {
 		a.clearActivationLookup()
 	}
@@ -1350,7 +1355,7 @@ func (a *agenda) purgeRuleRevisions(revisionIDs map[RuleRevisionID]struct{}) []a
 	a.clearActivationLookup()
 
 	oldActivations := a.activations
-	a.activationLookup = make(map[activationLookupKey][]*activation, len(oldActivations))
+	a.activationLookup = make(map[activationLookupKey]activationLookupBucket, len(oldActivations))
 	a.activations = make([]*activation, 0, len(oldActivations))
 	for _, current := range oldActivations {
 		if current == nil {
@@ -1984,21 +1989,27 @@ func (a *agenda) storeActivationLookupRef(act *activation) {
 		return
 	}
 	if a.activationLookup == nil {
-		a.activationLookup = make(map[activationLookupKey][]*activation)
+		a.activationLookup = make(map[activationLookupKey]activationLookupBucket)
 	}
 	key := activationLookupKey{
 		ruleRevisionID: act.ruleRevisionID,
 		identityKey:    act.identityKey,
 	}
-	a.activationLookup[key] = append(a.activationLookup[key], act)
+	bucket := a.activationLookup[key]
+	if bucket.first == nil && len(bucket.rest) == 0 {
+		bucket.first = act
+	} else {
+		bucket.rest = append(bucket.rest, act)
+	}
+	a.activationLookup[key] = bucket
 }
 
 func (a *agenda) clearActivationLookup() {
 	if a == nil {
 		return
 	}
-	for key, refs := range a.activationLookup {
-		clear(refs)
+	for key, bucket := range a.activationLookup {
+		clear(bucket.rest)
 		delete(a.activationLookup, key)
 	}
 }
@@ -2043,7 +2054,7 @@ func (a *agenda) compactConsumedActivationRows() {
 	oldActivations := append([]*activation(nil), a.activations...)
 	pendingCount := a.pendingActivationCount()
 
-	a.activationLookup = make(map[activationLookupKey][]*activation, pendingCount)
+	a.activationLookup = make(map[activationLookupKey]activationLookupBucket, pendingCount)
 	a.activations = make([]*activation, 0, pendingCount)
 	a.resetModuleQueues()
 
@@ -2087,7 +2098,11 @@ func (a *agenda) forEachActivationLookup(key activationLookupKey, fn func(*activ
 	if a == nil || fn == nil {
 		return
 	}
-	for _, current := range a.activationLookup[key] {
+	bucket := a.activationLookup[key]
+	if bucket.first != nil && !fn(bucket.first) {
+		return
+	}
+	for _, current := range bucket.rest {
 		if current == nil {
 			continue
 		}

@@ -470,9 +470,9 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 		bytes += activationPayloadBytes(current.payload)
 		return true
 	})
-	bytes += mapEntryBytes[activationLookupKey, []*activation](len(a.activationLookup))
-	for _, refs := range a.activationLookup {
-		bytes += sliceBytes[*activation](cap(refs))
+	bytes += mapEntryBytes[activationLookupKey, activationLookupBucket](len(a.activationLookup))
+	for _, bucket := range a.activationLookup {
+		bytes += sliceBytes[*activation](cap(bucket.rest))
 	}
 	bytes += sliceBytes[*activation](cap(a.activations))
 	bytes += mapEntryBytes[ModuleName, *agendaModuleQueue](len(a.moduleQueues))
