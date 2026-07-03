@@ -6521,6 +6521,15 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 	return nil
 }
 
+// releaseTransientAgendaDeltas recycles graph-beta delta arena storage between
+// fire iterations, after the pending run delta has been fully applied.
+func (s *Session) releaseTransientAgendaDeltas() {
+	if s == nil || s.rete == nil {
+		return
+	}
+	s.rete.graphBeta.releaseTransientTerminalDeltas()
+}
+
 func (s *Session) abandonRunAgendaDelta() {
 	if s == nil || !s.runAgendaPending {
 		return

@@ -155,6 +155,7 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 			}
 			return abort(RunFailed, fired, err)
 		}
+		s.releaseTransientAgendaDeltas()
 		if s.agendaDirty {
 			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}

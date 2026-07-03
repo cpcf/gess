@@ -1259,6 +1259,18 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	m.rootToken = tokenRef{}
 }
 
+// releaseTransientTerminalDeltas recycles the removed-delta arena once every
+// outstanding non-owned agenda delta has been applied or cloned. Callers must
+// only invoke it at boundaries where no transient delta is live, such as the
+// end of a fire iteration.
+func (m *reteGraphBetaMemory) releaseTransientTerminalDeltas() {
+	if m == nil || len(m.terminalRemovedDeltas) == 0 {
+		return
+	}
+	clear(m.terminalRemovedDeltas)
+	m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
+}
+
 func (m *reteGraphBetaMemory) appendRemovedTerminalDelta(delta *reteAgendaDelta, removed reteTerminalTokenDelta) {
 	if m == nil || delta == nil {
 		return
