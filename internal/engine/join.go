@@ -79,11 +79,7 @@ func (c compiledJoinConstraint) isHashJoin() bool {
 	return c.indexable && c.indexKind == joinIndexEquality
 }
 
-func (c compiledJoinConstraint) matchesToken(fact conditionFactRef, bindings tokenRef) (bool, error) {
-	return c.matchesTokenWithCounters(fact, bindings, nil)
-}
-
-func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+func (c compiledJoinConstraint) matchesTokenWithCounters(fact *conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
 	if c.refBindingSlot < 0 {
 		return false, fmt.Errorf("%w: malformed join binding slot %d", ErrMatcher, c.refBindingSlot)
 	}
@@ -91,7 +87,7 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 		if !found {
 			return false, nil
 		}
-		if leftSlot, leftOK, leftDirect := c.leftKeySlotFromFactRef(&fact); leftDirect {
+		if leftSlot, leftOK, leftDirect := c.leftKeySlotFromFactRef(fact); leftDirect {
 			if rightSlot, rightOK, rightDirect := c.rightKeySlotFromFactRef(refFact); rightDirect {
 				if !leftOK || !rightOK {
 					return false, nil
@@ -105,7 +101,7 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 		return false, nil
 	}
 
-	left, ok := c.leftValueFromFactWithCounters(fact, span)
+	left, ok := c.leftValueFromFactWithCounters(*fact, span)
 	if !ok {
 		return false, nil
 	}

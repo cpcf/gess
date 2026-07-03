@@ -317,7 +317,7 @@ func (m reteGraphNegativeBetaMemory) leftRightMatchToken(left tokenRef, right to
 		return false, nil
 	}
 	if len(m.node.residualJoins) != 0 || len(m.node.predicates) != 0 {
-		ok, err := m.owner.residualJoinsMatch(m.node, rightMatch.fact, left, span)
+		ok, err := m.owner.residualJoinsMatch(m.node, &rightMatch.fact, left, span)
 		if err != nil || !ok {
 			return ok, err
 		}

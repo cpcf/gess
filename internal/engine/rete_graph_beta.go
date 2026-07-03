@@ -3651,11 +3651,11 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if rightRow == nil || rightRow.token.isZero() {
 				return true
 			}
-			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
+			rightFact, ok := tokenFactRefForBindingSlot(rightRow.token, node.entry.bindingSlot)
 			if !ok {
 				return true
 			}
-			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
+			if ok, err := m.residualJoinsMatch(node, rightFact, token, span); err != nil {
 				joinErr = err
 				return false
 			} else if !ok {
@@ -3685,7 +3685,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			m.appendBackchainDemandRequests(nodeID, node, reteGraphBetaInputRight, token, delta)
 		}
 	case reteGraphBetaInputRight:
-		currentMatch, ok := tokenFactMatchForBindingSlot(token, node.entry.bindingSlot)
+		currentFact, ok := tokenFactRefForBindingSlot(token, node.entry.bindingSlot)
 		if !ok {
 			return false, nil
 		}
@@ -3702,7 +3702,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if leftRow == nil || leftRow.token.isZero() {
 				return true
 			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, span); err != nil {
+			if ok, err := m.residualJoinsMatch(node, currentFact, leftRow.token, span); err != nil {
 				joinErr = err
 				return false
 			} else if !ok {
@@ -3774,7 +3774,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 		if leftRow == nil || leftRow.token.isZero() {
 			return true
 		}
-		if ok, err := m.residualJoinsMatch(node, match.fact, leftRow.token, span); err != nil {
+		if ok, err := m.residualJoinsMatch(node, &match.fact, leftRow.token, span); err != nil {
 			joinErr = err
 			return false
 		} else if !ok {
@@ -3845,11 +3845,11 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 		if rightRow == nil || rightRow.token.isZero() {
 			return true
 		}
-		rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
+		rightFact, ok := tokenFactRefForBindingSlot(rightRow.token, node.entry.bindingSlot)
 		if !ok {
 			return true
 		}
-		if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, span); err != nil {
+		if ok, err := m.residualJoinsMatch(node, rightFact, token, span); err != nil {
 			joinErr = err
 			return false
 		} else if !ok {
@@ -5568,6 +5568,22 @@ func tokenLastMatch(token tokenRef) (conditionMatch, bool) {
 	return row.conditionMatch()
 }
 
+// tokenFactRefForBindingSlot resolves the fact for a binding slot as a
+// pointer, avoiding the conditionMatch copy on the common chain shape and
+// falling back to the match-based lookup for value-bound or positional
+// slots.
+func tokenFactRefForBindingSlot(token tokenRef, bindingSlot int) (*conditionFactRef, bool) {
+	if fact, found, direct := tokenFactPtrAtSlot(token, bindingSlot); direct && found {
+		return fact, true
+	}
+	match, ok := tokenFactMatchForBindingSlot(token, bindingSlot)
+	if !ok {
+		return nil, false
+	}
+	fact := match.fact
+	return &fact, true
+}
+
 func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMatch, bool) {
 	if bindingSlot >= 0 {
 		if match, ok := tokenRefAtSlot(token, bindingSlot); ok && !match.hasValue {
@@ -5960,7 +5976,7 @@ func joinFunctionEvaluationMeta(join compiledJoinConstraint) *FunctionEvaluation
 	return meta
 }
 
-func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
+func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact *conditionFactRef, bindings tokenRef, span *propagationCounterSpan) (bool, error) {
 	if m == nil || node == nil {
 		return true, nil
 	}
@@ -5979,7 +5995,7 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 			return false, nil
 		}
 	}
-	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, fact, bindings, span)
+	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, *fact, bindings, span)
 	if err != nil {
 		return false, err
 	}
@@ -5998,7 +6014,7 @@ func (m *reteGraphBetaMemory) filterTokenMatches(node *reteGraphBetaNode, token 
 		if !ok {
 			return false, nil
 		}
-		return m.residualJoinsMatch(node, currentMatch.fact, token.parent(), span)
+		return m.residualJoinsMatch(node, &currentMatch.fact, token.parent(), span)
 	}
 	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, conditionFactRef{}, token, span)
 	if err != nil {
