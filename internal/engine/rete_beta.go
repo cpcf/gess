@@ -814,6 +814,33 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 	return token.matchAt(slot)
 }
 
+// tokenFactPtrAtSlot resolves the fact bound at slot without copying a
+// conditionMatch. direct=false means the caller must use the tokenRefAtSlot
+// path (value-bound row or positional matchAt fallback); direct=true with
+// found=false matches tokenRefAtSlot reporting no match.
+func tokenFactPtrAtSlot(token tokenRef, slot int) (fact *conditionFactRef, found bool, direct bool) {
+	if token.isZero() || slot < 0 {
+		return nil, false, false
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return nil, false, true
+	}
+	arena := token.handle.arena
+	for row != nil {
+		if row.bindingSlot == slot {
+			if row.hasValue || row.fact == nil {
+				return nil, false, false
+			}
+			return row.fact, true, true
+		}
+		if row, ok = arena.parentRow(row); !ok {
+			return nil, false, true
+		}
+	}
+	return nil, false, false
+}
+
 // tokenFactsAtSlots resolves the facts for count binding slots in one chain
 // walk, resolving each row exactly once. The nearest row to the tip wins for
 // each slot, matching tokenRefAtSlot. It reports false when any slot is not
@@ -1036,6 +1063,78 @@ func betaJoinKeySlotFromCompact(slot compactFactSlot) (betaJoinKeySlot, bool) {
 		return betaJoinKeySlot{kind: betaJoinKeyString, stringValue: slot.stringValue}, true
 	default:
 		return betaJoinKeySlot{}, false
+	}
+}
+
+// betaJoinKeySlotsComparableForEquality mirrors valuesComparableForEquality
+// on folded slots: numerics are always mutually comparable, other kinds only
+// to themselves.
+func betaJoinKeySlotsComparableForEquality(left, right betaJoinKeySlot) bool {
+	if betaJoinKeySlotNumeric(left) && betaJoinKeySlotNumeric(right) {
+		return true
+	}
+	return left.kind == right.kind
+}
+
+func betaJoinKeySlotNumeric(slot betaJoinKeySlot) bool {
+	return slot.kind == betaJoinKeyInt || slot.kind == betaJoinKeyFloat
+}
+
+// betaJoinKeySlotsEqual mirrors Value.Equal on folded slots. Integral floats
+// fold to int, so a remaining float component is never integral and cross
+// int/float equality is always false; float equality goes through numeric
+// comparison so NaN stays unequal to itself.
+func betaJoinKeySlotsEqual(left, right betaJoinKeySlot) bool {
+	if left.kind != right.kind {
+		return false
+	}
+	switch left.kind {
+	case betaJoinKeyNull:
+		return true
+	case betaJoinKeyBool:
+		return left.boolValue == right.boolValue
+	case betaJoinKeyInt:
+		return left.intValue == right.intValue
+	case betaJoinKeyFloat:
+		return math.Float64frombits(left.floatBits) == math.Float64frombits(right.floatBits)
+	case betaJoinKeyString:
+		return left.stringValue == right.stringValue
+	default:
+		return false
+	}
+}
+
+// compareBetaJoinKeySlots mirrors compareNumericValues on folded slots;
+// ok=false when either side is non-numeric.
+func compareBetaJoinKeySlots(left, right betaJoinKeySlot) (int, bool) {
+	if !betaJoinKeySlotNumeric(left) || !betaJoinKeySlotNumeric(right) {
+		return 0, false
+	}
+	switch {
+	case left.kind == betaJoinKeyInt && right.kind == betaJoinKeyInt:
+		switch {
+		case left.intValue < right.intValue:
+			return -1, true
+		case left.intValue > right.intValue:
+			return 1, true
+		default:
+			return 0, true
+		}
+	case left.kind == betaJoinKeyInt:
+		return compareIntAndFloatValues(left.intValue, math.Float64frombits(right.floatBits)), true
+	case right.kind == betaJoinKeyInt:
+		return -compareIntAndFloatValues(right.intValue, math.Float64frombits(left.floatBits)), true
+	default:
+		leftFloat := math.Float64frombits(left.floatBits)
+		rightFloat := math.Float64frombits(right.floatBits)
+		switch {
+		case leftFloat < rightFloat:
+			return -1, true
+		case leftFloat > rightFloat:
+			return 1, true
+		default:
+			return 0, true
+		}
 	}
 }
 

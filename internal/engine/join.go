@@ -87,6 +87,19 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 	if c.refBindingSlot < 0 {
 		return false, fmt.Errorf("%w: malformed join binding slot %d", ErrMatcher, c.refBindingSlot)
 	}
+	if refFact, found, direct := tokenFactPtrAtSlot(bindings, c.refBindingSlot); direct {
+		if !found {
+			return false, nil
+		}
+		if leftSlot, leftOK, leftDirect := c.leftKeySlotFromFactRef(&fact); leftDirect {
+			if rightSlot, rightOK, rightDirect := c.rightKeySlotFromFactRef(refFact); rightDirect {
+				if !leftOK || !rightOK {
+					return false, nil
+				}
+				return matchJoinKeySlots(c.operator, leftSlot, rightSlot)
+			}
+		}
+	}
 	match, ok := tokenRefAtSlot(bindings, c.refBindingSlot)
 	if !ok {
 		return false, nil
@@ -124,6 +137,33 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 		}
 	}
 
+	return false, nil
+}
+
+// matchJoinKeySlots applies a join operator to two folded key slots with the
+// same semantics as the Value-based comparisons in matchesTokenWithCounters.
+func matchJoinKeySlots(operator FieldConstraintOperator, left, right betaJoinKeySlot) (bool, error) {
+	switch operator {
+	case FieldConstraintOpEqual:
+		return betaJoinKeySlotsComparableForEquality(left, right) && betaJoinKeySlotsEqual(left, right), nil
+	case FieldConstraintOpNotEqual:
+		return betaJoinKeySlotsComparableForEquality(left, right) && !betaJoinKeySlotsEqual(left, right), nil
+	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
+		comparison, ok := compareBetaJoinKeySlots(left, right)
+		if !ok {
+			return false, nil
+		}
+		switch operator {
+		case FieldConstraintOpLessThan:
+			return comparison < 0, nil
+		case FieldConstraintOpLessOrEqual:
+			return comparison <= 0, nil
+		case FieldConstraintOpGreaterThan:
+			return comparison > 0, nil
+		case FieldConstraintOpGreaterOrEqual:
+			return comparison >= 0, nil
+		}
+	}
 	return false, nil
 }
 
