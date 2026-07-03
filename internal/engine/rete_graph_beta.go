@@ -960,22 +960,18 @@ func (m *betaSideMemory) removeToken(token tokenRef, counters *propagationCounte
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	for rowIndex := range m.indexes.rows {
-		row := &m.indexes.rows[rowIndex]
-		if row.token.isZero() {
-			continue
-		}
-		if counters != nil {
-			counters.recordRemovalRowTouched()
-		}
-		if !tokenRefEqual(row.token, token) {
-			continue
-		}
-		removed := *row
-		m.removeArenaRow(int32(rowIndex+1), counters)
-		return removed, true
+	var onTouch func()
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
 	}
-	return betaTokenRow{}, false
+	removed, ok := m.indexes.removeIdentityToken(token, nil, onTouch)
+	if !ok {
+		return betaTokenRow{}, false
+	}
+	if counters != nil {
+		counters.recordRemovalRowRemoved()
+	}
+	return removed, true
 }
 
 func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoinKey, counters *propagationCounterLedger) (betaTokenRow, bool) {
@@ -985,23 +981,19 @@ func (m *betaSideMemory) removeTokenWithJoinKey(token tokenRef, joinKey betaJoin
 	if counters != nil {
 		counters.recordRemovalIndexLookup()
 	}
-	found := int32(0)
-	removed := betaTokenRow{}
-	m.indexes.forEachChainRow(joinKey, func(ref int32, row *betaTokenRow) bool {
-		if counters != nil {
-			counters.recordRemovalRowTouched()
-		}
-		if !tokenRefEqual(row.token, token) {
-			return true
-		}
-		found = ref
-		removed = *row
-		return false
-	})
-	if found == 0 {
+	var onTouch func()
+	if counters != nil {
+		onTouch = counters.recordRemovalRowTouched
+	}
+	removed, ok := m.indexes.removeIdentityToken(token, func(row *betaTokenRow) bool {
+		return row.joinKey == joinKey
+	}, onTouch)
+	if !ok {
 		return betaTokenRow{}, false
 	}
-	m.removeArenaRow(found, counters)
+	if counters != nil {
+		counters.recordRemovalRowRemoved()
+	}
 	return removed, true
 }
 
@@ -4871,12 +4863,59 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 	if len(added) == 0 || len(removed) == 0 {
 		return added, removed
 	}
+	if len(added)*len(removed) <= 64 {
+		keptAdded := added[:0]
+		for _, add := range added {
+			match := -1
+			for i, remove := range removed {
+				if terminalTokenDeltasCoalesceEqual(revision, add, remove) {
+					match = i
+					break
+				}
+			}
+			if match < 0 {
+				keptAdded = append(keptAdded, add)
+				continue
+			}
+			copy(removed[match:], removed[match+1:])
+			removed[len(removed)-1] = reteTerminalTokenDelta{}
+			removed = removed[:len(removed)-1]
+		}
+		return keptAdded, removed
+	}
+	return coalesceTerminalTokenDeltasIndexed(revision, added, removed)
+}
+
+// coalesceTerminalTokenDeltasIndexed matches large delta batches through an
+// identity-key index instead of pairwise scans. Equal identity keys are a
+// necessary condition for both coalesce-equality branches, so bucketing by
+// (rule revision, identity key) preserves the first-match semantics of the
+// quadratic loop while touching only same-key pairs.
+func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta) {
+	type coalesceKey struct {
+		ruleRevisionID RuleRevisionID
+		identity       candidateIdentityKey
+	}
+	buckets := make(map[coalesceKey][]int, len(removed))
+	for i, remove := range removed {
+		key := coalesceKey{
+			ruleRevisionID: remove.ruleRevisionID,
+			identity:       candidateIdentityForTerminalTokenDelta(revision, remove).key,
+		}
+		buckets[key] = append(buckets[key], i)
+	}
+	consumed := make([]bool, len(removed))
 	keptAdded := added[:0]
 	for _, add := range added {
+		key := coalesceKey{
+			ruleRevisionID: add.ruleRevisionID,
+			identity:       candidateIdentityForTerminalTokenDelta(revision, add).key,
+		}
+		bucket := buckets[key]
 		match := -1
-		for i, remove := range removed {
-			if terminalTokenDeltasCoalesceEqual(revision, add, remove) {
-				match = i
+		for bucketIndex, removedIndex := range bucket {
+			if terminalTokenDeltasCoalesceEqual(revision, add, removed[removedIndex]) {
+				match = bucketIndex
 				break
 			}
 		}
@@ -4884,11 +4923,19 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 			keptAdded = append(keptAdded, add)
 			continue
 		}
-		copy(removed[match:], removed[match+1:])
-		removed[len(removed)-1] = reteTerminalTokenDelta{}
-		removed = removed[:len(removed)-1]
+		consumed[bucket[match]] = true
+		buckets[key] = append(bucket[:match], bucket[match+1:]...)
 	}
-	return keptAdded, removed
+	keptRemoved := removed[:0]
+	for i := range removed {
+		if !consumed[i] {
+			keptRemoved = append(keptRemoved, removed[i])
+		}
+	}
+	for i := len(keptRemoved); i < len(removed); i++ {
+		removed[i] = reteTerminalTokenDelta{}
+	}
+	return keptAdded, keptRemoved
 }
 
 func terminalTokenDeltasCoalesceEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
