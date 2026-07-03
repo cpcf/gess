@@ -159,6 +159,12 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 	if !ok {
 		return tokenRef{}
 	}
+	if source.handle.arena == a {
+		// Same-arena sources share the interned fact ref directly; factRefs
+		// storage outlives row recycling, so the pointer stays valid even if
+		// the source row is reclaimed before the new row.
+		return a.addCompactSharedFact(parent, sourceRow.fact, entry, recency, generation)
+	}
 	match, ok := sourceRow.conditionMatch()
 	if !ok {
 		return tokenRef{}
@@ -277,6 +283,56 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 
 	handle := tokenHandle{arena: a, row: row, generation: row.rowGen}
 	return tokenRef{handle: handle}
+}
+
+// addCompactSharedFact is addCompactInternal for a source row in this arena:
+// the already-interned fact ref is shared instead of copied and re-interned.
+func (a *tokenArena) addCompactSharedFact(parent tokenRef, fact *conditionFactRef, entry tokenRowEntry, recency Recency, generation Generation) tokenRef {
+	if a == nil {
+		return tokenRef{}
+	}
+	var parentRow *tokenRow
+	var ok bool
+	if !parent.isZero() {
+		if parent.handle.arena != nil && parent.handle.arena != a {
+			return tokenRef{}
+		}
+		parentRow, ok = parent.resolve()
+		if !ok {
+			return tokenRef{}
+		}
+	}
+	tokenGeneration := generation
+	if tokenGeneration == 0 && parentRow != nil {
+		tokenGeneration = parent.generation()
+	}
+	if tokenGeneration == 0 {
+		tokenGeneration = a.generation
+	}
+	if !a.setGeneration(tokenGeneration) {
+		return tokenRef{}
+	}
+	row := a.allocRow()
+	if row == nil {
+		return tokenRef{}
+	}
+	if parentRow != nil {
+		row.parent = tokenParentHandle{row: parent.handle.row, gen: parent.handle.generation}
+		row.size = parentRow.size + 1
+		row.maxRecency = max(recency, parentRow.maxRecency)
+		row.totalRecency = addRecency(parentRow.totalRecency, recency)
+		row.identityState = parentRow.identityState
+	} else {
+		row.size = 1
+		row.maxRecency = recency
+		row.totalRecency = recency
+		row.identityState = candidateIdentityHashStart(tokenGeneration)
+	}
+	row.fact = fact
+	row.setEntry(entry)
+	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
+
+	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: row.rowGen}}
 }
 
 func (a *tokenArena) internFactRef(fact conditionFactRef, hasValue bool) *conditionFactRef {
