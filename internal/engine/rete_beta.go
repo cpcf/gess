@@ -531,7 +531,11 @@ func (r tokenRef) factVersions() ([]FactVersion, bool) {
 }
 
 type reteAgendaDelta struct {
-	supported       bool
+	supported bool
+	// owned reports that the payload slices no longer alias reusable
+	// graph-beta scratch or arena storage, so the delta may be retained
+	// across mutations without another defensive copy.
+	owned           bool
 	added           []reteTerminalTokenDelta
 	removed         []reteTerminalTokenDelta
 	updated         []reteTerminalTokenUpdate

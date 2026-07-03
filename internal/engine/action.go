@@ -384,14 +384,10 @@ func (c ActionContext) bindingScalarValueLiveAtSlot(index, fieldSlot int) (Value
 		return Value{}, false
 	}
 	entry := c.bindings.entryAt(index)
-	fact, ok := c.session.workingFactByID(entry.factID)
-	if !ok || fact == nil {
+	if entry.factID.Generation() != c.generation {
 		return Value{}, false
 	}
-	if fact.id.Generation() != c.generation || fact.version != entry.factVersion {
-		return Value{}, false
-	}
-	value, ok := fact.compiledFieldValue("", fieldSlot, c.session.compactSlotStore)
+	value, ok := c.session.factScalarValueAtSlot(entry.factID, entry.factVersion, fieldSlot)
 	if !ok || !valueShareable(value) {
 		return Value{}, false
 	}

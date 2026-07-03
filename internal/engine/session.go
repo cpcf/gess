@@ -437,6 +437,35 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 	return fact, true
 }
 
+func (s *Session) factScalarValueAtSlot(id FactID, version FactVersion, slot int) (Value, bool) {
+	if s == nil || slot < 0 {
+		return Value{}, false
+	}
+	if s.activeBackchainQueryProof != nil {
+		if fact, ok := s.activeBackchainQueryProof.workingFactByID(id); ok {
+			if fact == nil || fact.version != version {
+				return Value{}, false
+			}
+			return fact.compiledFieldValue("", slot, s.compactSlotStore)
+		}
+	}
+	index, ok := s.factRowIndex(id)
+	if !ok {
+		return Value{}, false
+	}
+	if row, generated := decodeCompactFactRow(index); generated {
+		return s.compactFacts.scalarValueAtSlot(row, id, version, slot, s.compactSlotStore)
+	}
+	if index < 0 || index >= len(s.facts) {
+		return Value{}, false
+	}
+	fact := &s.facts[index]
+	if fact.id != id || fact.version != version {
+		return Value{}, false
+	}
+	return fact.compiledFieldValue("", slot, s.compactSlotStore)
+}
+
 func (s *Session) factRowIndex(id FactID) (int, bool) {
 	if s == nil || id.IsZero() {
 		return 0, false
@@ -5006,7 +5035,7 @@ func (w *factWorkspace) reserveFactRowSequenceRows(factCount int) {
 	}
 	oldLen := len(w.factsBySequence)
 	if cap(w.factsBySequence) < target {
-		next := make([]int32, target)
+		next := make([]int32, target, max(target, 2*cap(w.factsBySequence)))
 		copy(next, w.factsBySequence)
 		w.factsBySequence = next
 	} else {

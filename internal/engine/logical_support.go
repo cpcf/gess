@@ -555,10 +555,19 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 		return reteAgendaDelta{}
 	}
 	if reteAgendaDeltaPayloadEmpty(left) {
+		if right.owned {
+			return right
+		}
 		return cloneRetainedReteAgendaDelta(right)
 	}
 	if reteAgendaDeltaPayloadEmpty(right) {
+		if left.owned {
+			return left
+		}
 		return cloneRetainedReteAgendaDelta(left)
+	}
+	if !left.owned {
+		left = cloneRetainedReteAgendaDelta(left)
 	}
 	left.added = mergeReteAgendaDeltaSlice(left.added, right.added)
 	left.removed = mergeReteAgendaDeltaSlice(left.removed, right.removed)
@@ -576,6 +585,7 @@ func cloneRetainedReteAgendaDelta(delta reteAgendaDelta) reteAgendaDelta {
 	delta.demands = slices.Clone(delta.demands)
 	delta.resolvedDemands = slices.Clone(delta.resolvedDemands)
 	delta.resolvedOwners = slices.Clone(delta.resolvedOwners)
+	delta.owned = true
 	return delta
 }
 

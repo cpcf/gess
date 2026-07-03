@@ -405,6 +405,24 @@ func (s *compactFactStore) append(fact workingFact) int {
 	return row
 }
 
+func (s *compactFactStore) scalarValueAtSlot(row int, id FactID, version FactVersion, slot int, store *factCompactSlotStore) (Value, bool) {
+	if s == nil || row < 0 || row >= len(s.ids) || slot < 0 {
+		return Value{}, false
+	}
+	if s.ids[row] != id || s.versions[row] != version {
+		return Value{}, false
+	}
+	if payload, ok := s.payloads[row]; ok && payload != nil && slot < len(payload.fieldSlots) {
+		resolved := payload.fieldSlots[slot]
+		return resolved.value, resolved.ok
+	}
+	slots := s.compactSlots[row].slots(store)
+	if slot < len(slots) {
+		return slots[slot].value()
+	}
+	return Value{}, false
+}
+
 func (s *compactFactStore) fact(row int) (*workingFact, bool) {
 	if s == nil || row < 0 || row >= len(s.ids) {
 		return nil, false

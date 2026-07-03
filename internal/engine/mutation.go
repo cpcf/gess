@@ -139,7 +139,12 @@ func (o mutationOrigin) matchesActivation(act *activation) bool {
 	if o.RuleRevisionID != act.ruleRevisionID {
 		return false
 	}
-	return o.activationID() == act.activationID()
+	if !o.ActivationID.IsZero() ||
+		o.activationIdentityKey == (candidateIdentityKey{}) ||
+		act.identityKey == (candidateIdentityKey{}) {
+		return o.activationID() == act.activationID()
+	}
+	return o.activationIdentityKey == act.identityKey && o.activationOrdinal == act.key.ordinal
 }
 
 func mutationOriginForRuleActivation(rule compiledRule, act activation) mutationOrigin {
