@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 )
@@ -3096,6 +3097,34 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFact(id FactID) bo
 	return changed
 }
 
+// removeInputTokensContainingFactSubtractive removes matching input tokens
+// and subtracts each from the accumulator while that stays exact. It reports
+// whether anything changed and whether the accumulator stayed consistent
+// without a rebuild.
+func (m *reteGraphAggregateBucket) removeInputTokensContainingFactSubtractive(ctx context.Context, node *reteGraphAggregateNode, id FactID) (bool, bool) {
+	if m == nil || id.IsZero() {
+		return false, false
+	}
+	changed := false
+	subtracted := true
+	for i := 0; i < len(m.inputTokens); {
+		token := m.inputTokens[i]
+		if token.isZero() || !token.containsFact(id) {
+			i++
+			continue
+		}
+		if subtracted && !m.removeAccumulatorToken(ctx, node, token) {
+			subtracted = false
+		}
+		last := len(m.inputTokens) - 1
+		m.inputTokens[i] = m.inputTokens[last]
+		m.inputTokens[last] = tokenRef{}
+		m.inputTokens = m.inputTokens[:last]
+		changed = true
+	}
+	return changed, subtracted
+}
+
 func (m *reteGraphAggregateBucket) results(ctx context.Context, node *reteGraphAggregateNode) ([]Value, bool) {
 	if m == nil || node == nil {
 		return nil, false
@@ -3117,6 +3146,70 @@ func (m *reteGraphAggregateBucket) rebuildAccumulator(ctx context.Context, node 
 		if !m.addAccumulatorToken(ctx, node, token) {
 			return false
 		}
+	}
+	return true
+}
+
+// removeAccumulatorToken subtracts one input token from the accumulator when
+// every spec supports exact reversal; callers must rebuild when it reports
+// false. Float sums and collects always rebuild so results match a fresh
+// recompute exactly.
+func (m *reteGraphAggregateBucket) removeAccumulatorToken(ctx context.Context, node *reteGraphAggregateNode, token tokenRef) bool {
+	if m == nil || node == nil || token.isZero() {
+		return false
+	}
+	match, ok := tokenFactMatchForBindingSlot(token, node.inputEntry.bindingSlot)
+	if !ok {
+		return false
+	}
+	member, ok := aggregateScalarMemberFromToken(ctx, node, match, token)
+	if !ok {
+		return false
+	}
+	return m.accumulator.removeMemberSubtractive(node, member)
+}
+
+func (s *reteGraphAccumulatorState) removeMemberSubtractive(node *reteGraphAggregateNode, member reteGraphAggregateScalarMember) bool {
+	if s == nil || node == nil || !s.initializedFor(node) || s.count <= 0 {
+		return false
+	}
+	for i, spec := range node.specs {
+		switch spec.kind {
+		case AggregateCount:
+		case AggregateSum:
+			value, ok := member.value(spec.valueIndex)
+			if !ok || value.Kind() != ValueInt || i >= len(s.floaty) || s.floaty[i] {
+				return false
+			}
+			if value.intValue == math.MinInt64 {
+				return false
+			}
+			if _, overflow := safeAddInt64(s.intSums[i], -value.intValue); overflow {
+				return false
+			}
+		case AggregateMin, AggregateMax:
+			value, ok := member.value(spec.valueIndex)
+			if !ok || i >= len(s.extrema) || !s.extrema[i].have {
+				return false
+			}
+			comparison, comparable := compareValues(value, s.extrema[i].current)
+			if !comparable || comparison == 0 {
+				return false
+			}
+			if (spec.kind == AggregateMin && comparison < 0) || (spec.kind == AggregateMax && comparison > 0) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	s.count--
+	for i, spec := range node.specs {
+		if spec.kind != AggregateSum {
+			continue
+		}
+		value, _ := member.value(spec.valueIndex)
+		s.intSums[i], _ = safeAddInt64(s.intSums[i], -value.intValue)
 	}
 	return true
 }
