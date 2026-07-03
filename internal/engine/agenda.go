@@ -103,18 +103,19 @@ func (s activationStatus) String() string {
 }
 
 type activation struct {
-	key            activationKey
-	ruleRevisionID RuleRevisionID
-	identityKey    candidateIdentityKey
-	token          tokenRef
-	module         ModuleName
-	heapIndex      int
-	salience       int
-	maxRecency     Recency
-	totalRecency   Recency
-	supportCount   uint32
-	status         activationStatus
-	payload        *activationPayload
+	key              activationKey
+	ruleRevisionID   RuleRevisionID
+	identityKey      candidateIdentityKey
+	token            tokenRef
+	module           ModuleName
+	heapIndex        int
+	salience         int
+	declarationOrder int
+	maxRecency       Recency
+	totalRecency     Recency
+	supportCount     uint32
+	status           activationStatus
+	payload          *activationPayload
 }
 
 type activationPayload struct {
@@ -1514,15 +1515,16 @@ func activationRunSnapshot(current *activation) activation {
 		return out
 	}
 	return activation{
-		key:            current.key,
-		ruleRevisionID: current.ruleRevisionID,
-		identityKey:    current.identityKey,
-		token:          current.token,
-		module:         current.module,
-		salience:       current.salience,
-		maxRecency:     current.maxRecency,
-		totalRecency:   current.totalRecency,
-		status:         current.status,
+		key:              current.key,
+		ruleRevisionID:   current.ruleRevisionID,
+		identityKey:      current.identityKey,
+		token:            current.token,
+		module:           current.module,
+		salience:         current.salience,
+		declarationOrder: current.declarationOrder,
+		maxRecency:       current.maxRecency,
+		totalRecency:     current.totalRecency,
+		status:           current.status,
 	}
 }
 
@@ -1732,12 +1734,8 @@ func (a *agenda) activationLess(left, right *activation) bool {
 	if left.totalRecency != right.totalRecency {
 		return left.totalRecency > right.totalRecency
 	}
-	if a != nil && a.revision != nil && left.ruleRevisionID != right.ruleRevisionID {
-		leftRule, leftOK := a.revision.rulesByRevisionID[left.ruleRevisionID]
-		rightRule, rightOK := a.revision.rulesByRevisionID[right.ruleRevisionID]
-		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
-			return leftRule.declarationOrder < rightRule.declarationOrder
-		}
+	if left.ruleRevisionID != right.ruleRevisionID && left.declarationOrder != right.declarationOrder {
+		return left.declarationOrder < right.declarationOrder
 	}
 	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
@@ -2298,6 +2296,7 @@ func fillActivationFromCandidate(dst *activation, rule compiledRule, candidate m
 	dst.setFactIDs(cloneFactIDs(candidate.factIDs))
 	dst.setFactVersions(cloneFactVersions(candidate.factVersions))
 	dst.salience = rule.salience
+	dst.declarationOrder = rule.declarationOrder
 	dst.maxRecency = candidate.maxRecency
 	dst.totalRecency = candidate.totalRecency
 	dst.supportCount = 1
@@ -2352,6 +2351,7 @@ func fillActivationFromTerminalTokenWithIdentity(dst *activation, rule compiledR
 	dst.module = rule.module
 	dst.heapIndex = 0
 	dst.salience = rule.salience
+	dst.declarationOrder = rule.declarationOrder
 	dst.maxRecency = row.maxRecency
 	dst.totalRecency = row.totalRecency
 	dst.status = activationStatusPending
