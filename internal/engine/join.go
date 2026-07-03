@@ -383,3 +383,48 @@ func (c compiledJoinConstraint) rightValueFromFact(fact conditionFactRef) (Value
 func (c compiledJoinConstraint) rightValueFromFactWithCounters(fact conditionFactRef, span *propagationCounterSpan) (Value, bool) {
 	return c.refAccess.valueFromFactWithCounters(fact, span)
 }
+
+// rightKeySlotFromFactRef extracts the hash-join key slot for the referenced
+// binding's fact directly from slot storage. direct=false means the access
+// shape or storage form is not supported and the caller must use the generic
+// Value path; direct=true with ok=false means the value is authoritatively
+// absent, matching valueFromFact.
+func (c compiledJoinConstraint) rightKeySlotFromFactRef(fact *conditionFactRef) (slot betaJoinKeySlot, ok bool, direct bool) {
+	return joinKeySlotForAccess(c.refAccess, fact)
+}
+
+// leftKeySlotFromFactRef is rightKeySlotFromFactRef for the arriving fact's
+// own field access.
+func (c compiledJoinConstraint) leftKeySlotFromFactRef(fact *conditionFactRef) (slot betaJoinKeySlot, ok bool, direct bool) {
+	return joinKeySlotForAccess(c.access, fact)
+}
+
+func joinKeySlotForAccess(access compiledPathAccess, fact *conditionFactRef) (betaJoinKeySlot, bool, bool) {
+	if fact == nil || len(access.path.Segments) != 1 {
+		return betaJoinKeySlot{}, false, false
+	}
+	slot := access.rootSlot
+	if slot >= 0 && slot < len(fact.fieldSlots) {
+		resolved := fact.fieldSlots[slot]
+		if !resolved.ok {
+			return betaJoinKeySlot{}, false, true
+		}
+		keySlot, ok := betaJoinKeySlotFromValue(resolved.value)
+		if !ok {
+			return betaJoinKeySlot{}, false, false
+		}
+		return keySlot, true, true
+	}
+	if slot >= 0 && slot < len(fact.compactFieldSlots) {
+		compact := fact.compactFieldSlots[slot]
+		if !compact.ok {
+			return betaJoinKeySlot{}, false, true
+		}
+		keySlot, ok := betaJoinKeySlotFromCompact(compact)
+		if !ok {
+			return betaJoinKeySlot{}, false, false
+		}
+		return keySlot, true, true
+	}
+	return betaJoinKeySlot{}, false, false
+}

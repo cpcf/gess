@@ -5724,11 +5724,35 @@ func graphBetaJoinKeyForLeftTokenSingleWalk(joins []compiledJoinConstraint, toke
 		}
 		slots[i] = joins[i].refBindingSlot
 	}
-	var facts [3]conditionFactRef
+	var facts [3]*conditionFactRef
 	if !tokenFactsAtSlots(token, slots, len(joins), &facts) {
 		return betaJoinKey{}, false, false
 	}
-	firstValue, ok := joins[0].rightValueFromFact(facts[0])
+	var keySlots [3]betaJoinKeySlot
+	for i := range joins {
+		keySlot, ok, direct := joins[i].rightKeySlotFromFactRef(facts[i])
+		if !direct {
+			return graphBetaJoinKeyForLeftTokenValues(joins, &facts)
+		}
+		if !ok {
+			return betaJoinKey{}, false, true
+		}
+		keySlots[i] = keySlot
+	}
+	return betaJoinKeyFromSlots(&keySlots, len(joins)), true, true
+}
+
+// graphBetaJoinKeyForLeftTokenValues is the Value-materializing tail of the
+// single-walk path, used when a join's access shape or fact storage form has
+// no direct slot representation.
+func graphBetaJoinKeyForLeftTokenValues(joins []compiledJoinConstraint, facts *[3]*conditionFactRef) (betaJoinKey, bool, bool) {
+	factAt := func(i int) conditionFactRef {
+		if facts[i] == nil {
+			return conditionFactRef{}
+		}
+		return *facts[i]
+	}
+	firstValue, ok := joins[0].rightValueFromFact(factAt(0))
 	if !ok {
 		return betaJoinKey{}, false, true
 	}
@@ -5736,7 +5760,7 @@ func graphBetaJoinKeyForLeftTokenSingleWalk(joins []compiledJoinConstraint, toke
 		key, ok := betaJoinKeyForSingleValue(firstValue)
 		return key, ok, true
 	}
-	secondValue, ok := joins[1].rightValueFromFact(facts[1])
+	secondValue, ok := joins[1].rightValueFromFact(factAt(1))
 	if !ok {
 		return betaJoinKey{}, false, true
 	}
@@ -5746,7 +5770,7 @@ func graphBetaJoinKeyForLeftTokenSingleWalk(joins []compiledJoinConstraint, toke
 		}
 		return betaJoinKey{}, false, false
 	}
-	thirdValue, ok := joins[2].rightValueFromFact(facts[2])
+	thirdValue, ok := joins[2].rightValueFromFact(factAt(2))
 	if !ok {
 		return betaJoinKey{}, false, true
 	}
@@ -5834,11 +5858,42 @@ func graphBetaJoinKeyForRightMatchWithContext(ctx context.Context, node *reteGra
 	if len(joins) == 0 {
 		return betaJoinKey{}, true, nil
 	}
-	if len(joins) == 1 {
-		join := joins[0]
-		if join.indexKind != joinIndexEquality {
+	if len(joins) <= 3 {
+		allEquality := true
+		anyKeyExpression := false
+		for i := range joins {
+			if joins[i].indexKind != joinIndexEquality {
+				allEquality = false
+				break
+			}
+			if joins[i].hasLeftKeyExpression {
+				anyKeyExpression = true
+			}
+		}
+		if !allEquality {
 			return betaJoinKey{}, false, nil
 		}
+		if !anyKeyExpression {
+			var keySlots [3]betaJoinKeySlot
+			direct := true
+			for i := range joins {
+				keySlot, ok, slotDirect := joins[i].leftKeySlotFromFactRef(&fact)
+				if !slotDirect {
+					direct = false
+					break
+				}
+				if !ok {
+					return betaJoinKey{}, false, nil
+				}
+				keySlots[i] = keySlot
+			}
+			if direct {
+				return betaJoinKeyFromSlots(&keySlots, len(joins)), true, nil
+			}
+		}
+	}
+	if len(joins) == 1 {
+		join := joins[0]
 		if !join.hasLeftKeyExpression {
 			value, ok := join.leftValueFromFact(fact)
 			if !ok {
@@ -5850,9 +5905,6 @@ func graphBetaJoinKeyForRightMatchWithContext(ctx context.Context, node *reteGra
 	} else if len(joins) == 2 {
 		firstJoin := joins[0]
 		secondJoin := joins[1]
-		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false, nil
-		}
 		if !firstJoin.hasLeftKeyExpression && !secondJoin.hasLeftKeyExpression {
 			firstValue, ok := firstJoin.leftValueFromFact(fact)
 			if !ok {

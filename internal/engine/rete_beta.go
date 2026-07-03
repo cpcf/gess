@@ -819,7 +819,7 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 // each slot, matching tokenRefAtSlot. It reports false when any slot is not
 // found on the chain (callers needing the positional matchAt fallback must
 // use tokenRefAtSlot).
-func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]conditionFactRef) bool {
+func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]*conditionFactRef) bool {
 	if count <= 0 || count > 3 || out == nil {
 		return false
 	}
@@ -837,9 +837,7 @@ func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]conditio
 			}
 			found[i] = true
 			remaining--
-			if row.fact != nil {
-				out[i] = *row.fact
-			}
+			out[i] = row.fact
 		}
 		if remaining == 0 {
 			return true
@@ -985,6 +983,87 @@ func betaJoinKeyForTokenIdentity(token tokenRef) (betaJoinKey, bool) {
 		floatBits:       uint64(identity.generation),
 		secondFloatBits: identity.identityState,
 	}, true
+}
+
+// betaJoinKeySlot is one extracted hash-join key component, produced without
+// materializing an intermediate Value on supported paths.
+type betaJoinKeySlot struct {
+	kind        betaJoinKeyKind
+	boolValue   bool
+	intValue    int64
+	floatBits   uint64
+	stringValue string
+}
+
+func betaJoinKeySlotFromValue(value Value) (betaJoinKeySlot, bool) {
+	switch value.Kind() {
+	case ValueNull:
+		return betaJoinKeySlot{kind: betaJoinKeyNull}, true
+	case ValueBool:
+		return betaJoinKeySlot{kind: betaJoinKeyBool, boolValue: value.boolValue}, true
+	case ValueInt:
+		return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: value.intValue}, true
+	case ValueFloat:
+		if integer, ok := betaJoinIntFromFloat(value.floatValue); ok {
+			return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: integer}, true
+		}
+		return betaJoinKeySlot{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.floatValue)}, true
+	case ValueString:
+		return betaJoinKeySlot{kind: betaJoinKeyString, stringValue: value.stringValue}, true
+	default:
+		return betaJoinKeySlot{}, false
+	}
+}
+
+func betaJoinKeySlotFromCompact(slot compactFactSlot) (betaJoinKeySlot, bool) {
+	if !slot.ok {
+		return betaJoinKeySlot{}, false
+	}
+	switch slot.kind {
+	case duplicateScalarNull:
+		return betaJoinKeySlot{kind: betaJoinKeyNull}, true
+	case duplicateScalarBool:
+		return betaJoinKeySlot{kind: betaJoinKeyBool, boolValue: slot.bits != 0}, true
+	case duplicateScalarInt:
+		return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: int64(slot.bits)}, true
+	case duplicateScalarFloat:
+		floating := math.Float64frombits(slot.bits)
+		if integer, ok := betaJoinIntFromFloat(floating); ok {
+			return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: integer}, true
+		}
+		return betaJoinKeySlot{kind: betaJoinKeyFloat, floatBits: slot.bits}, true
+	case duplicateScalarString:
+		return betaJoinKeySlot{kind: betaJoinKeyString, stringValue: slot.stringValue}, true
+	default:
+		return betaJoinKeySlot{}, false
+	}
+}
+
+// betaJoinKeyFromSlots assembles the composite key from already-extracted
+// slots, writing each component once.
+func betaJoinKeyFromSlots(slots *[3]betaJoinKeySlot, count int) betaJoinKey {
+	key := betaJoinKey{
+		kind:        slots[0].kind,
+		boolValue:   slots[0].boolValue,
+		intValue:    slots[0].intValue,
+		floatBits:   slots[0].floatBits,
+		stringValue: slots[0].stringValue,
+	}
+	if count >= 2 {
+		key.secondKind = slots[1].kind
+		key.secondBoolValue = slots[1].boolValue
+		key.secondIntValue = slots[1].intValue
+		key.secondFloatBits = slots[1].floatBits
+		key.secondStringValue = slots[1].stringValue
+	}
+	if count >= 3 {
+		key.thirdKind = slots[2].kind
+		key.thirdBoolValue = slots[2].boolValue
+		key.thirdIntValue = slots[2].intValue
+		key.thirdFloatBits = slots[2].floatBits
+		key.thirdStringValue = slots[2].stringValue
+	}
+	return key
 }
 
 func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {
