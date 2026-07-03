@@ -2678,33 +2678,46 @@ func matchTokenFactsEqualSlicesAt(token tokenRef, factIDs []FactID, factVersions
 }
 
 func terminalTokenFactVersionsEqual(left, right tokenRef) bool {
-	leftIDs, leftVersions, leftOK := tokenPublicFactSlices(left)
-	rightIDs, rightVersions, rightOK := tokenPublicFactSlices(right)
-	return leftOK && rightOK && factVersionSlicesEqual(leftIDs, leftVersions, rightIDs, rightVersions)
+	l, r := left, right
+	for {
+		leftID, leftVersion, leftHas, leftOK := nextPublicTokenFact(&l)
+		rightID, rightVersion, rightHas, rightOK := nextPublicTokenFact(&r)
+		if !leftOK || !rightOK || leftHas != rightHas {
+			return false
+		}
+		if !leftHas {
+			return true
+		}
+		if leftID != rightID || leftVersion != rightVersion {
+			return false
+		}
+	}
 }
 
-func tokenPublicFactSlices(token tokenRef) ([]FactID, []FactVersion, bool) {
-	if token.isZero() {
-		return nil, nil, true
+// nextPublicTokenFact advances token toward the root and returns the next
+// public (bindingSlot >= 0) row's fact identity. hasFact is false once the
+// chain is exhausted; ok is false when a row fails to resolve.
+func nextPublicTokenFact(token *tokenRef) (id FactID, version FactVersion, hasFact bool, ok bool) {
+	for !token.isZero() {
+		row, resolved := token.resolve()
+		if !resolved {
+			return FactID{}, 0, false, false
+		}
+		slot := row.bindingSlot
+		if row.fact != nil {
+			id = row.fact.ID()
+			version = row.fact.Version()
+		} else {
+			id = FactID{}
+			version = 0
+		}
+		*token = token.parent()
+		if slot < 0 {
+			continue
+		}
+		return id, version, true, true
 	}
-	row, ok := token.resolve()
-	if !ok {
-		return nil, nil, false
-	}
-	ids, versions, ok := tokenPublicFactSlices(token.parent())
-	if !ok {
-		return nil, nil, false
-	}
-	match, ok := row.conditionMatch()
-	if !ok {
-		return nil, nil, false
-	}
-	if match.bindingSlot < 0 {
-		return ids, versions, true
-	}
-	ids = append(ids, match.fact.ID())
-	versions = append(versions, match.fact.Version())
-	return ids, versions, true
+	return FactID{}, 0, false, true
 }
 
 func compareTerminalTokenFacts(left, right tokenRef) int {
