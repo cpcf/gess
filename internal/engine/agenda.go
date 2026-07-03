@@ -689,6 +689,32 @@ type agenda struct {
 
 	activationRowsSpare activationRows
 	activationsSpare    []*activation
+	payloadPool         []*activationPayload
+}
+
+const activationPayloadPoolCap = 4096
+
+func (a *agenda) takeActivationPayload() *activationPayload {
+	if a == nil || len(a.payloadPool) == 0 {
+		return &activationPayload{}
+	}
+	payload := a.payloadPool[len(a.payloadPool)-1]
+	a.payloadPool = a.payloadPool[:len(a.payloadPool)-1]
+	return payload
+}
+
+// recycleActivationPayload returns a payload owned by a dropped activation to
+// the pool, keeping only the fact tuple array capacity. Callers must ensure no
+// copies share the payload pointer; agenda-external copies always clone.
+func (a *agenda) recycleActivationPayload(payload *activationPayload) {
+	if a == nil || payload == nil || len(a.payloadPool) >= activationPayloadPoolCap {
+		return
+	}
+	*payload = activationPayload{
+		factIDs:      payload.factIDs[:0],
+		factVersions: payload.factVersions[:0],
+	}
+	a.payloadPool = append(a.payloadPool, payload)
 }
 
 func newAgenda() *agenda {
@@ -1030,7 +1056,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 				case existing.status == activationStatusPending:
 					a.dequeueActivation(existing)
 					existing.status = activationStatusDeactivated
-					compactDeactivatedTokenActivation(existing)
+					a.compactDeactivatedTokenActivation(existing)
 				case existing.status == activationStatusConsumed:
 					existing.status = activationStatusDeactivated
 				}
@@ -1110,7 +1136,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !collectChanges {
 			a.dequeueActivation(existing)
 			existing.status = activationStatusDeactivated
-			compactDeactivatedTokenActivation(existing)
+			a.compactDeactivatedTokenActivation(existing)
 			continue
 		}
 		a.dequeueActivation(existing)
@@ -1119,7 +1145,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			kind:       agendaChangeDeactivated,
 			activation: a.compactChangeActivation(existing),
 		})
-		compactDeactivatedTokenActivation(existing)
+		a.compactDeactivatedTokenActivation(existing)
 	}
 
 	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
@@ -1440,7 +1466,7 @@ func (a *agenda) nextActivationPtr() (*activation, activation, bool) {
 		}
 		current.status = activationStatusConsumed
 		selected := a.activationRunSnapshot(current)
-		compactConsumedTokenActivation(current)
+		a.compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
 }
@@ -1464,7 +1490,7 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName) (*activation, act
 		}
 		current.status = activationStatusConsumed
 		selected := a.activationRunSnapshot(current)
-		compactConsumedTokenActivation(current)
+		a.compactConsumedTokenActivation(current)
 		return current, selected, true
 	}
 	return nil, activation{}, false
@@ -1501,16 +1527,20 @@ func (a *agenda) nextQueue() (*agendaModuleQueue, bool) {
 // slice-backed identity so its token chain can be recycled. Identity lookups
 // fall back to the materialized fact slices; a reactivation re-arms the token
 // from the incoming delta.
-func compactConsumedTokenActivation(current *activation) {
+func (a *agenda) compactConsumedTokenActivation(current *activation) {
 	if current == nil || current.status != activationStatusConsumed || current.token.isZero() {
 		return
 	}
-	factIDs, factVersions, ok := materializePublicTokenFacts(current.token)
+	payload := a.takeActivationPayload()
+	factIDs, factVersions, ok := materializePublicTokenFactsInto(current.token, payload.factIDs, payload.factVersions)
+	payload.factIDs = factIDs
+	payload.factVersions = factVersions
 	if !ok {
+		a.recycleActivationPayload(payload)
 		current.payload = nil
 		return
 	}
-	current.payload = &activationPayload{factIDs: factIDs, factVersions: factVersions}
+	current.payload = payload
 	current.token.releaseChain()
 	current.token = tokenRef{}
 }
@@ -1518,15 +1548,39 @@ func compactConsumedTokenActivation(current *activation) {
 // compactDeactivatedTokenActivation mirrors compactConsumedTokenActivation for
 // activations invalidated before firing, so their token chains stop pinning
 // arena rows for the rest of the run.
-func compactDeactivatedTokenActivation(current *activation) {
+func (a *agenda) compactDeactivatedTokenActivation(current *activation) {
 	if current == nil || current.status != activationStatusDeactivated || current.token.isZero() {
 		return
 	}
-	factIDs, factVersions, ok := materializePublicTokenFacts(current.token)
+	// Reusing populated tuple arrays in place would corrupt them if the
+	// materialization failed partway; only empty arrays are reused.
+	var scratchIDs []FactID
+	var scratchVersions []FactVersion
+	pooled := (*activationPayload)(nil)
+	if existing := current.payload; existing != nil {
+		if len(existing.factIDs) == 0 && len(existing.factVersions) == 0 {
+			scratchIDs = existing.factIDs
+			scratchVersions = existing.factVersions
+		}
+	} else {
+		pooled = a.takeActivationPayload()
+		scratchIDs = pooled.factIDs
+		scratchVersions = pooled.factVersions
+	}
+	factIDs, factVersions, ok := materializePublicTokenFactsInto(current.token, scratchIDs, scratchVersions)
 	if !ok {
+		if pooled != nil {
+			pooled.factIDs = factIDs
+			pooled.factVersions = factVersions
+			a.recycleActivationPayload(pooled)
+		}
 		return
 	}
-	payload := current.ensurePayload()
+	payload := current.payload
+	if payload == nil {
+		payload = pooled
+		current.payload = payload
+	}
 	payload.factIDs = factIDs
 	payload.factVersions = factVersions
 	current.token.releaseChain()
@@ -1544,18 +1598,29 @@ func rearmActivationToken(existing *activation, token tokenRef) {
 	existing.token.retainChain()
 }
 
-func materializePublicTokenFacts(token tokenRef) ([]FactID, []FactVersion, bool) {
+// materializePublicTokenFactsInto reuses the capacity of ids and versions
+// when possible. On failure the returned slices carry whatever was written so
+// callers can recycle them; their previous contents are not preserved.
+func materializePublicTokenFactsInto(token tokenRef, ids []FactID, versions []FactVersion) ([]FactID, []FactVersion, bool) {
 	if token.isZero() {
 		return nil, nil, true
 	}
 	size := token.size()
-	ids := make([]FactID, 0, size)
-	versions := make([]FactVersion, 0, size)
+	if cap(ids) < size {
+		ids = make([]FactID, 0, size)
+	} else {
+		ids = ids[:0]
+	}
+	if cap(versions) < size {
+		versions = make([]FactVersion, 0, size)
+	} else {
+		versions = versions[:0]
+	}
 	current := token
 	for {
 		id, version, hasFact, ok := nextPublicTokenFact(&current)
 		if !ok {
-			return nil, nil, false
+			return ids, versions, false
 		}
 		if !hasFact {
 			break
@@ -2188,6 +2253,8 @@ func (a *agenda) compactActivationStorage() {
 		}
 		if current.status != activationStatusPending {
 			current.token.releaseChain()
+			a.recycleActivationPayload(current.payload)
+			current.payload = nil
 			continue
 		}
 		stored := nextRows.add(*current)
@@ -2215,6 +2282,7 @@ func (a *agenda) releaseCompletedRunStorage() {
 	a.terminalActivations = activationRows{}
 	a.activationRowsSpare = activationRows{}
 	a.activationsSpare = nil
+	a.payloadPool = nil
 	a.moduleQueues = nil
 	a.reconcileSeen = nil
 	a.reconcileChanges = nil
