@@ -2812,7 +2812,7 @@ func nextPublicTokenFact(token *tokenRef) (id FactID, version FactVersion, hasFa
 		}
 		slot := row.bindingSlot
 		id, version = row.factIdentity()
-		*token = tokenRef{handle: tokenHandle{arena: token.handle.arena, rowID: row.parent.rowID, generation: row.parent.gen}}
+		*token = tokenRef{handle: tokenHandle{arena: token.handle.arena, row: row.parent.row, generation: row.parent.gen}}
 		if slot < 0 {
 			continue
 		}

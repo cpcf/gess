@@ -25,7 +25,7 @@ type terminalTokenRow struct {
 }
 
 type terminalTokenRef struct {
-	rowID      tokenArenaRowID
+	row        *tokenRow
 	generation uint64
 }
 
@@ -34,13 +34,13 @@ func terminalTokenRefFromToken(token tokenRef) terminalTokenRef {
 		return terminalTokenRef{}
 	}
 	return terminalTokenRef{
-		rowID:      token.handle.rowID,
+		row:        token.handle.row,
 		generation: token.handle.generation,
 	}
 }
 
 func (r terminalTokenRef) isZero() bool {
-	return r.rowID == 0 || r.generation == 0
+	return r.row == nil || r.generation == 0
 }
 
 func (r terminalTokenRef) toTokenRef(arena *tokenArena) tokenRef {
@@ -49,7 +49,7 @@ func (r terminalTokenRef) toTokenRef(arena *tokenArena) tokenRef {
 	}
 	return tokenRef{handle: tokenHandle{
 		arena:      arena,
-		rowID:      r.rowID,
+		row:        r.row,
 		generation: r.generation,
 	}}
 }
