@@ -474,11 +474,11 @@ func TestAgendaTerminalConsumedActivationKeepsCompactDerivedIdentity(t *testing.
 	if stored.status != activationStatusConsumed {
 		t.Fatalf("stored activation status = %v, want consumed", stored.status)
 	}
-	if stored.payload != nil {
-		t.Fatalf("stored consumed activation payload = %#v, want nil", stored.payload)
+	if got := len(stored.factIDs()); got == 0 {
+		t.Fatal("stored consumed activation did not materialize fact identity")
 	}
-	if stored.token.isZero() {
-		t.Fatal("stored consumed activation lost token ref")
+	if !stored.token.isZero() {
+		t.Fatal("stored consumed activation kept its token ref pinned")
 	}
 	if got := stored.mutationOrigin().activationID(); got != selected.activationID() {
 		t.Fatalf("stored mutation origin activation ID = %q, want %q", got, selected.activationID())

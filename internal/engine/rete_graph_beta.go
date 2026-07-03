@@ -1482,7 +1482,7 @@ func (m *reteGraphAggregateBucket) clear() {
 	clear(m.inputTokens)
 	m.inputTokens = m.inputTokens[:0]
 	m.accumulator.clear()
-	m.token.release()
+	m.token.releaseChain()
 	m.token = tokenRef{}
 	m.hasValue = false
 }
@@ -2787,7 +2787,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	if !bucket.token.isZero() {
 		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-		bucket.token.release()
+		bucket.token.releaseChain()
 		bucket.token = tokenRef{}
 		bucket.hasValue = false
 	}
@@ -2812,9 +2812,11 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 			return
 		}
 	}
+	// Retain the whole chain: multi-entry aggregate outputs build intermediate
+	// rows that are never stored in any node memory.
 	bucket.token = token
 	bucket.hasValue = true
-	token.retain()
+	token.retainChain()
 	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
 		delta.supported = false
 	}

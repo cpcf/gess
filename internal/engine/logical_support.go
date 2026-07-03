@@ -578,6 +578,16 @@ func mergeReteAgendaDelta(left, right reteAgendaDelta) reteAgendaDelta {
 	return left
 }
 
+// mergeReteAgendaDeltaIfNeeded skips the ownership-forcing merge when the
+// right delta carries nothing, keeping the left delta transient so callers
+// that apply it immediately avoid a defensive clone.
+func mergeReteAgendaDeltaIfNeeded(left, right reteAgendaDelta) reteAgendaDelta {
+	if right.supported && reteAgendaDeltaPayloadEmpty(right) {
+		return left
+	}
+	return mergeReteAgendaDelta(left, right)
+}
+
 func cloneRetainedReteAgendaDelta(delta reteAgendaDelta) reteAgendaDelta {
 	delta.added = slices.Clone(delta.added)
 	delta.removed = slices.Clone(delta.removed)

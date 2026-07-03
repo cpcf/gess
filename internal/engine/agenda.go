@@ -32,6 +32,7 @@ func (r *activationRows) reset() {
 	}
 	for chunkIndex, chunk := range r.chunks {
 		for i := range chunk {
+			chunk[i].token.releaseChain()
 			chunk[i] = activation{}
 		}
 		r.chunks[chunkIndex] = chunk[:0]
@@ -964,6 +965,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		existing.incrementSupport()
 		if existing.status == activationStatusDeactivated {
+			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
 			a.enqueueActivation(existing)
 		}
@@ -1012,6 +1014,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 				case existing.status == activationStatusPending:
 					a.dequeueActivation(existing)
 					existing.status = activationStatusDeactivated
+					compactDeactivatedTokenActivation(existing)
 				case existing.status == activationStatusConsumed:
 					existing.status = activationStatusDeactivated
 				}
@@ -1034,6 +1037,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		existing.incrementSupport()
 		if existing.status == activationStatusDeactivated {
+			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
 			a.enqueueActivation(existing)
 		}
@@ -1090,6 +1094,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if !collectChanges {
 			a.dequeueActivation(existing)
 			existing.status = activationStatusDeactivated
+			compactDeactivatedTokenActivation(existing)
 			continue
 		}
 		a.dequeueActivation(existing)
@@ -1098,6 +1103,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			kind:       agendaChangeDeactivated,
 			activation: a.compactChangeActivation(existing),
 		})
+		compactDeactivatedTokenActivation(existing)
 	}
 
 	if len(added) > 1 && !terminalTokenDeltasSorted(revision, added) {
@@ -1126,6 +1132,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			existing.incrementSupport()
 			if existing.status == activationStatusDeactivated {
+				rearmActivationToken(existing, delta.token)
 				existing.status = activationStatusPending
 				a.enqueueActivation(existing)
 				if collectChanges {
@@ -1202,6 +1209,8 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		if !ok {
 			continue
 		}
+		update.after.retainChain()
+		existing.token.releaseChain()
 		existing.token = update.after
 		existing.maxRecency = update.after.maxRecency()
 		existing.totalRecency = update.after.totalRecency()
@@ -1472,11 +1481,75 @@ func (a *agenda) nextQueue() (*agendaModuleQueue, bool) {
 	return best, best != nil
 }
 
+// compactConsumedTokenActivation swaps a fired activation from token-backed to
+// slice-backed identity so its token chain can be recycled. Identity lookups
+// fall back to the materialized fact slices; a reactivation re-arms the token
+// from the incoming delta.
 func compactConsumedTokenActivation(current *activation) {
 	if current == nil || current.status != activationStatusConsumed || current.token.isZero() {
 		return
 	}
-	current.payload = nil
+	factIDs, factVersions, ok := materializePublicTokenFacts(current.token)
+	if !ok {
+		current.payload = nil
+		return
+	}
+	current.payload = &activationPayload{factIDs: factIDs, factVersions: factVersions}
+	current.token.releaseChain()
+	current.token = tokenRef{}
+}
+
+// compactDeactivatedTokenActivation mirrors compactConsumedTokenActivation for
+// activations invalidated before firing, so their token chains stop pinning
+// arena rows for the rest of the run.
+func compactDeactivatedTokenActivation(current *activation) {
+	if current == nil || current.status != activationStatusDeactivated || current.token.isZero() {
+		return
+	}
+	factIDs, factVersions, ok := materializePublicTokenFacts(current.token)
+	if !ok {
+		return
+	}
+	payload := current.ensurePayload()
+	payload.factIDs = factIDs
+	payload.factVersions = factVersions
+	current.token.releaseChain()
+	current.token = tokenRef{}
+}
+
+// rearmActivationToken restores token backing on a reactivated activation that
+// released its token when it was consumed. The incoming delta token carries the
+// same public fact tuple, so bindings are unchanged.
+func rearmActivationToken(existing *activation, token tokenRef) {
+	if existing == nil || !existing.token.isZero() || token.isZero() {
+		return
+	}
+	existing.token = token
+	existing.token.retainChain()
+}
+
+func materializePublicTokenFacts(token tokenRef) ([]FactID, []FactVersion, bool) {
+	if token.isZero() {
+		return nil, nil, true
+	}
+	size := token.size()
+	ids := make([]FactID, 0, size)
+	versions := make([]FactVersion, 0, size)
+	current := token
+	for {
+		id, version, hasFact, ok := nextPublicTokenFact(&current)
+		if !ok {
+			return nil, nil, false
+		}
+		if !hasFact {
+			break
+		}
+		ids = append(ids, id)
+		versions = append(versions, version)
+	}
+	slices.Reverse(ids)
+	slices.Reverse(versions)
+	return ids, versions, true
 }
 
 func (a *agenda) activationRunSnapshot(current *activation) activation {
@@ -1967,6 +2040,7 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 	}
 	a.nextOrdinal++
 	act.key = key
+	act.token.retainChain()
 	a.storeActivationRef(act)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
@@ -2058,7 +2132,11 @@ func (a *agenda) compactConsumedActivationRows() {
 
 	var nextRows activationRows
 	for _, current := range oldActivations {
-		if current == nil || current.status != activationStatusPending {
+		if current == nil {
+			continue
+		}
+		if current.status != activationStatusPending {
+			current.token.releaseChain()
 			continue
 		}
 		stored := nextRows.add(*current)

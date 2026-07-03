@@ -1492,7 +1492,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
@@ -1502,7 +1502,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		s.restoreReteAfterPropagationFailure()
 		return AssertResult{Status: AssertValidationFailure}, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if span != nil {
 		span.finish()
@@ -1654,7 +1654,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		s.restoreReteAfterPropagationFailure()
 		return nil, false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
@@ -1664,7 +1664,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		s.restoreReteAfterPropagationFailure()
 		return nil, false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if span != nil {
 		span.finish()
@@ -1719,7 +1719,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
@@ -1729,7 +1729,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		s.restoreReteAfterPropagationFailure()
 		return nil, "", false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if span != nil {
 		span.finish()
@@ -1790,7 +1790,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
@@ -1800,7 +1800,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if span != nil {
 		span.finish()
@@ -1861,7 +1861,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, state, agendaDelta.demands, origin); err != nil {
 		if span != nil {
@@ -1871,7 +1871,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		s.restoreReteAfterPropagationFailure()
 		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if span != nil {
 		span.finish()
@@ -2190,19 +2190,19 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	if demandDelta, err := s.removeBackchainDemandSupportsForFact(ctx, id, origin); err != nil {
 		return result, agendaDelta, err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		return result, agendaDelta, err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	demandState := s.activeFactWorkspace()
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, agendaDelta.demands, origin); err != nil {
 		return result, agendaDelta, err
 	} else {
 		s.commitFactWorkspace(demandState)
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
@@ -3407,19 +3407,19 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	if demandDelta, err := s.removeBackchainDemandSupportsForFactVersion(ctx, before.ID(), before.Version(), origin); err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	} else {
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, resolvedDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
 	demandState := s.activeFactWorkspace()
 	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, agendaDelta.demands, origin); err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	} else {
 		s.commitFactWorkspace(demandState)
-		agendaDelta = mergeReteAgendaDelta(agendaDelta, demandDelta)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
@@ -3429,7 +3429,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	if err != nil {
 		return ModifyResult{Status: ModifyValidationFailure, Fact: before}, agendaDelta, err
 	}
-	agendaDelta = mergeReteAgendaDelta(agendaDelta, cascadeDelta)
+	agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, cascadeDelta)
 	delta := MutationDelta{
 		Kind:           MutationModify,
 		Generation:     s.generation,

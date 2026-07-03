@@ -72,7 +72,14 @@ type tokenArena struct {
 	nextRowGen   uint64
 	freeRows     []tokenArenaRowID
 	pendingFree  []tokenArenaRowID
+	recentRows   []tokenArenaRowID
 	generation   Generation
+
+	statGrown   int
+	statReused  int
+	statFreed   int
+	statSwept   int
+	statFlushes int
 }
 
 type tokenArenaRowID uint32
@@ -118,6 +125,7 @@ func (a *tokenArena) reset() {
 	a.generation = 0
 	a.freeRows = a.freeRows[:0]
 	a.pendingFree = a.pendingFree[:0]
+	a.recentRows = a.recentRows[:0]
 }
 
 func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
@@ -172,6 +180,8 @@ func (a *tokenArena) allocRow() (tokenArenaRowID, *tokenRow) {
 		}
 		a.nextRowGen++
 		row.rowGen = a.nextRowGen
+		a.recentRows = append(a.recentRows, rowID)
+		a.statReused++
 		return rowID, row
 	}
 	rowID, chunkIndex := a.nextRowID()
@@ -192,6 +202,8 @@ func (a *tokenArena) allocRow() (tokenArenaRowID, *tokenRow) {
 	a.count++
 	a.nextRowGen++
 	row.rowGen = a.nextRowGen
+	a.recentRows = append(a.recentRows, rowID)
+	a.statGrown++
 	return rowID, row
 }
 
@@ -453,9 +465,10 @@ func (a *tokenArena) releaseToken(token tokenRef) {
 // invoke it at boundaries where no transient tokenRef from earlier propagation
 // is still in use, such as the end of a fire iteration.
 func (a *tokenArena) flushPendingFree() {
-	if a == nil || len(a.pendingFree) == 0 {
+	if a == nil {
 		return
 	}
+	a.statFlushes++
 	for _, rowID := range a.pendingFree {
 		row, ok := a.rowByID(rowID)
 		if !ok || !row.pendingFree {
@@ -467,8 +480,22 @@ func (a *tokenArena) flushPendingFree() {
 		}
 		*row = tokenRow{}
 		a.freeRows = append(a.freeRows, rowID)
+		a.statFreed++
 	}
 	a.pendingFree = a.pendingFree[:0]
+	// Rows allocated since the last flush that never gained a durable holder
+	// are transient propagation products (dropped duplicates, rejected joins)
+	// and are dead once the boundary is reached.
+	for _, rowID := range a.recentRows {
+		row, ok := a.rowByID(rowID)
+		if !ok || row.rowGen == 0 || row.refs != 0 || row.pendingFree {
+			continue
+		}
+		*row = tokenRow{}
+		a.freeRows = append(a.freeRows, rowID)
+		a.statSwept++
+	}
+	a.recentRows = a.recentRows[:0]
 }
 
 func (r tokenRef) retain() {
