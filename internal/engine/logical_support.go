@@ -591,7 +591,11 @@ func cloneRetainedReteAgendaDelta(delta reteAgendaDelta) reteAgendaDelta {
 
 func coalesceReteAgendaDelta(revision *Ruleset, delta reteAgendaDelta) reteAgendaDelta {
 	if len(delta.added) != 0 && len(delta.removed) != 0 {
-		delta.added, delta.removed = coalesceTerminalTokenDeltas(revision, delta.added, delta.removed)
+		var updates []reteTerminalTokenUpdate
+		delta.added, delta.removed, updates = coalesceTerminalTokenDeltas(revision, delta.added, delta.removed)
+		if len(updates) != 0 {
+			delta.updated = append(delta.updated, updates...)
+		}
 	}
 	return delta
 }

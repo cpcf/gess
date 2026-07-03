@@ -487,7 +487,7 @@ func TestTerminalTokenMemoryClearInvalidatesRowGeneration(t *testing.T) {
 }
 
 func TestTerminalTokenRowIsCompact(t *testing.T) {
-	if got, want := unsafe.Sizeof(terminalTokenRow{}), uintptr(32); got != want {
+	if got, want := unsafe.Sizeof(terminalTokenRow{}), uintptr(40); got != want {
 		t.Fatalf("terminal token row size = %d, want %d", got, want)
 	}
 }

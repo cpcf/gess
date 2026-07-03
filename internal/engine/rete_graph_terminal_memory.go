@@ -26,16 +26,16 @@ type terminalTokenRow struct {
 
 type terminalTokenRef struct {
 	rowID      tokenArenaRowID
-	generation uint32
+	generation uint64
 }
 
 func terminalTokenRefFromToken(token tokenRef) terminalTokenRef {
-	if token.isZero() || token.handle.generation > uint64(^uint32(0)) {
+	if token.isZero() {
 		return terminalTokenRef{}
 	}
 	return terminalTokenRef{
 		rowID:      token.handle.rowID,
-		generation: uint32(token.handle.generation),
+		generation: token.handle.generation,
 	}
 }
 
@@ -50,7 +50,7 @@ func (r terminalTokenRef) toTokenRef(arena *tokenArena) tokenRef {
 	return tokenRef{handle: tokenHandle{
 		arena:      arena,
 		rowID:      r.rowID,
-		generation: uint64(r.generation),
+		generation: r.generation,
 	}}
 }
 
@@ -636,6 +636,7 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(key, rowID)
 	m.markFactRowsDirty()
+	token.retainChain()
 	return handle
 }
 
@@ -692,6 +693,7 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, id
 	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(key, rowID)
 	m.markFactRowsDirty()
+	token.retainChain()
 	return handle, true
 }
 
@@ -881,6 +883,7 @@ func (m *terminalTokenMemory) removeRow(rowID graphTokenRowID, counters *propaga
 	if !m.factRowsDirty {
 		m.removeTokenFacts(m.rowToken(removed), rowID)
 	}
+	m.rowToken(removed).releaseChain()
 	m.clearRowForReuse(rowID)
 	if m.liveRows > 0 {
 		m.liveRows--
@@ -1207,6 +1210,7 @@ func (m *queryTerminalMemory) insertRow(token tokenRef) bool {
 	m.rows[rowID] = queryTerminalRow{token: token}
 	m.rowByToken[token.handle] = int(rowID)
 	m.rowByTokenReserve = max(m.rowByTokenReserve, len(m.rowByToken))
+	token.retain()
 	return true
 }
 
@@ -1284,6 +1288,7 @@ func (m *queryTerminalMemory) removeRow(rowID graphTokenRowID, counters *propaga
 		return
 	}
 	removed := m.rows[index]
+	removed.token.release()
 	if m.rowByToken != nil && !removed.token.isZero() {
 		delete(m.rowByToken, removed.token.handle)
 	}

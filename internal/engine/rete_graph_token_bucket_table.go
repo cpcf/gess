@@ -184,6 +184,7 @@ func (t *betaJoinBucketTable) insert(row betaTokenRow) bool {
 	t.chainRow(ref)
 	t.indexIdentity(ref)
 	t.rowCount++
+	row.token.retain()
 	return true
 }
 
@@ -209,6 +210,7 @@ func (t *betaJoinBucketTable) unlink(ref int32) bool {
 	if t.heads[slot] == 0 {
 		t.slotCount--
 	}
+	t.rows[ref-1].token.release()
 	t.rows[ref-1] = betaTokenRow{}
 	t.next[ref-1] = t.freeHead
 	t.prev[ref-1] = 0

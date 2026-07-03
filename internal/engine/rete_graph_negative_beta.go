@@ -139,6 +139,7 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 		leftRow.blockerCount++
 		if leftRow.blockerCount == 1 && !leftRow.output.isZero() {
 			m.owner.propagateRemoveFromStage(source, leftRow.output, nil, delta)
+			leftRow.output.release()
 			leftRow.output = tokenRef{}
 		}
 		return true
@@ -300,6 +301,7 @@ func (m reteGraphNegativeBetaMemory) emitLeftAdd(row *negativeBetaLeftRow, span 
 	}
 	if row.output.isZero() {
 		row.output = m.owner.newNegativeOutputTokenRef(row.token, span)
+		row.output.retain()
 	}
 	if row.output.isZero() {
 		return false, nil
@@ -437,6 +439,7 @@ func (m *negativeBetaLeftMemory) insert(token tokenRef, joinKey betaJoinKey, blo
 	})
 	m.indexes.rowCount++
 	m.rowReserve = max(m.rowReserve, m.indexes.len())
+	token.retain()
 	return &bucket.rows[len(bucket.rows)-1], true
 }
 
@@ -502,6 +505,8 @@ func (m *negativeBetaLeftMemory) removeBucketRow(bucket *negativeBetaLeftBucket,
 	if m == nil || bucket == nil || rowIndex < 0 || rowIndex >= len(bucket.rows) {
 		return
 	}
+	bucket.rows[rowIndex].token.release()
+	bucket.rows[rowIndex].output.release()
 	last := len(bucket.rows) - 1
 	if rowIndex != last {
 		bucket.rows[rowIndex] = bucket.rows[last]
@@ -628,6 +633,7 @@ func (m *negativeBetaRightMemory) insert(token tokenRef, joinKey betaJoinKey) bo
 	})
 	m.indexes.rowCount++
 	m.rowReserve = max(m.rowReserve, m.indexes.len())
+	token.retain()
 	return true
 }
 
@@ -717,6 +723,7 @@ func (m *negativeBetaRightMemory) removeBucketRow(bucket *negativeBetaRightBucke
 	if m == nil || bucket == nil || rowIndex < 0 || rowIndex >= len(bucket.rows) {
 		return
 	}
+	bucket.rows[rowIndex].token.release()
 	last := len(bucket.rows) - 1
 	if rowIndex != last {
 		bucket.rows[rowIndex] = bucket.rows[last]

@@ -390,8 +390,8 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 	if got := len(delta.added); got != 0 {
 		t.Fatalf("terminal additions after note modify = %d, want 0", got)
 	}
-	if got := len(delta.updated); got != 0 {
-		t.Fatalf("terminal updates after note modify = %d, want 0", got)
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
 		t.Fatalf("apply note delta: %v", err)
@@ -989,8 +989,8 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 	if got := len(delta.added); got != 0 {
 		t.Fatalf("terminal additions after note modify = %d, want 0", got)
 	}
-	if got := len(delta.updated); got != 0 {
-		t.Fatalf("terminal updates after note modify = %d, want 0", got)
+	if got, want := len(delta.updated), 1; got != want {
+		t.Fatalf("terminal updates after note modify = %d, want %d", got, want)
 	}
 	if _, ok, err := session.applyReteAgendaDelta(context.Background(), delta); err != nil {
 		t.Fatalf("apply note delta: %v", err)

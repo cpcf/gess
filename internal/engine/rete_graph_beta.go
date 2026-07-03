@@ -1264,11 +1264,14 @@ func (m *reteGraphBetaMemory) clearMemories() {
 // only invoke it at boundaries where no transient delta is live, such as the
 // end of a fire iteration.
 func (m *reteGraphBetaMemory) releaseTransientTerminalDeltas() {
-	if m == nil || len(m.terminalRemovedDeltas) == 0 {
+	if m == nil {
 		return
 	}
-	clear(m.terminalRemovedDeltas)
-	m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
+	if len(m.terminalRemovedDeltas) != 0 {
+		clear(m.terminalRemovedDeltas)
+		m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
+	}
+	m.arena.flushPendingFree()
 }
 
 func (m *reteGraphBetaMemory) appendRemovedTerminalDelta(delta *reteAgendaDelta, removed reteTerminalTokenDelta) {
@@ -1471,10 +1474,15 @@ func (m *reteGraphAggregateBucket) clear() {
 	if m == nil {
 		return
 	}
+	m.parent.release()
 	m.parent = tokenRef{}
+	for i := range m.inputTokens {
+		m.inputTokens[i].release()
+	}
 	clear(m.inputTokens)
 	m.inputTokens = m.inputTokens[:0]
 	m.accumulator.clear()
+	m.token.release()
 	m.token = tokenRef{}
 	m.hasValue = false
 }
@@ -2779,6 +2787,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	if !bucket.token.isZero() {
 		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
+		bucket.token.release()
 		bucket.token = tokenRef{}
 		bucket.hasValue = false
 	}
@@ -2805,6 +2814,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	bucket.token = token
 	bucket.hasValue = true
+	token.retain()
 	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
 		delta.supported = false
 	}
@@ -2945,10 +2955,12 @@ func (t *reteGraphAggregateBucketTable) allocate(parent tokenRef) reteGraphAggre
 		}
 		bucket.clear()
 		bucket.parent = parent
+		parent.retain()
 		return id
 	}
 	id := reteGraphAggregateBucketID(len(t.rows))
 	t.rows = append(t.rows, reteGraphAggregateBucket{id: id, parent: parent})
+	parent.retain()
 	return id
 }
 
@@ -3061,6 +3073,7 @@ func (m *reteGraphAggregateBucket) addInputToken(token tokenRef) bool {
 		}
 	}
 	m.inputTokens = append(m.inputTokens, token)
+	token.retain()
 	return true
 }
 
@@ -3072,6 +3085,7 @@ func (m *reteGraphAggregateBucket) removeInputToken(token tokenRef) bool {
 		if !tokenRefEqual(existing, token) {
 			continue
 		}
+		m.inputTokens[i].release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
@@ -3092,6 +3106,7 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFact(id FactID) bo
 			i++
 			continue
 		}
+		token.release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
@@ -3120,6 +3135,7 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFactSubtractive(ct
 		if subtracted && !m.removeAccumulatorToken(ctx, node, token) {
 			subtracted = false
 		}
+		token.release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
@@ -4672,12 +4688,16 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		return added, true, err
 	}
 	m.sourceGenerationValue = after.Generation()
-	addedTokens, removedTokens := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
+	addedTokens, removedTokens, coalescedUpdates := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
+	updatedTokens := append(removed.updated, added.updated...)
+	if len(coalescedUpdates) != 0 {
+		updatedTokens = append(updatedTokens, coalescedUpdates...)
+	}
 	return reteAgendaDelta{
 		supported:       removed.supported && added.supported,
 		added:           addedTokens,
 		removed:         removedTokens,
-		updated:         append(removed.updated, added.updated...),
+		updated:         updatedTokens,
 		demands:         append(removed.demands, added.demands...),
 		resolvedDemands: append(removed.resolvedDemands, added.resolvedDemands...),
 		resolvedOwners:  append(removed.resolvedOwners, added.resolvedOwners...),
@@ -4871,11 +4891,16 @@ func expressionMayObserveModify(expressionBindingSlot, modifiedBindingSlot int, 
 	}
 }
 
-func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta) {
+// coalesceTerminalTokenDeltas cancels added/removed pairs describing the same
+// match. Cancelled pairs with distinct tokens are reported as updates so
+// agenda activations move to the surviving token instead of holding a token
+// whose arena rows are about to be recycled.
+func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
 	if len(added) == 0 || len(removed) == 0 {
-		return added, removed
+		return added, removed, nil
 	}
 	if len(added)*len(removed) <= 64 {
+		var updates []reteTerminalTokenUpdate
 		keptAdded := added[:0]
 		for _, add := range added {
 			match := -1
@@ -4889,13 +4914,26 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 				keptAdded = append(keptAdded, add)
 				continue
 			}
+			updates = appendCoalescedTokenUpdate(updates, removed[match], add)
 			copy(removed[match:], removed[match+1:])
 			removed[len(removed)-1] = reteTerminalTokenDelta{}
 			removed = removed[:len(removed)-1]
 		}
-		return keptAdded, removed
+		return keptAdded, removed, updates
 	}
 	return coalesceTerminalTokenDeltasIndexed(revision, added, removed)
+}
+
+func appendCoalescedTokenUpdate(updates []reteTerminalTokenUpdate, remove, add reteTerminalTokenDelta) []reteTerminalTokenUpdate {
+	if remove.token == add.token || remove.token.isZero() || add.token.isZero() {
+		return updates
+	}
+	return append(updates, reteTerminalTokenUpdate{
+		ruleRevisionID: add.ruleRevisionID,
+		before:         remove.token,
+		after:          add.token,
+		identity:       add.identity,
+	})
 }
 
 // coalesceTerminalTokenDeltasIndexed matches large delta batches through an
@@ -4903,7 +4941,7 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 // necessary condition for both coalesce-equality branches, so bucketing by
 // (rule revision, identity key) preserves the first-match semantics of the
 // quadratic loop while touching only same-key pairs.
-func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta) {
+func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
 	type coalesceKey struct {
 		ruleRevisionID RuleRevisionID
 		identity       candidateIdentityKey
@@ -4916,6 +4954,7 @@ func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []rete
 		}
 		buckets[key] = append(buckets[key], i)
 	}
+	var updates []reteTerminalTokenUpdate
 	consumed := make([]bool, len(removed))
 	keptAdded := added[:0]
 	for _, add := range added {
@@ -4935,6 +4974,7 @@ func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []rete
 			keptAdded = append(keptAdded, add)
 			continue
 		}
+		updates = appendCoalescedTokenUpdate(updates, removed[bucket[match]], add)
 		consumed[bucket[match]] = true
 		buckets[key] = append(bucket[:match], bucket[match+1:]...)
 	}
@@ -4947,7 +4987,7 @@ func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []rete
 	for i := len(keptRemoved); i < len(removed); i++ {
 		removed[i] = reteTerminalTokenDelta{}
 	}
-	return keptAdded, keptRemoved
+	return keptAdded, keptRemoved, updates
 }
 
 func terminalTokenDeltasCoalesceEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
