@@ -92,7 +92,7 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false, nil
 	}
-	inserted := m.memory.right.insert(token, joinKey)
+	_, inserted := m.memory.right.insert(token, joinKey)
 	if !inserted {
 		return true, nil
 	}

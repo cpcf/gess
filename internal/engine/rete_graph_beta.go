@@ -40,7 +40,6 @@ type reteGraphBetaMemory struct {
 	deferredAggregateOrder   []deferredAggregateOutputKey
 	suppressTerminalDeltas   bool
 	rightPredicateScratch    []conditionMatch
-	tokenRefreshCache        map[tokenHandle]tokenRef
 	modifyRouteScope         reteModifyRouteScope
 }
 
@@ -55,6 +54,7 @@ type reteModifyRouteScope struct {
 type reteGraphBetaNodeMemory struct {
 	left     betaSideMemory
 	right    betaSideMemory
+	outputs  joinOutputTable
 	negative reteGraphNegativeBetaNodeMemory
 }
 
@@ -254,8 +254,11 @@ type graphTokenRow struct {
 }
 
 type betaTokenRow struct {
-	token   tokenRef
-	joinKey betaJoinKey
+	token tokenRef
+	// outputHead anchors the row's joinOutputTable chain on positive join
+	// nodes; it stays zero in filter and negative memories.
+	outputHead int32
+	joinKey    betaJoinKey
 }
 
 type alphaFactOwnershipRow struct {
@@ -884,16 +887,17 @@ func (m *betaSideMemory) forEachRow(fn func(*betaTokenRow) bool) {
 	}
 }
 
-func (m *betaSideMemory) insert(token tokenRef, joinKey betaJoinKey) bool {
+func (m *betaSideMemory) insert(token tokenRef, joinKey betaJoinKey) (int32, bool) {
 	if m == nil || token.isZero() {
-		return false
+		return 0, false
 	}
-	if !m.indexes.insert(betaTokenRow{token: token, joinKey: joinKey}) {
-		return false
+	ref, ok := m.indexes.insert(betaTokenRow{token: token, joinKey: joinKey})
+	if !ok {
+		return 0, false
 	}
 	m.joinIndexReserve = max(m.joinIndexReserve, len(m.indexes.heads))
 	m.rowReserve = max(m.rowReserve, m.indexes.len())
-	return true
+	return ref, true
 }
 
 func (m *betaSideMemory) containsExactToken(token tokenRef) bool {
@@ -910,24 +914,6 @@ func (m *betaSideMemory) containsExactToken(token tokenRef) bool {
 		}
 	}
 	return false
-}
-
-func (m *betaSideMemory) removeContainingFact(id FactID, counters *propagationCounterLedger) int {
-	if m == nil || id.IsZero() {
-		return 0
-	}
-	if counters != nil {
-		counters.recordRemovalIndexLookup()
-	}
-	var onTouch func()
-	var onRemove func(betaTokenRow)
-	if counters != nil {
-		onTouch = counters.recordRemovalRowTouched
-		onRemove = func(betaTokenRow) { counters.recordRemovalRowRemoved() }
-	}
-	return m.indexes.removeMatching(func(row *betaTokenRow) bool {
-		return row.token.containsFact(id)
-	}, onTouch, onRemove)
 }
 
 func (m *betaSideMemory) removeTokensContainingFact(id FactID, counters *propagationCounterLedger, fn func(betaTokenRow)) int {
@@ -1018,15 +1004,6 @@ func (m *betaSideMemory) forEachTokenContainingFact(id FactID, counters *propaga
 		if fn != nil {
 			fn(*row)
 		}
-	}
-}
-
-func (m *betaSideMemory) removeArenaRow(ref int32, counters *propagationCounterLedger) {
-	if m == nil || !m.indexes.unlink(ref) {
-		return
-	}
-	if counters != nil {
-		counters.recordRemovalRowRemoved()
 	}
 }
 
@@ -1223,6 +1200,7 @@ func (m *reteGraphBetaMemory) clearMemories() {
 		if node != nil {
 			node.left.clear()
 			node.right.clear()
+			node.outputs.clear()
 			node.negative.clear()
 		}
 	}
@@ -3630,6 +3608,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		return m.insertNegativeBetaInput(nodeID, side, node, token, span, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
+	var insertedRef int32
 	var inserted bool
 	var joinKey betaJoinKey
 	var ok bool
@@ -3640,14 +3619,14 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		if err != nil || !ok {
 			return false, err
 		}
-		inserted = nodeMemory.left.insert(token, joinKey)
+		insertedRef, inserted = nodeMemory.left.insert(token, joinKey)
 	case reteGraphBetaInputRight:
 		var err error
 		joinKey, ok, err = graphBetaJoinKeyForRightTokenWithContext(m.context(), node, token, span)
 		if err != nil || !ok {
 			return false, err
 		}
-		inserted = nodeMemory.right.insert(token, joinKey)
+		insertedRef, inserted = nodeMemory.right.insert(token, joinKey)
 	default:
 		return false, nil
 	}
@@ -3665,7 +3644,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		}
 		matched := false
 		var joinErr error
-		nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
+		nodeMemory.right.forEachJoinRow(joinKey, func(rightID graphTokenRowID, rightRow *betaTokenRow) bool {
 			if span != nil {
 				span.recordBetaCandidateRowScanned()
 			}
@@ -3689,6 +3668,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if output.isZero() {
 				return true
 			}
+			nodeMemory.outputs.link(&nodeMemory.left.indexes, insertedRef, &nodeMemory.right.indexes, int32(rightID)+1, output)
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
@@ -3715,7 +3695,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 		}
 		matched := false
 		var joinErr error
-		nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
+		nodeMemory.left.forEachJoinRow(joinKey, func(leftID graphTokenRowID, leftRow *betaTokenRow) bool {
 			if span != nil {
 				span.recordBetaCandidateRowScanned()
 			}
@@ -3735,6 +3715,7 @@ func (m *reteGraphBetaMemory) insertBetaInput(nodeID reteGraphBetaNodeID, side r
 			if output.isZero() {
 				return true
 			}
+			nodeMemory.outputs.link(&nodeMemory.left.indexes, int32(leftID)+1, &nodeMemory.right.indexes, insertedRef, output)
 			if span != nil {
 				span.recordBetaJoinedTokenProduced()
 			}
@@ -3773,7 +3754,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 		return m.insertBetaInput(nodeID, reteGraphBetaInputRight, token, entry, span, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	inserted := nodeMemory.right.insert(token, joinKey)
+	insertedRef, inserted := nodeMemory.right.insert(token, joinKey)
 	if !inserted {
 		return false, nil
 	}
@@ -3786,7 +3767,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 	}
 	matched := false
 	var joinErr error
-	nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
+	nodeMemory.left.forEachJoinRow(joinKey, func(leftID graphTokenRowID, leftRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
@@ -3806,6 +3787,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaRightInput(nodeID reteGraphBeta
 		if output.isZero() {
 			return true
 		}
+		nodeMemory.outputs.link(&nodeMemory.left.indexes, int32(leftID)+1, &nodeMemory.right.indexes, insertedRef, output)
 		if span != nil {
 			span.recordBetaJoinedTokenProduced()
 		}
@@ -3843,7 +3825,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 		return m.insertBetaInput(nodeID, reteGraphBetaInputLeft, token, entry, span, delta)
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	inserted := nodeMemory.left.insert(token, joinKey)
+	insertedRef, inserted := nodeMemory.left.insert(token, joinKey)
 	if !inserted {
 		return false, nil
 	}
@@ -3856,7 +3838,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 	}
 	matched := false
 	var joinErr error
-	nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
+	nodeMemory.right.forEachJoinRow(joinKey, func(rightID graphTokenRowID, rightRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
 		}
@@ -3880,6 +3862,7 @@ func (m *reteGraphBetaMemory) insertGeneratedBetaLeftInput(nodeID reteGraphBetaN
 		if output.isZero() {
 			return true
 		}
+		nodeMemory.outputs.link(&nodeMemory.left.indexes, insertedRef, &nodeMemory.right.indexes, int32(rightID)+1, output)
 		if span != nil {
 			span.recordBetaJoinedTokenProduced()
 		}
@@ -4096,7 +4079,7 @@ func (m *reteGraphBetaMemory) insertFilterBetaInput(nodeID reteGraphBetaNodeID, 
 		return true, nil
 	}
 	nodeMemory := m.nodeMemory(nodeID)
-	inserted := nodeMemory.left.insert(token, betaJoinKey{})
+	_, inserted := nodeMemory.left.insert(token, betaJoinKey{})
 	if !inserted {
 		return true, nil
 	}
@@ -4161,11 +4144,10 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 	if !ok {
 		return true
 	}
-	joinKey, removed := removedRow.joinKey, removedRow.token
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
 	}
-	m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, joinKey, removed, counters, delta)
+	m.propagateStoredJoinedRemovals(nodeID, side, node, nodeMemory, removedRow, counters, delta)
 	return true
 }
 
@@ -4203,127 +4185,35 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 	}
 }
 
-func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
-	if m == nil || delta == nil || node == nil || nodeMemory == nil || token.isZero() {
+// propagateStoredJoinedRemovals drains the removed row's stored output links:
+// each stored output token is propagated for removal downstream exactly as
+// inserted, with no key or token reconstruction and no residual
+// re-evaluation, and a surviving opposite row whose link chain empties has
+// lost its last match, which drives backchain demand.
+func (m *reteGraphBetaMemory) propagateStoredJoinedRemovals(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, removedRow betaTokenRow, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || delta == nil || node == nil || nodeMemory == nil {
 		return
 	}
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
+	checkDemand := len(node.backchainDemands) > 0
 	switch side {
 	case reteGraphBetaInputLeft:
-		nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
-			if rightRow == nil || rightRow.token.isZero() {
-				return true
-			}
-			rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
-			if !ok {
-				return true
-			}
-			if ok, err := m.residualJoinsMatch(node, rightMatch.fact, token, nil); err != nil {
-				delta.supported = false
-			} else if !ok {
-				return true
-			}
-			output := m.newTokenRef(token, node.entry, rightMatch, rightMatch.fact.Recency(), rightMatch.fact.Generation(), nil)
-			if output.isZero() {
-				delta.supported = false
-				return true
-			}
+		nodeMemory.outputs.removeAllForLeft(removedRow.outputHead, &nodeMemory.right.indexes, func(output tokenRef, rightRef int32, rightEmpty bool) {
 			m.propagateRemoveFromStage(source, output, counters, delta)
-			if ok, supported := m.rightTokenHasLeftMatch(node, nodeMemory, joinKey, rightRow.token); !supported {
-				delta.supported = false
-			} else if !ok {
-				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputLeft, rightRow.token, delta)
+			if checkDemand && rightEmpty {
+				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputLeft, nodeMemory.right.indexes.rows[rightRef-1].token, delta)
 			}
-			return true
 		})
 	case reteGraphBetaInputRight:
-		currentMatch, ok := tokenLastMatch(token)
-		if !ok {
-			delta.supported = false
-			return
-		}
-		nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
-			if leftRow == nil || leftRow.token.isZero() {
-				return true
-			}
-			if ok, err := m.residualJoinsMatch(node, currentMatch.fact, leftRow.token, nil); err != nil {
-				delta.supported = false
-			} else if !ok {
-				return true
-			}
-			output := m.newTokenRef(leftRow.token, node.entry, currentMatch, currentMatch.fact.Recency(), currentMatch.fact.Generation(), nil)
-			if output.isZero() {
-				delta.supported = false
-				return true
-			}
+		nodeMemory.outputs.removeAllForRight(removedRow.outputHead, &nodeMemory.left.indexes, func(output tokenRef, leftRef int32, leftEmpty bool) {
 			m.propagateRemoveFromStage(source, output, counters, delta)
-			if ok, supported := m.leftTokenHasRightMatch(node, nodeMemory, joinKey, leftRow.token); !supported {
-				delta.supported = false
-			} else if !ok {
-				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputRight, leftRow.token, delta)
+			if checkDemand && leftEmpty {
+				m.appendBackchainDemandRequests(node.id, node, reteGraphBetaInputRight, nodeMemory.left.indexes.rows[leftRef-1].token, delta)
 			}
-			return true
 		})
 	default:
 		delta.supported = false
 	}
-}
-
-func (m *reteGraphBetaMemory) rightTokenHasLeftMatch(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, right tokenRef) (bool, bool) {
-	if m == nil || node == nil || nodeMemory == nil || right.isZero() {
-		return false, false
-	}
-	rightMatch, ok := tokenFactMatchForBindingSlot(right, node.entry.bindingSlot)
-	if !ok {
-		return false, false
-	}
-	matched := false
-	supported := true
-	nodeMemory.left.forEachJoinRow(joinKey, func(_ graphTokenRowID, leftRow *betaTokenRow) bool {
-		if leftRow == nil || leftRow.token.isZero() {
-			return true
-		}
-		ok, err := m.residualJoinsMatch(node, rightMatch.fact, leftRow.token, nil)
-		if err != nil {
-			supported = false
-			return false
-		}
-		if ok {
-			matched = true
-			return false
-		}
-		return true
-	})
-	return matched, supported
-}
-
-func (m *reteGraphBetaMemory) leftTokenHasRightMatch(node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, left tokenRef) (bool, bool) {
-	if m == nil || node == nil || nodeMemory == nil || left.isZero() {
-		return false, false
-	}
-	matched := false
-	supported := true
-	nodeMemory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
-		if rightRow == nil || rightRow.token.isZero() {
-			return true
-		}
-		rightMatch, ok := tokenFactMatchForBindingSlot(rightRow.token, node.entry.bindingSlot)
-		if !ok {
-			supported = false
-			return false
-		}
-		ok, err := m.residualJoinsMatch(node, rightMatch.fact, left, nil)
-		if err != nil {
-			supported = false
-			return false
-		}
-		if ok {
-			matched = true
-			return false
-		}
-		return true
-	})
-	return matched, supported
 }
 
 func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
@@ -4342,7 +4232,7 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 	}
 	nodeMemory := m.nodeMemory(nodeID)
 	removeToken := func(row betaTokenRow) {
-		m.propagateJoinedRemovals(nodeID, side, node, nodeMemory, row.joinKey, row.token, counters, delta)
+		m.propagateStoredJoinedRemovals(nodeID, side, node, nodeMemory, row, counters, delta)
 	}
 	switch side {
 	case reteGraphBetaInputLeft:
@@ -4509,24 +4399,6 @@ func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactS
 	}
 	m.removeAlphaFact(id)
 	return delta, nil
-}
-
-func (m *reteGraphBetaMemory) removeFactByIndexes(id FactID, counters *propagationCounterLedger) reteAgendaDelta {
-	if m == nil || m.graph == nil {
-		return reteAgendaDelta{}
-	}
-	delta := reteAgendaDelta{supported: true}
-	m.removeAlphaFact(id)
-	for _, node := range m.nodes {
-		if node == nil {
-			continue
-		}
-		node.left.removeContainingFact(id, counters)
-		node.right.removeContainingFact(id, counters)
-		node.negative.left.removeTokensContainingFact(id, counters, nil)
-		node.negative.right.removeTokensContainingFact(id, counters, nil)
-	}
-	return delta
 }
 
 func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact conditionFactRef) {

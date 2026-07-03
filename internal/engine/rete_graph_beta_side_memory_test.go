@@ -155,10 +155,10 @@ func TestBetaSideMemoryAppendsEquivalentReconstructedToken(t *testing.T) {
 	}
 
 	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
+	if _, ok := memory.insert(firstToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(first) returned false")
 	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
+	if _, ok := memory.insert(secondToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(equivalent second) returned false")
 	}
 	if got, want := memory.len(), 2; got != want {
@@ -197,10 +197,10 @@ func TestBetaSideMemoryKeepsIdentityCollisionRowsDistinct(t *testing.T) {
 	}
 
 	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
+	if _, ok := memory.insert(firstToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(first) returned false")
 	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
+	if _, ok := memory.insert(secondToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(colliding second) returned false")
 	}
 	if got, want := memory.len(), 2; got != want {
@@ -320,15 +320,15 @@ func TestBetaSideMemoryIndexedRemovalKeepsCollidingRows(t *testing.T) {
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
 	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
+	if _, ok := memory.insert(firstToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(first) returned false")
 	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
+	if _, ok := memory.insert(secondToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(second) returned false")
 	}
 
 	counters := newPropagationCounterLedger()
-	if removed := memory.removeContainingFact(firstFact.ID(), counters); removed != 1 {
+	if removed := memory.removeTokensContainingFact(firstFact.ID(), counters, nil); removed != 1 {
 		t.Fatalf("removed rows = %d, want 1", removed)
 	}
 	snapshot := counters.snapshot()
@@ -344,7 +344,7 @@ func TestBetaSideMemoryIndexedRemovalKeepsCollidingRows(t *testing.T) {
 	if !memory.containsExactToken(secondToken) {
 		t.Fatal("moved token is missing from beta memory")
 	}
-	if removed := memory.removeContainingFact(secondFact.ID(), counters); removed != 1 {
+	if removed := memory.removeTokensContainingFact(secondFact.ID(), counters, nil); removed != 1 {
 		t.Fatalf("removed moved row = %d, want 1", removed)
 	}
 }
@@ -361,10 +361,10 @@ func TestBetaSideMemoryRemoveTokenWithJoinKeySurvivesBucketCollision(t *testing.
 	secondKey := betaJoinKey{intValue: 20}
 
 	var memory betaSideMemory
-	if !memory.insert(firstToken, firstKey) {
+	if _, ok := memory.insert(firstToken, firstKey); !ok {
 		t.Fatal("insert(first) returned false")
 	}
-	if !memory.insert(secondToken, secondKey) {
+	if _, ok := memory.insert(secondToken, secondKey); !ok {
 		t.Fatal("insert(second) returned false")
 	}
 
@@ -502,22 +502,22 @@ func TestBetaSideMemoryScansFactRemovalWithoutReverseIndex(t *testing.T) {
 	secondToken := arena.add(tokenRef{}, secondEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(secondFact)}, secondFact.Recency(), secondFact.Generation())
 
 	var memory betaSideMemory
-	if !memory.insert(firstToken, betaJoinKey{}) {
+	if _, ok := memory.insert(firstToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(first) returned false")
 	}
-	if !memory.insert(secondToken, betaJoinKey{}) {
+	if _, ok := memory.insert(secondToken, betaJoinKey{}); !ok {
 		t.Fatal("insert(second) returned false")
 	}
 	if got := memory.factIndexKeyCount(); got != 0 {
 		t.Fatalf("beta fact index keys = %d, want no retained fact index", got)
 	}
-	if removed := memory.removeContainingFact(firstFact.ID(), nil); removed != 1 {
+	if removed := memory.removeTokensContainingFact(firstFact.ID(), nil, nil); removed != 1 {
 		t.Fatalf("removed rows = %d, want 1", removed)
 	}
 	if got, want := memory.len(), 1; got != want {
 		t.Fatalf("rows after first fact removal = %d, want %d", got, want)
 	}
-	if removed := memory.removeContainingFact(secondFact.ID(), nil); removed != 1 {
+	if removed := memory.removeTokensContainingFact(secondFact.ID(), nil, nil); removed != 1 {
 		t.Fatalf("removed second rows = %d, want 1", removed)
 	}
 }
@@ -532,7 +532,7 @@ func TestBetaSideMemoryFactScanFindsParentFacts(t *testing.T) {
 	child := arena.add(parent, childEntry, conditionMatch{bindingSlot: 1, fact: newConditionFactRefFromSnapshot(childFact)}, childFact.Recency(), childFact.Generation())
 
 	var memory betaSideMemory
-	if !memory.insert(child, betaJoinKey{}) {
+	if _, ok := memory.insert(child, betaJoinKey{}); !ok {
 		t.Fatal("insert(child) returned false")
 	}
 	if got := memory.factRowCount(parentFact.ID()); got != 1 {
@@ -541,7 +541,7 @@ func TestBetaSideMemoryFactScanFindsParentFacts(t *testing.T) {
 	if got := memory.factRowCount(childFact.ID()); got != 1 {
 		t.Fatalf("child fact scan rows = %d, want 1", got)
 	}
-	if removed := memory.removeContainingFact(parentFact.ID(), nil); removed != 1 {
+	if removed := memory.removeTokensContainingFact(parentFact.ID(), nil, nil); removed != 1 {
 		t.Fatalf("removed rows for parent fact = %d, want 1", removed)
 	}
 }

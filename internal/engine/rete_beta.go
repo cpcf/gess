@@ -867,7 +867,7 @@ func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]conditio
 			return false
 		}
 		slot := row.bindingSlot
-		for i := 0; i < count; i++ {
+		for i := range count {
 			if found[i] || slots[i] != slot {
 				continue
 			}

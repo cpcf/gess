@@ -165,9 +165,9 @@ func (t *betaJoinBucketTable) chainRow(ref int32) {
 	t.tails[slot] = ref
 }
 
-func (t *betaJoinBucketTable) insert(row betaTokenRow) bool {
+func (t *betaJoinBucketTable) insert(row betaTokenRow) (int32, bool) {
 	if t == nil || row.token.isZero() {
-		return false
+		return 0, false
 	}
 	t.reserve(max(8, t.rowCount+1))
 	var ref int32
@@ -185,7 +185,7 @@ func (t *betaJoinBucketTable) insert(row betaTokenRow) bool {
 	t.indexIdentity(ref)
 	t.rowCount++
 	row.token.retain()
-	return true
+	return ref, true
 }
 
 func (t *betaJoinBucketTable) unlink(ref int32) bool {
