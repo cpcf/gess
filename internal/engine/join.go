@@ -56,6 +56,7 @@ const (
 	joinIndexUnknown joinIndexKind = iota
 	joinIndexEquality
 	joinIndexNumericComparison
+	joinIndexInequality
 )
 
 type compiledJoinConstraint struct {
@@ -104,6 +105,8 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 	switch c.operator {
 	case FieldConstraintOpEqual:
 		return valuesComparableForEquality(left, right) && left.Equal(right), nil
+	case FieldConstraintOpNotEqual:
+		return valuesComparableForEquality(left, right) && !left.Equal(right), nil
 	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		if !isNumericValue(left) || !isNumericValue(right) {
 			return false, nil
@@ -126,7 +129,7 @@ func (c compiledJoinConstraint) matchesTokenWithCounters(fact conditionFactRef, 
 
 func validJoinOperator(operator FieldConstraintOperator) bool {
 	switch operator {
-	case FieldConstraintOpEqual, FieldConstraintOpLessThan,
+	case FieldConstraintOpEqual, FieldConstraintOpNotEqual, FieldConstraintOpLessThan,
 		FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		return true
 	default:
@@ -260,6 +263,8 @@ func compileJoinConstraintSpec(
 
 	indexKind := joinIndexEquality
 	switch normalized.Operator {
+	case FieldConstraintOpNotEqual:
+		indexKind = joinIndexInequality
 	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		indexKind = joinIndexNumericComparison
 	}
@@ -341,6 +346,8 @@ func (c compiledJoinConstraint) matches(fact conditionFactRef, bindings []condit
 	switch c.operator {
 	case FieldConstraintOpEqual:
 		return valuesComparableForEquality(left, right) && left.Equal(right), nil
+	case FieldConstraintOpNotEqual:
+		return valuesComparableForEquality(left, right) && !left.Equal(right), nil
 	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		if !isNumericValue(left) || !isNumericValue(right) {
 			return false, nil

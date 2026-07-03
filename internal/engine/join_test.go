@@ -199,7 +199,7 @@ func TestJoinConstraintCompileValidation(t *testing.T) {
 					Binding: "right",
 
 					JoinConstraints: []JoinConstraintSpec{
-						{Field: "age", Operator: FieldConstraintNotEqual, Ref: FieldRef{Binding: "left", Field: "age"}},
+						{Field: "age", Operator: FieldConstraintExists, Ref: FieldRef{Binding: "left", Field: "age"}},
 					}, Target: TemplateKeyFact(personTemplate.Key()),
 				},
 			},
