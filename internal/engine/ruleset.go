@@ -339,10 +339,13 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 			}
 		}
 		template.id = templateID(i + 1)
-		templates[template.name] = template.clone()
-		templatesByKey[template.key] = template.clone()
-		templatesByQualifiedName[template.QualifiedName()] = template.clone()
-		templatesByID = append(templatesByID, template.clone())
+		// Compiled templates are immutable, so one isolated clone backs
+		// every index of the revision.
+		cloned := template.clone()
+		templates[template.name] = cloned
+		templatesByKey[template.key] = cloned
+		templatesByQualifiedName[template.QualifiedName()] = cloned
+		templatesByID = append(templatesByID, cloned)
 		templateIDsByName[template.name] = template.id
 		templateIDsByKey[template.key] = template.id
 		templateOrder = append(templateOrder, template.name)
