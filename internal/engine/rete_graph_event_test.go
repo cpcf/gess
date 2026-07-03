@@ -237,7 +237,7 @@ func TestReteGraphPropagationEventCarriesGeneratedMetadata(t *testing.T) {
 	}
 	fact.setFieldSlots(slots)
 
-	event := newReteGraphGeneratedAssertEvent(fact, revision, nil, mutationOrigin{}, nil)
+	event := newReteGraphGeneratedAssertEvent(fact, mutationOrigin{}, nil)
 
 	if event.tag != reteGraphPropagationAdd {
 		t.Fatalf("event tag = %d, want add", event.tag)
@@ -248,15 +248,11 @@ func TestReteGraphPropagationEventCarriesGeneratedMetadata(t *testing.T) {
 	if event.workingFact != fact {
 		t.Fatal("generated assert event lost working fact handle")
 	}
-	if event.fact.ID() != fact.id || event.after.ID() != fact.id {
-		t.Fatalf("generated event IDs = (%#v, %#v), want %#v", event.fact.ID(), event.after.ID(), fact.id)
+	if !event.fact.ID().IsZero() || !event.after.ID().IsZero() {
+		t.Fatalf("generated event materialized public snapshots (%#v, %#v), want none", event.fact.ID(), event.after.ID())
 	}
-	if event.fact.TemplateKey() != templateKey {
-		t.Fatalf("generated event template key = %q, want %q", event.fact.TemplateKey(), templateKey)
-	}
-	slots[0].value = mustValue(t, "mutated")
-	if got := event.fact.fieldSlots[0].value; !got.Equal(mustValue(t, "kind-a")) {
-		t.Fatalf("generated event snapshot slot aliased caller slots: %v", got)
+	if event.sourceGeneration != fact.id.Generation() {
+		t.Fatalf("generated event source generation = %d, want %d", event.sourceGeneration, fact.id.Generation())
 	}
 
 	remove := newReteGraphGeneratedRetractEvent(fact, mutationOrigin{}, nil)

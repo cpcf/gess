@@ -79,18 +79,16 @@ func newReteGraphResetWorkingAssertEvent(fact *workingFact, snapshot FactSnapsho
 	}
 }
 
-func newReteGraphGeneratedAssertEvent(fact *workingFact, revision *Ruleset, compactSlotStore *factCompactSlotStore, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
-	var snapshot FactSnapshot
+func newReteGraphGeneratedAssertEvent(fact *workingFact, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
+	var generation Generation
 	if fact != nil {
-		snapshot = fact.snapshotForRevision(revision, compactSlotStore)
+		generation = fact.id.Generation()
 	}
 	return reteGraphPropagationEvent{
 		tag:              reteGraphPropagationAdd,
-		fact:             snapshot,
 		workingFact:      fact,
-		after:            snapshot,
 		generated:        true,
-		sourceGeneration: snapshot.Generation(),
+		sourceGeneration: generation,
 		origin:           origin,
 		span:             span,
 	}
