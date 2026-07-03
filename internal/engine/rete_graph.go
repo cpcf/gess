@@ -85,15 +85,23 @@ const (
 	reteGraphAlphaGeneratedMatchNone reteGraphAlphaGeneratedMatchKind = iota
 	reteGraphAlphaGeneratedMatchTargetOnly
 	reteGraphAlphaGeneratedMatchSlotEqual
+	reteGraphAlphaGeneratedMatchSlotCompare
 )
 
 type reteGraphAlphaGeneratedMatch struct {
-	kind       reteGraphAlphaGeneratedMatchKind
-	equalities []reteGraphAlphaGeneratedEquality
+	kind        reteGraphAlphaGeneratedMatchKind
+	equalities  []reteGraphAlphaGeneratedEquality
+	comparisons []reteGraphAlphaGeneratedComparison
 }
 
 type reteGraphAlphaGeneratedEquality struct {
 	fieldSlot int
+	value     reteGraphAlphaRouteValue
+}
+
+type reteGraphAlphaGeneratedComparison struct {
+	fieldSlot int
+	operator  FieldConstraintOperator
 	value     reteGraphAlphaRouteValue
 }
 
@@ -469,7 +477,7 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 						template := templatesByKey[condition.target.templateKey]
 						route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 						alphaNode.route = route
-						alphaNode.configureGeneratedMatch(route)
+						alphaNode.configureGeneratedMatch(template, route)
 					}
 					switch condition.target.kind {
 					case conditionTargetTemplateKey:
@@ -1240,7 +1248,7 @@ func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, conditio
 			template := templatesByKey[condition.target.templateKey]
 			route = reteGraphAlphaRouteSelectorForConstraints(template, alphaConstraints)
 			alphaNode.route = route
-			alphaNode.configureGeneratedMatch(route)
+			alphaNode.configureGeneratedMatch(template, route)
 		}
 		switch condition.target.kind {
 		case conditionTargetTemplateKey:
@@ -1745,7 +1753,7 @@ func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []
 	return reteGraphAlphaRouteSelector{}
 }
 
-func (n *reteGraphAlphaNode) configureGeneratedMatch(route reteGraphAlphaRouteSelector) {
+func (n *reteGraphAlphaNode) configureGeneratedMatch(template Template, route reteGraphAlphaRouteSelector) {
 	if n == nil || len(n.listPatterns) != 0 || len(n.predicates) != 0 {
 		return
 	}
@@ -1756,6 +1764,7 @@ func (n *reteGraphAlphaNode) configureGeneratedMatch(route reteGraphAlphaRouteSe
 	equalities := make([]reteGraphAlphaGeneratedEquality, 0, len(n.constraints))
 	for _, constraint := range n.constraints {
 		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
+			n.configureGeneratedCompareMatch(template)
 			return
 		}
 		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
@@ -1776,6 +1785,48 @@ func (n *reteGraphAlphaNode) configureGeneratedMatch(route reteGraphAlphaRouteSe
 	n.generatedMatch = reteGraphAlphaGeneratedMatch{
 		kind:       reteGraphAlphaGeneratedMatchSlotEqual,
 		equalities: equalities,
+	}
+}
+
+// configureGeneratedCompareMatch compiles mixed scalar comparisons on
+// top-level slots whose declared field kind matches the constant kind, so
+// generated asserts skip the generic constraint path. Constant kinds are
+// limited to bool/int/string, which keeps the comparisons free of the
+// cross-kind numeric coercion the generic path handles.
+func (n *reteGraphAlphaNode) configureGeneratedCompareMatch(template Template) {
+	comparisons := make([]reteGraphAlphaGeneratedComparison, 0, len(n.constraints))
+	for _, constraint := range n.constraints {
+		if constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
+			return
+		}
+		switch constraint.operator {
+		case FieldConstraintOpEqual, FieldConstraintOpNotEqual:
+		case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
+			if constraint.value.Kind() == ValueBool {
+				return
+			}
+		default:
+			return
+		}
+		value, ok := reteGraphAlphaRouteValueFromValue(constraint.value)
+		if !ok {
+			return
+		}
+		if !reteGraphAlphaRouteFieldKindMatches(template, constraint.access.rootSlot, value.kind) {
+			return
+		}
+		comparisons = append(comparisons, reteGraphAlphaGeneratedComparison{
+			fieldSlot: constraint.access.rootSlot,
+			operator:  constraint.operator,
+			value:     value,
+		})
+	}
+	if len(comparisons) == 0 {
+		return
+	}
+	n.generatedMatch = reteGraphAlphaGeneratedMatch{
+		kind:        reteGraphAlphaGeneratedMatchSlotCompare,
+		comparisons: comparisons,
 	}
 }
 
@@ -1912,6 +1963,52 @@ func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fac
 			}
 		}
 		return true
+	case reteGraphAlphaGeneratedMatchSlotCompare:
+		for _, comparison := range m.comparisons {
+			value, ok := fact.compiledFieldValue("", comparison.fieldSlot, compactSlotStore)
+			if !ok || !comparison.matchesValue(value) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func (c reteGraphAlphaGeneratedComparison) matchesValue(value Value) bool {
+	if !c.value.valid || value.Kind() != c.value.kind {
+		return false
+	}
+	switch c.operator {
+	case FieldConstraintOpEqual:
+		return c.value.matchesValue(value)
+	case FieldConstraintOpNotEqual:
+		return !c.value.matchesValue(value)
+	}
+	var comparison int
+	switch c.value.kind {
+	case ValueInt:
+		switch {
+		case value.intValue < c.value.bits:
+			comparison = -1
+		case value.intValue > c.value.bits:
+			comparison = 1
+		}
+	case ValueString:
+		comparison = strings.Compare(value.stringValue, c.value.text)
+	default:
+		return false
+	}
+	switch c.operator {
+	case FieldConstraintOpLessThan:
+		return comparison < 0
+	case FieldConstraintOpLessOrEqual:
+		return comparison <= 0
+	case FieldConstraintOpGreaterThan:
+		return comparison > 0
+	case FieldConstraintOpGreaterOrEqual:
+		return comparison >= 0
 	default:
 		return false
 	}
@@ -2619,6 +2716,7 @@ func cloneReteGraphAlphaNodes(in []reteGraphAlphaNode) []reteGraphAlphaNode {
 		out[i].consumers = cloneReteGraphAlphaConsumers(node.consumers)
 		out[i].entry = cloneBindingTupleEntry(node.entry)
 		out[i].generatedMatch.equalities = cloneReteGraphAlphaGeneratedEqualities(node.generatedMatch.equalities)
+		out[i].generatedMatch.comparisons = slices.Clone(node.generatedMatch.comparisons)
 		out[i].generatedOps = cloneReteGraphGeneratedAlphaOps(node.generatedOps)
 	}
 	return out
