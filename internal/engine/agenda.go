@@ -2782,14 +2782,8 @@ func nextPublicTokenFact(token *tokenRef) (id FactID, version FactVersion, hasFa
 			return FactID{}, 0, false, false
 		}
 		slot := row.bindingSlot
-		if row.fact != nil {
-			id = row.fact.ID()
-			version = row.fact.Version()
-		} else {
-			id = FactID{}
-			version = 0
-		}
-		*token = token.parent()
+		id, version = row.factIdentity()
+		*token = tokenRef{handle: tokenHandle{arena: token.handle.arena, rowID: row.parent.rowID, generation: row.parent.gen}}
 		if slot < 0 {
 			continue
 		}
@@ -2814,22 +2808,38 @@ func compareTerminalTokenFacts(left, right tokenRef) int {
 	if !leftOK || !rightOK {
 		return 0
 	}
-	if compare := compareTerminalTokenFacts(left.parent(), right.parent()); compare != 0 {
-		return compare
+	return compareTerminalTokenRows(left.handle.arena, leftRow, right.handle.arena, rightRow)
+}
+
+// compareTerminalTokenRows compares two resolved token chains root-first,
+// resolving each row once. A stale parent handle contributes 0 for that
+// subtree, matching the tokenRef-based comparison it replaces.
+func compareTerminalTokenRows(leftArena *tokenArena, leftRow *tokenRow, rightArena *tokenArena, rightRow *tokenRow) int {
+	switch {
+	case leftRow.parent.isZero() && rightRow.parent.isZero():
+	case leftRow.parent.isZero():
+		return -1
+	case rightRow.parent.isZero():
+		return 1
+	default:
+		leftParent, leftOK := leftArena.parentRow(leftRow)
+		rightParent, rightOK := rightArena.parentRow(rightRow)
+		if leftOK && rightOK {
+			if compare := compareTerminalTokenRows(leftArena, leftParent, rightArena, rightParent); compare != 0 {
+				return compare
+			}
+		}
 	}
-	leftMatch, leftOK := leftRow.conditionMatch()
-	rightMatch, rightOK := rightRow.conditionMatch()
-	if !leftOK || !rightOK {
-		return 0
-	}
-	if leftMatch.fact.ID() != rightMatch.fact.ID() {
-		if factIDLess(leftMatch.fact.ID(), rightMatch.fact.ID()) {
+	leftID, leftVersion := leftRow.factIdentity()
+	rightID, rightVersion := rightRow.factIdentity()
+	if leftID != rightID {
+		if factIDLess(leftID, rightID) {
 			return -1
 		}
 		return 1
 	}
-	if leftMatch.fact.Version() != rightMatch.fact.Version() {
-		if leftMatch.fact.Version() < rightMatch.fact.Version() {
+	if leftVersion != rightVersion {
+		if leftVersion < rightVersion {
 			return -1
 		}
 		return 1

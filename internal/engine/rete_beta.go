@@ -632,17 +632,20 @@ func (r tokenRef) containsFact(id FactID) bool {
 	if ok {
 		return slices.Contains(ids, id)
 	}
-	for current := r; !current.isZero(); current = current.parent() {
-		row, ok := current.resolve()
-		if !ok {
-			return false
-		}
-		match, ok := row.conditionMatch()
-		if !ok {
-			return false
-		}
-		if match.fact.ID() == id {
+	if r.isZero() {
+		return false
+	}
+	row, ok := r.resolve()
+	if !ok {
+		return false
+	}
+	arena := r.handle.arena
+	for row != nil {
+		if row.fact != nil && row.fact.ID() == id {
 			return true
+		}
+		if row, ok = arena.parentRow(row); !ok {
+			return false
 		}
 	}
 	return false
@@ -746,6 +749,27 @@ const reteBetaMatchTokenChunkSize = 64
 const reteBetaMatchTokenChunkReserve = 2
 const transientFactSequenceThreshold = ^uint64(0) >> 1
 
+// parentRow steps to row's parent within the arena, resolving once. nil with
+// ok=true means the chain ended; ok=false means the parent handle is stale.
+func (a *tokenArena) parentRow(row *tokenRow) (*tokenRow, bool) {
+	if row.parent.isZero() {
+		return nil, true
+	}
+	parent, ok := a.rowByID(row.parent.rowID)
+	if !ok || parent.rowGen != row.parent.gen {
+		return nil, false
+	}
+	return parent, true
+}
+
+// factIdentity reads the row's fact identity without copying a conditionMatch.
+func (r *tokenRow) factIdentity() (FactID, FactVersion) {
+	if r.fact == nil {
+		return FactID{}, 0
+	}
+	return r.fact.ID(), r.fact.Version()
+}
+
 func tokenRefEqual(left, right tokenRef) bool {
 	if left.isZero() || right.isZero() {
 		return left.isZero() && right.isZero()
@@ -753,43 +777,34 @@ func tokenRefEqual(left, right tokenRef) bool {
 	if left.handle == right.handle {
 		return true
 	}
-	if left.size() != right.size() || left.generation() != right.generation() || left.identityState() != right.identityState() {
+	leftRow, leftOK := left.resolve()
+	rightRow, rightOK := right.resolve()
+	if !leftOK || !rightOK {
 		return false
 	}
-	leftFactIDs, leftIDsOK := left.factIDs()
-	rightFactIDs, rightIDsOK := right.factIDs()
-	leftFactVersions, leftVersionsOK := left.factVersions()
-	rightFactVersions, rightVersionsOK := right.factVersions()
-	if leftIDsOK && rightIDsOK && leftVersionsOK && rightVersionsOK {
-		if len(leftFactIDs) != len(rightFactIDs) || len(leftFactVersions) != len(rightFactVersions) || len(leftFactIDs) != len(leftFactVersions) {
-			return false
-		}
-		for i := range leftFactIDs {
-			if leftFactIDs[i] != rightFactIDs[i] || leftFactVersions[i] != rightFactVersions[i] {
-				return false
-			}
-		}
-		return true
+	if leftRow.size != rightRow.size || leftRow.identityState != rightRow.identityState {
+		return false
 	}
-	for currentLeft, currentRight := left, right; !currentLeft.isZero() || !currentRight.isZero(); currentLeft, currentRight = currentLeft.parent(), currentRight.parent() {
-		leftRow, leftOK := currentLeft.resolve()
-		rightRow, rightOK := currentRight.resolve()
-		if !leftOK || !rightOK {
-			return false
-		}
-		leftMatch, leftOK := leftRow.conditionMatch()
-		rightMatch, rightOK := rightRow.conditionMatch()
-		if !leftOK || !rightOK {
-			return false
-		}
-		if leftMatch.fact.ID() != rightMatch.fact.ID() || leftMatch.fact.Version() != rightMatch.fact.Version() {
+	leftArena, rightArena := left.handle.arena, right.handle.arena
+	if leftArena.generation != rightArena.generation {
+		return false
+	}
+	for {
+		leftID, leftVersion := leftRow.factIdentity()
+		rightID, rightVersion := rightRow.factIdentity()
+		if leftID != rightID || leftVersion != rightVersion {
 			return false
 		}
 		if leftRow.parent.isZero() || rightRow.parent.isZero() {
 			return leftRow.parent.isZero() && rightRow.parent.isZero()
 		}
+		if leftRow, leftOK = leftArena.parentRow(leftRow); !leftOK {
+			return false
+		}
+		if rightRow, rightOK = rightArena.parentRow(rightRow); !rightOK {
+			return false
+		}
 	}
-	return true
 }
 
 func tokenRefHasPrefix(token, prefix tokenRef) bool {
@@ -819,19 +834,18 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 	if token.isZero() || slot < 0 {
 		return conditionMatch{}, false
 	}
-	for current := token; !current.isZero(); current = current.parent() {
-		row, ok := current.resolve()
-		if !ok {
+	row, ok := token.resolve()
+	if !ok {
+		return conditionMatch{}, false
+	}
+	arena := token.handle.arena
+	for row != nil {
+		if row.bindingSlot == slot {
+			return row.conditionMatch()
+		}
+		if row, ok = arena.parentRow(row); !ok {
 			return conditionMatch{}, false
 		}
-		if row.bindingSlot != slot {
-			continue
-		}
-		match, ok := row.conditionMatch()
-		if !ok {
-			return conditionMatch{}, false
-		}
-		return match, true
 	}
 	return token.matchAt(slot)
 }

@@ -5702,17 +5702,20 @@ func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMat
 			return match, true
 		}
 	}
-	for current := token; !current.isZero(); current = current.parent() {
-		row, ok := current.resolve()
-		if !ok {
-			return conditionMatch{}, false
+	if token.isZero() {
+		return conditionMatch{}, false
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return conditionMatch{}, false
+	}
+	arena := token.handle.arena
+	for row != nil {
+		if !row.hasValue {
+			return row.conditionMatch()
 		}
-		match, ok := row.conditionMatch()
-		if !ok {
+		if row, ok = arena.parentRow(row); !ok {
 			return conditionMatch{}, false
-		}
-		if !match.hasValue {
-			return match, true
 		}
 	}
 	return conditionMatch{}, false
