@@ -836,6 +836,44 @@ func tokenRefAtSlot(token tokenRef, slot int) (conditionMatch, bool) {
 	return token.matchAt(slot)
 }
 
+// tokenFactsAtSlots resolves the facts for count binding slots in one chain
+// walk, resolving each row exactly once. The nearest row to the tip wins for
+// each slot, matching tokenRefAtSlot. It reports false when any slot is not
+// found on the chain (callers needing the positional matchAt fallback must
+// use tokenRefAtSlot).
+func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]conditionFactRef) bool {
+	if count <= 0 || count > 3 || out == nil {
+		return false
+	}
+	var found [3]bool
+	remaining := count
+	for current := token; !current.isZero(); {
+		row, ok := current.resolve()
+		if !ok {
+			return false
+		}
+		slot := row.bindingSlot
+		for i := 0; i < count; i++ {
+			if found[i] || slots[i] != slot {
+				continue
+			}
+			found[i] = true
+			remaining--
+			if row.fact != nil {
+				out[i] = *row.fact
+			}
+		}
+		if remaining == 0 {
+			return true
+		}
+		if row.parent.isZero() {
+			return false
+		}
+		current = tokenRef{handle: tokenHandle{arena: current.handle.arena, rowID: row.parent.rowID, generation: row.parent.gen}}
+	}
+	return false
+}
+
 func betaJoinKeyForPlan(plan compiledConditionPlan, valueForJoin func(join compiledJoinConstraint) (Value, bool)) (betaJoinKey, bool) {
 	key, ok, _ := betaJoinKeyForPlanWithError(plan, func(join compiledJoinConstraint) (Value, bool, error) {
 		value, ok := valueForJoin(join)

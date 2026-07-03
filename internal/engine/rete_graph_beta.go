@@ -5821,54 +5821,64 @@ func graphBetaJoinKeyForLeftTokenWithContext(ctx context.Context, node *reteGrap
 	if len(joins) == 0 {
 		return betaJoinKey{}, true, nil
 	}
-	if len(joins) == 1 {
-		join := joins[0]
-		if join.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false, nil
-		}
-		if !join.hasRightKeyExpression {
-			match, ok := tokenRefAtSlot(token, join.refBindingSlot)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			value, ok := join.rightValueFromFact(match.fact)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			key, ok := betaJoinKeyForSingleValue(value)
-			return key, ok, nil
-		}
-	} else if len(joins) == 2 {
-		firstJoin := joins[0]
-		secondJoin := joins[1]
-		if firstJoin.indexKind != joinIndexEquality || secondJoin.indexKind != joinIndexEquality {
-			return betaJoinKey{}, false, nil
-		}
-		if !firstJoin.hasRightKeyExpression && !secondJoin.hasRightKeyExpression {
-			firstMatch, ok := tokenRefAtSlot(token, firstJoin.refBindingSlot)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			firstValue, ok := firstJoin.rightValueFromFact(firstMatch.fact)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			secondMatch, ok := tokenRefAtSlot(token, secondJoin.refBindingSlot)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			secondValue, ok := secondJoin.rightValueFromFact(secondMatch.fact)
-			if !ok {
-				return betaJoinKey{}, false, nil
-			}
-			if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
-				return key, true, nil
-			}
-		}
+	if key, ok, done := graphBetaJoinKeyForLeftTokenSingleWalk(joins, token); done {
+		return key, ok, nil
 	}
 	return betaJoinKeyForPlanWithError(compiledConditionPlan{joins: joins}, func(join compiledJoinConstraint) (Value, bool, error) {
 		return graphBetaLeftJoinValue(ctx, join, token, span)
 	})
+}
+
+// graphBetaJoinKeyForLeftTokenSingleWalk builds the hash-join key for up to
+// three equality constraints by resolving every needed binding slot in one
+// token chain walk. done reports whether the result is authoritative; when
+// false the caller must fall back to the per-constraint plan path (key
+// expressions, canonical key shapes, or slots that need the positional
+// matchAt fallback).
+func graphBetaJoinKeyForLeftTokenSingleWalk(joins []compiledJoinConstraint, token tokenRef) (betaJoinKey, bool, bool) {
+	if len(joins) > 3 {
+		return betaJoinKey{}, false, false
+	}
+	var slots [3]int
+	for i := range joins {
+		if joins[i].indexKind != joinIndexEquality {
+			return betaJoinKey{}, false, true
+		}
+		if joins[i].hasRightKeyExpression {
+			return betaJoinKey{}, false, false
+		}
+		slots[i] = joins[i].refBindingSlot
+	}
+	var facts [3]conditionFactRef
+	if !tokenFactsAtSlots(token, slots, len(joins), &facts) {
+		return betaJoinKey{}, false, false
+	}
+	firstValue, ok := joins[0].rightValueFromFact(facts[0])
+	if !ok {
+		return betaJoinKey{}, false, true
+	}
+	if len(joins) == 1 {
+		key, ok := betaJoinKeyForSingleValue(firstValue)
+		return key, ok, true
+	}
+	secondValue, ok := joins[1].rightValueFromFact(facts[1])
+	if !ok {
+		return betaJoinKey{}, false, true
+	}
+	if len(joins) == 2 {
+		if key, ok := betaJoinKeyForTwoValues(firstValue, secondValue); ok {
+			return key, true, true
+		}
+		return betaJoinKey{}, false, false
+	}
+	thirdValue, ok := joins[2].rightValueFromFact(facts[2])
+	if !ok {
+		return betaJoinKey{}, false, true
+	}
+	if key, ok := betaJoinKeyForThreeValues(firstValue, secondValue, thirdValue); ok {
+		return key, true, true
+	}
+	return betaJoinKey{}, false, false
 }
 
 func graphBetaJoinKeyForLeftMatchWithContext(ctx context.Context, node *reteGraphBetaNode, bindingSlot int, fact conditionFactRef, token tokenRef, span *propagationCounterSpan) (betaJoinKey, bool, error) {
