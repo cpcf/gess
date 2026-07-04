@@ -4078,7 +4078,6 @@ func (m *reteGraphBetaMemory) insertNegativeBetaInput(nodeID reteGraphBetaNodeID
 	default:
 		return false, nil
 	}
-	return true, nil
 }
 
 func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
@@ -4169,7 +4168,6 @@ func (m *reteGraphBetaMemory) removeNegativeBetaInputToken(nodeID reteGraphBetaN
 	default:
 		return false
 	}
-	return true
 }
 
 func (m *reteGraphBetaMemory) propagateJoinedRemovals(nodeID reteGraphBetaNodeID, side reteGraphBetaInputSide, node *reteGraphBetaNode, nodeMemory *reteGraphBetaNodeMemory, joinKey betaJoinKey, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
