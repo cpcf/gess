@@ -275,7 +275,7 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 	return out
 }
 
-func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction) (compiledQuery, error) {
+func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledQuery, error) {
 	normalized := spec.clone()
 	if normalized.Name == "" {
 		return compiledQuery{}, &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
@@ -306,7 +306,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 	}
 
 	queryRuleID := RuleID("query:" + normalized.Name)
-	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalized.Module, normalizedConditions, templates, true, paramTypes, functions)
+	inspectionSet, err := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalized.Module, normalizedConditions, templates, true, paramTypes, functions, globals)
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
 	}
@@ -315,7 +315,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 	var representative compiledRuleConditionSet
 	for branchIndex, branch := range normalizedBranches {
 		branchIR := newReorderedBranchPlanningIR(branchIndex, branch.conditions)
-		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, normalized.Module, branchIR, templates, false, paramTypes, functions)
+		compiledBranch, err := compileBranchPlanningIR(normalized.Name, queryRuleID, normalized.Module, branchIR, templates, false, paramTypes, functions, globals)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -325,7 +325,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 			return compiledQuery{}, markQueryValidation(err)
 		}
 		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
-		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, normalized.Module, branchIndex, branch.conditions, templates, paramTypes, functions)
+		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, normalized.Module, branchIndex, branch.conditions, templates, paramTypes, functions, globals)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
 		}
@@ -351,7 +351,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 	for i, condition := range representative.conditions {
 		bindingSlots[condition.binding] = i
 	}
-	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templates.byKey, paramTypes, functions)
+	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templates.byKey, paramTypes, functions, globals)
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -414,7 +414,7 @@ func validQueryParameterKind(kind ValueKind) bool {
 	}
 }
 
-func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction) ([]compiledQueryReturn, error) {
+func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledQueryReturn, error) {
 	returns := make([]compiledQueryReturn, 0, len(specs))
 	aliases := make(map[string]struct{}, len(specs))
 	for i, spec := range specs {
@@ -451,7 +451,7 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 		if expressionContainsCurrentField(spec.Expression) {
 			return nil, &ValidationError{RuleName: queryName, Reason: "query return value expressions cannot use current field references", Err: ErrQueryValidation}
 		}
-		expression, _, err := compileExpressionSpecWithParams(spec.Expression, queryName, -1, i, nil, conditions, bindingSlots, templatesByKey, params, functions)
+		expression, _, err := compileExpressionSpecWithParams(spec.Expression, queryName, -1, i, nil, conditions, bindingSlots, templatesByKey, params, functions, globals)
 		if err != nil {
 			return nil, markQueryValidation(err)
 		}
@@ -536,12 +536,12 @@ func compileQueryTriggerFieldSpecs(params []QueryParameter) []FieldSpec {
 	return specs
 }
 
-func compileQueryGraphBranch(queryName string, queryRuleID RuleID, author ModuleName, branchIndex int, branch []normalizedRuleCondition, templates templateResolver, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledConditionBranch, bool, error) {
+func compileQueryGraphBranch(queryName string, queryRuleID RuleID, author ModuleName, branchIndex int, branch []normalizedRuleCondition, templates templateResolver, params map[string]ValueKind, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledConditionBranch, bool, error) {
 	branchIR, ok := newQueryGraphBranchPlanningIR(queryName, branchIndex, branch, params)
 	if !ok {
 		return compiledConditionBranch{}, false, nil
 	}
-	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, author, branchIR, templates, false, nil, functions)
+	compiled, err := compileBranchPlanningIR(queryName, queryRuleID, author, branchIR, templates, false, nil, functions, globals)
 	if err != nil {
 		return compiledConditionBranch{}, false, err
 	}
@@ -1217,7 +1217,7 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if len(query.graphConditionBranches) == 0 {
 		return nil, fmt.Errorf("%w: query %q has no graph terminal plan", ErrUnsupportedRuntime, query.name)
 	}
-	runtime, err := newReteRuntime(s.revision)
+	runtime, err := newReteRuntime(s.revision, s.globalValues)
 	if err != nil {
 		return nil, err
 	}
@@ -1555,9 +1555,9 @@ func (q compiledQuery) compileArgs(args QueryArgs) (compiledQueryArgs, error) {
 	return compiledQueryArgs{values: values}, nil
 }
 
-func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs) (QueryRow, error) {
+func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs, globals []Value) (QueryRow, error) {
 	if q.compactMixedReturns() {
-		return q.materializeCompactRow(ctx, source, matches, args)
+		return q.materializeCompactRow(ctx, source, matches, args, globals)
 	}
 	row := q.newQueryRow()
 	owner := newQueryRowOwner(source)
@@ -1570,7 +1570,7 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 			row.items[i] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1586,14 +1586,14 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRow(ctx context.Context, source Snapshot, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, globals []Value) (QueryRow, error) {
 	if q.valueReturnsOnly() {
-		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, make([]Value, len(q.returns)))
+		return q.materializeTokenValueRowInto(ctx, token, args, bindingSlotOffset, globals, make([]Value, len(q.returns)))
 	}
 	if q.compactMixedReturns() {
-		return q.materializeTokenCompactMixedRowInto(ctx, token, args, bindingSlotOffset, newQueryRowOwner(source), make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
+		return q.materializeTokenCompactMixedRowInto(ctx, token, args, bindingSlotOffset, globals, newQueryRowOwner(source), make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
 	}
-	return q.materializeTokenRowInto(ctx, token, args, bindingSlotOffset, newQueryRowOwner(source), make([]queryRowValue, len(q.returns)))
+	return q.materializeTokenRowInto(ctx, token, args, bindingSlotOffset, globals, newQueryRowOwner(source), make([]queryRowValue, len(q.returns)))
 }
 
 func (q compiledQuery) valueReturnsOnly() bool {
@@ -1612,7 +1612,7 @@ func (q compiledQuery) compactMixedReturns() bool {
 	return q.factReturnCount != 0 && q.valueReturnCount != 0
 }
 
-func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs) (QueryRow, error) {
+func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapshot, matches []conditionMatch, args *compiledQueryArgs, globals []Value) (QueryRow, error) {
 	row := q.newQueryCompactMixedRowWithItems(make([]queryRowValue, q.factReturnCount), make([]Value, q.valueReturnCount))
 	owner := newQueryRowOwner(source)
 	factIdx := 0
@@ -1627,7 +1627,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 			factIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1644,7 +1644,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
+func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, globals []Value, owner *queryRowOwner, items []queryRowValue) (QueryRow, error) {
 	if len(items) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row item count %d", ErrQueryExecution, len(items))
 	}
@@ -1665,7 +1665,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 			row.items[i] = queryRowValue{value: value}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1681,7 +1681,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, owner *queryRowOwner, items []queryRowValue, values []Value) (QueryRow, error) {
+func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, globals []Value, owner *queryRowOwner, items []queryRowValue, values []Value) (QueryRow, error) {
 	if len(items) != q.factReturnCount {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row fact count %d", ErrQueryExecution, len(items))
 	}
@@ -1709,7 +1709,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 			valueIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
@@ -1726,7 +1726,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 	return row, nil
 }
 
-func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, values []Value) (QueryRow, error) {
+func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token tokenRef, args *compiledQueryArgs, bindingSlotOffset int, globals []Value, values []Value) (QueryRow, error) {
 	if len(values) != len(q.returns) {
 		return QueryRow{}, fmt.Errorf("%w: malformed query row value count %d", ErrQueryExecution, len(values))
 	}
@@ -1741,7 +1741,7 @@ func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token t
 			row.valueItems[i] = value
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), bindingSlotOffset, &FunctionEvaluationError{
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,

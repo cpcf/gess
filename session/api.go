@@ -177,6 +177,10 @@ func WithInitialFacts(initials ...InitialFact) Option {
 	return engine.WithInitialFacts(initials...)
 }
 
+func WithGlobals(values map[string]any) Option {
+	return engine.WithGlobals(values)
+}
+
 func WithResetBeforeSnapshot(enabled bool) Option {
 	return engine.WithResetBeforeSnapshot(enabled)
 }

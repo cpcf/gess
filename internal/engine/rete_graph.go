@@ -1820,6 +1820,10 @@ func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span 
 }
 
 func (n reteGraphAlphaNode) matchesSnapshotWithContextAndCounters(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
+	return n.matchesSnapshotWithContextGlobalsAndCounters(ctx, fact, nil, span)
+}
+
+func (n reteGraphAlphaNode) matchesSnapshotWithContextGlobalsAndCounters(ctx context.Context, fact FactSnapshot, globals []Value, span *propagationCounterSpan) (bool, error) {
 	switch n.target.kind {
 	case conditionTargetTemplateKey:
 		if fact.TemplateKey() != n.target.templateKey {
@@ -1841,7 +1845,7 @@ func (n reteGraphAlphaNode) matchesSnapshotWithContextAndCounters(ctx context.Co
 	if !n.listPatternsMatch(ref, tokenRef{}) {
 		return false, nil
 	}
-	ok, err := n.expressionPredicatesMatch(ctx, ref, span)
+	ok, err := n.expressionPredicatesMatch(ctx, ref, globals, span)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1859,6 +1863,10 @@ func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, compac
 }
 
 func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
+	return n.matchesWorkingWithContextGlobalsAndCounters(ctx, fact, compactSlotStore, nil, span)
+}
+
+func (n reteGraphAlphaNode) matchesWorkingWithContextGlobalsAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, globals []Value, span *propagationCounterSpan) (bool, error) {
 	if fact == nil {
 		return false, nil
 	}
@@ -1883,7 +1891,7 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 	if !n.listPatternsMatch(ref, tokenRef{}) {
 		return false, nil
 	}
-	ok, err := n.expressionPredicatesMatch(ctx, ref, span)
+	ok, err := n.expressionPredicatesMatch(ctx, ref, globals, span)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1891,10 +1899,14 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Con
 }
 
 func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
+	return n.matchesGeneratedWorkingWithContextGlobalsAndCounters(ctx, fact, compactSlotStore, nil, span)
+}
+
+func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextGlobalsAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, globals []Value, span *propagationCounterSpan) (bool, error) {
 	if n.generatedMatch.kind != reteGraphAlphaGeneratedMatchNone {
 		return n.generatedMatch.matchesWorking(n.target, fact, compactSlotStore), nil
 	}
-	return n.matchesWorkingWithContextAndCounters(ctx, fact, compactSlotStore, span)
+	return n.matchesWorkingWithContextGlobalsAndCounters(ctx, fact, compactSlotStore, globals, span)
 }
 
 func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
@@ -1974,12 +1986,12 @@ func (n reteGraphAlphaNode) listPatternCaptures(fact conditionFactRef, bindings 
 	return out, true
 }
 
-func (n reteGraphAlphaNode) expressionPredicatesMatch(ctx context.Context, fact conditionFactRef, span *propagationCounterSpan) (bool, error) {
+func (n reteGraphAlphaNode) expressionPredicatesMatch(ctx context.Context, fact conditionFactRef, globals []Value, span *propagationCounterSpan) (bool, error) {
 	for _, predicate := range n.predicates {
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		ok, err := predicate.matchesWithContextParamsAndCounters(ctx, fact, nil, nil, span)
+		ok, err := predicate.matchesWithContextParamsGlobalsAndCounters(ctx, fact, nil, nil, globals, span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()

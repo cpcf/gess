@@ -54,6 +54,7 @@ func GenerateGessGo(ctx context.Context, sources []GessSourceFile, opts GessGoGe
 
 type generatedGessProgram struct {
 	modules   []ModuleSpec
+	globals   []GlobalSpec
 	templates []TemplateSpec
 	actions   []generatedGessAction
 	rules     []RuleSpec
@@ -114,6 +115,12 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 					return generatedGessProgram{}, err
 				}
 				program.modules = append(program.modules, workspace.modules[before:]...)
+			case "defglobal":
+				before := len(workspace.globals)
+				if err := loader.loadGlobal(form); err != nil {
+					return generatedGessProgram{}, err
+				}
+				program.globals = append(program.globals, workspace.globals[before:]...)
 			case "deftemplate":
 				before := len(workspace.templates)
 				if err := loader.loadTemplate(form); err != nil {
@@ -132,7 +139,7 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 				return generatedGessProgram{}, err
 			}
 			switch form.Head() {
-			case "defmodule", "deftemplate":
+			case "defmodule", "defglobal", "deftemplate":
 			case "deffacts":
 				initials, err := loader.loadFacts(form)
 				if err != nil {
@@ -367,6 +374,9 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	for _, module := range p.modules {
 		fmt.Fprintf(&b, "\tif err := workspace.AddModule(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderModuleSpec(module))
 	}
+	for _, global := range p.globals {
+		fmt.Fprintf(&b, "\tif err := workspace.AddGlobal(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderGlobalSpec(global))
+	}
 	for _, template := range p.templates {
 		fmt.Fprintf(&b, "\tif err := workspace.AddTemplate(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderTemplateSpec(template))
 	}
@@ -400,6 +410,19 @@ func renderModuleSpec(spec ModuleSpec) string {
 	}
 	if spec.AutoFocus != nil {
 		fmt.Fprintf(&b, ", AutoFocus: func() *bool { v := %t; return &v }()", *spec.AutoFocus)
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderGlobalSpec(spec GlobalSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "gessrules.GlobalSpec{Name: %s, Kind: %s", strconv.Quote(spec.Name), renderValueKind(spec.Kind))
+	if spec.HasDefault {
+		fmt.Fprintf(&b, ", Default: %s, HasDefault: true", renderAnyValue(spec.Default))
+	}
+	if spec.Description != "" {
+		fmt.Fprintf(&b, ", Description: %s", strconv.Quote(spec.Description))
 	}
 	b.WriteString("}")
 	return b.String()
@@ -634,6 +657,8 @@ func renderExpression(spec ExpressionSpec) string {
 		return "gessrules.BindingValueExpr{Binding: " + strconv.Quote(expr.Binding) + "}"
 	case ParamExpr:
 		return "gessrules.ParamExpr{Name: " + strconv.Quote(expr.Name) + "}"
+	case GlobalExpr:
+		return "gessrules.GlobalExpr{Name: " + strconv.Quote(expr.Name) + "}"
 	case CallExpr:
 		return "gessrules.Call(" + strconv.Quote(expr.Name) + renderCallArgs(expr.Args) + ")"
 	case CompareExpr:

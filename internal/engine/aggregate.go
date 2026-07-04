@@ -110,7 +110,7 @@ type compiledAggregatePlan struct {
 	higherOrder conditionHigherOrderKind
 }
 
-func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) ([]compiledAggregateSpec, []RuleCondition, error) {
+func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledAggregateSpec, []RuleCondition, error) {
 	if len(specs) == 0 {
 		return nil, nil, aggregateValidationError(ruleName, conditionIndex, -1, "accumulate requires at least one aggregate spec", nil)
 	}
@@ -140,7 +140,7 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 			if normalized.expression == nil {
 				return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "aggregate expression is required", nil)
 			}
-			expression, _, err := compileExpressionSpecWithParams(normalized.expression, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey, nil, functions)
+			expression, _, err := compileExpressionSpecWithParams(normalized.expression, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey, nil, functions, globals)
 			if err != nil {
 				return nil, nil, err
 			}

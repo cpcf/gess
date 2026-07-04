@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ type sessionConfig struct {
 	id                  SessionID
 	listeners           []eventListenerRegistration
 	initials            []SessionInitialFact
+	globals             map[string]any
 	eventClock          func() time.Time
 	resetBeforeSnapshot bool
 }
@@ -69,6 +71,23 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 	}
 }
 
+// WithGlobals supplies immutable per-session values for declared ruleset
+// globals. Reset preserves these values; changing globals requires creating a
+// new session so existing matches do not need to be re-propagated.
+func WithGlobals(values map[string]any) SessionOption {
+	return func(cfg *sessionConfig) {
+		if len(values) == 0 {
+			return
+		}
+		if cfg.globals == nil {
+			cfg.globals = make(map[string]any, len(values))
+		}
+		for name, value := range values {
+			cfg.globals[strings.TrimSpace(name)] = cloneSpecValue(value)
+		}
+	}
+}
+
 // WithResetBeforeSnapshot controls whether successful Reset calls populate
 // ResetResult.Before. The default is true.
 func WithResetBeforeSnapshot(enabled bool) SessionOption {
@@ -87,6 +106,7 @@ type Session struct {
 	initialFocusStack    []ModuleName
 	focusStack           []ModuleName
 	initials             []SessionInitialFact
+	globalValues         []Value
 	initialCount         int
 	compiledInitials     []compiledSessionInitialFact
 	resetBeforeSnapshot  bool
@@ -201,6 +221,10 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	listeners := cloneEventListenerRegistrations(cfg.listeners)
 	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
 	initials := cloneSessionInitialFacts(cfg.initials)
+	globalValues, err := compileSessionGlobals(revision, cfg.globals)
+	if err != nil {
+		return nil, err
+	}
 
 	compiledInitials, err := compileSessionInitialFacts(revision, initials)
 	if err != nil {
@@ -214,7 +238,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if len(compiledInitials) > 0 {
 		state.applyCompiledInitialFacts(compiledInitials)
 	}
-	rete, err := newReteRuntime(revision)
+	rete, err := newReteRuntime(revision, globalValues)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +262,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		initialFocusStack:   []ModuleName{MainModule},
 		focusStack:          []ModuleName{MainModule},
 		initials:            initials,
+		globalValues:        globalValues,
 		initialCount:        len(initials),
 		compiledInitials:    compiledInitials,
 		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
@@ -2404,7 +2429,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	rete := s.rete
 	if rete == nil {
 		var err error
-		rete, err = newReteRuntime(s.revision)
+		rete, err = newReteRuntime(s.revision, s.globalValues)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
@@ -2585,9 +2610,14 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 
+	globalValues, err := rebindSessionGlobals(s.revision, next, s.globalValues)
+	if err != nil {
+		restoreApplyRulesetState()
+		return ApplyRulesetResult{}, err
+	}
 	s.rebuildFieldSlots(s.revision, next)
 	snapshot = s.indexedSnapshotLocked()
-	rete, err := newReteRuntime(next)
+	rete, err := newReteRuntime(next, globalValues)
 	if err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
@@ -2615,6 +2645,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	results = s.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
 
 	s.revision = next
+	s.globalValues = globalValues
 	s.rete = rete
 	if s.agenda == nil {
 		s.agenda = newAgenda()
@@ -2809,7 +2840,7 @@ func (s *Session) rebuildReteRuntimeFromWorkspace(ctx context.Context, revision 
 	if s == nil || revision == nil {
 		return nil
 	}
-	rete, err := newReteRuntime(revision)
+	rete, err := newReteRuntime(revision, s.globalValues)
 	if err != nil {
 		s.rete = nil
 		return err
@@ -3844,12 +3875,13 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 	}
 
 	snapshot := Snapshot{
-		sessionID:  s.id,
-		rulesetID:  s.revision.ID(),
-		revision:   s.revision,
-		generation: s.generation,
-		facts:      facts,
-		support:    s.currentSupportGraph(),
+		sessionID:    s.id,
+		rulesetID:    s.revision.ID(),
+		revision:     s.revision,
+		generation:   s.generation,
+		globalValues: cloneGlobalValues(s.globalValues),
+		facts:        facts,
+		support:      s.currentSupportGraph(),
 	}
 	if includeTargetIndexes {
 		snapshot.byID, snapshot.byName, snapshot.byTemplate = snapshotIndexes(facts)

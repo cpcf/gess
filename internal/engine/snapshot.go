@@ -7,15 +7,16 @@ import (
 
 // Snapshot is an immutable working-memory view.
 type Snapshot struct {
-	sessionID  SessionID
-	rulesetID  RulesetID
-	revision   *Ruleset
-	generation Generation
-	facts      []FactSnapshot
-	support    SupportGraph
-	byID       map[FactID]int
-	byName     map[string][]int
-	byTemplate map[TemplateKey][]int
+	sessionID    SessionID
+	rulesetID    RulesetID
+	revision     *Ruleset
+	generation   Generation
+	globalValues []Value
+	facts        []FactSnapshot
+	support      SupportGraph
+	byID         map[FactID]int
+	byName       map[string][]int
+	byTemplate   map[TemplateKey][]int
 }
 
 // BackchainDemandDiagnostics summarizes active generated backward-chaining
@@ -79,12 +80,13 @@ func newSnapshot(sessionID SessionID, rulesetID RulesetID, generation Generation
 	byID := snapshotIDIndex(copied)
 
 	return Snapshot{
-		sessionID:  sessionID,
-		rulesetID:  rulesetID,
-		generation: generation,
-		facts:      copied,
-		support:    SupportGraph{Generation: generation},
-		byID:       byID,
+		sessionID:    sessionID,
+		rulesetID:    rulesetID,
+		generation:   generation,
+		globalValues: nil,
+		facts:        copied,
+		support:      SupportGraph{Generation: generation},
+		byID:         byID,
 	}
 }
 

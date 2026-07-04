@@ -27,6 +27,7 @@ type (
 	HasPathExpr                    = engine.HasPathExpr
 	BindingValueExpr               = engine.BindingValueExpr
 	ParamExpr                      = engine.ParamExpr
+	GlobalExpr                     = engine.GlobalExpr
 	CallExpr                       = engine.CallExpr
 	CompareExpr                    = engine.CompareExpr
 	BooleanExpr                    = engine.BooleanExpr
@@ -74,6 +75,8 @@ type (
 	PureFunction3                  = engine.PureFunction3
 	PureFunctionSpec               = engine.PureFunctionSpec
 	PureFunctionDefinition         = engine.PureFunctionDefinition
+	GlobalSpec                     = engine.GlobalSpec
+	Global                         = engine.Global
 	FunctionEvaluationError        = engine.FunctionEvaluationError
 	QueryParameterSpec             = engine.QueryParameterSpec
 	QueryReturnSpec                = engine.QueryReturnSpec
@@ -237,6 +240,10 @@ func CurrentPath(path PathSpec) CurrentFieldExpr {
 
 func BindingPath(binding string, path PathSpec) BindingFieldExpr {
 	return engine.BindingPath(binding, path)
+}
+
+func GlobalValue(name string) GlobalExpr {
+	return engine.GlobalExpr{Name: name}
 }
 
 func HasPath(path PathSpec) HasPathExpr {

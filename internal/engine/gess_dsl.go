@@ -127,6 +127,10 @@ func (l *gessLoader) load(ctx context.Context) error {
 			if err := l.loadModule(form); err != nil {
 				return err
 			}
+		case "defglobal":
+			if err := l.loadGlobal(form); err != nil {
+				return err
+			}
 		case "deftemplate":
 			if err := l.loadTemplate(form); err != nil {
 				return err
@@ -138,7 +142,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 			return err
 		}
 		switch form.Head() {
-		case "defmodule", "deftemplate":
+		case "defmodule", "defglobal", "deftemplate":
 		case "deffacts":
 			initials, err := l.loadFacts(form)
 			if err != nil {
@@ -181,6 +185,45 @@ func (l *gessLoader) loadModule(form gessSExpr) error {
 	}
 	if err := l.workspace.AddModule(spec); err != nil {
 		return l.wrap(form.Span, "add module", err)
+	}
+	return nil
+}
+
+func (l *gessLoader) loadGlobal(form gessSExpr) error {
+	if len(form.List) < 2 || !form.List[1].IsAtom() {
+		return l.err(form.Span, "defglobal requires a global name")
+	}
+	name, ok := gessGlobalName(form.List[1])
+	if !ok {
+		return l.err(form.List[1].Span, "global name must use *name* syntax")
+	}
+	spec := GlobalSpec{Name: name, Kind: ValueAny}
+	for _, attr := range form.List[2:] {
+		switch attr.Head() {
+		case "type":
+			if len(attr.List) != 2 || !attr.List[1].IsAtom() {
+				return l.err(attr.Span, "global type requires one value")
+			}
+			spec.Kind = gessValueKind(attr.List[1].Text())
+		case "default":
+			if len(attr.List) != 2 {
+				return l.err(attr.Span, "global default requires one value")
+			}
+			value, err := gessAtomValue(attr.List[1])
+			if err != nil {
+				return err
+			}
+			spec.Default = value
+			spec.HasDefault = true
+		case "description":
+			if len(attr.List) != 2 || !attr.List[1].IsAtom() {
+				return l.err(attr.Span, "global description requires one value")
+			}
+			spec.Description = attr.List[1].Text()
+		}
+	}
+	if err := l.workspace.AddGlobal(spec); err != nil {
+		return l.wrap(form.Span, "add global", err)
 	}
 	return nil
 }
@@ -549,6 +592,14 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 			scope.vars[variable] = FieldRef{Binding: binding, Field: field}
 			continue
 		}
+		if global, ok := gessGlobalName(value); ok {
+			spec.Predicates = append(spec.Predicates, CompareExpr{
+				Operator: ExpressionCompareEqual,
+				Left:     CurrentFieldExpr{Field: field},
+				Right:    GlobalExpr{Name: global},
+			})
+			continue
+		}
 		scalar, err := gessAtomValue(value)
 		if err != nil {
 			return nil, err
@@ -615,6 +666,9 @@ func (l *gessLoader) parseAccumulate(module ModuleName, form gessSExpr, scope *g
 
 func (l *gessLoader) parseExpr(module ModuleName, form gessSExpr, scope *gessScope) (ExpressionSpec, error) {
 	if form.IsAtom() {
+		if global, ok := gessGlobalName(form); ok {
+			return GlobalExpr{Name: global}, nil
+		}
 		if binding, field, ok := splitGessProjection(form.Text()); ok {
 			return BindingFieldExpr{Binding: binding, Field: field}, nil
 		}
@@ -1114,6 +1168,21 @@ func gessVariableName(expr gessSExpr) (string, bool) {
 		return "", false
 	}
 	return strings.ReplaceAll(text, "-", "_"), true
+}
+
+func gessGlobalName(expr gessSExpr) (string, bool) {
+	if !expr.IsAtom() {
+		return "", false
+	}
+	text := strings.TrimSpace(expr.Text())
+	if len(text) < 3 || !strings.HasPrefix(text, "*") || !strings.HasSuffix(text, "*") {
+		return "", false
+	}
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "*"), "*"))
+	if name == "" || strings.Contains(name, ":") || strings.Contains(name, "*") {
+		return "", false
+	}
+	return strings.ReplaceAll(name, "-", "_"), true
 }
 
 func splitGessProjection(text string) (string, string, bool) {

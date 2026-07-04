@@ -12,6 +12,7 @@ type reteGraphBetaMemory struct {
 	graph                    *reteGraph
 	compactSlotStore         *factCompactSlotStore
 	evalCtx                  context.Context
+	globalValues             []Value
 	nodes                    []*reteGraphBetaNodeMemory
 	aggregates               []*reteGraphAggregateNodeMemory
 	terminals                []*reteGraphTerminalMemory
@@ -540,16 +541,16 @@ func (b graphTokenRowIDBucket) reset() graphTokenRowIDBucket {
 }
 
 func newReteGraphBetaMemory(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot) (*reteGraphBetaMemory, error) {
-	return newReteGraphBetaMemoryForGeneration(ctx, revision, graph, facts, reteGraphFactsGeneration(facts))
+	return newReteGraphBetaMemoryForGeneration(ctx, revision, graph, facts, reteGraphFactsGeneration(facts), nil)
 }
 
-func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, error) {
-	memory, _, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, revision, graph, facts, generation)
+func newReteGraphBetaMemoryForGeneration(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation, globals []Value) (*reteGraphBetaMemory, error) {
+	memory, _, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, revision, graph, facts, generation, globals)
 	return memory, err
 }
 
-func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation) (*reteGraphBetaMemory, reteAgendaDelta, error) {
-	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts))
+func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation, globals []Value) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts), globals)
 	if memory == nil {
 		return nil, reteAgendaDelta{supported: true}, nil
 	}
@@ -560,8 +561,8 @@ func newReteGraphBetaMemoryForGenerationWithDelta(ctx context.Context, revision 
 	return memory, delta, nil
 }
 
-func newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation, agenda *agenda) (*reteGraphBetaMemory, reteAgendaDelta, error) {
-	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts))
+func newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts []FactSnapshot, generation Generation, agenda *agenda, globals []Value) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, len(facts), globals)
 	if memory == nil {
 		return nil, reteAgendaDelta{supported: true}, nil
 	}
@@ -572,8 +573,8 @@ func newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx context.Context, r
 	return memory, delta, nil
 }
 
-func newReteGraphBetaMemoryForWorkspaceWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation) (*reteGraphBetaMemory, reteAgendaDelta, error) {
-	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount())
+func newReteGraphBetaMemoryForWorkspaceWithDelta(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation, globals []Value) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount(), globals)
 	if memory == nil {
 		return nil, reteAgendaDelta{supported: true}, nil
 	}
@@ -584,8 +585,8 @@ func newReteGraphBetaMemoryForWorkspaceWithDelta(ctx context.Context, revision *
 	return memory, delta, nil
 }
 
-func newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation, agenda *agenda) (*reteGraphBetaMemory, reteAgendaDelta, error) {
-	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount())
+func newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx context.Context, revision *Ruleset, graph *reteGraph, facts *factWorkspace, generation Generation, agenda *agenda, globals []Value) (*reteGraphBetaMemory, reteAgendaDelta, error) {
+	memory := newEmptyReteGraphBetaMemory(revision, graph, facts.factCount(), globals)
 	if memory == nil {
 		return nil, reteAgendaDelta{supported: true}, nil
 	}
@@ -596,17 +597,18 @@ func newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx context.Context, re
 	return memory, delta, nil
 }
 
-func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount int) *reteGraphBetaMemory {
+func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount int, globals []Value) *reteGraphBetaMemory {
 	if revision == nil || graph == nil {
 		return nil
 	}
 	memory := &reteGraphBetaMemory{
-		revision:   revision,
-		graph:      graph,
-		nodes:      make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
-		aggregates: make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
-		terminals:  make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
-		arena:      newTokenArena(),
+		revision:     revision,
+		graph:        graph,
+		globalValues: cloneGlobalValues(globals),
+		nodes:        make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
+		aggregates:   make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
+		terminals:    make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
+		arena:        newTokenArena(),
 	}
 	memory.indexRuleTerminals()
 	memory.reserveAlphaFacts(0)
@@ -1609,7 +1611,7 @@ func (m *reteGraphBetaMemory) insertFactInternal(ctx context.Context, fact FactS
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		ok, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, span)
+		ok, err := node.matchesSnapshotWithContextGlobalsAndCounters(ctx, fact, m.globalValues, span)
 		if err != nil {
 			return delta, err
 		}
@@ -1706,7 +1708,7 @@ func (m *reteGraphBetaMemory) insertFactGenerated(ctx context.Context, fact *wor
 		if span != nil {
 			span.recordConditionsTested()
 		}
-		ok, err := node.matchesGeneratedWorkingWithContextAndCounters(ctx, fact, m.compactSlotStore, span)
+		ok, err := node.matchesGeneratedWorkingWithContextGlobalsAndCounters(ctx, fact, m.compactSlotStore, m.globalValues, span)
 		if err != nil {
 			return delta, err
 		}
@@ -2548,7 +2550,7 @@ func (m *reteGraphBetaMemory) removeAggregateMembersContainingFact(id reteGraphA
 	m.graphAggregateMemory(id).removeMembersContainingFact(factID, counters, delta)
 }
 
-func aggregateScalarMemberFromToken(ctx context.Context, node *reteGraphAggregateNode, match conditionMatch, token tokenRef) (reteGraphAggregateScalarMember, bool) {
+func aggregateScalarMemberFromToken(ctx context.Context, node *reteGraphAggregateNode, match conditionMatch, token tokenRef, globals []Value) (reteGraphAggregateScalarMember, bool) {
 	member := reteGraphAggregateScalarMember{
 		factID: match.fact.ID(),
 	}
@@ -2592,7 +2594,7 @@ func aggregateScalarMemberFromToken(ctx context.Context, node *reteGraphAggregat
 			}
 			seenOverflow[overflowIndex] = true
 		}
-		value, ok, err := spec.expression.evaluateTokenWithContextParamsOffset(ctx, match.fact, token, nil, 0)
+		value, ok, err := spec.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, match.fact, token, nil, globals, 0, nil, nil)
 		if err != nil || !ok {
 			return member, false
 		}
@@ -2828,7 +2830,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 		return
 	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
-	values, ok := memory.bucketResults(m.context(), node, bucket)
+	values, ok := memory.bucketResults(m.context(), node, bucket, m.globalValues)
 	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateOutputTokenValuesEqual(bucket.token, node, values) {
 		return
 	}
@@ -2951,11 +2953,11 @@ func (m *reteGraphAggregateNodeMemory) bucketCount() int {
 	return m.buckets.len()
 }
 
-func (m *reteGraphAggregateNodeMemory) bucketResults(ctx context.Context, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket) ([]Value, bool) {
+func (m *reteGraphAggregateNodeMemory) bucketResults(ctx context.Context, node *reteGraphAggregateNode, bucket *reteGraphAggregateBucket, globals []Value) ([]Value, bool) {
 	if m == nil || bucket == nil {
 		return nil, false
 	}
-	return bucket.results(ctx, node)
+	return bucket.results(ctx, node, globals)
 }
 
 func (t *reteGraphAggregateBucketTable) len() int {
@@ -3156,32 +3158,32 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFact(id FactID) bo
 	return changed
 }
 
-func (m *reteGraphAggregateBucket) results(ctx context.Context, node *reteGraphAggregateNode) ([]Value, bool) {
+func (m *reteGraphAggregateBucket) results(ctx context.Context, node *reteGraphAggregateNode, globals []Value) ([]Value, bool) {
 	if m == nil || node == nil {
 		return nil, false
 	}
 	if !m.accumulator.initializedFor(node) {
-		if !m.rebuildAccumulator(ctx, node) {
+		if !m.rebuildAccumulator(ctx, node, globals) {
 			return nil, false
 		}
 	}
 	return m.accumulator.results(node)
 }
 
-func (m *reteGraphAggregateBucket) rebuildAccumulator(ctx context.Context, node *reteGraphAggregateNode) bool {
+func (m *reteGraphAggregateBucket) rebuildAccumulator(ctx context.Context, node *reteGraphAggregateNode, globals []Value) bool {
 	if m == nil || node == nil {
 		return false
 	}
 	m.accumulator.reset(node)
 	for _, token := range m.inputTokens {
-		if !m.addAccumulatorToken(ctx, node, token) {
+		if !m.addAccumulatorToken(ctx, node, token, globals) {
 			return false
 		}
 	}
 	return true
 }
 
-func (m *reteGraphAggregateBucket) addAccumulatorToken(ctx context.Context, node *reteGraphAggregateNode, token tokenRef) bool {
+func (m *reteGraphAggregateBucket) addAccumulatorToken(ctx context.Context, node *reteGraphAggregateNode, token tokenRef, globals []Value) bool {
 	if m == nil || node == nil || token.isZero() {
 		return false
 	}
@@ -3192,7 +3194,7 @@ func (m *reteGraphAggregateBucket) addAccumulatorToken(ctx context.Context, node
 	if !ok {
 		return false
 	}
-	member, ok := aggregateScalarMemberFromToken(ctx, node, match, token)
+	member, ok := aggregateScalarMemberFromToken(ctx, node, match, token, globals)
 	if !ok {
 		return false
 	}
@@ -4359,7 +4361,7 @@ func (m *reteGraphBetaMemory) removeWorkingFact(ctx context.Context, fact *worki
 			delta.supported = false
 			continue
 		}
-		ok, err := node.matchesWorkingWithContextAndCounters(ctx, fact, m.compactSlotStore, nil)
+		ok, err := node.matchesWorkingWithContextGlobalsAndCounters(ctx, fact, m.compactSlotStore, m.globalValues, nil)
 		if err != nil {
 			return delta, err
 		}
@@ -4460,7 +4462,7 @@ func (m *reteGraphBetaMemory) removeFactInternal(ctx context.Context, fact FactS
 			delta.supported = false
 			continue
 		}
-		ok, err := node.matchesSnapshotWithContextAndCounters(ctx, fact, nil)
+		ok, err := node.matchesSnapshotWithContextGlobalsAndCounters(ctx, fact, m.globalValues, nil)
 		if err != nil {
 			return delta, err
 		}
@@ -4701,9 +4703,9 @@ func (m *reteGraphBetaMemory) workingFactMatchesAlphaNode(ctx context.Context, f
 		return false, nil
 	}
 	if canUseWorkingFactForAlphaTarget(fact, node.target) {
-		return node.matchesWorkingWithContextAndCounters(ctx, fact, m.compactSlotStore, span)
+		return node.matchesWorkingWithContextGlobalsAndCounters(ctx, fact, m.compactSlotStore, m.globalValues, span)
 	}
-	return node.matchesSnapshotWithContextAndCounters(ctx, snapshot, span)
+	return node.matchesSnapshotWithContextGlobalsAndCounters(ctx, snapshot, m.globalValues, span)
 }
 
 func (m *reteGraphBetaMemory) workingFactRefForAlphaNode(fact *workingFact, snapshot FactSnapshot, node *reteGraphAlphaNode) conditionFactRef {
@@ -5165,6 +5167,7 @@ type reteGraphQueryCollector struct {
 	ctx         context.Context
 	query       compiledQuery
 	args        *compiledQueryArgs
+	globals     []Value
 	source      Snapshot
 	rows        []QueryRow
 	rowItems    []queryRowValue
@@ -5179,6 +5182,7 @@ func (m *reteGraphBetaMemory) materializeQueryTerminalRows(ctx context.Context, 
 		ctx:       ctx,
 		query:     query,
 		args:      args,
+		globals:   m.globalValues,
 		source:    source,
 		valueRows: query.valueReturnsOnly(),
 	}
@@ -5221,11 +5225,11 @@ func (m *reteGraphBetaMemory) queryCollectTerminalToken(token tokenRef, collecto
 		err error
 	)
 	if collector.valueRows {
-		row, err = collector.query.materializeTokenValueRowInto(collector.ctx, token, collector.args, 1, collector.nextRowValues())
+		row, err = collector.query.materializeTokenValueRowInto(collector.ctx, token, collector.args, 1, collector.globals, collector.nextRowValues())
 	} else if collector.query.compactMixedReturns() {
-		row, err = collector.query.materializeTokenCompactMixedRowInto(collector.ctx, token, collector.args, 1, collector.rowOwner, collector.nextRowItemsCount(collector.query.factReturnCount), collector.nextMixedRowValuesCount(collector.query.valueReturnCount))
+		row, err = collector.query.materializeTokenCompactMixedRowInto(collector.ctx, token, collector.args, 1, collector.globals, collector.rowOwner, collector.nextRowItemsCount(collector.query.factReturnCount), collector.nextMixedRowValuesCount(collector.query.valueReturnCount))
 	} else {
-		row, err = collector.query.materializeTokenRowInto(collector.ctx, token, collector.args, 1, collector.rowOwner, collector.nextRowItems())
+		row, err = collector.query.materializeTokenRowInto(collector.ctx, token, collector.args, 1, collector.globals, collector.rowOwner, collector.nextRowItems())
 	}
 	if err != nil {
 		return err
@@ -5877,7 +5881,7 @@ func graphBetaJoinKeyForRightMatchWithContext(ctx context.Context, node *reteGra
 
 func graphBetaLeftJoinValue(ctx context.Context, join compiledJoinConstraint, token tokenRef, span *propagationCounterSpan) (Value, bool, error) {
 	if join.hasRightKeyExpression {
-		value, ok, err := join.rightKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, conditionFactRef{}, token, nil, 0, joinFunctionEvaluationMeta(join), span)
+		value, ok, err := join.rightKeyExpression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, nil, nil, 0, joinFunctionEvaluationMeta(join), span)
 		return value, ok, err
 	}
 	match, ok := tokenRefAtSlot(token, join.refBindingSlot)
@@ -5890,7 +5894,7 @@ func graphBetaLeftJoinValue(ctx context.Context, join compiledJoinConstraint, to
 
 func graphBetaRightJoinValue(ctx context.Context, join compiledJoinConstraint, fact conditionFactRef, token tokenRef, span *propagationCounterSpan) (Value, bool, error) {
 	if join.hasLeftKeyExpression {
-		value, ok, err := join.leftKeyExpression.evaluateTokenWithContextParamsOffsetAndCounters(ctx, fact, token, nil, 0, joinFunctionEvaluationMeta(join), span)
+		value, ok, err := join.leftKeyExpression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, token, nil, nil, 0, joinFunctionEvaluationMeta(join), span)
 		return value, ok, err
 	}
 	value, ok := join.leftValueFromFact(fact)
@@ -5930,7 +5934,7 @@ func (m *reteGraphBetaMemory) residualJoinsMatch(node *reteGraphBetaNode, fact c
 			return false, nil
 		}
 	}
-	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, fact, bindings, span)
+	ok, err := expressionPredicatesMatchTokenWithContextGlobals(m.context(), node.predicates, fact, bindings, m.globalValues, span)
 	if err != nil {
 		return false, err
 	}
@@ -5951,7 +5955,7 @@ func (m *reteGraphBetaMemory) filterTokenMatches(node *reteGraphBetaNode, token 
 		}
 		return m.residualJoinsMatch(node, currentMatch.fact, token.parent(), span)
 	}
-	ok, err := expressionPredicatesMatchTokenWithContext(m.context(), node.predicates, conditionFactRef{}, token, span)
+	ok, err := expressionPredicatesMatchTokenWithContextGlobals(m.context(), node.predicates, conditionFactRef{}, token, m.globalValues, span)
 	if err != nil {
 		return false, err
 	}
@@ -5995,7 +5999,7 @@ func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, righ
 		if span != nil {
 			span.recordExpressionPredicateTest()
 		}
-		value, ok, err := predicate.expression.evaluateWithContextParamsAndCounters(m.context(), right.fact, bindings, nil, predicate.functionEvaluationMeta(), span)
+		value, ok, err := predicate.expression.evaluateWithContextParamsGlobalsAndCounters(m.context(), right.fact, bindings, nil, m.globalValues, predicate.functionEvaluationMeta(), span)
 		if err != nil {
 			if span != nil {
 				span.recordExpressionPredicateError()
@@ -6299,7 +6303,7 @@ func (m *reteGraphBetaMemory) match(ctx context.Context, source factSource) ([]r
 	}
 	facts := m.boundarySourceFacts(source)
 	agenda := newAgenda()
-	_, _, err := newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx, m.revision, m.graph, facts, source.sourceGeneration(), agenda)
+	_, _, err := newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx, m.revision, m.graph, facts, source.sourceGeneration(), agenda, m.globalValues)
 	if err != nil {
 		return nil, err
 	}
