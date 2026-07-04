@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,8 +265,8 @@ func TestSessionEventMaskSkipsFactEventConstruction(t *testing.T) {
 	if clockCalls != 0 {
 		t.Fatalf("event clock calls = %d, want 0 masked fact event envelopes", clockCalls)
 	}
-	if session.nextEventSequence != 0 {
-		t.Fatalf("next event sequence = %d, want 0 for fully masked fact churn", session.nextEventSequence)
+	if session.nextEventSequence != 3 {
+		t.Fatalf("next event sequence = %d, want 3: masked events skip construction but still advance the global sequence", session.nextEventSequence)
 	}
 }
 
@@ -467,3 +468,44 @@ seq=24 type=rule_fired severity=info run=run:3 rule=fail-rule revision=sha256:4f
 seq=25 type=action_failed severity=error run=run:3 rule=fail-rule revision=sha256:4f6b959ac0c955b96beaecd38d4f96c0c262caea3421e4589dc79b257594aef0 activation=activation:v1:15524002455324254194:8149420427212459193:5 facts=[fact:g1:5] action="fail-action" action_index=0 error="trace action failed"
 seq=26 type=reset generation=2 old_generation=1
 `
+
+func TestTraceListenerTimestampOption(t *testing.T) {
+	var out bytes.Buffer
+	listener := NewTraceListener(&out, TraceWithTimestamps())
+	event := Event{
+		Sequence:  7,
+		Timestamp: time.Date(2026, 7, 4, 12, 30, 15, 0, time.UTC),
+		Type:      EventFactAsserted,
+	}
+	if err := listener.HandleEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	line := out.String()
+	if !strings.Contains(line, "time=2026-07-04T12:30:15Z") {
+		t.Fatalf("trace line %q missing formatted timestamp", line)
+	}
+	out.Reset()
+	if err := listener.HandleEvent(context.Background(), Event{Sequence: 8, Type: EventFactAsserted}); err != nil {
+		t.Fatalf("HandleEvent zero time: %v", err)
+	}
+	if !strings.Contains(out.String(), "time=zero") {
+		t.Fatalf("trace line %q missing zero-time fallback", out.String())
+	}
+}
+
+func TestTraceListenerIncludesRuleSourceSpan(t *testing.T) {
+	var out bytes.Buffer
+	listener := NewTraceListener(&out)
+	event := Event{
+		Sequence: 3,
+		Type:     EventRuleFired,
+		RuleID:   RuleID("route-vip"),
+		Source:   SourceSpan{Name: "rules.gess", StartLine: 12, StartColumn: 1},
+	}
+	if err := listener.HandleEvent(context.Background(), event); err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if !strings.Contains(out.String(), "source=rules.gess:12:1") {
+		t.Fatalf("trace line %q missing source span", out.String())
+	}
+}

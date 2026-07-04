@@ -166,6 +166,10 @@ func traceWriteOrigin(b *strings.Builder, event Event) {
 		b.WriteString(" rule=")
 		b.WriteString(event.RuleID.String())
 	}
+	if loc := sourceSpanLocation(event.Source); loc != "" {
+		b.WriteString(" source=")
+		b.WriteString(loc)
+	}
 	if !event.RuleRevisionID.IsZero() {
 		b.WriteString(" revision=")
 		b.WriteString(event.RuleRevisionID.String())

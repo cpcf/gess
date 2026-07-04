@@ -28,9 +28,16 @@ const (
 )
 
 type Event struct {
-	SessionID      SessionID
-	RulesetID      RulesetID
-	RunID          RunID
+	SessionID SessionID
+	RulesetID RulesetID
+	RunID     RunID
+	// Sequence is a session-lifetime counter over generated events. It
+	// advances for every generated event whether or not any listener is
+	// subscribed to its type, so listeners registered with ForEventTypes
+	// observe gaps but never renumbering. Rule activation/deactivation
+	// events are only generated when a listener subscribes to them, so
+	// numbering is comparable between sessions only when their listener
+	// configurations match.
 	Sequence       uint64
 	Timestamp      time.Time
 	Type           EventType
@@ -118,6 +125,11 @@ type eventListenerRegistration struct {
 
 // ForEventTypes limits a listener to the supplied event types. With no filter,
 // listeners receive every event type.
+// ForEventTypes restricts a listener registration to the given event types.
+// Events of other types are neither constructed nor delivered for that
+// listener; repeated ForEventTypes options replace earlier ones (last wins),
+// and an empty type list subscribes the listener to nothing. Sequence numbers
+// are global to the session, so a filtered listener observes gaps.
 func ForEventTypes(types ...EventType) EventListenerOption {
 	return func(cfg *eventListenerConfig) {
 		cfg.types = make(map[EventType]struct{}, len(types))
