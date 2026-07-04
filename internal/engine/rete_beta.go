@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 )
 
 type tokenHandle struct {
@@ -60,6 +61,54 @@ type tokenRow struct {
 	// the next safe boundary.
 	refs        int32
 	pendingFree bool
+	// holderTableID/holderRef locate the single bucket-table row storing this
+	// token, so exact-handle removals unlink directly without identity-index
+	// probes. holderRef == tokenHolderMulti marks tokens stored in more than
+	// one table row; those removals use the identity-index path.
+	holderTableID uint32
+	holderRef     int32
+}
+
+const tokenHolderMulti int32 = -1
+
+// nextTokenHolderTableID assigns bucket-table identities for holder
+// backpointers; sessions may run on different goroutines, so the counter is
+// atomic.
+var tokenHolderTableIDSeq atomic.Uint32
+
+func nextTokenHolderTableID() uint32 {
+	return tokenHolderTableIDSeq.Add(1)
+}
+
+// recordTokenHolder marks the token's row as stored at (tableID, ref);
+// a second holder demotes the row to the identity-index removal path.
+func recordTokenHolder(token tokenRef, tableID uint32, ref int32) {
+	row, ok := token.resolve()
+	if !ok {
+		return
+	}
+	switch {
+	case row.holderRef == tokenHolderMulti:
+	case row.holderTableID == 0 && row.holderRef == 0:
+		row.holderTableID = tableID
+		row.holderRef = ref
+	default:
+		row.holderTableID = 0
+		row.holderRef = tokenHolderMulti
+	}
+}
+
+// clearTokenHolder resets the holder record when the recorded row is
+// unlinked; multi-holder rows keep their marker.
+func clearTokenHolder(token tokenRef, tableID uint32, ref int32) {
+	row, ok := token.resolve()
+	if !ok {
+		return
+	}
+	if row.holderTableID == tableID && row.holderRef == ref {
+		row.holderTableID = 0
+		row.holderRef = 0
+	}
 }
 
 type tokenIdentityKey = graphTokenIdentityKey

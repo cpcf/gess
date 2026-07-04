@@ -22,6 +22,14 @@ type betaJoinBucketTable struct {
 	touched    []int
 	slotCount  int
 	rowCount   int
+	id         uint32
+}
+
+func (t *betaJoinBucketTable) holderID() uint32 {
+	if t.id == 0 {
+		t.id = nextTokenHolderTableID()
+	}
+	return t.id
 }
 
 func (t *betaJoinBucketTable) ensureIdentityIndex() {
@@ -74,8 +82,23 @@ func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*b
 	if t == nil || token.isZero() {
 		return betaTokenRow{}, false
 	}
-	if _, ok := token.resolve(); !ok {
+	tokenRow, ok := token.resolve()
+	if !ok {
 		return t.removeIdentityTokenScan(token, filter, onTouch)
+	}
+	if t.id != 0 && tokenRow.holderTableID == t.id && tokenRow.holderRef > 0 && int(tokenRow.holderRef) <= len(t.rows) {
+		ref := tokenRow.holderRef
+		held := &t.rows[ref-1]
+		if held.token.handle.row == tokenRow {
+			if onTouch != nil {
+				onTouch()
+			}
+			if filter == nil || filter(held) {
+				removed := *held
+				t.unlink(ref)
+				return removed, true
+			}
+		}
 	}
 	t.ensureIdentityIndex()
 	for _, ref := range t.byIdentity[token.identityState()] {
@@ -185,6 +208,7 @@ func (t *betaJoinBucketTable) insert(row betaTokenRow) (int32, bool) {
 	t.indexIdentity(ref)
 	t.rowCount++
 	row.token.retain()
+	recordTokenHolder(row.token, t.holderID(), ref)
 	return ref, true
 }
 
@@ -192,6 +216,7 @@ func (t *betaJoinBucketTable) unlink(ref int32) bool {
 	if t == nil || ref <= 0 || int(ref) > len(t.rows) || t.rows[ref-1].token.isZero() {
 		return false
 	}
+	clearTokenHolder(t.rows[ref-1].token, t.id, ref)
 	t.unindexIdentity(ref)
 	slot := t.slot(t.rows[ref-1].joinKey)
 	next := t.next[ref-1]
