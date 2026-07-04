@@ -1,6 +1,7 @@
 package session
 
 import (
+	"io"
 	"time"
 
 	"github.com/cpcf/gess/internal/engine"
@@ -35,7 +36,9 @@ type (
 	EventSeverity              = engine.EventSeverity
 	Event                      = engine.Event
 	EventListener              = engine.EventListener
+	EventListenerOption        = engine.EventListenerOption
 	EventFunc                  = engine.EventFunc
+	TraceOption                = engine.TraceOption
 	MutationKind               = engine.MutationKind
 	RunStatus                  = engine.RunStatus
 	RunOption                  = engine.RunOption
@@ -150,8 +153,20 @@ func WithSessionID(id SessionID) Option {
 	return engine.WithSessionID(id)
 }
 
-func WithEventListener(listener EventListener) Option {
-	return engine.WithEventListener(listener)
+func WithEventListener(listener EventListener, opts ...EventListenerOption) Option {
+	return engine.WithEventListener(listener, opts...)
+}
+
+func ForEventTypes(types ...EventType) EventListenerOption {
+	return engine.ForEventTypes(types...)
+}
+
+func NewTraceListener(w io.Writer, opts ...TraceOption) EventListener {
+	return engine.NewTraceListener(w, opts...)
+}
+
+func TraceWithTimestamps() TraceOption {
+	return engine.TraceWithTimestamps()
 }
 
 func WithEventClock(clock func() time.Time) Option {

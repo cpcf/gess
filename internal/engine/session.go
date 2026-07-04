@@ -17,7 +17,7 @@ type SessionOption func(*sessionConfig)
 
 type sessionConfig struct {
 	id                  SessionID
-	listeners           []EventListener
+	listeners           []eventListenerRegistration
 	initials            []SessionInitialFact
 	eventClock          func() time.Time
 	resetBeforeSnapshot bool
@@ -45,10 +45,11 @@ func WithSessionID(id SessionID) SessionOption {
 	}
 }
 
-func WithEventListener(listener EventListener) SessionOption {
+func WithEventListener(listener EventListener, opts ...EventListenerOption) SessionOption {
 	return func(cfg *sessionConfig) {
-		if listener != nil {
-			cfg.listeners = append(cfg.listeners, listener)
+		registration := newEventListenerRegistration(listener, opts)
+		if registration.listener != nil {
+			cfg.listeners = append(cfg.listeners, registration)
 		}
 	}
 }
@@ -89,7 +90,9 @@ type Session struct {
 	initialCount         int
 	compiledInitials     []compiledSessionInitialFact
 	resetBeforeSnapshot  bool
-	listeners            []EventListener
+	listeners            []eventListenerRegistration
+	allEventListeners    int
+	eventListenerCounts  map[EventType]int
 	eventClock           func() time.Time
 	closed               bool
 	runGuard             chan struct{}
@@ -195,8 +198,8 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		cfg.eventClock = time.Now
 	}
 
-	listeners := make([]EventListener, len(cfg.listeners))
-	copy(listeners, cfg.listeners)
+	listeners := cloneEventListenerRegistrations(cfg.listeners)
+	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
 	initials := cloneSessionInitialFacts(cfg.initials)
 
 	compiledInitials, err := compileSessionInitialFacts(revision, initials)
@@ -216,7 +219,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		return nil, err
 	}
 	agenda := newAgenda()
-	useInitialAgenda := len(listeners) == 0 && rete.supportsInitialAgendaReset()
+	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(listeners) && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
 		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(context.Background(), state, state.generation, agenda)
@@ -239,6 +242,8 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		compiledInitials:    compiledInitials,
 		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
 		listeners:           listeners,
+		allEventListeners:   allEventListeners,
+		eventListenerCounts: eventListenerCounts,
 		eventClock:          cfg.eventClock,
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
@@ -901,7 +906,7 @@ func (s *Session) insertTemplateValuesBatchWithContext(ctx context.Context, fn f
 		}
 	}
 	if batch.needsReconcile {
-		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, len(s.listeners) > 0); err != nil {
+		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, s.shouldCollectAgendaChanges()); err != nil {
 			return err
 		} else if !ok {
 			return fmt.Errorf("%w: unsupported agenda delta after template value batch", ErrUnsupportedRuntime)
@@ -996,7 +1001,7 @@ func (s *Session) insertPreparedTemplateValuesBatchWithContext(ctx context.Conte
 	}
 	s.commitFactWorkspace(batch.state)
 	if batch.needsReconcile {
-		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, len(s.listeners) > 0); err != nil {
+		if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, batch.agendaDelta, s.shouldCollectAgendaChanges()); err != nil {
 			return err
 		} else if !ok {
 			return fmt.Errorf("%w: unsupported agenda delta after prepared template value batch", ErrUnsupportedRuntime)
@@ -1368,7 +1373,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
-	if len(s.listeners) > 0 {
+	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
@@ -1496,7 +1501,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
-	if len(s.listeners) > 0 {
+	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
@@ -2002,7 +2007,7 @@ func (s *Session) clearBackchainDemandRequestArena() {
 }
 
 func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
-	if s == nil || len(s.listeners) == 0 || fact == nil {
+	if s == nil || fact == nil || !s.hasEventListenersFor(EventFactAsserted) {
 		return
 	}
 	publicSnapshot := fact.snapshotForRevision(s.revision, s.compactSlotStore)
@@ -2237,7 +2242,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 		Fact:   before,
 		Delta:  &delta,
 	}
-	if len(s.listeners) > 0 {
+	if s.hasEventListenersFor(EventFactRetracted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
@@ -2312,7 +2317,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if s.agendaReady && !s.agendaDirty {
 		return result, nil
 	}
-	if len(s.listeners) == 0 {
+	if !s.shouldCollectAgendaChanges() {
 		if ok, err := s.reconcileAgendaWithoutSnapshotAndChanges(ctx); ok || err != nil {
 			return result, err
 		}
@@ -2405,7 +2410,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 	}
 	mayEmitBackchainDemandDeltas := rete != nil && rete.mayEmitBackchainDemandDeltas()
-	resetAgendaWithInitialAgenda := len(s.listeners) == 0 && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
+	resetAgendaWithInitialAgenda := !s.shouldCollectAgendaChanges() && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
 	var initialAgenda *agenda
 	if resetAgendaWithInitialAgenda {
 		initialAgenda = newAgenda()
@@ -2492,7 +2497,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			OldGeneration: oldGeneration,
 		},
 	}
-	if len(s.listeners) > 0 {
+	if s.hasEventListenersFor(EventReset) {
 		delta := MutationDelta{
 			Kind:          MutationReset,
 			Generation:    s.generation,
@@ -2733,13 +2738,13 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
-	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); ok || err != nil {
+	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); ok || err != nil {
 		return changes, err
 	}
 	if !delta.supported && s.agendaReady && !s.agendaDirty {
 		return nil, fmt.Errorf("%w: unsupported agenda delta after steady-state mutation", ErrUnsupportedRuntime)
 	}
-	if len(s.listeners) == 0 && s.rete != nil && !s.rete.supportsIncrementalAgenda() {
+	if !s.shouldCollectAgendaChanges() && s.rete != nil && !s.rete.supportsIncrementalAgenda() {
 		s.markAgendaDirty()
 		return nil, nil
 	}
@@ -3137,7 +3142,7 @@ func templatesCompatible(left, right Template) bool {
 }
 
 func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) {
-	if s == nil || len(s.listeners) == 0 || len(changes) == 0 {
+	if s == nil || len(changes) == 0 {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -3145,6 +3150,13 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 		rulesetID = s.revision.ID()
 	}
 	for _, change := range changes {
+		eventType := EventRuleActivated
+		if change.kind == agendaChangeDeactivated {
+			eventType = EventRuleDeactivated
+		}
+		if !s.hasEventListenersFor(eventType) {
+			continue
+		}
 		ruleID := RuleID("")
 		if s.revision != nil {
 			if rule, ok := s.revision.rulesByRevisionID[change.activation.ruleRevisionID]; ok {
@@ -3421,7 +3433,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		Fact:   after,
 		Delta:  &delta,
 	}
-	if len(s.listeners) > 0 {
+	if s.hasEventListenersFor(EventFactModified) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
@@ -6216,7 +6228,7 @@ func (s *Session) canApplyRunAgendaDeltaDirect(delta reteAgendaDelta) bool {
 	if s == nil || !delta.supported || s.agendaDirty || !s.agendaReady {
 		return false
 	}
-	if s.revision == nil || s.revision.hasAutoFocusRules() || len(s.listeners) > 0 {
+	if s.revision == nil || s.revision.hasAutoFocusRules() || s.hasAgendaEventListeners() {
 		return false
 	}
 	if s.runAgendaPending && !s.runAgendaDirect {
@@ -6295,7 +6307,7 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 }
 
 func (s *Session) applyAutoFocusForActivation(act *activation) {
-	if s == nil || s.revision == nil || !s.revision.hasAutoFocusRules() || len(s.listeners) > 0 {
+	if s == nil || s.revision == nil || !s.revision.hasAutoFocusRules() || s.hasAgendaEventListeners() {
 		return
 	}
 	if act == nil || act.status != activationStatusPending {
@@ -6401,7 +6413,7 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 		s.markAgendaDirty()
 		return err
 	}
-	if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, len(s.listeners) > 0); err != nil {
+	if _, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); err != nil {
 		s.clearRunAgendaDelta()
 		s.markAgendaDirty()
 		return err
@@ -6700,12 +6712,26 @@ func (s *Session) emitEvent(ctx context.Context, event Event) {
 	if s == nil || len(s.listeners) == 0 {
 		return
 	}
-	for _, listener := range s.listeners {
-		if listener == nil {
+	for _, registration := range s.listeners {
+		if !registration.subscribesTo(event.Type) {
 			continue
 		}
-		_ = listener.HandleEvent(ctx, event.clone())
+		_ = registration.listener.HandleEvent(ctx, event.clone())
 	}
+}
+
+func (s *Session) hasEventListenersFor(eventType EventType) bool {
+	if s == nil || len(s.listeners) == 0 {
+		return false
+	}
+	if s.allEventListeners > 0 {
+		return true
+	}
+	return s.eventListenerCounts[eventType] > 0
+}
+
+func (s *Session) hasAgendaEventListeners() bool {
+	return s.hasEventListenersFor(EventRuleActivated) || s.hasEventListenersFor(EventRuleDeactivated)
 }
 
 func (s *Session) factByID(id FactID) (FactSnapshot, bool) {

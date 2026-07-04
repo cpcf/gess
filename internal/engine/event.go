@@ -102,3 +102,111 @@ type EventFunc func(context.Context, Event) error
 func (f EventFunc) HandleEvent(ctx context.Context, event Event) error {
 	return f(ctx, event)
 }
+
+// EventListenerOption configures a listener registered with WithEventListener.
+type EventListenerOption func(*eventListenerConfig)
+
+type eventListenerConfig struct {
+	types map[EventType]struct{}
+}
+
+type eventListenerRegistration struct {
+	listener EventListener
+	types    map[EventType]struct{}
+}
+
+// ForEventTypes limits a listener to the supplied event types. With no filter,
+// listeners receive every event type.
+func ForEventTypes(types ...EventType) EventListenerOption {
+	return func(cfg *eventListenerConfig) {
+		cfg.types = make(map[EventType]struct{}, len(types))
+		for _, eventType := range types {
+			cfg.types[eventType] = struct{}{}
+		}
+	}
+}
+
+func newEventListenerRegistration(listener EventListener, opts []EventListenerOption) eventListenerRegistration {
+	if listener == nil {
+		return eventListenerRegistration{}
+	}
+	var cfg eventListenerConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return eventListenerRegistration{
+		listener: listener,
+		types:    cloneEventTypeSet(cfg.types),
+	}
+}
+
+func cloneEventListenerRegistrations(in []eventListenerRegistration) []eventListenerRegistration {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]eventListenerRegistration, len(in))
+	for i, registration := range in {
+		out[i] = eventListenerRegistration{
+			listener: registration.listener,
+			types:    cloneEventTypeSet(registration.types),
+		}
+	}
+	return out
+}
+
+func cloneEventTypeSet(in map[EventType]struct{}) map[EventType]struct{} {
+	if in == nil {
+		return nil
+	}
+	out := make(map[EventType]struct{}, len(in))
+	for eventType := range in {
+		out[eventType] = struct{}{}
+	}
+	return out
+}
+
+func (r eventListenerRegistration) subscribesTo(eventType EventType) bool {
+	if r.listener == nil {
+		return false
+	}
+	if r.types == nil {
+		return true
+	}
+	_, ok := r.types[eventType]
+	return ok
+}
+
+func eventListenerRegistrationsHaveAnySubscriptions(registrations []eventListenerRegistration) bool {
+	for _, registration := range registrations {
+		if registration.listener == nil {
+			continue
+		}
+		if registration.types == nil || len(registration.types) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func countEventListenerSubscriptions(registrations []eventListenerRegistration) (int, map[EventType]int) {
+	all := 0
+	counts := make(map[EventType]int)
+	for _, registration := range registrations {
+		if registration.listener == nil {
+			continue
+		}
+		if registration.types == nil {
+			all++
+			continue
+		}
+		for eventType := range registration.types {
+			counts[eventType]++
+		}
+	}
+	if len(counts) == 0 {
+		counts = nil
+	}
+	return all, counts
+}

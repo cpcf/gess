@@ -495,7 +495,7 @@ func cloneSupportIDSet(in map[SupportID]struct{}) map[SupportID]struct{} {
 }
 
 func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventType, edge LogicalSupportEdge) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil || !s.hasEventListenersFor(eventType) {
 		return
 	}
 	rulesetID := RulesetID("")

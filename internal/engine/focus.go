@@ -384,5 +384,5 @@ func (s *Session) applyAutoFocus(changes []agendaChange) {
 }
 
 func (s *Session) shouldCollectAgendaChanges() bool {
-	return s != nil && (len(s.listeners) > 0 || s.revision.hasAutoFocusRules())
+	return s != nil && (s.hasAgendaEventListeners() || s.revision.hasAutoFocusRules())
 }

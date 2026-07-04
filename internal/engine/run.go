@@ -256,7 +256,7 @@ func (s *Session) endRun() {
 }
 
 func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activation activation) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil || !s.hasEventListenersFor(EventRuleFired) {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -288,7 +288,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 }
 
 func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activation activation, failure ActionFailureError) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil || !s.hasEventListenersFor(EventActionFailed) {
 		return
 	}
 	rulesetID := RulesetID("")
