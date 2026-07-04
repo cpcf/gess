@@ -109,8 +109,12 @@ err := workspace.AddRule(rules.RuleSpec{
   demand generation.
 
 `RuleSpec` also accepts a flat `Conditions []RuleConditionSpec` slice as a
-shorthand for a top-level `And` of matches; set either `Conditions` or
-`ConditionTree`, not both.
+shorthand for a top-level `And` of matches.
+
+:::caution
+Set either `Conditions` or `ConditionTree` on a `RuleSpec`, not both.
+Nothing on the struct itself prevents setting both at once.
+:::
 
 ### Targets, constraints, and joins
 

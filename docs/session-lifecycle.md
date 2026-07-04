@@ -143,8 +143,10 @@ and a status:
   `rules.ErrActionFailed`.
 - `RunConcurrencyMisuse`: a `Run` overlapped another `Run`.
 
+:::note
 There is no built-in firing limit; use context cancellation or `Halt()` to
-bound a run.
+bound a run. A runaway rule cycle can otherwise run indefinitely.
+:::
 
 ### Activation order
 
@@ -201,8 +203,12 @@ result, err := session.Reset(ctx)
 `Reset` returns the session to its initial state: it advances the fact
 generation, clears working memory, re-asserts the configured initial facts,
 clears logical support and backchain demand, resets the focus stack to
-`MAIN`, and rebuilds the agenda. Fact IDs from before the reset become
-stale; using one afterwards yields `ModifyStale` or `RetractStale`.
+`MAIN`, and rebuilds the agenda.
+
+:::caution
+Fact IDs from before the reset become stale; using one afterwards yields
+`ModifyStale` or `RetractStale`. Don't hold onto `FactID`s across a `Reset`.
+:::
 
 ## Events
 
@@ -290,11 +296,15 @@ facts; when that support goes away the fact is retracted automatically. See
 
 A session has one logical owner. Overlapping operations from several
 goroutines don't block; they fail fast with `ErrConcurrencyMisuse` and the
-matching `...ConcurrencyMisuse` status. The exception: while a `Run` is
-active, `Assert`, `Modify`, `Retract`, focus changes, and `ApplyRuleset`
-from other goroutines are queued and applied between rule firings, with the
-caller blocking until its mutation applies. `Snapshot` and queries during an
-active `Run` are refused with `ErrConcurrencyMisuse`.
+matching `...ConcurrencyMisuse` status.
+
+:::note
+The exception: while a `Run` is active, `Assert`, `Modify`, `Retract`,
+focus changes, and `ApplyRuleset` from other goroutines are queued and
+applied between rule firings, with the caller blocking until its mutation
+applies. `Snapshot` and queries during an active `Run` are still refused
+with `ErrConcurrencyMisuse`.
+:::
 
 ## Next steps
 

@@ -59,9 +59,14 @@ depends on removes the activation before it can fire.
 A session is the mutable runtime for one compiled ruleset. It owns working
 memory, the agenda, the focus stack, logical support, and event delivery.
 Host code asserts, modifies, and retracts facts, calls `Run` to fire rules
-until quiescence, executes queries, and takes snapshots. A session has one
-logical owner; concurrent misuse fails fast rather than blocking. See
+until quiescence, executes queries, and takes snapshots. See
 `session-lifecycle.md`.
+
+:::caution
+A session has one logical owner. Overlapping calls from other goroutines
+fail fast rather than blocking, so a session isn't safe to share across
+goroutines the way many Go runtime objects are.
+:::
 
 ## Compiled rulesets
 
@@ -69,7 +74,13 @@ A ruleset is an immutable compiled revision of a workspace: templates,
 rules, queries, actions, and pure functions, compiled into a Rete graph
 plan. Rulesets are safe to share across sessions. A running session can
 swap to a newly compiled revision with `ApplyRuleset` while keeping its
-facts, provided the templates used by live facts are unchanged.
+facts.
+
+:::note
+`ApplyRuleset` only succeeds if the templates used by the session's live
+facts are unchanged between the old and new revision; otherwise it fails
+with `ErrIncompatibleRuleset`.
+:::
 
 This separation into definitions in a workspace, immutable compiled
 rulesets, and mutable session state is the core structure of the API.

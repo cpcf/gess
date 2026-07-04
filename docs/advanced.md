@@ -50,11 +50,14 @@ The compiler classifies every expression predicate on a condition:
   conditions, so it must run after the join, once per joined token.
 
 Placement is automatic and can be inspected through
-`rules.ExpressionPredicate.Placement()`. The performance implication:
-filters that read one fact are cheap and often indexed, while
+`rules.ExpressionPredicate.Placement()`.
+
+:::tip
+Filters that read one fact are cheap and often indexed, while
 cross-binding comparisons pay a per-join-result cost. Where possible,
 phrase constraints against a single fact, and prefer equality joins, which
 use hash indexes.
+:::
 
 Conjunctions split: in an `and` expression, single-fact conjuncts hoist to
 alpha placement even when a sibling conjunct stays residual.
@@ -90,11 +93,13 @@ or downstream facts instead.
   the domain is empty. Internally it compiles to counterexample negation:
   no domain match without its requirement.
 
+:::caution
 Limits, enforced at compile time with errors wrapping
 `rules.ErrInvalidHigherOrderCondition`: `exists` and `forall` can't appear
 under `not` or as an `or` branch; the domain must be a positive
 conjunction of matches; a `forall` requirement is at most one positive
 match plus tests. Bindings inside `exists` and `forall` don't escape.
+:::
 
 ## Logical support and truth maintenance
 

@@ -33,6 +33,11 @@ closing parentheses for long forms.
 A `.gess` file contains only these top-level forms. Any other form is
 rejected with an `unsupported top-level form` error.
 
+:::caution
+This is an exhaustive list, not a starting point. Readers coming from
+CLIPS or Jess should not expect other top-level forms to work.
+:::
+
 - `(defmodule NAME ...)`: declare a module.
 - `(deftemplate NAME ...)`: declare a fact template.
 - `(deffacts NAME fact...)`: declare seed facts.
@@ -165,9 +170,11 @@ Bind the whole fact with `?binding <- (pattern)`. A bound fact's fields are
 readable elsewhere as a projection `?binding:field`, usable in expressions,
 `assert` values, `call` arguments, and query returns.
 
+:::caution
 The pattern language intentionally stops there: per-slot predicate
 constraints, connective constraints, and multifield patterns aren't part of
 the language. Use `test` conditions for anything beyond equality.
+:::
 
 ### Condition forms
 
@@ -229,9 +236,12 @@ with an `unsupported action` error:
   `Registry.Calls`; with no arguments, in `Registry.Actions`. Arguments are
   scalar literals, variables, or projections.
 
-`retract`, `modify`, `bind`, and `printout` aren't `.gess` actions. Rules
-that need side effects or fact mutation beyond `assert` call registered host
-functions, which receive an action context with the full mutation API.
+:::caution
+`retract`, `modify`, `bind`, and `printout` aren't `.gess` actions, even
+though they exist in CLIPS and Jess. Rules that need side effects or fact
+mutation beyond `assert` call registered host functions, which receive an
+action context with the full mutation API.
+:::
 
 ## `defquery`
 
@@ -310,9 +320,11 @@ Notable rejections, verbatim from the loader:
 - `unregistered action`: a `call` names a function the registry doesn't
   provide.
 
+:::caution
 Unknown `declare` keys and unknown slot attributes are ignored rather than
 rejected, so check spelling carefully when a declaration seems to have no
 effect.
+:::
 
 ## Next steps
 
