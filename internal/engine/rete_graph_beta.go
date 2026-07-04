@@ -65,6 +65,16 @@ type reteGraphAlphaMemory struct {
 	factOwnershipIDs []FactID
 	factRouteStorage []reteGraphAlphaNodeID
 	factCounts       map[ConditionID]int
+	// edgeTokens records the alpha token created per (source stage, edge
+	// ordinal) for each fact, so removal propagates the stored handles
+	// instead of reconstructing structurally-equal tokens.
+	edgeTokens map[FactID][]alphaEdgeSlot
+}
+
+type alphaEdgeSlot struct {
+	source int32
+	edge   int32
+	token  tokenRef
 }
 
 type reteGraphAggregateNodeMemory struct {
@@ -1228,6 +1238,9 @@ func (m *reteGraphBetaMemory) clearMemories() {
 	}
 	m.alpha.factOwnershipIDs = m.alpha.factOwnershipIDs[:0]
 	m.alpha.factRouteStorage = m.alpha.factRouteStorage[:0]
+	if m.alpha.edgeTokens != nil {
+		clear(m.alpha.edgeTokens)
+	}
 	clear(m.terminalTokenDeltas)
 	m.terminalTokenDeltas = m.terminalTokenDeltas[:0]
 	clear(m.terminalRemovedDeltas)
@@ -2159,7 +2172,12 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		delta.supported = false
 		return nil
 	}
+	edge := int32(-1)
+	recordEdges := alphaNodeID > 0 && !match.fact.ID().IsZero()
+	var recordedArr [6]alphaEdgeSlot
+	recorded := recordedArr[:0]
 	for _, terminal := range m.graph.stageTerminals(source) {
+		edge++
 		entry := terminal.entry
 		if entry.conditionID == "" {
 			entry = sourceEntry
@@ -2174,9 +2192,13 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 			continue
 		}
+		if recordEdges {
+			recorded = append(recorded, alphaEdgeSlot{source: int32(source.id), edge: edge, token: token})
+		}
 		_, _ = m.insertTerminalToken(terminal.terminalID, terminal.branchID, token, delta, span)
 	}
 	for _, successor := range m.graph.stageSuccessors(source) {
+		edge++
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
 			delta.supported = false
@@ -2198,6 +2220,9 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				delta.supported = false
 				continue
 			}
+			if recordEdges {
+				recorded = append(recorded, alphaEdgeSlot{source: int32(source.id), edge: edge, token: token})
+			}
 			ok, err := m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta)
 			if err != nil {
 				return err
@@ -2217,6 +2242,9 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 				delta.supported = false
 				continue
 			}
+			if recordEdges {
+				recorded = append(recorded, alphaEdgeSlot{source: int32(source.id), edge: edge, token: token})
+			}
 			ok, err := m.insertBetaInput(successor.betaNodeID, successor.side, token, node.entry, span, delta)
 			if err != nil {
 				return err
@@ -2229,6 +2257,7 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 		}
 	}
 	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
+		edge++
 		entry := sourceEntry
 		if entry.conditionID == "" {
 			delta.supported = false
@@ -2240,11 +2269,21 @@ func (m *reteGraphBetaMemory) propagateAlphaStage(source reteGraphStageRef, sour
 			delta.supported = false
 			continue
 		}
+		if recordEdges {
+			recorded = append(recorded, alphaEdgeSlot{source: int32(source.id), edge: edge, token: token})
+		}
 		m.openAggregateBucket(aggregateID, token, span, delta)
 	}
 	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.recordAlphaFact(alphaNodeID, match.fact)
 		m.insertAggregateInput(aggregateID, match, span, delta)
+	}
+	if len(recorded) > 0 {
+		if m.alpha.edgeTokens == nil {
+			m.alpha.edgeTokens = make(map[FactID][]alphaEdgeSlot)
+		}
+		id := match.fact.ID()
+		m.alpha.edgeTokens[id] = append(m.alpha.edgeTokens[id], recorded...)
 	}
 	return nil
 }
@@ -2261,7 +2300,10 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		delta.supported = false
 		return
 	}
+	stored := m.takeAlphaEdgeTokens(source, match.fact.ID())
+	edge := int32(-1)
 	for _, terminal := range m.graph.stageTerminals(source) {
+		edge++
 		entry := terminal.entry
 		if entry.conditionID == "" {
 			entry = sourceEntry
@@ -2270,7 +2312,10 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 			delta.supported = false
 			continue
 		}
-		token := m.newAlphaTokenRef(entry, match, captures, nil)
+		token := alphaEdgeTokenAt(stored, edge)
+		if token.isZero() {
+			token = m.newAlphaTokenRef(entry, match, captures, nil)
+		}
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -2278,6 +2323,7 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		m.removeTerminalToken(terminal.terminalID, terminal.branchID, token, counters, delta)
 	}
 	for _, successor := range m.graph.stageSuccessors(source) {
+		edge++
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
 			delta.supported = false
@@ -2293,17 +2339,23 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 				delta.supported = false
 				continue
 			}
-			token := m.newAlphaTokenRef(entry, match, captures, nil)
+			token := alphaEdgeTokenAt(stored, edge)
+			if token.isZero() {
+				token = m.newAlphaTokenRef(entry, match, captures, nil)
+			}
 			if token.isZero() || !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 				delta.supported = false
 			}
 		case reteGraphBetaInputRight:
-			edgeMatch := conditionMatch{
-				conditionID: successor.entry.conditionID,
-				bindingSlot: successor.entry.bindingSlot,
-				fact:        match.fact,
+			token := alphaEdgeTokenAt(stored, edge)
+			if token.isZero() {
+				edgeMatch := conditionMatch{
+					conditionID: successor.entry.conditionID,
+					bindingSlot: successor.entry.bindingSlot,
+					fact:        match.fact,
+				}
+				token = m.newAlphaTokenRef(successor.entry, edgeMatch, captures, nil)
 			}
-			token := m.newAlphaTokenRef(successor.entry, edgeMatch, captures, nil)
 			if token.isZero() || !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 				delta.supported = false
 			}
@@ -2312,12 +2364,16 @@ func (m *reteGraphBetaMemory) propagateRemoveAlphaStage(source reteGraphStageRef
 		}
 	}
 	for _, aggregateID := range m.graph.stageAggregateOuters(source) {
+		edge++
 		entry := sourceEntry
 		if entry.conditionID == "" {
 			delta.supported = false
 			continue
 		}
-		token := m.newAlphaTokenRef(entry, match, captures, nil)
+		token := alphaEdgeTokenAt(stored, edge)
+		if token.isZero() {
+			token = m.newAlphaTokenRef(entry, match, captures, nil)
+		}
 		if token.isZero() {
 			delta.supported = false
 			continue
@@ -4432,6 +4488,48 @@ func (m *reteGraphBetaMemory) recordAlphaFact(nodeID reteGraphAlphaNodeID, fact 
 	}
 }
 
+// takeAlphaEdgeTokens removes and returns the stored edge tokens for a
+// fact and alpha source stage; the caller consumes them positionally.
+func (m *reteGraphBetaMemory) takeAlphaEdgeTokens(source reteGraphStageRef, id FactID) []alphaEdgeSlot {
+	if m == nil || source.kind != reteGraphStageAlpha || id.IsZero() || len(m.alpha.edgeTokens) == 0 {
+		return nil
+	}
+	slots := m.alpha.edgeTokens[id]
+	if len(slots) == 0 {
+		return nil
+	}
+	sourceID := int32(source.id)
+	kept := 0
+	for i := range slots {
+		if slots[i].source != sourceID {
+			slots[kept], slots[i] = slots[i], slots[kept]
+			kept++
+		}
+	}
+	remaining, taken := slots[:kept], slots[kept:]
+	if len(taken) == 0 {
+		return nil
+	}
+	if len(remaining) == 0 {
+		delete(m.alpha.edgeTokens, id)
+	} else {
+		m.alpha.edgeTokens[id] = remaining
+	}
+	return taken
+}
+
+func alphaEdgeTokenAt(slots []alphaEdgeSlot, edge int32) tokenRef {
+	for _, slot := range slots {
+		if slot.edge == edge {
+			if _, ok := slot.token.resolve(); !ok {
+				return tokenRef{}
+			}
+			return slot.token
+		}
+	}
+	return tokenRef{}
+}
+
 func (m *reteGraphBetaMemory) removeAlphaFact(id FactID) {
 	if m == nil || id.IsZero() {
 		return
@@ -4459,11 +4557,13 @@ func (m *reteGraphBetaMemory) removeAlphaFactRoutes(id FactID, routes []reteGrap
 	}
 	if removeTerminalRows {
 		delete(m.alpha.factOwnership, id)
+		delete(m.alpha.edgeTokens, id)
 		return
 	}
 	row := m.alpha.factOwnership[id]
 	row.routes = nil
 	delete(m.alpha.factOwnership, id)
+	delete(m.alpha.edgeTokens, id)
 }
 
 func (m *reteGraphBetaMemory) alphaFactCount(conditionID ConditionID) int {
