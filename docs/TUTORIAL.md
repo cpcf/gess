@@ -7,8 +7,9 @@ This tutorial shows the preferred Gess workflow:
 3. Use the generated Go code from your app.
 
 The examples live under `examples/`. The primary example for this workflow is
-`examples/gess-files/order_routing`, which defines an order routing ruleset in
-`rules.gess` and generates `rules_generated.go`.
+[`examples/gess-files/order_routing`](https://github.com/cpcf/gess/tree/main/examples/gess-files/order_routing),
+which defines an order routing ruleset in `rules.gess` and generates
+`rules_generated.go`.
 
 ## Project shape
 
@@ -111,9 +112,10 @@ Queries give Go code a stable way to read results:
 ```
 
 The complete file is
-`examples/gess-files/order_routing/rules.gess`.
+[`examples/gess-files/order_routing/rules.gess`](https://github.com/cpcf/gess/blob/main/examples/gess-files/order_routing/rules.gess).
 
-For a hands-on version with checkpoints, use `tutorial/README.md`.
+For a hands-on version with checkpoints, use
+[`tutorial/README.md`](https://github.com/cpcf/gess/blob/main/tutorial/README.md).
 
 ## Compile with `gessc`
 
@@ -194,8 +196,9 @@ func run(out io.Writer) error {
 }
 ```
 
-The full example is `examples/gess-files/order_routing/main.go`. Its test
-expects:
+The full example is
+[`examples/gess-files/order_routing/main.go`](https://github.com/cpcf/gess/blob/main/examples/gess-files/order_routing/main.go).
+Its test expects:
 
 ```text
 O-100 -> W-1

@@ -154,8 +154,9 @@ state. Snapshot queries don't generate demand.
 
 Conditions wrapped in `rules.Explicit{...}` and negated conditions never
 generate demand. `Snapshot.BackchainDemandDiagnostics()` reports active
-demand counts per template. The `examples/backward-chaining` examples show
-the pattern end to end.
+demand counts per template. The
+[`examples/backward-chaining`](https://github.com/cpcf/gess/tree/main/examples/backward-chaining)
+examples show the pattern end to end.
 
 ## Modules and the focus stack
 
@@ -179,8 +180,9 @@ session's focus stack (initially `[MAIN]`) selects which partition fires:
 
 Use modules to phase work, for example an intake module that normalizes
 facts followed by a response module that acts on them, with rules or the
-host pushing focus between phases. The `examples/modules-focus` example shows
-the pattern.
+host pushing focus between phases. The
+[`examples/modules-focus`](https://github.com/cpcf/gess/tree/main/examples/modules-focus)
+example shows the pattern.
 
 ## Next steps
 
