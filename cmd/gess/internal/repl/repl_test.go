@@ -183,7 +183,7 @@ func TestMalformedCommandsContinueAndReturnFailure(t *testing.T) {
 		"error: bad field assignment \"badfield\"; want field=value\n",
 		"error: unknown template \"missing\"\n",
 		"error: unknown fact id \"fact:g9:9\"\n",
-		"error: run limit must be a non-negative integer\n",
+		"error: run limit must be a positive integer\n",
 		"error: bad query argument \"badarg\"; want arg=value\n",
 		"error: usage: watch on|off [types]\n",
 		"error: unknown watch event type \"nope\"\n",
@@ -201,4 +201,43 @@ func TestMalformedCommandsContinueAndReturnFailure(t *testing.T) {
 
 func rootPath(path string) string {
 	return filepath.Join("..", "..", "..", "..", path)
+}
+
+func TestSplitFieldsPreservesMultibyteRunes(t *testing.T) {
+	fields, err := splitFields(`assert order id=voilà customer=Ç sku="a béta"`)
+	if err != nil {
+		t.Fatalf("splitFields: %v", err)
+	}
+	want := []string{"assert", "order", "id=voilà", "customer=Ç", `sku="a béta"`}
+	if len(fields) != len(want) {
+		t.Fatalf("fields = %#v, want %#v", fields, want)
+	}
+	for i := range want {
+		if fields[i] != want[i] {
+			t.Fatalf("fields[%d] = %q, want %q", i, fields[i], want[i])
+		}
+	}
+}
+
+func TestSplitFieldsNonBreakingSpaceIsSeparator(t *testing.T) {
+	fields, err := splitFields("a b")
+	if err != nil {
+		t.Fatalf("splitFields: %v", err)
+	}
+	if len(fields) != 2 || fields[0] != "a" || fields[1] != "b" {
+		t.Fatalf("fields = %#v, want [a b]", fields)
+	}
+}
+
+func TestRunSurvivesOverlongLines(t *testing.T) {
+	long := strings.Repeat("x", 80*1024)
+	input := "# " + long + "\nhelp\n"
+	var out bytes.Buffer
+	err := Run(context.Background(), strings.NewReader(input), &out, Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "commands:") {
+		t.Fatalf("help output missing after overlong line; got %q", out.String())
+	}
 }

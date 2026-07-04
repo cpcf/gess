@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	dsl "github.com/cpcf/gess/dsl"
 	rules "github.com/cpcf/gess/rules"
@@ -44,33 +45,37 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, opts Options) error {
 		opts.Prompt = "gess> "
 	}
 	state := &replState{out: out, stubCalls: opts.StubCalls}
-	scanner := bufio.NewScanner(in)
+	defer func() {
+		if state.session != nil {
+			_ = state.session.Close()
+		}
+	}()
+	reader := bufio.NewReader(in)
 	failed := false
 	for {
 		if opts.Interactive {
 			fmt.Fprint(out, opts.Prompt)
 		}
-		if !scanner.Scan() {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			return readErr
+		}
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			exit, err := state.exec(ctx, trimmed)
+			if err != nil {
+				if !opts.Interactive {
+					failed = true
+				}
+				fmt.Fprintf(out, "error: %v\n", err)
+			}
+			if exit {
+				break
+			}
+		}
+		if readErr == io.EOF {
 			break
 		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		exit, err := state.exec(ctx, line)
-		if err != nil {
-			failed = true
-			fmt.Fprintf(out, "error: %v\n", err)
-		}
-		if exit {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-	if state.session != nil {
-		_ = state.session.Close()
 	}
 	if failed {
 		return ErrCommandFailed
@@ -280,8 +285,8 @@ func (s *replState) run(ctx context.Context, args []string) error {
 	var opts []sess.RunOption
 	if len(args) == 1 {
 		n, err := strconv.Atoi(args[0])
-		if err != nil || n < 0 {
-			return fmt.Errorf("run limit must be a non-negative integer")
+		if err != nil || n < 1 {
+			return fmt.Errorf("run limit must be a positive integer")
 		}
 		opts = append(opts, sess.WithMaxFirings(n))
 	}
@@ -676,33 +681,34 @@ func formatValue(value rules.Value) string {
 
 func splitFields(line string) ([]string, error) {
 	var fields []string
-	for i := 0; i < len(line); {
-		for i < len(line) && unicode.IsSpace(rune(line[i])) {
-			i++
-		}
-		if i >= len(line) {
-			break
+	i := 0
+	for i < len(line) {
+		r, size := utf8.DecodeRuneInString(line[i:])
+		if unicode.IsSpace(r) {
+			i += size
+			continue
 		}
 		start := i
 		var b strings.Builder
 		quoted := false
 		for i < len(line) {
-			r := rune(line[i])
+			r, size := utf8.DecodeRuneInString(line[i:])
 			if !quoted && unicode.IsSpace(r) {
 				break
 			}
-			if line[i] == '\\' && i+1 < len(line) {
-				b.WriteByte(line[i])
-				i++
-				b.WriteByte(line[i])
-				i++
+			if r == '\\' && i+size < len(line) {
+				b.WriteRune(r)
+				i += size
+				escaped, escapedSize := utf8.DecodeRuneInString(line[i:])
+				b.WriteRune(escaped)
+				i += escapedSize
 				continue
 			}
-			if line[i] == '"' {
+			if r == '"' {
 				quoted = !quoted
 			}
-			b.WriteByte(line[i])
-			i++
+			b.WriteRune(r)
+			i += size
 		}
 		if quoted {
 			return nil, fmt.Errorf("unterminated quote near %q", line[start:])
