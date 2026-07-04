@@ -1,12 +1,17 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import mermaid from 'astro-mermaid';
 
 const repo = 'https://github.com/cpcf/gess';
 
 // https://astro.build/config
 export default defineConfig({
 	integrations: [
+		mermaid({
+			theme: 'neutral',
+			autoTheme: true,
+		}),
 		starlight({
 			title: 'Gess',
 			description:

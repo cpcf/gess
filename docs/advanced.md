@@ -22,6 +22,24 @@ a ruleset builds a graph of:
 - Terminal nodes: rule endpoints that feed the agenda and query endpoints
   that produce rows.
 
+```mermaid
+flowchart LR
+    Fact["Asserted / modified /<br/>retracted fact"] --> Alpha["Alpha nodes<br/>(per-template, per-field filters)"]
+    Alpha --> Beta["Beta nodes<br/>(indexed joins + residual predicates)"]
+    Beta --> Neg["Negative nodes<br/>(blocker counts for not)"]
+    Beta --> Agg["Aggregate nodes<br/>(incremental per-group state)"]
+    Neg --> Terminal["Terminal nodes"]
+    Agg --> Terminal
+    Beta --> Terminal
+    Terminal -->|rule terminal| Agenda["Agenda<br/>(activations, ordered by salience/recency)"]
+    Terminal -->|query terminal| Rows["Query rows"]
+    Agenda -->|Run fires activations| Actions["Rule actions<br/>(assert/modify/retract/focus/halt)"]
+    Actions --> Fact
+```
+
+Every arrow is a delta, not a full re-scan: one changed fact propagates
+only through the alpha and beta memories it actually reaches.
+
 Asserts, modifies, and retracts propagate through the graph as deltas.
 Tokens (partial matches) carry a commutative identity hash so removals
 resolve without scanning memories again. The agenda updates from terminal
@@ -107,6 +125,20 @@ match plus tests. Bindings inside `exists` and `forall` don't escape.
 asserts a fact whose justification is the asserting activation's matched
 facts. The session records a support edge per asserting activation.
 
+```mermaid
+flowchart LR
+    Finding["finding<br/>(stated fact)"] -->|supports| Ticket["ticket<br/>(logical fact)"]
+    Ticket -->|supports| Escalation["escalation<br/>(logical fact)"]
+
+    Retract["Retract finding"] -.->|removes support edge| Finding
+    Finding -.->|"no support left,<br/>auto-retracted"| Ticket
+    Ticket -.->|"no support left,<br/>auto-retracted"| Escalation
+```
+
+Retracting the root stated fact removes its support edge; each downstream
+logical fact loses its only support in turn and is retracted automatically,
+cascading until nothing more depends on what's gone.
+
 - A fact can be stated, logical, or both. Asserting an existing logical
   fact adds stated support; retracting a stated-and-logical fact removes
   only the stated support.
@@ -167,6 +199,26 @@ examples show the pattern end to end.
 
 Every rule belongs to a module; the agenda is partitioned per module. The
 session's focus stack (initially `[MAIN]`) selects which partition fires:
+
+```mermaid
+sequenceDiagram
+    participant Stack as Focus stack
+    participant MAIN
+    participant intake
+    participant response
+
+    Note over Stack: [MAIN]
+    MAIN->>intake: PushFocus("intake")
+    Note over Stack: [MAIN, intake]
+    intake->>intake: fire intake activations
+    intake->>response: auto-focus activation enters agenda
+    Note over Stack: [MAIN, intake, response]
+    response->>response: fire response activations
+    Note over Stack: response's agenda empties, frame pops
+    Note over Stack: [MAIN, intake]
+    Note over Stack: intake's agenda empties, frame pops
+    Note over Stack: [MAIN]
+```
 
 - `Run` draws activations only from the module on top of the stack. When
   that module's agenda empties, the frame pops automatically and the run

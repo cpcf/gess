@@ -5,6 +5,25 @@ memory, the agenda, the focus stack, and logical support. This guide covers
 the full lifecycle from construction to close. For the package overview, see
 `go-api.md`; for concepts, see `concepts.md`.
 
+```mermaid
+flowchart TD
+    Workspace["Workspace<br/>(templates, rules, queries)"] -->|Compile| Ruleset["Ruleset<br/>(immutable, compiled)"]
+    Ruleset -->|New| Session["Session<br/>(working memory, agenda, focus stack)"]
+    Session --> Mutate["Assert / Modify / Retract"]
+    Mutate --> Run["Run<br/>(fires activations until quiescent)"]
+    Run --> Mutate
+    Run --> Query["Query / QueryAll"]
+    Query --> Mutate
+    Session --> Snapshot["Snapshot"]
+    Session --> Reset["Reset<br/>(new generation, re-seeds initial facts)"]
+    Reset --> Mutate
+    Ruleset2["New Ruleset revision"] -->|ApplyRuleset| Session
+    Session --> Close["Close"]
+```
+
+A session's own state machine loops through mutate/run/query until the host
+resets it, swaps in a new compiled ruleset, or closes it.
+
 All examples use the public packages:
 
 ```go
