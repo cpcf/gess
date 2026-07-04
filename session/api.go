@@ -12,6 +12,8 @@ type (
 	InitialFact                = engine.SessionInitialFact
 	Session                    = engine.Session
 	Snapshot                   = engine.Snapshot
+	Agenda                     = engine.Agenda
+	AgendaActivation           = engine.AgendaActivation
 	BackchainDemandDiagnostics = engine.BackchainDemandDiagnostics
 	QueryArgs                  = engine.QueryArgs
 	QueryRow                   = engine.QueryRow

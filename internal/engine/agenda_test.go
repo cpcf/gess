@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"slices"
 	"sort"
@@ -77,6 +78,284 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	if got := agenda.pendingActivations()[0].activationID(); got != pending[0].activationID() {
 		t.Fatalf("activation ID changed across duplicate reconcile: %q vs %q", got, pending[0].activationID())
 	}
+}
+
+func TestSessionAgendaMatchesFocusedRunOrder(t *testing.T) {
+	ctx := context.Background()
+	trace := make([]string, 0, 3)
+	revision, mainKey, reviewKey := mustAgendaIntrospectionRevision(t, &trace, true)
+	session := mustSession(t, revision, "agenda-view-order-session")
+	for _, assertion := range []struct {
+		key    TemplateKey
+		fields Fields
+	}{
+		{key: mainKey, fields: mustFields(t, map[string]any{"kind": "low"})},
+		{key: reviewKey, fields: mustFields(t, map[string]any{"kind": "review"})},
+		{key: mainKey, fields: mustFields(t, map[string]any{"kind": "high"})},
+	} {
+		if _, err := session.AssertTemplate(ctx, assertion.key, assertion.fields); err != nil {
+			t.Fatalf("AssertTemplate(%s): %v", assertion.key, err)
+		}
+	}
+
+	agenda, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda: %v", err)
+	}
+	if got, want := agenda.FocusStack(), []ModuleName{MainModule, "review"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("focus stack = %#v, want %#v", got, want)
+	}
+	activations := agenda.Activations()
+	if got, want := agendaRuleNames(activations), []string{"review-rule", "main-high", "main-low"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("agenda order = %#v, want %#v", got, want)
+	}
+	for _, activation := range activations {
+		if activation.ActivationID().IsZero() {
+			t.Fatalf("activation ID is empty: %#v", activation)
+		}
+		if activation.RuleID().IsZero() || activation.RuleRevisionID().IsZero() || activation.RuleName() == "" {
+			t.Fatalf("rule metadata is incomplete: %#v", activation)
+		}
+		if got := len(activation.FactIDs()); got != 1 {
+			t.Fatalf("activation %s fact IDs = %d, want 1", activation.RuleName(), got)
+		}
+	}
+	again, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("second Agenda: %v", err)
+	}
+	if !reflect.DeepEqual(agendaActivationIDs(again.Activations()), agendaActivationIDs(activations)) {
+		t.Fatalf("agenda calls were not deterministic: %#v vs %#v", again.Activations(), activations)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != len(activations) {
+		t.Fatalf("run fired = %d, want %d", result.Fired, len(activations))
+	}
+	if !reflect.DeepEqual(trace, agendaRuleNames(activations)) {
+		t.Fatalf("fired order = %#v, want agenda order %#v", trace, agendaRuleNames(activations))
+	}
+}
+
+func TestSessionAgendaFocusOrderAndModuleViews(t *testing.T) {
+	ctx := context.Background()
+	trace := make([]string, 0, 2)
+	revision, mainKey, reviewKey := mustAgendaIntrospectionRevision(t, &trace, false)
+	session := mustSession(t, revision, "agenda-view-focus-session")
+	if _, err := session.AssertTemplate(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
+		t.Fatalf("AssertTemplate main: %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, reviewKey, mustFields(t, map[string]any{"kind": "review"})); err != nil {
+		t.Fatalf("AssertTemplate review: %v", err)
+	}
+
+	before, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda before focus: %v", err)
+	}
+	if got, want := agendaRuleNames(before.Activations()), []string{"main-low"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("agenda before focus = %#v, want %#v", got, want)
+	}
+	beforeReview := before.ActivationsForModule("review")
+	if got, want := agendaRuleNames(beforeReview), []string{"review-rule"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("review module before focus = %#v, want %#v", got, want)
+	}
+	if err := session.PushFocus(ctx, "review"); err != nil {
+		t.Fatalf("PushFocus: %v", err)
+	}
+	focused, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda focused: %v", err)
+	}
+	if got, want := agendaRuleNames(focused.Activations()), []string{"review-rule", "main-low"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("focused agenda = %#v, want %#v", got, want)
+	}
+	if !reflect.DeepEqual(agendaActivationIDs(beforeReview), agendaActivationIDs(focused.ActivationsForModule("review"))) {
+		t.Fatalf("review module activations changed after focus push: %#v vs %#v", beforeReview, focused.ActivationsForModule("review"))
+	}
+	if _, err := session.PopFocus(ctx); err != nil {
+		t.Fatalf("PopFocus: %v", err)
+	}
+	afterPop, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda after pop: %v", err)
+	}
+	if got, want := agendaRuleNames(afterPop.Activations()), []string{"main-low"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("agenda after pop = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionAgendaOmitsConsumedActivation(t *testing.T) {
+	ctx := context.Background()
+	trace := make([]string, 0, 1)
+	revision, mainKey, _ := mustAgendaIntrospectionRevision(t, &trace, false)
+	session := mustSession(t, revision, "agenda-view-refraction-session")
+	if _, err := session.AssertTemplate(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	before, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda before run: %v", err)
+	}
+	if got := len(before.Activations()); got != 1 {
+		t.Fatalf("agenda before run = %d activations, want 1", got)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	after, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda after run: %v", err)
+	}
+	if got := after.Activations(); got == nil || len(got) != 0 {
+		t.Fatalf("agenda after run = %#v, want empty non-nil slice", got)
+	}
+}
+
+func TestSessionAgendaEmptyClosedAndConcurrentRun(t *testing.T) {
+	ctx := context.Background()
+	empty := mustSession(t, mustCompileWorkspace(t, NewWorkspace()), "agenda-empty-session")
+	agenda, err := empty.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("empty Agenda: %v", err)
+	}
+	if got := agenda.Activations(); got == nil || len(got) != 0 {
+		t.Fatalf("empty activations = %#v, want empty non-nil slice", got)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := empty.Agenda(ctx); !errors.Is(err, ErrClosedSession) {
+		t.Fatalf("Agenda closed error = %v, want ErrClosedSession", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{Name: "event"})
+	mustAddAction(t, workspace, ActionSpec{Name: "block", Fn: func(ActionContext) error {
+		close(entered)
+		<-release
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "blocking-rule",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+		Actions:    []RuleActionSpec{{Name: "block"}},
+	})
+	session, err := NewSession(mustCompileWorkspace(t, workspace), WithInitialFacts(SessionInitialFact{TemplateKey: event.Key()}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	runDone := make(chan error, 1)
+	go func() {
+		_, err := session.Run(ctx)
+		runDone <- err
+	}()
+	<-entered
+	if _, err := session.Agenda(ctx); !errors.Is(err, ErrConcurrencyMisuse) {
+		t.Fatalf("Agenda during run error = %v, want ErrConcurrencyMisuse", err)
+	}
+	close(release)
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+}
+
+func mustAgendaIntrospectionRevision(t testing.TB, trace *[]string, autoFocus bool) (*Ruleset, TemplateKey, TemplateKey) {
+	t.Helper()
+	workspace := NewWorkspace()
+	var autoFocusDefault *bool
+	if autoFocus {
+		enabled := true
+		autoFocusDefault = &enabled
+	}
+	mustAddModule(t, workspace, ModuleSpec{Name: "review", AutoFocus: autoFocusDefault})
+	mainEvent := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "main-event",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	})
+	reviewEvent := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "review-event",
+		Module: "review",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+		},
+	})
+	for _, name := range []string{"main-high", "main-low", "review-rule"} {
+		ruleName := name
+		mustAddAction(t, workspace, ActionSpec{Name: ruleName, Fn: func(ActionContext) error {
+			if trace != nil {
+				*trace = append(*trace, ruleName)
+			}
+			return nil
+		}})
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "main-high",
+		Salience: 30,
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Target:  TemplateKeyFact(mainEvent.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "kind",
+				Operator: FieldConstraintEqual,
+				Value:    "high",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "main-high"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "main-low",
+		Salience: 5,
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Target:  TemplateKeyFact(mainEvent.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "kind",
+				Operator: FieldConstraintEqual,
+				Value:    "low",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "main-low"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "review-rule",
+		Module:   "review",
+		Salience: 10,
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Target:  TemplateKeyFact(reviewEvent.Key()),
+			FieldConstraints: []FieldConstraintSpec{{
+				Field:    "kind",
+				Operator: FieldConstraintEqual,
+				Value:    "review",
+			}},
+		}},
+		Actions: []RuleActionSpec{{Name: "review-rule"}},
+	})
+	return mustCompileWorkspace(t, workspace), mainEvent.Key(), reviewEvent.Key()
+}
+
+func agendaRuleNames(activations []AgendaActivation) []string {
+	out := make([]string, 0, len(activations))
+	for _, activation := range activations {
+		out = append(out, activation.RuleName())
+	}
+	return out
+}
+
+func agendaActivationIDs(activations []AgendaActivation) []ActivationID {
+	out := make([]ActivationID, 0, len(activations))
+	for _, activation := range activations {
+		out = append(out, activation.ActivationID())
+	}
+	return out
 }
 
 func TestSessionDoesNotReserveAgendaRowsFromRuleCount(t *testing.T) {
