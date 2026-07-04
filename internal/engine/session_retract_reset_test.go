@@ -205,6 +205,7 @@ func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
 	session, err := NewSession(
 		revision,
 		WithSessionID("reset-initialized-session"),
+		WithResetBeforeSnapshot(true),
 		WithInitialFacts(initialTemplate, initialDynamic),
 		WithEventListener(collector),
 	)

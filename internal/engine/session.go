@@ -69,7 +69,9 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 }
 
 // WithResetBeforeSnapshot controls whether successful Reset calls populate
-// ResetResult.Before. The default is true.
+// ResetResult.Before. The default is false: materializing a full
+// working-memory snapshot per Reset is a per-call cost most sessions never
+// consume.
 func WithResetBeforeSnapshot(enabled bool) SessionOption {
 	return func(cfg *sessionConfig) {
 		cfg.resetBeforeSnapshot = enabled
@@ -185,7 +187,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		return nil, ErrInvalidRuleset
 	}
 
-	cfg := sessionConfig{resetBeforeSnapshot: true}
+	cfg := sessionConfig{}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&cfg)

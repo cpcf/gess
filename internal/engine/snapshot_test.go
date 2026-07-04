@@ -198,6 +198,7 @@ func TestSnapshotReconstructsPublicFactsFromCompactSlots(t *testing.T) {
 func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
 	session, err := NewSession(
 		mustCompile(t),
+		WithResetBeforeSnapshot(true),
 		WithInitialFacts(SessionInitialFact{
 			Name: "settings",
 			Fields: mustFields(t, map[string]any{
