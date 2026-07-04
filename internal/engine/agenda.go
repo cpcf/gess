@@ -2496,7 +2496,29 @@ func candidateIdentityForTerminalToken(rule compiledRule, token tokenRef) candid
 }
 
 func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (candidateIdentity, bool) {
-	if token.isZero() || len(rule.conditions) == 0 || len(rule.conditions) > 8 {
+	if token.isZero() || len(rule.conditions) == 0 {
+		return candidateIdentity{}, false
+	}
+	// Chains covering exactly slots 0..n-1 already carry the canonical
+	// commutative identity state built up during construction, so the
+	// terminal identity is a finish step away.
+	if n := len(rule.conditions); n < 63 {
+		if row, ok := token.resolve(); ok && int(row.publicSize) == n && row.slotMask == uint64(1)<<uint(n)-1 {
+			scopeHash := rule.identityScopeHash
+			if scopeHash == 0 {
+				scopeHash = candidateIdentityScopeHash(rule.id, rule.revisionID)
+			}
+			return candidateIdentity{
+				generation: tokenRefGeneration(token),
+				count:      n,
+				key: candidateIdentityKey{
+					scopeHash: scopeHash,
+					hash:      candidateIdentityHashFinish(row.identityState, n),
+				},
+			}, true
+		}
+	}
+	if len(rule.conditions) > 8 {
 		return candidateIdentity{}, false
 	}
 	var factIDs [8]FactID
@@ -2543,7 +2565,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 		if values&mask != 0 {
 			state = candidateIdentityHashTokenEntryStep(state, valueEntries[i])
 		} else {
-			state = candidateIdentityHashFactStep(state, factIDs[i], factVersions[i])
+			state = candidateIdentityHashFactStep(state, i, factIDs[i], factVersions[i])
 		}
 		count++
 	}

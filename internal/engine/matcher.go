@@ -285,22 +285,29 @@ func candidateIdentityHashStep(hash uint64, entry bindingTupleEntry) uint64 {
 	if entry.hasValue {
 		return candidateIdentityHashValueStep(hash, entry.bindingSlot, entry.value)
 	}
-	return candidateIdentityHashFactStep(hash, entry.factID, entry.factVersion)
+	return candidateIdentityHashFactStep(hash, entry.bindingSlot, entry.factID, entry.factVersion)
 }
 
-func candidateIdentityHashFactStep(hash uint64, id FactID, version FactVersion) uint64 {
-	hash = fnvhash.MixUint64(hash, 0)
-	hash = fnvhash.MixUint64(hash, uint64(id.generation))
-	hash = fnvhash.MixUint64(hash, id.sequence)
-	hash = fnvhash.MixUint64(hash, uint64(version))
-	return hash
+// Identity steps hash each entry independently (with its binding slot) and
+// fold it in with a commutative sum, so a token chain reaches the same state
+// no matter what order joins appended its entries. That lets terminal
+// identity reuse the state accumulated during token construction directly.
+func candidateIdentityHashFactStep(hash uint64, bindingSlot int, id FactID, version FactVersion) uint64 {
+	entry := fnvhash.Offset64
+	entry = fnvhash.MixUint64(entry, 0)
+	entry = fnvhash.MixUint64(entry, uint64(bindingSlot))
+	entry = fnvhash.MixUint64(entry, uint64(id.generation))
+	entry = fnvhash.MixUint64(entry, id.sequence)
+	entry = fnvhash.MixUint64(entry, uint64(version))
+	return hash + fnvhash.Avalanche(entry)
 }
 
 func candidateIdentityHashValueStep(hash uint64, bindingSlot int, value Value) uint64 {
-	hash = fnvhash.MixUint64(hash, 1)
-	hash = fnvhash.MixUint64(hash, uint64(bindingSlot))
-	hash = fnvhash.MixString(hash, value.canonicalKey())
-	return hash
+	entry := fnvhash.Offset64
+	entry = fnvhash.MixUint64(entry, 1)
+	entry = fnvhash.MixUint64(entry, uint64(bindingSlot))
+	entry = fnvhash.MixString(entry, value.canonicalKey())
+	return hash + fnvhash.Avalanche(entry)
 }
 
 func candidateIdentityHashFinish(hash uint64, count int) uint64 {

@@ -36,15 +36,22 @@ type tokenRowEntry struct {
 // long as a handle or a descendant row's parent pointer references it, so
 // there is no refcounting, recycling, or staleness generation.
 type tokenRow struct {
-	parent        *tokenRow
-	bindingSlot   int
-	fact          *conditionFactRef
-	value         Value
-	hasValue      bool
-	size          int
-	maxRecency    Recency
-	totalRecency  Recency
+	parent       *tokenRow
+	bindingSlot  int
+	fact         *conditionFactRef
+	value        Value
+	hasValue     bool
+	size         int
+	maxRecency   Recency
+	totalRecency Recency
+	// identityState accumulates the commutative identity hash of the chain's
+	// public (bindingSlot >= 0) entries; publicSize counts them and slotMask
+	// records which slots appeared (slots beyond 62 share the top bit). A
+	// terminal whose rule needs slots 0..n-1 can use identityState directly
+	// when publicSize == n and slotMask covers exactly those slots.
 	identityState uint64
+	slotMask      uint64
+	publicSize    int32
 	// holderTableID/holderRef (and the second slot) locate the bucket-table
 	// rows storing this token, so exact-handle removals unlink directly
 	// without identity-index probes. holderRef == tokenHolderMulti marks
@@ -284,7 +291,8 @@ func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch,
 	row.maxRecency = recency
 	row.totalRecency = recency
 	row.setEntry(entry)
-	row.identityState = candidateIdentityHashTokenEntryStep(candidateIdentityHashStart(tokenGeneration), entry)
+	row.identityState = candidateIdentityHashStart(tokenGeneration)
+	row.applyEntryIdentity(entry)
 
 	return tokenRef{handle: tokenHandle{arena: a, row: row}}
 }
@@ -319,14 +327,13 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 		return tokenRef{}
 	}
 	if parentRow != nil {
-		// Re-resolve after allocation: allocRow may have appended to the
-		// parent's chunk slice header, but never reallocates existing chunk
-		// storage, so parentRow stays valid; keep the resolve for safety.
 		row.parent = parent.handle.row
 		row.size = parentRow.size + 1
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.totalRecency = addRecency(parentRow.totalRecency, recency)
 		row.identityState = parentRow.identityState
+		row.slotMask = parentRow.slotMask
+		row.publicSize = parentRow.publicSize
 	} else {
 		row.size = 1
 		row.maxRecency = recency
@@ -335,7 +342,7 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 	}
 	row.fact = a.internFactRef(match.fact, match.hasValue)
 	row.setEntry(entry)
-	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
+	row.applyEntryIdentity(entry)
 
 	handle := tokenHandle{arena: a, row: row}
 	return tokenRef{handle: handle}
@@ -378,6 +385,8 @@ func (a *tokenArena) addCompactSharedFact(parent tokenRef, fact *conditionFactRe
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.totalRecency = addRecency(parentRow.totalRecency, recency)
 		row.identityState = parentRow.identityState
+		row.slotMask = parentRow.slotMask
+		row.publicSize = parentRow.publicSize
 	} else {
 		row.size = 1
 		row.maxRecency = recency
@@ -386,7 +395,7 @@ func (a *tokenArena) addCompactSharedFact(parent tokenRef, fact *conditionFactRe
 	}
 	row.fact = fact
 	row.setEntry(entry)
-	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
+	row.applyEntryIdentity(entry)
 
 	return tokenRef{handle: tokenHandle{arena: a, row: row}}
 }
@@ -447,6 +456,17 @@ func (r *tokenRow) conditionMatch() (conditionMatch, bool) {
 	}, true
 }
 
+// applyEntryIdentity folds a public entry into the chain identity
+// accumulators; non-public placeholder entries leave them untouched.
+func (r *tokenRow) applyEntryIdentity(entry tokenRowEntry) {
+	if entry.bindingSlot < 0 {
+		return
+	}
+	r.identityState = candidateIdentityHashTokenEntryStep(r.identityState, entry)
+	r.slotMask |= uint64(1) << uint(min(entry.bindingSlot, 63))
+	r.publicSize++
+}
+
 func (r *tokenRow) setEntry(entry tokenRowEntry) {
 	if r == nil {
 		return
@@ -494,7 +514,7 @@ func candidateIdentityHashTokenEntryStep(hash uint64, entry tokenRowEntry) uint6
 	if entry.hasValue {
 		return candidateIdentityHashValueStep(hash, entry.bindingSlot, entry.value)
 	}
-	return candidateIdentityHashFactStep(hash, entry.factID, entry.factVersion)
+	return candidateIdentityHashFactStep(hash, entry.bindingSlot, entry.factID, entry.factVersion)
 }
 
 func (a *tokenArena) addSeed(generation Generation) tokenRef {

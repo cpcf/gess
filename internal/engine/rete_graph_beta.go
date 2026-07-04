@@ -5547,7 +5547,23 @@ func (t *reteGraphTerminalMemory) rowCandidateIdentity(row graphTokenRow) candid
 }
 
 func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (candidateIdentity, bool) {
-	if t == nil || token.isZero() || t.ruleConditionCount <= 0 || t.ruleConditionCount > 8 {
+	if t == nil || token.isZero() || t.ruleConditionCount <= 0 {
+		return candidateIdentity{}, false
+	}
+	if n := t.ruleConditionCount; n < 63 {
+		if row, ok := token.resolve(); ok && int(row.publicSize) == n && row.slotMask == uint64(1)<<uint(n)-1 {
+			generation := token.handle.arena.generation
+			return candidateIdentity{
+				generation: generation,
+				count:      n,
+				key: candidateIdentityKey{
+					scopeHash: t.ruleIdentityScopeHash,
+					hash:      candidateIdentityHashFinish(row.identityState, n),
+				},
+			}, true
+		}
+	}
+	if t.ruleConditionCount > 8 {
 		return candidateIdentity{}, false
 	}
 	var factIDs [8]FactID
@@ -5597,7 +5613,7 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (ca
 		if values&mask != 0 {
 			state = candidateIdentityHashTokenEntryStep(state, valueEntries[i])
 		} else {
-			state = candidateIdentityHashFactStep(state, factIDs[i], factVersions[i])
+			state = candidateIdentityHashFactStep(state, i, factIDs[i], factVersions[i])
 		}
 		count++
 	}
