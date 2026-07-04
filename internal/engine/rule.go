@@ -416,6 +416,7 @@ type RuleSpec struct {
 	ID          RuleID
 	Description string
 	Source      SourceSpan
+	GessSource  string
 	Tags        []string
 	Salience    int
 	AutoFocus   *bool
@@ -631,13 +632,15 @@ const (
 )
 
 type RuleConditionTree struct {
-	kind     ConditionTreeKind
-	children []RuleConditionTree
-	match    RuleCondition
-	hasMatch bool
-	test     ExpressionSpec
-	hasTest  bool
-	source   SourceSpan
+	kind         ConditionTreeKind
+	children     []RuleConditionTree
+	match        RuleCondition
+	hasMatch     bool
+	test         ExpressionSpec
+	hasTest      bool
+	aggregate    AccumulateCondition
+	hasAggregate bool
+	source       SourceSpan
 }
 
 func (t RuleConditionTree) Kind() ConditionTreeKind {
@@ -666,6 +669,13 @@ func (t RuleConditionTree) Test() (ExpressionSpec, bool) {
 	return cloneExpressionSpec(t.test), true
 }
 
+func (t RuleConditionTree) Aggregate() (AccumulateCondition, bool) {
+	if !t.hasAggregate {
+		return AccumulateCondition{}, false
+	}
+	return t.aggregate.clone(), true
+}
+
 func (t RuleConditionTree) Source() SourceSpan {
 	return t.source
 }
@@ -678,6 +688,7 @@ func (t RuleConditionTree) clone() RuleConditionTree {
 	}
 	out.match = t.match.clone()
 	out.test = cloneExpressionSpec(t.test)
+	out.aggregate = t.aggregate.clone()
 	return out
 }
 
@@ -716,6 +727,7 @@ type Rule struct {
 	effectiveAutoFocus bool
 	declarationOrder   int
 	source             SourceSpan
+	gessSource         string
 	conditions         []RuleCondition
 	conditionTree      RuleConditionTree
 	conditionBranches  []RuleConditionBranch
@@ -766,6 +778,10 @@ func (r Rule) DeclarationOrder() int {
 
 func (r Rule) Source() SourceSpan {
 	return r.source
+}
+
+func (r Rule) GessSource() string {
+	return r.gessSource
 }
 
 func (r Rule) Conditions() []RuleCondition {
@@ -821,6 +837,7 @@ type compiledRule struct {
 	effectiveAutoFocus          bool
 	declarationOrder            int
 	source                      SourceSpan
+	gessSource                  string
 	identityScopeHash           uint64
 	conditions                  []RuleCondition
 	treeConditions              []RuleCondition
@@ -848,6 +865,7 @@ func (r compiledRule) inspect() Rule {
 		effectiveAutoFocus: r.effectiveAutoFocus,
 		declarationOrder:   r.declarationOrder,
 		source:             r.source,
+		gessSource:         r.gessSource,
 		conditions:         cloneRuleConditions(r.conditions),
 		conditionTree:      r.conditionTree.clone(),
 		conditionBranches:  cloneRuleConditionBranches(r.conditionBranchPlans),
@@ -927,6 +945,7 @@ type compiledConditionTreeShape struct {
 	children       []compiledConditionTreeShape
 	conditionIndex int
 	test           ExpressionSpec
+	aggregate      AccumulateCondition
 	source         SourceSpan
 }
 
@@ -937,6 +956,7 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 		out.children[i] = child.clone()
 	}
 	out.test = cloneExpressionSpec(s.test)
+	out.aggregate = s.aggregate.clone()
 	return out
 }
 
@@ -1835,6 +1855,8 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindAccumulate,
 			conditionIndex: index,
+			aggregate:      condition.clone(),
+			source:         condition.Source,
 		}, nil
 	case *AccumulateCondition:
 		if condition == nil {
@@ -2142,6 +2164,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		effectiveAutoFocus:          effectiveAutoFocus,
 		declarationOrder:            declarationOrder,
 		source:                      normalized.Source,
+		gessSource:                  normalized.GessSource,
 		conditions:                  conditions,
 		treeConditions:              treeConditions,
 		conditionTree:               conditionTree,
@@ -2929,6 +2952,13 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
 		}
 		return tree
+	case ConditionTreeKindAccumulate:
+		return RuleConditionTree{
+			kind:         ConditionTreeKindAccumulate,
+			aggregate:    shape.aggregate.clone(),
+			hasAggregate: true,
+			source:       shape.source,
+		}
 	default:
 		return RuleConditionTree{kind: ConditionTreeKindUnknown}
 	}

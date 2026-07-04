@@ -42,7 +42,7 @@ func TestScriptedOrderRoutingSession(t *testing.T) {
 	checks := []string{
 		"loaded " + rulesPath + ": templates=4 rules=1 queries=1 deffacts=8\n",
 		"rules count=1\nroute-vip-order module=MAIN salience=0\n",
-		"rule route-vip-order module=MAIN salience=0 conditions=3 actions=1\n",
+		"(defrule route-vip-order ?order <-\n",
 		"agenda count=1",
 		"run status=completed fired=1\n",
 		"facts count=1\nid=fact:g1:9 template=fulfillment-route lane=expedite order=O-100 warehouse=W-1\n",

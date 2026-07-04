@@ -51,6 +51,7 @@ type QuerySpec struct {
 	Module        ModuleName
 	Description   string
 	Source        SourceSpan
+	GessSource    string
 	Parameters    []QueryParameterSpec
 	Conditions    []RuleConditionSpec
 	ConditionTree ConditionSpec
@@ -133,6 +134,7 @@ type Query struct {
 	module            ModuleName
 	description       string
 	source            SourceSpan
+	gessSource        string
 	parameters        []QueryParameter
 	conditions        []RuleCondition
 	conditionTree     RuleConditionTree
@@ -154,6 +156,10 @@ func (q Query) Description() string {
 
 func (q Query) Source() SourceSpan {
 	return q.source
+}
+
+func (q Query) GessSource() string {
+	return q.gessSource
 }
 
 func (q Query) Parameters() []QueryParameter {
@@ -188,6 +194,7 @@ type compiledQuery struct {
 	module                  ModuleName
 	description             string
 	source                  SourceSpan
+	gessSource              string
 	triggerName             string
 	triggerFieldSpecs       []FieldSpec
 	parameters              []QueryParameter
@@ -268,6 +275,7 @@ func (q compiledQuery) inspect() Query {
 		module:            q.module,
 		description:       q.description,
 		source:            q.source,
+		gessSource:        q.gessSource,
 		parameters:        append([]QueryParameter(nil), q.parameters...),
 		conditions:        cloneRuleConditions(q.conditions),
 		conditionTree:     q.conditionTree.clone(),
@@ -380,6 +388,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 		module:                  normalized.Module,
 		description:             normalized.Description,
 		source:                  normalized.Source,
+		gessSource:              normalized.GessSource,
 		triggerName:             internalQueryTriggerName(normalized.Name),
 		triggerFieldSpecs:       compileQueryTriggerFieldSpecs(params),
 		parameters:              params,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -372,7 +373,7 @@ func (l *gessLoader) loadTemplate(form gessSExpr) error {
 		return l.err(form.Span, "deftemplate requires a template name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow, Source: form.Span}
+	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow, Source: form.Span, GessSource: gessExprSource(form)}
 	for _, item := range form.List[2:] {
 		switch item.Head() {
 		case "declare":
@@ -495,7 +496,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 		return l.err(form.Span, "defrule requires a rule name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	rule := RuleSpec{Name: name, Module: module, Source: form.Span}
+	rule := RuleSpec{Name: name, Module: module, Source: form.Span, GessSource: gessExprSource(form)}
 	body, rhs, err := splitGessRuleBody(form.List[2:])
 	if err != nil {
 		return l.wrap(form.Span, "parse rule body", err)
@@ -551,7 +552,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		return l.err(form.Span, "defquery requires a query name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	query := QuerySpec{Name: name, Module: module, Source: form.Span}
+	query := QuerySpec{Name: name, Module: module, Source: form.Span, GessSource: gessExprSource(form)}
 	var body []gessSExpr
 	var returns []gessSExpr
 	scope := newGessScope()
@@ -901,6 +902,7 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 		if err != nil {
 			return "", err
 		}
+		action.GessSource = gessExprSource(form)
 		if err := l.workspace.AddAction(action); err != nil {
 			return "", l.wrap(form.Span, "add generated assert action", err)
 		}
@@ -911,23 +913,23 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 		}
 		name := l.generatedActionName(ruleName, index, "focus")
 		module := ModuleName(form.List[1].Text())
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.PushFocus(module)
 		}})
 	case "pop-focus":
 		name := l.generatedActionName(ruleName, index, "pop-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			_, err := ctx.PopFocus()
 			return err
 		}})
 	case "clear-focus":
 		name := l.generatedActionName(ruleName, index, "clear-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.ClearFocusStack()
 		}})
 	case "halt":
 		name := l.generatedActionName(ruleName, index, "halt")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.Halt()
 		}})
 	case "call":
@@ -968,6 +970,7 @@ func (l *gessLoader) buildCallAction(ruleName string, index int, callName string
 		values = append(values, value)
 	}
 	action := ActionSpec{Name: l.generatedActionName(ruleName, index, "call_"+callName)}
+	action.GessSource = gessCallSource(callName, values)
 	var reads []ActionBindingReadSpec
 	for _, value := range values {
 		if value.fieldRef {
@@ -993,6 +996,35 @@ func (l *gessLoader) buildCallAction(ruleName string, index int, callName string
 		return call(ctx, args)
 	}
 	return action, nil
+}
+
+func gessCallSource(callName string, values []gessRuntimeValue) string {
+	var b strings.Builder
+	b.WriteString("(call ")
+	b.WriteString(callName)
+	for _, value := range values {
+		b.WriteByte(' ')
+		b.WriteString(gessRuntimeValueSource(value))
+	}
+	b.WriteByte(')')
+	return b.String()
+}
+
+func gessRuntimeValueSource(value gessRuntimeValue) string {
+	switch {
+	case value.hasConst:
+		normalized, err := NewValue(value.constant)
+		if err != nil {
+			return strconv.Quote(fmt.Sprint(value.constant))
+		}
+		return renderGessValue(normalized)
+	case value.fieldRef:
+		return "?" + value.binding + ":" + value.field
+	case value.bindingValue:
+		return "?" + value.binding
+	default:
+		return "NULL"
+	}
 }
 
 func (l *gessLoader) buildAssertAction(ruleName string, index int, module ModuleName, logical bool, fact gessSExpr, scope *gessScope) (ActionSpec, error) {
@@ -1176,6 +1208,25 @@ func (l *gessLoader) parseFactLiteral(fact gessSExpr) (string, Fields, error) {
 func (l *gessLoader) generatedActionName(ruleName string, index int, suffix string) string {
 	l.ruleSeq++
 	return fmt.Sprintf("__gess_%s_%d_%d_%s", ruleName, index, l.ruleSeq, sanitizeGessActionName(suffix))
+}
+
+func gessExprSource(expr gessSExpr) string {
+	if expr.IsAtom() {
+		if expr.String {
+			return strconv.Quote(expr.Text())
+		}
+		return expr.Text()
+	}
+	var b strings.Builder
+	b.WriteByte('(')
+	for i, child := range expr.List {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(gessExprSource(child))
+	}
+	b.WriteByte(')')
+	return b.String()
 }
 
 func (l *gessLoader) templateKey(module ModuleName, name string) TemplateKey {

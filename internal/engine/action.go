@@ -530,6 +530,7 @@ type ActionSpec struct {
 	Fn                   ActionFunc
 	AssertTemplateValues *AssertTemplateValuesActionSpec
 	BindingReads         *ActionBindingReadSetSpec
+	GessSource           string
 	// NonEscaping allows the engine to skip freezing unread bindings after a
 	// rule fires. Set it only when Fn does not retain ActionContext or any
 	// binding-derived data that depends on post-return defensive snapshots.
@@ -566,6 +567,7 @@ type AssertTemplateValuesActionSpec struct {
 func (s ActionSpec) clone() ActionSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
+	out.GessSource = strings.TrimSpace(out.GessSource)
 	if s.AssertTemplateValues != nil {
 		out.AssertTemplateValues = s.AssertTemplateValues.clone()
 	}
@@ -657,8 +659,10 @@ func normalizeActionSpec(spec ActionSpec) (ActionSpec, error) {
 }
 
 type Action struct {
-	name  string
-	order int
+	name                 string
+	order                int
+	gessSource           string
+	assertTemplateValues *AssertTemplateValuesActionSpec
 }
 
 func (a Action) Name() string {
@@ -669,7 +673,19 @@ func (a Action) DeclarationOrder() int {
 	return a.order
 }
 
+func (a Action) GessSource() string {
+	return a.gessSource
+}
+
+func (a Action) AssertTemplateValues() (*AssertTemplateValuesActionSpec, bool) {
+	if a.assertTemplateValues == nil {
+		return nil, false
+	}
+	return a.assertTemplateValues.clone(), true
+}
+
 func (a Action) clone() Action {
+	a.assertTemplateValues = a.assertTemplateValues.clone()
 	return a
 }
 
@@ -678,6 +694,7 @@ type compiledAction struct {
 	fn                   ActionFunc
 	assertTemplateValues *AssertTemplateValuesActionSpec
 	bindingReads         *ActionBindingReadSetSpec
+	gessSource           string
 	order                int
 	skipBindingFreeze    bool
 }
@@ -886,6 +903,7 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 		fn:                   normalized.Fn,
 		assertTemplateValues: normalized.AssertTemplateValues,
 		bindingReads:         normalized.BindingReads,
+		gessSource:           normalized.GessSource,
 		order:                order,
 		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil || (normalized.BindingReads != nil && len(normalized.BindingReads.Reads) == 0),
 	}, nil
@@ -893,12 +911,16 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 
 func (a compiledAction) inspect() Action {
 	return Action{
-		name:  a.name,
-		order: a.order,
+		name:                 a.name,
+		order:                a.order,
+		gessSource:           a.gessSource,
+		assertTemplateValues: a.assertTemplateValues.clone(),
 	}
 }
 
 func (a compiledAction) clone() compiledAction {
+	a.assertTemplateValues = a.assertTemplateValues.clone()
+	a.bindingReads = a.bindingReads.clone()
 	return a
 }
 

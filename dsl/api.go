@@ -35,6 +35,30 @@ func GenerateGo(ctx context.Context, sources []SourceFile, opts GoGeneratorOptio
 	return engine.GenerateGessGo(ctx, sources, opts)
 }
 
+func RenderRuleset(revision *rules.Ruleset) ([]byte, error) {
+	return engine.RenderGessRuleset(revision)
+}
+
+func RenderModule(revision *rules.Ruleset, name rules.ModuleName) ([]byte, error) {
+	return engine.RenderGessModule(revision, name)
+}
+
+func RenderTemplate(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessTemplate(revision, name)
+}
+
+func RenderRule(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessRule(revision, name)
+}
+
+func RenderQuery(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessQuery(revision, name)
+}
+
+func RenderFunction(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessFunction(revision, name)
+}
+
 func InitialFacts(doc *Document) []session.InitialFact {
 	if doc == nil {
 		return nil

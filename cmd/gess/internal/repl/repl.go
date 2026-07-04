@@ -393,8 +393,12 @@ func (s *replState) rule(args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown rule %q", args[0])
 	}
-	fmt.Fprintf(s.out, "rule %s module=%s salience=%d conditions=%d actions=%d\n", rule.Name(), rule.Module(), rule.Salience(), len(rule.Conditions()), len(rule.Actions()))
-	return nil
+	rendered, err := dsl.RenderRule(s.ruleset, rule.Name())
+	if err != nil {
+		return err
+	}
+	_, err = s.out.Write(rendered)
+	return err
 }
 
 func (s *replState) watchCommand(args []string) error {
