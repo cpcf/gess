@@ -291,7 +291,7 @@ func (s *Session) factHasLogicalSupport(factID FactID) bool {
 }
 
 func (s *Session) removeLogicalSupportsForPropagationEventDelta(ctx context.Context, event reteGraphPropagationEvent, delta reteAgendaDelta) (reteAgendaDelta, error) {
-	if s == nil || len(delta.removed) == 0 {
+	if s == nil || len(delta.removed) == 0 || len(s.logicalSupportBySource) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
 	combined := reteAgendaDelta{supported: delta.supported}

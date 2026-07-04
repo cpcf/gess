@@ -1006,6 +1006,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		existing.incrementSupport()
+		a.linkTokenActivation(delta.token, existing)
 		if existing.status == activationStatusDeactivated {
 			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
@@ -1020,6 +1021,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	created.supportCount = 1
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
+	a.linkTokenActivation(delta.token, created)
 	return created, nil
 }
 
@@ -1044,12 +1046,17 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	if len(removed) == 1 {
 		delta := removed[0]
 		if !delta.token.isZero() {
-			rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
-			if !ok {
-				return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+			existing := a.takeLinkedTokenActivation(delta)
+			if existing == nil {
+				rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+				if !ok {
+					return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+				}
+				if found, _, ok := a.activationForTerminalTokenDelta(rule, delta); ok {
+					existing = found
+				}
 			}
-			existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
-			if ok {
+			if existing != nil {
 				deactivate := existing.decrementSupport()
 				switch {
 				case !deactivate:
@@ -1078,6 +1085,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 	if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 		existing.incrementSupport()
+		a.linkTokenActivation(delta.token, existing)
 		if existing.status == activationStatusDeactivated {
 			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
@@ -1092,6 +1100,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	created.supportCount = 1
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
+	a.linkTokenActivation(delta.token, created)
 	return created, nil
 }
 
@@ -1118,13 +1127,17 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		if delta.token.isZero() {
 			continue
 		}
-		rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
-		if !ok {
-			return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
-		}
-		existing, _, ok := a.activationForTerminalTokenDelta(rule, delta)
-		if !ok {
-			continue
+		existing := a.takeLinkedTokenActivation(delta)
+		if existing == nil {
+			rule, ok := revision.rulesByRevisionID[delta.ruleRevisionID]
+			if !ok {
+				return nil, fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, delta.ruleRevisionID)
+			}
+			found, _, ok := a.activationForTerminalTokenDelta(rule, delta)
+			if !ok {
+				continue
+			}
+			existing = found
 		}
 		deactivate := existing.decrementSupport()
 		if !deactivate || existing.status != activationStatusPending {
@@ -1166,6 +1179,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
 		if existing, _, ok := a.activationForTerminalTokenIdentity(rule, delta.token, identity); ok {
 			existing.incrementSupport()
+			a.linkTokenActivation(delta.token, existing)
 			if existing.status == activationStatusDeactivated {
 				rearmActivationToken(existing, delta.token)
 				existing.status = activationStatusPending
@@ -1190,6 +1204,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		created.supportCount = 1
 		a.storePreparedActivation(created)
 		a.enqueueActivation(created)
+		a.linkTokenActivation(delta.token, created)
 		if observeActivation != nil {
 			observeActivation(created)
 		}
@@ -2167,6 +2182,7 @@ func (a *agenda) compactActivationStorage() {
 		stored.heapIndex = 0
 		a.storeActivationRef(stored)
 		a.enqueueActivation(stored)
+		a.linkTokenActivation(stored.token, stored)
 	}
 
 	oldRows := a.activationRows

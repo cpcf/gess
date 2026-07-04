@@ -70,6 +70,53 @@ type tokenRow struct {
 	holderRef      int32
 	holder2TableID uint32
 	holder2Ref     int32
+	// activationLink caches the agenda activation this rule-terminal token
+	// supports, with the owning agenda and activation ordinal for staleness
+	// verification, so removals skip the identity-bucket lookup. Tokens can
+	// feed more than one agenda (candidate/direct comparisons), so only the
+	// recording agenda trusts the link; stale or foreign links fall back.
+	activationLink    *activation
+	activationAgenda  *agenda
+	activationOrdinal uint64
+}
+
+// linkTokenActivation caches the activation supporting this terminal token
+// on the token's arena row.
+func (a *agenda) linkTokenActivation(token tokenRef, act *activation) {
+	if a == nil || act == nil || act.key.ordinal == 0 {
+		return
+	}
+	row, ok := token.resolve()
+	if !ok {
+		return
+	}
+	row.activationLink = act
+	row.activationAgenda = a
+	row.activationOrdinal = act.key.ordinal
+}
+
+// takeLinkedTokenActivation resolves and clears the cached activation for a
+// removal token. Agenda, ordinal, and rule-revision verification make
+// foreign, reused, or recycled activation storage fall back to the identity
+// lookup.
+func (a *agenda) takeLinkedTokenActivation(delta reteTerminalTokenDelta) *activation {
+	if a == nil {
+		return nil
+	}
+	row, ok := delta.token.resolve()
+	if !ok {
+		return nil
+	}
+	act := row.activationLink
+	if act == nil || row.activationAgenda != a || row.activationOrdinal == 0 ||
+		act.key.ordinal != row.activationOrdinal ||
+		act.ruleRevisionID != delta.ruleRevisionID {
+		return nil
+	}
+	row.activationLink = nil
+	row.activationAgenda = nil
+	row.activationOrdinal = 0
+	return act
 }
 
 const tokenHolderMulti int32 = -1
