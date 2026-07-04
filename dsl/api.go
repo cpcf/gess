@@ -9,31 +9,72 @@ import (
 )
 
 type (
-	Registry           = engine.DSLRegistry
-	CallFunc           = engine.DSLCallFunc
-	Document           = engine.GessDocument
-	SourceSpan         = engine.SourceSpan
-	FileError          = engine.GessFileError
-	SourceFile         = engine.GessSourceFile
+	// Registry supplies the host-provided actions, call targets, and pure
+	// functions that a .gess file's (call ...) forms and expressions
+	// reference. Load and Compile fail if a .gess file names an action,
+	// call, or function that Registry doesn't provide.
+	Registry = engine.DSLRegistry
+	// CallFunc is the signature host code implements to back a .gess
+	// (call name arg...) action. It receives the action context and the
+	// evaluated argument values, and returns an error to fail the action.
+	CallFunc = engine.DSLCallFunc
+	// Document is a parsed .gess source file. Parse produces a Document;
+	// Load lowers it into a Workspace and populates the facts returned by
+	// InitialFacts.
+	Document = engine.GessDocument
+	// SourceSpan is a source location range within a .gess file, used to
+	// locate parse and lowering errors.
+	SourceSpan = engine.SourceSpan
+	// FileError reports a .gess parser or lowering error with the source
+	// span where it occurred. It wraps an underlying error where one
+	// exists, so errors.Is and errors.As work through it.
+	FileError = engine.GessFileError
+	// SourceFile is one .gess file passed to GenerateGo, identified by
+	// name (for error spans) and its raw source bytes.
+	SourceFile = engine.GessSourceFile
+	// GoGeneratorOptions controls the package and function name of Go
+	// source emitted by GenerateGo. Empty fields default to "main" and
+	// "BuildRuleset".
 	GoGeneratorOptions = engine.GessGoGeneratorOptions
 )
 
+// Parse parses .gess source bytes into a Document without loading it into
+// a workspace. name is stored as the document's identity and used in
+// error spans. The result's InitialFacts are empty until Load runs.
 func Parse(name string, source []byte) (*Document, error) {
 	return engine.ParseGess(name, source)
 }
 
+// Load lowers a parsed Document into workspace, registering its modules,
+// templates, rules, queries, and deffacts seed facts, and resolving its
+// (call ...) forms and pure functions against registry. On success it
+// populates doc's InitialFacts. Loading fails if the document references
+// an action, call, or function name registry doesn't provide.
 func Load(ctx context.Context, workspace *rules.Workspace, doc *Document, registry Registry) error {
 	return engine.LoadGess(ctx, workspace, doc, registry)
 }
 
+// Compile parses and loads .gess source into a new workspace and compiles
+// it in one step, equivalent to Parse followed by Load and
+// Workspace.Compile. Use Parse and Load directly to load multiple .gess
+// files into one shared workspace before compiling, or to keep the
+// intermediate Document for InitialFacts.
 func Compile(ctx context.Context, name string, source []byte, registry Registry) (*rules.Ruleset, error) {
 	return engine.CompileGess(ctx, name, source, registry)
 }
 
+// GenerateGo emits Go source that builds the same workspace as the given
+// .gess sources, without parsing those files at application startup. The
+// generated build function takes a Registry and validates every (call
+// ...) name against it. If formatting the generated source fails,
+// GenerateGo returns the unformatted bytes alongside the error.
 func GenerateGo(ctx context.Context, sources []SourceFile, opts GoGeneratorOptions) ([]byte, error) {
 	return engine.GenerateGessGo(ctx, sources, opts)
 }
 
+// InitialFacts returns the deffacts-declared seed facts from doc for use
+// with session.WithInitialFacts. It is safe to call with a nil doc, and
+// returns nil if doc has not been through Load yet.
 func InitialFacts(doc *Document) []session.InitialFact {
 	if doc == nil {
 		return nil
