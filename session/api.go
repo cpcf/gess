@@ -20,7 +20,7 @@ type (
 	// memory, the agenda, the focus stack, logical support, backchain
 	// demand, and event delivery. A session has one logical owner;
 	// overlapping operations from other goroutines fail fast with
-	// ErrConcurrencyMisuse rather than blocking, except that mutations
+	// [ErrConcurrencyMisuse] rather than blocking, except that mutations
 	// from other goroutines queue during an active Run.
 	Session = engine.Session
 	// Snapshot is an immutable, point-in-time view of working memory:
@@ -28,7 +28,7 @@ type (
 	// It does not change as the session mutates afterward.
 	Snapshot = engine.Snapshot
 	// BackchainDemandDiagnostics summarizes active backward-chaining
-	// demand facts visible in a Snapshot, in total and per template.
+	// demand facts visible in a [Snapshot], in total and per template.
 	BackchainDemandDiagnostics = engine.BackchainDemandDiagnostics
 	// QueryArgs maps query parameter names, without the leading '?', to
 	// the Go values passed to Query or QueryAll.
@@ -71,11 +71,11 @@ type (
 	Value = engine.Value
 	// ValueKind is a Value's type tag.
 	ValueKind = engine.ValueKind
-	// EventType discriminates the kind of change an Event reports.
+	// EventType discriminates the kind of change an [Event] reports.
 	EventType = engine.EventType
-	// EventSeverity is an Event's severity: info or error.
+	// EventSeverity is an [Event]'s severity: info or error.
 	EventSeverity = engine.EventSeverity
-	// Event is one state change delivered to an EventListener: a fact
+	// Event is one state change delivered to an [EventListener]: a fact
 	// mutation, rule activation or firing, action failure, or logical
 	// support change. Listeners receive a cloned copy per event.
 	Event = engine.Event
@@ -83,9 +83,9 @@ type (
 	// Listener errors are ignored: they never fail the mutation that
 	// produced the event, and later listeners still run.
 	EventListener = engine.EventListener
-	// EventFunc adapts a function to EventListener.
+	// EventFunc adapts a function to [EventListener].
 	EventFunc = engine.EventFunc
-	// MutationKind is the kind of change recorded in a MutationDelta:
+	// MutationKind is the kind of change recorded in a [MutationDelta]:
 	// assert, modify, retract, or reset.
 	MutationKind = engine.MutationKind
 	// RunStatus is the outcome of a Session.Run call.
@@ -95,7 +95,7 @@ type (
 	RunResult = engine.RunResult
 	// ActionFailureError wraps the error an action returned during Run,
 	// identifying which activation and action produced it. Unwrap
-	// returns the underlying cause; Is matches ErrActionFailed.
+	// returns the underlying cause; Is matches [ErrActionFailed].
 	ActionFailureError = engine.ActionFailureError
 	// DuplicateKey is the computed duplicate-detection key for a fact
 	// under its template's duplicate policy.
@@ -105,10 +105,10 @@ type (
 	FactSupportState = engine.FactSupportState
 	// FactSupportProvenance is a fact's support classification together
 	// with the engine's internal tracking of that support, returned by
-	// FactSnapshot.Support.
+	// [FactSnapshot].Support.
 	FactSupportProvenance = engine.FactSupportProvenance
 	// FieldChange describes one field's before and after value from a
-	// Modify, as recorded in MutationDelta.ChangedFields.
+	// Modify, as recorded in [MutationDelta].ChangedFields.
 	FieldChange = engine.FieldChange
 	// FactPatch is the argument to Session.Modify: fields to set or
 	// overwrite, and field names to remove.
@@ -142,7 +142,7 @@ type (
 	// ApplyRulesetStatus is the outcome of a Session.ApplyRuleset call.
 	ApplyRulesetStatus = engine.ApplyRulesetStatus
 	// RuleRevisionSummary identifies one rule revision by rule ID and
-	// revision ID, as reported in an ApplyRulesetResult.
+	// revision ID, as reported in an [ApplyRulesetResult].
 	RuleRevisionSummary = engine.RuleRevisionSummary
 	// RuleReplacement identifies a rule whose compiled revision changed
 	// across an ApplyRuleset call, from OldRevisionID to NewRevisionID.
@@ -159,7 +159,7 @@ type (
 	// and cascades.
 	LogicalSupportCounters = engine.LogicalSupportCounters
 	// SupportGraph is the logical support edges and counters visible in
-	// a Snapshot, as of a given generation.
+	// a [Snapshot], as of a given generation.
 	SupportGraph = engine.SupportGraph
 )
 
@@ -186,8 +186,8 @@ const (
 	// EventRuleFired reports one activation firing during a Run.
 	EventRuleFired = engine.EventRuleFired
 	// EventActionFailed reports a rule action returning an error; its
-	// Event carries ActionName, ActionIndex, and Cause, with severity
-	// EventSeverityError.
+	// [Event] carries ActionName, ActionIndex, and Cause, with severity
+	// [EventSeverityError].
 	EventActionFailed = engine.EventActionFailed
 	// EventLogicalSupportAdded and EventLogicalSupportRemoved report a
 	// logical support edge being created or removed.
@@ -195,10 +195,10 @@ const (
 	EventLogicalSupportRemoved = engine.EventLogicalSupportRemoved
 	// EventSeverityInfo is the default event severity.
 	EventSeverityInfo = engine.EventSeverityInfo
-	// EventSeverityError marks EventActionFailed events.
+	// EventSeverityError marks [EventActionFailed] events.
 	EventSeverityError = engine.EventSeverityError
 	// MutationAssert, MutationModify, MutationRetract, and MutationReset
-	// tag a MutationDelta's Kind.
+	// tag a [MutationDelta]'s Kind.
 	MutationAssert  = engine.MutationAssert
 	MutationModify  = engine.MutationModify
 	MutationRetract = engine.MutationRetract
@@ -212,7 +212,7 @@ const (
 	// RunCanceled reports that ctx was canceled during the run.
 	RunCanceled = engine.RunCanceled
 	// RunActionFailed reports that an action returned an error; Run
-	// returns a non-nil error that is an *ActionFailureError.
+	// returns a non-nil error that is an *[ActionFailureError].
 	RunActionFailed = engine.RunActionFailed
 	// RunClosed reports that the session was already closed.
 	RunClosed = engine.RunClosed
@@ -241,7 +241,7 @@ const (
 	// matched an existing fact instead of inserting a new one.
 	AssertExisting = engine.AssertExisting
 	// AssertValidationFailure reports that the fields failed template
-	// validation; the error wraps rules.ErrValidation.
+	// validation; the error wraps [rules.ErrValidation].
 	AssertValidationFailure = engine.AssertValidationFailure
 	// AssertClosed reports that the session was already closed.
 	AssertClosed = engine.AssertClosed
@@ -336,7 +336,7 @@ var (
 	// the session's single-owner lock: overlapping calls from other
 	// goroutines, or Snapshot/queries attempted while a Run is active.
 	ErrConcurrencyMisuse = engine.ErrConcurrencyMisuse
-	// ErrActionFailed is the sentinel ActionFailureError.Is matches,
+	// ErrActionFailed is the sentinel [ActionFailureError].Is matches,
 	// representing a rule action that returned an error during Run.
 	ErrActionFailed = engine.ErrActionFailed
 	// ErrFactNotFound is returned by Modify or Retract when the given
@@ -353,7 +353,7 @@ var (
 	// ErrQueryNotFound is returned by Query or QueryAll for an unknown
 	// query name.
 	ErrQueryNotFound = engine.ErrQueryNotFound
-	// ErrQueryArgument is returned when QueryArgs names an unknown
+	// ErrQueryArgument is returned when [QueryArgs] names an unknown
 	// parameter, omits a required parameter, or supplies a value whose
 	// kind doesn't match the declared parameter kind.
 	ErrQueryArgument = engine.ErrQueryArgument
@@ -373,7 +373,7 @@ var (
 	ErrLogicalFactModify = engine.ErrLogicalFactModify
 )
 
-// WithSessionID sets the SessionID returned later by Session.ID.
+// WithSessionID sets the [SessionID] returned later by [Session].ID.
 func WithSessionID(id SessionID) Option {
 	return engine.WithSessionID(id)
 }
@@ -386,7 +386,7 @@ func WithEventListener(listener EventListener) Option {
 }
 
 // WithEventClock overrides the timestamp source used to stamp
-// Event.Timestamp. A nil clock is ignored, leaving the default time.Now.
+// [Event].Timestamp. A nil clock is ignored, leaving the default time.Now.
 func WithEventClock(clock func() time.Time) Option {
 	return engine.WithEventClock(clock)
 }
@@ -399,7 +399,7 @@ func WithInitialFacts(initials ...InitialFact) Option {
 }
 
 // WithResetBeforeSnapshot controls whether a successful Reset populates
-// ResetResult.Before with a snapshot of working memory immediately before
+// [ResetResult].Before with a snapshot of working memory immediately before
 // the reset. It defaults to false, since materializing that snapshot has
 // a cost most sessions don't need to pay.
 func WithResetBeforeSnapshot(enabled bool) Option {
