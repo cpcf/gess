@@ -335,6 +335,7 @@ type compiledExpressionPredicate struct {
 	order              int
 	currentBindingSlot int
 	source             SourceSpan
+	evalMeta           *FunctionEvaluationError
 }
 
 type compiledExpression struct {
@@ -408,20 +409,22 @@ func compileExpressionPredicateSpecWithParamsAndSource(
 	if referencesEarlierBinding {
 		placement = ExpressionPredicatePlacementBetaResidual
 	}
+	compiled := compiledExpressionPredicate{
+		path:               []int{conditionIndex, predicateIndex},
+		ruleName:           ruleName,
+		expression:         expression,
+		placement:          placement,
+		order:              predicateIndex,
+		currentBindingSlot: -1,
+		source:             source,
+	}
+	compiled.evalMeta = compiled.buildFunctionEvaluationMeta()
 	return ExpressionPredicate{
-			expression: cloneExpressionSpec(spec),
-			placement:  placement,
-			order:      predicateIndex,
-			source:     source,
-		}, compiledExpressionPredicate{
-			path:               []int{conditionIndex, predicateIndex},
-			ruleName:           ruleName,
-			expression:         expression,
-			placement:          placement,
-			order:              predicateIndex,
-			currentBindingSlot: -1,
-			source:             source,
-		}, nil
+		expression: cloneExpressionSpec(spec),
+		placement:  placement,
+		order:      predicateIndex,
+		source:     source,
+	}, compiled, nil
 }
 
 func compileExpressionSpec(
@@ -679,7 +682,7 @@ func compileGlobalExpression(spec GlobalExpr, ruleName string, conditionIndex, p
 	}
 	global, ok := globals[normalized.Name]
 	if !ok {
-		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "unknown global", nil)
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", fmt.Sprintf("unknown global %q", normalized.Name), nil)
 	}
 	kind := global.kind
 	if kind == valueKindUnknown {
@@ -1112,6 +1115,15 @@ func (p compiledExpressionPredicate) matchesTokenWithContextGlobalsAndCounters(c
 }
 
 func (p compiledExpressionPredicate) functionEvaluationMeta() *FunctionEvaluationError {
+	if p.evalMeta != nil {
+		return p.evalMeta
+	}
+	return p.buildFunctionEvaluationMeta()
+}
+
+// buildFunctionEvaluationMeta is called once at compile time (cached in
+// evalMeta); the evaluator only reads the returned template on error paths.
+func (p compiledExpressionPredicate) buildFunctionEvaluationMeta() *FunctionEvaluationError {
 	meta := &FunctionEvaluationError{
 		RuleName:       p.ruleName,
 		ConditionIndex: -1,

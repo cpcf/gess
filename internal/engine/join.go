@@ -73,6 +73,7 @@ type compiledJoinConstraint struct {
 	hasRightKeyExpression bool
 	indexable             bool
 	indexKind             joinIndexKind
+	evalMeta              *FunctionEvaluationError
 }
 
 func (c compiledJoinConstraint) isHashJoin() bool {
@@ -285,7 +286,7 @@ func compileJoinConstraintSpecWithSource(
 			Path:     normalized.Path.clone(),
 			Operator: normalized.Operator,
 			Ref:      normalized.Ref.clone(),
-		}, compiledJoinConstraint{
+		}, newCompiledJoinConstraint(compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
 			source:         source,
 			bindingSlot:    conditionIndex,
@@ -296,7 +297,14 @@ func compileJoinConstraintSpecWithSource(
 			refAccess:      refAccess,
 			indexable:      indexable,
 			indexKind:      indexKind,
-		}, nil
+		}), nil
+}
+
+// newCompiledJoinConstraint precomputes the evaluation-error metadata so join
+// evaluation never allocates it per probe.
+func newCompiledJoinConstraint(join compiledJoinConstraint) compiledJoinConstraint {
+	join.evalMeta = buildJoinFunctionEvaluationMeta(join)
+	return join
 }
 
 func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinIndex int, template *Template) (compiledPathAccess, error) {

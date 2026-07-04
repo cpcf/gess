@@ -3039,8 +3039,9 @@ func newExpressionPredicateHashJoin(predicate compiledExpressionPredicate, curre
 	if len(predicate.path) > 0 {
 		conditionIndex = predicate.path[0]
 	}
-	return compiledJoinConstraint{
+	return newCompiledJoinConstraint(compiledJoinConstraint{
 		path:           cloneIntPath(predicate.path),
+		source:         predicate.source,
 		bindingSlot:    conditionIndex,
 		access:         current.access.clone(),
 		operator:       FieldConstraintOpEqual,
@@ -3049,7 +3050,7 @@ func newExpressionPredicateHashJoin(predicate compiledExpressionPredicate, curre
 		refAccess:      binding.access.clone(),
 		indexable:      true,
 		indexKind:      joinIndexEquality,
-	}
+	})
 }
 
 func expressionPredicateHashJoinOperands(left, right compiledExpression) (compiledExpression, compiledExpression, bool) {

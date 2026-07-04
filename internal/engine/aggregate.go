@@ -69,8 +69,8 @@ func (s AggregateSpec) clone() AggregateSpec {
 }
 
 type AccumulateCondition struct {
-	Input ConditionSpec
-	Specs []AggregateSpec
+	Input  ConditionSpec
+	Specs  []AggregateSpec
 	Source SourceSpan
 }
 

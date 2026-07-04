@@ -5902,6 +5902,13 @@ func graphBetaRightJoinValue(ctx context.Context, join compiledJoinConstraint, f
 }
 
 func joinFunctionEvaluationMeta(join compiledJoinConstraint) *FunctionEvaluationError {
+	if join.evalMeta != nil {
+		return join.evalMeta
+	}
+	return buildJoinFunctionEvaluationMeta(join)
+}
+
+func buildJoinFunctionEvaluationMeta(join compiledJoinConstraint) *FunctionEvaluationError {
 	meta := &FunctionEvaluationError{
 		ConditionIndex: -1,
 		PredicateIndex: -1,

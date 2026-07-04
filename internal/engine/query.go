@@ -251,6 +251,7 @@ type compiledQueryReturn struct {
 	fact        bool
 	order       int
 	source      SourceSpan
+	evalMeta    *FunctionEvaluationError
 }
 
 type compiledQueryReturnProjectionKind uint8
@@ -490,6 +491,12 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 			bindingSlot: -1,
 			order:       i,
 			source:      spec.Source,
+			evalMeta: &FunctionEvaluationError{
+				QueryName:      queryName,
+				ConditionIndex: -1,
+				PredicateIndex: i,
+				Source:         spec.Source,
+			},
 		})
 	}
 	return returns, nil
@@ -1598,12 +1605,7 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 			row.items[i] = queryRowValue{fact: owner.newFact(match.fact), hasFact: true}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, &FunctionEvaluationError{
-			QueryName:      q.name,
-			ConditionIndex: -1,
-			PredicateIndex: ret.order,
-			Source:         ret.source,
-		}, nil)
+		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, ret.evalMeta, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
@@ -1656,12 +1658,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 			factIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, &FunctionEvaluationError{
-			QueryName:      q.name,
-			ConditionIndex: -1,
-			PredicateIndex: ret.order,
-			Source:         ret.source,
-		}, nil)
+		value, ok, err := ret.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, args.mapView(q), globals, ret.evalMeta, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
@@ -1695,12 +1692,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 			row.items[i] = queryRowValue{value: value}
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
-			QueryName:      q.name,
-			ConditionIndex: -1,
-			PredicateIndex: ret.order,
-			Source:         ret.source,
-		}, nil)
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, ret.evalMeta, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
@@ -1740,12 +1732,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 			valueIdx++
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
-			QueryName:      q.name,
-			ConditionIndex: -1,
-			PredicateIndex: ret.order,
-			Source:         ret.source,
-		}, nil)
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, ret.evalMeta, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
@@ -1773,12 +1760,7 @@ func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token t
 			row.valueItems[i] = value
 			continue
 		}
-		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, &FunctionEvaluationError{
-			QueryName:      q.name,
-			ConditionIndex: -1,
-			PredicateIndex: ret.order,
-			Source:         ret.source,
-		}, nil)
+		value, ok, err := ret.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, args.mapView(q), globals, bindingSlotOffset, ret.evalMeta, nil)
 		if err != nil {
 			return QueryRow{}, err
 		}
