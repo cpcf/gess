@@ -1,7 +1,7 @@
 # Gess documentation
 
 Start with the repository `../README.md` for a quick start and
-`../TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow. The
+`TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow. The
 guides here go deeper:
 
 - [Core concepts](concepts.md): templates, facts, rules, activations, the
