@@ -295,3 +295,10 @@ active, `Assert`, `Modify`, `Retract`, focus changes, and `ApplyRuleset`
 from other goroutines are queued and applied between rule firings, with the
 caller blocking until its mutation applies. `Snapshot` and queries during an
 active `Run` are refused with `ErrConcurrencyMisuse`.
+
+## Next steps
+
+- [Advanced behavior](advanced.md) for the Rete runtime, logical support,
+  and backward chaining in depth.
+- [Command-line tools](cli.md) for `gessc` and `gessfmt`.
+- [Examples map](examples.md) for runnable examples organized by feature.

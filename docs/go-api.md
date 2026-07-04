@@ -321,3 +321,10 @@ rows, err := session.QueryAll(ctx, "routes", nil)
 See `session-lifecycle.md` for the full session API: mutation results,
 run statuses, queries, snapshots, events, the focus stack, and
 `ApplyRuleset`.
+
+## Next steps
+
+- [Session lifecycle](session-lifecycle.md) for the full runtime API.
+- [Advanced behavior](advanced.md) for aggregates, higher-order
+  conditions, logical support, and backward chaining.
+- [Examples map](examples.md) for Go-API examples organized by feature.

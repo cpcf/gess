@@ -313,3 +313,9 @@ Notable rejections, verbatim from the loader:
 Unknown `declare` keys and unknown slot attributes are ignored rather than
 rejected, so check spelling carefully when a declaration seems to have no
 effect.
+
+## Next steps
+
+- [Command-line tools](cli.md) to compile `.gess` files with `gessc`.
+- [The tutorial](TUTORIAL.md) for a worked `.gess` example end to end.
+- [Examples map](examples.md) for `.gess` examples organized by feature.

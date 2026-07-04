@@ -108,3 +108,11 @@ negation and aggregate nodes, and terminal nodes (rule and query
 endpoints). Asserts, modifies, and retracts propagate as deltas through
 this graph, so match cost scales with the size of the change rather than
 the size of working memory. See `advanced.md` for a deeper tour.
+
+## Next steps
+
+- [The `.gess` language reference](gess-language.md) or the [Go API
+  guide](go-api.md) to start writing templates and rules.
+- [Session lifecycle](session-lifecycle.md) for the full runtime API.
+- [Advanced behavior](advanced.md) for the Rete runtime, aggregates, and
+  module focus in depth.

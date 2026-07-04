@@ -91,3 +91,10 @@ go run ./cmd/gessfmt -w examples/gess-files/order_routing/rules.gess
 
 Files that fail to parse are reported with `file:line:column` positions and
 the command exits nonzero.
+
+## Next steps
+
+- [The tutorial](TUTORIAL.md) to see `gessc` used end to end.
+- [Go API guide](go-api.md) to build the generated ruleset into a session.
+- [The `.gess` language reference](gess-language.md) for what `gessc`
+  accepts.

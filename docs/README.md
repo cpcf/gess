@@ -1,8 +1,28 @@
 # Gess documentation
 
-Start with the repository `../README.md` for a quick start and
-`TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow. The
-guides here go deeper:
+Gess is a Go rules engine with a Rete-based runtime and a `.gess` file
+format for defining templates, seed facts, rules, and queries outside app
+code.
+
+## Start here
+
+New to Gess? Follow this path:
+
+1. Write templates, facts, rules, and queries in a `.gess` file. See
+   [the `.gess` language reference](gess-language.md) or jump straight into
+   [the tutorial](TUTORIAL.md).
+2. Generate Go with `gessc`. See [command-line tools](cli.md).
+3. Build a session from the generated ruleset and run it. See the
+   [Go API guide](go-api.md) and [session lifecycle](session-lifecycle.md).
+4. Read results back with queries. See
+   [session lifecycle](session-lifecycle.md#queries).
+
+`TUTORIAL.md` walks through all four steps with one worked example,
+`examples/gess-files/order_routing`.
+
+## Guides
+
+Once the basics are working, these guides go deeper:
 
 - [Core concepts](concepts.md): templates, facts, rules, activations, the
   agenda, sessions, rulesets, and queries.
@@ -17,7 +37,7 @@ guides here go deeper:
 - [Advanced behavior](advanced.md): the Rete runtime, expression predicate
   placement, aggregates, higher-order conditions, logical support,
   backward chaining, and module focus.
-- [Examples map](examples.md): what each example demonstrates and where to
-  start.
+- [Examples map](examples.md): what each example demonstrates, organized
+  by feature, and where to start.
 - [Developer guide](contributing.md): repository layout, engine
   architecture, tests, benchmarks, and the documentation workflow.

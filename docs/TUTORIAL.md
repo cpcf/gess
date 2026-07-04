@@ -288,3 +288,12 @@ For all examples:
 ```sh
 go test ./examples/...
 ```
+
+## Next steps
+
+- [Core concepts](concepts.md) for the vocabulary behind what you just
+  built.
+- [The `.gess` language reference](gess-language.md) for every form the
+  parser accepts.
+- [Examples map](examples.md) for more `.gess` and Go-API examples,
+  organized by feature.

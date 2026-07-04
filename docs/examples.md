@@ -12,7 +12,7 @@ Run everything with `go test ./examples/...`. Most examples build rules
 with the pure Go API; `examples/gess-files` and the tutorial workshop use
 `.gess` files compiled with `gessc`.
 
-## Which example to start from
+## Examples by feature
 
 | Goal | Start here |
 | --- | --- |
@@ -129,3 +129,12 @@ GESS_TUTORIAL=1 go test ./tutorial/vulnerability_response
 `go run ./tutorial/cmd/gess-tutorial` serves a browser workshop with an
 editor, checkpoints, and checks; adding the `prompt` argument runs the
 same workshop as a terminal session. See `tutorial/README.md`.
+
+## Next steps
+
+- [Core concepts](concepts.md) or [Go API guide](go-api.md) for the
+  vocabulary and APIs the examples use.
+- [Advanced behavior](advanced.md) for the mechanisms behind aggregates,
+  logical support, and backward chaining.
+- [Developer guide](contributing.md) for how examples are tested and
+  added.

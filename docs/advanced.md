@@ -181,3 +181,12 @@ Use modules to phase work, for example an intake module that normalizes
 facts followed by a response module that acts on them, with rules or the
 host pushing focus between phases. The `examples/modules-focus` example shows
 the pattern.
+
+## Next steps
+
+- [Examples map](examples.md) for runnable examples of each mechanism
+  covered here.
+- [Session lifecycle](session-lifecycle.md) for the host-facing API these
+  mechanisms build on.
+- [Developer guide](contributing.md) for the engine's internal
+  architecture.
