@@ -75,6 +75,11 @@ func WithInitialFacts(initials ...SessionInitialFact) SessionOption {
 // WithGlobals supplies immutable per-session values for declared ruleset
 // globals. Reset preserves these values; changing globals requires creating a
 // new session so existing matches do not need to be re-propagated.
+//
+// ApplyRuleset carries current values forward by name; a next revision that
+// adds a global without a default cannot be applied to a live session because
+// there is no way to supply the missing value at apply time — create a new
+// session with WithGlobals instead.
 func WithGlobals(values map[string]any) SessionOption {
 	return func(cfg *sessionConfig) {
 		if len(values) == 0 {
@@ -89,6 +94,9 @@ func WithGlobals(values map[string]any) SessionOption {
 	}
 }
 
+// WithStrategy selects the session's conflict-resolution strategy at
+// construction. The strategy is fixed for the session's lifetime and survives
+// Reset and Fork; the zero value is StrategyDepth.
 func WithStrategy(strategy Strategy) SessionOption {
 	return func(cfg *sessionConfig) {
 		cfg.strategy = strategy
@@ -107,6 +115,8 @@ type Session struct {
 	id                   SessionID
 	revision             *Ruleset
 	agenda               *agenda
+	strategy             Strategy
+	forkCount            uint64
 	propagationCounters  *propagationCounterLedger
 	rete                 *reteRuntime
 	generation           Generation
@@ -267,6 +277,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		id:                  cfg.id,
 		revision:            revision,
 		agenda:              agenda,
+		strategy:            cfg.strategy,
 		rete:                rete,
 		generation:          1,
 		initialFocusStack:   []ModuleName{MainModule},
@@ -713,6 +724,14 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 // Rete memories, logical support, backchain support metadata, and listeners.
 // Event sequence numbers continue from the parent so pre-fork event history can
 // be correlated by hosts that attach a listener to the fork.
+//
+// Fork is idle-only. Fact storage, agenda (including refraction and pending
+// value bindings), focus stack, logical support, and global values carry
+// over; listeners do not — pass WithEventListener in opts to observe the
+// fork. Rete join memories are rebuilt by re-propagating the copied facts
+// rather than deep-copied, so fork cost scales with working-memory size and
+// internal memory diagnostics (RuntimeDiagnostics) may differ from the parent
+// until the fork processes new mutations.
 func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, error) {
 	if s == nil || s.closed {
 		return nil, ErrClosedSession
@@ -809,7 +828,12 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		nextEventSequence:      s.nextEventSequence,
 	}
 	if fork.id == "" {
-		fork.id = SessionID(fmt.Sprintf("fork:%p", fork))
+		s.forkCount++
+		if s.id == "" {
+			fork.id = SessionID(fmt.Sprintf("fork:%d", s.forkCount))
+		} else {
+			fork.id = SessionID(fmt.Sprintf("%s:fork:%d", s.id, s.forkCount))
+		}
 	}
 	fork.syncPropagationCounters()
 	forkAgendaReady := s.agendaReady && !s.agendaDirty
@@ -837,16 +861,12 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 }
 
 func (s *Session) forkSessionConfig() sessionConfig {
-	cfg := sessionConfig{
+	return sessionConfig{
 		initials:            cloneSessionInitialFacts(s.initials),
 		globals:             s.sessionGlobalValueMap(),
-		strategy:            StrategyDepth,
+		strategy:            s.strategy,
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
 	}
-	if s.agenda != nil {
-		cfg.strategy = s.agenda.strategy
-	}
-	return cfg
 }
 
 func (s *Session) sessionGlobalValueMap() map[string]any {
@@ -1564,11 +1584,12 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
+	s.nextEventSequence++
 	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence + 1,
+			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactAsserted,
 			Generation:     s.generation,
@@ -1579,7 +1600,6 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
-		s.nextEventSequence++
 	}
 
 	return result, agendaDelta, nil
@@ -1692,11 +1712,12 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
+	s.nextEventSequence++
 	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence + 1,
+			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactAsserted,
 			Generation:     s.generation,
@@ -1707,7 +1728,6 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
-		s.nextEventSequence++
 	}
 
 	return result, agendaDelta, nil
@@ -2198,7 +2218,11 @@ func (s *Session) clearBackchainDemandRequestArena() {
 }
 
 func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
-	if s == nil || fact == nil || !s.hasEventListenersFor(EventFactAsserted) {
+	if s == nil || fact == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(EventFactAsserted) {
 		return
 	}
 	publicSnapshot := fact.snapshotForRevision(s.revision, s.compactSlotStore)
@@ -2219,7 +2243,7 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      s.revision.ID(),
-		Sequence:       s.nextEventSequence + 1,
+		Sequence:       s.nextEventSequence,
 		Timestamp:      s.eventClock(),
 		Type:           EventFactAsserted,
 		Generation:     s.generation,
@@ -2230,7 +2254,6 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 		FactIDs:        []FactID{fact.id},
 		Delta:          &delta,
 	})
-	s.nextEventSequence++
 }
 
 func (s *Session) Retract(ctx context.Context, id FactID) (RetractResult, error) {
@@ -2433,11 +2456,12 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 		Fact:   before,
 		Delta:  &delta,
 	}
+	s.nextEventSequence++
 	if s.hasEventListenersFor(EventFactRetracted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence + 1,
+			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactRetracted,
 			Generation:     s.generation,
@@ -2448,7 +2472,6 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 			FactIDs:        []FactID{factID},
 			Delta:          &delta,
 		})
-		s.nextEventSequence++
 	}
 
 	return result, agendaDelta, nil
@@ -2604,7 +2627,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	resetAgendaWithInitialAgenda := !s.shouldCollectAgendaChanges() && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
 	var initialAgenda *agenda
 	if resetAgendaWithInitialAgenda {
-		initialAgenda = newAgenda()
+		initialAgenda = newAgendaWithStrategy(s.strategy)
 		initialAgenda.propagationCounters = s.propagationCounters
 	}
 	var resetDemandDelta reteAgendaDelta
@@ -2688,6 +2711,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			OldGeneration: oldGeneration,
 		},
 	}
+	s.nextEventSequence++
 	if s.hasEventListenersFor(EventReset) {
 		delta := MutationDelta{
 			Kind:          MutationReset,
@@ -2697,14 +2721,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.emitEvent(ctx, Event{
 			SessionID:  s.id,
 			RulesetID:  s.revision.ID(),
-			Sequence:   s.nextEventSequence + 1,
+			Sequence:   s.nextEventSequence,
 			Timestamp:  s.eventClock(),
 			Type:       EventReset,
 			Generation: s.generation,
 			FactIDs:    nil,
 			Delta:      &delta,
 		})
-		s.nextEventSequence++
 	}
 	if !resetAgendaWithInitialAgenda {
 		s.applyAutoFocus(resetActivations)
@@ -2814,7 +2837,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	s.globalValues = globalValues
 	s.rete = rete
 	if s.agenda == nil {
-		s.agenda = newAgenda()
+		s.agenda = newAgendaWithStrategy(s.strategy)
 	}
 	s.syncPropagationCounters()
 	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
@@ -2852,7 +2875,7 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 		return nil, ErrInvalidRuleset
 	}
 	if s.agenda == nil {
-		s.agenda = newAgenda()
+		s.agenda = newAgendaWithStrategy(s.strategy)
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -2915,7 +2938,7 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 		return nil, true, ErrInvalidRuleset
 	}
 	if s.agenda == nil {
-		s.agenda = newAgenda()
+		s.agenda = newAgendaWithStrategy(s.strategy)
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -2960,7 +2983,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 		return nil, true, ErrInvalidRuleset
 	}
 	if s.agenda == nil {
-		s.agenda = newAgenda()
+		s.agenda = newAgendaWithStrategy(s.strategy)
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -3355,6 +3378,7 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 		if change.kind == agendaChangeDeactivated {
 			eventType = EventRuleDeactivated
 		}
+		s.nextEventSequence++
 		if !s.hasEventListenersFor(eventType) {
 			continue
 		}
@@ -3366,7 +3390,6 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 				source = rule.source
 			}
 		}
-		s.nextEventSequence++
 		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, source, s.nextEventSequence, s.eventClock()))
 	}
 }
@@ -3636,11 +3659,12 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		Fact:   after,
 		Delta:  &delta,
 	}
+	s.nextEventSequence++
 	if s.hasEventListenersFor(EventFactModified) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence + 1,
+			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactModified,
 			Generation:     s.generation,
@@ -3651,7 +3675,6 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
-		s.nextEventSequence++
 	}
 
 	return result, agendaDelta, nil
@@ -6461,7 +6484,7 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 		return true, ErrInvalidRuleset
 	}
 	if s.agenda == nil {
-		s.agenda = newAgenda()
+		s.agenda = newAgendaWithStrategy(s.strategy)
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {

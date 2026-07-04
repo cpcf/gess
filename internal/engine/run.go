@@ -6,6 +6,7 @@ import (
 	"fmt"
 )
 
+// RunOption configures a single Run call.
 type RunOption interface {
 	applyRunOption(*runConfig) error
 }
@@ -24,6 +25,14 @@ type runConfig struct {
 	hasMaxFirings bool
 }
 
+// WithMaxFirings bounds the run to at most n activation firings; n must be
+// positive. The limit is checked at the same safe point as halt, after queued
+// external mutations have been applied. When the limit is the reason the run
+// stops, Run reports RunFireLimit; if the agenda drained at exactly the limit,
+// Run reports RunCompleted with identical session state to an unbounded run.
+// Stop reasons coinciding at one safe point rank: action failure, then
+// cancellation, then halt, then the fire limit. A subsequent Run resumes
+// exactly where the limited run stopped.
 func WithMaxFirings(n int) RunOption {
 	return runOptionFunc(func(config *runConfig) error {
 		if n <= 0 {
@@ -176,13 +185,18 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 		}
 		if config.hasMaxFirings && fired >= config.maxFirings {
 			hasMore := s.hasFocusedActivation()
-			s.mutationQueueMu.Unlock()
 			if !hasMore {
+				// No pending activation remains, so this cannot consume one;
+				// it only pops exhausted focus frames, keeping focus state
+				// identical to the drained RunCompleted path below.
+				s.nextFocusedActivation()
+				s.mutationQueueMu.Unlock()
 				if s.agenda != nil {
 					s.agenda.compactConsumedActivationRows()
 				}
 				return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 			}
+			s.mutationQueueMu.Unlock()
 			return RunResult{RunID: runID, Status: RunFireLimit, Fired: fired}, nil
 		}
 		currentActivation, activation, ok := s.nextFocusedActivation()
@@ -256,7 +270,11 @@ func (s *Session) endRun() {
 }
 
 func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activation activation) {
-	if s == nil || !s.hasEventListenersFor(EventRuleFired) {
+	if s == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(EventRuleFired) {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -271,7 +289,6 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 			source = rule.source
 		}
 	}
-	s.nextEventSequence++
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
@@ -291,14 +308,17 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 }
 
 func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activation activation, failure ActionFailureError) {
-	if s == nil || !s.hasEventListenersFor(EventActionFailed) {
+	if s == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(EventActionFailed) {
 		return
 	}
 	rulesetID := RulesetID("")
 	if s.revision != nil {
 		rulesetID = s.revision.ID()
 	}
-	s.nextEventSequence++
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      rulesetID,

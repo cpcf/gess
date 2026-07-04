@@ -3167,3 +3167,99 @@ func firedRuleIDs(events []Event) []RuleID {
 	}
 	return out
 }
+
+func TestSessionRunWithMaxFiringsExactLimitMatchesDrainedFocusStack(t *testing.T) {
+	ctx := context.Background()
+	autoFocus := true
+	buildSession := func(id string) (*Session, TemplateKey) {
+		t.Helper()
+		workspace := NewWorkspace()
+		mustAddModule(t, workspace, ModuleSpec{Name: "review", AutoFocus: &autoFocus})
+		event := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "event",
+			Module: "review",
+			Fields: []FieldSpec{{Name: "id", Kind: ValueInt, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "review-rule",
+			Module:     "review",
+			Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+			Actions:    []RuleActionSpec{{Name: "noop"}},
+		})
+		revision := mustCompileWorkspace(t, workspace)
+		session, err := NewSession(revision, WithSessionID(SessionID(id)))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		for i := int64(1); i <= 2; i++ {
+			if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+				t.Fatalf("AssertTemplate(%d): %v", i, err)
+			}
+		}
+		return session, event.Key()
+	}
+
+	unbounded, _ := buildSession("focus-unbounded")
+	defer unbounded.Close()
+	if _, err := unbounded.Run(ctx); err != nil {
+		t.Fatalf("unbounded Run: %v", err)
+	}
+
+	limited, _ := buildSession("focus-limited")
+	defer limited.Close()
+	result, err := limited.Run(ctx, WithMaxFirings(2))
+	if err != nil {
+		t.Fatalf("limited Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("limited run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+	if !reflect.DeepEqual(limited.FocusStack(), unbounded.FocusStack()) {
+		t.Fatalf("focus stack after exact-limit run = %v, want %v (same as drained run)", limited.FocusStack(), unbounded.FocusStack())
+	}
+	if limited.CurrentFocus() != unbounded.CurrentFocus() {
+		t.Fatalf("current focus = %v, want %v", limited.CurrentFocus(), unbounded.CurrentFocus())
+	}
+}
+
+func TestSessionRunCancellationTakesPrecedenceOverFireLimit(t *testing.T) {
+	ctx := context.Background()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "event",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "cancel-run",
+		Fn: func(ActionContext) error {
+			cancel()
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "cancel-rule",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+		Actions:    []RuleActionSpec{{Name: "cancel-run"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("run-limit-cancel"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	for i := int64(1); i <= 2; i++ {
+		if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+			t.Fatalf("AssertTemplate(%d): %v", i, err)
+		}
+	}
+	result, err := session.Run(runCtx, WithMaxFirings(1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if result.Status != RunCanceled || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCanceled)
+	}
+}

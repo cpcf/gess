@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"sort"
@@ -2517,5 +2518,77 @@ func mustCollisionCandidate(ruleID RuleID, revisionID RuleRevisionID, identity c
 				factVersion:    version,
 			},
 		},
+	}
+}
+
+func TestSessionAgendaMainOnlyFastPathMatchesRunOrderWithTieBreaks(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	task := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "task",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "seq", Kind: ValueInt, Required: true},
+		},
+	})
+	trace := make([]string, 0, 8)
+	for _, name := range []string{"tie-first", "tie-second", "high"} {
+		mustAddAction(t, workspace, strategyTraceAction(name, "item", "seq", &trace))
+	}
+	mustAddRule(t, workspace, strategyRule("high", 20, task.Key(), "high", "high"))
+	mustAddRule(t, workspace, strategyRule("tie-first", 5, task.Key(), "tie", "tie-first"))
+	mustAddRule(t, workspace, strategyRule("tie-second", 5, task.Key(), "tie", "tie-second"))
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustSession(t, revision, "agenda-main-only")
+	for _, assertion := range []struct {
+		kind string
+		seq  int64
+	}{
+		{kind: "tie", seq: 1},
+		{kind: "tie", seq: 2},
+		{kind: "high", seq: 3},
+		{kind: "tie", seq: 4},
+	} {
+		if _, err := session.AssertTemplate(ctx, task.Key(), Fields{
+			"kind": newStringValue(assertion.kind),
+			"seq":  newIntValue(assertion.seq),
+		}); err != nil {
+			t.Fatalf("AssertTemplate(%s:%d): %v", assertion.kind, assertion.seq, err)
+		}
+	}
+
+	agenda, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda: %v", err)
+	}
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	seqByFactID := make(map[FactID]int64)
+	for _, fact := range snapshot.Facts() {
+		if value, ok := fact.Field("seq"); ok {
+			if seq, ok := value.AsInt64(); ok {
+				seqByFactID[fact.ID()] = seq
+			}
+		}
+	}
+	want := make([]string, 0, agenda.Len())
+	for _, activation := range agenda.Activations() {
+		factIDs := activation.FactIDs()
+		if len(factIDs) != 1 {
+			t.Fatalf("activation %s fact IDs = %d, want 1", activation.RuleName(), len(factIDs))
+		}
+		want = append(want, fmt.Sprintf("%s:%d", activation.RuleName(), seqByFactID[factIDs[0]]))
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != len(want) {
+		t.Fatalf("run fired = %d, want %d", result.Fired, len(want))
+	}
+	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("fired order = %#v, want agenda order %#v", trace, want)
 	}
 }

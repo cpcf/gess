@@ -323,3 +323,71 @@ func strategyBindingInt(ctx ActionContext, binding, field string) int64 {
 	}
 	return seq
 }
+
+func TestSessionStrategyBreadthSurvivesResetAndFork(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	task := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "task",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "seq", Kind: ValueInt, Required: true},
+		},
+	})
+	trace := make([]string, 0, 3)
+	mustAddAction(t, workspace, strategyTraceAction("task", "item", "seq", &trace))
+	mustAddRule(t, workspace, strategyRule("task", 10, task.Key(), "task", "task"))
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustStrategySession(t, revision, SessionID("strategy-reset"), WithStrategy(StrategyBreadth))
+
+	assertTasks := func(s *Session) {
+		t.Helper()
+		for seq := int64(1); seq <= 3; seq++ {
+			if _, err := s.AssertTemplate(ctx, task.Key(), Fields{
+				"kind": newStringValue("task"),
+				"seq":  newIntValue(seq),
+			}); err != nil {
+				t.Fatalf("AssertTemplate(%d): %v", seq, err)
+			}
+		}
+	}
+	runAndTrace := func(s *Session) []string {
+		t.Helper()
+		trace = trace[:0]
+		result, err := s.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 3 {
+			t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+		}
+		return append([]string(nil), trace...)
+	}
+
+	want := []string{"task:1", "task:2", "task:3"}
+	assertTasks(session)
+	if got := runAndTrace(session); !reflect.DeepEqual(got, want) {
+		t.Fatalf("initial trace = %#v, want %#v", got, want)
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	assertTasks(session)
+	if got := runAndTrace(session); !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-reset trace = %#v, want %#v", got, want)
+	}
+
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("second Reset: %v", err)
+	}
+	assertTasks(session)
+	fork, err := session.Fork(ctx, WithSessionID(SessionID("strategy-reset-fork")))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	defer fork.Close()
+	if got := runAndTrace(fork); !reflect.DeepEqual(got, want) {
+		t.Fatalf("fork trace = %#v, want %#v", got, want)
+	}
+}

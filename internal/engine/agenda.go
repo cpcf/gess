@@ -12,10 +12,17 @@ type activationKey struct {
 	ordinal uint64
 }
 
+// Strategy selects the conflict-resolution ordering a session uses among
+// pending activations of equal salience within the focused module. Salience,
+// module focus, refraction, and activation identity are strategy-independent.
 type Strategy uint8
 
 const (
+	// StrategyDepth is the default: equal-salience activations fire most
+	// recent first (LIFO), with deterministic declaration-order tie-breaks.
 	StrategyDepth Strategy = iota
+	// StrategyBreadth fires equal-salience activations in creation order
+	// (FIFO), suiting interview and queue-style rule programs.
 	StrategyBreadth
 )
 
@@ -732,13 +739,30 @@ func (a *agenda) cloneForFork() *agenda {
 		if current == nil {
 			continue
 		}
-		cloned := current.clone()
+		cloned := a.cloneActivationForFork(current)
 		cloned.heapIndex = 0
 		stored := out.activationRows.add(cloned)
 		out.storeActivationRef(stored)
 		if stored.status == activationStatusPending {
 			out.enqueueActivation(stored)
 		}
+	}
+	return out
+}
+
+// cloneActivationForFork materializes token-backed bindings before the clone
+// drops its token, so value bindings (aggregate results) survive the fork.
+func (a *agenda) cloneActivationForFork(act *activation) activation {
+	out := act.clone()
+	if act.token.isZero() || len(out.bindings()) > 0 || a.revision == nil {
+		return out
+	}
+	rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]
+	if !ok {
+		return out
+	}
+	if entries := activationBindingTupleEntriesForActivation(rule, act, false); len(entries) > 0 {
+		out.setBindings(entries)
 	}
 	return out
 }

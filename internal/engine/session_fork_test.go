@@ -314,3 +314,75 @@ func stableForkDiagnostics(in RuntimeDiagnostics) RuntimeDiagnostics {
 	}
 	return out
 }
+
+func TestSessionForkPreservesPendingAggregateActivationBindings(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "bucket", Kind: ValueString, Required: true},
+		},
+	})
+	counts := map[string][]int64{}
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record-count",
+		Fn: func(actionCtx ActionContext) error {
+			value, ok := actionCtx.BindingValue("total")
+			if !ok {
+				counts[string(actionCtx.SessionID())] = append(counts[string(actionCtx.SessionID())], -1)
+				return nil
+			}
+			total, _ := value.AsInt64()
+			counts[string(actionCtx.SessionID())] = append(counts[string(actionCtx.SessionID())], total)
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "count-items",
+		ConditionTree: Accumulate(
+			Match{
+				Binding: "entry",
+				Target:  TemplateKeyFact(item.Key()),
+				FieldConstraints: []FieldConstraintSpec{{
+					Field:    "bucket",
+					Operator: FieldConstraintEqual,
+					Value:    "b",
+				}},
+			},
+			Count().As("total"),
+		),
+		Actions: []RuleActionSpec{{Name: "record-count"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	parent, err := NewSession(revision, WithSessionID("agg-parent"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer parent.Close()
+	for id := int64(1); id <= 3; id++ {
+		if _, err := parent.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": id, "bucket": "b"})); err != nil {
+			t.Fatalf("AssertTemplate(%d): %v", id, err)
+		}
+	}
+
+	fork, err := parent.Fork(ctx, WithSessionID("agg-fork"))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	defer fork.Close()
+
+	if _, err := parent.Run(ctx); err != nil {
+		t.Fatalf("parent Run: %v", err)
+	}
+	if _, err := fork.Run(ctx); err != nil {
+		t.Fatalf("fork Run: %v", err)
+	}
+	if !reflect.DeepEqual(counts["agg-parent"], []int64{3}) {
+		t.Fatalf("parent counts = %v, want [3]", counts["agg-parent"])
+	}
+	if !reflect.DeepEqual(counts["agg-fork"], []int64{3}) {
+		t.Fatalf("fork counts = %v, want [3]", counts["agg-fork"])
+	}
+}

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"slices"
 )
 
@@ -27,6 +28,10 @@ type AgendaActivation struct {
 // Agenda returns an idle-only, point-in-time view of the pending agenda. The
 // returned value is immutable and is invalidated by any subsequent session
 // mutation or run.
+//
+// If the agenda needs reconciliation (for example after ApplyRuleset), Agenda
+// performs the same reconciliation Run would, which can push auto-focus
+// frames and emit activation events.
 func (s *Session) Agenda(ctx context.Context) (Agenda, error) {
 	if s == nil || s.closed {
 		return Agenda{}, ErrClosedSession
@@ -45,7 +50,10 @@ func (s *Session) Agenda(ctx context.Context) (Agenda, error) {
 	}
 	defer s.unlock()
 
-	if !s.agendaReady || s.agendaDirty {
+	if s.agendaDirty {
+		return Agenda{}, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime)
+	}
+	if !s.agendaReady {
 		if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 			return Agenda{}, err
 		}
@@ -60,7 +68,10 @@ func (a Agenda) FocusStack() []ModuleName {
 }
 
 // Activations returns pending activations in the order Run would fire them
-// from the captured focus stack if no further mutations occurred.
+// from the captured focus stack if no further mutations occurred. Pending
+// activations in modules not reachable from the captured focus stack (or
+// MAIN) never fire in that state, so they are excluded here; use
+// ActivationsForModule to inspect them.
 func (a Agenda) Activations() []AgendaActivation {
 	return cloneAgendaActivations(a.activations)
 }
@@ -78,6 +89,8 @@ func (a Agenda) ActivationsForModule(module ModuleName) []AgendaActivation {
 	return cloneAgendaActivations(a.byModule[normalized])
 }
 
+// Len reports the number of activations in fire order, matching
+// Activations; it excludes pending activations in unfocused modules.
 func (a Agenda) Len() int {
 	return len(a.activations)
 }
