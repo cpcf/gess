@@ -16,6 +16,13 @@ type DSLRegistry struct {
 	Functions []PureFunctionSpec
 }
 
+// DSLMissingRegistrations lists host registrations referenced by a .gess source
+// but absent from a Registry.
+type DSLMissingRegistrations struct {
+	Calls   []string
+	Actions []string
+}
+
 // DSLCallFunc is a host-provided action that receives positional arguments
 // evaluated from a .gess (call name arg...) form.
 type DSLCallFunc func(ActionContext, []Value) error
@@ -42,6 +49,56 @@ func (d *GessDocument) InitialFacts() []SessionInitialFact {
 		return nil
 	}
 	return cloneSessionInitialFacts(d.initials)
+}
+
+// MissingRegistrations returns host action and call registrations referenced by
+// the parsed source but absent from registry. Expression function references are
+// validated during load/compile because the loader needs resolved definition
+// context to distinguish function calls from DSL syntax.
+func (d *GessDocument) MissingRegistrations(registry DSLRegistry) DSLMissingRegistrations {
+	if d == nil {
+		return DSLMissingRegistrations{}
+	}
+	missingCalls := make(map[string]struct{})
+	missingActions := make(map[string]struct{})
+	for _, form := range d.forms {
+		collectMissingGessCalls(form, registry, missingCalls, missingActions)
+	}
+	return DSLMissingRegistrations{
+		Calls:   sortedStringKeys(missingCalls),
+		Actions: sortedStringKeys(missingActions),
+	}
+}
+
+func collectMissingGessCalls(form gessSExpr, registry DSLRegistry, missingCalls, missingActions map[string]struct{}) {
+	if form.IsAtom() || len(form.List) == 0 {
+		return
+	}
+	if form.Head() == "call" && len(form.List) >= 2 && form.List[1].IsAtom() {
+		name := form.List[1].Text()
+		if len(form.List) == 2 {
+			if _, ok := registry.Actions[name]; !ok {
+				missingActions[name] = struct{}{}
+			}
+		} else if _, ok := registry.Calls[name]; !ok {
+			missingCalls[name] = struct{}{}
+		}
+	}
+	for _, child := range form.List {
+		collectMissingGessCalls(child, registry, missingCalls, missingActions)
+	}
+}
+
+func sortedStringKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ParseGess parses a Gess source file into a reusable document.

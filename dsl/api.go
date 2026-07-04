@@ -9,13 +9,14 @@ import (
 )
 
 type (
-	Registry           = engine.DSLRegistry
-	CallFunc           = engine.DSLCallFunc
-	Document           = engine.GessDocument
-	SourceSpan         = engine.SourceSpan
-	FileError          = engine.GessFileError
-	SourceFile         = engine.GessSourceFile
-	GoGeneratorOptions = engine.GessGoGeneratorOptions
+	Registry             = engine.DSLRegistry
+	CallFunc             = engine.DSLCallFunc
+	MissingRegistrations = engine.DSLMissingRegistrations
+	Document             = engine.GessDocument
+	SourceSpan           = engine.SourceSpan
+	FileError            = engine.GessFileError
+	SourceFile           = engine.GessSourceFile
+	GoGeneratorOptions   = engine.GessGoGeneratorOptions
 )
 
 func Parse(name string, source []byte) (*Document, error) {

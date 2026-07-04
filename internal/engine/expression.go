@@ -711,7 +711,7 @@ func compileCallExpression(
 	}
 	function, ok := functions[normalized.Name]
 	if !ok {
-		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "unknown function", ErrFunctionValidation)
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", fmt.Sprintf("unknown function %q", normalized.Name), ErrFunctionValidation)
 	}
 	if len(normalized.Args) != len(function.args) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call arity mismatch", ErrFunctionValidation)
