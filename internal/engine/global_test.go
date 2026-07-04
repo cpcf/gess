@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -338,5 +339,131 @@ func mustAddQuery(t *testing.T, workspace *Workspace, spec QuerySpec) {
 	t.Helper()
 	if err := workspace.AddQuery(spec); err != nil {
 		t.Fatalf("AddQuery(%q): %v", spec.Name, err)
+	}
+}
+
+func TestGessGlobalsResolveInRHSAssert(t *testing.T) {
+	ctx := context.Background()
+	source := []byte(`
+(defglobal *lane* (type STRING) (default "standard"))
+(deftemplate order (slot id (type STRING)))
+(deftemplate route
+  (slot id (type STRING))
+  (slot lane (type STRING)))
+(defrule route-order
+  ?order <- (order (id ?id))
+  =>
+  (assert (route (id ?id) (lane *lane*))))
+(defquery routes
+  ?route <- (route (id ?id) (lane ?lane))
+  (return (id ?id) (lane ?lane)))`)
+	revision, err := CompileGess(ctx, "rhs-global.gess", source, DSLRegistry{})
+	if err != nil {
+		t.Fatalf("CompileGess: %v", err)
+	}
+	session, err := NewSession(revision, WithGlobals(map[string]any{"lane": "expedite"}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	template, ok := revision.Template("order")
+	if !ok {
+		t.Fatal("compiled ruleset missing order template")
+	}
+	if _, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "O-1"})); err != nil {
+		t.Fatalf("AssertTemplate: %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "routes", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	lane, ok := rows[0].Value("lane")
+	if !ok {
+		t.Fatal("row missing lane")
+	}
+	if got, _ := lane.AsString(); got != "expedite" {
+		t.Fatalf("lane = %q, want %q (session-supplied global)", got, "expedite")
+	}
+}
+
+func TestGessGlobalsDSLValidation(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		source   string
+		fragment string
+	}{
+		{
+			name:     "missing type",
+			source:   `(defglobal *limit* (default 100))`,
+			fragment: "explicit (type KIND)",
+		},
+		{
+			name:     "unknown attribute",
+			source:   `(defglobal *limit* (type INT) (dfault 100))`,
+			fragment: `unsupported defglobal attribute "dfault"`,
+		},
+		{
+			name: "unknown global in rhs assert",
+			source: `(defglobal *lane* (type STRING) (default "s"))
+(deftemplate order (slot id (type STRING)))
+(deftemplate route (slot lane (type STRING)))
+(defrule r
+  (order (id ?id))
+  =>
+  (assert (route (lane *missing*))))`,
+			fragment: `unknown global "*missing*"`,
+		},
+		{
+			name: "global in deffacts",
+			source: `(defglobal *lane* (type STRING) (default "s"))
+(deftemplate route (slot lane (type STRING)))
+(deffacts seed (route (lane *lane*)))`,
+			fragment: "global references are not supported in deffacts",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CompileGess(ctx, tc.name+".gess", []byte(tc.source), DSLRegistry{})
+			if err == nil {
+				t.Fatal("CompileGess succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.fragment) {
+				t.Fatalf("error %q missing fragment %q", err.Error(), tc.fragment)
+			}
+		})
+	}
+}
+
+func TestGlobalsWorkspaceValidationNamesGlobal(t *testing.T) {
+	workspace := NewWorkspace()
+	if err := workspace.AddGlobal(GlobalSpec{Name: "limit", Kind: ValueInt}); err != nil {
+		t.Fatalf("AddGlobal: %v", err)
+	}
+	err := workspace.AddGlobal(GlobalSpec{Name: "limit", Kind: ValueInt})
+	if err == nil {
+		t.Fatal("duplicate AddGlobal succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), `for global "limit"`) {
+		t.Fatalf("duplicate error %q does not name the global", err.Error())
+	}
+
+	if err := workspace.AddGlobal(GlobalSpec{Name: "bad-default", Kind: ValueInt, Default: "nope", HasDefault: true}); err == nil {
+		t.Fatal("kind-mismatched default succeeded, want error")
+	}
+
+	revision := mustCompileWorkspace(t, workspace)
+	_, err = NewSession(revision, WithGlobals(map[string]any{"missing": 1}))
+	if err == nil {
+		t.Fatal("unknown global at session construction succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), `for global "missing"`) {
+		t.Fatalf("session error %q does not name the global", err.Error())
 	}
 }

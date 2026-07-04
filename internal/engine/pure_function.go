@@ -38,6 +38,7 @@ type ExpressionFunctionSpec struct {
 	Return      ValueKind
 	Expression  ExpressionSpec
 	Description string
+	Source      SourceSpan
 }
 
 func (s PureFunctionSpec) clone() PureFunctionSpec {
@@ -310,20 +311,26 @@ func compileExpressionFunctionSpec(spec ExpressionFunctionSpec, order int, funct
 	for _, param := range normalized.Params {
 		if param.Name == "" {
 			return compiledPureFunction{}, &ValidationError{
-				Reason: "function parameter name is required",
-				Err:    ErrFunctionValidation,
+				FunctionName: normalized.Name,
+				Source:       normalized.Source,
+				Reason:       "function parameter name is required",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		if !validPureFunctionValueKind(param.Kind) {
 			return compiledPureFunction{}, &ValidationError{
-				Reason: "invalid function parameter kind",
-				Err:    ErrFunctionValidation,
+				FunctionName: normalized.Name,
+				Source:       normalized.Source,
+				Reason:       "invalid function parameter kind",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		if _, exists := params[param.Name]; exists {
 			return compiledPureFunction{}, &ValidationError{
-				Reason: "duplicate function parameter",
-				Err:    ErrFunctionValidation,
+				FunctionName: normalized.Name,
+				Source:       normalized.Source,
+				Reason:       "duplicate function parameter",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		params[param.Name] = param.Kind
@@ -336,16 +343,18 @@ func compileExpressionFunctionSpec(spec ExpressionFunctionSpec, order int, funct
 	expression, _, err := compileExpressionSpecWithParams(normalized.Expression, normalized.Name, -1, -1, nil, nil, nil, nil, params, functions, nil)
 	if err != nil {
 		return compiledPureFunction{}, &ValidationError{
-			RuleName: normalized.Name,
-			Reason:   "invalid function expression",
-			Err:      fmt.Errorf("%w: %w", ErrFunctionValidation, err),
+			FunctionName: normalized.Name,
+			Source:       normalized.Source,
+			Reason:       fmt.Sprintf("invalid function expression: %v", err),
+			Err:          fmt.Errorf("%w: %w", ErrFunctionValidation, err),
 		}
 	}
 	if !expressionKindAssignable(normalized.Return, expression.resultKind) {
 		return compiledPureFunction{}, &ValidationError{
-			RuleName: normalized.Name,
-			Reason:   "function expression return has incompatible type",
-			Err:      ErrFunctionValidation,
+			FunctionName: normalized.Name,
+			Source:       normalized.Source,
+			Reason:       "function expression return has incompatible type",
+			Err:          ErrFunctionValidation,
 		}
 	}
 	return compiledPureFunction{

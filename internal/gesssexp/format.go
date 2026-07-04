@@ -145,8 +145,14 @@ func shouldInline(expr Expr) bool {
 		return true
 	}
 	switch expr.Head() {
-	case "assert", "assert-logical", "return":
+	case "assert", "assert-logical":
 		return false
+	case "return":
+		// Query returns hold (alias value) lists and never inline; a
+		// deffunction return kind such as (return BOOL) inlines normally.
+		if len(expr.List) != 2 || !expr.List[1].IsAtom() {
+			return false
+		}
 	}
 	if len(expr.List) > 4 {
 		return false

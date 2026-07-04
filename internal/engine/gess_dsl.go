@@ -230,7 +230,7 @@ func (l *gessLoader) loadExpressionFunction(form gessSExpr) error {
 	if len(form.List) < 3 || !form.List[1].IsAtom() {
 		return l.err(form.Span, "deffunction requires a function name")
 	}
-	spec := ExpressionFunctionSpec{Name: form.List[1].Text(), Return: valueKindUnknown}
+	spec := ExpressionFunctionSpec{Name: form.List[1].Text(), Return: valueKindUnknown, Source: form.Span}
 	scope := newGessScope()
 	var body *gessSExpr
 	for _, item := range form.List[2:] {
@@ -337,7 +337,7 @@ func (l *gessLoader) loadGlobal(form gessSExpr) error {
 	if !ok {
 		return l.err(form.List[1].Span, "global name must use *name* syntax")
 	}
-	spec := GlobalSpec{Name: name, Kind: ValueAny}
+	spec := GlobalSpec{Name: name, Kind: valueKindUnknown}
 	for _, attr := range form.List[2:] {
 		switch attr.Head() {
 		case "type":
@@ -360,7 +360,12 @@ func (l *gessLoader) loadGlobal(form gessSExpr) error {
 				return l.err(attr.Span, "global description requires one value")
 			}
 			spec.Description = attr.List[1].Text()
+		default:
+			return l.err(attr.Span, "unsupported defglobal attribute %q", attr.Head())
 		}
+	}
+	if spec.Kind == valueKindUnknown {
+		return l.err(form.Span, "defglobal requires an explicit (type KIND)")
 	}
 	if err := l.workspace.AddGlobal(spec); err != nil {
 		return l.wrap(form.Span, "add global", err)
@@ -626,15 +631,15 @@ func (l *gessLoader) parseConditions(module ModuleName, forms []gessSExpr, scope
 func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding string, scope *gessScope, query bool) (ConditionSpec, error) {
 	switch form.Head() {
 	case "and":
-		var conditions []ConditionSpec
-		for _, child := range form.List[1:] {
-			cond, err := l.parseCondition(module, child, "", scope, query)
-			if err != nil {
-				return nil, err
-			}
-			conditions = append(conditions, cond)
+		cond, err := l.parseConditions(module, form.List[1:], scope, query)
+		if err != nil {
+			return nil, err
 		}
-		return And{Conditions: conditions, Source: form.Span}, nil
+		if and, ok := cond.(And); ok {
+			and.Source = form.Span
+			return and, nil
+		}
+		return cond, nil
 	case "or":
 		var branches []ConditionSpec
 		for _, branch := range form.List[1:] {
@@ -1155,6 +1160,8 @@ func gessRuntimeValueExpression(value gessRuntimeValue) (ExpressionSpec, bool) {
 		return BindingFieldExpr{Binding: value.binding, Field: value.field}, true
 	case value.bindingValue:
 		return BindingValueExpr{Binding: value.binding}, true
+	case value.globalRef:
+		return GlobalExpr{Name: value.global}, true
 	default:
 		return nil, false
 	}
@@ -1164,6 +1171,12 @@ func (l *gessLoader) runtimeValue(form gessSExpr, scope *gessScope) (gessRuntime
 	if form.IsAtom() {
 		if binding, field, ok := splitGessProjection(form.Text()); ok {
 			return gessRuntimeValue{binding: binding, field: field, fieldRef: true}, nil
+		}
+		if global, ok := gessGlobalName(form); ok {
+			if _, declared := l.workspace.globalIndex(global); !declared {
+				return gessRuntimeValue{}, l.err(form.Span, "unknown global %q", form.Text())
+			}
+			return gessRuntimeValue{global: global, globalRef: true}, nil
 		}
 		if variable, ok := gessVariableName(form); ok {
 			if ref, ok := scope.vars[variable]; ok {
@@ -1191,6 +1204,9 @@ func (l *gessLoader) parseFactLiteral(fact gessSExpr) (string, Fields, error) {
 	for _, slot := range fact.List[1:] {
 		if len(slot.List) != 2 || !slot.List[0].IsAtom() {
 			return "", nil, l.err(slot.Span, "fact slot must be (field value)")
+		}
+		if _, ok := gessGlobalName(slot.List[1]); ok {
+			return "", nil, l.err(slot.List[1].Span, "global references are not supported in deffacts; deffacts values must be literals")
 		}
 		value, err := gessAtomValue(slot.List[1])
 		if err != nil {
@@ -1309,6 +1325,8 @@ type gessRuntimeValue struct {
 	field        string
 	fieldRef     bool
 	bindingValue bool
+	global       string
+	globalRef    bool
 }
 
 func (v gessRuntimeValue) value(ctx ActionContext) (any, error) {
@@ -1325,6 +1343,12 @@ func (v gessRuntimeValue) value(ctx ActionContext) (any, error) {
 		value, ok := ctx.BindingValue(v.binding)
 		if !ok {
 			return nil, fmt.Errorf("gess: Gess action missing binding value %s", v.binding)
+		}
+		return value, nil
+	case v.globalRef:
+		value, ok := ctx.Global(v.global)
+		if !ok {
+			return nil, fmt.Errorf("gess: Gess action references unknown global %s", v.global)
 		}
 		return value, nil
 	default:

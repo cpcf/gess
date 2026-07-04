@@ -51,11 +51,6 @@ func (g Global) DeclarationOrder() int {
 	return g.slot
 }
 
-func (g Global) clone() Global {
-	g.defaultValue = cloneValue(g.defaultValue)
-	return g
-}
-
 type compiledGlobal struct {
 	name         string
 	kind         ValueKind
@@ -74,11 +69,6 @@ func (g compiledGlobal) public() Global {
 		description:  g.description,
 		slot:         g.slot,
 	}
-}
-
-func (g compiledGlobal) clone() compiledGlobal {
-	g.defaultValue = cloneValue(g.defaultValue)
-	return g
 }
 
 func compileGlobalSpec(spec GlobalSpec, slot int) (compiledGlobal, error) {
@@ -109,28 +99,6 @@ func compileGlobalSpec(spec GlobalSpec, slot int) (compiledGlobal, error) {
 	return out, nil
 }
 
-func cloneGlobalSpecs(in []GlobalSpec) []GlobalSpec {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]GlobalSpec, len(in))
-	for i, spec := range in {
-		out[i] = spec.clone()
-	}
-	return out
-}
-
-func cloneCompiledGlobals(in []compiledGlobal) []compiledGlobal {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]compiledGlobal, len(in))
-	for i, global := range in {
-		out[i] = global.clone()
-	}
-	return out
-}
-
 func cloneGlobalValues(values []Value) []Value {
 	if len(values) == 0 {
 		return nil
@@ -150,7 +118,7 @@ func compileSessionGlobals(revision *Ruleset, supplied map[string]any) ([]Value,
 	for name := range supplied {
 		normalized := strings.TrimSpace(name)
 		if _, ok := revision.globals[normalized]; !ok {
-			return nil, &ValidationError{Reason: "unknown global"}
+			return nil, &ValidationError{GlobalName: normalized, Reason: "unknown global"}
 		}
 		normalizedSupplied[normalized] = supplied[name]
 	}
@@ -164,17 +132,17 @@ func compileSessionGlobals(revision *Ruleset, supplied map[string]any) ([]Value,
 		if raw, supplied := normalizedSupplied[name]; supplied {
 			canonical, err := canonicalValue(raw)
 			if err != nil {
-				return nil, &ValidationError{Reason: "invalid global value", Err: err}
+				return nil, &ValidationError{GlobalName: name, Reason: "invalid global value", Err: err}
 			}
 			value, ok = canonical, true
 		} else if global.hasDefault {
 			value, ok = cloneValue(global.defaultValue), true
 		}
 		if !ok {
-			return nil, &ValidationError{Reason: "missing required global"}
+			return nil, &ValidationError{GlobalName: name, Reason: "missing required global"}
 		}
 		if !isValueCompatibleWithKind(global.kind, value) {
-			return nil, &ValidationError{Reason: "global value has incompatible type"}
+			return nil, &ValidationError{GlobalName: name, Reason: "global value has incompatible type"}
 		}
 		if global.slot < 0 || global.slot >= len(values) {
 			return nil, ErrInvalidRuleset

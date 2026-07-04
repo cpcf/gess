@@ -65,6 +65,11 @@ func (w *Workspace) AddTemplate(spec TemplateSpec) error {
 	return nil
 }
 
+// AddGlobal declares a typed global constant readable from rule, query, and
+// aggregate expressions and from ActionContext.Global. Values bind per session
+// via WithGlobals; a declaration without a default requires every session to
+// supply a value. In .gess sources the equivalent form is
+// (defglobal *name* (type KIND) (default value)).
 func (w *Workspace) AddGlobal(spec GlobalSpec) error {
 	normalized, err := compileGlobalSpec(spec, len(w.globals))
 	if err != nil {
@@ -72,7 +77,8 @@ func (w *Workspace) AddGlobal(spec GlobalSpec) error {
 	}
 	if _, ok := w.globalIndex(normalized.name); ok {
 		return &ValidationError{
-			Reason: "duplicate global",
+			GlobalName: normalized.name,
+			Reason:     "duplicate global",
 		}
 	}
 
@@ -173,14 +179,16 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 	}
 	if _, ok := w.functionIndex(normalized.name); ok {
 		return &ValidationError{
-			Reason: "duplicate function",
-			Err:    ErrFunctionValidation,
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
 		}
 	}
 	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
 		return &ValidationError{
-			Reason: "duplicate function",
-			Err:    ErrFunctionValidation,
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
 		}
 	}
 
@@ -188,6 +196,13 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 	return nil
 }
 
+// AddExpressionFunction registers a pure function whose body is a single
+// expression over its declared parameters, the programmatic equivalent of a
+// .gess deffunction. Bodies may call Go-registered functions and expression
+// functions defined earlier in declaration order; recursion (direct or
+// mutual) is therefore impossible by construction. Bodies compile with the
+// ruleset at Workspace.Compile, so body errors surface there rather than
+// here.
 func (w *Workspace) AddExpressionFunction(spec ExpressionFunctionSpec) error {
 	normalized := spec.clone()
 	if normalized.Name == "" {
@@ -219,10 +234,10 @@ func (w *Workspace) AddExpressionFunction(spec ExpressionFunctionSpec) error {
 		return err
 	}
 	if _, ok := w.functionIndex(normalized.Name); ok {
-		return &ValidationError{Reason: "duplicate function", Err: ErrFunctionValidation}
+		return &ValidationError{FunctionName: normalized.Name, Source: normalized.Source, Reason: "duplicate function", Err: ErrFunctionValidation}
 	}
 	if _, ok := w.expressionFunctionIndex(normalized.Name); ok {
-		return &ValidationError{Reason: "duplicate function", Err: ErrFunctionValidation}
+		return &ValidationError{FunctionName: normalized.Name, Source: normalized.Source, Reason: "duplicate function", Err: ErrFunctionValidation}
 	}
 	w.exprFuncs = append(w.exprFuncs, normalized)
 	return nil
@@ -235,8 +250,9 @@ func (w *Workspace) ReplaceFunction(spec PureFunctionSpec) error {
 	}
 	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
 		return &ValidationError{
-			Reason: "duplicate function",
-			Err:    ErrFunctionValidation,
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
 		}
 	}
 	idx, ok := w.functionIndex(normalized.name)
@@ -487,8 +503,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		if _, exists := functionsByName[function.name]; exists {
 			return nil, &ValidationError{
-				Reason: "duplicate function",
-				Err:    ErrFunctionValidation,
+				FunctionName: function.name,
+				Reason:       "duplicate function",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		functionsByName[function.name] = function
@@ -505,8 +522,9 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		if _, exists := functionsByName[function.name]; exists {
 			return nil, &ValidationError{
-				Reason: "duplicate function",
-				Err:    ErrFunctionValidation,
+				FunctionName: function.name,
+				Reason:       "duplicate function",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		functionsByName[function.name] = function
@@ -516,7 +534,6 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 
 	compiledGlobals := make([]compiledGlobal, 0, len(w.globals))
 	globalsByName := make(map[string]compiledGlobal, len(w.globals))
-	globalTypes := make(map[string]ValueKind, len(w.globals))
 	globalOrder := make([]string, 0, len(w.globals))
 	for i, spec := range w.globals {
 		if err := ctx.Err(); err != nil {
@@ -532,7 +549,6 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 			}
 		}
 		globalsByName[global.name] = global
-		globalTypes[global.name] = global.kind
 		compiledGlobals = append(compiledGlobals, global)
 		globalOrder = append(globalOrder, global.name)
 	}
@@ -631,7 +647,6 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		functionOrder:              functionOrder,
 		globals:                    globalsByName,
 		globalOrder:                globalOrder,
-		globalTypes:                globalTypes,
 		rules:                      rulesByName,
 		rulesByID:                  rulesByID,
 		rulesByRevisionID:          rulesByRevisionID,
@@ -667,7 +682,6 @@ type Ruleset struct {
 	functionOrder              []string
 	globals                    map[string]compiledGlobal
 	globalOrder                []string
-	globalTypes                map[string]ValueKind
 	rules                      map[string]compiledRule
 	rulesByID                  map[RuleID]compiledRule
 	rulesByRevisionID          map[RuleRevisionID]compiledRule
