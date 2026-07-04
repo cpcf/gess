@@ -4851,6 +4851,13 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 	if len(added) == 0 || len(removed) == 0 {
 		return added, removed, nil
 	}
+	// Removal deltas for link-resolved tokens omit their identity; pairing
+	// compares identities repeatedly, so materialize them once up front.
+	for i := range removed {
+		if removed[i].identity.isZero() {
+			removed[i].identity = candidateIdentityForTerminalTokenDelta(revision, removed[i])
+		}
+	}
 	if len(added)*len(removed) <= 64 {
 		var updates []reteTerminalTokenUpdate
 		keptAdded := added[:0]
@@ -5116,7 +5123,13 @@ func (m *reteGraphBetaMemory) removeRuleTerminalToken(terminalID reteGraphTermin
 	if terminal == nil {
 		return
 	}
-	identity := terminal.terminalTokenIdentity(token)
+	// A linked activation lets the agenda resolve this removal without the
+	// identity; consumers that still need it (coalescing, link fallback)
+	// compute it lazily from the token.
+	identity := candidateIdentity{}
+	if row, ok := token.resolve(); !ok || row.activationLink == nil || row.activationOrdinal == 0 {
+		identity = terminal.terminalTokenIdentity(token)
+	}
 	ruleRevisionID := terminal.ruleRevisionID
 	removed := reteTerminalTokenDelta{
 		ruleRevisionID: ruleRevisionID,
