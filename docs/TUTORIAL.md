@@ -277,6 +277,30 @@ The examples show the behavior to model in `.gess` files:
 When starting new work, keep the rules in `.gess`, compile with `gessc`, and let
 Go code handle session lifecycle, runtime facts, integrations, and output.
 
+## Debugging and tuning
+
+Beyond the patterns above, a few `.gess` and session features help while
+developing:
+
+- `(defglobal *max-amount* (type INT) (default 1000))` declares a typed
+  constant; reference it as `*max-amount*` in conditions, `test` expressions,
+  query returns, and RHS `(assert ...)` slots. Supply per-session values with
+  `session.WithGlobals(map[string]any{"max-amount": 5000})` — the same
+  compiled ruleset can run with different thresholds per session.
+- `(deffunction discounted (param ?price INT) (return INT) (- ?price 100))`
+  defines a pure function in the file itself; call it as `(discounted ?price)`
+  inside `test` and comparison expressions without registering Go code.
+  Bodies are single expressions and may call only functions defined earlier
+  in the file, so recursion is impossible.
+- `session.Agenda(ctx)` lists what will fire next and in what order;
+  `session.Run(ctx, session.WithMaxFirings(1))` steps one activation at a
+  time. Together they answer "why didn't my rule fire?" interactively.
+- `session.WithEventListener(session.NewTraceListener(os.Stderr))` streams a
+  readable line per fact change, activation, and firing. Rules compiled from
+  `.gess` include their `file:line` in rule events and runtime errors.
+- `go run ./cmd/gess repl` opens an interactive shell: `load`, `assert`,
+  `run [n]`, `facts`, `agenda`, `query`, `watch on`, and `help`.
+
 ## Verify changes
 
 For the tutorial example:

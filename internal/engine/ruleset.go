@@ -11,9 +11,11 @@ import (
 
 type Workspace struct {
 	modules   []ModuleSpec
+	globals   []GlobalSpec
 	templates []TemplateSpec
 	actions   []ActionSpec
 	functions []PureFunctionSpec
+	exprFuncs []ExpressionFunctionSpec
 	rules     []RuleSpec
 	queries   []QuerySpec
 }
@@ -60,6 +62,62 @@ func (w *Workspace) AddTemplate(spec TemplateSpec) error {
 	}
 
 	w.templates = append(w.templates, template.spec())
+	return nil
+}
+
+// AddGlobal declares a typed global constant readable from rule, query, and
+// aggregate expressions and from ActionContext.Global. Values bind per session
+// via WithGlobals; a declaration without a default requires every session to
+// supply a value. In .gess sources the equivalent form is
+// (defglobal *name* (type KIND) (default value)).
+func (w *Workspace) AddGlobal(spec GlobalSpec) error {
+	normalized, err := compileGlobalSpec(spec, len(w.globals))
+	if err != nil {
+		return err
+	}
+	if _, ok := w.globalIndex(normalized.name); ok {
+		return &ValidationError{
+			GlobalName: normalized.name,
+			Reason:     "duplicate global",
+		}
+	}
+
+	w.globals = append(w.globals, spec.clone())
+	return nil
+}
+
+func (w *Workspace) ReplaceGlobal(spec GlobalSpec) error {
+	normalized, err := compileGlobalSpec(spec, 0)
+	if err != nil {
+		return err
+	}
+	idx, ok := w.globalIndex(normalized.name)
+	if !ok {
+		return &ValidationError{
+			Reason: "global not found",
+		}
+	}
+
+	w.globals[idx] = spec.clone()
+	return nil
+}
+
+func (w *Workspace) RemoveGlobal(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return &ValidationError{
+			Reason: "global name is required",
+		}
+	}
+
+	idx, ok := w.globalIndex(name)
+	if !ok {
+		return &ValidationError{
+			Reason: "global not found",
+		}
+	}
+
+	w.globals = append(w.globals[:idx], w.globals[idx+1:]...)
 	return nil
 }
 
@@ -121,8 +179,16 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 	}
 	if _, ok := w.functionIndex(normalized.name); ok {
 		return &ValidationError{
-			Reason: "duplicate function",
-			Err:    ErrFunctionValidation,
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
+		}
+	}
+	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
+		return &ValidationError{
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
 		}
 	}
 
@@ -130,10 +196,64 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 	return nil
 }
 
+// AddExpressionFunction registers a pure function whose body is a single
+// expression over its declared parameters, the programmatic equivalent of a
+// .gess deffunction. Bodies may call Go-registered functions and expression
+// functions defined earlier in declaration order; recursion (direct or
+// mutual) is therefore impossible by construction. Bodies compile with the
+// ruleset at Workspace.Compile, so body errors surface there rather than
+// here.
+func (w *Workspace) AddExpressionFunction(spec ExpressionFunctionSpec) error {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return &ValidationError{Reason: "function name is required", Err: ErrFunctionValidation}
+	}
+	if !validPureFunctionName(normalized.Name) {
+		return &ValidationError{Reason: "invalid function name", Err: ErrFunctionValidation}
+	}
+	if !validPureFunctionValueKind(normalized.Return) {
+		return &ValidationError{Reason: "invalid function return kind", Err: ErrFunctionValidation}
+	}
+	if normalized.Expression == nil {
+		return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+	}
+	seenParams := make(map[string]struct{}, len(normalized.Params))
+	for _, param := range normalized.Params {
+		if param.Name == "" {
+			return &ValidationError{Reason: "function parameter name is required", Err: ErrFunctionValidation}
+		}
+		if !validPureFunctionValueKind(param.Kind) {
+			return &ValidationError{Reason: "invalid function parameter kind", Err: ErrFunctionValidation}
+		}
+		if _, exists := seenParams[param.Name]; exists {
+			return &ValidationError{Reason: "duplicate function parameter", Err: ErrFunctionValidation}
+		}
+		seenParams[param.Name] = struct{}{}
+	}
+	if err := validateExpressionFunctionBodySpec(normalized.Expression); err != nil {
+		return err
+	}
+	if _, ok := w.functionIndex(normalized.Name); ok {
+		return &ValidationError{FunctionName: normalized.Name, Source: normalized.Source, Reason: "duplicate function", Err: ErrFunctionValidation}
+	}
+	if _, ok := w.expressionFunctionIndex(normalized.Name); ok {
+		return &ValidationError{FunctionName: normalized.Name, Source: normalized.Source, Reason: "duplicate function", Err: ErrFunctionValidation}
+	}
+	w.exprFuncs = append(w.exprFuncs, normalized)
+	return nil
+}
+
 func (w *Workspace) ReplaceFunction(spec PureFunctionSpec) error {
 	normalized, err := compilePureFunctionSpec(spec, 0)
 	if err != nil {
 		return err
+	}
+	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
+		return &ValidationError{
+			FunctionName: normalized.name,
+			Reason:       "duplicate function",
+			Err:          ErrFunctionValidation,
+		}
 	}
 	idx, ok := w.functionIndex(normalized.name)
 	if !ok {
@@ -374,8 +494,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	}
 
 	compiledFunctions := make([]compiledPureFunction, 0, len(w.functions))
-	functionsByName := make(map[string]compiledPureFunction, len(w.functions))
-	functionOrder := make([]string, 0, len(w.functions))
+	functionsByName := make(map[string]compiledPureFunction, len(w.functions)+len(w.exprFuncs))
+	functionOrder := make([]string, 0, len(w.functions)+len(w.exprFuncs))
 	for i, spec := range w.functions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -386,13 +506,54 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		}
 		if _, exists := functionsByName[function.name]; exists {
 			return nil, &ValidationError{
-				Reason: "duplicate function",
-				Err:    ErrFunctionValidation,
+				FunctionName: function.name,
+				Reason:       "duplicate function",
+				Err:          ErrFunctionValidation,
 			}
 		}
 		functionsByName[function.name] = function
 		compiledFunctions = append(compiledFunctions, function)
 		functionOrder = append(functionOrder, function.name)
+	}
+	for _, spec := range w.exprFuncs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		function, err := compileExpressionFunctionSpec(spec, len(compiledFunctions), functionsByName)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := functionsByName[function.name]; exists {
+			return nil, &ValidationError{
+				FunctionName: function.name,
+				Reason:       "duplicate function",
+				Err:          ErrFunctionValidation,
+			}
+		}
+		functionsByName[function.name] = function
+		compiledFunctions = append(compiledFunctions, function)
+		functionOrder = append(functionOrder, function.name)
+	}
+
+	compiledGlobals := make([]compiledGlobal, 0, len(w.globals))
+	globalsByName := make(map[string]compiledGlobal, len(w.globals))
+	globalOrder := make([]string, 0, len(w.globals))
+	for i, spec := range w.globals {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		global, err := compileGlobalSpec(spec, i)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := globalsByName[global.name]; exists {
+			return nil, &ValidationError{
+				Reason: "duplicate global",
+			}
+		}
+		globalsByName[global.name] = global
+		compiledGlobals = append(compiledGlobals, global)
+		globalOrder = append(globalOrder, global.name)
 	}
 
 	compiledRules := make([]compiledRule, 0, len(w.rules))
@@ -414,7 +575,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if ruleID.IsZero() {
 			ruleID = RuleID(strings.TrimSpace(spec.Name))
 		}
-		rule, err := compileRuleSpec(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName)
+		rule, err := compileRuleSpec(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName, globalsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -457,7 +618,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		query, err := compileQuerySpec(spec, templateResolver, functionsByName)
+		query, err := compileQuerySpec(spec, templateResolver, functionsByName, globalsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -474,7 +635,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	compiledRules = annotateGeneratedFactInsertPlansOnRules(compiledRules, rulesByName, rulesByID, rulesByRevisionID, generatedFactInsertPlans)
 
 	return &Ruleset{
-		id:                         rulesetID(compiledModules, compiledTemplates, compiledActions, compiledFunctions, compiledRules, compiledQueries),
+		id:                         rulesetID(compiledModules, compiledTemplates, compiledActions, compiledFunctions, compiledGlobals, compiledRules, compiledQueries),
 		modules:                    modules,
 		moduleOrder:                moduleOrder,
 		templates:                  templates,
@@ -487,6 +648,8 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		actionOrder:                actionOrder,
 		functions:                  functionsByName,
 		functionOrder:              functionOrder,
+		globals:                    globalsByName,
+		globalOrder:                globalOrder,
 		rules:                      rulesByName,
 		rulesByID:                  rulesByID,
 		rulesByRevisionID:          rulesByRevisionID,
@@ -520,6 +683,8 @@ type Ruleset struct {
 	actionOrder                []string
 	functions                  map[string]compiledPureFunction
 	functionOrder              []string
+	globals                    map[string]compiledGlobal
+	globalOrder                []string
 	rules                      map[string]compiledRule
 	rulesByID                  map[RuleID]compiledRule
 	rulesByRevisionID          map[RuleRevisionID]compiledRule
@@ -1019,6 +1184,28 @@ func (r *Ruleset) Functions() []PureFunctionDefinition {
 	return out
 }
 
+func (r *Ruleset) Global(name string) (Global, bool) {
+	if r == nil {
+		return Global{}, false
+	}
+	global, ok := r.globals[strings.TrimSpace(name)]
+	if !ok {
+		return Global{}, false
+	}
+	return global.public(), true
+}
+
+func (r *Ruleset) Globals() []Global {
+	if r == nil {
+		return nil
+	}
+	out := make([]Global, 0, len(r.globalOrder))
+	for _, name := range r.globalOrder {
+		out = append(out, r.globals[name].public())
+	}
+	return out
+}
+
 func (r *Ruleset) Rule(name string) (Rule, bool) {
 	if r == nil {
 		return Rule{}, false
@@ -1241,6 +1428,26 @@ func (w *Workspace) functionIndex(name string) (int, bool) {
 	return -1, false
 }
 
+func (w *Workspace) expressionFunctionIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, function := range w.exprFuncs {
+		if strings.TrimSpace(function.Name) == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
+func (w *Workspace) globalIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, global := range w.globals {
+		if strings.TrimSpace(global.Name) == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 func (w *Workspace) ruleIndex(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	for i, rule := range w.rules {
@@ -1302,7 +1509,7 @@ func (w *Workspace) validateDefinitionModules(modules map[ModuleName]Module) err
 	return nil
 }
 
-func rulesetID(modules []Module, templates []Template, actions []compiledAction, functions []compiledPureFunction, rules []compiledRule, queries []compiledQuery) RulesetID {
+func rulesetID(modules []Module, templates []Template, actions []compiledAction, functions []compiledPureFunction, globals []compiledGlobal, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
 	sum.Write([]byte("modules:\n"))
@@ -1355,6 +1562,26 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 		for _, arg := range function.args {
 			sum.Write([]byte(arg.String()))
 			sum.Write([]byte(","))
+		}
+		if function.expressionBacked {
+			sum.Write([]byte(":expression:"))
+			sum.Write([]byte(function.description))
+			sum.Write([]byte(":params:"))
+			for _, param := range function.paramNames {
+				sum.Write([]byte(param))
+				sum.Write([]byte(","))
+			}
+			sum.Write([]byte(":body:"))
+			sum.Write([]byte(renderExpression(function.expressionSpec)))
+		}
+		sum.Write([]byte("\n"))
+	}
+
+	sum.Write([]byte("globals:\n"))
+	for _, global := range globals {
+		sum.Write(fmt.Appendf(nil, "global:%s:%d:%s:%t:", global.name, global.slot, global.kind, global.hasDefault))
+		if global.hasDefault {
+			sum.Write([]byte(global.defaultValue.canonicalKey()))
 		}
 		sum.Write([]byte("\n"))
 	}

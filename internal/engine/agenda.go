@@ -12,6 +12,29 @@ type activationKey struct {
 	ordinal uint64
 }
 
+// Strategy selects the conflict-resolution ordering a session uses among
+// pending activations of equal salience within the focused module. Salience,
+// module focus, refraction, and activation identity are strategy-independent.
+type Strategy uint8
+
+const (
+	// StrategyDepth is the default: equal-salience activations fire most
+	// recent first (LIFO), with deterministic declaration-order tie-breaks.
+	StrategyDepth Strategy = iota
+	// StrategyBreadth fires equal-salience activations in creation order
+	// (FIFO), suiting interview and queue-style rule programs.
+	StrategyBreadth
+)
+
+func (s Strategy) valid() bool {
+	switch s {
+	case StrategyDepth, StrategyBreadth:
+		return true
+	default:
+		return false
+	}
+}
+
 type activationLookupKey struct {
 	ruleRevisionID RuleRevisionID
 	identityKey    candidateIdentityKey
@@ -356,6 +379,17 @@ func (q *agendaModuleQueue) pop(a *agenda) (*activation, bool) {
 	return act, act != nil
 }
 
+func (q *agendaModuleQueue) peekPending(a *agenda) (*activation, bool) {
+	for q != nil && !q.empty() {
+		act := q.heap[1]
+		if act != nil && act.status == activationStatusPending {
+			return act, true
+		}
+		q.pop(a)
+	}
+	return nil, false
+}
+
 func (q *agendaModuleQueue) remove(a *agenda, act *activation) bool {
 	if q == nil || act == nil || act.heapIndex <= 0 || act.heapIndex >= len(q.heap) || q.heap[act.heapIndex] != act {
 		return false
@@ -452,10 +486,10 @@ type agendaChange struct {
 }
 
 func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence uint64, timestamp time.Time) Event {
-	return c.eventWithRuleID(sessionID, rulesetID, "", sequence, timestamp)
+	return c.eventWithRuleID(sessionID, rulesetID, "", SourceSpan{}, sequence, timestamp)
 }
 
-func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, ruleID RuleID, sequence uint64, timestamp time.Time) Event {
+func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, ruleID RuleID, source SourceSpan, sequence uint64, timestamp time.Time) Event {
 	eventType := EventRuleActivated
 	if c.kind == agendaChangeDeactivated {
 		eventType = EventRuleDeactivated
@@ -472,6 +506,7 @@ func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, 
 		RuleID:         ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
 		ActivationID:   c.activation.activationID(),
+		Source:         source,
 		FactIDs:        cloneActivationFactIDs(&c.activation),
 	}
 }
@@ -670,6 +705,8 @@ type agenda struct {
 	activationRows      activationRows
 	terminalActivations activationRows
 	moduleQueues        map[ModuleName]*agendaModuleQueue
+	lessActivation      func(*activation, *activation) bool
+	strategy            Strategy
 	nextOrdinal         uint64
 	handleGeneration    uint32
 	revision            *Ruleset
@@ -717,11 +754,65 @@ func (a *agenda) recycleActivationPayload(payload *activationPayload) {
 }
 
 func newAgenda() *agenda {
-	return &agenda{
+	return newAgendaWithStrategy(StrategyDepth)
+}
+
+func newAgendaWithStrategy(strategy Strategy) *agenda {
+	agenda := &agenda{
 		activationLookup: make(map[activationLookupKey]activationLookupBucket),
 		moduleQueues:     make(map[ModuleName]*agendaModuleQueue),
+		strategy:         strategy,
 		handleGeneration: 1,
 	}
+	if strategy == StrategyBreadth {
+		agenda.lessActivation = agenda.activationBreadthLess
+	} else {
+		agenda.lessActivation = agenda.activationDepthLess
+	}
+	return agenda
+}
+
+func (a *agenda) cloneForFork(strategy Strategy) *agenda {
+	if a == nil {
+		return newAgendaWithStrategy(strategy)
+	}
+	out := newAgendaWithStrategy(strategy)
+	out.nextOrdinal = a.nextOrdinal
+	out.handleGeneration = a.handleGeneration
+	out.revision = a.revision
+	if out.handleGeneration == 0 {
+		out.handleGeneration = 1
+	}
+	for _, current := range a.activations {
+		if current == nil {
+			continue
+		}
+		cloned := a.cloneActivationForFork(current)
+		cloned.heapIndex = 0
+		stored := out.activationRows.add(cloned)
+		out.storeActivationRef(stored)
+		if stored.status == activationStatusPending {
+			out.enqueueActivation(stored)
+		}
+	}
+	return out
+}
+
+// cloneActivationForFork materializes token-backed bindings before the clone
+// drops its token, so value bindings (aggregate results) survive the fork.
+func (a *agenda) cloneActivationForFork(act *activation) activation {
+	out := act.clone()
+	if act.token.isZero() || len(out.bindings()) > 0 || a.revision == nil {
+		return out
+	}
+	rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]
+	if !ok {
+		return out
+	}
+	if entries := activationBindingTupleEntriesForActivation(rule, act, false); len(entries) > 0 {
+		out.setBindings(entries)
+	}
+	return out
 }
 
 func (a *agenda) queueForModule(module ModuleName) *agendaModuleQueue {
@@ -1405,6 +1496,43 @@ func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activ
 	return a.nextActivationPtrForModule(module)
 }
 
+func (a *agenda) hasPendingActivation() bool {
+	_, ok := a.peekActivationPtr()
+	return ok
+}
+
+func (a *agenda) hasPendingActivationForModule(module ModuleName) bool {
+	_, ok := a.peekActivationPtrForModule(module)
+	return ok
+}
+
+func (a *agenda) peekActivationPtr() (*activation, bool) {
+	queue, ok := a.nextQueue()
+	if !ok {
+		return nil, false
+	}
+	return queue.peekPending(a)
+}
+
+func (a *agenda) peekActivationPtrForModule(module ModuleName) (*activation, bool) {
+	if a == nil {
+		return nil, false
+	}
+	module = normalizeModuleName(module)
+	if module.IsZero() {
+		module = MainModule
+	}
+	queue := a.moduleQueues[module]
+	if queue == nil {
+		return nil, false
+	}
+	act, ok := queue.peekPending(a)
+	if queue.empty() {
+		delete(a.moduleQueues, module)
+	}
+	return act, ok
+}
+
 func (a *agenda) nextActivationPtr() (*activation, activation, bool) {
 	if a == nil {
 		return nil, activation{}, false
@@ -1796,6 +1924,10 @@ func (a *agenda) activationCompare(left, right *activation) int {
 }
 
 func activationLess(left, right *activation) bool {
+	return activationDepthLess(nil, left, right)
+}
+
+func activationDepthLess(revision *Ruleset, left, right *activation) bool {
 	if left == nil || right == nil {
 		return right != nil
 	}
@@ -1807,6 +1939,9 @@ func activationLess(left, right *activation) bool {
 	}
 	if left.totalRecency != right.totalRecency {
 		return left.totalRecency > right.totalRecency
+	}
+	if revision != nil && left.ruleRevisionID != right.ruleRevisionID && left.declarationOrder != right.declarationOrder {
+		return left.declarationOrder < right.declarationOrder
 	}
 	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
@@ -1830,32 +1965,22 @@ func activationLess(left, right *activation) bool {
 }
 
 func (a *agenda) activationLess(left, right *activation) bool {
+	return a.lessActivation(left, right)
+}
+
+func (a *agenda) activationDepthLess(left, right *activation) bool {
+	if a == nil {
+		return activationDepthLess(nil, left, right)
+	}
+	return activationDepthLess(a.revision, left, right)
+}
+
+func (a *agenda) activationBreadthLess(left, right *activation) bool {
 	if left == nil || right == nil {
 		return right != nil
 	}
 	if left.salience != right.salience {
 		return left.salience > right.salience
-	}
-	if left.maxRecency != right.maxRecency {
-		return left.maxRecency > right.maxRecency
-	}
-	if left.totalRecency != right.totalRecency {
-		return left.totalRecency > right.totalRecency
-	}
-	if left.ruleRevisionID != right.ruleRevisionID && left.declarationOrder != right.declarationOrder {
-		return left.declarationOrder < right.declarationOrder
-	}
-	if left.identityKey.scopeHash < right.identityKey.scopeHash {
-		return true
-	}
-	if left.identityKey.scopeHash != right.identityKey.scopeHash {
-		return false
-	}
-	if left.identityKey.hash < right.identityKey.hash {
-		return true
-	}
-	if left.identityKey.hash != right.identityKey.hash {
-		return false
 	}
 	if left.key.ordinal < right.key.ordinal {
 		return true

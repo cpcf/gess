@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -14,6 +15,13 @@ type DSLRegistry struct {
 	Actions   map[string]ActionFunc
 	Calls     map[string]DSLCallFunc
 	Functions []PureFunctionSpec
+}
+
+// DSLMissingRegistrations lists host registrations referenced by a .gess source
+// but absent from a Registry.
+type DSLMissingRegistrations struct {
+	Calls   []string
+	Actions []string
 }
 
 // DSLCallFunc is a host-provided action that receives positional arguments
@@ -42,6 +50,56 @@ func (d *GessDocument) InitialFacts() []SessionInitialFact {
 		return nil
 	}
 	return cloneSessionInitialFacts(d.initials)
+}
+
+// MissingRegistrations returns host action and call registrations referenced by
+// the parsed source but absent from registry. Expression function references are
+// validated during load/compile because the loader needs resolved definition
+// context to distinguish function calls from DSL syntax.
+func (d *GessDocument) MissingRegistrations(registry DSLRegistry) DSLMissingRegistrations {
+	if d == nil {
+		return DSLMissingRegistrations{}
+	}
+	missingCalls := make(map[string]struct{})
+	missingActions := make(map[string]struct{})
+	for _, form := range d.forms {
+		collectMissingGessCalls(form, registry, missingCalls, missingActions)
+	}
+	return DSLMissingRegistrations{
+		Calls:   sortedStringKeys(missingCalls),
+		Actions: sortedStringKeys(missingActions),
+	}
+}
+
+func collectMissingGessCalls(form gessSExpr, registry DSLRegistry, missingCalls, missingActions map[string]struct{}) {
+	if form.IsAtom() || len(form.List) == 0 {
+		return
+	}
+	if form.Head() == "call" && len(form.List) >= 2 && form.List[1].IsAtom() {
+		name := form.List[1].Text()
+		if len(form.List) == 2 {
+			if _, ok := registry.Actions[name]; !ok {
+				missingActions[name] = struct{}{}
+			}
+		} else if _, ok := registry.Calls[name]; !ok {
+			missingCalls[name] = struct{}{}
+		}
+	}
+	for _, child := range form.List {
+		collectMissingGessCalls(child, registry, missingCalls, missingActions)
+	}
+}
+
+func sortedStringKeys(values map[string]struct{}) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ParseGess parses a Gess source file into a reusable document.
@@ -127,6 +185,10 @@ func (l *gessLoader) load(ctx context.Context) error {
 			if err := l.loadModule(form); err != nil {
 				return err
 			}
+		case "defglobal":
+			if err := l.loadGlobal(form); err != nil {
+				return err
+			}
 		case "deftemplate":
 			if err := l.loadTemplate(form); err != nil {
 				return err
@@ -138,13 +200,17 @@ func (l *gessLoader) load(ctx context.Context) error {
 			return err
 		}
 		switch form.Head() {
-		case "defmodule", "deftemplate":
+		case "defmodule", "defglobal", "deftemplate":
 		case "deffacts":
 			initials, err := l.loadFacts(form)
 			if err != nil {
 				return err
 			}
 			l.doc.initials = append(l.doc.initials, initials...)
+		case "deffunction":
+			if err := l.loadExpressionFunction(form); err != nil {
+				return err
+			}
 		case "defrule":
 			if err := l.loadRule(form); err != nil {
 				return err
@@ -158,6 +224,84 @@ func (l *gessLoader) load(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (l *gessLoader) loadExpressionFunction(form gessSExpr) error {
+	if len(form.List) < 3 || !form.List[1].IsAtom() {
+		return l.err(form.Span, "deffunction requires a function name")
+	}
+	spec := ExpressionFunctionSpec{Name: form.List[1].Text(), Return: valueKindUnknown, Source: form.Span}
+	scope := newGessScope()
+	var body *gessSExpr
+	for _, item := range form.List[2:] {
+		switch item.Head() {
+		case "param":
+			param, err := l.parseExpressionFunctionParam(item)
+			if err != nil {
+				return err
+			}
+			spec.Params = append(spec.Params, param)
+			scope.params[param.Name] = struct{}{}
+		case "params":
+			for _, paramForm := range item.List[1:] {
+				param, err := l.parseExpressionFunctionParam(paramForm)
+				if err != nil {
+					return err
+				}
+				spec.Params = append(spec.Params, param)
+				scope.params[param.Name] = struct{}{}
+			}
+		case "return", "type":
+			if len(item.List) != 2 || !item.List[1].IsAtom() {
+				return l.err(item.Span, "%s requires one value kind", item.Head())
+			}
+			spec.Return = gessValueKind(item.List[1].Text())
+		case "description":
+			if len(item.List) != 2 || !item.List[1].IsAtom() {
+				return l.err(item.Span, "function description requires one value")
+			}
+			spec.Description = item.List[1].Text()
+		default:
+			if body != nil {
+				return l.err(item.Span, "deffunction requires exactly one expression body")
+			}
+			current := item
+			body = &current
+		}
+	}
+	if spec.Return == valueKindUnknown {
+		return l.err(form.Span, "deffunction requires a return kind")
+	}
+	if body == nil {
+		return l.err(form.Span, "deffunction requires an expression body")
+	}
+	expr, err := l.parseExpr("", *body, scope)
+	if err != nil {
+		return err
+	}
+	spec.Expression = expr
+	if err := l.workspace.AddExpressionFunction(spec); err != nil {
+		return l.wrap(form.Span, "add function", err)
+	}
+	return nil
+}
+
+func (l *gessLoader) parseExpressionFunctionParam(form gessSExpr) (ExpressionFunctionParamSpec, error) {
+	if len(form.List) != 2 && len(form.List) != 3 {
+		return ExpressionFunctionParamSpec{}, l.err(form.Span, "function parameter must be (param ?name KIND) or (?name KIND)")
+	}
+	offset := 0
+	if form.Head() == "param" {
+		offset = 1
+	}
+	if len(form.List) != offset+2 || !form.List[offset].IsAtom() || !form.List[offset+1].IsAtom() {
+		return ExpressionFunctionParamSpec{}, l.err(form.Span, "function parameter requires a name and value kind")
+	}
+	name, ok := gessFunctionParamName(form.List[offset])
+	if !ok {
+		return ExpressionFunctionParamSpec{}, l.err(form.List[offset].Span, "function parameter name must be a symbol or ?name")
+	}
+	return ExpressionFunctionParamSpec{Name: name, Kind: gessValueKind(form.List[offset+1].Text())}, nil
 }
 
 func (l *gessLoader) loadModule(form gessSExpr) error {
@@ -185,12 +329,56 @@ func (l *gessLoader) loadModule(form gessSExpr) error {
 	return nil
 }
 
+func (l *gessLoader) loadGlobal(form gessSExpr) error {
+	if len(form.List) < 2 || !form.List[1].IsAtom() {
+		return l.err(form.Span, "defglobal requires a global name")
+	}
+	name, ok := gessGlobalName(form.List[1])
+	if !ok {
+		return l.err(form.List[1].Span, "global name must use *name* syntax")
+	}
+	spec := GlobalSpec{Name: name, Kind: valueKindUnknown}
+	for _, attr := range form.List[2:] {
+		switch attr.Head() {
+		case "type":
+			if len(attr.List) != 2 || !attr.List[1].IsAtom() {
+				return l.err(attr.Span, "global type requires one value")
+			}
+			spec.Kind = gessValueKind(attr.List[1].Text())
+		case "default":
+			if len(attr.List) != 2 {
+				return l.err(attr.Span, "global default requires one value")
+			}
+			value, err := gessAtomValue(attr.List[1])
+			if err != nil {
+				return err
+			}
+			spec.Default = value
+			spec.HasDefault = true
+		case "description":
+			if len(attr.List) != 2 || !attr.List[1].IsAtom() {
+				return l.err(attr.Span, "global description requires one value")
+			}
+			spec.Description = attr.List[1].Text()
+		default:
+			return l.err(attr.Span, "unsupported defglobal attribute %q", attr.Head())
+		}
+	}
+	if spec.Kind == valueKindUnknown {
+		return l.err(form.Span, "defglobal requires an explicit (type KIND)")
+	}
+	if err := l.workspace.AddGlobal(spec); err != nil {
+		return l.wrap(form.Span, "add global", err)
+	}
+	return nil
+}
+
 func (l *gessLoader) loadTemplate(form gessSExpr) error {
 	if len(form.List) < 2 || !form.List[1].IsAtom() {
 		return l.err(form.Span, "deftemplate requires a template name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow}
+	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow, Source: form.Span, GessSource: gessExprSource(form)}
 	for _, item := range form.List[2:] {
 		switch item.Head() {
 		case "declare":
@@ -313,7 +501,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 		return l.err(form.Span, "defrule requires a rule name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	rule := RuleSpec{Name: name, Module: module}
+	rule := RuleSpec{Name: name, Module: module, Source: form.Span, GessSource: gessExprSource(form)}
 	body, rhs, err := splitGessRuleBody(form.List[2:])
 	if err != nil {
 		return l.wrap(form.Span, "parse rule body", err)
@@ -330,7 +518,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 		if err != nil {
 			return err
 		}
-		rule.Actions = append(rule.Actions, RuleActionSpec{Name: actionName})
+		rule.Actions = append(rule.Actions, RuleActionSpec{Name: actionName, Source: action.Span})
 	}
 	if err := l.workspace.AddRule(rule); err != nil {
 		return l.wrap(form.Span, "add rule", err)
@@ -369,7 +557,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		return l.err(form.Span, "defquery requires a query name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	query := QuerySpec{Name: name, Module: module}
+	query := QuerySpec{Name: name, Module: module, Source: form.Span, GessSource: gessExprSource(form)}
 	var body []gessSExpr
 	var returns []gessSExpr
 	scope := newGessScope()
@@ -408,7 +596,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		if err != nil {
 			return err
 		}
-		query.Returns = append(query.Returns, ReturnValue(ret.List[0].Text(), expr))
+		query.Returns = append(query.Returns, QueryReturnSpec{Alias: ret.List[0].Text(), Expression: expr, Source: ret.Span})
 	}
 	if err := l.workspace.AddQuery(query); err != nil {
 		return l.wrap(form.Span, "add query", err)
@@ -443,7 +631,15 @@ func (l *gessLoader) parseConditions(module ModuleName, forms []gessSExpr, scope
 func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding string, scope *gessScope, query bool) (ConditionSpec, error) {
 	switch form.Head() {
 	case "and":
-		return l.parseConditions(module, form.List[1:], scope, query)
+		cond, err := l.parseConditions(module, form.List[1:], scope, query)
+		if err != nil {
+			return nil, err
+		}
+		if and, ok := cond.(And); ok {
+			and.Source = form.Span
+			return and, nil
+		}
+		return cond, nil
 	case "or":
 		var branches []ConditionSpec
 		for _, branch := range form.List[1:] {
@@ -454,7 +650,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 			}
 			branches = append(branches, cond)
 		}
-		return Or{Conditions: branches}, nil
+		return Or{Conditions: branches, Source: form.Span}, nil
 	case "not":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "not requires one condition")
@@ -463,7 +659,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Not{Condition: cond}, nil
+		return Not{Condition: cond, Source: form.Span}, nil
 	case "exists":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "exists requires one condition")
@@ -472,7 +668,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Exists(cond), nil
+		return ExistsCondition{Condition: cloneConditionSpec(cond), Source: form.Span}, nil
 	case "forall":
 		if len(form.List) != 3 {
 			return nil, l.err(form.Span, "forall requires domain and requirement")
@@ -486,7 +682,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Forall(domain, requirement), nil
+		return ForallCondition{Domain: cloneConditionSpec(domain), Requirement: cloneConditionSpec(requirement), Source: form.Span}, nil
 	case "test":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "test requires one expression")
@@ -498,7 +694,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Test{Expression: expr}, nil
+		return Test{Expression: expr, Source: form.Span}, nil
 	case "accumulate":
 		return l.parseAccumulate(module, form, scope, query)
 	default:
@@ -518,7 +714,7 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 	if mod.IsZero() {
 		mod = module
 	}
-	spec := RuleConditionSpec{Binding: binding, Target: TemplateFactIn(mod, name)}
+	spec := RuleConditionSpec{Binding: binding, Target: TemplateFactIn(mod, name), Source: form.Span}
 	if binding != "" {
 		scope.bindings[binding] = struct{}{}
 	}
@@ -547,6 +743,14 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 				return nil, l.err(value.Span, "variable %q needs a fact binding", value.Text())
 			}
 			scope.vars[variable] = FieldRef{Binding: binding, Field: field}
+			continue
+		}
+		if global, ok := gessGlobalName(value); ok {
+			spec.Predicates = append(spec.Predicates, CompareExpr{
+				Operator: ExpressionCompareEqual,
+				Left:     CurrentFieldExpr{Field: field},
+				Right:    GlobalExpr{Name: global},
+			})
 			continue
 		}
 		scalar, err := gessAtomValue(value)
@@ -610,11 +814,14 @@ func (l *gessLoader) parseAccumulate(module ModuleName, form gessSExpr, scope *g
 		specs = append(specs, spec.As(name))
 		scope.values[name] = struct{}{}
 	}
-	return Accumulate(input, specs...), nil
+	return AccumulateCondition{Input: cloneConditionSpec(input), Specs: specs, Source: form.Span}, nil
 }
 
 func (l *gessLoader) parseExpr(module ModuleName, form gessSExpr, scope *gessScope) (ExpressionSpec, error) {
 	if form.IsAtom() {
+		if global, ok := gessGlobalName(form); ok {
+			return GlobalExpr{Name: global}, nil
+		}
 		if binding, field, ok := splitGessProjection(form.Text()); ok {
 			return BindingFieldExpr{Binding: binding, Field: field}, nil
 		}
@@ -700,6 +907,7 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 		if err != nil {
 			return "", err
 		}
+		action.GessSource = gessExprSource(form)
 		if err := l.workspace.AddAction(action); err != nil {
 			return "", l.wrap(form.Span, "add generated assert action", err)
 		}
@@ -710,23 +918,23 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 		}
 		name := l.generatedActionName(ruleName, index, "focus")
 		module := ModuleName(form.List[1].Text())
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.PushFocus(module)
 		}})
 	case "pop-focus":
 		name := l.generatedActionName(ruleName, index, "pop-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			_, err := ctx.PopFocus()
 			return err
 		}})
 	case "clear-focus":
 		name := l.generatedActionName(ruleName, index, "clear-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.ClearFocusStack()
 		}})
 	case "halt":
 		name := l.generatedActionName(ruleName, index, "halt")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, Fn: func(ctx ActionContext) error {
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
 			return ctx.Halt()
 		}})
 	case "call":
@@ -767,6 +975,7 @@ func (l *gessLoader) buildCallAction(ruleName string, index int, callName string
 		values = append(values, value)
 	}
 	action := ActionSpec{Name: l.generatedActionName(ruleName, index, "call_"+callName)}
+	action.GessSource = gessCallSource(callName, values)
 	var reads []ActionBindingReadSpec
 	for _, value := range values {
 		if value.fieldRef {
@@ -792,6 +1001,35 @@ func (l *gessLoader) buildCallAction(ruleName string, index int, callName string
 		return call(ctx, args)
 	}
 	return action, nil
+}
+
+func gessCallSource(callName string, values []gessRuntimeValue) string {
+	var b strings.Builder
+	b.WriteString("(call ")
+	b.WriteString(callName)
+	for _, value := range values {
+		b.WriteByte(' ')
+		b.WriteString(gessRuntimeValueSource(value))
+	}
+	b.WriteByte(')')
+	return b.String()
+}
+
+func gessRuntimeValueSource(value gessRuntimeValue) string {
+	switch {
+	case value.hasConst:
+		normalized, err := NewValue(value.constant)
+		if err != nil {
+			return strconv.Quote(fmt.Sprint(value.constant))
+		}
+		return renderGessValue(normalized)
+	case value.fieldRef:
+		return "?" + value.binding + ":" + value.field
+	case value.bindingValue:
+		return "?" + value.binding
+	default:
+		return "NULL"
+	}
 }
 
 func (l *gessLoader) buildAssertAction(ruleName string, index int, module ModuleName, logical bool, fact gessSExpr, scope *gessScope) (ActionSpec, error) {
@@ -922,6 +1160,8 @@ func gessRuntimeValueExpression(value gessRuntimeValue) (ExpressionSpec, bool) {
 		return BindingFieldExpr{Binding: value.binding, Field: value.field}, true
 	case value.bindingValue:
 		return BindingValueExpr{Binding: value.binding}, true
+	case value.globalRef:
+		return GlobalExpr{Name: value.global}, true
 	default:
 		return nil, false
 	}
@@ -931,6 +1171,12 @@ func (l *gessLoader) runtimeValue(form gessSExpr, scope *gessScope) (gessRuntime
 	if form.IsAtom() {
 		if binding, field, ok := splitGessProjection(form.Text()); ok {
 			return gessRuntimeValue{binding: binding, field: field, fieldRef: true}, nil
+		}
+		if global, ok := gessGlobalName(form); ok {
+			if _, declared := l.workspace.globalIndex(global); !declared {
+				return gessRuntimeValue{}, l.err(form.Span, "unknown global %q", form.Text())
+			}
+			return gessRuntimeValue{global: global, globalRef: true}, nil
 		}
 		if variable, ok := gessVariableName(form); ok {
 			if ref, ok := scope.vars[variable]; ok {
@@ -959,6 +1205,9 @@ func (l *gessLoader) parseFactLiteral(fact gessSExpr) (string, Fields, error) {
 		if len(slot.List) != 2 || !slot.List[0].IsAtom() {
 			return "", nil, l.err(slot.Span, "fact slot must be (field value)")
 		}
+		if _, ok := gessGlobalName(slot.List[1]); ok {
+			return "", nil, l.err(slot.List[1].Span, "global references are not supported in deffacts; deffacts values must be literals")
+		}
 		value, err := gessAtomValue(slot.List[1])
 		if err != nil {
 			return "", nil, err
@@ -975,6 +1224,25 @@ func (l *gessLoader) parseFactLiteral(fact gessSExpr) (string, Fields, error) {
 func (l *gessLoader) generatedActionName(ruleName string, index int, suffix string) string {
 	l.ruleSeq++
 	return fmt.Sprintf("__gess_%s_%d_%d_%s", ruleName, index, l.ruleSeq, sanitizeGessActionName(suffix))
+}
+
+func gessExprSource(expr gessSExpr) string {
+	if expr.IsAtom() {
+		if expr.String {
+			return strconv.Quote(expr.Text())
+		}
+		return expr.Text()
+	}
+	var b strings.Builder
+	b.WriteByte('(')
+	for i, child := range expr.List {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(gessExprSource(child))
+	}
+	b.WriteByte(')')
+	return b.String()
 }
 
 func (l *gessLoader) templateKey(module ModuleName, name string) TemplateKey {
@@ -1057,6 +1325,8 @@ type gessRuntimeValue struct {
 	field        string
 	fieldRef     bool
 	bindingValue bool
+	global       string
+	globalRef    bool
 }
 
 func (v gessRuntimeValue) value(ctx ActionContext) (any, error) {
@@ -1073,6 +1343,12 @@ func (v gessRuntimeValue) value(ctx ActionContext) (any, error) {
 		value, ok := ctx.BindingValue(v.binding)
 		if !ok {
 			return nil, fmt.Errorf("gess: Gess action missing binding value %s", v.binding)
+		}
+		return value, nil
+	case v.globalRef:
+		value, ok := ctx.Global(v.global)
+		if !ok {
+			return nil, fmt.Errorf("gess: Gess action references unknown global %s", v.global)
 		}
 		return value, nil
 	default:
@@ -1114,6 +1390,35 @@ func gessVariableName(expr gessSExpr) (string, bool) {
 		return "", false
 	}
 	return strings.ReplaceAll(text, "-", "_"), true
+}
+
+func gessFunctionParamName(expr gessSExpr) (string, bool) {
+	if !expr.IsAtom() {
+		return "", false
+	}
+	if name, ok := gessVariableName(expr); ok {
+		return name, true
+	}
+	text := strings.TrimSpace(expr.Text())
+	if text == "" || strings.Contains(text, ":") || strings.Contains(text, "*") || strings.HasPrefix(text, "?") {
+		return "", false
+	}
+	return strings.ReplaceAll(text, "-", "_"), true
+}
+
+func gessGlobalName(expr gessSExpr) (string, bool) {
+	if !expr.IsAtom() {
+		return "", false
+	}
+	text := strings.TrimSpace(expr.Text())
+	if len(text) < 3 || !strings.HasPrefix(text, "*") || !strings.HasSuffix(text, "*") {
+		return "", false
+	}
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "*"), "*"))
+	if name == "" || strings.Contains(name, ":") || strings.Contains(name, "*") {
+		return "", false
+	}
+	return strings.ReplaceAll(name, "-", "_"), true
 }
 
 func splitGessProjection(text string) (string, string, bool) {

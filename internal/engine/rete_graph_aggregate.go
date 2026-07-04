@@ -60,7 +60,7 @@ func (m reteGraphAggregateMemory) insertToken(token tokenRef, span *propagationC
 	if !bucket.addInputToken(token) {
 		return
 	}
-	if !bucket.addAccumulatorToken(m.owner.context(), m.node, token) {
+	if !bucket.addAccumulatorToken(m.owner.context(), m.node, token, m.owner.globalValues) {
 		bucket.removeInputToken(token)
 		delta.supported = false
 		return
@@ -86,8 +86,8 @@ func (m reteGraphAggregateMemory) removeToken(token tokenRef, counters *propagat
 	if !bucket.removeInputToken(token) {
 		return
 	}
-	if !bucket.removeAccumulatorToken(m.owner.context(), m.node, token) {
-		if !bucket.rebuildAccumulator(m.owner.context(), m.node) {
+	if !bucket.removeAccumulatorToken(m.owner.context(), m.node, token, m.owner.globalValues) {
+		if !bucket.rebuildAccumulator(m.owner.context(), m.node, m.owner.globalValues) {
 			delta.supported = false
 			return
 		}
@@ -196,9 +196,9 @@ func (m reteGraphAggregateMemory) removeMembersContainingFact(factID FactID, cou
 		if bucket == nil {
 			return
 		}
-		changed, subtracted := bucket.removeInputTokensContainingFactSubtractive(m.owner.context(), m.node, factID)
+		changed, subtracted := bucket.removeInputTokensContainingFactSubtractive(m.owner.context(), m.node, factID, m.owner.globalValues)
 		if changed {
-			if !subtracted && !bucket.rebuildAccumulator(m.owner.context(), m.node) {
+			if !subtracted && !bucket.rebuildAccumulator(m.owner.context(), m.node, m.owner.globalValues) {
 				delta.supported = false
 				return
 			}

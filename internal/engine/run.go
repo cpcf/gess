@@ -6,12 +6,67 @@ import (
 	"fmt"
 )
 
-func (s *Session) Run(ctx context.Context) (RunResult, error) {
+// RunOption configures a single Run call.
+type RunOption interface {
+	applyRunOption(*runConfig) error
+}
+
+type runOptionFunc func(*runConfig) error
+
+func (f runOptionFunc) applyRunOption(config *runConfig) error {
+	if f == nil {
+		return &ValidationError{Reason: "run option is nil"}
+	}
+	return f(config)
+}
+
+type runConfig struct {
+	maxFirings    int
+	hasMaxFirings bool
+}
+
+// WithMaxFirings bounds the run to at most n activation firings; n must be
+// positive. The limit is checked at the same safe point as halt, after queued
+// external mutations have been applied. When the limit is the reason the run
+// stops, Run reports RunFireLimit; if the agenda drained at exactly the limit,
+// Run reports RunCompleted with identical session state to an unbounded run.
+// Stop reasons coinciding at one safe point rank: action failure, then
+// cancellation, then halt, then the fire limit. A subsequent Run resumes
+// exactly where the limited run stopped.
+func WithMaxFirings(n int) RunOption {
+	return runOptionFunc(func(config *runConfig) error {
+		if n <= 0 {
+			return &ValidationError{Reason: "max firings must be greater than zero"}
+		}
+		config.maxFirings = n
+		config.hasMaxFirings = true
+		return nil
+	})
+}
+
+func newRunConfig(opts []RunOption) (runConfig, error) {
+	var config runConfig
+	for _, opt := range opts {
+		if opt == nil {
+			return runConfig{}, &ValidationError{Reason: "run option is nil"}
+		}
+		if err := opt.applyRunOption(&config); err != nil {
+			return runConfig{}, err
+		}
+	}
+	return config, nil
+}
+
+func (s *Session) Run(ctx context.Context, opts ...RunOption) (RunResult, error) {
 	if s == nil || s.closed {
 		return RunResult{Status: RunClosed}, ErrClosedSession
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	config, err := newRunConfig(opts)
+	if err != nil {
+		return RunResult{Status: RunFailed}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return RunResult{Status: RunCanceled}, err
@@ -32,14 +87,14 @@ func (s *Session) Run(ctx context.Context) (RunResult, error) {
 		return RunResult{Status: RunFailed}, ErrInvalidRuleset
 	}
 
-	result, mutationHeld, err := s.runAgendaWithMutationReleased(ctx)
+	result, mutationHeld, err := s.runAgendaWithMutationReleased(ctx, config)
 	if mutationHeld {
 		s.endMutation()
 	}
 	return result, err
 }
 
-func (s *Session) runAgendaWithMutationReleased(ctx context.Context) (RunResult, bool, error) {
+func (s *Session) runAgendaWithMutationReleased(ctx context.Context, config runConfig) (RunResult, bool, error) {
 	if !s.beginRun() {
 		return RunResult{Status: RunConcurrencyMisuse}, true, ErrConcurrencyMisuse
 	}
@@ -50,7 +105,7 @@ func (s *Session) runAgendaWithMutationReleased(ctx context.Context) (RunResult,
 	s.runActive.Store(true)
 	s.endMutation()
 
-	result, err := s.runAgendaLoop(ctx, runID)
+	result, err := s.runAgendaLoop(ctx, runID, config)
 	mutationHeld := s.beginMutation()
 	s.runActivation.Store(nil)
 	s.runActive.Store(false)
@@ -61,7 +116,7 @@ func (s *Session) runAgendaWithMutationReleased(ctx context.Context) (RunResult,
 	return result, true, err
 }
 
-func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, error) {
+func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConfig) (RunResult, error) {
 	var runErr error
 	abort := func(status RunStatus, fired int, err error) (RunResult, error) {
 		runErr = err
@@ -115,10 +170,34 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 			return abort(RunFailed, fired, err)
 		}
 
+		if err := ctx.Err(); err != nil {
+			return abort(RunCanceled, fired, err)
+		}
+
 		s.mutationQueueMu.Lock()
 		if len(s.mutationQueue) > 0 {
 			s.mutationQueueMu.Unlock()
 			continue
+		}
+		if s.runHaltRequested.Load() {
+			s.mutationQueueMu.Unlock()
+			return RunResult{RunID: runID, Status: RunHalted, Fired: fired}, nil
+		}
+		if config.hasMaxFirings && fired >= config.maxFirings {
+			hasMore := s.hasFocusedActivation()
+			if !hasMore {
+				// No pending activation remains, so this cannot consume one;
+				// it only pops exhausted focus frames, keeping focus state
+				// identical to the drained RunCompleted path below.
+				s.nextFocusedActivation()
+				s.mutationQueueMu.Unlock()
+				if s.agenda != nil {
+					s.agenda.compactConsumedActivationRows()
+				}
+				return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
+			}
+			s.mutationQueueMu.Unlock()
+			return RunResult{RunID: runID, Status: RunFireLimit, Fired: fired}, nil
 		}
 		currentActivation, activation, ok := s.nextFocusedActivation()
 		if !ok {
@@ -162,9 +241,6 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID) (RunResult, er
 		if s.agendaDirty {
 			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}
-		if s.runHaltRequested.Load() {
-			return RunResult{RunID: runID, Status: RunHalted, Fired: fired}, nil
-		}
 	}
 }
 
@@ -198,7 +274,11 @@ func (s *Session) endRun() {
 }
 
 func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activation activation) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(EventRuleFired) {
 		return
 	}
 	rulesetID := RulesetID("")
@@ -206,12 +286,13 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		rulesetID = s.revision.ID()
 	}
 	ruleID := RuleID("")
+	source := SourceSpan{}
 	if s.revision != nil {
 		if rule, ok := s.revision.rulesByRevisionID[activation.ruleRevisionID]; ok {
 			ruleID = rule.id
+			source = rule.source
 		}
 	}
-	s.nextEventSequence++
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
@@ -225,19 +306,23 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		RuleID:         ruleID,
 		RuleRevisionID: activation.ruleRevisionID,
 		ActivationID:   activation.activationID(),
+		Source:         source,
 		FactIDs:        cloneActivationFactIDs(&activation),
 	})
 }
 
 func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activation activation, failure ActionFailureError) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(EventActionFailed) {
 		return
 	}
 	rulesetID := RulesetID("")
 	if s.revision != nil {
 		rulesetID = s.revision.ID()
 	}
-	s.nextEventSequence++
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
@@ -253,6 +338,7 @@ func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activa
 		ActivationID:   failure.ActivationID,
 		ActionName:     failure.ActionName,
 		ActionIndex:    failure.ActionIndex,
+		Source:         failure.Source,
 		Cause:          failure.Err,
 		FactIDs:        cloneActivationFactIDs(&activation),
 	})

@@ -149,8 +149,8 @@ func (ir branchPlanningIR) normalizedConditions() []normalizedRuleCondition {
 	return out
 }
 
-func compileBranchPlanningIR(ruleName string, ruleID RuleID, author ModuleName, ir branchPlanningIR, templates templateResolver, allowDuplicateBindings bool, params map[string]ValueKind, functions map[string]compiledPureFunction) (compiledRuleConditionSet, error) {
-	return compileNormalizedRuleConditionBranchWithParams(ruleName, ruleID, author, ir.normalizedConditions(), templates, allowDuplicateBindings, params, functions)
+func compileBranchPlanningIR(ruleName string, ruleID RuleID, author ModuleName, ir branchPlanningIR, templates templateResolver, allowDuplicateBindings bool, params map[string]ValueKind, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRuleConditionSet, error) {
+	return compileNormalizedRuleConditionBranchWithParams(ruleName, ruleID, author, ir.normalizedConditions(), templates, allowDuplicateBindings, params, functions, globals)
 }
 
 func compiledConditionBranchFromPlanningIR(ir branchPlanningIR, compiled compiledRuleConditionSet) compiledConditionBranch {

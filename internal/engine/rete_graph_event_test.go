@@ -126,7 +126,7 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if !ok {
 		t.Fatalf("after working fact %q not found", asserted.Fact.ID())
 	}
-	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, []FactSnapshot{before}, session.Generation())
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, []FactSnapshot{before}, session.Generation(), nil)
 	if err != nil {
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
 	facts := mustSnapshot(t, ctx, session).Facts()
-	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation())
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation(), nil)
 	if err != nil {
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestReteGraphResetFactsClearsThroughEventAndReassertsFacts(t *testing.T) {
 		t.Fatalf("AssertTemplate: %v", err)
 	}
 	facts := mustSnapshot(t, ctx, session).Facts()
-	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation())
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation(), nil)
 	if err != nil {
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}

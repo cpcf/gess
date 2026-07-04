@@ -54,7 +54,9 @@ func GenerateGessGo(ctx context.Context, sources []GessSourceFile, opts GessGoGe
 
 type generatedGessProgram struct {
 	modules   []ModuleSpec
+	globals   []GlobalSpec
 	templates []TemplateSpec
+	functions []ExpressionFunctionSpec
 	actions   []generatedGessAction
 	rules     []RuleSpec
 	queries   []QuerySpec
@@ -114,12 +116,24 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 					return generatedGessProgram{}, err
 				}
 				program.modules = append(program.modules, workspace.modules[before:]...)
+			case "defglobal":
+				before := len(workspace.globals)
+				if err := loader.loadGlobal(form); err != nil {
+					return generatedGessProgram{}, err
+				}
+				program.globals = append(program.globals, workspace.globals[before:]...)
 			case "deftemplate":
 				before := len(workspace.templates)
 				if err := loader.loadTemplate(form); err != nil {
 					return generatedGessProgram{}, err
 				}
 				program.templates = append(program.templates, workspace.templates[before:]...)
+			case "deffunction":
+				before := len(workspace.exprFuncs)
+				if err := loader.loadExpressionFunction(form); err != nil {
+					return generatedGessProgram{}, err
+				}
+				program.functions = append(program.functions, workspace.exprFuncs[before:]...)
 			}
 		}
 	}
@@ -132,7 +146,7 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 				return generatedGessProgram{}, err
 			}
 			switch form.Head() {
-			case "defmodule", "deftemplate":
+			case "defmodule", "defglobal", "deftemplate", "deffunction":
 			case "deffacts":
 				initials, err := loader.loadFacts(form)
 				if err != nil {
@@ -180,7 +194,7 @@ func loadGeneratedGessRule(loader *gessLoader, form gessSExpr) (RuleSpec, []gene
 		return RuleSpec{}, nil, loader.err(form.Span, "defrule requires a rule name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	rule := RuleSpec{Name: name, Module: module}
+	rule := RuleSpec{Name: name, Module: module, Source: form.Span}
 	body, rhs, err := splitGessRuleBody(form.List[2:])
 	if err != nil {
 		return RuleSpec{}, nil, loader.wrap(form.Span, "parse rule body", err)
@@ -198,7 +212,7 @@ func loadGeneratedGessRule(loader *gessLoader, form gessSExpr) (RuleSpec, []gene
 		if err != nil {
 			return RuleSpec{}, nil, err
 		}
-		rule.Actions = append(rule.Actions, RuleActionSpec{Name: action.Name})
+		rule.Actions = append(rule.Actions, RuleActionSpec{Name: action.Name, Source: actionForm.Span})
 		actions = append(actions, action)
 	}
 	return rule, actions, nil
@@ -367,8 +381,14 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	for _, module := range p.modules {
 		fmt.Fprintf(&b, "\tif err := workspace.AddModule(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderModuleSpec(module))
 	}
+	for _, global := range p.globals {
+		fmt.Fprintf(&b, "\tif err := workspace.AddGlobal(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderGlobalSpec(global))
+	}
 	for _, template := range p.templates {
 		fmt.Fprintf(&b, "\tif err := workspace.AddTemplate(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderTemplateSpec(template))
+	}
+	for _, function := range p.functions {
+		fmt.Fprintf(&b, "\tif err := workspace.AddExpressionFunction(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderExpressionFunctionSpec(function))
 	}
 	for _, action := range p.actions {
 		if check := renderGeneratedActionRegistryCheck(action); check != "" {
@@ -405,9 +425,25 @@ func renderModuleSpec(spec ModuleSpec) string {
 	return b.String()
 }
 
+func renderGlobalSpec(spec GlobalSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "gessrules.GlobalSpec{Name: %s, Kind: %s", strconv.Quote(spec.Name), renderValueKind(spec.Kind))
+	if spec.HasDefault {
+		fmt.Fprintf(&b, ", Default: %s, HasDefault: true", renderAnyValue(spec.Default))
+	}
+	if spec.Description != "" {
+		fmt.Fprintf(&b, ", Description: %s", strconv.Quote(spec.Description))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
 func renderTemplateSpec(spec TemplateSpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.TemplateSpec{Name: %s", strconv.Quote(spec.Name))
+	if !sourceSpanIsZero(spec.Source) {
+		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
+	}
 	if !spec.Module.IsZero() {
 		fmt.Fprintf(&b, ", Module: %s", renderModuleName(spec.Module))
 	}
@@ -430,6 +466,33 @@ func renderTemplateSpec(spec TemplateSpec) string {
 		b.WriteString(", BackchainReactive: true")
 	}
 	b.WriteString("}")
+	return b.String()
+}
+
+func renderExpressionFunctionSpec(spec ExpressionFunctionSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "gessrules.ExpressionFunctionSpec{Name: %s, Return: %s", strconv.Quote(spec.Name), renderValueKind(spec.Return))
+	if len(spec.Params) > 0 {
+		fmt.Fprintf(&b, ", Params: []gessrules.ExpressionFunctionParamSpec{%s}", renderExpressionFunctionParams(spec.Params))
+	}
+	if spec.Expression != nil {
+		fmt.Fprintf(&b, ", Expression: %s", renderExpression(spec.Expression))
+	}
+	if spec.Description != "" {
+		fmt.Fprintf(&b, ", Description: %s", strconv.Quote(spec.Description))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderExpressionFunctionParams(params []ExpressionFunctionParamSpec) string {
+	var b strings.Builder
+	for i, param := range params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "{Name: %s, Kind: %s}", strconv.Quote(param.Name), renderValueKind(param.Kind))
+	}
 	return b.String()
 }
 
@@ -520,6 +583,9 @@ func renderRuleSpec(spec RuleSpec) string {
 	if spec.AutoFocus != nil {
 		fmt.Fprintf(&b, ", AutoFocus: func() *bool { v := %t; return &v }()", *spec.AutoFocus)
 	}
+	if !sourceSpanIsZero(spec.Source) {
+		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
+	}
 	if spec.ConditionTree != nil {
 		fmt.Fprintf(&b, ", ConditionTree: %s", renderCondition(spec.ConditionTree))
 	}
@@ -533,6 +599,9 @@ func renderRuleSpec(spec RuleSpec) string {
 func renderQuerySpec(spec QuerySpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.QuerySpec{Name: %s", strconv.Quote(spec.Name))
+	if !sourceSpanIsZero(spec.Source) {
+		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
+	}
 	if !spec.Module.IsZero() {
 		fmt.Fprintf(&b, ", Module: %s", renderModuleName(spec.Module))
 	}
@@ -552,21 +621,21 @@ func renderQuerySpec(spec QuerySpec) string {
 func renderCondition(spec ConditionSpec) string {
 	switch condition := spec.(type) {
 	case And:
-		return "gessrules.And{Conditions: []gessrules.ConditionSpec{" + renderConditions(condition.Conditions) + "}}"
+		return "gessrules.And{Conditions: []gessrules.ConditionSpec{" + renderConditions(condition.Conditions) + "}" + renderConditionSource(condition.Source) + "}"
 	case Or:
-		return "gessrules.Or{Conditions: []gessrules.ConditionSpec{" + renderConditions(condition.Conditions) + "}}"
+		return "gessrules.Or{Conditions: []gessrules.ConditionSpec{" + renderConditions(condition.Conditions) + "}" + renderConditionSource(condition.Source) + "}"
 	case Not:
-		return "gessrules.Not{Condition: " + renderCondition(condition.Condition) + "}"
+		return "gessrules.Not{Condition: " + renderCondition(condition.Condition) + renderConditionSource(condition.Source) + "}"
 	case ExistsCondition:
-		return "gessrules.Exists(" + renderCondition(condition.Condition) + ")"
+		return "gessrules.ExistsCondition{Condition: " + renderCondition(condition.Condition) + renderConditionSource(condition.Source) + "}"
 	case ForallCondition:
-		return "gessrules.Forall(" + renderCondition(condition.Domain) + ", " + renderCondition(condition.Requirement) + ")"
+		return "gessrules.ForallCondition{Domain: " + renderCondition(condition.Domain) + ", Requirement: " + renderCondition(condition.Requirement) + renderConditionSource(condition.Source) + "}"
 	case Test:
-		return "gessrules.Test{Expression: " + renderExpression(condition.Expression) + "}"
+		return "gessrules.Test{Expression: " + renderExpression(condition.Expression) + renderConditionSource(condition.Source) + "}"
 	case Match:
 		return renderMatch(RuleConditionSpec(condition))
 	case AccumulateCondition:
-		return "gessrules.Accumulate(" + renderCondition(condition.Input) + renderAggregateSpecs(condition.Specs) + ")"
+		return "gessrules.AccumulateCondition{Input: " + renderCondition(condition.Input) + ", Specs: []gessrules.AggregateSpec{" + renderAggregateSpecList(condition.Specs) + "}" + renderConditionSource(condition.Source) + "}"
 	default:
 		return "nil"
 	}
@@ -595,6 +664,9 @@ func renderMatch(spec RuleConditionSpec) string {
 	}
 	if len(spec.Predicates) > 0 {
 		fmt.Fprintf(&b, ", Predicates: []gessrules.ExpressionSpec{%s}", renderExpressions(spec.Predicates))
+	}
+	if !sourceSpanIsZero(spec.Source) {
+		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
 	}
 	b.WriteString("}")
 	return b.String()
@@ -634,6 +706,8 @@ func renderExpression(spec ExpressionSpec) string {
 		return "gessrules.BindingValueExpr{Binding: " + strconv.Quote(expr.Binding) + "}"
 	case ParamExpr:
 		return "gessrules.ParamExpr{Name: " + strconv.Quote(expr.Name) + "}"
+	case GlobalExpr:
+		return "gessrules.GlobalExpr{Name: " + strconv.Quote(expr.Name) + "}"
 	case CallExpr:
 		return "gessrules.Call(" + strconv.Quote(expr.Name) + renderCallArgs(expr.Args) + ")"
 	case CompareExpr:
@@ -667,21 +741,38 @@ func renderAggregateSpecs(specs []AggregateSpec) string {
 	var b strings.Builder
 	for _, spec := range specs {
 		b.WriteString(", ")
-		switch spec.Kind() {
-		case AggregateCount:
-			b.WriteString("gessrules.Count()")
-		case AggregateSum:
-			b.WriteString("gessrules.Sum(" + renderExpression(spec.Expression()) + ")")
-		case AggregateMin:
-			b.WriteString("gessrules.Min(" + renderExpression(spec.Expression()) + ")")
-		case AggregateMax:
-			b.WriteString("gessrules.Max(" + renderExpression(spec.Expression()) + ")")
-		case AggregateCollect:
-			b.WriteString("gessrules.Collect(" + renderExpression(spec.Expression()) + ")")
+		b.WriteString(renderAggregateSpec(spec))
+	}
+	return b.String()
+}
+
+func renderAggregateSpecList(specs []AggregateSpec) string {
+	var b strings.Builder
+	for i, spec := range specs {
+		if i > 0 {
+			b.WriteString(", ")
 		}
-		if spec.Binding() != "" {
-			b.WriteString(".As(" + strconv.Quote(spec.Binding()) + ")")
-		}
+		b.WriteString(renderAggregateSpec(spec))
+	}
+	return b.String()
+}
+
+func renderAggregateSpec(spec AggregateSpec) string {
+	var b strings.Builder
+	switch spec.Kind() {
+	case AggregateCount:
+		b.WriteString("gessrules.Count()")
+	case AggregateSum:
+		b.WriteString("gessrules.Sum(" + renderExpression(spec.Expression()) + ")")
+	case AggregateMin:
+		b.WriteString("gessrules.Min(" + renderExpression(spec.Expression()) + ")")
+	case AggregateMax:
+		b.WriteString("gessrules.Max(" + renderExpression(spec.Expression()) + ")")
+	case AggregateCollect:
+		b.WriteString("gessrules.Collect(" + renderExpression(spec.Expression()) + ")")
+	}
+	if spec.Binding() != "" {
+		b.WriteString(".As(" + strconv.Quote(spec.Binding()) + ")")
 	}
 	return b.String()
 }
@@ -692,7 +783,11 @@ func renderRuleActions(actions []RuleActionSpec) string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(&b, "{Name: %s}", strconv.Quote(action.Name))
+		fmt.Fprintf(&b, "{Name: %s", strconv.Quote(action.Name))
+		if !sourceSpanIsZero(action.Source) {
+			fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(action.Source))
+		}
+		b.WriteString("}")
 	}
 	return b.String()
 }
@@ -714,9 +809,30 @@ func renderQueryReturns(returns []QueryReturnSpec) string {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		fmt.Fprintf(&b, "gessrules.ReturnValue(%s, %s)", strconv.Quote(ret.Alias), renderExpression(ret.Expression))
+		fmt.Fprintf(&b, "gessrules.QueryReturnSpec{Alias: %s, Expression: %s", strconv.Quote(ret.Alias), renderExpression(ret.Expression))
+		if !sourceSpanIsZero(ret.Source) {
+			fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(ret.Source))
+		}
+		b.WriteString("}")
 	}
 	return b.String()
+}
+
+func renderConditionSource(source SourceSpan) string {
+	if sourceSpanIsZero(source) {
+		return ""
+	}
+	return ", Source: " + renderSourceSpan(source)
+}
+
+func renderSourceSpan(source SourceSpan) string {
+	return fmt.Sprintf("gessrules.SourceSpan{Name: %s, StartLine: %d, StartColumn: %d, EndLine: %d, EndColumn: %d}",
+		strconv.Quote(source.Name),
+		source.StartLine,
+		source.StartColumn,
+		source.EndLine,
+		source.EndColumn,
+	)
 }
 
 func renderInitialFacts(initials []SessionInitialFact) string {

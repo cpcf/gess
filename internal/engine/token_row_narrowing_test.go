@@ -77,7 +77,7 @@ func TestNarrowedTokenRowsPreserveBoundaryMaterialization(t *testing.T) {
 		returnAliases:    []string{"first_id", "second_score"},
 		returnAliasIndex: map[string]int{"first_id": 0, "second_score": 1},
 	}
-	row, err := query.materializeTokenValueRowInto(context.Background(), token, &compiledQueryArgs{}, 0, make([]Value, len(query.returns)))
+	row, err := query.materializeTokenValueRowInto(context.Background(), token, &compiledQueryArgs{}, 0, nil, make([]Value, len(query.returns)))
 	if err != nil {
 		t.Fatalf("materializeTokenValueRowInto: %v", err)
 	}

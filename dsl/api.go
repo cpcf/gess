@@ -18,6 +18,10 @@ type (
 	// (call name arg...) action. It receives the action context and the
 	// evaluated argument values, and returns an error to fail the action.
 	CallFunc = engine.DSLCallFunc
+	// MissingRegistrations lists the host action and call names a parsed
+	// Document references that a Registry does not provide, as returned by
+	// Document.MissingRegistrations.
+	MissingRegistrations = engine.DSLMissingRegistrations
 	// Document is a parsed .gess source file. [Parse] produces a Document;
 	// [Load] lowers it into a Workspace and populates the facts returned by
 	// [InitialFacts].
@@ -70,6 +74,40 @@ func Compile(ctx context.Context, name string, source []byte, registry Registry)
 // GenerateGo returns the unformatted bytes alongside the error.
 func GenerateGo(ctx context.Context, sources []SourceFile, opts GoGeneratorOptions) ([]byte, error) {
 	return engine.GenerateGessGo(ctx, sources, opts)
+}
+
+// RenderRuleset renders every module, template, function, rule, and query
+// in a compiled ruleset back to canonical .gess source.
+func RenderRuleset(revision *rules.Ruleset) ([]byte, error) {
+	return engine.RenderGessRuleset(revision)
+}
+
+// RenderModule renders one module of a compiled ruleset, and everything
+// defined in it, back to canonical .gess source.
+func RenderModule(revision *rules.Ruleset, name rules.ModuleName) ([]byte, error) {
+	return engine.RenderGessModule(revision, name)
+}
+
+// RenderTemplate renders one template definition back to canonical .gess
+// source.
+func RenderTemplate(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessTemplate(revision, name)
+}
+
+// RenderRule renders one rule definition back to canonical .gess source.
+func RenderRule(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessRule(revision, name)
+}
+
+// RenderQuery renders one query definition back to canonical .gess source.
+func RenderQuery(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessQuery(revision, name)
+}
+
+// RenderFunction renders one deffunction definition back to canonical
+// .gess source.
+func RenderFunction(revision *rules.Ruleset, name string) ([]byte, error) {
+	return engine.RenderGessFunction(revision, name)
 }
 
 // InitialFacts returns the deffacts-declared seed facts from doc for use

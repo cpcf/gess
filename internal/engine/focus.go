@@ -341,6 +341,32 @@ func (s *Session) nextFocusedActivation() (*activation, activation, bool) {
 	}
 }
 
+func (s *Session) hasFocusedActivation() bool {
+	if s == nil || s.agenda == nil {
+		return false
+	}
+	depth := len(s.focusStack)
+	for {
+		module := MainModule
+		if depth > 0 {
+			module = s.focusStack[depth-1]
+			if module.IsZero() {
+				module = MainModule
+			}
+		}
+		if module == MainModule && s.revision != nil && s.revision.allRulesInMainModule {
+			return s.agenda.hasPendingActivation()
+		}
+		if s.agenda.hasPendingActivationForModule(module) {
+			return true
+		}
+		if depth == 0 {
+			return false
+		}
+		depth--
+	}
+}
+
 func (s *Session) applyAutoFocus(changes []agendaChange) {
 	if s == nil || s.revision == nil || len(changes) == 0 {
 		return
@@ -358,5 +384,5 @@ func (s *Session) applyAutoFocus(changes []agendaChange) {
 }
 
 func (s *Session) shouldCollectAgendaChanges() bool {
-	return s != nil && (len(s.listeners) > 0 || s.revision.hasAutoFocusRules())
+	return s != nil && (s.hasAgendaEventListeners() || s.revision.hasAutoFocusRules())
 }

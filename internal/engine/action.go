@@ -169,6 +169,17 @@ func (c ActionContext) BindingScalarValue(name, field string) (Value, bool) {
 	return c.bindingScalarValue(name, field)
 }
 
+func (c ActionContext) Global(name string) (Value, bool) {
+	if c.session == nil || c.session.revision == nil {
+		return Value{}, false
+	}
+	global, ok := c.session.revision.globals[strings.TrimSpace(name)]
+	if !ok || global.slot < 0 || global.slot >= len(c.session.globalValues) {
+		return Value{}, false
+	}
+	return cloneValue(c.session.globalValues[global.slot]), true
+}
+
 func (c ActionContext) bindingScalarValue(name, field string) (Value, bool) {
 	if name == "" || field == "" || c.bindings == nil {
 		return Value{}, false
@@ -515,6 +526,7 @@ type ActionSpec struct {
 	Fn                   ActionFunc
 	AssertTemplateValues *AssertTemplateValuesActionSpec
 	BindingReads         *ActionBindingReadSetSpec
+	GessSource           string
 	// NonEscaping allows the engine to skip freezing unread bindings after a
 	// rule fires. Set it only when Fn does not retain ActionContext or any
 	// binding-derived data that depends on post-return defensive snapshots.
@@ -551,6 +563,7 @@ type AssertTemplateValuesActionSpec struct {
 func (s ActionSpec) clone() ActionSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
+	out.GessSource = strings.TrimSpace(out.GessSource)
 	if s.AssertTemplateValues != nil {
 		out.AssertTemplateValues = s.AssertTemplateValues.clone()
 	}
@@ -642,8 +655,10 @@ func normalizeActionSpec(spec ActionSpec) (ActionSpec, error) {
 }
 
 type Action struct {
-	name  string
-	order int
+	name                 string
+	order                int
+	gessSource           string
+	assertTemplateValues *AssertTemplateValuesActionSpec
 }
 
 func (a Action) Name() string {
@@ -654,7 +669,19 @@ func (a Action) DeclarationOrder() int {
 	return a.order
 }
 
+func (a Action) GessSource() string {
+	return a.gessSource
+}
+
+func (a Action) AssertTemplateValues() (*AssertTemplateValuesActionSpec, bool) {
+	if a.assertTemplateValues == nil {
+		return nil, false
+	}
+	return a.assertTemplateValues.clone(), true
+}
+
 func (a Action) clone() Action {
+	a.assertTemplateValues = a.assertTemplateValues.clone()
 	return a
 }
 
@@ -663,6 +690,7 @@ type compiledAction struct {
 	fn                   ActionFunc
 	assertTemplateValues *AssertTemplateValuesActionSpec
 	bindingReads         *ActionBindingReadSetSpec
+	gessSource           string
 	order                int
 	skipBindingFreeze    bool
 }
@@ -678,6 +706,7 @@ type compiledRuleAction struct {
 	kind                 compiledRuleActionKind
 	name                 string
 	order                int
+	source               SourceSpan
 	fn                   ActionFunc
 	assertTemplateValues compiledAssertTemplateValuesAction
 	bindingReads         actionBindingReadSet
@@ -870,6 +899,7 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 		fn:                   normalized.Fn,
 		assertTemplateValues: normalized.AssertTemplateValues,
 		bindingReads:         normalized.BindingReads,
+		gessSource:           normalized.GessSource,
 		order:                order,
 		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil || (normalized.BindingReads != nil && len(normalized.BindingReads.Reads) == 0),
 	}, nil
@@ -877,16 +907,20 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 
 func (a compiledAction) inspect() Action {
 	return Action{
-		name:  a.name,
-		order: a.order,
+		name:                 a.name,
+		order:                a.order,
+		gessSource:           a.gessSource,
+		assertTemplateValues: a.assertTemplateValues.clone(),
 	}
 }
 
 func (a compiledAction) clone() compiledAction {
+	a.assertTemplateValues = a.assertTemplateValues.clone()
+	a.bindingReads = a.bindingReads.clone()
 	return a
 }
 
-func compileRuleActionExecution(ruleName string, actionIndex int, action compiledAction, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction) (compiledRuleAction, error) {
+func compileRuleActionExecution(ruleName string, actionIndex int, action compiledAction, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRuleAction, error) {
 	out := compiledRuleAction{
 		name:              action.name,
 		order:             actionIndex,
@@ -962,7 +996,7 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 				Reason:         "native assert value cannot reference a current fact",
 			}
 		}
-		value, _, err := compileExpressionSpecWithParams(valueSpec, ruleName, -1, i, nil, conditions, bindingSlots, templatesByKey, nil, functions)
+		value, _, err := compileExpressionSpecWithParams(valueSpec, ruleName, -1, i, nil, conditions, bindingSlots, templatesByKey, nil, functions, globals)
 		if err != nil {
 			return compiledRuleAction{}, err
 		}
@@ -1219,6 +1253,13 @@ func serializeExpressionSpec(spec ExpressionSpec) string {
 			return "<nil>"
 		}
 		return serializeExpressionSpec(*expression)
+	case GlobalExpr:
+		return "global:" + expression.Name
+	case *GlobalExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
 	case CallExpr:
 		var b strings.Builder
 		b.WriteString("call:")
@@ -1342,6 +1383,9 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				ActivationID:   activation.activationID(),
 				ActionName:     actionSpec.name,
 				ActionIndex:    actionSpec.order,
+				Source:         firstSourceSpan(actionSpec.source, rule.source),
+				RuleSource:     rule.source,
+				ActionSource:   actionSpec.source,
 				Err:            actionErr,
 			}
 		}
@@ -1452,7 +1496,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 
 		if !activation.token.isZero() {
 			for i, valueSpec := range action.tokenValues {
-				value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token)
+				value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token, s.globalValues)
 				if err != nil {
 					state.rollbackGeneratedCompactFactSlots(slotMark)
 					return err
@@ -1469,7 +1513,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 				return err
 			}
 			for i, expression := range action.values {
-				value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+				value, ok, evalErr := expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, nil, s.globalValues, nil, nil)
 				if evalErr != nil {
 					state.rollbackGeneratedCompactFactSlots(slotMark)
 					return evalErr
@@ -1506,7 +1550,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 
 	if !activation.token.isZero() {
 		for i, valueSpec := range action.tokenValues {
-			value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token)
+			value, err := evaluateTokenActionValue(ctx, valueSpec, activation.token, s.globalValues)
 			if err != nil {
 				state.rollbackGeneratedFactSlots(slotMark)
 				return err
@@ -1523,7 +1567,7 @@ func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context,
 			return err
 		}
 		for i, expression := range action.values {
-			value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+			value, ok, evalErr := expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, nil, s.globalValues, nil, nil)
 			if evalErr != nil {
 				state.rollbackGeneratedFactSlots(slotMark)
 				return evalErr
@@ -1568,7 +1612,7 @@ func (s *Session) evaluateAssertTemplateValuesAction(ctx context.Context, activa
 	var err error
 	if !activation.token.isZero() {
 		for i, valueSpec := range action.tokenValues {
-			values[i], err = evaluateTokenActionValue(ctx, valueSpec, activation.token)
+			values[i], err = evaluateTokenActionValue(ctx, valueSpec, activation.token, s.globalValues)
 			if err != nil {
 				s.actionValueScratch = values
 				return nil, err
@@ -1584,7 +1628,7 @@ func (s *Session) evaluateAssertTemplateValuesAction(ctx context.Context, activa
 		return nil, err
 	}
 	for i, expression := range action.values {
-		value, ok, evalErr := expression.evaluateWithContextParams(ctx, conditionFactRef{}, matches, nil)
+		value, ok, evalErr := expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, matches, nil, s.globalValues, nil, nil)
 		if evalErr != nil {
 			s.actionValueScratch = values
 			return nil, evalErr
@@ -1599,8 +1643,8 @@ func (s *Session) evaluateAssertTemplateValuesAction(ctx context.Context, activa
 	return values, nil
 }
 
-func evaluateNativeActionExpressionWithToken(ctx context.Context, expression compiledExpression, token tokenRef) (Value, error) {
-	value, ok, err := expression.evaluateTokenWithContextParamsOffset(ctx, conditionFactRef{}, token, nil, 0)
+func evaluateNativeActionExpressionWithToken(ctx context.Context, expression compiledExpression, token tokenRef, globals []Value) (Value, error) {
+	value, ok, err := expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, conditionFactRef{}, token, nil, globals, 0, nil, nil)
 	if err != nil {
 		return Value{}, err
 	}
@@ -1610,7 +1654,7 @@ func evaluateNativeActionExpressionWithToken(ctx context.Context, expression com
 	return value, nil
 }
 
-func evaluateTokenActionValue(ctx context.Context, value compiledTokenActionValue, token tokenRef) (Value, error) {
+func evaluateTokenActionValue(ctx context.Context, value compiledTokenActionValue, token tokenRef, globals []Value) (Value, error) {
 	switch value.kind {
 	case compiledTokenActionValueConst:
 		return value.value, nil
@@ -1633,7 +1677,7 @@ func evaluateTokenActionValue(ctx context.Context, value compiledTokenActionValu
 		}
 		return evaluateTokenActionStringCall2(ctx, value, resolved)
 	default:
-		return evaluateNativeActionExpressionWithToken(ctx, value.expression, token)
+		return evaluateNativeActionExpressionWithToken(ctx, value.expression, token, globals)
 	}
 }
 

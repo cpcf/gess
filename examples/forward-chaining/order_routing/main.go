@@ -31,7 +31,10 @@ func run(out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	session, err := sess.New(ruleset)
+	session, err := sess.New(ruleset, sess.WithEventListener(
+		sess.NewTraceListener(out),
+		sess.ForEventTypes(sess.EventRuleFired),
+	))
 	if err != nil {
 		return err
 	}

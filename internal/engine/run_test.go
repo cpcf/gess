@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -314,12 +316,236 @@ func TestSessionRunActionFailureRemainsDistinctFromHalt(t *testing.T) {
 		t.Fatalf("AssertTemplate(event): %v", err)
 	}
 
-	result, err := session.Run(context.Background())
+	result, err := session.Run(context.Background(), WithMaxFirings(1))
 	if result.Status != RunActionFailed || result.Fired != 1 {
 		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunActionFailed)
 	}
 	if !errors.Is(err, ErrActionFailed) || !errors.Is(err, terminalErr) {
 		t.Fatalf("run error = %v, want action failure wrapping terminal error", err)
+	}
+}
+
+func TestSessionRunWithMaxFiringsStepsCascadeLikeUnboundedRun(t *testing.T) {
+	revision, stepKey := mustRunLimitCascadeRevision(t, 5)
+	ctx := context.Background()
+
+	unboundedCollector := &testEventCollector{}
+	unbounded := mustRunLimitCascadeSession(t, revision, stepKey, "run-limit-unbounded", unboundedCollector)
+	unboundedResult, err := unbounded.Run(ctx)
+	if err != nil {
+		t.Fatalf("unbounded Run: %v", err)
+	}
+	if unboundedResult.Status != RunCompleted || unboundedResult.Fired != 5 {
+		t.Fatalf("unbounded run result = (%v, %d), want (%v, 5)", unboundedResult.Status, unboundedResult.Fired, RunCompleted)
+	}
+
+	steppedCollector := &testEventCollector{}
+	stepped := mustRunLimitCascadeSession(t, revision, stepKey, "run-limit-stepped", steppedCollector)
+	totalFired := 0
+	for {
+		result, err := stepped.Run(ctx, WithMaxFirings(1))
+		if err != nil {
+			t.Fatalf("stepped Run: %v", err)
+		}
+		totalFired += result.Fired
+		if result.Status == RunCompleted {
+			if result.Fired != 1 {
+				t.Fatalf("final stepped run fired = %d, want 1", result.Fired)
+			}
+			break
+		}
+		if result.Status != RunFireLimit || result.Fired != 1 {
+			t.Fatalf("stepped run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunFireLimit)
+		}
+	}
+	if totalFired != unboundedResult.Fired {
+		t.Fatalf("stepped total fired = %d, want %d", totalFired, unboundedResult.Fired)
+	}
+	if got, want := firedRuleIDs(steppedCollector.Events()), firedRuleIDs(unboundedCollector.Events()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stepped fired rules = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionRunWithMaxFiringsBoundaryStatus(t *testing.T) {
+	revision, stepKey := mustRunLimitCascadeRevision(t, 3)
+	ctx := context.Background()
+
+	completed := mustRunLimitCascadeSession(t, revision, stepKey, "run-limit-exact", nil)
+	result, err := completed.Run(ctx, WithMaxFirings(3))
+	if err != nil {
+		t.Fatalf("exact limit Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 3 {
+		t.Fatalf("exact limit run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+	}
+	if got := len(completed.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("pending activations after exact limit = %d, want 0", got)
+	}
+
+	limited := mustRunLimitCascadeSession(t, revision, stepKey, "run-limit-pending", nil)
+	result, err = limited.Run(ctx, WithMaxFirings(2))
+	if err != nil {
+		t.Fatalf("pending limit Run: %v", err)
+	}
+	if result.Status != RunFireLimit || result.Fired != 2 {
+		t.Fatalf("pending limit run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunFireLimit)
+	}
+	result, err = limited.Run(ctx)
+	if err != nil {
+		t.Fatalf("resume Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("resume run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+}
+
+func TestSessionRunWithMaxFiringsGivesHaltPrecedence(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "halt",
+		Fn: func(ctx ActionContext) error {
+			return ctx.Halt()
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "halt-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Target:  TemplateKeyFact(TemplateKey("event")),
+		}},
+		Actions: []RuleActionSpec{{Name: "halt"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "follow-up-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding: "event",
+			Target:  TemplateKeyFact(TemplateKey("event")),
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "run-limit-halt-session")
+	if err := session.AssertTemplateValues(context.Background(), TemplateKey("event"), newStringValue("e-1")); err != nil {
+		t.Fatalf("AssertTemplateValues(event): %v", err)
+	}
+
+	result, err := session.Run(context.Background(), WithMaxFirings(1))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunHalted || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunHalted)
+	}
+}
+
+func TestSessionRunWithMaxFiringsDrainsQueuedMutationsBeforeReturning(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "trigger",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "external",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+
+	queuedDone := make(chan error, 1)
+	var session *Session
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "enqueue-external",
+		Fn: func(ActionContext) error {
+			go func() {
+				_, err := session.AssertTemplate(context.Background(), TemplateKey("external"), mustFields(t, map[string]any{"id": "x-1"}))
+				queuedDone <- err
+			}()
+			waitForQueuedMutationCount(t, session, 1)
+			return nil
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "observe", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "trigger-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding: "trigger",
+			Target:  TemplateKeyFact(TemplateKey("trigger")),
+		}},
+		Actions: []RuleActionSpec{{Name: "enqueue-external"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "external-rule",
+		Conditions: []RuleConditionSpec{{
+			Binding: "external",
+			Target:  TemplateKeyFact(TemplateKey("external")),
+		}},
+		Actions: []RuleActionSpec{{Name: "observe"}},
+	})
+
+	session = mustSession(t, mustCompileWorkspace(t, workspace), "run-limit-queued-session")
+	if err := session.AssertTemplateValues(context.Background(), TemplateKey("trigger"), newStringValue("t-1")); err != nil {
+		t.Fatalf("AssertTemplateValues(trigger): %v", err)
+	}
+	result, err := session.Run(context.Background(), WithMaxFirings(1))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunFireLimit || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunFireLimit)
+	}
+	select {
+	case err := <-queuedDone:
+		if err != nil {
+			t.Fatalf("queued AssertTemplate: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued AssertTemplate did not complete")
+	}
+	snapshot := mustSnapshot(t, context.Background(), session)
+	externalFacts := 0
+	for _, fact := range snapshot.Facts() {
+		if fact.TemplateKey() == TemplateKey("external") {
+			externalFacts++
+		}
+	}
+	if externalFacts != 1 {
+		t.Fatalf("external facts after limited run = %d, want 1", externalFacts)
+	}
+}
+
+func TestSessionRunWithMaxFiringsRejectsInvalidLimitBeforeFiring(t *testing.T) {
+	revision, stepKey := mustRunLimitCascadeRevision(t, 1)
+	session := mustRunLimitCascadeSession(t, revision, stepKey, "run-limit-invalid", nil)
+
+	result, err := session.Run(context.Background(), WithMaxFirings(0))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Run error = %v, want ErrValidation", err)
+	}
+	if result.Status != RunFailed || result.Fired != 0 {
+		t.Fatalf("invalid limit run result = (%v, %d), want (%v, 0)", result.Status, result.Fired, RunFailed)
+	}
+	result, err = session.Run(context.Background())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("second run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCompleted)
+	}
+
+	result, err = session.Run(context.Background(), WithMaxFirings(-1))
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("negative limit Run error = %v, want ErrValidation", err)
+	}
+	if result.Status != RunFailed || result.Fired != 0 {
+		t.Fatalf("negative limit run result = (%v, %d), want (%v, 0)", result.Status, result.Fired, RunFailed)
 	}
 }
 
@@ -2873,5 +3099,167 @@ func waitForQueuedMutationCount(t *testing.T, session *Session, want int) {
 			t.Fatalf("queued mutations = %d, want %d", got, want)
 		case <-ticker.C:
 		}
+	}
+}
+
+func mustRunLimitCascadeRevision(t testing.TB, steps int) (*Ruleset, TemplateKey) {
+	t.Helper()
+	workspace := NewWorkspace()
+	stepTemplate := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "step",
+		Fields: []FieldSpec{
+			{Name: "n", Kind: ValueInt, Required: true},
+		},
+	})
+	stepKey := stepTemplate.Key()
+	for i := range steps {
+		step := i
+		actionName := "advance-" + strconv.Itoa(step)
+		mustAddAction(t, workspace, ActionSpec{
+			Name: actionName,
+			Fn: func(ctx ActionContext) error {
+				if step+1 >= steps {
+					return nil
+				}
+				return ctx.AssertTemplateValues(stepKey, newIntValue(int64(step+1)))
+			},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "step-" + strconv.Itoa(step),
+			Conditions: []RuleConditionSpec{{
+				Binding: "step",
+				Target:  TemplateKeyFact(stepKey),
+				FieldConstraints: []FieldConstraintSpec{{
+					Field:    "n",
+					Operator: FieldConstraintEqual,
+					Value:    step,
+				}},
+			}},
+			Actions: []RuleActionSpec{{Name: actionName}},
+		})
+	}
+	return mustCompileWorkspace(t, workspace), stepKey
+}
+
+func mustRunLimitCascadeSession(t testing.TB, revision *Ruleset, stepKey TemplateKey, id SessionID, collector *testEventCollector) *Session {
+	t.Helper()
+	var opts []SessionOption
+	opts = append(opts, WithSessionID(id))
+	if collector != nil {
+		opts = append(opts, WithEventListener(collector))
+	}
+	session, err := NewSession(revision, opts...)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if err := session.AssertTemplateValues(context.Background(), stepKey, newIntValue(0)); err != nil {
+		t.Fatalf("AssertTemplateValues(step): %v", err)
+	}
+	return session
+}
+
+func firedRuleIDs(events []Event) []RuleID {
+	out := make([]RuleID, 0)
+	for _, event := range events {
+		if event.Type == EventRuleFired {
+			out = append(out, event.RuleID)
+		}
+	}
+	return out
+}
+
+func TestSessionRunWithMaxFiringsExactLimitMatchesDrainedFocusStack(t *testing.T) {
+	ctx := context.Background()
+	autoFocus := true
+	buildSession := func(id string) (*Session, TemplateKey) {
+		t.Helper()
+		workspace := NewWorkspace()
+		mustAddModule(t, workspace, ModuleSpec{Name: "review", AutoFocus: &autoFocus})
+		event := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "event",
+			Module: "review",
+			Fields: []FieldSpec{{Name: "id", Kind: ValueInt, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "review-rule",
+			Module:     "review",
+			Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+			Actions:    []RuleActionSpec{{Name: "noop"}},
+		})
+		revision := mustCompileWorkspace(t, workspace)
+		session, err := NewSession(revision, WithSessionID(SessionID(id)))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		for i := int64(1); i <= 2; i++ {
+			if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+				t.Fatalf("AssertTemplate(%d): %v", i, err)
+			}
+		}
+		return session, event.Key()
+	}
+
+	unbounded, _ := buildSession("focus-unbounded")
+	defer unbounded.Close()
+	if _, err := unbounded.Run(ctx); err != nil {
+		t.Fatalf("unbounded Run: %v", err)
+	}
+
+	limited, _ := buildSession("focus-limited")
+	defer limited.Close()
+	result, err := limited.Run(ctx, WithMaxFirings(2))
+	if err != nil {
+		t.Fatalf("limited Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("limited run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+	if !reflect.DeepEqual(limited.FocusStack(), unbounded.FocusStack()) {
+		t.Fatalf("focus stack after exact-limit run = %v, want %v (same as drained run)", limited.FocusStack(), unbounded.FocusStack())
+	}
+	if limited.CurrentFocus() != unbounded.CurrentFocus() {
+		t.Fatalf("current focus = %v, want %v", limited.CurrentFocus(), unbounded.CurrentFocus())
+	}
+}
+
+func TestSessionRunCancellationTakesPrecedenceOverFireLimit(t *testing.T) {
+	ctx := context.Background()
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	workspace := NewWorkspace()
+	event := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "event",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueInt, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "cancel-run",
+		Fn: func(ActionContext) error {
+			cancel()
+			return nil
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "cancel-rule",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+		Actions:    []RuleActionSpec{{Name: "cancel-run"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision, WithSessionID("run-limit-cancel"))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	for i := int64(1); i <= 2; i++ {
+		if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+			t.Fatalf("AssertTemplate(%d): %v", i, err)
+		}
+	}
+	result, err := session.Run(runCtx, WithMaxFirings(1))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if result.Status != RunCanceled || result.Fired != 1 {
+		t.Fatalf("run result = (%v, %d), want (%v, 1)", result.Status, result.Fired, RunCanceled)
 	}
 }

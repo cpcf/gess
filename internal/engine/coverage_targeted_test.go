@@ -68,7 +68,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("compileExpressionSpec = (%v, %v), want ok", err, ok)
 	}
-	value, err := evaluateNativeActionExpressionWithToken(ctx, expression, actPtr.token)
+	value, err := evaluateNativeActionExpressionWithToken(ctx, expression, actPtr.token, nil)
 	if err != nil {
 		t.Fatalf("evaluateNativeActionExpressionWithToken: %v", err)
 	}

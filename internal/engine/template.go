@@ -37,6 +37,8 @@ type TemplateSpec struct {
 	Module            ModuleName
 	Key               TemplateKey
 	CompatibilityKey  TemplateKey
+	Source            SourceSpan
+	GessSource        string
 	Fields            []FieldSpec
 	DuplicatePolicy   DuplicatePolicy
 	DuplicateKeyNames []string
@@ -63,6 +65,8 @@ type Template struct {
 	backchainDemandKey TemplateKey
 	backchainDemand    bool
 	backchainSourceKey TemplateKey
+	source             SourceSpan
+	gessSource         string
 	closed             bool
 }
 
@@ -138,6 +142,14 @@ func (t Template) DuplicateKeys() []string {
 
 func (t Template) BackchainReactive() bool {
 	return t.backchainReactive
+}
+
+func (t Template) Source() SourceSpan {
+	return t.source
+}
+
+func (t Template) GessSource() string {
+	return t.gessSource
 }
 
 func (t Template) BackchainDemandTemplateKey() (TemplateKey, bool) {
@@ -571,6 +583,8 @@ func (t Template) spec() TemplateSpec {
 		Module:            t.module,
 		Key:               t.key,
 		CompatibilityKey:  t.compatibilityKey,
+		Source:            t.source,
+		GessSource:        t.gessSource,
 		Fields:            t.Fields(),
 		DuplicatePolicy:   t.duplicatePolicy,
 		DuplicateKeyNames: t.DuplicateKeys(),
@@ -816,6 +830,8 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		module:             module,
 		key:                key,
 		compatibilityKey:   compatibilityKey,
+		source:             spec.Source,
+		gessSource:         strings.TrimSpace(spec.GessSource),
 		fields:             fields,
 		fieldsByName:       fieldsByName,
 		fieldIndexes:       fieldIndexes,

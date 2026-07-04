@@ -1,6 +1,7 @@
 package session
 
 import (
+	"io"
 	"time"
 
 	"github.com/cpcf/gess/internal/engine"
@@ -27,6 +28,12 @@ type (
 	// every fact plus the support graph, as of when Snapshot was called.
 	// It does not change as the session mutates afterward.
 	Snapshot = engine.Snapshot
+	// Agenda is an ordered, immutable view of pending activations, as
+	// returned by Session.Agenda in the exact order Run would fire them.
+	Agenda = engine.Agenda
+	// AgendaActivation describes one pending activation in an [Agenda]:
+	// its rule, module, salience, and matched facts.
+	AgendaActivation = engine.AgendaActivation
 	// BackchainDemandDiagnostics summarizes active backward-chaining
 	// demand facts visible in a [Snapshot], in total and per template.
 	BackchainDemandDiagnostics = engine.BackchainDemandDiagnostics
@@ -58,6 +65,10 @@ type (
 	SessionID = engine.SessionID
 	// RunID is a per-session sequence number for a Run call.
 	RunID = engine.RunID
+	// SourceSpan is a source location range within a .gess file, carried
+	// into runtime errors and events for rulesets loaded from .gess
+	// source.
+	SourceSpan = engine.SourceSpan
 	// ActivationID identifies one activation: a rule paired with the
 	// specific facts that matched it.
 	ActivationID = engine.ActivationID
@@ -83,13 +94,26 @@ type (
 	// Listener errors are ignored: they never fail the mutation that
 	// produced the event, and later listeners still run.
 	EventListener = engine.EventListener
+	// EventListenerOption configures a listener registered with
+	// [WithEventListener], such as [ForEventTypes].
+	EventListenerOption = engine.EventListenerOption
 	// EventFunc adapts a function to [EventListener].
 	EventFunc = engine.EventFunc
+	// TraceOption configures a [NewTraceListener], such as
+	// [TraceWithTimestamps].
+	TraceOption = engine.TraceOption
+	// Strategy selects how equal-salience activations are ordered:
+	// [StrategyDepth] (recency, the default) or [StrategyBreadth]
+	// (creation order). Set it with [WithStrategy].
+	Strategy = engine.Strategy
 	// MutationKind is the kind of change recorded in a [MutationDelta]:
 	// assert, modify, retract, or reset.
 	MutationKind = engine.MutationKind
 	// RunStatus is the outcome of a Session.Run call.
 	RunStatus = engine.RunStatus
+	// RunOption configures one Session.Run call, such as
+	// [WithMaxFirings].
+	RunOption = engine.RunOption
 	// RunResult reports the outcome of a Run: its status and how many
 	// activations fired.
 	RunResult = engine.RunResult
@@ -197,6 +221,12 @@ const (
 	EventSeverityInfo = engine.EventSeverityInfo
 	// EventSeverityError marks [EventActionFailed] events.
 	EventSeverityError = engine.EventSeverityError
+	// StrategyDepth orders equal-salience activations by recency, most
+	// recent first. It is the default [Strategy].
+	StrategyDepth = engine.StrategyDepth
+	// StrategyBreadth orders equal-salience activations by creation
+	// order, oldest first.
+	StrategyBreadth = engine.StrategyBreadth
 	// MutationAssert, MutationModify, MutationRetract, and MutationReset
 	// tag a [MutationDelta]'s Kind.
 	MutationAssert  = engine.MutationAssert
@@ -209,6 +239,9 @@ const (
 	// activation's remaining actions still ran, and a later Run
 	// continues with the activations left pending.
 	RunHalted = engine.RunHalted
+	// RunFireLimit reports that Run stopped at the [WithMaxFirings]
+	// limit with activations still pending; a later Run continues them.
+	RunFireLimit = engine.RunFireLimit
 	// RunCanceled reports that ctx was canceled during the run.
 	RunCanceled = engine.RunCanceled
 	// RunActionFailed reports that an action returned an error; Run
@@ -380,9 +413,28 @@ func WithSessionID(id SessionID) Option {
 
 // WithEventListener registers a listener to receive the session's Events.
 // Repeat the option to register more than one listener; a nil listener is
-// ignored.
-func WithEventListener(listener EventListener) Option {
-	return engine.WithEventListener(listener)
+// ignored. Pass [ForEventTypes] to subscribe the listener to a subset of
+// event types; envelopes for unsubscribed types are never constructed.
+func WithEventListener(listener EventListener, opts ...EventListenerOption) Option {
+	return engine.WithEventListener(listener, opts...)
+}
+
+// ForEventTypes restricts a listener registered with [WithEventListener]
+// to the given event types.
+func ForEventTypes(types ...EventType) EventListenerOption {
+	return engine.ForEventTypes(types...)
+}
+
+// NewTraceListener returns a listener that prints one line per event to w,
+// suitable for tracing a session's activity.
+func NewTraceListener(w io.Writer, opts ...TraceOption) EventListener {
+	return engine.NewTraceListener(w, opts...)
+}
+
+// TraceWithTimestamps prefixes each trace line printed by a
+// [NewTraceListener] with the event's timestamp.
+func TraceWithTimestamps() TraceOption {
+	return engine.TraceWithTimestamps()
 }
 
 // WithEventClock overrides the timestamp source used to stamp
@@ -398,12 +450,33 @@ func WithInitialFacts(initials ...InitialFact) Option {
 	return engine.WithInitialFacts(initials...)
 }
 
+// WithGlobals binds per-session values for globals declared on the
+// ruleset, keyed by global name without the '*' markers. Unnamed globals
+// keep their declared defaults; naming an undeclared global or supplying
+// a value of the wrong kind fails session construction.
+func WithGlobals(values map[string]any) Option {
+	return engine.WithGlobals(values)
+}
+
+// WithStrategy sets the session's conflict-resolution [Strategy] for
+// equal-salience activations. The default is [StrategyDepth].
+func WithStrategy(strategy Strategy) Option {
+	return engine.WithStrategy(strategy)
+}
+
 // WithResetBeforeSnapshot controls whether a successful Reset populates
 // [ResetResult].Before with a snapshot of working memory immediately before
 // the reset. It defaults to false, since materializing that snapshot has
 // a cost most sessions don't need to pay.
 func WithResetBeforeSnapshot(enabled bool) Option {
 	return engine.WithResetBeforeSnapshot(enabled)
+}
+
+// WithMaxFirings caps one Run call at n activation firings. A run that
+// stops at the cap with work remaining returns [RunFireLimit]; n <= 0
+// fails the run.
+func WithMaxFirings(n int) RunOption {
+	return engine.WithMaxFirings(n)
 }
 
 // New builds a session from revision: it compiles the configured initial

@@ -495,14 +495,17 @@ func cloneSupportIDSet(in map[SupportID]struct{}) map[SupportID]struct{} {
 }
 
 func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventType, edge LogicalSupportEdge) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil {
+		return
+	}
+	s.nextEventSequence++
+	if !s.hasEventListenersFor(eventType) {
 		return
 	}
 	rulesetID := RulesetID("")
 	if s.revision != nil {
 		rulesetID = s.revision.ID()
 	}
-	s.nextEventSequence++
 	edgeClone := edge.clone()
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,

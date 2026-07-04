@@ -98,3 +98,40 @@ func TestFormatKeepsBindingArrowWithPattern(t *testing.T) {
 		t.Fatalf("formatted =\n%s\nwant =\n%s", got, want)
 	}
 }
+
+func TestFormatInlinesDeffunctionReturnKind(t *testing.T) {
+	source := []byte(`(deffunction discounted (param ?price INT) (return INT) (- ?price 10))
+`)
+	got, err := Format("fn.gess", source)
+	if err != nil {
+		t.Fatalf("Format: %v", err)
+	}
+	const want = `(deffunction discounted
+  (param ?price INT)
+  (return INT)
+  (- ?price 10)
+)
+`
+	if string(got) != want {
+		t.Fatalf("formatted =\n%s\nwant =\n%s", got, want)
+	}
+}
+
+func TestFormatKeepsQueryReturnMultiline(t *testing.T) {
+	source := []byte(`(defquery routes ?route <- (route (lane ?lane)) (return (lane ?lane)))
+`)
+	got, err := Format("q.gess", source)
+	if err != nil {
+		t.Fatalf("Format: %v", err)
+	}
+	const want = `(defquery routes ?route <-
+  (route (lane ?lane))
+  (return
+    (lane ?lane)
+  )
+)
+`
+	if string(got) != want {
+		t.Fatalf("formatted =\n%s\nwant =\n%s", got, want)
+	}
+}

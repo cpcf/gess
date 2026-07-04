@@ -76,6 +76,10 @@ type (
 	// ParamExpr references a named query parameter. Valid only inside
 	// query predicates and query returns.
 	ParamExpr = engine.ParamExpr
+	// GlobalExpr references a declared global by name, built with
+	// [GlobalValue]. Valid in any condition, test, aggregate-input,
+	// query, or action-argument expression.
+	GlobalExpr = engine.GlobalExpr
 	// CallExpr invokes a registered pure function by name with Args.
 	CallExpr = engine.CallExpr
 	// CompareExpr compares Left and Right with Operator; both operands
@@ -113,6 +117,10 @@ type (
 	SessionID = engine.SessionID
 	// RunID identifies one session Run call.
 	RunID = engine.RunID
+	// SourceSpan is a source location range within a .gess file, carried
+	// into compiled definitions and runtime errors for rulesets loaded
+	// from .gess source.
+	SourceSpan = engine.SourceSpan
 	// RuleID is a rule's stable identity, surviving ReplaceRule.
 	RuleID = engine.RuleID
 	// RuleRevisionID identifies one compiled revision of a rule; it
@@ -216,9 +224,22 @@ type (
 	// Return kinds, and exactly one of Func (variadic) or the
 	// fixed-arity Func0 through Func3 matching len(Args).
 	PureFunctionSpec = engine.PureFunctionSpec
+	// ExpressionFunctionParamSpec declares one named, typed parameter of
+	// an [ExpressionFunctionSpec].
+	ExpressionFunctionParamSpec = engine.ExpressionFunctionParamSpec
+	// ExpressionFunctionSpec defines a pure function whose body is an
+	// expression tree over its parameters, as authored with deffunction;
+	// it needs no Go implementation.
+	ExpressionFunctionSpec = engine.ExpressionFunctionSpec
 	// PureFunctionDefinition is the compiled, inspectable form of a
 	// [PureFunctionSpec].
 	PureFunctionDefinition = engine.PureFunctionDefinition
+	// GlobalSpec declares a named, typed global with a default value,
+	// readable in expressions with [GlobalValue] and overridable per
+	// session.
+	GlobalSpec = engine.GlobalSpec
+	// Global is the compiled, inspectable form of a [GlobalSpec].
+	Global = engine.Global
 	// FunctionEvaluationError reports a pure function that panicked,
 	// returned an error, or returned a value of the wrong kind, wrapping
 	// [ErrFunctionEvaluation].
@@ -586,6 +607,12 @@ func CurrentPath(path PathSpec) CurrentFieldExpr {
 // condition's binding through path.
 func BindingPath(binding string, path PathSpec) BindingFieldExpr {
 	return engine.BindingPath(binding, path)
+}
+
+// GlobalValue builds a [GlobalExpr] referencing the declared global
+// named name.
+func GlobalValue(name string) GlobalExpr {
+	return engine.GlobalExpr{Name: name}
 }
 
 // HasPath builds a [HasPathExpr] testing whether path resolves to a

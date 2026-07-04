@@ -61,6 +61,7 @@ const (
 
 type compiledJoinConstraint struct {
 	path                  []int
+	source                SourceSpan
 	bindingSlot           int
 	access                compiledPathAccess
 	leftKeyExpression     compiledExpression
@@ -73,6 +74,7 @@ type compiledJoinConstraint struct {
 	hasRightKeyExpression bool
 	indexable             bool
 	indexKind             joinIndexKind
+	evalMeta              *FunctionEvaluationError
 }
 
 func (c compiledJoinConstraint) isHashJoin() bool {
@@ -175,6 +177,19 @@ func validJoinOperator(operator FieldConstraintOperator) bool {
 
 func compileJoinConstraintSpec(
 	spec JoinConstraintSpec,
+	ruleName string,
+	conditionIndex, joinIndex int,
+	template *Template,
+	conditions []RuleCondition,
+	bindingSlots map[string]int,
+	templatesByKey map[TemplateKey]Template,
+) (JoinConstraint, compiledJoinConstraint, error) {
+	return compileJoinConstraintSpecWithSource(spec, SourceSpan{}, ruleName, conditionIndex, joinIndex, template, conditions, bindingSlots, templatesByKey)
+}
+
+func compileJoinConstraintSpecWithSource(
+	spec JoinConstraintSpec,
+	source SourceSpan,
 	ruleName string,
 	conditionIndex, joinIndex int,
 	template *Template,
@@ -312,8 +327,9 @@ func compileJoinConstraintSpec(
 			Path:     normalized.Path.clone(),
 			Operator: normalized.Operator,
 			Ref:      normalized.Ref.clone(),
-		}, compiledJoinConstraint{
+		}, newCompiledJoinConstraint(compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
+			source:         source,
 			bindingSlot:    conditionIndex,
 			access:         access,
 			operator:       normalized.Operator,
@@ -322,7 +338,14 @@ func compileJoinConstraintSpec(
 			refAccess:      refAccess,
 			indexable:      indexable,
 			indexKind:      indexKind,
-		}, nil
+		}), nil
+}
+
+// newCompiledJoinConstraint precomputes the evaluation-error metadata so join
+// evaluation never allocates it per probe.
+func newCompiledJoinConstraint(join compiledJoinConstraint) compiledJoinConstraint {
+	join.evalMeta = buildJoinFunctionEvaluationMeta(join)
+	return join
 }
 
 func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinIndex int, template *Template) (compiledPathAccess, error) {

@@ -36,6 +36,9 @@ var (
 type ValidationError struct {
 	TemplateName       string
 	RuleName           string
+	FunctionName       string
+	GlobalName         string
+	Source             SourceSpan
 	FieldName          string
 	ConditionIndex     int
 	HasConditionIndex  bool
@@ -57,11 +60,20 @@ func (e *ValidationError) Error() string {
 	}
 
 	msg := "gess: validation failed"
+	if loc := sourceSpanLocation(e.Source); loc != "" {
+		msg = loc + ": " + msg
+	}
 	if e.TemplateName != "" {
 		msg += fmt.Sprintf(" for template %q", e.TemplateName)
 	}
 	if e.RuleName != "" {
 		msg += fmt.Sprintf(" for rule %q", e.RuleName)
+	}
+	if e.FunctionName != "" {
+		msg += fmt.Sprintf(" for function %q", e.FunctionName)
+	}
+	if e.GlobalName != "" {
+		msg += fmt.Sprintf(" for global %q", e.GlobalName)
 	}
 	if e.FieldName != "" {
 		msg += fmt.Sprintf(" field %q", e.FieldName)

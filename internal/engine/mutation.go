@@ -14,8 +14,13 @@ const (
 type RunStatus string
 
 const (
-	RunCompleted         RunStatus = "completed"
-	RunHalted            RunStatus = "halted"
+	// RunCompleted reports that the agenda drained.
+	RunCompleted RunStatus = "completed"
+	// RunHalted reports that an action requested Halt.
+	RunHalted RunStatus = "halted"
+	// RunFireLimit reports that WithMaxFirings stopped the run while
+	// activations were still pending; a subsequent Run resumes them.
+	RunFireLimit         RunStatus = "fire_limit"
 	RunCanceled          RunStatus = "canceled"
 	RunActionFailed      RunStatus = "action_failed"
 	RunClosed            RunStatus = "closed"
@@ -36,6 +41,9 @@ type ActionFailureError struct {
 	ActivationID   ActivationID
 	ActionName     string
 	ActionIndex    int
+	Source         SourceSpan
+	RuleSource     SourceSpan
+	ActionSource   SourceSpan
 	Err            error
 }
 
@@ -45,6 +53,9 @@ func (e *ActionFailureError) Error() string {
 	}
 
 	msg := "gess: action failed"
+	if location := sourceSpanLocation(e.Source); location != "" {
+		msg += " at " + location
+	}
 	if !e.RunID.IsZero() {
 		msg += " run " + e.RunID.String()
 	}

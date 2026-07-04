@@ -10,6 +10,7 @@ import (
 type reteRuntime struct {
 	revision               *Ruleset
 	graph                  *reteGraph
+	globalValues           []Value
 	plan                   reteNetworkPlan
 	mode                   reteRuntimeMode
 	graphBeta              *reteGraphBetaMemory
@@ -148,14 +149,19 @@ const (
 	reteNodeTerminal
 )
 
-func newReteRuntime(revision *Ruleset) (*reteRuntime, error) {
+func newReteRuntime(revision *Ruleset, globals ...[]Value) (*reteRuntime, error) {
 	if revision == nil {
 		return nil, ErrInvalidRuleset
 	}
+	var globalValues []Value
+	if len(globals) > 0 {
+		globalValues = globals[0]
+	}
 	runtime := &reteRuntime{
-		revision: revision,
-		graph:    revision.graph,
-		plan:     planReteNetwork(revision),
+		revision:     revision,
+		graph:        revision.graph,
+		globalValues: cloneGlobalValues(globalValues),
+		plan:         planReteNetwork(revision),
 	}
 	runtime.mode = runtime.determineMode()
 	return runtime, nil
@@ -289,7 +295,7 @@ func (r *reteRuntime) resetGraphBetaForGenerationWithDelta(ctx context.Context, 
 		return reteAgendaDelta{}, r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, delta, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, r.revision, r.graph, facts, generation)
+		memory, delta, err := newReteGraphBetaMemoryForGenerationWithDelta(ctx, r.revision, r.graph, facts, generation, r.globalValues)
 		if err != nil {
 			return delta, err
 		}
@@ -312,7 +318,7 @@ func (r *reteRuntime) resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx cont
 		return reteAgendaDelta{}, r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithDelta(ctx, r.revision, r.graph, facts, generation)
+		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithDelta(ctx, r.revision, r.graph, facts, generation, r.globalValues)
 		if err != nil {
 			return delta, err
 		}
@@ -335,7 +341,7 @@ func (r *reteRuntime) resetGraphBetaForGenerationWithInitialAgenda(ctx context.C
 		return reteAgendaDelta{}, r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, delta, err := newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda)
+		memory, delta, err := newReteGraphBetaMemoryForGenerationWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda, r.globalValues)
 		if err != nil {
 			return delta, err
 		}
@@ -358,7 +364,7 @@ func (r *reteRuntime) resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(
 		return reteAgendaDelta{}, r.unsupportedRuntimeError()
 	}
 	if r.graphBeta == nil {
-		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda)
+		memory, delta, err := newReteGraphBetaMemoryForWorkspaceWithInitialAgenda(ctx, r.revision, r.graph, facts, generation, agenda, r.globalValues)
 		if err != nil {
 			return delta, err
 		}
@@ -394,7 +400,7 @@ func (r *reteRuntime) rebuildBeta(ctx context.Context, facts []FactSnapshot) err
 		r.graphBeta = nil
 		return nil
 	}
-	memory, err := newReteGraphBetaMemory(ctx, r.revision, r.graph, facts)
+	memory, err := newReteGraphBetaMemoryForGeneration(ctx, r.revision, r.graph, facts, reteGraphFactsGeneration(facts), r.globalValues)
 	if err != nil {
 		return err
 	}
@@ -1012,7 +1018,7 @@ func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Contex
 			return false, nil
 		}
 	}
-	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
+	ok, err := expressionPredicatesMatchWithContextGlobalsAndCounters(ctx, p.alphaPredicates, ref, nil, nil, span)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1046,7 +1052,7 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 		}
 	}
 	ref := newConditionFactRefFromWorkingFactForTarget(fact, p.target, compactSlotStore)
-	ok, err := expressionPredicatesMatchWithContextAndCounters(ctx, p.alphaPredicates, ref, nil, span)
+	ok, err := expressionPredicatesMatchWithContextGlobalsAndCounters(ctx, p.alphaPredicates, ref, nil, nil, span)
 	if err != nil || !ok {
 		return ok, err
 	}
