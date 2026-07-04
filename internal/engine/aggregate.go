@@ -71,6 +71,7 @@ func (s AggregateSpec) clone() AggregateSpec {
 type AccumulateCondition struct {
 	Input ConditionSpec
 	Specs []AggregateSpec
+	Source SourceSpan
 }
 
 func (AccumulateCondition) conditionSpecNode() {}

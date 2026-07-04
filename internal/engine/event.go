@@ -40,6 +40,7 @@ type Event struct {
 	RuleID         RuleID
 	RuleRevisionID RuleRevisionID
 	ActivationID   ActivationID
+	Source         SourceSpan
 	ActionName     string
 	ActionIndex    int
 	Cause          error

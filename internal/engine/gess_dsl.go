@@ -315,7 +315,7 @@ func (l *gessLoader) loadTemplate(form gessSExpr) error {
 		return l.err(form.Span, "deftemplate requires a template name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow}
+	spec := TemplateSpec{Name: name, Module: module, DuplicatePolicy: DuplicateAllow, Source: form.Span}
 	for _, item := range form.List[2:] {
 		switch item.Head() {
 		case "declare":
@@ -438,7 +438,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 		return l.err(form.Span, "defrule requires a rule name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	rule := RuleSpec{Name: name, Module: module}
+	rule := RuleSpec{Name: name, Module: module, Source: form.Span}
 	body, rhs, err := splitGessRuleBody(form.List[2:])
 	if err != nil {
 		return l.wrap(form.Span, "parse rule body", err)
@@ -455,7 +455,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 		if err != nil {
 			return err
 		}
-		rule.Actions = append(rule.Actions, RuleActionSpec{Name: actionName})
+		rule.Actions = append(rule.Actions, RuleActionSpec{Name: actionName, Source: action.Span})
 	}
 	if err := l.workspace.AddRule(rule); err != nil {
 		return l.wrap(form.Span, "add rule", err)
@@ -494,7 +494,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		return l.err(form.Span, "defquery requires a query name")
 	}
 	module, name := splitGessName(form.List[1].Text())
-	query := QuerySpec{Name: name, Module: module}
+	query := QuerySpec{Name: name, Module: module, Source: form.Span}
 	var body []gessSExpr
 	var returns []gessSExpr
 	scope := newGessScope()
@@ -533,7 +533,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		if err != nil {
 			return err
 		}
-		query.Returns = append(query.Returns, ReturnValue(ret.List[0].Text(), expr))
+		query.Returns = append(query.Returns, QueryReturnSpec{Alias: ret.List[0].Text(), Expression: expr, Source: ret.Span})
 	}
 	if err := l.workspace.AddQuery(query); err != nil {
 		return l.wrap(form.Span, "add query", err)
@@ -568,7 +568,15 @@ func (l *gessLoader) parseConditions(module ModuleName, forms []gessSExpr, scope
 func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding string, scope *gessScope, query bool) (ConditionSpec, error) {
 	switch form.Head() {
 	case "and":
-		return l.parseConditions(module, form.List[1:], scope, query)
+		var conditions []ConditionSpec
+		for _, child := range form.List[1:] {
+			cond, err := l.parseCondition(module, child, "", scope, query)
+			if err != nil {
+				return nil, err
+			}
+			conditions = append(conditions, cond)
+		}
+		return And{Conditions: conditions, Source: form.Span}, nil
 	case "or":
 		var branches []ConditionSpec
 		for _, branch := range form.List[1:] {
@@ -579,7 +587,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 			}
 			branches = append(branches, cond)
 		}
-		return Or{Conditions: branches}, nil
+		return Or{Conditions: branches, Source: form.Span}, nil
 	case "not":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "not requires one condition")
@@ -588,7 +596,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Not{Condition: cond}, nil
+		return Not{Condition: cond, Source: form.Span}, nil
 	case "exists":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "exists requires one condition")
@@ -597,7 +605,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Exists(cond), nil
+		return ExistsCondition{Condition: cloneConditionSpec(cond), Source: form.Span}, nil
 	case "forall":
 		if len(form.List) != 3 {
 			return nil, l.err(form.Span, "forall requires domain and requirement")
@@ -611,7 +619,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Forall(domain, requirement), nil
+		return ForallCondition{Domain: cloneConditionSpec(domain), Requirement: cloneConditionSpec(requirement), Source: form.Span}, nil
 	case "test":
 		if len(form.List) != 2 {
 			return nil, l.err(form.Span, "test requires one expression")
@@ -623,7 +631,7 @@ func (l *gessLoader) parseCondition(module ModuleName, form gessSExpr, binding s
 		if err != nil {
 			return nil, err
 		}
-		return Test{Expression: expr}, nil
+		return Test{Expression: expr, Source: form.Span}, nil
 	case "accumulate":
 		return l.parseAccumulate(module, form, scope, query)
 	default:
@@ -643,7 +651,7 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 	if mod.IsZero() {
 		mod = module
 	}
-	spec := RuleConditionSpec{Binding: binding, Target: TemplateFactIn(mod, name)}
+	spec := RuleConditionSpec{Binding: binding, Target: TemplateFactIn(mod, name), Source: form.Span}
 	if binding != "" {
 		scope.bindings[binding] = struct{}{}
 	}
@@ -743,7 +751,7 @@ func (l *gessLoader) parseAccumulate(module ModuleName, form gessSExpr, scope *g
 		specs = append(specs, spec.As(name))
 		scope.values[name] = struct{}{}
 	}
-	return Accumulate(input, specs...), nil
+	return AccumulateCondition{Input: cloneConditionSpec(input), Specs: specs, Source: form.Span}, nil
 }
 
 func (l *gessLoader) parseExpr(module ModuleName, form gessSExpr, scope *gessScope) (ExpressionSpec, error) {

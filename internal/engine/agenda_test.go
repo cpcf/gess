@@ -45,7 +45,7 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 		t.Fatal("compiled rule missing")
 	}
 
-	event := changes[0].eventWithRuleID(session.ID(), revision.ID(), rule.ID(), 1, time.Unix(1, 0).UTC())
+	event := changes[0].eventWithRuleID(session.ID(), revision.ID(), rule.ID(), SourceSpan{}, 1, time.Unix(1, 0).UTC())
 	if event.Type != EventRuleActivated {
 		t.Fatalf("event type = %q, want %q", event.Type, EventRuleActivated)
 	}
@@ -1912,7 +1912,7 @@ func TestAgendaChangeEventsKeepFactEventsBare(t *testing.T) {
 		activation: activation,
 	}
 
-	event := change.eventWithRuleID(SessionID("session"), RulesetID("ruleset"), RuleID("rule"), 3, time.Unix(2, 0).UTC())
+	event := change.eventWithRuleID(SessionID("session"), RulesetID("ruleset"), RuleID("rule"), SourceSpan{}, 3, time.Unix(2, 0).UTC())
 	if event.Type != EventRuleActivated {
 		t.Fatalf("event type = %q, want %q", event.Type, EventRuleActivated)
 	}

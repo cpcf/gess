@@ -288,6 +288,7 @@ type ExpressionPredicate struct {
 	expression ExpressionSpec
 	placement  ExpressionPredicatePlacement
 	order      int
+	source     SourceSpan
 }
 
 func (p ExpressionPredicate) Expression() ExpressionSpec {
@@ -300,6 +301,10 @@ func (p ExpressionPredicate) Placement() ExpressionPredicatePlacement {
 
 func (p ExpressionPredicate) DeclarationOrder() int {
 	return p.order
+}
+
+func (p ExpressionPredicate) Source() SourceSpan {
+	return p.source
 }
 
 func (p ExpressionPredicate) clone() ExpressionPredicate {
@@ -329,6 +334,7 @@ type compiledExpressionPredicate struct {
 	placement          ExpressionPredicatePlacement
 	order              int
 	currentBindingSlot int
+	source             SourceSpan
 }
 
 type compiledExpression struct {
@@ -371,6 +377,22 @@ func compileExpressionPredicateSpecWithParams(
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
+	return compileExpressionPredicateSpecWithParamsAndSource(spec, SourceSpan{}, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions, globals)
+}
+
+func compileExpressionPredicateSpecWithParamsAndSource(
+	spec ExpressionSpec,
+	source SourceSpan,
+	ruleName string,
+	conditionIndex, predicateIndex int,
+	template *Template,
+	conditions []RuleCondition,
+	bindingSlots map[string]int,
+	templatesByKey map[TemplateKey]Template,
+	params map[string]ValueKind,
+	functions map[string]compiledPureFunction,
+	globals map[string]compiledGlobal,
+) (ExpressionPredicate, compiledExpressionPredicate, error) {
 	if spec == nil {
 		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression predicate is required", nil)
 	}
@@ -390,6 +412,7 @@ func compileExpressionPredicateSpecWithParams(
 			expression: cloneExpressionSpec(spec),
 			placement:  placement,
 			order:      predicateIndex,
+			source:     source,
 		}, compiledExpressionPredicate{
 			path:               []int{conditionIndex, predicateIndex},
 			ruleName:           ruleName,
@@ -397,6 +420,7 @@ func compileExpressionPredicateSpecWithParams(
 			placement:          placement,
 			order:              predicateIndex,
 			currentBindingSlot: -1,
+			source:             source,
 		}, nil
 }
 
@@ -1099,6 +1123,7 @@ func (p compiledExpressionPredicate) functionEvaluationMeta() *FunctionEvaluatio
 	if len(p.path) > 1 {
 		meta.PredicateIndex = p.path[1]
 	}
+	meta.Source = p.source
 	return meta
 }
 
@@ -1479,6 +1504,7 @@ func functionEvaluationError(meta *FunctionEvaluationError, functionName string,
 		out.QueryName = meta.QueryName
 		out.ConditionIndex = meta.ConditionIndex
 		out.PredicateIndex = meta.PredicateIndex
+		out.Source = meta.Source
 		if out.FunctionName == "" {
 			out.FunctionName = meta.FunctionName
 		}

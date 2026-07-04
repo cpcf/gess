@@ -5912,6 +5912,7 @@ func joinFunctionEvaluationMeta(join compiledJoinConstraint) *FunctionEvaluation
 	if len(join.path) > 1 {
 		meta.PredicateIndex = join.path[1]
 	}
+	meta.Source = join.source
 	return meta
 }
 

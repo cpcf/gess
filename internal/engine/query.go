@@ -28,6 +28,7 @@ type QueryReturnSpec struct {
 	Alias      string
 	Binding    string
 	Expression ExpressionSpec
+	Source     SourceSpan
 }
 
 func (s QueryReturnSpec) clone() QueryReturnSpec {
@@ -49,6 +50,7 @@ type QuerySpec struct {
 	Name          string
 	Module        ModuleName
 	Description   string
+	Source        SourceSpan
 	Parameters    []QueryParameterSpec
 	Conditions    []RuleConditionSpec
 	ConditionTree ConditionSpec
@@ -99,6 +101,7 @@ type QueryReturn struct {
 	expression ExpressionSpec
 	fact       bool
 	order      int
+	source     SourceSpan
 }
 
 func (r QueryReturn) Alias() string {
@@ -121,10 +124,15 @@ func (r QueryReturn) DeclarationOrder() int {
 	return r.order
 }
 
+func (r QueryReturn) Source() SourceSpan {
+	return r.source
+}
+
 type Query struct {
 	name              string
 	module            ModuleName
 	description       string
+	source            SourceSpan
 	parameters        []QueryParameter
 	conditions        []RuleCondition
 	conditionTree     RuleConditionTree
@@ -142,6 +150,10 @@ func (q Query) Module() ModuleName {
 
 func (q Query) Description() string {
 	return q.description
+}
+
+func (q Query) Source() SourceSpan {
+	return q.source
 }
 
 func (q Query) Parameters() []QueryParameter {
@@ -175,6 +187,7 @@ type compiledQuery struct {
 	name                    string
 	module                  ModuleName
 	description             string
+	source                  SourceSpan
 	triggerName             string
 	triggerFieldSpecs       []FieldSpec
 	parameters              []QueryParameter
@@ -230,6 +243,7 @@ type compiledQueryReturn struct {
 	rawExpr     ExpressionSpec
 	fact        bool
 	order       int
+	source      SourceSpan
 }
 
 type compiledQueryReturnProjectionKind uint8
@@ -253,6 +267,7 @@ func (q compiledQuery) inspect() Query {
 		name:              q.name,
 		module:            q.module,
 		description:       q.description,
+		source:            q.source,
 		parameters:        append([]QueryParameter(nil), q.parameters...),
 		conditions:        cloneRuleConditions(q.conditions),
 		conditionTree:     q.conditionTree.clone(),
@@ -270,6 +285,7 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 			expression: cloneExpressionSpec(ret.rawExpr),
 			fact:       ret.fact,
 			order:      ret.order,
+			source:     ret.source,
 		}
 	}
 	return out
@@ -363,6 +379,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 		name:                    normalized.Name,
 		module:                  normalized.Module,
 		description:             normalized.Description,
+		source:                  normalized.Source,
 		triggerName:             internalQueryTriggerName(normalized.Name),
 		triggerFieldSpecs:       compileQueryTriggerFieldSpecs(params),
 		parameters:              params,
@@ -445,6 +462,7 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 				bindingSlot: slot,
 				fact:        true,
 				order:       i,
+				source:      spec.Source,
 			})
 			continue
 		}
@@ -462,6 +480,7 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 			rawExpr:     cloneExpressionSpec(spec.Expression),
 			bindingSlot: -1,
 			order:       i,
+			source:      spec.Source,
 		})
 	}
 	return returns, nil
@@ -1574,6 +1593,7 @@ func (q compiledQuery) materializeRow(ctx context.Context, source Snapshot, matc
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
+			Source:         ret.source,
 		}, nil)
 		if err != nil {
 			return QueryRow{}, err
@@ -1631,6 +1651,7 @@ func (q compiledQuery) materializeCompactRow(ctx context.Context, source Snapsho
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
+			Source:         ret.source,
 		}, nil)
 		if err != nil {
 			return QueryRow{}, err
@@ -1669,6 +1690,7 @@ func (q compiledQuery) materializeTokenRowInto(ctx context.Context, token tokenR
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
+			Source:         ret.source,
 		}, nil)
 		if err != nil {
 			return QueryRow{}, err
@@ -1713,6 +1735,7 @@ func (q compiledQuery) materializeTokenCompactMixedRowInto(ctx context.Context, 
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
+			Source:         ret.source,
 		}, nil)
 		if err != nil {
 			return QueryRow{}, err
@@ -1745,6 +1768,7 @@ func (q compiledQuery) materializeTokenValueRowInto(ctx context.Context, token t
 			QueryName:      q.name,
 			ConditionIndex: -1,
 			PredicateIndex: ret.order,
+			Source:         ret.source,
 		}, nil)
 		if err != nil {
 			return QueryRow{}, err

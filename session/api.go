@@ -26,6 +26,7 @@ type (
 	FactID                     = engine.FactID
 	SessionID                  = engine.SessionID
 	RunID                      = engine.RunID
+	SourceSpan                 = engine.SourceSpan
 	ActivationID               = engine.ActivationID
 	SupportID                  = engine.SupportID
 	TemplateKey                = engine.TemplateKey

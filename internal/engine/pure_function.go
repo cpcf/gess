@@ -460,6 +460,7 @@ type FunctionEvaluationError struct {
 	ConditionIndex int
 	PredicateIndex int
 	FunctionName   string
+	Source         SourceSpan
 	Err            error
 }
 
@@ -468,6 +469,9 @@ func (e *FunctionEvaluationError) Error() string {
 		return ErrFunctionEvaluation.Error()
 	}
 	msg := "gess: function evaluation failed"
+	if location := sourceSpanLocation(e.Source); location != "" {
+		msg += " at " + location
+	}
 	if e.RuleName != "" {
 		msg += fmt.Sprintf(" for rule %q", e.RuleName)
 	}

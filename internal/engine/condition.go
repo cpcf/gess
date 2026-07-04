@@ -34,6 +34,7 @@ type compiledConditionPlan struct {
 	binding        string
 	bindingSlot    int
 	path           []int
+	source         SourceSpan
 	negated        bool
 	explicit       bool
 	aggregate      *compiledAggregatePlan

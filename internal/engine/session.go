@@ -3179,7 +3179,11 @@ func rulesetCompatibleWithSession(current, next *Ruleset, snapshot Snapshot, ini
 }
 
 func templatesCompatible(left, right Template) bool {
-	return reflect.DeepEqual(left.spec(), right.spec())
+	leftSpec := left.spec()
+	rightSpec := right.spec()
+	leftSpec.Source = SourceSpan{}
+	rightSpec.Source = SourceSpan{}
+	return reflect.DeepEqual(leftSpec, rightSpec)
 }
 
 func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) {
@@ -3199,13 +3203,15 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 			continue
 		}
 		ruleID := RuleID("")
+		source := SourceSpan{}
 		if s.revision != nil {
 			if rule, ok := s.revision.rulesByRevisionID[change.activation.ruleRevisionID]; ok {
 				ruleID = rule.id
+				source = rule.source
 			}
 		}
 		s.nextEventSequence++
-		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, s.nextEventSequence, s.eventClock()))
+		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, source, s.nextEventSequence, s.eventClock()))
 	}
 }
 

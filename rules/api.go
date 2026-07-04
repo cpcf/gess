@@ -41,6 +41,7 @@ type (
 	ModuleName                     = engine.ModuleName
 	SessionID                      = engine.SessionID
 	RunID                          = engine.RunID
+	SourceSpan                     = engine.SourceSpan
 	RuleID                         = engine.RuleID
 	RuleRevisionID                 = engine.RuleRevisionID
 	ActivationID                   = engine.ActivationID

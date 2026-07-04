@@ -264,9 +264,11 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		rulesetID = s.revision.ID()
 	}
 	ruleID := RuleID("")
+	source := SourceSpan{}
 	if s.revision != nil {
 		if rule, ok := s.revision.rulesByRevisionID[activation.ruleRevisionID]; ok {
 			ruleID = rule.id
+			source = rule.source
 		}
 	}
 	s.nextEventSequence++
@@ -283,6 +285,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		RuleID:         ruleID,
 		RuleRevisionID: activation.ruleRevisionID,
 		ActivationID:   activation.activationID(),
+		Source:         source,
 		FactIDs:        cloneActivationFactIDs(&activation),
 	})
 }
@@ -311,6 +314,7 @@ func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activa
 		ActivationID:   failure.ActivationID,
 		ActionName:     failure.ActionName,
 		ActionIndex:    failure.ActionIndex,
+		Source:         failure.Source,
 		Cause:          failure.Err,
 		FactIDs:        cloneActivationFactIDs(&activation),
 	})

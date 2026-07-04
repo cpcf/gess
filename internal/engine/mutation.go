@@ -37,6 +37,9 @@ type ActionFailureError struct {
 	ActivationID   ActivationID
 	ActionName     string
 	ActionIndex    int
+	Source         SourceSpan
+	RuleSource     SourceSpan
+	ActionSource   SourceSpan
 	Err            error
 }
 
@@ -46,6 +49,9 @@ func (e *ActionFailureError) Error() string {
 	}
 
 	msg := "gess: action failed"
+	if location := sourceSpanLocation(e.Source); location != "" {
+		msg += " at " + location
+	}
 	if !e.RunID.IsZero() {
 		msg += " run " + e.RunID.String()
 	}

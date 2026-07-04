@@ -693,6 +693,7 @@ type compiledRuleAction struct {
 	kind                 compiledRuleActionKind
 	name                 string
 	order                int
+	source               SourceSpan
 	fn                   ActionFunc
 	assertTemplateValues compiledAssertTemplateValuesAction
 	bindingReads         actionBindingReadSet
@@ -1364,6 +1365,9 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				ActivationID:   activation.activationID(),
 				ActionName:     actionSpec.name,
 				ActionIndex:    actionSpec.order,
+				Source:         firstSourceSpan(actionSpec.source, rule.source),
+				RuleSource:     rule.source,
+				ActionSource:   actionSpec.source,
 				Err:            actionErr,
 			}
 		}

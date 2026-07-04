@@ -37,6 +37,7 @@ type TemplateSpec struct {
 	Module            ModuleName
 	Key               TemplateKey
 	CompatibilityKey  TemplateKey
+	Source            SourceSpan
 	Fields            []FieldSpec
 	DuplicatePolicy   DuplicatePolicy
 	DuplicateKeyNames []string
@@ -63,6 +64,7 @@ type Template struct {
 	backchainDemandKey TemplateKey
 	backchainDemand    bool
 	backchainSourceKey TemplateKey
+	source             SourceSpan
 	closed             bool
 }
 
@@ -138,6 +140,10 @@ func (t Template) DuplicateKeys() []string {
 
 func (t Template) BackchainReactive() bool {
 	return t.backchainReactive
+}
+
+func (t Template) Source() SourceSpan {
+	return t.source
 }
 
 func (t Template) BackchainDemandTemplateKey() (TemplateKey, bool) {
@@ -571,6 +577,7 @@ func (t Template) spec() TemplateSpec {
 		Module:            t.module,
 		Key:               t.key,
 		CompatibilityKey:  t.compatibilityKey,
+		Source:            t.source,
 		Fields:            t.Fields(),
 		DuplicatePolicy:   t.duplicatePolicy,
 		DuplicateKeyNames: t.DuplicateKeys(),
@@ -816,6 +823,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		module:             module,
 		key:                key,
 		compatibilityKey:   compatibilityKey,
+		source:             spec.Source,
 		fields:             fields,
 		fieldsByName:       fieldsByName,
 		fieldIndexes:       fieldIndexes,

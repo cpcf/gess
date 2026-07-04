@@ -60,6 +60,7 @@ const (
 
 type compiledJoinConstraint struct {
 	path                  []int
+	source                SourceSpan
 	bindingSlot           int
 	access                compiledPathAccess
 	leftKeyExpression     compiledExpression
@@ -136,6 +137,19 @@ func validJoinOperator(operator FieldConstraintOperator) bool {
 
 func compileJoinConstraintSpec(
 	spec JoinConstraintSpec,
+	ruleName string,
+	conditionIndex, joinIndex int,
+	template *Template,
+	conditions []RuleCondition,
+	bindingSlots map[string]int,
+	templatesByKey map[TemplateKey]Template,
+) (JoinConstraint, compiledJoinConstraint, error) {
+	return compileJoinConstraintSpecWithSource(spec, SourceSpan{}, ruleName, conditionIndex, joinIndex, template, conditions, bindingSlots, templatesByKey)
+}
+
+func compileJoinConstraintSpecWithSource(
+	spec JoinConstraintSpec,
+	source SourceSpan,
 	ruleName string,
 	conditionIndex, joinIndex int,
 	template *Template,
@@ -273,6 +287,7 @@ func compileJoinConstraintSpec(
 			Ref:      normalized.Ref.clone(),
 		}, compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
+			source:         source,
 			bindingSlot:    conditionIndex,
 			access:         access,
 			operator:       normalized.Operator,

@@ -465,10 +465,10 @@ type agendaChange struct {
 }
 
 func (c agendaChange) event(sessionID SessionID, rulesetID RulesetID, sequence uint64, timestamp time.Time) Event {
-	return c.eventWithRuleID(sessionID, rulesetID, "", sequence, timestamp)
+	return c.eventWithRuleID(sessionID, rulesetID, "", SourceSpan{}, sequence, timestamp)
 }
 
-func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, ruleID RuleID, sequence uint64, timestamp time.Time) Event {
+func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, ruleID RuleID, source SourceSpan, sequence uint64, timestamp time.Time) Event {
 	eventType := EventRuleActivated
 	if c.kind == agendaChangeDeactivated {
 		eventType = EventRuleDeactivated
@@ -485,6 +485,7 @@ func (c agendaChange) eventWithRuleID(sessionID SessionID, rulesetID RulesetID, 
 		RuleID:         ruleID,
 		RuleRevisionID: c.activation.ruleRevisionID,
 		ActivationID:   c.activation.activationID(),
+		Source:         source,
 		FactIDs:        cloneActivationFactIDs(&c.activation),
 	}
 }

@@ -16,6 +16,7 @@ type RuleConditionSpec struct {
 	ListPatterns     []ListPatternSpec
 	JoinConstraints  []JoinConstraintSpec
 	Predicates       []ExpressionSpec
+	Source           SourceSpan
 }
 
 func (s RuleConditionSpec) clone() RuleConditionSpec {
@@ -191,6 +192,7 @@ type ConditionSpec interface {
 // And groups condition tree nodes into a conjunction.
 type And struct {
 	Conditions []ConditionSpec
+	Source     SourceSpan
 }
 
 func (And) conditionSpecNode() {}
@@ -207,6 +209,7 @@ func (s And) clone() And {
 // Or groups condition tree branches into a disjunction.
 type Or struct {
 	Conditions []ConditionSpec
+	Source     SourceSpan
 }
 
 func (Or) conditionSpecNode() {}
@@ -224,6 +227,7 @@ func (s Or) clone() Or {
 // the negated condition and are not exposed to later conditions or actions.
 type Not struct {
 	Condition ConditionSpec
+	Source    SourceSpan
 }
 
 func (Not) conditionSpecNode() {}
@@ -238,6 +242,7 @@ func (s Not) clone() Not {
 // generation while keeping ordinary match behavior unchanged.
 type Explicit struct {
 	Condition ConditionSpec
+	Source    SourceSpan
 }
 
 func (Explicit) conditionSpecNode() {}
@@ -252,6 +257,7 @@ func (s Explicit) clone() Explicit {
 // introduced inside Exists are local to the condition.
 type ExistsCondition struct {
 	Condition ConditionSpec
+	Source    SourceSpan
 }
 
 func (ExistsCondition) conditionSpecNode() {}
@@ -271,6 +277,7 @@ func (s ExistsCondition) clone() ExistsCondition {
 type ForallCondition struct {
 	Domain      ConditionSpec
 	Requirement ConditionSpec
+	Source      SourceSpan
 }
 
 func (ForallCondition) conditionSpecNode() {}
@@ -292,6 +299,7 @@ func (s ForallCondition) clone() ForallCondition {
 // Test evaluates a standalone boolean condition over earlier local bindings.
 type Test struct {
 	Expression ExpressionSpec
+	Source     SourceSpan
 }
 
 func (Test) conditionSpecNode() {}
@@ -392,7 +400,8 @@ func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
 }
 
 type RuleActionSpec struct {
-	Name string
+	Name   string
+	Source SourceSpan
 }
 
 func (s RuleActionSpec) clone() RuleActionSpec {
@@ -406,6 +415,7 @@ type RuleSpec struct {
 	Module      ModuleName
 	ID          RuleID
 	Description string
+	Source      SourceSpan
 	Tags        []string
 	Salience    int
 	AutoFocus   *bool
@@ -452,6 +462,7 @@ type RuleCondition struct {
 	predicates       []ExpressionPredicate
 	explicit         bool
 	order            int
+	source           SourceSpan
 }
 
 func (c RuleCondition) ID() ConditionID {
@@ -514,6 +525,10 @@ func (c RuleCondition) Explicit() bool {
 
 func (c RuleCondition) DeclarationOrder() int {
 	return c.order
+}
+
+func (c RuleCondition) Source() SourceSpan {
+	return c.source
 }
 
 func (c RuleCondition) clone() RuleCondition {
@@ -622,6 +637,7 @@ type RuleConditionTree struct {
 	hasMatch bool
 	test     ExpressionSpec
 	hasTest  bool
+	source   SourceSpan
 }
 
 func (t RuleConditionTree) Kind() ConditionTreeKind {
@@ -650,6 +666,10 @@ func (t RuleConditionTree) Test() (ExpressionSpec, bool) {
 	return cloneExpressionSpec(t.test), true
 }
 
+func (t RuleConditionTree) Source() SourceSpan {
+	return t.source
+}
+
 func (t RuleConditionTree) clone() RuleConditionTree {
 	out := t
 	out.children = make([]RuleConditionTree, len(t.children))
@@ -662,8 +682,9 @@ func (t RuleConditionTree) clone() RuleConditionTree {
 }
 
 type RuleAction struct {
-	name  string
-	order int
+	name   string
+	order  int
+	source SourceSpan
 }
 
 func (a RuleAction) Name() string {
@@ -672,6 +693,10 @@ func (a RuleAction) Name() string {
 
 func (a RuleAction) DeclarationOrder() int {
 	return a.order
+}
+
+func (a RuleAction) Source() SourceSpan {
+	return a.source
 }
 
 func (a RuleAction) clone() RuleAction {
@@ -690,6 +715,7 @@ type Rule struct {
 	hasAutoFocus       bool
 	effectiveAutoFocus bool
 	declarationOrder   int
+	source             SourceSpan
 	conditions         []RuleCondition
 	conditionTree      RuleConditionTree
 	conditionBranches  []RuleConditionBranch
@@ -736,6 +762,10 @@ func (r Rule) EffectiveAutoFocus() bool {
 
 func (r Rule) DeclarationOrder() int {
 	return r.declarationOrder
+}
+
+func (r Rule) Source() SourceSpan {
+	return r.source
 }
 
 func (r Rule) Conditions() []RuleCondition {
@@ -790,6 +820,7 @@ type compiledRule struct {
 	hasAutoFocus                bool
 	effectiveAutoFocus          bool
 	declarationOrder            int
+	source                      SourceSpan
 	identityScopeHash           uint64
 	conditions                  []RuleCondition
 	treeConditions              []RuleCondition
@@ -816,6 +847,7 @@ func (r compiledRule) inspect() Rule {
 		hasAutoFocus:       r.hasAutoFocus,
 		effectiveAutoFocus: r.effectiveAutoFocus,
 		declarationOrder:   r.declarationOrder,
+		source:             r.source,
 		conditions:         cloneRuleConditions(r.conditions),
 		conditionTree:      r.conditionTree.clone(),
 		conditionBranches:  cloneRuleConditionBranches(r.conditionBranchPlans),
@@ -895,6 +927,7 @@ type compiledConditionTreeShape struct {
 	children       []compiledConditionTreeShape
 	conditionIndex int
 	test           ExpressionSpec
+	source         SourceSpan
 }
 
 func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
@@ -918,6 +951,7 @@ type normalizedRuleCondition struct {
 	visible     bool
 	negated     bool
 	explicit    bool
+	source      SourceSpan
 }
 
 type conditionHigherOrderKind string
@@ -1001,6 +1035,7 @@ func normalizeRuleConditions(spec RuleSpec) ([]normalizedRuleCondition, compiled
 			spec:    condition.clone(),
 			path:    []int{i},
 			visible: true,
+			source:  condition.Source,
 		}
 		children[i] = compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
@@ -1034,6 +1069,7 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 			spec:    condition.clone(),
 			path:    []int{i},
 			visible: true,
+			source:  condition.Source,
 		}
 	}
 	return []normalizedRuleConditionBranch{branch}, nil
@@ -1348,6 +1384,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				visible:  visible,
 				negated:  negated,
 				explicit: true,
+				source:   firstSourceSpan(match.Source, condition.Source),
 			}},
 		}}, nil
 	case *Explicit:
@@ -1373,6 +1410,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				},
 				path:    cloneIntPath(path),
 				visible: false,
+				source:  condition.Source,
 			}},
 		}}, nil
 	case *ExistsCondition:
@@ -1399,6 +1437,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				},
 				path:    cloneIntPath(path),
 				visible: false,
+				source:  condition.Source,
 			}},
 		}}, nil
 	case *ForallCondition:
@@ -1422,6 +1461,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				isTest:  true,
 				path:    cloneIntPath(path),
 				visible: false,
+				source:  condition.Source,
 			}},
 		}}, nil
 	case *Test:
@@ -1439,6 +1479,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
+				source:  RuleConditionSpec(condition).Source,
 			}},
 		}}, nil
 	case *Match:
@@ -1454,6 +1495,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
+				source:  RuleConditionSpec(*condition).Source,
 			}},
 		}}, nil
 	case AccumulateCondition:
@@ -1469,6 +1511,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 				isAggregate: true,
 				path:        cloneIntPath(path),
 				visible:     true,
+				source:      condition.Source,
 			}},
 		}}, nil
 	case *AccumulateCondition:
@@ -1649,6 +1692,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			visible:  visible,
 			negated:  negated,
 			explicit: true,
+			source:   firstSourceSpan(match.Source, condition.Source),
 		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
@@ -1725,11 +1769,13 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			isTest:  true,
 			path:    cloneIntPath(path),
 			visible: false,
+			source:  condition.Source,
 		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindTest,
 			conditionIndex: index,
 			test:           cloneExpressionSpec(condition.Expression),
+			source:         condition.Source,
 		}, nil
 	case *Test:
 		if condition == nil {
@@ -1746,6 +1792,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
+			source:  RuleConditionSpec(condition).Source,
 		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
@@ -1764,6 +1811,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
+			source:  RuleConditionSpec(*condition).Source,
 		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindMatch,
@@ -1782,6 +1830,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 			isAggregate: true,
 			path:        cloneIntPath(path),
 			visible:     true,
+			source:      condition.Source,
 		})
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindAccumulate,
@@ -2072,9 +2121,11 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		if err != nil {
 			return compiledRule{}, err
 		}
+		actionExecution.source = action.Source
 		actions = append(actions, RuleAction{
-			name:  action.Name,
-			order: i,
+			name:   action.Name,
+			order:  i,
+			source: action.Source,
 		})
 		actionExecutions = append(actionExecutions, actionExecution)
 	}
@@ -2090,6 +2141,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		hasAutoFocus:                hasAutoFocus,
 		effectiveAutoFocus:          effectiveAutoFocus,
 		declarationOrder:            declarationOrder,
+		source:                      normalized.Source,
 		conditions:                  conditions,
 		treeConditions:              treeConditions,
 		conditionTree:               conditionTree,
@@ -2214,6 +2266,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				binding:     string(node.higherOrder.kind),
 				bindingSlot: -1,
 				path:        cloneIntPath(node.path),
+				source:      node.source,
 				aggregate: &compiledAggregatePlan{
 					inputPlans:  inputSet.conditionPlans,
 					specs:       compiledSpecs,
@@ -2296,7 +2349,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				bindingSlots[result.binding] = firstSlot + j
 				allBindingSlots[result.binding] = firstSlot + j
 			}
-			treeCondition := RuleCondition{id: aggregateID, binding: "accumulate", order: i}
+			treeCondition := RuleCondition{id: aggregateID, binding: "accumulate", order: i, source: node.source}
 			treeConditions = append(treeConditions, treeCondition)
 			branchConditions = append(branchConditions, RuleConditionBranchCondition{
 				condition: treeCondition,
@@ -2308,6 +2361,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				binding:     "accumulate",
 				bindingSlot: firstSlot,
 				path:        []int{i},
+				source:      node.source,
 				aggregate: &compiledAggregatePlan{
 					inputPlans: inputSet.conditionPlans,
 					specs:      compiledSpecs,
@@ -2330,13 +2384,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 					Reason:            "test condition requires an earlier visible binding",
 				}
 			}
-			_, planPredicate, err := compileExpressionPredicateSpecWithParams(node.test, ruleName, i, 0, nil, conditions, bindingSlots, templates.byKey, params, functions, globals)
+			_, planPredicate, err := compileExpressionPredicateSpecWithParamsAndSource(node.test, node.source, ruleName, i, 0, nil, conditions, bindingSlots, templates.byKey, params, functions, globals)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
 			planPredicate.placement = ExpressionPredicatePlacementBetaResidual
 			conditionPlans = append(conditionPlans, compiledConditionPlan{
 				path:           []int{i},
+				source:         node.source,
 				isTest:         true,
 				predicates:     []compiledExpressionPredicate{planPredicate},
 				testPredicates: []compiledExpressionPredicate{planPredicate},
@@ -2413,7 +2468,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		joinConstraints := make([]JoinConstraint, 0, len(condition.JoinConstraints))
 		compiledJoins := make([]compiledJoinConstraint, 0, len(condition.JoinConstraints))
 		for joinIndex, joinConstraint := range condition.JoinConstraints {
-			compiledJoin, planJoin, err := compileJoinConstraintSpec(joinConstraint, ruleName, i, joinIndex, template, conditions, bindingSlots, templates.byKey)
+			compiledJoin, planJoin, err := compileJoinConstraintSpecWithSource(joinConstraint, node.source, ruleName, i, joinIndex, template, conditions, bindingSlots, templates.byKey)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -2429,7 +2484,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		predicates := make([]ExpressionPredicate, 0, len(predicateSpecs))
 		compiledPredicates := make([]compiledExpressionPredicate, 0, len(predicateSpecs))
 		for predicateIndex, predicate := range predicateSpecs {
-			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParams(predicate, ruleName, i, predicateIndex, template, conditions, bindingSlots, templates.byKey, params, functions, globals)
+			compiledPredicate, planPredicate, err := compileExpressionPredicateSpecWithParamsAndSource(predicate, node.source, ruleName, i, predicateIndex, template, conditions, bindingSlots, templates.byKey, params, functions, globals)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -2449,6 +2504,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			predicates:       predicates,
 			explicit:         node.explicit,
 			order:            i,
+			source:           node.source,
 		}
 		publicBindingSlot := -1
 		if node.visible {
@@ -2487,6 +2543,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			binding:      condition.Binding,
 			bindingSlot:  publicBindingSlot,
 			path:         []int{i},
+			source:       node.source,
 			negated:      node.negated,
 			explicit:     node.explicit,
 			target:       target,
@@ -2827,12 +2884,14 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 			kind:     ConditionTreeKindMatch,
 			match:    conditions[shape.conditionIndex].clone(),
 			hasMatch: true,
+			source:   conditions[shape.conditionIndex].source,
 		}
 	case ConditionTreeKindTest:
 		return RuleConditionTree{
 			kind:    ConditionTreeKindTest,
 			test:    cloneExpressionSpec(shape.test),
 			hasTest: true,
+			source:  shape.source,
 		}
 	case ConditionTreeKindNot:
 		tree := RuleConditionTree{
