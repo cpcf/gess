@@ -22,6 +22,14 @@ export default defineConfig({
 				{ label: 'Advanced behavior', slug: 'advanced' },
 				{ label: 'Examples map', slug: 'examples' },
 				{ label: 'Developer guide', slug: 'contributing' },
+				{
+					label: 'API reference',
+					items: [
+						{ label: 'rules', slug: 'reference/rules' },
+						{ label: 'session', slug: 'reference/session' },
+						{ label: 'dsl', slug: 'reference/dsl' },
+					],
+				},
 			],
 		}),
 	],
