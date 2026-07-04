@@ -680,6 +680,7 @@ type agenda struct {
 	terminalActivations activationRows
 	moduleQueues        map[ModuleName]*agendaModuleQueue
 	lessActivation      func(*activation, *activation) bool
+	strategy            Strategy
 	nextOrdinal         uint64
 	handleGeneration    uint32
 	revision            *Ruleset
@@ -705,6 +706,7 @@ func newAgendaWithStrategy(strategy Strategy) *agenda {
 	agenda := &agenda{
 		activationLookup: make(map[activationLookupKey][]*activation),
 		moduleQueues:     make(map[ModuleName]*agendaModuleQueue),
+		strategy:         strategy,
 		handleGeneration: 1,
 	}
 	if strategy == StrategyBreadth {
@@ -713,6 +715,32 @@ func newAgendaWithStrategy(strategy Strategy) *agenda {
 		agenda.lessActivation = agenda.activationDepthLess
 	}
 	return agenda
+}
+
+func (a *agenda) cloneForFork() *agenda {
+	if a == nil {
+		return newAgenda()
+	}
+	out := newAgendaWithStrategy(a.strategy)
+	out.nextOrdinal = a.nextOrdinal
+	out.handleGeneration = a.handleGeneration
+	out.revision = a.revision
+	if out.handleGeneration == 0 {
+		out.handleGeneration = 1
+	}
+	for _, current := range a.activations {
+		if current == nil {
+			continue
+		}
+		cloned := current.clone()
+		cloned.heapIndex = 0
+		stored := out.activationRows.add(cloned)
+		out.storeActivationRef(stored)
+		if stored.status == activationStatusPending {
+			out.enqueueActivation(stored)
+		}
+	}
+	return out
 }
 
 func (a *agenda) queueForModule(module ModuleName) *agendaModuleQueue {

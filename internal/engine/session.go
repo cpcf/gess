@@ -708,6 +708,162 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 	return s.snapshotLocked(), nil
 }
 
+// Fork returns an independent session with the same working state as s.
+// The fork shares immutable ruleset state, but owns its agenda, fact storage,
+// Rete memories, logical support, backchain support metadata, and listeners.
+// Event sequence numbers continue from the parent so pre-fork event history can
+// be correlated by hosts that attach a listener to the fork.
+func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, error) {
+	if s == nil || s.closed {
+		return nil, ErrClosedSession
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if s.runGuardHeld() {
+		return nil, ErrConcurrencyMisuse
+	}
+	if !s.lock() {
+		return nil, ErrConcurrencyMisuse
+	}
+	defer s.unlock()
+
+	cfg := s.forkSessionConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	if cfg.eventClock == nil {
+		cfg.eventClock = time.Now
+	}
+	if !cfg.strategy.valid() {
+		return nil, &ValidationError{Reason: "invalid agenda strategy"}
+	}
+
+	listeners := cloneEventListenerRegistrations(cfg.listeners)
+	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
+	initials := cloneSessionInitialFacts(cfg.initials)
+	globalValues, err := compileSessionGlobals(s.revision, cfg.globals)
+	if err != nil {
+		return nil, err
+	}
+	compiledInitials, err := compileSessionInitialFacts(s.revision, initials)
+	if err != nil {
+		return nil, err
+	}
+
+	state := s.clonedFactWorkspace()
+	rete, err := newReteRuntime(s.revision, globalValues)
+	if err != nil {
+		return nil, err
+	}
+	initialDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, state.generation)
+	if err != nil {
+		return nil, err
+	}
+
+	fork := &Session{
+		id:                  cfg.id,
+		revision:            s.revision,
+		agenda:              s.agenda.cloneForFork(),
+		rete:                rete,
+		generation:          s.generation,
+		initialFocusStack:   cloneModuleNames(s.initialFocusStack),
+		focusStack:          cloneModuleNames(s.focusStack),
+		initials:            initials,
+		globalValues:        globalValues,
+		initialCount:        len(initials),
+		compiledInitials:    compiledInitials,
+		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
+		listeners:           listeners,
+		allEventListeners:   allEventListeners,
+		eventListenerCounts: eventListenerCounts,
+		eventClock:          cfg.eventClock,
+		runGuard:            make(chan struct{}, 1),
+		mu: struct {
+			mutate chan struct{}
+			lock   chan struct{}
+		}{make(chan struct{}, 1), make(chan struct{}, 1)},
+		nextFactSequence:       state.nextFactSequence(),
+		nextRecency:            state.nextRecency(),
+		nextRunSequence:        s.nextRunSequence,
+		facts:                  state.facts,
+		compactFacts:           state.compactFacts,
+		factsByID:              state.factsByID,
+		factsBySequence:        state.factsBySequence,
+		factsByDuplicate:       state.factsByDuplicate,
+		factsByTemplate:        state.factsByTemplate,
+		factsByName:            state.factsByName,
+		factTargetIndexesDirty: state.factTargetIndexesDirty,
+		insertionOrder:         state.insertionOrder,
+		slotStorage:            state.slotStorage,
+		compactSlotStore:       state.compactSlotStore,
+		logicalSupportEdges:    cloneLogicalSupportEdges(s.logicalSupportEdges),
+		logicalSupportBySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
+		logicalSupportByFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
+		logicalSupportCounters: s.logicalSupportCounters,
+		nextEventSequence:      s.nextEventSequence,
+	}
+	if fork.id == "" {
+		fork.id = SessionID(fmt.Sprintf("fork:%p", fork))
+	}
+	fork.syncPropagationCounters()
+	forkAgendaReady := s.agendaReady && !s.agendaDirty
+	forkAgendaDirty := s.agendaDirty
+	if len(initialDelta.resolvedDemands) > 0 || len(initialDelta.resolvedOwners) > 0 {
+		if _, err := fork.resolveBackchainDemandRequestsImmediate(ctx, initialDelta.resolvedDemands, initialDelta.resolvedOwners, mutationOrigin{}); err != nil {
+			return nil, err
+		}
+	}
+	if len(initialDelta.demands) > 0 {
+		forkState := fork.activeFactWorkspace()
+		demandDelta, err := fork.flushBackchainDemandRequestsImmediate(ctx, &forkState, initialDelta.demands, mutationOrigin{})
+		if err != nil {
+			return nil, err
+		}
+		fork.commitFactWorkspace(forkState)
+		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
+			forkAgendaReady = false
+			forkAgendaDirty = false
+		}
+	}
+	fork.agendaReady = forkAgendaReady
+	fork.agendaDirty = forkAgendaDirty
+	return fork, nil
+}
+
+func (s *Session) forkSessionConfig() sessionConfig {
+	cfg := sessionConfig{
+		initials:            cloneSessionInitialFacts(s.initials),
+		globals:             s.sessionGlobalValueMap(),
+		strategy:            StrategyDepth,
+		resetBeforeSnapshot: s.resetBeforeSnapshot,
+	}
+	if s.agenda != nil {
+		cfg.strategy = s.agenda.strategy
+	}
+	return cfg
+}
+
+func (s *Session) sessionGlobalValueMap() map[string]any {
+	if s == nil || s.revision == nil || len(s.globalValues) == 0 || len(s.revision.globalOrder) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(s.revision.globalOrder))
+	for _, name := range s.revision.globalOrder {
+		global := s.revision.globals[name]
+		if global.slot < 0 || global.slot >= len(s.globalValues) {
+			continue
+		}
+		out[name] = cloneValue(s.globalValues[global.slot])
+	}
+	return out
+}
+
 func (s *Session) Close() error {
 	if s == nil {
 		return ErrClosedSession
