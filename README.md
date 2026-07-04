@@ -108,6 +108,54 @@ See `TUTORIAL.md` for a fuller walkthrough based on
 For an interactive edit-and-run workshop, use `tutorial/README.md` or run
 `go run ./tutorial/cmd/gess-tutorial`.
 
+## Session control and observability
+
+Beyond assert/run/query, sessions expose:
+
+- **Agenda introspection** — `session.Agenda(ctx)` returns pending activations
+  in the exact order `Run` would fire them, including focus-stack drain order.
+  Use `ActivationsForModule` to inspect unfocused modules.
+- **Bounded runs** — `session.Run(ctx, sess.WithMaxFirings(n))` fires at most
+  `n` activations and returns `RunFireLimit` when work remains; `Run` with
+  `WithMaxFirings(1)` in a loop single-steps a rule cascade.
+- **Trace listener** — `sess.NewTraceListener(os.Stderr)` prints one line per
+  event; pass `sess.ForEventTypes(...)` to `WithEventListener` to subscribe a
+  listener to a subset of event types (unsubscribed event envelopes are never
+  constructed).
+- **Conflict strategy** — `sess.WithStrategy(sess.StrategyBreadth)` switches
+  equal-salience ordering from recency (depth, the default) to FIFO creation
+  order.
+- **Globals** — declare typed constants with `defglobal` (or
+  `Workspace.AddGlobal`), read them as `*name*` in rule and query expressions
+  and RHS asserts, and bind per-session values with `sess.WithGlobals`.
+- **DSL functions** — `deffunction` defines pure expression-bodied functions
+  directly in `.gess`, callable from any condition, test, or query expression;
+  no Go registration needed.
+- **Session fork** — `session.Fork(ctx)` branches an idle session (facts,
+  agenda, refraction, focus, logical support) for what-if runs without
+  rebuilding.
+- **Runtime source spans** — rulesets compiled from `.gess` carry file:line
+  spans into runtime errors (`ActionFailureError`, expression evaluation) and
+  rule events.
+
+## Interactive REPL
+
+`cmd/gess` provides a shell over the public API:
+
+```sh
+go run ./cmd/gess repl
+gess> load examples/gess-files/order_routing/rules.gess
+gess> facts
+gess> run 1
+gess> agenda
+gess> query routes-by-lane lane=expedite
+```
+
+Piped mode (`gess repl < script.txt`) is deterministic and exits non-zero if
+any command fails. Files whose `(call ...)` actions are not registered load
+with `--stub-calls`, which prints stub invocations instead of failing; missing
+pure functions cannot be stubbed because they affect matching.
+
 ## Packages
 
 - `rules`: public types for templates, conditions, actions, queries, values, and
@@ -117,6 +165,11 @@ For an interactive edit-and-run workshop, use `tutorial/README.md` or run
 - `dsl`: parser, loader, generated-code support, and registry hooks for `.gess`
   files.
 - `cmd/gessc`: command-line compiler from `.gess` files to generated Go.
+  Generated code embeds each construct's source span verbatim from the input
+  file name passed to `gessc`, so runtime errors point back at the authored
+  `.gess` line.
+- `cmd/gessfmt`: canonical formatter for `.gess` files.
+- `cmd/gess`: interactive REPL (`gess repl`).
 
 Most implementation code lives under `internal/engine`.
 
