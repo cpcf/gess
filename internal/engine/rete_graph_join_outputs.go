@@ -56,7 +56,6 @@ func (t *joinOutputTable) link(left *betaJoinBucketTable, leftRef int32, right *
 	*leftHead = ref
 	*rightHead = ref
 	t.count++
-	output.retain()
 }
 
 func (t *joinOutputTable) unlinkFromLeft(ref int32, left *betaJoinBucketTable) {
@@ -111,7 +110,6 @@ func (t *joinOutputTable) removeAllForLeft(head int32, right *betaJoinBucketTabl
 		if fn != nil {
 			fn(output, rightRef, rightEmpty)
 		}
-		output.release()
 		t.free(ref)
 		ref = next
 	}
@@ -130,7 +128,6 @@ func (t *joinOutputTable) removeAllForRight(head int32, left *betaJoinBucketTabl
 		if fn != nil {
 			fn(output, leftRef, leftEmpty)
 		}
-		output.release()
 		t.free(ref)
 		ref = next
 	}

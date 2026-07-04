@@ -8,13 +8,12 @@ import (
 )
 
 type tokenHandle struct {
-	arena      *tokenArena
-	row        *tokenRow
-	generation uint64
+	arena *tokenArena
+	row   *tokenRow
 }
 
 func (h tokenHandle) isZero() bool {
-	return h.row == nil || h.generation == 0
+	return h.row == nil
 }
 
 type tokenRef struct {
@@ -25,15 +24,6 @@ func (r tokenRef) isZero() bool {
 	return r.handle.isZero()
 }
 
-type tokenParentHandle struct {
-	row *tokenRow
-	gen uint64
-}
-
-func (h tokenParentHandle) isZero() bool {
-	return h.row == nil
-}
-
 type tokenRowEntry struct {
 	bindingSlot int
 	factID      FactID
@@ -42,8 +32,11 @@ type tokenRowEntry struct {
 	hasValue    bool
 }
 
+// tokenRow is an individually GC-owned token node: it stays alive exactly as
+// long as a handle or a descendant row's parent pointer references it, so
+// there is no refcounting, recycling, or staleness generation.
 type tokenRow struct {
-	parent        tokenParentHandle
+	parent        *tokenRow
 	bindingSlot   int
 	fact          *conditionFactRef
 	value         Value
@@ -52,15 +45,6 @@ type tokenRow struct {
 	maxRecency    Recency
 	totalRecency  Recency
 	identityState uint64
-	// rowGen is the allocation generation of this row. Handles capture it at
-	// allocation time; a mismatch means the row was recycled and the handle is
-	// stale. Zero marks a free row.
-	rowGen uint64
-	// refs counts durable holders (beta/negative/terminal/query/aggregate
-	// memories). Rows reaching zero are queued for recycling and reclaimed at
-	// the next safe boundary.
-	refs        int32
-	pendingFree bool
 	// holderTableID/holderRef (and the second slot) locate the bucket-table
 	// rows storing this token, so exact-handle removals unlink directly
 	// without identity-index probes. holderRef == tokenHolderMulti marks
@@ -184,21 +168,11 @@ func clearTokenHolder(token tokenRef, tableID uint32, ref int32) {
 type tokenIdentityKey = graphTokenIdentityKey
 
 type tokenArena struct {
-	chunks       [][]tokenRow
 	factRefs     []conditionFactRef
 	factRefIndex map[tokenFactRefKey]int
+	spare        []tokenRow
 	count        int
-	nextRowGen   uint64
-	freeRows     []*tokenRow
-	pendingFree  []*tokenRow
-	recentRows   []*tokenRow
 	generation   Generation
-
-	statGrown   int
-	statReused  int
-	statFreed   int
-	statSwept   int
-	statFlushes int
 }
 
 type tokenFactRefKey struct {
@@ -211,38 +185,20 @@ func newTokenArena() *tokenArena {
 	return &tokenArena{}
 }
 
-func (a *tokenArena) reserve(rowCapacity int) {
-	if a == nil || rowCapacity <= 0 {
-		return
-	}
-	chunkCount := (rowCapacity + reteBetaMatchTokenChunkSize - 1) / reteBetaMatchTokenChunkSize
-	for len(a.chunks) < chunkCount {
-		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
-	}
-}
-
 func (a *tokenArena) reset() {
 	if a == nil {
 		return
 	}
-	for chunkIndex, chunk := range a.chunks {
-		for i := range chunk {
-			chunk[i] = tokenRow{}
-		}
-		a.chunks[chunkIndex] = chunk[:0]
-	}
-	for i := range a.factRefs {
-		a.factRefs[i] = conditionFactRef{}
-	}
-	a.factRefs = a.factRefs[:0]
+	// Pre-reset rows may still be referenced through stale handles and share
+	// interned fact refs; drop the storage instead of reusing it so those rows
+	// never observe post-reset data.
+	a.factRefs = nil
 	if a.factRefIndex != nil {
 		clear(a.factRefIndex)
 	}
+	a.spare = nil
 	a.count = 0
 	a.generation = 0
-	a.freeRows = a.freeRows[:0]
-	a.pendingFree = a.pendingFree[:0]
-	a.recentRows = a.recentRows[:0]
 }
 
 func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
@@ -291,41 +247,22 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 	return a.addCompactInternal(parent, entry, match, recency, generation)
 }
 
-// allocRow returns a fresh zeroed row with its allocation generation assigned,
-// reusing a recycled row when one is available. Rows live in chunks whose
-// backing arrays never move, so *tokenRow stays valid for the arena lifetime.
+// allocRow returns a fresh GC-owned row carved from a small batch; the Go
+// collector owns the storage, so rows need no recycling and pointers stay
+// valid for as long as anything references them. A batch is reclaimed once
+// none of its rows are referenced, so batches stay small to bound the memory
+// a long-lived row can pin.
 func (a *tokenArena) allocRow() *tokenRow {
-	for n := len(a.freeRows); n > 0; n = len(a.freeRows) {
-		row := a.freeRows[n-1]
-		a.freeRows = a.freeRows[:n-1]
-		if row == nil || row.rowGen != 0 {
-			continue
-		}
-		a.nextRowGen++
-		row.rowGen = a.nextRowGen
-		a.recentRows = append(a.recentRows, row)
-		a.statReused++
-		return row
-	}
-	chunkIndex := a.count / reteBetaMatchTokenChunkSize
-	for len(a.chunks) <= chunkIndex {
-		a.chunks = append(a.chunks, make([]tokenRow, 0, reteBetaMatchTokenChunkSize))
-	}
-	chunk := a.chunks[chunkIndex]
-	if len(chunk) < cap(chunk) {
-		chunk = chunk[:len(chunk)+1]
-	} else {
-		chunk = append(chunk, tokenRow{})
-	}
-	a.chunks[chunkIndex] = chunk
-	row := &a.chunks[chunkIndex][len(chunk)-1]
 	a.count++
-	a.nextRowGen++
-	row.rowGen = a.nextRowGen
-	a.recentRows = append(a.recentRows, row)
-	a.statGrown++
+	if len(a.spare) == 0 {
+		a.spare = make([]tokenRow, tokenRowAllocBatch)
+	}
+	row := &a.spare[0]
+	a.spare = a.spare[1:]
 	return row
 }
+
+const tokenRowAllocBatch = 16
 
 func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
 	if a == nil {
@@ -349,7 +286,7 @@ func (a *tokenArena) addSourceCompact(entry tokenRowEntry, match conditionMatch,
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(candidateIdentityHashStart(tokenGeneration), entry)
 
-	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: row.rowGen}}
+	return tokenRef{handle: tokenHandle{arena: a, row: row}}
 }
 
 func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
@@ -385,7 +322,7 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 		// Re-resolve after allocation: allocRow may have appended to the
 		// parent's chunk slice header, but never reallocates existing chunk
 		// storage, so parentRow stays valid; keep the resolve for safety.
-		row.parent = tokenParentHandle{row: parent.handle.row, gen: parent.handle.generation}
+		row.parent = parent.handle.row
 		row.size = parentRow.size + 1
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.totalRecency = addRecency(parentRow.totalRecency, recency)
@@ -400,7 +337,7 @@ func (a *tokenArena) addCompactInternal(parent tokenRef, entry tokenRowEntry, ma
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
 
-	handle := tokenHandle{arena: a, row: row, generation: row.rowGen}
+	handle := tokenHandle{arena: a, row: row}
 	return tokenRef{handle: handle}
 }
 
@@ -436,7 +373,7 @@ func (a *tokenArena) addCompactSharedFact(parent tokenRef, fact *conditionFactRe
 		return tokenRef{}
 	}
 	if parentRow != nil {
-		row.parent = tokenParentHandle{row: parent.handle.row, gen: parent.handle.generation}
+		row.parent = parent.handle.row
 		row.size = parentRow.size + 1
 		row.maxRecency = max(recency, parentRow.maxRecency)
 		row.totalRecency = addRecency(parentRow.totalRecency, recency)
@@ -451,7 +388,7 @@ func (a *tokenArena) addCompactSharedFact(parent tokenRef, fact *conditionFactRe
 	row.setEntry(entry)
 	row.identityState = candidateIdentityHashTokenEntryStep(row.identityState, entry)
 
-	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: row.rowGen}}
+	return tokenRef{handle: tokenHandle{arena: a, row: row}}
 }
 
 func (a *tokenArena) internFactRef(fact conditionFactRef, hasValue bool) *conditionFactRef {
@@ -572,9 +509,7 @@ func (a *tokenArena) addSeed(generation Generation) tokenRef {
 		return tokenRef{}
 	}
 	row.identityState = candidateIdentityHashStart(generation)
-	// Seed rows anchor propagation roots and must never be recycled.
-	row.refs = 1
-	return tokenRef{handle: tokenHandle{arena: a, row: row, generation: row.rowGen}}
+	return tokenRef{handle: tokenHandle{arena: a, row: row}}
 }
 
 func (a *tokenArena) resolve(handle tokenHandle) (*tokenRow, bool) {
@@ -584,98 +519,7 @@ func (a *tokenArena) resolve(handle tokenHandle) (*tokenRow, bool) {
 	if handle.arena != nil && handle.arena != a {
 		return nil, false
 	}
-	if handle.row.rowGen != handle.generation {
-		return nil, false
-	}
 	return handle.row, true
-}
-
-// retainToken records a durable holder of the token's arena row.
-func (a *tokenArena) retainToken(token tokenRef) {
-	if a == nil {
-		return
-	}
-	if row, ok := a.resolve(token.handle); ok {
-		row.refs++
-	}
-}
-
-// releaseToken drops a durable holder. Rows reaching zero holders are queued
-// and recycled by flushPendingFree at the next safe boundary.
-func (a *tokenArena) releaseToken(token tokenRef) {
-	if a == nil {
-		return
-	}
-	row, ok := a.resolve(token.handle)
-	if !ok {
-		return
-	}
-	if row.refs > 0 {
-		row.refs--
-	}
-	if row.refs == 0 && !row.pendingFree {
-		row.pendingFree = true
-		a.pendingFree = append(a.pendingFree, token.handle.row)
-	}
-}
-
-// flushPendingFree recycles rows with no remaining holders. Callers must only
-// invoke it at boundaries where no transient tokenRef from earlier propagation
-// is still in use, such as the end of a fire iteration.
-func (a *tokenArena) flushPendingFree() {
-	if a == nil {
-		return
-	}
-	a.statFlushes++
-	for _, row := range a.pendingFree {
-		if row == nil || !row.pendingFree {
-			continue
-		}
-		row.pendingFree = false
-		if row.refs != 0 {
-			continue
-		}
-		*row = tokenRow{}
-		a.freeRows = append(a.freeRows, row)
-		a.statFreed++
-	}
-	a.pendingFree = a.pendingFree[:0]
-	// Rows allocated since the last flush that never gained a durable holder
-	// are transient propagation products (dropped duplicates, rejected joins)
-	// and are dead once the boundary is reached.
-	for _, row := range a.recentRows {
-		if row == nil || row.rowGen == 0 || row.refs != 0 || row.pendingFree {
-			continue
-		}
-		*row = tokenRow{}
-		a.freeRows = append(a.freeRows, row)
-		a.statSwept++
-	}
-	a.recentRows = a.recentRows[:0]
-}
-
-func (r tokenRef) retain() {
-	r.handle.arena.retainToken(r)
-}
-
-func (r tokenRef) release() {
-	r.handle.arena.releaseToken(r)
-}
-
-// retainChain retains every row on the token's parent chain. Terminal rows can
-// outlive their token's derivation through identity support counting, so they
-// must keep the full chain resolvable rather than relying on upstream
-// memories.
-func (r tokenRef) retainChain() {
-	for current := r; !current.isZero(); current = current.parent() {
-		current.retain()
-	}
-}
-
-func (r tokenRef) releaseChain() {
-	for current := r; !current.isZero(); current = current.parent() {
-		current.release()
-	}
 }
 
 func (a *tokenArena) rowCount() int {
@@ -686,10 +530,7 @@ func (a *tokenArena) rowCount() int {
 }
 
 func (r tokenRef) resolve() (*tokenRow, bool) {
-	if r.handle.isZero() {
-		return nil, false
-	}
-	if r.handle.row.rowGen != r.handle.generation {
+	if r.handle.row == nil {
 		return nil, false
 	}
 	return r.handle.row, true
@@ -697,10 +538,10 @@ func (r tokenRef) resolve() (*tokenRow, bool) {
 
 func (r tokenRef) parent() tokenRef {
 	row, ok := r.resolve()
-	if !ok || row.parent.isZero() {
+	if !ok || row.parent == nil {
 		return tokenRef{}
 	}
-	return tokenRef{handle: tokenHandle{arena: r.handle.arena, row: row.parent.row, generation: row.parent.gen}}
+	return tokenRef{handle: tokenHandle{arena: r.handle.arena, row: row.parent}}
 }
 
 func (r tokenRef) size() int {
@@ -888,17 +729,10 @@ const reteBetaMatchTokenChunkSize = 64
 const reteBetaMatchTokenChunkReserve = 2
 const transientFactSequenceThreshold = ^uint64(0) >> 1
 
-// parentRow steps to row's parent within the arena, resolving once. nil with
-// ok=true means the chain ended; ok=false means the parent handle is stale.
+// parentRow steps to row's parent within the arena. nil means the chain
+// ended; the bool is retained for call-site compatibility and is always true.
 func (a *tokenArena) parentRow(row *tokenRow) (*tokenRow, bool) {
-	if row.parent.isZero() {
-		return nil, true
-	}
-	parent := row.parent.row
-	if parent.rowGen != row.parent.gen {
-		return nil, false
-	}
-	return parent, true
+	return row.parent, true
 }
 
 // factIdentity reads the row's fact identity without copying a conditionMatch.
@@ -934,8 +768,8 @@ func tokenRefEqual(left, right tokenRef) bool {
 		if leftID != rightID || leftVersion != rightVersion {
 			return false
 		}
-		if leftRow.parent.isZero() || rightRow.parent.isZero() {
-			return leftRow.parent.isZero() && rightRow.parent.isZero()
+		if leftRow.parent == nil || rightRow.parent == nil {
+			return leftRow.parent == nil && rightRow.parent == nil
 		}
 		if leftRow, leftOK = leftArena.parentRow(leftRow); !leftOK {
 			return false
@@ -1044,10 +878,10 @@ func tokenFactsAtSlots(token tokenRef, slots [3]int, count int, out *[3]*conditi
 		if remaining == 0 {
 			return true
 		}
-		if row.parent.isZero() {
+		if row.parent == nil {
 			return false
 		}
-		current = tokenRef{handle: tokenHandle{arena: current.handle.arena, row: row.parent.row, generation: row.parent.gen}}
+		current = tokenRef{handle: tokenHandle{arena: current.handle.arena, row: row.parent}}
 	}
 	return false
 }

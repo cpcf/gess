@@ -132,7 +132,6 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 		leftRow.blockerCount++
 		if leftRow.blockerCount == 1 && !leftRow.output.isZero() {
 			m.owner.propagateRemoveFromStage(source, leftRow.output, nil, delta)
-			leftRow.output.release()
 			leftRow.output = tokenRef{}
 		}
 		return true
@@ -295,7 +294,6 @@ func (m reteGraphNegativeBetaMemory) emitLeftAdd(row *negativeBetaLeftRow, span 
 	}
 	if row.output.isZero() {
 		row.output = m.owner.newNegativeOutputTokenRef(row.token, span)
-		row.output.retain()
 	}
 	if row.output.isZero() {
 		return false, nil
@@ -645,7 +643,6 @@ func (t *negativeBetaLeftBucketTable) insert(row negativeBetaLeftRow) (int32, bo
 	t.chainRow(ref)
 	t.indexIdentity(ref)
 	t.rowCount++
-	row.token.retain()
 	recordTokenHolder(row.token, t.holderID(), ref)
 	return ref, true
 }
@@ -673,8 +670,6 @@ func (t *negativeBetaLeftBucketTable) unlink(ref int32) bool {
 	if t.heads[slot] == 0 {
 		t.slotCount--
 	}
-	t.rows[ref-1].token.release()
-	t.rows[ref-1].output.release()
 	t.rows[ref-1] = negativeBetaLeftRow{}
 	t.next[ref-1] = t.freeHead
 	t.prev[ref-1] = 0

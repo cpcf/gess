@@ -25,33 +25,22 @@ type terminalTokenRow struct {
 }
 
 type terminalTokenRef struct {
-	row        *tokenRow
-	generation uint64
+	row *tokenRow
 }
 
 func terminalTokenRefFromToken(token tokenRef) terminalTokenRef {
-	if token.isZero() {
-		return terminalTokenRef{}
-	}
-	return terminalTokenRef{
-		row:        token.handle.row,
-		generation: token.handle.generation,
-	}
+	return terminalTokenRef{row: token.handle.row}
 }
 
 func (r terminalTokenRef) isZero() bool {
-	return r.row == nil || r.generation == 0
+	return r.row == nil
 }
 
 func (r terminalTokenRef) toTokenRef(arena *tokenArena) tokenRef {
 	if r.isZero() || arena == nil {
 		return tokenRef{}
 	}
-	return tokenRef{handle: tokenHandle{
-		arena:      arena,
-		row:        r.row,
-		generation: r.generation,
-	}}
+	return tokenRef{handle: tokenHandle{arena: arena, row: r.row}}
 }
 
 type terminalBranchSupportState struct {
@@ -636,7 +625,6 @@ func (m *terminalTokenMemory) insertFreshTerminalRow(token tokenRef, branchID in
 	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(key, rowID)
 	m.markFactRowsDirty()
-	token.retainChain()
 	return handle
 }
 
@@ -693,7 +681,6 @@ func (m *terminalTokenMemory) insertTerminalRow(token tokenRef, branchID int, id
 	m.addTerminalBranchSupport(rowID, branchID)
 	m.appendIdentityIndexRow(key, rowID)
 	m.markFactRowsDirty()
-	token.retainChain()
 	return handle, true
 }
 
@@ -883,7 +870,6 @@ func (m *terminalTokenMemory) removeRow(rowID graphTokenRowID, counters *propaga
 	if !m.factRowsDirty {
 		m.removeTokenFacts(m.rowToken(removed), rowID)
 	}
-	m.rowToken(removed).releaseChain()
 	m.clearRowForReuse(rowID)
 	if m.liveRows > 0 {
 		m.liveRows--
@@ -1210,7 +1196,6 @@ func (m *queryTerminalMemory) insertRow(token tokenRef) bool {
 	m.rows[rowID] = queryTerminalRow{token: token}
 	m.rowByToken[token.handle] = int(rowID)
 	m.rowByTokenReserve = max(m.rowByTokenReserve, len(m.rowByToken))
-	token.retain()
 	return true
 }
 
@@ -1288,7 +1273,6 @@ func (m *queryTerminalMemory) removeRow(rowID graphTokenRowID, counters *propaga
 		return
 	}
 	removed := m.rows[index]
-	removed.token.release()
 	if m.rowByToken != nil && !removed.token.isZero() {
 		delete(m.rowByToken, removed.token.handle)
 	}

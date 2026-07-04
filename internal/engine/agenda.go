@@ -32,7 +32,6 @@ func (r *activationRows) reset() {
 	}
 	for chunkIndex, chunk := range r.chunks {
 		for i := range chunk {
-			chunk[i].token.releaseChain()
 			chunk[i] = activation{}
 		}
 		r.chunks[chunkIndex] = chunk[:0]
@@ -1259,8 +1258,6 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		if !ok {
 			continue
 		}
-		update.after.retainChain()
-		existing.token.releaseChain()
 		existing.token = update.after
 		existing.maxRecency = update.after.maxRecency()
 		existing.totalRecency = update.after.totalRecency()
@@ -1501,7 +1498,6 @@ func (a *agenda) compactConsumedTokenActivation(current *activation) {
 		return
 	}
 	current.payload = payload
-	current.token.releaseChain()
 	current.token = tokenRef{}
 }
 
@@ -1543,7 +1539,6 @@ func (a *agenda) compactDeactivatedTokenActivation(current *activation) {
 	}
 	payload.factIDs = factIDs
 	payload.factVersions = factVersions
-	current.token.releaseChain()
 	current.token = tokenRef{}
 }
 
@@ -1555,7 +1550,6 @@ func rearmActivationToken(existing *activation, token tokenRef) {
 		return
 	}
 	existing.token = token
-	existing.token.retainChain()
 }
 
 // materializePublicTokenFactsInto reuses the capacity of ids and versions
@@ -2042,7 +2036,6 @@ func (a *agenda) storePreparedActivation(act *activation) activationKey {
 	}
 	a.nextOrdinal++
 	act.key = key
-	act.token.retainChain()
 	a.storeActivationRef(act)
 	if a.propagationCounters != nil {
 		a.propagationCounters.recordActivationStored()
@@ -2173,7 +2166,6 @@ func (a *agenda) compactActivationStorage() {
 			continue
 		}
 		if current.status != activationStatusPending {
-			current.token.releaseChain()
 			a.recycleActivationPayload(current.payload)
 			current.payload = nil
 			continue
@@ -2828,7 +2820,7 @@ func nextPublicTokenFact(token *tokenRef) (id FactID, version FactVersion, hasFa
 		}
 		slot := row.bindingSlot
 		id, version = row.factIdentity()
-		*token = tokenRef{handle: tokenHandle{arena: token.handle.arena, row: row.parent.row, generation: row.parent.gen}}
+		*token = tokenRef{handle: tokenHandle{arena: token.handle.arena, row: row.parent}}
 		if slot < 0 {
 			continue
 		}

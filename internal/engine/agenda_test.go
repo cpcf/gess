@@ -843,29 +843,34 @@ func TestTerminalTokenFastIdentityUsesBindingSlotsOutOfOrder(t *testing.T) {
 	}
 }
 
-func TestTokenArenaResetInvalidatesReusedRows(t *testing.T) {
+func TestTokenArenaResetRowsNeverAlias(t *testing.T) {
 	arena := newTokenArena()
 	firstFact := FactSnapshot{id: newFactID(1, 1), version: 3, recency: 10, generation: 1}
 	firstEntry := bindingTupleEntry{bindingSlot: 0, factID: firstFact.ID(), factVersion: firstFact.Version(), conditionPath: []int{0}}
 
 	stale := arena.add(tokenRef{}, firstEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(firstFact)}, firstFact.Recency(), firstFact.Generation())
-	if _, ok := stale.resolve(); !ok {
+	staleRow, ok := stale.resolve()
+	if !ok {
 		t.Fatal("token should resolve before reset")
 	}
 
 	arena.reset()
-	if _, ok := stale.resolve(); ok {
-		t.Fatal("token should not resolve after reset")
-	}
 
 	nextFact := FactSnapshot{id: newFactID(2, 1), version: 1, recency: 1, generation: 2}
 	nextEntry := bindingTupleEntry{bindingSlot: 0, factID: nextFact.ID(), factVersion: nextFact.Version()}
 	next := arena.add(tokenRef{}, nextEntry, conditionMatch{bindingSlot: 0, fact: newConditionFactRefFromSnapshot(nextFact)}, nextFact.Recency(), nextFact.Generation())
-	if _, ok := stale.resolve(); ok {
-		t.Fatal("stale token should not resolve after row reuse")
-	}
-	if _, ok := next.resolve(); !ok {
+	nextRow, ok := next.resolve()
+	if !ok {
 		t.Fatal("new token should resolve after reset")
+	}
+	if nextRow == staleRow {
+		t.Fatal("post-reset rows must never alias pre-reset handles")
+	}
+	if row, ok := stale.resolve(); ok && row.fact != nil && row.fact.ID() != firstFact.ID() {
+		t.Fatal("stale handle must never observe post-reset token data")
+	}
+	if tokenRefEqual(stale, next) {
+		t.Fatal("stale and post-reset tokens must not compare equal")
 	}
 }
 

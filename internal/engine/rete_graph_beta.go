@@ -1262,7 +1262,6 @@ func (m *reteGraphBetaMemory) releaseTransientTerminalDeltas() {
 		clear(m.terminalRemovedDeltas)
 		m.terminalRemovedDeltas = m.terminalRemovedDeltas[:0]
 	}
-	m.arena.flushPendingFree()
 }
 
 func (m *reteGraphBetaMemory) appendRemovedTerminalDelta(delta *reteAgendaDelta, removed reteTerminalTokenDelta) {
@@ -1465,15 +1464,10 @@ func (m *reteGraphAggregateBucket) clear() {
 	if m == nil {
 		return
 	}
-	m.parent.release()
 	m.parent = tokenRef{}
-	for i := range m.inputTokens {
-		m.inputTokens[i].release()
-	}
 	clear(m.inputTokens)
 	m.inputTokens = m.inputTokens[:0]
 	m.accumulator.clear()
-	m.token.releaseChain()
 	m.token = tokenRef{}
 	m.hasValue = false
 }
@@ -2821,7 +2815,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	if !bucket.token.isZero() {
 		m.propagateRemoveFromStage(stage, bucket.token, counters, delta)
-		bucket.token.releaseChain()
 		bucket.token = tokenRef{}
 		bucket.hasValue = false
 	}
@@ -2850,7 +2843,6 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	// rows that are never stored in any node memory.
 	bucket.token = token
 	bucket.hasValue = true
-	token.retainChain()
 	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
 		delta.supported = false
 	}
@@ -2991,12 +2983,10 @@ func (t *reteGraphAggregateBucketTable) allocate(parent tokenRef) reteGraphAggre
 		}
 		bucket.clear()
 		bucket.parent = parent
-		parent.retain()
 		return id
 	}
 	id := reteGraphAggregateBucketID(len(t.rows))
 	t.rows = append(t.rows, reteGraphAggregateBucket{id: id, parent: parent})
-	parent.retain()
 	return id
 }
 
@@ -3109,7 +3099,6 @@ func (m *reteGraphAggregateBucket) addInputToken(token tokenRef) bool {
 		}
 	}
 	m.inputTokens = append(m.inputTokens, token)
-	token.retain()
 	return true
 }
 
@@ -3121,7 +3110,6 @@ func (m *reteGraphAggregateBucket) removeInputToken(token tokenRef) bool {
 		if !tokenRefEqual(existing, token) {
 			continue
 		}
-		m.inputTokens[i].release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
@@ -3142,7 +3130,6 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFact(id FactID) bo
 			i++
 			continue
 		}
-		token.release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
@@ -3171,7 +3158,6 @@ func (m *reteGraphAggregateBucket) removeInputTokensContainingFactSubtractive(ct
 		if subtracted && !m.removeAccumulatorToken(ctx, node, token) {
 			subtracted = false
 		}
-		token.release()
 		last := len(m.inputTokens) - 1
 		m.inputTokens[i] = m.inputTokens[last]
 		m.inputTokens[last] = tokenRef{}
