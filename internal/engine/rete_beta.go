@@ -36,11 +36,13 @@ type tokenRowEntry struct {
 // long as a handle or a descendant row's parent pointer references it, so
 // there is no refcounting, recycling, or staleness generation.
 type tokenRow struct {
-	parent       *tokenRow
-	bindingSlot  int
-	fact         *conditionFactRef
-	value        Value
-	hasValue     bool
+	parent      *tokenRow
+	bindingSlot int
+	fact        *conditionFactRef
+	// value is set only for value-carrying entries (aggregate and computed
+	// results); keeping it out of line keeps the common fact-carrying row
+	// small, which matters because rows dominate propagation allocation.
+	value        *Value
 	size         int
 	maxRecency   Recency
 	totalRecency Recency
@@ -448,12 +450,15 @@ func (r *tokenRow) conditionMatch() (conditionMatch, bool) {
 	if r.fact != nil {
 		fact = *r.fact
 	}
-	return conditionMatch{
+	match := conditionMatch{
 		bindingSlot: r.bindingSlot,
 		fact:        fact,
-		value:       r.value,
-		hasValue:    r.hasValue,
-	}, true
+	}
+	if r.value != nil {
+		match.value = *r.value
+		match.hasValue = true
+	}
+	return match, true
 }
 
 // applyEntryIdentity folds a public entry into the chain identity
@@ -472,8 +477,12 @@ func (r *tokenRow) setEntry(entry tokenRowEntry) {
 		return
 	}
 	r.bindingSlot = entry.bindingSlot
-	r.value = entry.value
-	r.hasValue = entry.hasValue
+	if entry.hasValue {
+		value := entry.value
+		r.value = &value
+	} else {
+		r.value = nil
+	}
 }
 
 func (r *tokenRow) tokenRowEntry() tokenRowEntry {
@@ -482,10 +491,11 @@ func (r *tokenRow) tokenRowEntry() tokenRowEntry {
 	}
 	out := tokenRowEntry{
 		bindingSlot: r.bindingSlot,
-		value:       r.value,
-		hasValue:    r.hasValue,
 	}
-	if !r.hasValue && r.fact != nil {
+	if r.value != nil {
+		out.value = *r.value
+		out.hasValue = true
+	} else if r.fact != nil {
 		out.factID = r.fact.ID()
 		out.factVersion = r.fact.Version()
 	}
@@ -858,7 +868,7 @@ func tokenFactPtrAtSlot(token tokenRef, slot int) (fact *conditionFactRef, found
 	arena := token.handle.arena
 	for row != nil {
 		if row.bindingSlot == slot {
-			if row.hasValue || row.fact == nil {
+			if row.value != nil || row.fact == nil {
 				return nil, false, false
 			}
 			return row.fact, true, true

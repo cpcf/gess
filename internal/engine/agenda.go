@@ -2542,7 +2542,7 @@ func candidateIdentityForTerminalTokenFast(rule compiledRule, token tokenRef) (c
 		if seen&mask != 0 {
 			return candidateIdentity{}, false
 		}
-		if row.hasValue {
+		if row.value != nil {
 			valueEntries[slot] = row.tokenRowEntry()
 			values |= mask
 		} else {

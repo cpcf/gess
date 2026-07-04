@@ -5586,7 +5586,7 @@ func (t *reteGraphTerminalMemory) terminalTokenIdentitySmall(token tokenRef) (ca
 			if seen&mask != 0 {
 				return candidateIdentity{}, false
 			}
-			if row.hasValue {
+			if row.value != nil {
 				valueEntries[slot] = row.tokenRowEntry()
 				values |= mask
 			} else {
@@ -5717,7 +5717,7 @@ func tokenFactMatchForBindingSlot(token tokenRef, bindingSlot int) (conditionMat
 	}
 	arena := token.handle.arena
 	for row != nil {
-		if !row.hasValue {
+		if row.value == nil {
 			return row.conditionMatch()
 		}
 		if row, ok = arena.parentRow(row); !ok {
