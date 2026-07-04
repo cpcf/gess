@@ -1,10 +1,20 @@
 CLIPS
 APIs
 CVEs
+backchain
+backchaining
+boolean
+booleans
 deduplicates
+destructuring
+fanout
 Gess
 gessc
+gessfmt
 go:generate
+goroutine
+goroutines
+multifield
 reachability
 Rete
 rollout
@@ -12,4 +22,5 @@ ruleset
 rulesets
 suppressions
 unpatched
+variadic
 walkthrough

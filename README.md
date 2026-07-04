@@ -102,11 +102,30 @@ defer session.Close()
 _, err = session.Run(ctx)
 ```
 
-See `TUTORIAL.md` for a fuller walkthrough based on
+See `docs/TUTORIAL.md` for a fuller walkthrough based on
 `examples/gess-files/order_routing`.
 
 For an interactive edit-and-run workshop, use `tutorial/README.md` or run
 `go run ./tutorial/cmd/gess-tutorial`.
+
+## Documentation
+
+The guides under [`docs/`](docs/README.md) cover the engine in depth:
+
+- [Core concepts](docs/concepts.md): templates, facts, rules, activations,
+  the agenda, sessions, rulesets, and queries.
+- [The `.gess` language reference](docs/gess-language.md).
+- [Go API guide](docs/go-api.md) for the `rules`, `session`, and `dsl`
+  packages.
+- [Session lifecycle](docs/session-lifecycle.md): mutations, runs, queries,
+  snapshots, events, focus, and ruleset swaps.
+- [Command-line tools](docs/cli.md): `gessc` and `gessfmt`.
+- [Advanced behavior](docs/advanced.md): the Rete runtime, aggregates,
+  higher-order conditions, logical support, backward chaining, and module
+  focus.
+- [Examples map](docs/examples.md): where to start in `examples/`.
+- [Developer guide](docs/contributing.md): repository layout, architecture,
+  tests, and benchmarks.
 
 ## Packages
 

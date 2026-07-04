@@ -1,0 +1,323 @@
+# Go API guide
+
+Gess exposes three public packages. Each re-exports types from the internal
+engine, so import paths stay stable while the implementation evolves:
+
+- `github.com/cpcf/gess/rules`: definitions and compilation, covering
+  templates, rules, queries, actions, expressions, values, and the compiled
+  `Ruleset`.
+- `github.com/cpcf/gess/session`: the runtime, covering sessions,
+  mutations, runs, queries, snapshots, and events.
+- `github.com/cpcf/gess/dsl`: `.gess` parsing, loading, code generation, and
+  the registry that connects `.gess` files to host Go code.
+
+The preferred workflow keeps rule definitions in `.gess` files compiled with
+`gessc` (see `TUTORIAL.md`). This guide covers the programmatic API,
+which the generated code uses and which is available directly when rules
+are built in Go.
+
+## Building a ruleset
+
+A `rules.Workspace` collects definitions; `Compile` produces an immutable
+`*rules.Ruleset`:
+
+```go
+workspace := rules.NewWorkspace()
+// workspace.AddTemplate, AddRule, AddAction, AddQuery, ...
+ruleset, err := workspace.Compile(ctx)
+```
+
+Workspace methods: `AddModule`, `AddTemplate`, `AddAction` /
+`ReplaceAction` / `RemoveAction`, `AddFunction` / `ReplaceFunction` /
+`RemoveFunction`, `AddRule` / `ReplaceRule` / `RemoveRule`, and `AddQuery`
+/ `ReplaceQuery` / `RemoveQuery`. Definitions are validated at `Add` time
+and again at compile; errors wrap `rules.ErrValidation` and related
+sentinels.
+
+A compiled ruleset is safe to share: sessions never mutate it, and several
+sessions can use the same ruleset.
+
+## Templates
+
+```go
+err := workspace.AddTemplate(rules.TemplateSpec{
+	Name: "fulfillment-route",
+	Fields: []rules.FieldSpec{
+		{Name: "order", Kind: rules.ValueString, Required: true},
+		{Name: "lane", Kind: rules.ValueString, Required: true},
+		{Name: "warehouse", Kind: rules.ValueString, Required: true},
+	},
+	DuplicatePolicy:   rules.DuplicateUniqueKey,
+	DuplicateKeyNames: []string{"order"},
+})
+```
+
+`TemplateSpec` fields: `Name`, `Module` (defaults to `MAIN`), `Key`
+(defaults to the name), `Fields`, `DuplicatePolicy`, `DuplicateKeyNames`,
+and `BackchainReactive`. `FieldSpec` fields: `Name`, `Kind` (defaults to
+`ValueAny`), `Required`, `Default` with `HasDefault`, and `AllowedValues`.
+
+Duplicate policies: `DuplicateStructural` (the zero value) deduplicates
+facts with identical fields, `DuplicateAllow` permits duplicates, and
+`DuplicateUniqueKey` deduplicates by `DuplicateKeyNames`, which must name
+declared fields.
+
+## Rules
+
+A `rules.RuleSpec` has a name, an optional module, salience, an optional
+auto-focus flag, a condition tree, and a list of action references:
+
+```go
+err := workspace.AddRule(rules.RuleSpec{
+	Name: "route-vip-order",
+	ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+		rules.Match{Binding: "order", Target: rules.TemplateFact("order")},
+		rules.Match{
+			Binding: "customer",
+			Target:  rules.TemplateFact("customer"),
+			FieldConstraints: []rules.FieldConstraintSpec{
+				{Field: "segment", Operator: rules.FieldConstraintEqual, Value: "vip"},
+			},
+			JoinConstraints: []rules.JoinConstraintSpec{
+				{Field: "id", Operator: rules.FieldConstraintEqual,
+					Ref: rules.FieldRef{Binding: "order", Field: "customer"}},
+			},
+		},
+	}},
+	Actions: []rules.RuleActionSpec{{Name: "route-vip-order"}},
+})
+```
+
+### Condition forms
+
+`ConditionSpec` is an interface with these implementations:
+
+- `rules.Match`: a positive fact pattern with a `Binding`, a `Target`,
+  `FieldConstraints`, `JoinConstraints`, `Predicates` (expressions), and
+  `ListPatterns`.
+- `rules.And`, `rules.Or`: grouping. Bindings inside an `Or` branch stay
+  local to that branch.
+- `rules.Not`: absence; bindings inside are local.
+- `rules.Exists(condition)`: at least one match, one activation.
+- `rules.Forall(domain, requirement)`: every domain match has a matching
+  requirement.
+- `rules.Test{Expression: ...}`: a boolean expression over earlier
+  bindings.
+- `rules.Accumulate(input, specs...)`: aggregation; see the aggregates
+  section.
+- `rules.Explicit{Condition: ...}`: opt a condition out of backward-chaining
+  demand generation.
+
+`RuleSpec` also accepts a flat `Conditions []RuleConditionSpec` slice as a
+shorthand for a top-level `And` of matches; set either `Conditions` or
+`ConditionTree`, not both.
+
+### Targets, constraints, and joins
+
+A `Match` targets facts through a `FactTarget`: `TemplateFact(name)`,
+`TemplateFactIn(module, name)`, `TemplateKeyFact(key)` for template-backed
+facts, or `DynamicFact(name)` / `DynamicFactIn(module, name)` for facts
+asserted without a template.
+
+`FieldConstraintSpec` compares one field (or nested `Path`) of the matched
+fact against a constant `Value` with an operator: `FieldConstraintEqual`,
+`FieldConstraintNotEqual`, `FieldConstraintLessThan`,
+`FieldConstraintLessOrEqual`, `FieldConstraintGreaterThan`,
+`FieldConstraintGreaterOrEqual`, or `FieldConstraintExists` (no value).
+
+`JoinConstraintSpec` compares a field of the matched fact against a field
+of an earlier binding through `Ref: rules.FieldRef{Binding, Field}`.
+Equality joins compile to indexed hash joins in the Rete graph.
+
+### Aggregates
+
+```go
+rules.Accumulate(
+	rules.Match{Binding: "transaction", Target: rules.TemplateFact("transaction")},
+	rules.Count().As("count"),
+	rules.Sum(rules.BindingFieldExpr{Binding: "transaction", Field: "amount"}).As("total"),
+)
+```
+
+Aggregate constructors: `rules.Count()`, `rules.Sum(expr)`,
+`rules.Min(expr)`, `rules.Max(expr)`, and `rules.Collect(expr)`. Bind each
+result with `.As(name)`; actions read results through
+`ActionContext.BindingValue(name)`.
+
+## Actions
+
+Rules reference actions by name; the workspace owns the implementations:
+
+```go
+err := workspace.AddAction(rules.ActionSpec{
+	Name: "route-vip-order",
+	Fn: func(ctx rules.ActionContext) error {
+		order, _ := ctx.BindingScalarValue("order", "id")
+		warehouse, _ := ctx.BindingScalarValue("inventory", "warehouse")
+		_, err := ctx.AssertTemplate(rules.TemplateKey("fulfillment-route"), rules.Fields{
+			"order":     order,
+			"lane":      mustValue("expedite"),
+			"warehouse": warehouse,
+		})
+		return err
+	},
+})
+```
+
+`ActionSpec` takes exactly one of `Fn` (an `ActionFunc`) or
+`AssertTemplateValues` (a declarative assert of expression values in
+template field order, which the `.gess` compiler uses for `assert`
+actions). The optional `BindingReads` declares which bindings the action
+reads so the runtime can avoid materializing the rest.
+
+The `rules.ActionContext` passed to `Fn` provides activation identity,
+binding access, the mutation API including `AssertLogical`, `Halt`, and
+focus control. See `session-lifecycle.md` for the full method list.
+
+## Queries
+
+```go
+err := workspace.AddQuery(rules.QuerySpec{
+	Name:       "accounts-by-region",
+	Parameters: []rules.QueryParameterSpec{{Name: "region", Kind: rules.ValueString}},
+	ConditionTree: rules.Match{
+		Binding: "account",
+		Target:  rules.TemplateFact("account"),
+		Predicates: []rules.ExpressionSpec{
+			rules.CompareExpr{
+				Operator: rules.ExpressionCompareEqual,
+				Left:     rules.CurrentFieldExpr{Field: "region"},
+				Right:    rules.ParamExpr{Name: "region"},
+			},
+		},
+	},
+	Returns: []rules.QueryReturnSpec{
+		rules.ReturnValue("id", rules.BindingFieldExpr{Binding: "account", Field: "id"}),
+		rules.ReturnValue("balance", rules.BindingFieldExpr{Binding: "account", Field: "balance"}),
+	},
+})
+```
+
+A query has parameters (referenced with `rules.ParamExpr`), the same
+condition forms as a rule, and returns built with `rules.ReturnFact` for
+whole facts or `rules.ReturnValue` for scalar expressions.
+Execute queries with `session.Query` or `session.QueryAll`.
+
+## Expressions
+
+`ExpressionSpec` nodes compose predicates, tests, aggregate inputs, and
+query returns:
+
+- `rules.ConstExpr{Value: ...}`: a constant.
+- `rules.CurrentFieldExpr{Field: ...}` or `rules.CurrentPath(path)`: a
+  field of the fact matched by the current condition.
+- `rules.BindingFieldExpr{Binding, Field}` or
+  `rules.BindingPath(binding, path)`: a field of an earlier binding.
+- `rules.BindingValueExpr{Binding: ...}`: a value binding, such as an
+  aggregate result.
+- `rules.ParamExpr{Name: ...}`: a query parameter.
+- `rules.HasPath(path)`: whether a nested path exists.
+- `rules.CompareExpr{Operator, Left, Right}` with the
+  `ExpressionCompare...` operators.
+- `rules.BooleanExpr{Operator, Operands}` with `ExpressionBoolAnd`,
+  `ExpressionBoolOr`, and `ExpressionBoolNot`.
+- `rules.Call(name, args...)`: invoke a registered pure function.
+
+Nested values in `LIST` and `MAP` fields are addressed with
+`rules.Path(root, segments...)`, using `rules.MapKey(key)` and
+`rules.ListIndex(index)` segments.
+
+## Pure functions
+
+Pure functions are deterministic helpers callable from expressions:
+
+```go
+err := workspace.AddFunction(rules.PureFunctionSpec{
+	Name:   "risk-band",
+	Args:   []rules.ValueKind{rules.ValueInt},
+	Return: rules.ValueString,
+	Func: func(_ context.Context, args []rules.Value) (rules.Value, error) {
+		score, _ := args[0].AsInt64()
+		if score >= 90 {
+			return rules.NewValue("high")
+		}
+		return rules.NewValue("low")
+	},
+})
+```
+
+Provide exactly one of `Func` (variadic) or the fixed-arity `Func0` through
+`Func3`, matching `len(Args)`. `rules.Call("risk-band", ...)` resolves the
+name at compile time; unknown names fail compilation with an error wrapping
+`rules.ErrFunctionValidation`.
+
+## Values and fields
+
+Facts carry `rules.Value` data with kinds `ValueNull`, `ValueBool`,
+`ValueInt`, `ValueFloat`, `ValueString`, `ValueList`, and `ValueMap`.
+Construct values from Go data:
+
+- `rules.NewValue(raw)`: converts booleans, strings, integer types, floats,
+  `[]any` and typed slices, and `map[string]any`. Unsupported inputs, such
+  as structs, functions, NaN, or unsigned values past the signed range,
+  return an error wrapping `rules.ErrUnsupportedValue`.
+- `rules.NewFields(map[string]any)`, `rules.NewFieldsFromPairs(pairs...)`,
+  and `rules.MustFields(pairs...)` build field maps; `MustFields` panics on
+  conversion errors and suits tests and fixed data.
+
+Read values with `Kind()`, `AsBool()`, `AsInt64()`, `AsFloat64()`,
+`AsString()`, and `Equal()`.
+
+## The `dsl` package
+
+The `dsl` package connects `.gess` sources to the preceding API:
+
+- `dsl.Parse(name, source)` parses a `.gess` file into a `*dsl.Document`.
+- `dsl.Load(ctx, workspace, doc, registry)` loads a parsed document into a
+  workspace.
+- `dsl.Compile(ctx, name, source, registry)` parses, loads, and compiles in
+  one call.
+- `dsl.GenerateGo(ctx, sources, opts)` generates Go source with a build
+  function; `gessc` is a thin wrapper around it.
+- `dsl.InitialFacts(doc)` extracts `deffacts` facts as
+  `session.InitialFact` values.
+
+`dsl.Registry` supplies the host implementations a `.gess` file references:
+
+```go
+registry := dsl.Registry{
+	Calls: map[string]dsl.CallFunc{
+		"record": func(ctx rules.ActionContext, args []rules.Value) error {
+			return nil
+		},
+	},
+}
+```
+
+`Registry.Calls` backs `(call name arg...)` actions, `Registry.Actions`
+backs zero-argument `(call name)` actions, and `Registry.Functions`
+registers pure functions for expressions. Loading fails when a `.gess` file
+references a name the registry doesn't provide.
+
+## Running the result
+
+```go
+session, err := sess.New(ruleset, sess.WithInitialFacts(initials...))
+if err != nil {
+	return err
+}
+defer session.Close()
+
+if _, err := session.AssertTemplate(ctx, rules.TemplateKey("order"), fields); err != nil {
+	return err
+}
+result, err := session.Run(ctx)
+if err != nil {
+	return err
+}
+rows, err := session.QueryAll(ctx, "routes", nil)
+```
+
+See `session-lifecycle.md` for the full session API: mutation results,
+run statuses, queries, snapshots, events, the focus stack, and
+`ApplyRuleset`.

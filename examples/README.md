@@ -12,7 +12,7 @@
 - `vulnerability_management`: larger end-to-end example.
 - `stress`: temporary synthetic stress tools for local scaling experiments.
 
-Start with `../TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow.
+Start with `TUTORIAL.md` for the preferred `.gess` plus `gessc` workflow.
 
 Run the examples with:
 
