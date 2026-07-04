@@ -119,10 +119,6 @@ func render(fset *token.FileSet, pkg *doc.Package, opts renderOptions) (string, 
 
 	if len(pkg.Consts) > 0 {
 		b.WriteString("## Constants\n\n")
-		b.WriteString(
-			"Go groups these as one block, so they render here as one block too; " +
-				"see the inline comments for per-constant documentation.\n\n",
-		)
 		for _, v := range pkg.Consts {
 			writeNameAnchors(&b, v.Names)
 			writeCode(&b, formatDecl(v.Decl))
@@ -131,10 +127,6 @@ func render(fset *token.FileSet, pkg *doc.Package, opts renderOptions) (string, 
 
 	if len(pkg.Vars) > 0 {
 		b.WriteString("## Variables\n\n")
-		b.WriteString(
-			"Go groups these as one block, so they render here as one block too; " +
-				"see the inline comments for per-variable documentation.\n\n",
-		)
 		for _, v := range pkg.Vars {
 			writeNameAnchors(&b, v.Names)
 			writeCode(&b, formatDecl(v.Decl))
