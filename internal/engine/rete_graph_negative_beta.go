@@ -533,8 +533,7 @@ func (t *negativeBetaLeftBucketTable) removeIdentityToken(token tokenRef, onTouc
 	if !ok {
 		return t.removeIdentityTokenScan(token, onTouch)
 	}
-	if t.id != 0 && tokenRow.holderTableID == t.id && tokenRow.holderRef > 0 && int(tokenRow.holderRef) <= len(t.rows) {
-		ref := tokenRow.holderRef
+	if ref := tokenRow.holderRefForTable(t.id); t.id != 0 && ref > 0 && int(ref) <= len(t.rows) {
 		held := &t.rows[ref-1]
 		if held.token.handle.row == tokenRow {
 			if onTouch != nil {

@@ -61,12 +61,15 @@ type tokenRow struct {
 	// the next safe boundary.
 	refs        int32
 	pendingFree bool
-	// holderTableID/holderRef locate the single bucket-table row storing this
-	// token, so exact-handle removals unlink directly without identity-index
-	// probes. holderRef == tokenHolderMulti marks tokens stored in more than
-	// one table row; those removals use the identity-index path.
-	holderTableID uint32
-	holderRef     int32
+	// holderTableID/holderRef (and the second slot) locate the bucket-table
+	// rows storing this token, so exact-handle removals unlink directly
+	// without identity-index probes. holderRef == tokenHolderMulti marks
+	// tokens stored in more table rows than the slots track; those removals
+	// use the identity-index path.
+	holderTableID  uint32
+	holderRef      int32
+	holder2TableID uint32
+	holder2Ref     int32
 }
 
 const tokenHolderMulti int32 = -1
@@ -80,8 +83,8 @@ func nextTokenHolderTableID() uint32 {
 	return tokenHolderTableIDSeq.Add(1)
 }
 
-// recordTokenHolder marks the token's row as stored at (tableID, ref);
-// a second holder demotes the row to the identity-index removal path.
+// recordTokenHolder marks the token's row as stored at (tableID, ref); a
+// third holder demotes the row to the identity-index removal path.
 func recordTokenHolder(token tokenRef, tableID uint32, ref int32) {
 	row, ok := token.resolve()
 	if !ok {
@@ -92,10 +95,27 @@ func recordTokenHolder(token tokenRef, tableID uint32, ref int32) {
 	case row.holderTableID == 0 && row.holderRef == 0:
 		row.holderTableID = tableID
 		row.holderRef = ref
+	case row.holder2TableID == 0 && row.holder2Ref == 0:
+		row.holder2TableID = tableID
+		row.holder2Ref = ref
 	default:
 		row.holderTableID = 0
 		row.holderRef = tokenHolderMulti
+		row.holder2TableID = 0
+		row.holder2Ref = 0
 	}
+}
+
+// holderRefForTable reports the row ref this token is stored at in the given
+// table, or 0 when untracked there.
+func (r *tokenRow) holderRefForTable(tableID uint32) int32 {
+	if r.holderTableID == tableID && r.holderRef > 0 {
+		return r.holderRef
+	}
+	if r.holder2TableID == tableID && r.holder2Ref > 0 {
+		return r.holder2Ref
+	}
+	return 0
 }
 
 // clearTokenHolder resets the holder record when the recorded row is
@@ -108,6 +128,9 @@ func clearTokenHolder(token tokenRef, tableID uint32, ref int32) {
 	if row.holderTableID == tableID && row.holderRef == ref {
 		row.holderTableID = 0
 		row.holderRef = 0
+	} else if row.holder2TableID == tableID && row.holder2Ref == ref {
+		row.holder2TableID = 0
+		row.holder2Ref = 0
 	}
 }
 
