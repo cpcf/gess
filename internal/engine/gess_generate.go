@@ -56,6 +56,7 @@ type generatedGessProgram struct {
 	modules   []ModuleSpec
 	globals   []GlobalSpec
 	templates []TemplateSpec
+	functions []ExpressionFunctionSpec
 	actions   []generatedGessAction
 	rules     []RuleSpec
 	queries   []QuerySpec
@@ -127,6 +128,12 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 					return generatedGessProgram{}, err
 				}
 				program.templates = append(program.templates, workspace.templates[before:]...)
+			case "deffunction":
+				before := len(workspace.exprFuncs)
+				if err := loader.loadExpressionFunction(form); err != nil {
+					return generatedGessProgram{}, err
+				}
+				program.functions = append(program.functions, workspace.exprFuncs[before:]...)
 			}
 		}
 	}
@@ -139,7 +146,7 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 				return generatedGessProgram{}, err
 			}
 			switch form.Head() {
-			case "defmodule", "defglobal", "deftemplate":
+			case "defmodule", "defglobal", "deftemplate", "deffunction":
 			case "deffacts":
 				initials, err := loader.loadFacts(form)
 				if err != nil {
@@ -380,6 +387,9 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	for _, template := range p.templates {
 		fmt.Fprintf(&b, "\tif err := workspace.AddTemplate(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderTemplateSpec(template))
 	}
+	for _, function := range p.functions {
+		fmt.Fprintf(&b, "\tif err := workspace.AddExpressionFunction(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderExpressionFunctionSpec(function))
+	}
 	for _, action := range p.actions {
 		if check := renderGeneratedActionRegistryCheck(action); check != "" {
 			b.WriteString(check)
@@ -453,6 +463,33 @@ func renderTemplateSpec(spec TemplateSpec) string {
 		b.WriteString(", BackchainReactive: true")
 	}
 	b.WriteString("}")
+	return b.String()
+}
+
+func renderExpressionFunctionSpec(spec ExpressionFunctionSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "gessrules.ExpressionFunctionSpec{Name: %s, Return: %s", strconv.Quote(spec.Name), renderValueKind(spec.Return))
+	if len(spec.Params) > 0 {
+		fmt.Fprintf(&b, ", Params: []gessrules.ExpressionFunctionParamSpec{%s}", renderExpressionFunctionParams(spec.Params))
+	}
+	if spec.Expression != nil {
+		fmt.Fprintf(&b, ", Expression: %s", renderExpression(spec.Expression))
+	}
+	if spec.Description != "" {
+		fmt.Fprintf(&b, ", Description: %s", strconv.Quote(spec.Description))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderExpressionFunctionParams(params []ExpressionFunctionParamSpec) string {
+	var b strings.Builder
+	for i, param := range params {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "{Name: %s, Kind: %s}", strconv.Quote(param.Name), renderValueKind(param.Kind))
+	}
 	return b.String()
 }
 

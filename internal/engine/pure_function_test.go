@@ -611,6 +611,167 @@ func TestPureFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 	}
 }
 
+func TestExpressionFunctionPredicatesExecuteAlphaBetaAndTest(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddExpressionFunction(t, workspace, ExpressionFunctionSpec{
+		Name:   "high-score",
+		Params: []ExpressionFunctionParamSpec{{Name: "score", Kind: ValueInt}},
+		Return: ValueBool,
+		Expression: CompareExpr{
+			Operator: ExpressionCompareGreaterOrEqual,
+			Left:     ParamExpr{Name: "score"},
+			Right:    ConstExpr{Value: 90},
+		},
+	})
+	mustAddExpressionFunction(t, workspace, ExpressionFunctionSpec{
+		Name:   "same-text",
+		Params: []ExpressionFunctionParamSpec{{Name: "left", Kind: ValueString}, {Name: "right", Kind: ValueString}},
+		Return: ValueBool,
+		Expression: CompareExpr{
+			Operator: ExpressionCompareEqual,
+			Left:     ParamExpr{Name: "left"},
+			Right:    ParamExpr{Name: "right"},
+		},
+	})
+	mustAddExpressionFunction(t, workspace, ExpressionFunctionSpec{
+		Name:       "composed-high-score",
+		Params:     []ExpressionFunctionParamSpec{{Name: "score", Kind: ValueInt}},
+		Return:     ValueBool,
+		Expression: Call("high-score", ParamExpr{Name: "score"}),
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "alpha-expression-call",
+		Conditions: []RuleConditionSpec{{
+			Binding: "finding",
+			Target:  DynamicFact("finding"),
+			Predicates: []ExpressionSpec{
+				Call("high-score", CurrentFieldExpr{Field: "score"}),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "beta-expression-call",
+		Conditions: []RuleConditionSpec{
+			{Binding: "system", Target: DynamicFact("system")},
+			{
+				Binding: "finding",
+				Target:  DynamicFact("finding"),
+				Predicates: []ExpressionSpec{
+					Call("same-text", CurrentFieldExpr{Field: "system-id"}, BindingFieldExpr{Binding: "system", Field: "id"}),
+				},
+			},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "test-expression-call",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "finding", Target: DynamicFact("finding")}),
+			Test{Expression: Call("composed-high-score", BindingFieldExpr{Binding: "finding", Field: "score"})},
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	definition, ok := revision.Function("high-score")
+	if !ok || !definition.ExpressionBacked() {
+		t.Fatalf("high-score inspection = (%v, %v), want expression-backed function", definition, ok)
+	}
+	if params := definition.ParamNames(); len(params) != 1 || params[0] != "score" {
+		t.Fatalf("ParamNames = %#v, want [score]", params)
+	}
+	session := mustSession(t, revision, "expression-function-predicate-session")
+
+	ctx := context.Background()
+	if _, err := session.Assert(ctx, "system", mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(system): %v", err)
+	}
+	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-1", "score": 95})); err != nil {
+		t.Fatalf("Assert(finding high): %v", err)
+	}
+	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-2", "score": 20})); err != nil {
+		t.Fatalf("Assert(finding low): %v", err)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 3 {
+		t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+	}
+}
+
+func TestExpressionFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
+	workspace := NewWorkspace()
+	mustAddExpressionFunction(t, workspace, ExpressionFunctionSpec{
+		Name:       "identity-int",
+		Params:     []ExpressionFunctionParamSpec{{Name: "value", Kind: ValueInt}},
+		Return:     ValueInt,
+		Expression: ParamExpr{Name: "value"},
+	})
+	var observed Value
+	mustAddAction(t, workspace, ActionSpec{Name: "observe-total", Fn: func(ctx ActionContext) error {
+		value, ok := ctx.BindingValue("total")
+		if !ok {
+			return fmt.Errorf("missing total")
+		}
+		observed = value
+		return nil
+	}})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "aggregate-expression-call",
+		ConditionTree: Accumulate(Match(RuleConditionSpec{Binding: "item", Target: DynamicFact("item")}),
+			Sum(Call("identity-int", BindingFieldExpr{Binding: "item", Field: "amount"})).As("total")),
+		Actions: []RuleActionSpec{{Name: "observe-total"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "item-values",
+		Conditions: []RuleConditionSpec{{Binding: "item", Target: DynamicFact("item")}},
+		Returns: []QueryReturnSpec{
+			ReturnValue("amount", Call("identity-int", BindingFieldExpr{Binding: "item", Field: "amount"})),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "expression-function-query-aggregate-session")
+
+	ctx := context.Background()
+	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 2})); err != nil {
+		t.Fatalf("Assert item 1: %v", err)
+	}
+	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 3})); err != nil {
+		t.Fatalf("Assert item 2: %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || !observed.Equal(mustValue(t, 5)) {
+		t.Fatalf("aggregate fired/total = %d/%v, want 1/5", result.Fired, observed)
+	}
+
+	rows, err := session.QueryAll(ctx, "item-values", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("query rows = %d, want 2", len(rows))
+	}
+	values := map[string]bool{}
+	for _, row := range rows {
+		value, ok := row.Value("amount")
+		if !ok {
+			t.Fatal("missing amount value")
+		}
+		values[value.canonicalKey()] = true
+	}
+	if !values[mustValue(t, 2).canonicalKey()] || !values[mustValue(t, 3).canonicalKey()] {
+		t.Fatalf("query amount values = %#v, want 2 and 3", values)
+	}
+}
+
 func mustPureFunctionFailureRuleset(t testing.TB) *Ruleset {
 	t.Helper()
 	fail := false
@@ -649,5 +810,12 @@ func mustAddPureFunction(t testing.TB, workspace *Workspace, spec PureFunctionSp
 	t.Helper()
 	if err := workspace.AddFunction(spec); err != nil {
 		t.Fatalf("AddFunction(%q): %v", spec.Name, err)
+	}
+}
+
+func mustAddExpressionFunction(t testing.TB, workspace *Workspace, spec ExpressionFunctionSpec) {
+	t.Helper()
+	if err := workspace.AddExpressionFunction(spec); err != nil {
+		t.Fatalf("AddExpressionFunction(%q): %v", spec.Name, err)
 	}
 }

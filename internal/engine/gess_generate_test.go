@@ -13,6 +13,12 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 (deftemplate item
   (slot id (type STRING) (required TRUE)))
 
+(deffunction same-id
+  (param ?left STRING)
+  (param ?right STRING)
+  (return BOOL)
+  (= ?left ?right))
+
 (deffacts seed
   (item (id "I-1")))
 
@@ -23,6 +29,7 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 
 (defquery items
   ?item <- (item (id ?id))
+  (test (same-id ?id "I-1"))
   (return (id ?id)))
 `)
 	generated, err := GenerateGessGo(context.Background(), []GessSourceFile{{Name: "items.gess", Source: source}}, GessGoGeneratorOptions{
@@ -40,6 +47,7 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 		"package rules",
 		"func BuildItems(ctx context.Context, registry gessdsl.Registry)",
 		"workspace.AddTemplate",
+		"workspace.AddExpressionFunction",
 		"workspace.AddAction",
 		"workspace.AddQuery",
 		"gessGeneratedCallAction",

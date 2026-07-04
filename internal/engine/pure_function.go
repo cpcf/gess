@@ -27,6 +27,19 @@ type PureFunctionSpec struct {
 	IndexKeyExtractor  bool
 }
 
+type ExpressionFunctionParamSpec struct {
+	Name string
+	Kind ValueKind
+}
+
+type ExpressionFunctionSpec struct {
+	Name        string
+	Params      []ExpressionFunctionParamSpec
+	Return      ValueKind
+	Expression  ExpressionSpec
+	Description string
+}
+
 func (s PureFunctionSpec) clone() PureFunctionSpec {
 	out := s
 	out.Name = strings.TrimSpace(out.Name)
@@ -42,10 +55,35 @@ func (s PureFunctionSpec) clone() PureFunctionSpec {
 	return out
 }
 
+func (s ExpressionFunctionSpec) clone() ExpressionFunctionSpec {
+	out := s
+	out.Name = strings.TrimSpace(out.Name)
+	out.Description = strings.TrimSpace(out.Description)
+	if out.Return == valueKindUnknown {
+		out.Return = ValueAny
+	}
+	out.Params = make([]ExpressionFunctionParamSpec, len(s.Params))
+	for i, param := range s.Params {
+		out.Params[i] = ExpressionFunctionParamSpec{
+			Name: strings.TrimSpace(param.Name),
+			Kind: param.Kind,
+		}
+		if out.Params[i].Kind == valueKindUnknown {
+			out.Params[i].Kind = ValueAny
+		}
+	}
+	out.Expression = cloneExpressionSpec(s.Expression)
+	return out
+}
+
 type PureFunctionDefinition struct {
 	name               string
+	paramNames         []string
 	args               []ValueKind
 	ret                ValueKind
+	description        string
+	expression         ExpressionSpec
+	expressionBacked   bool
 	order              int
 	equalityComparator bool
 	indexKeyExtractor  bool
@@ -59,8 +97,27 @@ func (f PureFunctionDefinition) Args() []ValueKind {
 	return append([]ValueKind(nil), f.args...)
 }
 
+func (f PureFunctionDefinition) ParamNames() []string {
+	return append([]string(nil), f.paramNames...)
+}
+
 func (f PureFunctionDefinition) Return() ValueKind {
 	return f.ret
+}
+
+func (f PureFunctionDefinition) Description() string {
+	return f.description
+}
+
+func (f PureFunctionDefinition) Expression() (ExpressionSpec, bool) {
+	if !f.expressionBacked {
+		return nil, false
+	}
+	return cloneExpressionSpec(f.expression), true
+}
+
+func (f PureFunctionDefinition) ExpressionBacked() bool {
+	return f.expressionBacked
 }
 
 func (f PureFunctionDefinition) DeclarationOrder() int {
@@ -77,6 +134,7 @@ func (f PureFunctionDefinition) IndexKeyExtractor() bool {
 
 type compiledPureFunction struct {
 	name               string
+	paramNames         []string
 	args               []ValueKind
 	ret                ValueKind
 	fn                 PureFunction
@@ -84,6 +142,10 @@ type compiledPureFunction struct {
 	fn1                PureFunction1
 	fn2                PureFunction2
 	fn3                PureFunction3
+	expression         *compiledExpression
+	expressionSpec     ExpressionSpec
+	description        string
+	expressionBacked   bool
 	order              int
 	equalityComparator bool
 	indexKeyExtractor  bool
@@ -213,7 +275,138 @@ func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunc
 }
 
 func (f compiledPureFunction) hasImplementation() bool {
-	return f.fn != nil || f.fn0 != nil || f.fn1 != nil || f.fn2 != nil || f.fn3 != nil
+	return f.fn != nil || f.fn0 != nil || f.fn1 != nil || f.fn2 != nil || f.fn3 != nil || f.expression != nil
+}
+
+func compileExpressionFunctionSpec(spec ExpressionFunctionSpec, order int, functions map[string]compiledPureFunction) (compiledPureFunction, error) {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "function name is required",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if !validPureFunctionName(normalized.Name) {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "invalid function name",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if !validPureFunctionValueKind(normalized.Return) {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "invalid function return kind",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	if normalized.Expression == nil {
+		return compiledPureFunction{}, &ValidationError{
+			Reason: "function expression is required",
+			Err:    ErrFunctionValidation,
+		}
+	}
+	params := make(map[string]ValueKind, len(normalized.Params))
+	paramNames := make([]string, 0, len(normalized.Params))
+	args := make([]ValueKind, 0, len(normalized.Params))
+	for _, param := range normalized.Params {
+		if param.Name == "" {
+			return compiledPureFunction{}, &ValidationError{
+				Reason: "function parameter name is required",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		if !validPureFunctionValueKind(param.Kind) {
+			return compiledPureFunction{}, &ValidationError{
+				Reason: "invalid function parameter kind",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		if _, exists := params[param.Name]; exists {
+			return compiledPureFunction{}, &ValidationError{
+				Reason: "duplicate function parameter",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		params[param.Name] = param.Kind
+		paramNames = append(paramNames, param.Name)
+		args = append(args, param.Kind)
+	}
+	if err := validateExpressionFunctionBodySpec(normalized.Expression); err != nil {
+		return compiledPureFunction{}, err
+	}
+	expression, _, err := compileExpressionSpecWithParams(normalized.Expression, normalized.Name, -1, -1, nil, nil, nil, nil, params, functions, nil)
+	if err != nil {
+		return compiledPureFunction{}, &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "invalid function expression",
+			Err:      fmt.Errorf("%w: %w", ErrFunctionValidation, err),
+		}
+	}
+	if !expressionKindAssignable(normalized.Return, expression.resultKind) {
+		return compiledPureFunction{}, &ValidationError{
+			RuleName: normalized.Name,
+			Reason:   "function expression return has incompatible type",
+			Err:      ErrFunctionValidation,
+		}
+	}
+	return compiledPureFunction{
+		name:             normalized.Name,
+		paramNames:       paramNames,
+		args:             args,
+		ret:              normalized.Return,
+		expression:       &expression,
+		expressionSpec:   cloneExpressionSpec(normalized.Expression),
+		description:      normalized.Description,
+		expressionBacked: true,
+		order:            order,
+	}, nil
+}
+
+func validateExpressionFunctionBodySpec(spec ExpressionSpec) error {
+	switch expression := spec.(type) {
+	case nil:
+		return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+	case ConstExpr, *ConstExpr, ParamExpr, *ParamExpr:
+		return nil
+	case CallExpr:
+		for _, arg := range expression.Args {
+			if err := validateExpressionFunctionBodySpec(arg); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *CallExpr:
+		if expression == nil {
+			return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+		}
+		return validateExpressionFunctionBodySpec(CallExpr(*expression))
+	case CompareExpr:
+		if err := validateExpressionFunctionBodySpec(expression.Left); err != nil {
+			return err
+		}
+		return validateExpressionFunctionBodySpec(expression.Right)
+	case *CompareExpr:
+		if expression == nil {
+			return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+		}
+		return validateExpressionFunctionBodySpec(CompareExpr(*expression))
+	case BooleanExpr:
+		for _, operand := range expression.Operands {
+			if err := validateExpressionFunctionBodySpec(operand); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *BooleanExpr:
+		if expression == nil {
+			return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+		}
+		return validateExpressionFunctionBodySpec(BooleanExpr(*expression))
+	default:
+		return &ValidationError{
+			Reason: "function expression may only reference parameters, constants, and function calls",
+			Err:    ErrFunctionValidation,
+		}
+	}
 }
 
 func validPureFunctionName(name string) bool {
@@ -249,8 +442,12 @@ func validPureFunctionIndexKeyKind(kind ValueKind) bool {
 func (f compiledPureFunction) inspect() PureFunctionDefinition {
 	return PureFunctionDefinition{
 		name:               f.name,
+		paramNames:         append([]string(nil), f.paramNames...),
 		args:               append([]ValueKind(nil), f.args...),
 		ret:                f.ret,
+		description:        f.description,
+		expression:         cloneExpressionSpec(f.expressionSpec),
+		expressionBacked:   f.expressionBacked,
 		order:              f.order,
 		equalityComparator: f.equalityComparator,
 		indexKeyExtractor:  f.indexKeyExtractor,

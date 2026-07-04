@@ -1305,7 +1305,23 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 	if err := ctx.Err(); err != nil {
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
 	}
-	if e.function.fn0 != nil {
+	if e.function.expression != nil {
+		args := make([]Value, len(e.operands))
+		for i, operand := range e.operands {
+			arg, argOK, err := eval(operand)
+			if err != nil || !argOK {
+				return Value{}, false, err
+			}
+			if !expressionKindAssignable(e.function.args[i], arg.Kind()) {
+				return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", i, arg.Kind(), e.function.args[i]))
+			}
+			args[i] = cloneValue(arg)
+		}
+		value, ok, err = e.function.evaluateExpression(ctx, args, meta, span)
+		if err != nil || !ok {
+			return value, ok, err
+		}
+	} else if e.function.fn0 != nil {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				value = Value{}
@@ -1418,6 +1434,32 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("return has kind %s, want %s", value.Kind(), e.function.ret))
 	}
 	return value, true, nil
+}
+
+func (f compiledPureFunction) evaluateExpression(ctx context.Context, args []Value, meta *FunctionEvaluationError, span *propagationCounterSpan) (Value, bool, error) {
+	if f.expression == nil {
+		return Value{}, false, fmt.Errorf("%w: malformed expression function %q", ErrFunctionEvaluation, f.name)
+	}
+	params := make(map[string]Value, len(args))
+	for i, arg := range args {
+		if i >= len(f.paramNames) {
+			return Value{}, false, recordFunctionEvaluationError(span, meta, f.name, fmt.Errorf("arity mismatch: got %d args, want %d", len(args), len(f.paramNames)))
+		}
+		params[f.paramNames[i]] = cloneValue(arg)
+	}
+	nestedMeta := &FunctionEvaluationError{FunctionName: f.name}
+	if meta != nil {
+		*nestedMeta = *meta
+		nestedMeta.FunctionName = f.name
+	}
+	value, ok, err := f.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, conditionFactRef{}, nil, params, nil, nestedMeta, span)
+	if err != nil || !ok {
+		return Value{}, false, err
+	}
+	if !expressionKindAssignable(f.ret, value.Kind()) {
+		return Value{}, false, recordFunctionEvaluationError(span, meta, f.name, fmt.Errorf("return has kind %s, want %s", value.Kind(), f.ret))
+	}
+	return cloneValue(value), true, nil
 }
 
 func recordFunctionEvaluationError(span *propagationCounterSpan, meta *FunctionEvaluationError, functionName string, err error) error {

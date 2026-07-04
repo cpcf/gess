@@ -339,6 +339,193 @@ func TestGessDSLCallSupportsRegisteredActionsAndArgumentCalls(t *testing.T) {
 	}
 }
 
+func TestGessDSLCompilesExpressionFunctions(t *testing.T) {
+	ctx := context.Background()
+	source := []byte(`
+(deffunction high-score
+  (description "score threshold")
+  (param ?score INT)
+  (return BOOL)
+  (>= ?score 90))
+
+(deffunction publishable
+  (param ?score INT)
+  (return BOOL)
+  (high-score ?score))
+
+(deffunction go-high-score
+  (param ?score INT)
+  (return BOOL)
+  (gte ?score 90))
+
+(deftemplate finding
+  (slot id (type STRING) (required TRUE))
+  (slot score (type INT) (required TRUE)))
+
+(deffacts seed
+  (finding (id "F-1") (score 95))
+  (finding (id "F-2") (score 10)))
+
+(defrule publish-high
+  ?finding <- (finding (id ?id) (score ?score))
+  (test (publishable ?score))
+  =>
+  (call record ?id))
+
+(defquery scores
+  ?finding <- (finding (id ?id) (score ?score))
+  (return (score ?score) (high (high-score ?score)) (go_high (go-high-score ?score))))
+`)
+	var recorded []string
+	revision, err := CompileGess(ctx, "functions.gess", source, DSLRegistry{
+		Calls: map[string]DSLCallFunc{
+			"record": func(_ ActionContext, args []Value) error {
+				id, _ := args[0].AsString()
+				recorded = append(recorded, id)
+				return nil
+			},
+		},
+		Functions: []PureFunctionSpec{{
+			Name:   "gte",
+			Args:   []ValueKind{ValueInt, ValueInt},
+			Return: ValueBool,
+			Func2: func(_ context.Context, left, right Value) (Value, error) {
+				leftInt, _ := left.AsInt64()
+				rightInt, _ := right.AsInt64()
+				return NewValue(leftInt >= rightInt)
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CompileGess: %v", err)
+	}
+	definition, ok := revision.Function("high-score")
+	if !ok || !definition.ExpressionBacked() || definition.Description() != "score threshold" {
+		t.Fatalf("high-score definition = (%#v, %v), want expression-backed with description", definition, ok)
+	}
+	doc, err := ParseGess("functions.gess", source)
+	if err != nil {
+		t.Fatalf("ParseGess: %v", err)
+	}
+	workspace := NewWorkspace()
+	if err := LoadGess(ctx, workspace, doc, DSLRegistry{
+		Calls: map[string]DSLCallFunc{
+			"record": func(ActionContext, []Value) error { return nil },
+		},
+		Functions: []PureFunctionSpec{{
+			Name:   "gte",
+			Args:   []ValueKind{ValueInt, ValueInt},
+			Return: ValueBool,
+			Func2: func(_ context.Context, left, right Value) (Value, error) {
+				leftInt, _ := left.AsInt64()
+				rightInt, _ := right.AsInt64()
+				return NewValue(leftInt >= rightInt)
+			},
+		}},
+	}); err != nil {
+		t.Fatalf("LoadGess: %v", err)
+	}
+	session, err := NewSession(revision, WithInitialFacts(doc.InitialFacts()...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Fired != 1 || len(recorded) != 1 || recorded[0] != "F-1" {
+		t.Fatalf("run/recorded = %d/%#v, want one F-1 record", result.Fired, recorded)
+	}
+	rows, err := session.QueryAll(ctx, "scores", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+}
+
+func TestGessDSLExpressionFunctionValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		registry  DSLRegistry
+		wantGess  bool
+		wantError error
+	}{
+		{
+			name: "unknown parameter",
+			source: `(deffunction bad
+  (param ?score INT)
+  (return BOOL)
+  (> ?missing 10))`,
+			wantGess: true,
+		},
+		{
+			name: "kind mismatch",
+			source: `(deffunction bad
+  (param ?score STRING)
+  (return BOOL)
+  (> ?score 10))`,
+			wantError: ErrFunctionValidation,
+		},
+		{
+			name: "wrong arity",
+			source: `(deffunction ok
+  (param ?score INT)
+  (return BOOL)
+  (> ?score 10))
+(deftemplate finding (slot score (type INT)))
+(defrule bad
+  ?finding <- (finding (score ?score))
+  (test (ok ?score 10))
+  =>
+  (call noop))`,
+			registry:  DSLRegistry{Actions: map[string]ActionFunc{"noop": func(ActionContext) error { return nil }}},
+			wantError: ErrFunctionValidation,
+		},
+		{
+			name: "recursion",
+			source: `(deffunction loop
+  (param ?score INT)
+  (return BOOL)
+  (loop ?score))`,
+			wantError: ErrFunctionValidation,
+		},
+		{
+			name: "registered collision",
+			source: `(deffunction exists
+  (param ?score INT)
+  (return BOOL)
+  (> ?score 10))`,
+			registry: DSLRegistry{Functions: []PureFunctionSpec{{
+				Name:   "exists",
+				Args:   []ValueKind{ValueInt},
+				Return: ValueBool,
+				Func1:  func(context.Context, Value) (Value, error) { return NewValue(true) },
+			}}},
+			wantGess:  true,
+			wantError: ErrFunctionValidation,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CompileGess(context.Background(), "bad-functions.gess", []byte(tc.source), tc.registry)
+			if err == nil {
+				t.Fatal("CompileGess succeeded, want error")
+			}
+			if tc.wantError != nil && !errors.Is(err, tc.wantError) {
+				t.Fatalf("error = %v, want %v", err, tc.wantError)
+			}
+			var gessErr *GessFileError
+			if tc.wantGess && !errors.As(err, &gessErr) {
+				t.Fatalf("error = %T, want *GessFileError", err)
+			}
+		})
+	}
+}
+
 func assertGessDSLRowString(t *testing.T, row QueryRow, alias, want string) {
 	t.Helper()
 	value, ok := row.Value(alias)

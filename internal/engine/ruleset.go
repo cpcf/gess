@@ -15,6 +15,7 @@ type Workspace struct {
 	templates []TemplateSpec
 	actions   []ActionSpec
 	functions []PureFunctionSpec
+	exprFuncs []ExpressionFunctionSpec
 	rules     []RuleSpec
 	queries   []QuerySpec
 }
@@ -176,8 +177,54 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 			Err:    ErrFunctionValidation,
 		}
 	}
+	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
+		return &ValidationError{
+			Reason: "duplicate function",
+			Err:    ErrFunctionValidation,
+		}
+	}
 
 	w.functions = append(w.functions, spec.clone())
+	return nil
+}
+
+func (w *Workspace) AddExpressionFunction(spec ExpressionFunctionSpec) error {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return &ValidationError{Reason: "function name is required", Err: ErrFunctionValidation}
+	}
+	if !validPureFunctionName(normalized.Name) {
+		return &ValidationError{Reason: "invalid function name", Err: ErrFunctionValidation}
+	}
+	if !validPureFunctionValueKind(normalized.Return) {
+		return &ValidationError{Reason: "invalid function return kind", Err: ErrFunctionValidation}
+	}
+	if normalized.Expression == nil {
+		return &ValidationError{Reason: "function expression is required", Err: ErrFunctionValidation}
+	}
+	seenParams := make(map[string]struct{}, len(normalized.Params))
+	for _, param := range normalized.Params {
+		if param.Name == "" {
+			return &ValidationError{Reason: "function parameter name is required", Err: ErrFunctionValidation}
+		}
+		if !validPureFunctionValueKind(param.Kind) {
+			return &ValidationError{Reason: "invalid function parameter kind", Err: ErrFunctionValidation}
+		}
+		if _, exists := seenParams[param.Name]; exists {
+			return &ValidationError{Reason: "duplicate function parameter", Err: ErrFunctionValidation}
+		}
+		seenParams[param.Name] = struct{}{}
+	}
+	if err := validateExpressionFunctionBodySpec(normalized.Expression); err != nil {
+		return err
+	}
+	if _, ok := w.functionIndex(normalized.Name); ok {
+		return &ValidationError{Reason: "duplicate function", Err: ErrFunctionValidation}
+	}
+	if _, ok := w.expressionFunctionIndex(normalized.Name); ok {
+		return &ValidationError{Reason: "duplicate function", Err: ErrFunctionValidation}
+	}
+	w.exprFuncs = append(w.exprFuncs, normalized)
 	return nil
 }
 
@@ -185,6 +232,12 @@ func (w *Workspace) ReplaceFunction(spec PureFunctionSpec) error {
 	normalized, err := compilePureFunctionSpec(spec, 0)
 	if err != nil {
 		return err
+	}
+	if _, ok := w.expressionFunctionIndex(normalized.name); ok {
+		return &ValidationError{
+			Reason: "duplicate function",
+			Err:    ErrFunctionValidation,
+		}
 	}
 	idx, ok := w.functionIndex(normalized.name)
 	if !ok {
@@ -422,13 +475,31 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 	}
 
 	compiledFunctions := make([]compiledPureFunction, 0, len(w.functions))
-	functionsByName := make(map[string]compiledPureFunction, len(w.functions))
-	functionOrder := make([]string, 0, len(w.functions))
+	functionsByName := make(map[string]compiledPureFunction, len(w.functions)+len(w.exprFuncs))
+	functionOrder := make([]string, 0, len(w.functions)+len(w.exprFuncs))
 	for i, spec := range w.functions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		function, err := compilePureFunctionSpec(spec, i)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := functionsByName[function.name]; exists {
+			return nil, &ValidationError{
+				Reason: "duplicate function",
+				Err:    ErrFunctionValidation,
+			}
+		}
+		functionsByName[function.name] = function
+		compiledFunctions = append(compiledFunctions, function)
+		functionOrder = append(functionOrder, function.name)
+	}
+	for _, spec := range w.exprFuncs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		function, err := compileExpressionFunctionSpec(spec, len(compiledFunctions), functionsByName)
 		if err != nil {
 			return nil, err
 		}
@@ -1331,6 +1402,16 @@ func (w *Workspace) functionIndex(name string) (int, bool) {
 	return -1, false
 }
 
+func (w *Workspace) expressionFunctionIndex(name string) (int, bool) {
+	name = strings.TrimSpace(name)
+	for i, function := range w.exprFuncs {
+		if strings.TrimSpace(function.Name) == name {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 func (w *Workspace) globalIndex(name string) (int, bool) {
 	name = strings.TrimSpace(name)
 	for i, global := range w.globals {
@@ -1455,6 +1536,17 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 		for _, arg := range function.args {
 			sum.Write([]byte(arg.String()))
 			sum.Write([]byte(","))
+		}
+		if function.expressionBacked {
+			sum.Write([]byte(":expression:"))
+			sum.Write([]byte(function.description))
+			sum.Write([]byte(":params:"))
+			for _, param := range function.paramNames {
+				sum.Write([]byte(param))
+				sum.Write([]byte(","))
+			}
+			sum.Write([]byte(":body:"))
+			sum.Write([]byte(renderExpression(function.expressionSpec)))
 		}
 		sum.Write([]byte("\n"))
 	}

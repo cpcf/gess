@@ -74,6 +74,8 @@ type (
 	PureFunction2                  = engine.PureFunction2
 	PureFunction3                  = engine.PureFunction3
 	PureFunctionSpec               = engine.PureFunctionSpec
+	ExpressionFunctionParamSpec    = engine.ExpressionFunctionParamSpec
+	ExpressionFunctionSpec         = engine.ExpressionFunctionSpec
 	PureFunctionDefinition         = engine.PureFunctionDefinition
 	GlobalSpec                     = engine.GlobalSpec
 	Global                         = engine.Global

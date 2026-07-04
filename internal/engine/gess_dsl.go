@@ -149,6 +149,10 @@ func (l *gessLoader) load(ctx context.Context) error {
 				return err
 			}
 			l.doc.initials = append(l.doc.initials, initials...)
+		case "deffunction":
+			if err := l.loadExpressionFunction(form); err != nil {
+				return err
+			}
 		case "defrule":
 			if err := l.loadRule(form); err != nil {
 				return err
@@ -162,6 +166,84 @@ func (l *gessLoader) load(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (l *gessLoader) loadExpressionFunction(form gessSExpr) error {
+	if len(form.List) < 3 || !form.List[1].IsAtom() {
+		return l.err(form.Span, "deffunction requires a function name")
+	}
+	spec := ExpressionFunctionSpec{Name: form.List[1].Text(), Return: valueKindUnknown}
+	scope := newGessScope()
+	var body *gessSExpr
+	for _, item := range form.List[2:] {
+		switch item.Head() {
+		case "param":
+			param, err := l.parseExpressionFunctionParam(item)
+			if err != nil {
+				return err
+			}
+			spec.Params = append(spec.Params, param)
+			scope.params[param.Name] = struct{}{}
+		case "params":
+			for _, paramForm := range item.List[1:] {
+				param, err := l.parseExpressionFunctionParam(paramForm)
+				if err != nil {
+					return err
+				}
+				spec.Params = append(spec.Params, param)
+				scope.params[param.Name] = struct{}{}
+			}
+		case "return", "type":
+			if len(item.List) != 2 || !item.List[1].IsAtom() {
+				return l.err(item.Span, "%s requires one value kind", item.Head())
+			}
+			spec.Return = gessValueKind(item.List[1].Text())
+		case "description":
+			if len(item.List) != 2 || !item.List[1].IsAtom() {
+				return l.err(item.Span, "function description requires one value")
+			}
+			spec.Description = item.List[1].Text()
+		default:
+			if body != nil {
+				return l.err(item.Span, "deffunction requires exactly one expression body")
+			}
+			current := item
+			body = &current
+		}
+	}
+	if spec.Return == valueKindUnknown {
+		return l.err(form.Span, "deffunction requires a return kind")
+	}
+	if body == nil {
+		return l.err(form.Span, "deffunction requires an expression body")
+	}
+	expr, err := l.parseExpr("", *body, scope)
+	if err != nil {
+		return err
+	}
+	spec.Expression = expr
+	if err := l.workspace.AddExpressionFunction(spec); err != nil {
+		return l.wrap(form.Span, "add function", err)
+	}
+	return nil
+}
+
+func (l *gessLoader) parseExpressionFunctionParam(form gessSExpr) (ExpressionFunctionParamSpec, error) {
+	if len(form.List) != 2 && len(form.List) != 3 {
+		return ExpressionFunctionParamSpec{}, l.err(form.Span, "function parameter must be (param ?name KIND) or (?name KIND)")
+	}
+	offset := 0
+	if form.Head() == "param" {
+		offset = 1
+	}
+	if len(form.List) != offset+2 || !form.List[offset].IsAtom() || !form.List[offset+1].IsAtom() {
+		return ExpressionFunctionParamSpec{}, l.err(form.Span, "function parameter requires a name and value kind")
+	}
+	name, ok := gessFunctionParamName(form.List[offset])
+	if !ok {
+		return ExpressionFunctionParamSpec{}, l.err(form.List[offset].Span, "function parameter name must be a symbol or ?name")
+	}
+	return ExpressionFunctionParamSpec{Name: name, Kind: gessValueKind(form.List[offset+1].Text())}, nil
 }
 
 func (l *gessLoader) loadModule(form gessSExpr) error {
@@ -1165,6 +1247,20 @@ func gessVariableName(expr gessSExpr) (string, bool) {
 	}
 	text := strings.TrimPrefix(expr.Text(), "?")
 	if text == "" || strings.Contains(text, ":") {
+		return "", false
+	}
+	return strings.ReplaceAll(text, "-", "_"), true
+}
+
+func gessFunctionParamName(expr gessSExpr) (string, bool) {
+	if !expr.IsAtom() {
+		return "", false
+	}
+	if name, ok := gessVariableName(expr); ok {
+		return name, true
+	}
+	text := strings.TrimSpace(expr.Text())
+	if text == "" || strings.Contains(text, ":") || strings.Contains(text, "*") || strings.HasPrefix(text, "?") {
 		return "", false
 	}
 	return strings.ReplaceAll(text, "-", "_"), true
