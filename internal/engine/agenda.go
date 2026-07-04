@@ -724,11 +724,11 @@ func newAgendaWithStrategy(strategy Strategy) *agenda {
 	return agenda
 }
 
-func (a *agenda) cloneForFork() *agenda {
+func (a *agenda) cloneForFork(strategy Strategy) *agenda {
 	if a == nil {
-		return newAgenda()
+		return newAgendaWithStrategy(strategy)
 	}
-	out := newAgendaWithStrategy(a.strategy)
+	out := newAgendaWithStrategy(strategy)
 	out.nextOrdinal = a.nextOrdinal
 	out.handleGeneration = a.handleGeneration
 	out.revision = a.revision

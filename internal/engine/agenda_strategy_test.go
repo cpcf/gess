@@ -390,4 +390,79 @@ func TestSessionStrategyBreadthSurvivesResetAndFork(t *testing.T) {
 	if got := runAndTrace(fork); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fork trace = %#v, want %#v", got, want)
 	}
+
+	if _, err := fork.Reset(ctx); err != nil {
+		t.Fatalf("fork Reset: %v", err)
+	}
+	assertTasks(fork)
+	if got := runAndTrace(fork); !reflect.DeepEqual(got, want) {
+		t.Fatalf("post-reset fork trace = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionForkWithStrategyOverridesOrdering(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	task := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "task",
+		Fields: []FieldSpec{
+			{Name: "kind", Kind: ValueString, Required: true},
+			{Name: "seq", Kind: ValueInt, Required: true},
+		},
+	})
+	trace := make([]string, 0, 3)
+	mustAddAction(t, workspace, strategyTraceAction("task", "item", "seq", &trace))
+	mustAddRule(t, workspace, strategyRule("task", 10, task.Key(), "task", "task"))
+	revision := mustCompileWorkspace(t, workspace)
+	session := mustStrategySession(t, revision, SessionID("strategy-fork-override"))
+
+	assertTasks := func(s *Session) {
+		t.Helper()
+		for seq := int64(1); seq <= 3; seq++ {
+			if _, err := s.AssertTemplate(ctx, task.Key(), Fields{
+				"kind": newStringValue("task"),
+				"seq":  newIntValue(seq),
+			}); err != nil {
+				t.Fatalf("AssertTemplate(%d): %v", seq, err)
+			}
+		}
+	}
+	runAndTrace := func(s *Session) []string {
+		t.Helper()
+		trace = trace[:0]
+		result, err := s.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 3 {
+			t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+		}
+		return append([]string(nil), trace...)
+	}
+
+	assertTasks(session)
+	fork, err := session.Fork(ctx,
+		WithSessionID(SessionID("strategy-fork-override-fork")),
+		WithStrategy(StrategyBreadth))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	defer fork.Close()
+
+	breadthWant := []string{"task:1", "task:2", "task:3"}
+	if got := runAndTrace(fork); !reflect.DeepEqual(got, breadthWant) {
+		t.Fatalf("fork trace = %#v, want %#v", got, breadthWant)
+	}
+	if _, err := fork.Reset(ctx); err != nil {
+		t.Fatalf("fork Reset: %v", err)
+	}
+	assertTasks(fork)
+	if got := runAndTrace(fork); !reflect.DeepEqual(got, breadthWant) {
+		t.Fatalf("post-reset fork trace = %#v, want %#v", got, breadthWant)
+	}
+
+	depthWant := []string{"task:3", "task:2", "task:1"}
+	if got := runAndTrace(session); !reflect.DeepEqual(got, depthWant) {
+		t.Fatalf("parent trace = %#v, want %#v", got, depthWant)
+	}
 }

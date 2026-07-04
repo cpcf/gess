@@ -726,9 +726,11 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 // be correlated by hosts that attach a listener to the fork.
 //
 // Fork is idle-only. Fact storage, agenda (including refraction and pending
-// value bindings), focus stack, logical support, and global values carry
-// over; listeners do not — pass WithEventListener in opts to observe the
-// fork. Rete join memories are rebuilt by re-propagating the copied facts
+// value bindings), focus stack, strategy, logical support, and global values
+// carry over; listeners do not — pass WithEventListener in opts to observe
+// the fork, and WithStrategy to give the fork a different conflict-resolution
+// strategy (pending activations are reordered under the new strategy).
+// Rete join memories are rebuilt by re-propagating the copied facts
 // rather than deep-copied, so fork cost scales with working-memory size and
 // internal memory diagnostics (RuntimeDiagnostics) may differ from the parent
 // until the fork processes new mutations.
@@ -788,7 +790,8 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 	fork := &Session{
 		id:                  cfg.id,
 		revision:            s.revision,
-		agenda:              s.agenda.cloneForFork(),
+		agenda:              s.agenda.cloneForFork(cfg.strategy),
+		strategy:            cfg.strategy,
 		rete:                rete,
 		generation:          s.generation,
 		initialFocusStack:   cloneModuleNames(s.initialFocusStack),
