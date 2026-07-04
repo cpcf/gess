@@ -39,6 +39,7 @@ type (
 	EventListenerOption        = engine.EventListenerOption
 	EventFunc                  = engine.EventFunc
 	TraceOption                = engine.TraceOption
+	Strategy                   = engine.Strategy
 	MutationKind               = engine.MutationKind
 	RunStatus                  = engine.RunStatus
 	RunOption                  = engine.RunOption
@@ -85,6 +86,8 @@ const (
 	EventLogicalSupportRemoved    = engine.EventLogicalSupportRemoved
 	EventSeverityInfo             = engine.EventSeverityInfo
 	EventSeverityError            = engine.EventSeverityError
+	StrategyDepth                 = engine.StrategyDepth
+	StrategyBreadth               = engine.StrategyBreadth
 	MutationAssert                = engine.MutationAssert
 	MutationModify                = engine.MutationModify
 	MutationRetract               = engine.MutationRetract
@@ -179,6 +182,10 @@ func WithInitialFacts(initials ...InitialFact) Option {
 
 func WithGlobals(values map[string]any) Option {
 	return engine.WithGlobals(values)
+}
+
+func WithStrategy(strategy Strategy) Option {
+	return engine.WithStrategy(strategy)
 }
 
 func WithResetBeforeSnapshot(enabled bool) Option {

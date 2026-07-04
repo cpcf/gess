@@ -21,6 +21,7 @@ type sessionConfig struct {
 	listeners           []eventListenerRegistration
 	initials            []SessionInitialFact
 	globals             map[string]any
+	strategy            Strategy
 	eventClock          func() time.Time
 	resetBeforeSnapshot bool
 }
@@ -85,6 +86,12 @@ func WithGlobals(values map[string]any) SessionOption {
 		for name, value := range values {
 			cfg.globals[strings.TrimSpace(name)] = cloneSpecValue(value)
 		}
+	}
+}
+
+func WithStrategy(strategy Strategy) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.strategy = strategy
 	}
 }
 
@@ -217,6 +224,9 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if cfg.eventClock == nil {
 		cfg.eventClock = time.Now
 	}
+	if !cfg.strategy.valid() {
+		return nil, &ValidationError{Reason: "invalid agenda strategy"}
+	}
 
 	listeners := cloneEventListenerRegistrations(cfg.listeners)
 	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
@@ -242,7 +252,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	agenda := newAgenda()
+	agenda := newAgendaWithStrategy(cfg.strategy)
 	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(listeners) && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {

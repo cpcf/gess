@@ -12,6 +12,22 @@ type activationKey struct {
 	ordinal uint64
 }
 
+type Strategy uint8
+
+const (
+	StrategyDepth Strategy = iota
+	StrategyBreadth
+)
+
+func (s Strategy) valid() bool {
+	switch s {
+	case StrategyDepth, StrategyBreadth:
+		return true
+	default:
+		return false
+	}
+}
+
 type activationLookupKey struct {
 	ruleRevisionID RuleRevisionID
 	identityKey    candidateIdentityKey
@@ -662,6 +678,7 @@ type agenda struct {
 	activationRows      activationRows
 	terminalActivations activationRows
 	moduleQueues        map[ModuleName]*agendaModuleQueue
+	lessActivation      func(*activation, *activation) bool
 	nextOrdinal         uint64
 	handleGeneration    uint32
 	revision            *Ruleset
@@ -680,11 +697,21 @@ type agenda struct {
 }
 
 func newAgenda() *agenda {
-	return &agenda{
+	return newAgendaWithStrategy(StrategyDepth)
+}
+
+func newAgendaWithStrategy(strategy Strategy) *agenda {
+	agenda := &agenda{
 		activationLookup: make(map[activationLookupKey][]*activation),
 		moduleQueues:     make(map[ModuleName]*agendaModuleQueue),
 		handleGeneration: 1,
 	}
+	if strategy == StrategyBreadth {
+		agenda.lessActivation = agenda.activationBreadthLess
+	} else {
+		agenda.lessActivation = agenda.activationDepthLess
+	}
+	return agenda
 }
 
 func (a *agenda) queueForModule(module ModuleName) *agendaModuleQueue {
@@ -1729,6 +1756,10 @@ func (a *agenda) activationCompare(left, right *activation) int {
 }
 
 func activationLess(left, right *activation) bool {
+	return activationDepthLess(nil, left, right)
+}
+
+func activationDepthLess(revision *Ruleset, left, right *activation) bool {
 	if left == nil || right == nil {
 		return right != nil
 	}
@@ -1740,6 +1771,13 @@ func activationLess(left, right *activation) bool {
 	}
 	if left.totalRecency != right.totalRecency {
 		return left.totalRecency > right.totalRecency
+	}
+	if revision != nil && left.ruleRevisionID != right.ruleRevisionID {
+		leftRule, leftOK := revision.rulesByRevisionID[left.ruleRevisionID]
+		rightRule, rightOK := revision.rulesByRevisionID[right.ruleRevisionID]
+		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
+			return leftRule.declarationOrder < rightRule.declarationOrder
+		}
 	}
 	if left.identityKey.scopeHash < right.identityKey.scopeHash {
 		return true
@@ -1763,36 +1801,22 @@ func activationLess(left, right *activation) bool {
 }
 
 func (a *agenda) activationLess(left, right *activation) bool {
+	return a.lessActivation(left, right)
+}
+
+func (a *agenda) activationDepthLess(left, right *activation) bool {
+	if a == nil {
+		return activationDepthLess(nil, left, right)
+	}
+	return activationDepthLess(a.revision, left, right)
+}
+
+func (a *agenda) activationBreadthLess(left, right *activation) bool {
 	if left == nil || right == nil {
 		return right != nil
 	}
 	if left.salience != right.salience {
 		return left.salience > right.salience
-	}
-	if left.maxRecency != right.maxRecency {
-		return left.maxRecency > right.maxRecency
-	}
-	if left.totalRecency != right.totalRecency {
-		return left.totalRecency > right.totalRecency
-	}
-	if a != nil && a.revision != nil && left.ruleRevisionID != right.ruleRevisionID {
-		leftRule, leftOK := a.revision.rulesByRevisionID[left.ruleRevisionID]
-		rightRule, rightOK := a.revision.rulesByRevisionID[right.ruleRevisionID]
-		if leftOK && rightOK && leftRule.declarationOrder != rightRule.declarationOrder {
-			return leftRule.declarationOrder < rightRule.declarationOrder
-		}
-	}
-	if left.identityKey.scopeHash < right.identityKey.scopeHash {
-		return true
-	}
-	if left.identityKey.scopeHash != right.identityKey.scopeHash {
-		return false
-	}
-	if left.identityKey.hash < right.identityKey.hash {
-		return true
-	}
-	if left.identityKey.hash != right.identityKey.hash {
-		return false
 	}
 	if left.key.ordinal < right.key.ordinal {
 		return true
