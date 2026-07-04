@@ -342,6 +342,17 @@ func (q *agendaModuleQueue) pop(a *agenda) (*activation, bool) {
 	return act, act != nil
 }
 
+func (q *agendaModuleQueue) peekPending(a *agenda) (*activation, bool) {
+	for q != nil && !q.empty() {
+		act := q.heap[1]
+		if act != nil && act.status == activationStatusPending {
+			return act, true
+		}
+		q.pop(a)
+	}
+	return nil, false
+}
+
 func (q *agendaModuleQueue) remove(a *agenda, act *activation) bool {
 	if q == nil || act == nil || act.heapIndex <= 0 || act.heapIndex >= len(q.heap) || q.heap[act.heapIndex] != act {
 		return false
@@ -1389,6 +1400,43 @@ func (a *agenda) nextInternalPtr() (*activation, activation, bool) {
 
 func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activation, bool) {
 	return a.nextActivationPtrForModule(module)
+}
+
+func (a *agenda) hasPendingActivation() bool {
+	_, ok := a.peekActivationPtr()
+	return ok
+}
+
+func (a *agenda) hasPendingActivationForModule(module ModuleName) bool {
+	_, ok := a.peekActivationPtrForModule(module)
+	return ok
+}
+
+func (a *agenda) peekActivationPtr() (*activation, bool) {
+	queue, ok := a.nextQueue()
+	if !ok {
+		return nil, false
+	}
+	return queue.peekPending(a)
+}
+
+func (a *agenda) peekActivationPtrForModule(module ModuleName) (*activation, bool) {
+	if a == nil {
+		return nil, false
+	}
+	module = normalizeModuleName(module)
+	if module.IsZero() {
+		module = MainModule
+	}
+	queue := a.moduleQueues[module]
+	if queue == nil {
+		return nil, false
+	}
+	act, ok := queue.peekPending(a)
+	if queue.empty() {
+		delete(a.moduleQueues, module)
+	}
+	return act, ok
 }
 
 func (a *agenda) nextActivationPtr() (*activation, activation, bool) {

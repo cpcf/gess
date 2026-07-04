@@ -38,6 +38,7 @@ type (
 	EventFunc                  = engine.EventFunc
 	MutationKind               = engine.MutationKind
 	RunStatus                  = engine.RunStatus
+	RunOption                  = engine.RunOption
 	RunResult                  = engine.RunResult
 	ActionFailureError         = engine.ActionFailureError
 	DuplicateKey               = engine.DuplicateKey
@@ -87,6 +88,7 @@ const (
 	MutationReset                 = engine.MutationReset
 	RunCompleted                  = engine.RunCompleted
 	RunHalted                     = engine.RunHalted
+	RunFireLimit                  = engine.RunFireLimit
 	RunCanceled                   = engine.RunCanceled
 	RunActionFailed               = engine.RunActionFailed
 	RunClosed                     = engine.RunClosed
@@ -162,6 +164,10 @@ func WithInitialFacts(initials ...InitialFact) Option {
 
 func WithResetBeforeSnapshot(enabled bool) Option {
 	return engine.WithResetBeforeSnapshot(enabled)
+}
+
+func WithMaxFirings(n int) RunOption {
+	return engine.WithMaxFirings(n)
 }
 
 func New(revision *rules.Ruleset, opts ...Option) (*Session, error) {

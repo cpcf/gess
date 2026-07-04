@@ -1350,7 +1350,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		needsProof = false
 	}
 	if needsProof {
-		result, held, err := s.runAgendaWithMutationReleased(ctx)
+		result, held, err := s.runAgendaWithMutationReleased(ctx, runConfig{})
 		if mutationHeld != nil {
 			*mutationHeld = held
 		}
