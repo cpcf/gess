@@ -1,24 +1,25 @@
 name: deploy-docs
 
-# Publishes docs-site to GitHub Pages on every push to main.
+# Publishes docs-site to GitHub Pages.
 #
 # This requires the repository to be public (or on a GitHub plan that
 # supports Pages for private repos) and Pages enabled once, under
-# Settings > Pages > Source > GitHub Actions. Until then this workflow
-# will fail at the actions/configure-pages step with a clear error
-# rather than silently doing nothing.
+# Settings > Pages > Source > GitHub Actions.
+#
+# Disabled for CI until GitHub Pages is enabled for the repo. To re-enable
+# automatic deploys, uncomment the push trigger below.
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "docs/**"
-      - "docs-site/**"
-      - "rules/**"
-      - "session/**"
-      - "dsl/**"
-      - ".github/workflows/deploy-docs.yml"
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - "docs/**"
+  #     - "docs-site/**"
+  #     - "rules/**"
+  #     - "session/**"
+  #     - "dsl/**"
+  #     - ".github/workflows/deploy-docs.yml"
   workflow_dispatch: {}
 
 permissions:
