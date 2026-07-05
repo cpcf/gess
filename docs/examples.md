@@ -17,6 +17,7 @@ with the pure Go API; `examples/gess-files` and the tutorial workshop use
 | Goal | Start here |
 | --- | --- |
 | Learn the preferred `.gess` workflow | [`gess-files/order_routing`](https://github.com/cpcf/gess/tree/main/examples/gess-files/order_routing) |
+| Modify, retract, bind, and emit from `.gess` | [`gess-files/order_lifecycle`](https://github.com/cpcf/gess/tree/main/examples/gess-files/order_lifecycle) |
 | Derive facts from other facts in Go | [`forward-chaining/order_routing`](https://github.com/cpcf/gess/tree/main/examples/forward-chaining/order_routing) |
 | Read results with parameterized queries | [`queries/account_lookup`](https://github.com/cpcf/gess/tree/main/examples/queries/account_lookup) |
 | Require that a blocking fact is absent | [`negation/customer_screening`](https://github.com/cpcf/gess/tree/main/examples/negation/customer_screening) |
@@ -40,6 +41,17 @@ generated build function. This is the worked example behind
 go generate ./examples/gess-files/order_routing
 go test ./examples/gess-files/order_routing
 ```
+
+### [`gess-files/order_lifecycle`](https://github.com/cpcf/gess/tree/main/examples/gess-files/order_lifecycle)
+
+The `.gess` mutation verbs compiled by `gessc`: `modify` updates a shipped
+order in place (preserving its identity), `retract` drops a cancelled order,
+`bind` names a computed value for later actions, and `emit` writes progress to
+the session output writer set with `session.WithOutputWriter`. A `not` condition
+routes cancelled orders to the retract rule. The ship rule computes a total with
+the built-in `(+ ?subtotal ?tax)` and builds a status string with `(str-cat
+...)` directly in its action values — function-call action values compile to
+name-based expressions, so they work under `gessc` just as they do at runtime.
 
 ### [`forward-chaining/order_routing`](https://github.com/cpcf/gess/tree/main/examples/forward-chaining/order_routing)
 

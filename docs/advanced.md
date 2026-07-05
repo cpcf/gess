@@ -57,6 +57,28 @@ Rule shapes the graph can't represent fail compilation or session
 construction with an error wrapping `rules.ErrUnsupportedRuntime` rather
 than falling back to a slower matcher.
 
+## In-place modify
+
+`(modify ?binding (set ...) (unset ...))` changes a fact's slots in place and
+**preserves its fact identity**: the fact keeps the same `FactID` and recency
+lineage across the modify, so downstream rules, queries, and support edges that
+reference it continue to do so. The modify propagates as remove-then-add
+deltas: the fact is re-tested against every pattern, so it can newly match rules
+whose conditions the old slot values didn't satisfy, and unmatch rules the old
+values did.
+
+A rule that modifies a fact it matched does not necessarily loop. When the new
+slot values no longer satisfy the rule's own left-hand side, the fact stops
+matching and the rule does not re-activate — the common `(defrule r ?f <-
+(order (status "new")) => (modify ?f (set (status "shipped"))))` fires once. A
+rule whose modified fact still matches its own left-hand side would re-activate;
+gate that with a status slot that the modify changes, or a guard condition, so
+the rule stops matching after it fires.
+
+Modifying a fact held up purely by logical support is rejected with
+`ErrLogicalFactModify` (see below): its slots are entailed by its support, so
+change the supporting facts instead.
+
 ## Expression predicate placement
 
 The compiler classifies every expression predicate on a condition:

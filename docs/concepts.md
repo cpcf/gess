@@ -106,10 +106,12 @@ continues below. Modules structure large rulesets into phases. See
 
 Rule actions run Go code through a `rules.ActionContext`, which exposes
 the matched bindings and the session mutation API. From `.gess` files,
-actions are limited to a fixed vocabulary (`assert`, `assert-logical`,
-focus control, `halt`, and `call`), with `call` dispatching to host
-functions registered through `dsl.Registry`. Pure functions extend the
-expression language with deterministic host computations.
+actions are a fixed vocabulary — `assert`, `assert-logical`, `retract`,
+`modify`, `bind`, `emit`, focus control, `halt`, and `call` — with `call`
+dispatching to host functions registered through `dsl.Registry`. A curated
+set of built-in functions (arithmetic, string, and type predicates) and
+host-registered pure functions extend the expression language with
+deterministic computations. Right-hand-side control flow stays host-only.
 
 ## The Rete runtime
 

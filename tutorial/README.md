@@ -163,6 +163,27 @@ gess-tutorial> reset
 gess-tutorial> solution
 ```
 
+## Try it yourself
+
+Once the checkpoints pass, extend the ruleset with the mutation verbs and
+built-in functions. For example, add a rule that escalates a routed action in
+place and computes a value without host code:
+
+```cl
+(defrule escalate-internet-exposed
+  ?action <- (remediation-action (lane "standard") (target ?target) (reason ?reason))
+  =>
+  (bind ?note (str-cat "escalated:" ?reason))
+  (modify ?action (set (lane "emergency") (reason ?note)))
+  (emit "escalated " ?target))
+```
+
+`bind` names a computed value for later actions, `(str-cat ...)` is a built-in
+function, `modify` updates the fact in place (keeping its identity), and `emit`
+writes to the session output writer. Run the rules again to see the action
+re-routed. See the [language reference](../docs/gess-language.md) for the full
+action and built-in function list.
+
 ## Next steps
 
 - [Core concepts](../docs/concepts.md) for the vocabulary behind what you

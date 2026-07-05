@@ -222,11 +222,26 @@ The right-hand side accepts exactly these actions; anything else is rejected
 with an `unsupported action` error:
 
 - `(assert (template (field value)...))`: assert a fact. Values are scalar
-  literals, variables, projections such as `?order:id`, or aggregate result
-  variables. Nested expressions aren't allowed as values.
+  literals, variables, projections such as `?order:id`, aggregate result
+  variables, or built-in function calls such as `(+ ?a ?b)`.
 - `(assert-logical (template (field value)...))`: assert a fact with logical
   support from the activation's matched facts. The fact is retracted
   automatically when its support goes away. See `advanced.md`.
+- `(retract ?binding)`: retract the fact bound to `?binding` on the
+  left-hand side. The target must be a fact binding, not a value or parameter.
+- `(modify ?binding (set (field value)...) (unset field...))`: modify the
+  bound fact in place, preserving its fact identity. `set` overwrites the named
+  slots (same value grammar as `assert`); `unset` clears the named slots back
+  to their template defaults. Either block may be omitted, but at least one
+  slot must change. See `advanced.md` for identity and self-match behavior.
+- `(bind ?name expr)`: evaluate `expr` once and bind `?name` for use by
+  *later* actions in the same rule's right-hand side. Binds are ordered and
+  single-assignment; they never create a fact and are not visible on the
+  left-hand side. `expr` is any expression, including built-in function calls.
+- `(emit value...)`: write the concatenated display forms of the values to the
+  session output writer (set with `session.WithOutputWriter`; output is
+  discarded when unset). This is the Gess-native output verb; it has no CLIPS
+  router argument.
 - `(focus MODULE)`: push a module onto the focus stack.
 - `(pop-focus)`: pop the current focus.
 - `(clear-focus)`: clear the focus stack back to `MAIN`.
@@ -234,13 +249,15 @@ with an `unsupported action` error:
 - `(call name arg...)`: invoke a host function registered through
   `dsl.Registry`. With arguments, `name` must be registered in
   `Registry.Calls`; with no arguments, in `Registry.Actions`. Arguments are
-  scalar literals, variables, or projections.
+  scalar literals, variables, projections, or built-in function calls.
 
 :::caution
-`retract`, `modify`, `bind`, and `printout` aren't `.gess` actions, even
-though they exist in CLIPS and Jess. Rules that need side effects or fact
-mutation beyond `assert` call registered host functions, which receive an
-action context with the full mutation API.
+Right-hand-side control flow (`if`, `while`, `foreach`, `progn`) and arbitrary
+in-rule code remain host-only: compose that behavior with registered `(call
+...)` actions, which receive an action context with the full mutation API.
+Modifying a fact that is held up purely by logical support is rejected — a
+logically-supported fact is entailed by its support, so change the support
+instead. CLIPS `printout`'s router model is not carried over; use `emit`.
 :::
 
 ## `defquery`
@@ -283,11 +300,38 @@ returns:
 - Comparisons, each with exactly two operands: `=`, `!=` (alias `<>`), `<`,
   `<=`, `>`, `>=`.
 - Boolean forms: `(and e...)`, `(or e...)`, `(not e)`.
-- Function calls: `(name arg...)` for any other head, resolved against pure
-  functions registered through `dsl.Registry.Functions`.
+- Function calls: `(name arg...)` for any other head, resolved first against
+  the built-in functions below, then against pure functions registered through
+  `dsl.Registry.Functions`.
 
-There are no built-in arithmetic operators. Register a pure function and call
-it by name when a rule needs computation.
+### Built-in functions
+
+A curated, deterministic set of functions is always available without host
+registration. They are fixed-arity: the arithmetic and string operators that
+are variadic in CLIPS/Jess are exposed as two-argument forms, so nest calls to
+combine more than two operands (for example `(+ ?a (+ ?b ?c))`).
+
+- Arithmetic: `+`, `-`, `*`, `/`, `mod`, `abs`, `min`, `max`. A float operand
+  promotes the result to float; otherwise integer arithmetic stays integer.
+  `/` always returns a float. Division or `mod` by zero raises a typed runtime
+  error rather than panicking or producing infinity.
+- Numeric conversion: `integer` (truncates toward zero), `float`.
+- Numeric predicates: `numberp`, `integerp`, `floatp`.
+- Strings: `str-cat`, `str-length`, `sub-string` (`(sub-string string start
+  end)`, zero-based, half-open `[start, end)`), `upcase`, `lowcase`.
+- Type predicates: `stringp`, `booleanp`, `nullp`.
+
+Built-in names are reserved: a host function or `deffunction` that reuses a
+built-in name fails to compile with a `shadows a built-in` error. Comparison
+operators (`=`, `!=`, `<`, `<=`, `>`, `>=`) are the comparison forms above, not
+functions. No built-in reads wall-clock time or randomness, so results stay
+deterministic.
+
+Built-in and registered functions may be used anywhere an expression is
+allowed, including as `assert`/`modify`/`bind`/`emit`/`call` action values (for
+example `(modify ?f (set (total (+ ?f:subtotal ?f:tax))))`). Action values
+compile to name-resolved expressions, so they work identically whether the
+ruleset is loaded at runtime or compiled to Go with `gessc`.
 
 ## Host integration through the registry
 
@@ -315,8 +359,15 @@ Notable rejections, verbatim from the loader:
   earlier.
 - `unsupported aggregate`: only `count`, `sum`, `min`, `max`, and `collect`.
 - `test over aggregate result ... is not supported by the graph runtime`.
-- `assert values must be scalar expressions`: no nested expressions in
-  `assert` or `call` values.
+- `... target ... is not a bound fact`: `retract`/`modify` must name a fact
+  binding, not a value or query parameter.
+- `modify requires at least one set or unset field`: an empty `modify`.
+- `bind ... is already bound` / `unknown variable`: RHS binds are
+  single-assignment and cannot be forward-referenced.
+- `function shadows a built-in`: a host function or `deffunction` reuses a
+  reserved built-in name.
+- `divide by zero`: `/` or `mod` with a zero divisor, raised when the action
+  fires.
 - `unregistered action`: a `call` names a function the registry doesn't
   provide.
 

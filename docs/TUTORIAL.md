@@ -258,11 +258,46 @@ _, err = session.Run(ctx)
 Use templates declared in `.gess` for both generated seed facts and runtime
 assertions. That keeps validation and matching behavior in one ruleset.
 
+## Mutate and compute in place
+
+Rules can change facts and compute values without leaving `.gess`. `modify`
+updates a matched fact in place — keeping its identity — while `bind` names a
+value for later actions in the same rule, and `emit` writes output:
+
+```cl
+(defrule finalize-route
+  ?route <- (fulfillment-route (order ?order) (subtotal ?subtotal) (tax ?tax) (status "pending"))
+  =>
+  (bind ?total (+ ?subtotal ?tax))
+  (modify ?route (set (surcharge ?total) (status "priced")))
+  (emit "route " ?order " total " ?total))
+```
+
+- `(bind ?total (+ ?subtotal ?tax))` evaluates once and is visible only to
+  later actions in this rule; it never becomes a fact. `(+ ?subtotal ?tax)` is
+  a built-in function.
+- `(modify ?route (set ...))` matches the `(status "pending")` guard, then
+  changes `status`, so the rule fires once instead of looping. Matching a slot
+  the modify changes is the idiomatic way to keep a self-modifying rule from
+  re-activating.
+- `(retract ?binding)` removes a matched fact; `(emit ...)` writes to the
+  session output writer set with `session.WithOutputWriter`.
+
+Built-in functions — arithmetic, string, and type predicates (`+ - * / mod`,
+`str-cat`, `upcase`, `numberp`, …) — are available without registering host
+code. They work anywhere an expression is allowed, including directly as action
+values (`(modify ?f (set (total (+ ?a ?b))))`), and identically whether the
+ruleset is loaded at runtime or compiled with `gessc`. See
+[the language reference](gess-language.md) for the full action and built-in
+function list. The
+[`gess-files/order_lifecycle`](https://github.com/cpcf/gess/tree/main/examples/gess-files/order_lifecycle)
+example compiles these verbs with `gessc`.
+
 ## Call host code
 
-Prefer plain `.gess` actions such as `(assert ...)` when the rule can derive
-facts directly. When a rule needs a side effect or app-specific logic,
-register host functions and call them from `.gess`:
+Prefer plain `.gess` actions such as `(assert ...)` and `(modify ...)` when the
+rule can derive or update facts directly. When a rule needs a side effect or
+app-specific logic, register host functions and call them from `.gess`:
 
 ```cl
 (defrule notify-seen-item
