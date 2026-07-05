@@ -418,7 +418,7 @@ func TestGessGlobalsDSLValidation(t *testing.T) {
   (order (id ?id))
   =>
   (assert (route (lane *missing*))))`,
-			fragment: `unknown global "*missing*"`,
+			fragment: `unknown global "missing"`,
 		},
 		{
 			name: "global in deffacts",

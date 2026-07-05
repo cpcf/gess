@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync"
@@ -34,6 +35,37 @@ type ActionContext struct {
 	ruleRevisionID RuleRevisionID
 	generation     Generation
 	bindings       *actionContextBindingState
+	rhsBinds       *rhsBindStore
+}
+
+// rhsBindStore holds the RHS-local variables produced by bind actions. It is
+// created fresh per activation and shared across that firing's actions through
+// the ActionContext pointer, so a later action reads what an earlier bind wrote.
+type rhsBindStore struct {
+	values map[string]Value
+}
+
+// SetRHSBind records an RHS-local bound value for the current firing.
+func (c ActionContext) SetRHSBind(name string, value Value) {
+	if c.rhsBinds == nil || name == "" {
+		return
+	}
+	if c.rhsBinds.values == nil {
+		c.rhsBinds.values = make(map[string]Value, 4)
+	}
+	c.rhsBinds.values[name] = cloneValue(value)
+}
+
+// RHSBind returns an RHS-local bound value recorded earlier in this firing.
+func (c ActionContext) RHSBind(name string) (Value, bool) {
+	if c.rhsBinds == nil || c.rhsBinds.values == nil {
+		return Value{}, false
+	}
+	value, ok := c.rhsBinds.values[name]
+	if !ok {
+		return Value{}, false
+	}
+	return cloneValue(value), true
 }
 
 func newActionContext(ctx context.Context, session *Session, activation activation, entries []bindingTupleEntry) ActionContext {
@@ -146,6 +178,25 @@ func (c ActionContext) Binding(name string) (FactSnapshot, bool) {
 		return c.materializeBinding(index)
 	}
 	return FactSnapshot{}, false
+}
+
+// BindingID returns the FactID of a bound fact without materializing a public
+// snapshot. Unlike Binding, it declares no whole-snapshot read, so it composes
+// with field reads on the same binding (used by modify/retract to target a
+// fact while its sibling fields are read as scalars).
+func (c ActionContext) BindingID(name string) (FactID, bool) {
+	if name == "" || c.bindings == nil {
+		return FactID{}, false
+	}
+	index, ok := c.bindings.bindingIndex(name)
+	if !ok {
+		return FactID{}, false
+	}
+	entry := c.bindings.entryAt(index)
+	if entry.hasValue || entry.factID.IsZero() {
+		return FactID{}, false
+	}
+	return entry.factID, true
 }
 
 func (c ActionContext) BindingValue(name string) (Value, bool) {
@@ -287,6 +338,24 @@ func (c ActionContext) Halt() error {
 	}
 	c.session.requestRunHalt()
 	return nil
+}
+
+// Emit writes the display forms of values, concatenated, to the session's
+// configured output writer. When no writer is configured the output is
+// discarded. It is the runtime behind the .gess emit action.
+func (c ActionContext) Emit(values ...Value) error {
+	if c.session == nil {
+		return ErrClosedSession
+	}
+	if c.session.output == nil {
+		return nil
+	}
+	var b strings.Builder
+	for _, value := range values {
+		b.WriteString(gessDisplayValue(value))
+	}
+	_, err := io.WriteString(c.session.output, b.String())
+	return err
 }
 
 func (c ActionContext) supportingFactIDs() []FactID {
@@ -511,26 +580,120 @@ func (s *actionContextBindingState) entryAt(index int) bindingTupleEntry {
 
 func scalarFieldValue(fact FactSnapshot, field string) (Value, bool) {
 	slot, ok := fact.fieldSlot(field)
-	if !ok || slot < 0 || slot >= len(fact.fieldSlots) {
+	if !ok || slot < 0 {
 		return Value{}, false
 	}
-	resolved := fact.fieldSlots[slot]
-	if !resolved.ok || !valueShareable(resolved.value) {
-		return Value{}, false
+	if slot < len(fact.fieldSlots) {
+		resolved := fact.fieldSlots[slot]
+		if resolved.ok && valueShareable(resolved.value) {
+			return resolved.value, true
+		}
 	}
-	return resolved.value, true
+	if slot < len(fact.compactSlots) {
+		if value, ok := fact.compactSlots[slot].value(); ok && valueShareable(value) {
+			return value, true
+		}
+	}
+	return Value{}, false
 }
 
 type ActionSpec struct {
 	Name                 string
 	Fn                   ActionFunc
 	AssertTemplateValues *AssertTemplateValuesActionSpec
+	Effect               *ActionEffectSpec
+	Call                 *ActionCallSpec
 	BindingReads         *ActionBindingReadSetSpec
 	GessSource           string
 	// NonEscaping allows the engine to skip freezing unread bindings after a
 	// rule fires. Set it only when Fn does not retain ActionContext or any
 	// binding-derived data that depends on post-return defensive snapshots.
 	NonEscaping bool
+}
+
+// ActionEffectKind identifies the mutation an [ActionEffectSpec] performs.
+type ActionEffectKind uint8
+
+const (
+	// ActionEffectAssert asserts a fact from Name(Effect.Target as the
+	// template/name) with Fields/Values.
+	ActionEffectAssert ActionEffectKind = iota
+	ActionEffectAssertLogical
+	ActionEffectModify
+	ActionEffectRetract
+	ActionEffectEmit
+	ActionEffectBind
+	// Focus-stack and run control. These carry no values; PushFocus uses
+	// Target as the module name.
+	ActionEffectPushFocus
+	ActionEffectPopFocus
+	ActionEffectClearFocus
+	ActionEffectHalt
+)
+
+// ActionEffectSpec is a declarative, expression-backed rule action for the
+// .gess mutation verbs (assert/modify/retract/emit/bind). Its Values are
+// [ExpressionSpec]s compiled once at ruleset build time and evaluated against
+// the firing's frozen bindings, so function-call action values need no host
+// closure and survive Go code generation.
+type ActionEffectSpec struct {
+	Kind ActionEffectKind
+	// Target is the fact-binding name for modify/retract, or the local name
+	// for bind. Unused by emit.
+	Target string
+	// TemplateKey/FactName identify the asserted template for assert/-logical.
+	TemplateKey TemplateKey
+	FactName    string
+	// Fields names the slots set by assert/modify, parallel to Values.
+	Fields []string
+	// Unset names the slots cleared by modify.
+	Unset []string
+	// Values are the expression-valued operands: assert/modify slot values
+	// (parallel to Fields), emit arguments, or the single bind expression.
+	Values []ExpressionSpec
+}
+
+// ActionCallSpec is a host-function call action ((call name arg...) in .gess).
+// The host implementation is a closure, but its arguments are expression-backed
+// like the mutation verbs, so function-call arguments survive code generation.
+type ActionCallSpec struct {
+	Name string
+	Fn   DSLCallFunc
+	Args []ExpressionSpec
+}
+
+func (s *ActionCallSpec) clone() *ActionCallSpec {
+	if s == nil {
+		return nil
+	}
+	out := &ActionCallSpec{
+		Name: strings.TrimSpace(s.Name),
+		Fn:   s.Fn,
+		Args: make([]ExpressionSpec, len(s.Args)),
+	}
+	for i, a := range s.Args {
+		out.Args[i] = cloneExpressionSpec(a)
+	}
+	return out
+}
+
+func (s *ActionEffectSpec) clone() *ActionEffectSpec {
+	if s == nil {
+		return nil
+	}
+	out := &ActionEffectSpec{
+		Kind:        s.Kind,
+		Target:      strings.TrimSpace(s.Target),
+		TemplateKey: s.TemplateKey,
+		FactName:    strings.TrimSpace(s.FactName),
+		Fields:      append([]string(nil), s.Fields...),
+		Unset:       append([]string(nil), s.Unset...),
+		Values:      make([]ExpressionSpec, len(s.Values)),
+	}
+	for i, v := range s.Values {
+		out.Values[i] = cloneExpressionSpec(v)
+	}
+	return out
 }
 
 type ActionBindingReadSetSpec struct {
@@ -566,6 +729,12 @@ func (s ActionSpec) clone() ActionSpec {
 	out.GessSource = strings.TrimSpace(out.GessSource)
 	if s.AssertTemplateValues != nil {
 		out.AssertTemplateValues = s.AssertTemplateValues.clone()
+	}
+	if s.Effect != nil {
+		out.Effect = s.Effect.clone()
+	}
+	if s.Call != nil {
+		out.Call = s.Call.clone()
 	}
 	if s.BindingReads != nil {
 		out.BindingReads = s.BindingReads.clone()
@@ -636,6 +805,35 @@ func normalizeActionSpec(spec ActionSpec) (ActionSpec, error) {
 			}
 		}
 	}
+	if normalized.Effect != nil {
+		actionKinds++
+		for i, value := range normalized.Effect.Values {
+			if value == nil {
+				return ActionSpec{}, &ValidationError{
+					Reason:         "effect action requires a value expression",
+					ActionIndex:    i,
+					HasActionIndex: true,
+				}
+			}
+		}
+	}
+	if normalized.Call != nil {
+		actionKinds++
+		if normalized.Call.Fn == nil {
+			return ActionSpec{}, &ValidationError{
+				Reason: "call action requires a host function",
+			}
+		}
+		for i, value := range normalized.Call.Args {
+			if value == nil {
+				return ActionSpec{}, &ValidationError{
+					Reason:         "call action requires an argument expression",
+					ActionIndex:    i,
+					HasActionIndex: true,
+				}
+			}
+		}
+	}
 	if actionKinds == 0 {
 		return ActionSpec{}, &ValidationError{
 			Reason: "action function or native action is required",
@@ -689,6 +887,8 @@ type compiledAction struct {
 	name                 string
 	fn                   ActionFunc
 	assertTemplateValues *AssertTemplateValuesActionSpec
+	effect               *ActionEffectSpec
+	call                 *ActionCallSpec
 	bindingReads         *ActionBindingReadSetSpec
 	gessSource           string
 	order                int
@@ -700,6 +900,8 @@ type compiledRuleActionKind uint8
 const (
 	compiledRuleActionFunction compiledRuleActionKind = iota
 	compiledRuleActionAssertTemplateValues
+	compiledRuleActionEffect
+	compiledRuleActionCall
 )
 
 type compiledRuleAction struct {
@@ -709,8 +911,31 @@ type compiledRuleAction struct {
 	source               SourceSpan
 	fn                   ActionFunc
 	assertTemplateValues compiledAssertTemplateValuesAction
+	effect               compiledEffectAction
+	call                 compiledCallAction
 	bindingReads         actionBindingReadSet
 	skipBindingFreeze    bool
+}
+
+// compiledCallAction is the compiled form of an ActionCallSpec: expression-backed
+// arguments compiled once, plus the host closure to invoke with the results.
+type compiledCallAction struct {
+	name string
+	fn   DSLCallFunc
+	args []compiledExpression
+}
+
+// compiledEffectAction is the compiled form of an ActionEffectSpec: its Values
+// are compiled to expressions once, evaluated at fire time against the firing's
+// frozen bindings.
+type compiledEffectAction struct {
+	kind        ActionEffectKind
+	target      string
+	templateKey TemplateKey
+	factName    string
+	fields      []string
+	unset       []string
+	values      []compiledExpression
 }
 
 type compiledAssertTemplateValuesAction struct {
@@ -898,10 +1123,12 @@ func compileActionSpec(spec ActionSpec, order int) (compiledAction, error) {
 		name:                 normalized.Name,
 		fn:                   normalized.Fn,
 		assertTemplateValues: normalized.AssertTemplateValues,
+		effect:               normalized.Effect,
+		call:                 normalized.Call,
 		bindingReads:         normalized.BindingReads,
 		gessSource:           normalized.GessSource,
 		order:                order,
-		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil || (normalized.BindingReads != nil && len(normalized.BindingReads.Reads) == 0),
+		skipBindingFreeze:    normalized.NonEscaping || normalized.AssertTemplateValues != nil || normalized.Effect != nil || normalized.Call != nil || (normalized.BindingReads != nil && len(normalized.BindingReads.Reads) == 0),
 	}, nil
 }
 
@@ -916,7 +1143,66 @@ func (a compiledAction) inspect() Action {
 
 func (a compiledAction) clone() compiledAction {
 	a.assertTemplateValues = a.assertTemplateValues.clone()
+	a.effect = a.effect.clone()
+	a.call = a.call.clone()
 	a.bindingReads = a.bindingReads.clone()
+	return a
+}
+
+func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledEffectAction, error) {
+	out := compiledEffectAction{
+		kind:        spec.Kind,
+		target:      strings.TrimSpace(spec.Target),
+		templateKey: spec.TemplateKey,
+		factName:    strings.TrimSpace(spec.FactName),
+		fields:      append([]string(nil), spec.Fields...),
+		unset:       append([]string(nil), spec.Unset...),
+		values:      make([]compiledExpression, len(spec.Values)),
+	}
+	for i, valueSpec := range spec.Values {
+		if nativeActionExpressionUsesCurrent(valueSpec) {
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         "action value cannot reference a current fact or query parameter",
+			}
+		}
+		value, _, err := compileExpressionSpecWithParams(valueSpec, ruleName, -1, i, nil, conditions, bindingSlots, templatesByKey, nil, functions, globals)
+		if err != nil {
+			return compiledEffectAction{}, err
+		}
+		out.values[i] = value
+	}
+	return out, nil
+}
+
+func compileCallAction(ruleName string, actionIndex int, spec *ActionCallSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledCallAction, error) {
+	out := compiledCallAction{
+		name: strings.TrimSpace(spec.Name),
+		fn:   spec.Fn,
+		args: make([]compiledExpression, len(spec.Args)),
+	}
+	for i, argSpec := range spec.Args {
+		if nativeActionExpressionUsesCurrent(argSpec) {
+			return compiledCallAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         "call argument cannot reference a current fact or query parameter",
+			}
+		}
+		value, _, err := compileExpressionSpecWithParams(argSpec, ruleName, -1, i, nil, conditions, bindingSlots, templatesByKey, nil, functions, globals)
+		if err != nil {
+			return compiledCallAction{}, err
+		}
+		out.args[i] = value
+	}
+	return out, nil
+}
+
+func (a compiledCallAction) clone() compiledCallAction {
+	a.args = append([]compiledExpression(nil), a.args...)
 	return a
 }
 
@@ -934,6 +1220,24 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 			return compiledRuleAction{}, err
 		}
 		out.bindingReads = readSet
+		return out, nil
+	}
+	if action.effect != nil {
+		effect, err := compileEffectAction(ruleName, actionIndex, action.effect, conditions, bindingSlots, templatesByKey, functions, globals)
+		if err != nil {
+			return compiledRuleAction{}, err
+		}
+		out.kind = compiledRuleActionEffect
+		out.effect = effect
+		return out, nil
+	}
+	if action.call != nil {
+		callAction, err := compileCallAction(ruleName, actionIndex, action.call, conditions, bindingSlots, templatesByKey, functions, globals)
+		if err != nil {
+			return compiledRuleAction{}, err
+		}
+		out.kind = compiledRuleActionCall
+		out.call = callAction
 		return out, nil
 	}
 	if action.assertTemplateValues == nil {
@@ -1134,8 +1438,42 @@ func serializeCompiledRuleAction(action compiledRuleAction) string {
 			b.WriteByte(':')
 			b.WriteString(serializeCompiledExpression(value))
 		}
+	case compiledRuleActionEffect:
+		b.WriteString("effect:")
+		b.WriteString(serializeCompiledEffectAction(action.effect))
+	case compiledRuleActionCall:
+		b.WriteString("call:")
+		b.WriteString(action.call.name)
+		for _, value := range action.call.args {
+			b.WriteString(":a=")
+			b.WriteString(serializeCompiledExpression(value))
+		}
 	default:
 		b.WriteString("unknown")
+	}
+	return b.String()
+}
+
+func serializeCompiledEffectAction(effect compiledEffectAction) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprint(effect.kind))
+	b.WriteByte(':')
+	b.WriteString(effect.target)
+	b.WriteByte(':')
+	b.WriteString(effect.templateKey.String())
+	b.WriteByte(':')
+	b.WriteString(effect.factName)
+	for _, field := range effect.fields {
+		b.WriteString(":f=")
+		b.WriteString(field)
+	}
+	for _, name := range effect.unset {
+		b.WriteString(":u=")
+		b.WriteString(name)
+	}
+	for _, value := range effect.values {
+		b.WriteString(":v=")
+		b.WriteString(serializeCompiledExpression(value))
 	}
 	return b.String()
 }
@@ -1147,6 +1485,39 @@ func serializeCompiledActionDeclaration(action compiledAction) string {
 	b.WriteString(fmt.Sprint(action.order))
 	b.WriteByte(':')
 	b.WriteString(fmt.Sprint(action.skipBindingFreeze))
+	if action.call != nil {
+		b.WriteString(":call:")
+		b.WriteString(strings.TrimSpace(action.call.Name))
+		for _, value := range action.call.Args {
+			b.WriteString(":a=")
+			b.WriteString(serializeExpressionSpec(value))
+		}
+		return b.String()
+	}
+	if action.effect != nil {
+		b.WriteString(":effect:")
+		effect := action.effect
+		b.WriteString(fmt.Sprint(effect.Kind))
+		b.WriteByte(':')
+		b.WriteString(effect.Target)
+		b.WriteByte(':')
+		b.WriteString(effect.TemplateKey.String())
+		b.WriteByte(':')
+		b.WriteString(effect.FactName)
+		for _, field := range effect.Fields {
+			b.WriteString(":f=")
+			b.WriteString(field)
+		}
+		for _, name := range effect.Unset {
+			b.WriteString(":u=")
+			b.WriteString(name)
+		}
+		for _, value := range effect.Values {
+			b.WriteString(":v=")
+			b.WriteString(serializeExpressionSpec(value))
+		}
+		return b.String()
+	}
 	if action.assertTemplateValues == nil {
 		b.WriteString(":function")
 		b.WriteString(":reads:")
@@ -1260,6 +1631,13 @@ func serializeExpressionSpec(spec ExpressionSpec) string {
 			return "<nil>"
 		}
 		return serializeExpressionSpec(*expression)
+	case RHSBindExpr:
+		return "rhs-bind:" + expression.Name
+	case *RHSBindExpr:
+		if expression == nil {
+			return "<nil>"
+		}
+		return serializeExpressionSpec(*expression)
 	case CallExpr:
 		var b strings.Builder
 		b.WriteString("call:")
@@ -1355,6 +1733,7 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				if err != nil {
 					return err
 				}
+				actionCtx.rhsBinds = &rhsBindStore{}
 				actionCtxReady = true
 				activationValidated = true
 			}
@@ -1363,6 +1742,28 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 			} else {
 				actionErr = actionSpec.fn(actionCtx)
 			}
+		case compiledRuleActionEffect:
+			if !actionCtxReady {
+				actionCtx, err = s.actionContextForActivationWithScratchTrusted(ctx, activation, skipBindingFreeze, trustTokenActivation)
+				if err != nil {
+					return err
+				}
+				actionCtx.rhsBinds = &rhsBindStore{}
+				actionCtxReady = true
+				activationValidated = true
+			}
+			actionErr = s.executeEffectAction(actionCtx, actionSpec.effect)
+		case compiledRuleActionCall:
+			if !actionCtxReady {
+				actionCtx, err = s.actionContextForActivationWithScratchTrusted(ctx, activation, skipBindingFreeze, trustTokenActivation)
+				if err != nil {
+					return err
+				}
+				actionCtx.rhsBinds = &rhsBindStore{}
+				actionCtxReady = true
+				activationValidated = true
+			}
+			actionErr = s.executeCallAction(actionCtx, actionSpec.call)
 		case compiledRuleActionAssertTemplateValues:
 			if !activationValidated {
 				if err := s.validateActivationTokenFacts(rule, activation, trustTokenActivation); err != nil {
@@ -1392,6 +1793,191 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 	}
 
 	return nil
+}
+
+// conditionMatches builds the binding tuple an action-value expression is
+// evaluated against, from the ActionContext's frozen snapshots. Unlike
+// actionMatchesForActivation, it reads the frozen pre-modify state, so an
+// action value that references a fact modified earlier in the same firing sees
+// the value the rule matched on rather than erroring on a version bump.
+func (c ActionContext) conditionMatches() ([]conditionMatch, error) {
+	n := c.bindings.len()
+	if n == 0 {
+		return nil, nil
+	}
+	maxSlot := -1
+	for i := range n {
+		if slot := c.bindings.entryAt(i).bindingSlot; slot > maxSlot {
+			maxSlot = slot
+		}
+	}
+	if maxSlot < 0 {
+		return nil, nil
+	}
+	matches := make([]conditionMatch, maxSlot+1)
+	for i := range n {
+		entry := c.bindings.entryAt(i)
+		slot := entry.bindingSlot
+		if slot < 0 || slot > maxSlot {
+			continue
+		}
+		matches[slot] = conditionMatch{
+			conditionID: entry.conditionID,
+			bindingSlot: slot,
+			value:       cloneValue(entry.value),
+			hasValue:    entry.hasValue,
+		}
+		if entry.hasValue || entry.factID.IsZero() {
+			continue
+		}
+		snapshot, ok := c.materializeBinding(i)
+		if !ok {
+			return nil, fmt.Errorf("%w: stale fact %q for activation %q", ErrMatcher, entry.factID, c.ActivationID())
+		}
+		matches[slot].fact = newConditionFactRefFromSnapshot(snapshot)
+	}
+	return matches, nil
+}
+
+// rhsBindValues returns the firing's RHS-local bindings as a name→Value map for
+// expression evaluation (nil when none have been set).
+func (c ActionContext) rhsBindValues() map[string]Value {
+	if c.rhsBinds == nil {
+		return nil
+	}
+	return c.rhsBinds.values
+}
+
+// evalActionValue evaluates a compiled action-value expression against the
+// firing's frozen bindings, globals, and RHS-local binds.
+func (c ActionContext) evalActionValue(e compiledExpression, matches []conditionMatch) (Value, error) {
+	var globals []Value
+	if c.session != nil {
+		globals = c.session.globalValues
+	}
+	value, ok, err := e.evaluateWithContextParamsGlobalsAndCounters(c.Context(), conditionFactRef{}, matches, c.rhsBindValues(), globals, nil, nil)
+	if err != nil {
+		return Value{}, err
+	}
+	if !ok {
+		return Value{}, fmt.Errorf("%w: action value is unavailable", ErrMatcher)
+	}
+	return value, nil
+}
+
+func (s *Session) executeEffectAction(ctx ActionContext, effect compiledEffectAction) error {
+	switch effect.kind {
+	case ActionEffectPushFocus:
+		return ctx.PushFocus(ModuleName(effect.target))
+	case ActionEffectPopFocus:
+		_, err := ctx.PopFocus()
+		return err
+	case ActionEffectClearFocus:
+		return ctx.ClearFocusStack()
+	case ActionEffectHalt:
+		return ctx.Halt()
+	}
+	matches, err := ctx.conditionMatches()
+	if err != nil {
+		return err
+	}
+	values := make([]Value, len(effect.values))
+	for i, expr := range effect.values {
+		v, err := ctx.evalActionValue(expr, matches)
+		if err != nil {
+			return err
+		}
+		values[i] = v
+	}
+	switch effect.kind {
+	case ActionEffectBind:
+		if len(values) != 1 {
+			return fmt.Errorf("%w: bind requires one value", ErrInvalidRuleset)
+		}
+		ctx.SetRHSBind(effect.target, values[0])
+		return nil
+	case ActionEffectEmit:
+		return ctx.Emit(values...)
+	case ActionEffectRetract:
+		id, ok := ctx.BindingID(effect.target)
+		if !ok {
+			return fmt.Errorf("gess: retract missing fact binding %s", effect.target)
+		}
+		_, err := ctx.Retract(id)
+		return err
+	case ActionEffectModify:
+		id, ok := ctx.BindingID(effect.target)
+		if !ok {
+			return fmt.Errorf("gess: modify missing fact binding %s", effect.target)
+		}
+		patch := FactPatch{Unset: effect.unset}
+		if len(effect.fields) > 0 {
+			pairs := make([]any, 0, len(effect.fields)*2)
+			for i, field := range effect.fields {
+				pairs = append(pairs, field, values[i])
+			}
+			set, err := NewFieldsFromPairs(pairs...)
+			if err != nil {
+				return err
+			}
+			patch.Set = set
+		}
+		_, err := ctx.Modify(id, patch)
+		return err
+	case ActionEffectAssert, ActionEffectAssertLogical:
+		pairs := make([]any, 0, len(effect.fields)*2)
+		for i, field := range effect.fields {
+			pairs = append(pairs, field, values[i])
+		}
+		fields, err := NewFieldsFromPairs(pairs...)
+		if err != nil {
+			return err
+		}
+		if effect.kind == ActionEffectAssertLogical {
+			if effect.templateKey != "" {
+				if ctx.session == nil {
+					return ErrClosedSession
+				}
+				if ctx.RuleRevisionID().IsZero() || ctx.ActivationID().IsZero() {
+					return ErrLogicalSupportUnavailable
+				}
+				if err := ctx.materializeAllBindings(); err != nil {
+					return err
+				}
+				_, err = ctx.session.insertLogicalFactWithContextAndOrigin(ctx.Context(), "", effect.templateKey, fields, ctx.mutationOrigin(), ctx.supportingFactIDs())
+				return err
+			}
+			_, err = ctx.AssertLogical(effect.factName, fields)
+			return err
+		}
+		if effect.templateKey != "" {
+			_, err = ctx.AssertTemplate(effect.templateKey, fields)
+			return err
+		}
+		_, err = ctx.Assert(effect.factName, fields)
+		return err
+	default:
+		return fmt.Errorf("%w: unsupported action effect", ErrInvalidRuleset)
+	}
+}
+
+func (s *Session) executeCallAction(ctx ActionContext, action compiledCallAction) error {
+	if action.fn == nil {
+		return fmt.Errorf("%w: missing call function %q", ErrInvalidRuleset, action.name)
+	}
+	matches, err := ctx.conditionMatches()
+	if err != nil {
+		return err
+	}
+	args := make([]Value, len(action.args))
+	for i, expr := range action.args {
+		v, err := ctx.evalActionValue(expr, matches)
+		if err != nil {
+			return err
+		}
+		args[i] = v
+	}
+	return action.fn(ctx, args)
 }
 
 func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {

@@ -50,9 +50,8 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 		"workspace.AddExpressionFunction",
 		"workspace.AddAction",
 		"workspace.AddQuery",
-		"gessGeneratedCallAction",
+		"gessrules.ActionCallSpec",
 		"registry.Calls",
-		"gessrules.MustFields",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("generated source missing %q:\n%s", want, text)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"go/format"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,43 +54,19 @@ func GenerateGessGo(ctx context.Context, sources []GessSourceFile, opts GessGoGe
 }
 
 type generatedGessProgram struct {
-	modules   []ModuleSpec
-	globals   []GlobalSpec
-	templates []TemplateSpec
-	functions []ExpressionFunctionSpec
-	actions   []generatedGessAction
-	rules     []RuleSpec
-	queries   []QuerySpec
-	initials  []SessionInitialFact
-}
-
-type generatedGessActionKind string
-
-const (
-	generatedGessAssert     generatedGessActionKind = "assert"
-	generatedGessCall       generatedGessActionKind = "call"
-	generatedGessFocus      generatedGessActionKind = "focus"
-	generatedGessPopFocus   generatedGessActionKind = "pop-focus"
-	generatedGessClearFocus generatedGessActionKind = "clear-focus"
-	generatedGessHalt       generatedGessActionKind = "halt"
-)
-
-type generatedGessAction struct {
-	Name        string
-	Kind        generatedGessActionKind
-	Logical     bool
-	TemplateKey TemplateKey
-	FactName    string
-	Fields      []string
-	Values      []gessRuntimeValue
-	Reads       []ActionBindingReadSpec
-	CallName    string
-	FocusModule ModuleName
+	modules    []ModuleSpec
+	globals    []GlobalSpec
+	templates  []TemplateSpec
+	functions  []ExpressionFunctionSpec
+	registered []string
+	actions    []ActionSpec
+	rules      []RuleSpec
+	queries    []QuerySpec
+	initials   []SessionInitialFact
 }
 
 func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (generatedGessProgram, error) {
 	workspace := NewWorkspace()
-	loader := newGessLoader(workspace, &GessDocument{}, DSLRegistry{})
 	var docs []*GessDocument
 	for _, source := range sources {
 		if err := ctx.Err(); err != nil {
@@ -102,7 +79,40 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 		docs = append(docs, doc)
 	}
 
+	// The registry is not available at generation time. Stub every host call
+	// and action a source references so the loader can build real action specs
+	// (with those stub closures) and Compile can validate them. The stubs are
+	// never emitted: bare (call name) renders gessRegisteredAction and
+	// (call name arg...) renders gessGeneratedCallAction, both resolving the
+	// real host function from the generated program's registry at build time.
+	registry := DSLRegistry{Actions: map[string]ActionFunc{}, Calls: map[string]DSLCallFunc{}}
+	registeredActions := make(map[string]struct{})
+	for _, doc := range docs {
+		missing := doc.MissingRegistrations(DSLRegistry{})
+		for _, name := range missing.Actions {
+			registry.Actions[name] = func(ActionContext) error { return nil }
+			registeredActions[name] = struct{}{}
+		}
+		for _, name := range missing.Calls {
+			registry.Calls[name] = func(ActionContext, []Value) error { return nil }
+		}
+	}
+	loader := newGessLoader(workspace, &GessDocument{}, registry)
+	// Register the stub host actions on the workspace so a bare (call name)
+	// resolves during Compile; they render as gessRegisteredAction.
+	registeredActionNames := make([]string, 0, len(registeredActions))
+	for name := range registeredActions {
+		registeredActionNames = append(registeredActionNames, name)
+	}
+	slices.Sort(registeredActionNames)
+	for _, name := range registeredActionNames {
+		if err := workspace.AddAction(ActionSpec{Name: name, Fn: registry.Actions[name]}); err != nil {
+			return generatedGessProgram{}, err
+		}
+	}
+
 	var program generatedGessProgram
+	program.registered = registeredActionNames
 	for _, doc := range docs {
 		loader.doc = doc
 		for _, form := range doc.forms {
@@ -154,24 +164,18 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 				}
 				program.initials = append(program.initials, initials...)
 			case "defrule":
-				rule, actions, err := loadGeneratedGessRule(loader, form)
-				if err != nil {
+				before := len(workspace.actions)
+				if err := loader.loadRule(form); err != nil {
 					return generatedGessProgram{}, err
 				}
-				for _, action := range actions {
+				for _, action := range workspace.actions[before:] {
 					if _, exists := seenActions[action.Name]; exists {
 						continue
 					}
 					seenActions[action.Name] = struct{}{}
-					if err := workspace.AddAction(action.spec()); err != nil {
-						return generatedGessProgram{}, loader.wrap(form.Span, "add generated action", err)
-					}
+					program.actions = append(program.actions, action)
 				}
-				if err := workspace.AddRule(rule); err != nil {
-					return generatedGessProgram{}, loader.wrap(form.Span, "add rule", err)
-				}
-				program.actions = append(program.actions, actions...)
-				program.rules = append(program.rules, rule)
+				program.rules = append(program.rules, workspace.rules[len(workspace.rules)-1])
 			case "defquery":
 				before := len(workspace.queries)
 				if err := loader.loadQuery(form); err != nil {
@@ -189,187 +193,13 @@ func lowerGessSourcesForGo(ctx context.Context, sources []GessSourceFile) (gener
 	return program, nil
 }
 
-func loadGeneratedGessRule(loader *gessLoader, form gessSExpr) (RuleSpec, []generatedGessAction, error) {
-	if len(form.List) < 3 || !form.List[1].IsAtom() {
-		return RuleSpec{}, nil, loader.err(form.Span, "defrule requires a rule name")
-	}
-	module, name := splitGessName(form.List[1].Text())
-	rule := RuleSpec{Name: name, Module: module, Source: form.Span}
-	body, rhs, err := splitGessRuleBody(form.List[2:])
-	if err != nil {
-		return RuleSpec{}, nil, loader.wrap(form.Span, "parse rule body", err)
-	}
-	body = applyRuleDecls(loader, &rule, body)
-	scope := newGessScope()
-	condition, err := loader.parseConditions(module, body, scope, false)
-	if err != nil {
-		return RuleSpec{}, nil, err
-	}
-	rule.ConditionTree = condition
-	actions := make([]generatedGessAction, 0, len(rhs))
-	for i, actionForm := range rhs {
-		action, err := buildGeneratedGessAction(loader, rule.Name, i, module, actionForm, scope)
-		if err != nil {
-			return RuleSpec{}, nil, err
-		}
-		rule.Actions = append(rule.Actions, RuleActionSpec{Name: action.Name, Source: actionForm.Span})
-		actions = append(actions, action)
-	}
-	return rule, actions, nil
-}
-
-func buildGeneratedGessAction(loader *gessLoader, ruleName string, index int, module ModuleName, form gessSExpr, scope *gessScope) (generatedGessAction, error) {
-	switch form.Head() {
-	case "assert", "assert-logical":
-		return buildGeneratedGessAssertAction(loader, ruleName, index, module, form.Head() == "assert-logical", form, scope)
-	case "focus":
-		if len(form.List) != 2 || !form.List[1].IsAtom() {
-			return generatedGessAction{}, loader.err(form.Span, "focus requires a module name")
-		}
-		return generatedGessAction{
-			Name:        loader.generatedActionName(ruleName, index, "focus"),
-			Kind:        generatedGessFocus,
-			FocusModule: ModuleName(form.List[1].Text()),
-		}, nil
-	case "pop-focus":
-		return generatedGessAction{Name: loader.generatedActionName(ruleName, index, "pop-focus"), Kind: generatedGessPopFocus}, nil
-	case "clear-focus":
-		return generatedGessAction{Name: loader.generatedActionName(ruleName, index, "clear-focus"), Kind: generatedGessClearFocus}, nil
-	case "halt":
-		return generatedGessAction{Name: loader.generatedActionName(ruleName, index, "halt"), Kind: generatedGessHalt}, nil
-	case "call":
-		if len(form.List) < 2 || !form.List[1].IsAtom() {
-			return generatedGessAction{}, loader.err(form.Span, "call requires a registered action name")
-		}
-		name := form.List[1].Text()
-		if len(form.List) == 2 {
-			return generatedGessAction{
-				Name:     name,
-				Kind:     generatedGessCall,
-				CallName: name,
-			}, nil
-		}
-		action := generatedGessAction{
-			Name:     loader.generatedActionName(ruleName, index, "call_"+name),
-			Kind:     generatedGessCall,
-			CallName: name,
-		}
-		for _, arg := range form.List[2:] {
-			value, err := loader.runtimeValue(arg, scope)
-			if err != nil {
-				return generatedGessAction{}, err
-			}
-			action.Values = append(action.Values, value)
-			if value.fieldRef {
-				action.Reads = append(action.Reads, ActionBindingReadSpec{Binding: value.binding, Field: value.field})
-			}
-		}
-		return action, nil
-	default:
-		return generatedGessAction{}, loader.err(form.Span, "unsupported action %q", form.Head())
-	}
-}
-
-func buildGeneratedGessAssertAction(loader *gessLoader, ruleName string, index int, module ModuleName, logical bool, form gessSExpr, scope *gessScope) (generatedGessAction, error) {
-	if len(form.List) != 2 {
-		return generatedGessAction{}, loader.err(form.Span, "%s requires one fact literal", form.Head())
-	}
-	fact := form.List[1]
-	if fact.IsAtom() || len(fact.List) == 0 || !fact.List[0].IsAtom() {
-		return generatedGessAction{}, loader.err(fact.Span, "assert requires a fact literal")
-	}
-	mod, name := splitGessName(fact.Head())
-	if mod.IsZero() {
-		mod = module
-	}
-	action := generatedGessAction{
-		Name:        loader.generatedActionName(ruleName, index, fact.Head()),
-		Kind:        generatedGessAssert,
-		Logical:     logical,
-		TemplateKey: loader.templateKey(mod, name),
-		FactName:    qualifiedGessName(mod, name),
-	}
-	for _, slot := range fact.List[1:] {
-		if len(slot.List) != 2 || !slot.List[0].IsAtom() {
-			return generatedGessAction{}, loader.err(slot.Span, "assert slot must be (field value)")
-		}
-		value, err := loader.runtimeValue(slot.List[1], scope)
-		if err != nil {
-			return generatedGessAction{}, err
-		}
-		action.Fields = append(action.Fields, slot.List[0].Text())
-		action.Values = append(action.Values, value)
-		if value.fieldRef {
-			action.Reads = append(action.Reads, ActionBindingReadSpec{Binding: value.binding, Field: value.field})
-		}
-	}
-	return action, nil
-}
-
-func (a generatedGessAction) spec() ActionSpec {
-	spec := ActionSpec{Name: a.Name}
-	switch a.Kind {
-	case generatedGessAssert:
-		if len(a.Reads) > 0 {
-			spec.BindingReads = &ActionBindingReadSetSpec{Reads: a.Reads}
-		}
-		fields := append([]string(nil), a.Fields...)
-		values := append([]gessRuntimeValue(nil), a.Values...)
-		templateKey := a.TemplateKey
-		factName := a.FactName
-		logical := a.Logical
-		spec.Fn = func(ctx ActionContext) error {
-			pairs := make([]any, 0, len(fields)*2)
-			for i, field := range fields {
-				value, err := values[i].value(ctx)
-				if err != nil {
-					return err
-				}
-				pairs = append(pairs, field, value)
-			}
-			f, err := NewFieldsFromPairs(pairs...)
-			if err != nil {
-				return err
-			}
-			if logical {
-				_, err = ctx.AssertLogical(factName, f)
-				return err
-			}
-			if templateKey != "" {
-				_, err = ctx.AssertTemplate(templateKey, f)
-				return err
-			}
-			_, err = ctx.Assert(factName, f)
-			return err
-		}
-	case generatedGessCall:
-		if len(a.Reads) > 0 {
-			spec.BindingReads = &ActionBindingReadSetSpec{Reads: a.Reads}
-		}
-		spec.Fn = func(ActionContext) error { return nil }
-	case generatedGessFocus:
-		module := a.FocusModule
-		spec.Fn = func(ctx ActionContext) error { return ctx.PushFocus(module) }
-	case generatedGessPopFocus:
-		spec.Fn = func(ctx ActionContext) error {
-			_, err := ctx.PopFocus()
-			return err
-		}
-	case generatedGessClearFocus:
-		spec.Fn = func(ctx ActionContext) error { return ctx.ClearFocusStack() }
-	case generatedGessHalt:
-		spec.Fn = func(ctx ActionContext) error { return ctx.Halt() }
-	}
-	return spec
-}
-
 func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, error) {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "// Code generated by gessc; DO NOT EDIT.\n\n")
 	fmt.Fprintf(&b, "package %s\n\n", opts.PackageName)
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t\"context\"\n")
-	if len(p.actions) > 0 {
+	if p.usesFmt() {
 		fmt.Fprintf(&b, "\t\"fmt\"\n")
 	}
 	fmt.Fprintf(&b, "\n\tgessdsl \"github.com/cpcf/gess/dsl\"\n")
@@ -390,11 +220,15 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	for _, function := range p.functions {
 		fmt.Fprintf(&b, "\tif err := workspace.AddExpressionFunction(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderExpressionFunctionSpec(function))
 	}
+	for _, name := range p.registered {
+		fmt.Fprintf(&b, "\tif _, ok := registry.Actions[%s]; !ok {\n\t\treturn nil, nil, fmt.Errorf(\"gess: registered action %%q is required\", %s)\n\t}\n", strconv.Quote(name), strconv.Quote(name))
+		fmt.Fprintf(&b, "\tif err := workspace.AddAction(gessRegisteredAction(%s, registry)); err != nil {\n\t\treturn nil, nil, err\n\t}\n", strconv.Quote(name))
+	}
 	for _, action := range p.actions {
-		if check := renderGeneratedActionRegistryCheck(action); check != "" {
-			b.WriteString(check)
+		if action.Call != nil {
+			fmt.Fprintf(&b, "\tif _, ok := registry.Calls[%s]; !ok {\n\t\treturn nil, nil, fmt.Errorf(\"gess: registered call %%q is required\", %s)\n\t}\n", strconv.Quote(action.Call.Name), strconv.Quote(action.Call.Name))
 		}
-		fmt.Fprintf(&b, "\tif err := workspace.AddAction(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderGeneratedAction(action))
+		fmt.Fprintf(&b, "\tif err := workspace.AddAction(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderActionSpec(action))
 	}
 	for _, rule := range p.rules {
 		fmt.Fprintf(&b, "\tif err := workspace.AddRule(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderRuleSpec(rule))
@@ -406,10 +240,25 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	fmt.Fprintf(&b, "\tif err != nil {\n\t\treturn nil, nil, err\n\t}\n")
 	fmt.Fprintf(&b, "\treturn ruleset, %s, nil\n", renderInitialFacts(p.initials))
 	fmt.Fprintf(&b, "}\n")
-	if len(p.actions) > 0 {
+	if len(p.registered) > 0 {
 		writeGeneratedActionHelpers(&b)
 	}
 	return b.Bytes(), nil
+}
+
+// usesFmt reports whether the generated file references fmt (registry presence
+// checks for registered actions and host calls, and the gessRegisteredAction
+// helper).
+func (p generatedGessProgram) usesFmt() bool {
+	if len(p.registered) > 0 {
+		return true
+	}
+	for _, action := range p.actions {
+		if action.Call != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func renderModuleSpec(spec ModuleSpec) string {
@@ -520,49 +369,100 @@ func renderFieldSpecs(fields []FieldSpec) string {
 	return b.String()
 }
 
-func renderGeneratedAction(action generatedGessAction) string {
-	switch action.Kind {
-	case generatedGessAssert:
-		return fmt.Sprintf("gessGeneratedAssertAction(%s, %t, %s, %s, %s, %s, %s)",
-			strconv.Quote(action.Name),
-			action.Logical,
-			renderTemplateKey(action.TemplateKey),
-			strconv.Quote(action.FactName),
-			renderStringSlice(action.Fields),
-			renderGeneratedValues(action.Values),
-			renderBindingReadSpecs(action.Reads),
-		)
-	case generatedGessCall:
-		if len(action.Values) == 0 {
-			return fmt.Sprintf("gessRegisteredAction(%s, registry)", strconv.Quote(action.CallName))
-		}
-		return fmt.Sprintf("gessGeneratedCallAction(%s, %s, %s, %s, registry)",
-			strconv.Quote(action.Name),
-			strconv.Quote(action.CallName),
-			renderGeneratedValues(action.Values),
-			renderBindingReadSpecs(action.Reads),
-		)
-	case generatedGessFocus:
-		return fmt.Sprintf("gessrules.ActionSpec{Name: %s, Fn: func(ctx gessrules.ActionContext) error { return ctx.PushFocus(%s) }}", strconv.Quote(action.Name), renderModuleName(action.FocusModule))
-	case generatedGessPopFocus:
-		return fmt.Sprintf("gessrules.ActionSpec{Name: %s, Fn: func(ctx gessrules.ActionContext) error { _, err := ctx.PopFocus(); return err }}", strconv.Quote(action.Name))
-	case generatedGessClearFocus:
-		return fmt.Sprintf("gessrules.ActionSpec{Name: %s, Fn: func(ctx gessrules.ActionContext) error { return ctx.ClearFocusStack() }}", strconv.Quote(action.Name))
-	case generatedGessHalt:
-		return fmt.Sprintf("gessrules.ActionSpec{Name: %s, Fn: func(ctx gessrules.ActionContext) error { return ctx.Halt() }}", strconv.Quote(action.Name))
-	default:
-		return "gessrules.ActionSpec{}"
+func renderActionSpec(action ActionSpec) string {
+	var b strings.Builder
+	b.WriteString("gessrules.ActionSpec{Name: ")
+	b.WriteString(strconv.Quote(action.Name))
+	if action.GessSource != "" {
+		b.WriteString(", GessSource: ")
+		b.WriteString(strconv.Quote(action.GessSource))
 	}
+	switch {
+	case action.Effect != nil:
+		b.WriteString(", Effect: ")
+		b.WriteString(renderActionEffectSpec(action.Effect))
+	case action.Call != nil:
+		b.WriteString(", Call: ")
+		b.WriteString(renderActionCallSpec(action.Call))
+	case action.AssertTemplateValues != nil:
+		b.WriteString(", AssertTemplateValues: ")
+		b.WriteString(renderAssertTemplateValuesSpec(action.AssertTemplateValues))
+	}
+	b.WriteString("}")
+	return b.String()
 }
 
-func renderGeneratedActionRegistryCheck(action generatedGessAction) string {
-	if action.Kind != generatedGessCall {
-		return ""
+func renderActionEffectSpec(spec *ActionEffectSpec) string {
+	var b strings.Builder
+	b.WriteString("&gessrules.ActionEffectSpec{Kind: ")
+	b.WriteString(renderActionEffectKind(spec.Kind))
+	if spec.Target != "" {
+		fmt.Fprintf(&b, ", Target: %s", strconv.Quote(spec.Target))
 	}
-	if len(action.Values) == 0 {
-		return fmt.Sprintf("\tif _, ok := registry.Actions[%s]; !ok {\n\t\treturn nil, nil, fmt.Errorf(\"gess: registered action %%q is required\", %s)\n\t}\n", strconv.Quote(action.CallName), strconv.Quote(action.CallName))
+	if spec.TemplateKey != "" {
+		fmt.Fprintf(&b, ", TemplateKey: %s", renderTemplateKey(spec.TemplateKey))
 	}
-	return fmt.Sprintf("\tif _, ok := registry.Calls[%s]; !ok {\n\t\treturn nil, nil, fmt.Errorf(\"gess: registered call %%q is required\", %s)\n\t}\n", strconv.Quote(action.CallName), strconv.Quote(action.CallName))
+	if spec.FactName != "" {
+		fmt.Fprintf(&b, ", FactName: %s", strconv.Quote(spec.FactName))
+	}
+	if len(spec.Fields) > 0 {
+		fmt.Fprintf(&b, ", Fields: %s", renderStringSlice(spec.Fields))
+	}
+	if len(spec.Unset) > 0 {
+		fmt.Fprintf(&b, ", Unset: %s", renderStringSlice(spec.Unset))
+	}
+	if len(spec.Values) > 0 {
+		fmt.Fprintf(&b, ", Values: []gessrules.ExpressionSpec{%s}", renderExpressions(spec.Values))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderActionCallSpec(spec *ActionCallSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "&gessrules.ActionCallSpec{Name: %s, Fn: registry.Calls[%s]", strconv.Quote(spec.Name), strconv.Quote(spec.Name))
+	if len(spec.Args) > 0 {
+		fmt.Fprintf(&b, ", Args: []gessrules.ExpressionSpec{%s}", renderExpressions(spec.Args))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderAssertTemplateValuesSpec(spec *AssertTemplateValuesActionSpec) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "&gessrules.AssertTemplateValuesActionSpec{TemplateKey: %s", renderTemplateKey(spec.TemplateKey))
+	if len(spec.Values) > 0 {
+		fmt.Fprintf(&b, ", Values: []gessrules.ExpressionSpec{%s}", renderExpressions(spec.Values))
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+func renderActionEffectKind(kind ActionEffectKind) string {
+	switch kind {
+	case ActionEffectAssert:
+		return "gessrules.ActionEffectAssert"
+	case ActionEffectAssertLogical:
+		return "gessrules.ActionEffectAssertLogical"
+	case ActionEffectModify:
+		return "gessrules.ActionEffectModify"
+	case ActionEffectRetract:
+		return "gessrules.ActionEffectRetract"
+	case ActionEffectEmit:
+		return "gessrules.ActionEffectEmit"
+	case ActionEffectBind:
+		return "gessrules.ActionEffectBind"
+	case ActionEffectPushFocus:
+		return "gessrules.ActionEffectPushFocus"
+	case ActionEffectPopFocus:
+		return "gessrules.ActionEffectPopFocus"
+	case ActionEffectClearFocus:
+		return "gessrules.ActionEffectClearFocus"
+	case ActionEffectHalt:
+		return "gessrules.ActionEffectHalt"
+	default:
+		return "gessrules.ActionEffectAssert"
+	}
 }
 
 func renderRuleSpec(spec RuleSpec) string {
@@ -708,6 +608,8 @@ func renderExpression(spec ExpressionSpec) string {
 		return "gessrules.ParamExpr{Name: " + strconv.Quote(expr.Name) + "}"
 	case GlobalExpr:
 		return "gessrules.GlobalExpr{Name: " + strconv.Quote(expr.Name) + "}"
+	case RHSBindExpr:
+		return "gessrules.RHSBindExpr{Name: " + strconv.Quote(expr.Name) + "}"
 	case CallExpr:
 		return "gessrules.Call(" + strconv.Quote(expr.Name) + renderCallArgs(expr.Args) + ")"
 	case CompareExpr:
@@ -880,111 +782,8 @@ func renderFields(fields Fields) string {
 	return b.String()
 }
 
-func renderGeneratedValues(values []gessRuntimeValue) string {
-	if len(values) == 0 {
-		return "nil"
-	}
-	var b strings.Builder
-	b.WriteString("[]gessGeneratedActionValue{")
-	for i, value := range values {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString("{")
-		switch {
-		case value.hasConst:
-			fmt.Fprintf(&b, "Constant: %s, HasConstant: true", renderAnyValue(value.constant))
-		case value.fieldRef:
-			fmt.Fprintf(&b, "Binding: %s, Field: %s, FieldRef: true", strconv.Quote(value.binding), strconv.Quote(value.field))
-		case value.bindingValue:
-			fmt.Fprintf(&b, "Binding: %s, BindingValue: true", strconv.Quote(value.binding))
-		}
-		b.WriteString("}")
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
-func renderBindingReadSpecs(reads []ActionBindingReadSpec) string {
-	if len(reads) == 0 {
-		return "nil"
-	}
-	var b strings.Builder
-	b.WriteString("[]gessrules.ActionBindingReadSpec{")
-	for i, read := range reads {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(&b, "{Binding: %s, Field: %s}", strconv.Quote(read.Binding), strconv.Quote(read.Field))
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
 func writeGeneratedActionHelpers(b *bytes.Buffer) {
 	b.WriteString(`
-
-type gessGeneratedActionValue struct {
-	Constant     any
-	HasConstant  bool
-	Binding      string
-	Field        string
-	FieldRef     bool
-	BindingValue bool
-}
-
-func (v gessGeneratedActionValue) value(ctx gessrules.ActionContext) (any, error) {
-	switch {
-	case v.HasConstant:
-		return v.Constant, nil
-	case v.FieldRef:
-		value, ok := ctx.BindingScalarValue(v.Binding, v.Field)
-		if !ok {
-			return nil, fmt.Errorf("gess: generated action missing binding field %s.%s", v.Binding, v.Field)
-		}
-		return value, nil
-	case v.BindingValue:
-		value, ok := ctx.BindingValue(v.Binding)
-		if !ok {
-			return nil, fmt.Errorf("gess: generated action missing binding value %s", v.Binding)
-		}
-		return value, nil
-	default:
-		return nil, fmt.Errorf("gess: generated action value is not configured")
-	}
-}
-
-func gessGeneratedAssertAction(name string, logical bool, templateKey gessrules.TemplateKey, factName string, fields []string, values []gessGeneratedActionValue, reads []gessrules.ActionBindingReadSpec) gessrules.ActionSpec {
-	spec := gessrules.ActionSpec{Name: name}
-	if len(reads) > 0 {
-		spec.BindingReads = &gessrules.ActionBindingReadSetSpec{Reads: reads}
-	}
-	spec.Fn = func(ctx gessrules.ActionContext) error {
-		pairs := make([]any, 0, len(fields)*2)
-		for i, field := range fields {
-			value, err := values[i].value(ctx)
-			if err != nil {
-				return err
-			}
-			pairs = append(pairs, field, value)
-		}
-		f, err := gessrules.NewFieldsFromPairs(pairs...)
-		if err != nil {
-			return err
-		}
-		if logical {
-			_, err = ctx.AssertLogical(factName, f)
-			return err
-		}
-		if templateKey != "" {
-			_, err = ctx.AssertTemplate(templateKey, f)
-			return err
-		}
-		_, err = ctx.Assert(factName, f)
-		return err
-	}
-	return spec
-}
 
 func gessRegisteredAction(name string, registry gessdsl.Registry) gessrules.ActionSpec {
 	fn, ok := registry.Actions[name]
@@ -994,33 +793,6 @@ func gessRegisteredAction(name string, registry gessdsl.Registry) gessrules.Acti
 		}}
 	}
 	return gessrules.ActionSpec{Name: name, Fn: fn}
-}
-
-func gessGeneratedCallAction(name string, callName string, values []gessGeneratedActionValue, reads []gessrules.ActionBindingReadSpec, registry gessdsl.Registry) gessrules.ActionSpec {
-	call, ok := registry.Calls[callName]
-	spec := gessrules.ActionSpec{Name: name}
-	if len(reads) > 0 {
-		spec.BindingReads = &gessrules.ActionBindingReadSetSpec{Reads: reads}
-	}
-	spec.Fn = func(ctx gessrules.ActionContext) error {
-		if !ok {
-			return fmt.Errorf("gess: registered call %q is required", callName)
-		}
-		args := make([]gessrules.Value, 0, len(values))
-		for _, value := range values {
-			raw, err := value.value(ctx)
-			if err != nil {
-				return err
-			}
-			normalized, err := gessrules.NewValue(raw)
-			if err != nil {
-				return err
-			}
-			args = append(args, normalized)
-		}
-		return call(ctx, args)
-	}
-	return spec
 }
 `)
 }

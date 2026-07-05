@@ -131,6 +131,20 @@ func (s GlobalExpr) clone() GlobalExpr {
 	return s
 }
 
+// RHSBindExpr references a right-hand-side local variable created by a bind
+// action earlier in the same rule firing. It is valid only inside action
+// values, never on a rule or query left-hand side.
+type RHSBindExpr struct {
+	Name string
+}
+
+func (RHSBindExpr) expressionSpecNode() {}
+
+func (s RHSBindExpr) clone() RHSBindExpr {
+	s.Name = strings.TrimSpace(s.Name)
+	return s
+}
+
 type CallExpr struct {
 	Name string
 	Args []ExpressionSpec
@@ -246,6 +260,14 @@ func cloneExpressionSpec(spec ExpressionSpec) ExpressionSpec {
 		}
 		cloned := expression.clone()
 		return &cloned
+	case RHSBindExpr:
+		return expression.clone()
+	case *RHSBindExpr:
+		if expression == nil {
+			return nil
+		}
+		cloned := expression.clone()
+		return &cloned
 	case CallExpr:
 		return expression.clone()
 	case *CallExpr:
@@ -322,6 +344,7 @@ const (
 	expressionNodeHasPath      expressionNodeKind = "has-path"
 	expressionNodeParam        expressionNodeKind = "param"
 	expressionNodeGlobal       expressionNodeKind = "global"
+	expressionNodeRHSBind      expressionNodeKind = "rhs-bind"
 	expressionNodeCall         expressionNodeKind = "call"
 	expressionNodeCompare      expressionNodeKind = "compare"
 	expressionNodeBoolean      expressionNodeKind = "boolean"
@@ -501,6 +524,13 @@ func compileExpressionSpecWithParams(
 			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
 		}
 		return compileGlobalExpression(*expression, ruleName, conditionIndex, predicateIndex, globals)
+	case RHSBindExpr:
+		return compileRHSBindExpression(expression, ruleName, conditionIndex, predicateIndex)
+	case *RHSBindExpr:
+		if expression == nil {
+			return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression node is required", nil)
+		}
+		return compileRHSBindExpression(*expression, ruleName, conditionIndex, predicateIndex)
 	case CallExpr:
 		return compileCallExpression(expression, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions, globals)
 	case *CallExpr:
@@ -693,6 +723,23 @@ func compileGlobalExpression(spec GlobalExpr, ruleName string, conditionIndex, p
 		resultKind: kind,
 		globalName: normalized.Name,
 		globalSlot: global.slot,
+	}, false, nil
+}
+
+// compileRHSBindExpression compiles a reference to an RHS-local bind. The bind
+// name is resolved by the DSL loader against the rule's ordered RHS binds, so
+// no slot resolution is needed here; the value is supplied at action time
+// through the evaluation environment (the params map, which carries RHS binds
+// in action-value context).
+func compileRHSBindExpression(spec RHSBindExpr, ruleName string, conditionIndex, predicateIndex int) (compiledExpression, bool, error) {
+	normalized := spec.clone()
+	if normalized.Name == "" {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "rhs bind expression requires a name", nil)
+	}
+	return compiledExpression{
+		kind:       expressionNodeRHSBind,
+		resultKind: ValueAny,
+		paramName:  normalized.Name,
 	}, false, nil
 }
 
@@ -930,6 +977,8 @@ func (e compiledExpression) graphExecutable() bool {
 		return e.paramName != "" && e.resultKind != valueKindUnknown
 	case expressionNodeGlobal:
 		return e.globalName != "" && e.globalSlot >= 0 && e.resultKind != valueKindUnknown
+	case expressionNodeRHSBind:
+		return e.paramName != "" && e.resultKind != valueKindUnknown
 	case expressionNodeCall:
 		if e.function.name == "" || !e.function.hasImplementation() || e.resultKind == valueKindUnknown || len(e.operands) != len(e.function.args) {
 			return false
@@ -1206,6 +1255,15 @@ func (e compiledExpression) evaluateWithContextParamsGlobalsAndCounters(ctx cont
 			return Value{}, false, fmt.Errorf("%w: malformed global expression %q", ErrMatcher, e.globalName)
 		}
 		return globals[e.globalSlot], true, nil
+	case expressionNodeRHSBind:
+		if e.paramName == "" {
+			return Value{}, false, fmt.Errorf("%w: malformed rhs bind expression", ErrMatcher)
+		}
+		value, ok := params[e.paramName]
+		if !ok {
+			return Value{}, false, fmt.Errorf("gess: action references unset local %q", e.paramName)
+		}
+		return value, true, nil
 	case expressionNodeCall:
 		return e.evaluateCall(ctx, meta, span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateWithContextParamsGlobalsAndCounters(ctx, fact, bindings, params, globals, meta, span)
@@ -1296,6 +1354,15 @@ func (e compiledExpression) evaluateTokenWithContextParamsGlobalsOffsetAndCounte
 			return Value{}, false, fmt.Errorf("%w: malformed global expression %q", ErrMatcher, e.globalName)
 		}
 		return globals[e.globalSlot], true, nil
+	case expressionNodeRHSBind:
+		if e.paramName == "" {
+			return Value{}, false, fmt.Errorf("%w: malformed rhs bind expression", ErrMatcher)
+		}
+		value, ok := params[e.paramName]
+		if !ok {
+			return Value{}, false, fmt.Errorf("gess: action references unset local %q", e.paramName)
+		}
+		return value, true, nil
 	case expressionNodeCall:
 		return e.evaluateCall(ctx, meta, span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, bindings, params, globals, bindingSlotOffset, meta, span)
@@ -1368,9 +1435,9 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		}()
 		value, err = e.function.fn0(ctx)
 	} else if e.function.fn1 != nil {
-		arg0, argOK, err := eval(e.operands[0])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg0, arg0OK, arg0Err := eval(e.operands[0])
+		if arg0Err != nil || !arg0OK {
+			return Value{}, false, arg0Err
 		}
 		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
@@ -1384,16 +1451,16 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		}()
 		value, err = e.function.fn1(ctx, cloneValue(arg0))
 	} else if e.function.fn2 != nil {
-		arg0, argOK, err := eval(e.operands[0])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg0, arg0OK, arg0Err := eval(e.operands[0])
+		if arg0Err != nil || !arg0OK {
+			return Value{}, false, arg0Err
 		}
 		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
 		}
-		arg1, argOK, err := eval(e.operands[1])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg1, arg1OK, arg1Err := eval(e.operands[1])
+		if arg1Err != nil || !arg1OK {
+			return Value{}, false, arg1Err
 		}
 		if !expressionKindAssignable(e.function.args[1], arg1.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 1, arg1.Kind(), e.function.args[1]))
@@ -1407,23 +1474,23 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		}()
 		value, err = e.function.fn2(ctx, cloneValue(arg0), cloneValue(arg1))
 	} else if e.function.fn3 != nil {
-		arg0, argOK, err := eval(e.operands[0])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg0, arg0OK, arg0Err := eval(e.operands[0])
+		if arg0Err != nil || !arg0OK {
+			return Value{}, false, arg0Err
 		}
 		if !expressionKindAssignable(e.function.args[0], arg0.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 0, arg0.Kind(), e.function.args[0]))
 		}
-		arg1, argOK, err := eval(e.operands[1])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg1, arg1OK, arg1Err := eval(e.operands[1])
+		if arg1Err != nil || !arg1OK {
+			return Value{}, false, arg1Err
 		}
 		if !expressionKindAssignable(e.function.args[1], arg1.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 1, arg1.Kind(), e.function.args[1]))
 		}
-		arg2, argOK, err := eval(e.operands[2])
-		if err != nil || !argOK {
-			return Value{}, false, err
+		arg2, arg2OK, arg2Err := eval(e.operands[2])
+		if arg2Err != nil || !arg2OK {
+			return Value{}, false, arg2Err
 		}
 		if !expressionKindAssignable(e.function.args[2], arg2.Kind()) {
 			return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, fmt.Errorf("argument %d has kind %s, want %s", 2, arg2.Kind(), e.function.args[2]))
@@ -1839,6 +1906,9 @@ func serializeCompiledExpression(expression compiledExpression) string {
 		b.WriteString(expression.globalName)
 		b.WriteString(",global-slot=")
 		b.WriteString(fmt.Sprint(expression.globalSlot))
+	case expressionNodeRHSBind:
+		b.WriteString(",rhs-bind=")
+		b.WriteString(expression.paramName)
 	case expressionNodeCall:
 		b.WriteString(",function=")
 		b.WriteString(expression.function.name)

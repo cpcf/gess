@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"reflect"
 	"slices"
@@ -24,6 +25,7 @@ type sessionConfig struct {
 	strategy            Strategy
 	eventClock          func() time.Time
 	resetBeforeSnapshot bool
+	output              io.Writer
 }
 
 type SessionInitialFact struct {
@@ -113,6 +115,16 @@ func WithResetBeforeSnapshot(enabled bool) SessionOption {
 	}
 }
 
+// WithOutputWriter sets the destination for the Gess emit action. When unset,
+// emitted output is discarded. The writer is shared by all activations in the
+// session; it must be safe for the caller's own concurrent use, but the engine
+// serializes rule firings so a single run never writes concurrently.
+func WithOutputWriter(w io.Writer) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.output = w
+	}
+}
+
 type Session struct {
 	id                   SessionID
 	revision             *Ruleset
@@ -133,6 +145,7 @@ type Session struct {
 	allEventListeners    int
 	eventListenerCounts  map[EventType]int
 	eventClock           func() time.Time
+	output               io.Writer
 	closed               bool
 	runGuard             chan struct{}
 	runActive            atomic.Bool
@@ -293,6 +306,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		allEventListeners:   allEventListeners,
 		eventListenerCounts: eventListenerCounts,
 		eventClock:          cfg.eventClock,
+		output:              cfg.output,
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
@@ -839,6 +853,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		allEventListeners:   allEventListeners,
 		eventListenerCounts: eventListenerCounts,
 		eventClock:          cfg.eventClock,
+		output:              cfg.output,
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
@@ -903,6 +918,7 @@ func (s *Session) forkSessionConfig() sessionConfig {
 		globals:             s.sessionGlobalValueMap(),
 		strategy:            s.strategy,
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
+		output:              s.output,
 	}
 }
 

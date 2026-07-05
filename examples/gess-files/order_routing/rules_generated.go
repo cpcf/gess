@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 
 	gessdsl "github.com/cpcf/gess/dsl"
 	gessrules "github.com/cpcf/gess/rules"
@@ -13,25 +12,25 @@ import (
 
 func buildGeneratedRuleset(ctx context.Context, registry gessdsl.Registry) (*gessrules.Ruleset, []gesssession.InitialFact, error) {
 	workspace := gessrules.NewWorkspace()
-	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "order", Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("order"), CompatibilityKey: gessrules.TemplateKey("order"), Fields: []gessrules.FieldSpec{{Name: "customer", Kind: gessrules.ValueString, Required: true}, {Name: "id", Kind: gessrules.ValueString, Required: true}, {Name: "sku", Kind: gessrules.ValueString, Required: true}}}); err != nil {
+	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "order", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 1, StartColumn: 1, EndLine: 5, EndColumn: 1}, Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("order"), CompatibilityKey: gessrules.TemplateKey("order"), Fields: []gessrules.FieldSpec{{Name: "customer", Kind: gessrules.ValueString, Required: true}, {Name: "id", Kind: gessrules.ValueString, Required: true}, {Name: "sku", Kind: gessrules.ValueString, Required: true}}, DuplicatePolicy: gessrules.DuplicateAllow}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "customer", Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("customer"), CompatibilityKey: gessrules.TemplateKey("customer"), Fields: []gessrules.FieldSpec{{Name: "id", Kind: gessrules.ValueString, Required: true}, {Name: "segment", Kind: gessrules.ValueString, Required: true}}}); err != nil {
+	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "customer", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 7, StartColumn: 1, EndLine: 10, EndColumn: 1}, Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("customer"), CompatibilityKey: gessrules.TemplateKey("customer"), Fields: []gessrules.FieldSpec{{Name: "id", Kind: gessrules.ValueString, Required: true}, {Name: "segment", Kind: gessrules.ValueString, Required: true}}, DuplicatePolicy: gessrules.DuplicateAllow}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "inventory", Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("inventory"), CompatibilityKey: gessrules.TemplateKey("inventory"), Fields: []gessrules.FieldSpec{{Name: "available", Kind: gessrules.ValueBool, Required: true}, {Name: "sku", Kind: gessrules.ValueString, Required: true}, {Name: "warehouse", Kind: gessrules.ValueString, Required: true}}}); err != nil {
+	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "inventory", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 12, StartColumn: 1, EndLine: 16, EndColumn: 1}, Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("inventory"), CompatibilityKey: gessrules.TemplateKey("inventory"), Fields: []gessrules.FieldSpec{{Name: "available", Kind: gessrules.ValueBool, Required: true}, {Name: "sku", Kind: gessrules.ValueString, Required: true}, {Name: "warehouse", Kind: gessrules.ValueString, Required: true}}, DuplicatePolicy: gessrules.DuplicateAllow}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "fulfillment-route", Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("fulfillment-route"), CompatibilityKey: gessrules.TemplateKey("fulfillment-route"), Fields: []gessrules.FieldSpec{{Name: "lane", Kind: gessrules.ValueString, Required: true}, {Name: "order", Kind: gessrules.ValueString, Required: true}, {Name: "warehouse", Kind: gessrules.ValueString, Required: true}}, DuplicatePolicy: gessrules.DuplicateUniqueKey, DuplicateKeyNames: []string{"order"}}); err != nil {
+	if err := workspace.AddTemplate(gessrules.TemplateSpec{Name: "fulfillment-route", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 18, StartColumn: 1, EndLine: 23, EndColumn: 1}, Module: gessrules.ModuleName("MAIN"), Key: gessrules.TemplateKey("fulfillment-route"), CompatibilityKey: gessrules.TemplateKey("fulfillment-route"), Fields: []gessrules.FieldSpec{{Name: "lane", Kind: gessrules.ValueString, Required: true}, {Name: "order", Kind: gessrules.ValueString, Required: true}, {Name: "warehouse", Kind: gessrules.ValueString, Required: true}}, DuplicatePolicy: gessrules.DuplicateUniqueKey, DuplicateKeyNames: []string{"order"}}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddAction(gessGeneratedAssertAction("__gess_route-vip-order_0_1_fulfillment_route", false, gessrules.TemplateKey("fulfillment-route"), "fulfillment-route", []string{"order", "lane", "warehouse"}, []gessGeneratedActionValue{{Binding: "order", Field: "id", FieldRef: true}, {Constant: "expedite", HasConstant: true}, {Binding: "__gess2", Field: "warehouse", FieldRef: true}}, []gessrules.ActionBindingReadSpec{{Binding: "order", Field: "id"}, {Binding: "__gess2", Field: "warehouse"}})); err != nil {
+	if err := workspace.AddAction(gessrules.ActionSpec{Name: "__gess_route-vip-order_0_1_fulfillment_route", GessSource: "(assert (fulfillment-route (order ?order:id) (lane \"expedite\") (warehouse ?warehouse)))", AssertTemplateValues: &gessrules.AssertTemplateValuesActionSpec{TemplateKey: gessrules.TemplateKey("fulfillment-route"), Values: []gessrules.ExpressionSpec{gessrules.ConstExpr{Value: "expedite"}, gessrules.BindingFieldExpr{Binding: "order", Field: "id"}, gessrules.BindingFieldExpr{Binding: "__gess2", Field: "warehouse"}}}}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddRule(gessrules.RuleSpec{Name: "route-vip-order", ConditionTree: gessrules.And{Conditions: []gessrules.ConditionSpec{gessrules.Match{Binding: "order", Target: gessrules.TemplateFact("order")}, gessrules.Match{Binding: "__gess1", Target: gessrules.TemplateFact("customer"), FieldConstraints: []gessrules.FieldConstraintSpec{{Field: "segment", Operator: gessrules.FieldConstraintEqual, Value: "vip"}}, JoinConstraints: []gessrules.JoinConstraintSpec{{Field: "id", Operator: gessrules.FieldConstraintEqual, Ref: gessrules.FieldRef{Binding: "order", Field: "customer"}}}}, gessrules.Match{Binding: "__gess2", Target: gessrules.TemplateFact("inventory"), FieldConstraints: []gessrules.FieldConstraintSpec{{Field: "available", Operator: gessrules.FieldConstraintEqual, Value: true}}, JoinConstraints: []gessrules.JoinConstraintSpec{{Field: "sku", Operator: gessrules.FieldConstraintEqual, Ref: gessrules.FieldRef{Binding: "order", Field: "sku"}}}}}}, Actions: []gessrules.RuleActionSpec{{Name: "__gess_route-vip-order_0_1_fulfillment_route"}}}); err != nil {
+	if err := workspace.AddRule(gessrules.RuleSpec{Name: "route-vip-order", Module: gessrules.ModuleName("MAIN"), ID: gessrules.RuleID("route-vip-order"), Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 36, StartColumn: 1, EndLine: 47, EndColumn: 1}, ConditionTree: gessrules.And{Conditions: []gessrules.ConditionSpec{gessrules.Match{Binding: "order", Target: gessrules.TemplateFact("order"), Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 37, StartColumn: 3, EndLine: 37, EndColumn: 41}}, gessrules.Match{Binding: "__gess1", Target: gessrules.TemplateFact("customer"), FieldConstraints: []gessrules.FieldConstraintSpec{{Field: "segment", Operator: gessrules.FieldConstraintEqual, Value: "vip"}}, JoinConstraints: []gessrules.JoinConstraintSpec{{Field: "id", Operator: gessrules.FieldConstraintEqual, Ref: gessrules.FieldRef{Binding: "order", Field: "customer"}}}, Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 38, StartColumn: 3, EndLine: 38, EndColumn: 43}}, gessrules.Match{Binding: "__gess2", Target: gessrules.TemplateFact("inventory"), FieldConstraints: []gessrules.FieldConstraintSpec{{Field: "available", Operator: gessrules.FieldConstraintEqual, Value: true}}, JoinConstraints: []gessrules.JoinConstraintSpec{{Field: "sku", Operator: gessrules.FieldConstraintEqual, Ref: gessrules.FieldRef{Binding: "order", Field: "sku"}}}, Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 39, StartColumn: 3, EndLine: 39, EndColumn: 64}}}}, Actions: []gessrules.RuleActionSpec{{Name: "__gess_route-vip-order_0_1_fulfillment_route", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 41, StartColumn: 3, EndLine: 46, EndColumn: 3}}}}); err != nil {
 		return nil, nil, err
 	}
-	if err := workspace.AddQuery(gessrules.QuerySpec{Name: "routes-by-lane", Module: gessrules.ModuleName("MAIN"), Parameters: []gessrules.QueryParameterSpec{{Name: "lane", Kind: gessrules.ValueAny}}, ConditionTree: gessrules.Match{Binding: "route", Target: gessrules.TemplateFact("fulfillment-route"), Predicates: []gessrules.ExpressionSpec{gessrules.CompareExpr{Operator: gessrules.ExpressionCompareEqual, Left: gessrules.CurrentFieldExpr{Field: "lane"}, Right: gessrules.ParamExpr{Name: "lane"}}}}, Returns: []gessrules.QueryReturnSpec{gessrules.ReturnValue("order", gessrules.BindingFieldExpr{Binding: "route", Field: "order"}), gessrules.ReturnValue("warehouse", gessrules.BindingFieldExpr{Binding: "route", Field: "warehouse"})}}); err != nil {
+	if err := workspace.AddQuery(gessrules.QuerySpec{Name: "routes-by-lane", Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 49, StartColumn: 1, EndLine: 60, EndColumn: 1}, Module: gessrules.ModuleName("MAIN"), Parameters: []gessrules.QueryParameterSpec{{Name: "lane", Kind: gessrules.ValueAny}}, ConditionTree: gessrules.Match{Binding: "route", Target: gessrules.TemplateFact("fulfillment-route"), Predicates: []gessrules.ExpressionSpec{gessrules.CompareExpr{Operator: gessrules.ExpressionCompareEqual, Left: gessrules.CurrentFieldExpr{Field: "lane"}, Right: gessrules.ParamExpr{Name: "lane"}}}, Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 51, StartColumn: 13, EndLine: 55, EndColumn: 3}}, Returns: []gessrules.QueryReturnSpec{gessrules.QueryReturnSpec{Alias: "order", Expression: gessrules.BindingFieldExpr{Binding: "route", Field: "order"}, Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 57, StartColumn: 5, EndLine: 57, EndColumn: 18}}, gessrules.QueryReturnSpec{Alias: "warehouse", Expression: gessrules.BindingFieldExpr{Binding: "route", Field: "warehouse"}, Source: gessrules.SourceSpan{Name: "rules.gess", StartLine: 58, StartColumn: 5, EndLine: 58, EndColumn: 26}}}}); err != nil {
 		return nil, nil, err
 	}
 	ruleset, err := workspace.Compile(ctx)
@@ -39,103 +38,4 @@ func buildGeneratedRuleset(ctx context.Context, registry gessdsl.Registry) (*ges
 		return nil, nil, err
 	}
 	return ruleset, []gesssession.InitialFact{{TemplateKey: gessrules.TemplateKey("order"), Fields: gessrules.MustFields("customer", "C-100", "id", "O-100", "sku", "SKU-1")}, {TemplateKey: gessrules.TemplateKey("order"), Fields: gessrules.MustFields("customer", "C-200", "id", "O-200", "sku", "SKU-1")}, {TemplateKey: gessrules.TemplateKey("order"), Fields: gessrules.MustFields("customer", "C-300", "id", "O-300", "sku", "SKU-2")}, {TemplateKey: gessrules.TemplateKey("customer"), Fields: gessrules.MustFields("id", "C-100", "segment", "vip")}, {TemplateKey: gessrules.TemplateKey("customer"), Fields: gessrules.MustFields("id", "C-200", "segment", "standard")}, {TemplateKey: gessrules.TemplateKey("customer"), Fields: gessrules.MustFields("id", "C-300", "segment", "vip")}, {TemplateKey: gessrules.TemplateKey("inventory"), Fields: gessrules.MustFields("available", true, "sku", "SKU-1", "warehouse", "W-1")}, {TemplateKey: gessrules.TemplateKey("inventory"), Fields: gessrules.MustFields("available", false, "sku", "SKU-2", "warehouse", "W-2")}}, nil
-}
-
-type gessGeneratedActionValue struct {
-	Constant     any
-	HasConstant  bool
-	Binding      string
-	Field        string
-	FieldRef     bool
-	BindingValue bool
-}
-
-func (v gessGeneratedActionValue) value(ctx gessrules.ActionContext) (any, error) {
-	switch {
-	case v.HasConstant:
-		return v.Constant, nil
-	case v.FieldRef:
-		value, ok := ctx.BindingScalarValue(v.Binding, v.Field)
-		if !ok {
-			return nil, fmt.Errorf("gess: generated action missing binding field %s.%s", v.Binding, v.Field)
-		}
-		return value, nil
-	case v.BindingValue:
-		value, ok := ctx.BindingValue(v.Binding)
-		if !ok {
-			return nil, fmt.Errorf("gess: generated action missing binding value %s", v.Binding)
-		}
-		return value, nil
-	default:
-		return nil, fmt.Errorf("gess: generated action value is not configured")
-	}
-}
-
-func gessGeneratedAssertAction(name string, logical bool, templateKey gessrules.TemplateKey, factName string, fields []string, values []gessGeneratedActionValue, reads []gessrules.ActionBindingReadSpec) gessrules.ActionSpec {
-	spec := gessrules.ActionSpec{Name: name}
-	if len(reads) > 0 {
-		spec.BindingReads = &gessrules.ActionBindingReadSetSpec{Reads: reads}
-	}
-	spec.Fn = func(ctx gessrules.ActionContext) error {
-		pairs := make([]any, 0, len(fields)*2)
-		for i, field := range fields {
-			value, err := values[i].value(ctx)
-			if err != nil {
-				return err
-			}
-			pairs = append(pairs, field, value)
-		}
-		f, err := gessrules.NewFieldsFromPairs(pairs...)
-		if err != nil {
-			return err
-		}
-		if logical {
-			_, err = ctx.AssertLogical(factName, f)
-			return err
-		}
-		if templateKey != "" {
-			_, err = ctx.AssertTemplate(templateKey, f)
-			return err
-		}
-		_, err = ctx.Assert(factName, f)
-		return err
-	}
-	return spec
-}
-
-func gessRegisteredAction(name string, registry gessdsl.Registry) gessrules.ActionSpec {
-	fn, ok := registry.Actions[name]
-	if !ok {
-		return gessrules.ActionSpec{Name: name, Fn: func(gessrules.ActionContext) error {
-			return fmt.Errorf("gess: registered action %q is required", name)
-		}}
-	}
-	return gessrules.ActionSpec{Name: name, Fn: fn}
-}
-
-func gessGeneratedCallAction(name string, callName string, values []gessGeneratedActionValue, reads []gessrules.ActionBindingReadSpec, registry gessdsl.Registry) gessrules.ActionSpec {
-	call, ok := registry.Calls[callName]
-	spec := gessrules.ActionSpec{Name: name}
-	if len(reads) > 0 {
-		spec.BindingReads = &gessrules.ActionBindingReadSetSpec{Reads: reads}
-	}
-	spec.Fn = func(ctx gessrules.ActionContext) error {
-		if !ok {
-			return fmt.Errorf("gess: registered call %q is required", callName)
-		}
-		args := make([]gessrules.Value, 0, len(values))
-		for _, value := range values {
-			raw, err := value.value(ctx)
-			if err != nil {
-				return err
-			}
-			normalized, err := gessrules.NewValue(raw)
-			if err != nil {
-				return err
-			}
-			args = append(args, normalized)
-		}
-		return call(ctx, args)
-	}
-	return spec
 }

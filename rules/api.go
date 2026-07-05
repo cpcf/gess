@@ -30,6 +30,17 @@ type (
 	// matching, queries, or mutation, the emitted fact is output-only:
 	// validated and defaulted, then discarded unless consumed.
 	AssertTemplateValuesActionSpec = engine.AssertTemplateValuesActionSpec
+	// ActionEffectSpec is a declarative, expression-backed rule action for
+	// the .gess mutation verbs (assert/modify/retract/emit/bind). Its
+	// Values are [ExpressionSpec]s compiled once and evaluated against the
+	// firing's frozen bindings, so function-call action values need no host
+	// closure and survive Go code generation.
+	ActionEffectSpec = engine.ActionEffectSpec
+	// ActionEffectKind selects the mutation an [ActionEffectSpec] performs.
+	ActionEffectKind = engine.ActionEffectKind
+	// ActionCallSpec is a host-function call action: a registered call plus
+	// expression-backed arguments.
+	ActionCallSpec = engine.ActionCallSpec
 	// Action is a compiled, inspectable action reference on a rule or
 	// query.
 	Action = engine.Action
@@ -80,6 +91,10 @@ type (
 	// [GlobalValue]. Valid in any condition, test, aggregate-input,
 	// query, or action-argument expression.
 	GlobalExpr = engine.GlobalExpr
+	// RHSBindExpr references a right-hand-side local created by a bind
+	// action earlier in the same rule firing. Valid only in action
+	// values, never on a left-hand side.
+	RHSBindExpr = engine.RHSBindExpr
 	// CallExpr invokes a registered pure function by name with Args.
 	CallExpr = engine.CallExpr
 	// CompareExpr compares Left and Right with Operator; both operands
@@ -142,6 +157,9 @@ type (
 	// FactID identifies a fact, stable across modifies within a
 	// generation. IDs from an earlier generation are stale after Reset.
 	FactID = engine.FactID
+	// FactPatch describes a modify: Set overwrites the named fields and
+	// Unset clears the named fields, restoring their template defaults.
+	FactPatch = engine.FactPatch
 	// FieldRef names a field, or nested path, of an earlier binding,
 	// used as the right-hand side of a [JoinConstraintSpec].
 	FieldRef = engine.FieldRef
@@ -498,6 +516,19 @@ const (
 	ValueString = engine.ValueString
 	ValueList   = engine.ValueList
 	ValueMap    = engine.ValueMap
+
+	// Action effect kinds select the mutation an [ActionEffectSpec]
+	// performs.
+	ActionEffectAssert        = engine.ActionEffectAssert
+	ActionEffectAssertLogical = engine.ActionEffectAssertLogical
+	ActionEffectModify        = engine.ActionEffectModify
+	ActionEffectRetract       = engine.ActionEffectRetract
+	ActionEffectEmit          = engine.ActionEffectEmit
+	ActionEffectBind          = engine.ActionEffectBind
+	ActionEffectPushFocus     = engine.ActionEffectPushFocus
+	ActionEffectPopFocus      = engine.ActionEffectPopFocus
+	ActionEffectClearFocus    = engine.ActionEffectClearFocus
+	ActionEffectHalt          = engine.ActionEffectHalt
 )
 
 var (

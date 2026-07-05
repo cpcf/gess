@@ -1,0 +1,37 @@
+(deftemplate order
+  (slot id (type STRING) (required TRUE))
+  (slot warehouse (type STRING) (required TRUE))
+  (slot subtotal (type INTEGER) (required TRUE))
+  (slot tax (type INTEGER) (required TRUE))
+  (slot total (type INTEGER) (required TRUE))
+  (slot status (type STRING) (required TRUE)))
+
+(deftemplate cancellation
+  (slot order (type STRING) (required TRUE)))
+
+(deffacts seed
+  (order (id "O-1") (warehouse "W-1") (subtotal 100) (tax 8) (total 0) (status "new"))
+  (order (id "O-2") (warehouse "W-2") (subtotal 40) (tax 2) (total 0) (status "new"))
+  (cancellation (order "O-2")))
+
+(defrule ship-order
+  ?order <- (order (id ?id) (warehouse ?warehouse) (subtotal ?subtotal) (tax ?tax) (status "new"))
+  (not (cancellation (order ?id)))
+  =>
+  (bind ?total (+ ?subtotal ?tax))
+  (modify ?order (set (total ?total) (status (str-cat "shipped-" ?warehouse))))
+  (emit "order " ?id " shipped from " ?warehouse " total " ?total "\n"))
+
+(defrule drop-cancelled-order
+  ?order <- (order (id ?id) (status "new"))
+  (cancellation (order ?id))
+  =>
+  (emit "order " ?id " cancelled\n")
+  (retract ?order))
+
+(defquery shipped-orders ?order <-
+  (order (id ?id) (warehouse ?warehouse) (total ?total))
+  (test (> ?total 0))
+  (return
+    (id ?id)
+    (total ?total)))

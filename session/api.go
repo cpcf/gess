@@ -472,6 +472,13 @@ func WithResetBeforeSnapshot(enabled bool) Option {
 	return engine.WithResetBeforeSnapshot(enabled)
 }
 
+// WithOutputWriter sets the destination for the .gess emit action. When
+// unset, emitted output is discarded. A fork inherits the parent's writer
+// unless it supplies its own.
+func WithOutputWriter(w io.Writer) Option {
+	return engine.WithOutputWriter(w)
+}
+
 // WithMaxFirings caps one Run call at n activation firings. A run that
 // stops at the cap with work remaining returns [RunFireLimit]; n <= 0
 // fails the run.

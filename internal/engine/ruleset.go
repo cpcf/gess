@@ -493,9 +493,26 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		actionOrder = append(actionOrder, action.name)
 	}
 
+	builtins := builtinFunctionSpecs()
+	reservedBuiltins := make(map[string]struct{}, len(builtins))
+	userFunctions := make(map[string]struct{}, len(w.functions)+len(w.exprFuncs))
 	compiledFunctions := make([]compiledPureFunction, 0, len(w.functions))
-	functionsByName := make(map[string]compiledPureFunction, len(w.functions)+len(w.exprFuncs))
+	functionsByName := make(map[string]compiledPureFunction, len(builtins)+len(w.functions)+len(w.exprFuncs))
 	functionOrder := make([]string, 0, len(w.functions)+len(w.exprFuncs))
+	// Built-ins are always available and cannot be shadowed. They are kept out
+	// of compiledFunctions/functionOrder so they stay invisible to ruleset
+	// inspection and do not perturb the ruleset identity hash.
+	for i, spec := range builtins {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		function, err := compilePureFunctionSpec(spec, -1-i)
+		if err != nil {
+			return nil, err
+		}
+		functionsByName[function.name] = function
+		reservedBuiltins[function.name] = struct{}{}
+	}
 	for i, spec := range w.functions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -504,13 +521,21 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := functionsByName[function.name]; exists {
+		if _, reserved := reservedBuiltins[function.name]; reserved {
+			return nil, &ValidationError{
+				FunctionName: function.name,
+				Reason:       "function shadows a built-in",
+				Err:          ErrFunctionValidation,
+			}
+		}
+		if _, exists := userFunctions[function.name]; exists {
 			return nil, &ValidationError{
 				FunctionName: function.name,
 				Reason:       "duplicate function",
 				Err:          ErrFunctionValidation,
 			}
 		}
+		userFunctions[function.name] = struct{}{}
 		functionsByName[function.name] = function
 		compiledFunctions = append(compiledFunctions, function)
 		functionOrder = append(functionOrder, function.name)
@@ -522,6 +547,13 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		function, err := compileExpressionFunctionSpec(spec, len(compiledFunctions), functionsByName)
 		if err != nil {
 			return nil, err
+		}
+		if _, reserved := reservedBuiltins[function.name]; reserved {
+			return nil, &ValidationError{
+				FunctionName: function.name,
+				Reason:       "function shadows a built-in",
+				Err:          ErrFunctionValidation,
+			}
 		}
 		if _, exists := functionsByName[function.name]; exists {
 			return nil, &ValidationError{
@@ -1167,7 +1199,10 @@ func (r *Ruleset) Function(name string) (PureFunctionDefinition, bool) {
 		return PureFunctionDefinition{}, false
 	}
 	function, ok := r.functions[strings.TrimSpace(name)]
-	if !ok {
+	if !ok || function.order < 0 {
+		// Built-ins carry a negative order and are implicit rather than
+		// declared, so they are not exposed through inspection, matching
+		// Functions().
 		return PureFunctionDefinition{}, false
 	}
 	return function.inspect(), true

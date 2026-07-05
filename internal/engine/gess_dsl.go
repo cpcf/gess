@@ -826,6 +826,9 @@ func (l *gessLoader) parseExpr(module ModuleName, form gessSExpr, scope *gessSco
 			return BindingFieldExpr{Binding: binding, Field: field}, nil
 		}
 		if variable, ok := gessVariableName(form); ok {
+			if _, ok := scope.rhsBinds[variable]; ok {
+				return RHSBindExpr{Name: variable}, nil
+			}
 			if ref, ok := scope.vars[variable]; ok {
 				return BindingFieldExpr{Binding: ref.Binding, Field: ref.Field, Path: ref.Path}, nil
 			}
@@ -917,26 +920,52 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 			return "", l.err(form.Span, "focus requires a module name")
 		}
 		name := l.generatedActionName(ruleName, index, "focus")
-		module := ModuleName(form.List[1].Text())
-		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
-			return ctx.PushFocus(module)
-		}})
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Effect: &ActionEffectSpec{Kind: ActionEffectPushFocus, Target: form.List[1].Text()}})
 	case "pop-focus":
 		name := l.generatedActionName(ruleName, index, "pop-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
-			_, err := ctx.PopFocus()
-			return err
-		}})
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Effect: &ActionEffectSpec{Kind: ActionEffectPopFocus}})
 	case "clear-focus":
 		name := l.generatedActionName(ruleName, index, "clear-focus")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
-			return ctx.ClearFocusStack()
-		}})
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Effect: &ActionEffectSpec{Kind: ActionEffectClearFocus}})
 	case "halt":
 		name := l.generatedActionName(ruleName, index, "halt")
-		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Fn: func(ctx ActionContext) error {
-			return ctx.Halt()
-		}})
+		return name, l.workspace.AddAction(ActionSpec{Name: name, GessSource: gessExprSource(form), Effect: &ActionEffectSpec{Kind: ActionEffectHalt}})
+	case "retract":
+		action, err := l.buildRetractAction(ruleName, index, form, scope)
+		if err != nil {
+			return "", err
+		}
+		if err := l.workspace.AddAction(action); err != nil {
+			return "", l.wrap(form.Span, "add generated retract action", err)
+		}
+		return action.Name, nil
+	case "modify":
+		action, err := l.buildModifyAction(ruleName, index, module, form, scope)
+		if err != nil {
+			return "", err
+		}
+		if err := l.workspace.AddAction(action); err != nil {
+			return "", l.wrap(form.Span, "add generated modify action", err)
+		}
+		return action.Name, nil
+	case "emit":
+		action, err := l.buildEmitAction(ruleName, index, module, form, scope)
+		if err != nil {
+			return "", err
+		}
+		if err := l.workspace.AddAction(action); err != nil {
+			return "", l.wrap(form.Span, "add generated emit action", err)
+		}
+		return action.Name, nil
+	case "bind":
+		action, err := l.buildBindAction(ruleName, index, module, form, scope)
+		if err != nil {
+			return "", err
+		}
+		if err := l.workspace.AddAction(action); err != nil {
+			return "", l.wrap(form.Span, "add generated bind action", err)
+		}
+		return action.Name, nil
 	case "call":
 		if len(form.List) < 2 || !form.List[1].IsAtom() {
 			return "", l.err(form.Span, "call requires a registered action name")
@@ -952,7 +981,7 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 		if !ok {
 			return "", l.err(form.List[1].Span, "unregistered action %q", name)
 		}
-		action, err := l.buildCallAction(ruleName, index, name, call, form.List[2:], scope)
+		action, err := l.buildCallAction(ruleName, index, module, name, call, form.List[2:], form, scope)
 		if err != nil {
 			return "", err
 		}
@@ -965,71 +994,20 @@ func (l *gessLoader) loadRuleAction(ruleName string, index int, module ModuleNam
 	}
 }
 
-func (l *gessLoader) buildCallAction(ruleName string, index int, callName string, call DSLCallFunc, args []gessSExpr, scope *gessScope) (ActionSpec, error) {
-	values := make([]gessRuntimeValue, 0, len(args))
+func (l *gessLoader) buildCallAction(ruleName string, index int, module ModuleName, callName string, call DSLCallFunc, args []gessSExpr, form gessSExpr, scope *gessScope) (ActionSpec, error) {
+	spec := &ActionCallSpec{Name: callName, Fn: call}
 	for _, arg := range args {
-		value, err := l.runtimeValue(arg, scope)
+		value, err := l.parseExpr(module, arg, scope)
 		if err != nil {
 			return ActionSpec{}, err
 		}
-		values = append(values, value)
+		spec.Args = append(spec.Args, value)
 	}
-	action := ActionSpec{Name: l.generatedActionName(ruleName, index, "call_"+callName)}
-	action.GessSource = gessCallSource(callName, values)
-	var reads []ActionBindingReadSpec
-	for _, value := range values {
-		if value.fieldRef {
-			reads = append(reads, ActionBindingReadSpec{Binding: value.binding, Field: value.field})
-		}
-	}
-	if len(reads) > 0 {
-		action.BindingReads = &ActionBindingReadSetSpec{Reads: reads}
-	}
-	action.Fn = func(ctx ActionContext) error {
-		args := make([]Value, 0, len(values))
-		for _, value := range values {
-			raw, err := value.value(ctx)
-			if err != nil {
-				return err
-			}
-			normalized, err := NewValue(raw)
-			if err != nil {
-				return err
-			}
-			args = append(args, normalized)
-		}
-		return call(ctx, args)
-	}
-	return action, nil
-}
-
-func gessCallSource(callName string, values []gessRuntimeValue) string {
-	var b strings.Builder
-	b.WriteString("(call ")
-	b.WriteString(callName)
-	for _, value := range values {
-		b.WriteByte(' ')
-		b.WriteString(gessRuntimeValueSource(value))
-	}
-	b.WriteByte(')')
-	return b.String()
-}
-
-func gessRuntimeValueSource(value gessRuntimeValue) string {
-	switch {
-	case value.hasConst:
-		normalized, err := NewValue(value.constant)
-		if err != nil {
-			return strconv.Quote(fmt.Sprint(value.constant))
-		}
-		return renderGessValue(normalized)
-	case value.fieldRef:
-		return "?" + value.binding + ":" + value.field
-	case value.bindingValue:
-		return "?" + value.binding
-	default:
-		return "NULL"
-	}
+	return ActionSpec{
+		Name:       l.generatedActionName(ruleName, index, "call_"+callName),
+		GessSource: gessExprSource(form),
+		Call:       spec,
+	}, nil
 }
 
 func (l *gessLoader) buildAssertAction(ruleName string, index int, module ModuleName, logical bool, fact gessSExpr, scope *gessScope) (ActionSpec, error) {
@@ -1041,13 +1019,13 @@ func (l *gessLoader) buildAssertAction(ruleName string, index int, module Module
 		mod = module
 	}
 	templateKey := l.templateKey(mod, name)
-	values := make([]gessRuntimeValue, 0, len(fact.List)-1)
 	fields := make([]string, 0, len(fact.List)-1)
+	values := make([]ExpressionSpec, 0, len(fact.List)-1)
 	for _, slot := range fact.List[1:] {
 		if len(slot.List) != 2 || !slot.List[0].IsAtom() {
 			return ActionSpec{}, l.err(slot.Span, "assert slot must be (field value)")
 		}
-		value, err := l.runtimeValue(slot.List[1], scope)
+		value, err := l.parseExpr(module, slot.List[1], scope)
 		if err != nil {
 			return ActionSpec{}, err
 		}
@@ -1055,76 +1033,210 @@ func (l *gessLoader) buildAssertAction(ruleName string, index int, module Module
 		values = append(values, value)
 	}
 	action := ActionSpec{Name: l.generatedActionName(ruleName, index, fact.Head())}
-	var reads []ActionBindingReadSpec
-	for _, value := range values {
-		if value.fieldRef {
-			reads = append(reads, ActionBindingReadSpec{Binding: value.binding, Field: value.field})
-		}
-	}
-	if len(reads) > 0 {
-		action.BindingReads = &ActionBindingReadSetSpec{Reads: reads}
-	}
+	// Prefer the native template-values fast path (output-only optimization)
+	// when the target is a fixed template and all slots are present.
 	if !logical && templateKey != "" {
-		templateSpec, ok := l.templates[QualifiedName{Module: normalizeModuleName(mod), Name: name}.normalized()]
-		if ok {
+		if templateSpec, ok := l.templates[QualifiedName{Module: normalizeModuleName(mod), Name: name}.normalized()]; ok {
 			if native, ok := gessNativeAssertTemplateValues(templateKey, templateSpec, fields, values); ok {
-				action.BindingReads = nil
 				action.AssertTemplateValues = native
 				return action, nil
 			}
 		}
 	}
-	action.Fn = func(ctx ActionContext) error {
-		pairs := make([]any, 0, len(fields)*2)
-		for i, field := range fields {
-			value, err := values[i].value(ctx)
-			if err != nil {
-				return err
-			}
-			pairs = append(pairs, field, value)
-		}
-		f, err := NewFieldsFromPairs(pairs...)
-		if err != nil {
-			return err
-		}
-		if logical {
-			if templateKey != "" {
-				if ctx.session == nil {
-					return ErrClosedSession
-				}
-				if ctx.RuleRevisionID().IsZero() || ctx.ActivationID().IsZero() {
-					return ErrLogicalSupportUnavailable
-				}
-				if err := ctx.materializeAllBindings(); err != nil {
-					return err
-				}
-				_, err = ctx.session.insertLogicalFactWithContextAndOrigin(ctx.Context(), "", templateKey, f, ctx.mutationOrigin(), ctx.supportingFactIDs())
-				return err
-			}
-			_, err = ctx.AssertLogical(qualifiedGessName(mod, name), f)
-			return err
-		}
-		if templateKey != "" {
-			_, err = ctx.AssertTemplate(templateKey, f)
-			return err
-		}
-		_, err = ctx.Assert(qualifiedGessName(mod, name), f)
-		return err
+	effect := &ActionEffectSpec{
+		Kind:        ActionEffectAssert,
+		TemplateKey: templateKey,
+		FactName:    qualifiedGessName(mod, name),
+		Fields:      fields,
+		Values:      values,
 	}
+	if logical {
+		effect.Kind = ActionEffectAssertLogical
+	}
+	action.Effect = effect
 	return action, nil
 }
 
-func gessNativeAssertTemplateValues(templateKey TemplateKey, template TemplateSpec, fields []string, values []gessRuntimeValue) (*AssertTemplateValuesActionSpec, bool) {
+// gessMutationTargetBinding validates that a form's argument at index is a
+// fact-binding variable in scope and returns the binding name.
+func (l *gessLoader) gessMutationTargetBinding(verb string, form gessSExpr, index int, scope *gessScope) (string, error) {
+	if len(form.List) <= index || !form.List[index].IsAtom() {
+		return "", l.err(form.Span, "%s requires a fact binding", verb)
+	}
+	target := form.List[index]
+	binding, ok := gessVariableName(target)
+	if !ok {
+		return "", l.err(target.Span, "%s target must be a ?binding", verb)
+	}
+	if _, ok := scope.bindings[binding]; !ok {
+		if _, isVar := scope.vars[binding]; isVar {
+			return "", l.err(target.Span, "%s target %q is a value, not a fact binding", verb, target.Text())
+		}
+		if _, isValue := scope.values[binding]; isValue {
+			return "", l.err(target.Span, "%s target %q is a value, not a fact binding", verb, target.Text())
+		}
+		if _, isParam := scope.params[binding]; isParam {
+			return "", l.err(target.Span, "%s target %q is a query parameter, not a fact binding", verb, target.Text())
+		}
+		return "", l.err(target.Span, "%s target %q is not a bound fact", verb, target.Text())
+	}
+	return binding, nil
+}
+
+func (l *gessLoader) buildRetractAction(ruleName string, index int, form gessSExpr, scope *gessScope) (ActionSpec, error) {
+	if len(form.List) != 2 {
+		return ActionSpec{}, l.err(form.Span, "retract requires one fact binding")
+	}
+	binding, err := l.gessMutationTargetBinding("retract", form, 1, scope)
+	if err != nil {
+		return ActionSpec{}, err
+	}
+	return ActionSpec{
+		Name:       l.generatedActionName(ruleName, index, "retract"),
+		GessSource: gessExprSource(form),
+		Effect:     &ActionEffectSpec{Kind: ActionEffectRetract, Target: binding},
+	}, nil
+}
+
+func (l *gessLoader) buildModifyAction(ruleName string, index int, module ModuleName, form gessSExpr, scope *gessScope) (ActionSpec, error) {
+	if len(form.List) < 3 {
+		return ActionSpec{}, l.err(form.Span, "modify requires a fact binding and at least one set or unset block")
+	}
+	binding, err := l.gessMutationTargetBinding("modify", form, 1, scope)
+	if err != nil {
+		return ActionSpec{}, err
+	}
+	effect := &ActionEffectSpec{Kind: ActionEffectModify, Target: binding}
+	sawSet := false
+	sawUnset := false
+	for _, block := range form.List[2:] {
+		switch block.Head() {
+		case "set":
+			if sawSet {
+				return ActionSpec{}, l.err(block.Span, "modify allows one set block")
+			}
+			sawSet = true
+			for _, slot := range block.List[1:] {
+				if len(slot.List) != 2 || !slot.List[0].IsAtom() {
+					return ActionSpec{}, l.err(slot.Span, "modify set slot must be (field value)")
+				}
+				value, err := l.parseExpr(module, slot.List[1], scope)
+				if err != nil {
+					return ActionSpec{}, err
+				}
+				effect.Fields = append(effect.Fields, slot.List[0].Text())
+				effect.Values = append(effect.Values, value)
+			}
+		case "unset":
+			if sawUnset {
+				return ActionSpec{}, l.err(block.Span, "modify allows one unset block")
+			}
+			sawUnset = true
+			for _, slot := range block.List[1:] {
+				if !slot.IsAtom() {
+					return ActionSpec{}, l.err(slot.Span, "modify unset takes bare slot names")
+				}
+				effect.Unset = append(effect.Unset, slot.Text())
+			}
+		default:
+			return ActionSpec{}, l.err(block.Span, "modify block must be (set ...) or (unset ...)")
+		}
+	}
+	if len(effect.Fields) == 0 && len(effect.Unset) == 0 {
+		return ActionSpec{}, l.err(form.Span, "modify requires at least one set or unset field")
+	}
+	return ActionSpec{
+		Name:       l.generatedActionName(ruleName, index, "modify"),
+		GessSource: gessExprSource(form),
+		Effect:     effect,
+	}, nil
+}
+
+func (l *gessLoader) buildEmitAction(ruleName string, index int, module ModuleName, form gessSExpr, scope *gessScope) (ActionSpec, error) {
+	effect := &ActionEffectSpec{Kind: ActionEffectEmit}
+	for _, arg := range form.List[1:] {
+		value, err := l.parseExpr(module, arg, scope)
+		if err != nil {
+			return ActionSpec{}, err
+		}
+		effect.Values = append(effect.Values, value)
+	}
+	return ActionSpec{
+		Name:       l.generatedActionName(ruleName, index, "emit"),
+		GessSource: gessExprSource(form),
+		Effect:     effect,
+	}, nil
+}
+
+func (l *gessLoader) buildBindAction(ruleName string, index int, module ModuleName, form gessSExpr, scope *gessScope) (ActionSpec, error) {
+	if len(form.List) != 3 {
+		return ActionSpec{}, l.err(form.Span, "bind requires a ?name and one expression")
+	}
+	name, ok := gessVariableName(form.List[1])
+	if !ok {
+		return ActionSpec{}, l.err(form.List[1].Span, "bind target must be a ?name")
+	}
+	if _, exists := scope.rhsBinds[name]; exists {
+		return ActionSpec{}, l.err(form.List[1].Span, "bind %q is already bound", form.List[1].Text())
+	}
+	// Resolve the expression before registering the name so a bind cannot
+	// reference itself, and later actions resolve it as an RHS-local.
+	value, err := l.parseExpr(module, form.List[2], scope)
+	if err != nil {
+		return ActionSpec{}, err
+	}
+	scope.rhsBinds[name] = struct{}{}
+	return ActionSpec{
+		Name:       l.generatedActionName(ruleName, index, "bind"),
+		GessSource: gessExprSource(form),
+		Effect:     &ActionEffectSpec{Kind: ActionEffectBind, Target: name, Values: []ExpressionSpec{value}},
+	}, nil
+}
+
+// gessDisplayValue renders a value for emit output: strings verbatim and
+// scalars in their natural form, without the quoting used by canonical keys.
+func gessDisplayValue(value Value) string {
+	switch value.Kind() {
+	case ValueString:
+		v, _ := value.AsString()
+		return v
+	case ValueBool:
+		if v, _ := value.AsBool(); v {
+			return "true"
+		}
+		return "false"
+	case ValueInt:
+		v, _ := value.AsInt64()
+		return strconv.FormatInt(v, 10)
+	case ValueFloat:
+		v, _ := value.AsFloat64()
+		return strconv.FormatFloat(v, 'g', -1, 64)
+	case ValueNull:
+		return "nil"
+	default:
+		return value.String()
+	}
+}
+
+// gessNativeAssertTemplateValues rewrites a full-template assert with only
+// simple (non-call) values into the native AssertTemplateValues fast path,
+// preserving the output-only template optimization. It returns false when the
+// slots are incomplete or any value is a function call or RHS-local reference,
+// leaving those asserts on the general effect path.
+func gessNativeAssertTemplateValues(templateKey TemplateKey, template TemplateSpec, fields []string, values []ExpressionSpec) (*AssertTemplateValuesActionSpec, bool) {
 	if len(fields) != len(template.Fields) || len(values) != len(template.Fields) {
 		return nil, false
 	}
-	byField := make(map[string]gessRuntimeValue, len(fields))
+	byField := make(map[string]ExpressionSpec, len(fields))
 	for i, field := range fields {
 		field = strings.TrimSpace(field)
 		if field == "" {
 			return nil, false
 		}
 		if _, exists := byField[field]; exists {
+			return nil, false
+		}
+		if !gessNativeAssertValue(values[i]) {
 			return nil, false
 		}
 		byField[field] = values[i]
@@ -1143,57 +1255,22 @@ func gessNativeAssertTemplateValues(templateKey TemplateKey, template TemplateSp
 		if !ok {
 			return nil, false
 		}
-		expression, ok := gessRuntimeValueExpression(value)
-		if !ok {
-			return nil, false
-		}
-		out.Values[i] = expression
+		out.Values[i] = value
 	}
 	return out, true
 }
 
-func gessRuntimeValueExpression(value gessRuntimeValue) (ExpressionSpec, bool) {
-	switch {
-	case value.hasConst:
-		return ConstExpr{Value: value.constant}, true
-	case value.fieldRef:
-		return BindingFieldExpr{Binding: value.binding, Field: value.field}, true
-	case value.bindingValue:
-		return BindingValueExpr{Binding: value.binding}, true
-	case value.globalRef:
-		return GlobalExpr{Name: value.global}, true
+// gessNativeAssertValue reports whether an action value is simple enough for the
+// native AssertTemplateValues path: a literal, binding projection, binding
+// value, or global. Calls, RHS-local references, and current-fact references go
+// through the general effect path instead.
+func gessNativeAssertValue(spec ExpressionSpec) bool {
+	switch spec.(type) {
+	case ConstExpr, BindingFieldExpr, BindingValueExpr, GlobalExpr:
+		return true
 	default:
-		return nil, false
+		return false
 	}
-}
-
-func (l *gessLoader) runtimeValue(form gessSExpr, scope *gessScope) (gessRuntimeValue, error) {
-	if form.IsAtom() {
-		if binding, field, ok := splitGessProjection(form.Text()); ok {
-			return gessRuntimeValue{binding: binding, field: field, fieldRef: true}, nil
-		}
-		if global, ok := gessGlobalName(form); ok {
-			if _, declared := l.workspace.globalIndex(global); !declared {
-				return gessRuntimeValue{}, l.err(form.Span, "unknown global %q", form.Text())
-			}
-			return gessRuntimeValue{global: global, globalRef: true}, nil
-		}
-		if variable, ok := gessVariableName(form); ok {
-			if ref, ok := scope.vars[variable]; ok {
-				return gessRuntimeValue{binding: ref.Binding, field: ref.Field, fieldRef: true}, nil
-			}
-			if _, ok := scope.values[variable]; ok {
-				return gessRuntimeValue{binding: variable, bindingValue: true}, nil
-			}
-			return gessRuntimeValue{}, l.err(form.Span, "unknown variable %q", form.Text())
-		}
-		value, err := gessAtomValue(form)
-		if err != nil {
-			return gessRuntimeValue{}, err
-		}
-		return gessRuntimeValue{constant: value, hasConst: true}, nil
-	}
-	return gessRuntimeValue{}, l.err(form.Span, "assert values must be scalar expressions")
 }
 
 func (l *gessLoader) parseFactLiteral(fact gessSExpr) (string, Fields, error) {
@@ -1290,6 +1367,7 @@ type gessScope struct {
 	values    map[string]struct{}
 	params    map[string]struct{}
 	bindings  map[string]struct{}
+	rhsBinds  map[string]struct{}
 	generated int
 }
 
@@ -1299,6 +1377,7 @@ func newGessScope() *gessScope {
 		values:   make(map[string]struct{}),
 		params:   make(map[string]struct{}),
 		bindings: make(map[string]struct{}),
+		rhsBinds: make(map[string]struct{}),
 	}
 }
 
@@ -1315,45 +1394,10 @@ func (s *gessScope) clone() *gessScope {
 	for k := range s.bindings {
 		out.bindings[k] = struct{}{}
 	}
-	return out
-}
-
-type gessRuntimeValue struct {
-	constant     any
-	hasConst     bool
-	binding      string
-	field        string
-	fieldRef     bool
-	bindingValue bool
-	global       string
-	globalRef    bool
-}
-
-func (v gessRuntimeValue) value(ctx ActionContext) (any, error) {
-	switch {
-	case v.hasConst:
-		return v.constant, nil
-	case v.fieldRef:
-		value, ok := ctx.BindingScalarValue(v.binding, v.field)
-		if !ok {
-			return nil, fmt.Errorf("gess: Gess action missing binding field %s.%s", v.binding, v.field)
-		}
-		return value, nil
-	case v.bindingValue:
-		value, ok := ctx.BindingValue(v.binding)
-		if !ok {
-			return nil, fmt.Errorf("gess: Gess action missing binding value %s", v.binding)
-		}
-		return value, nil
-	case v.globalRef:
-		value, ok := ctx.Global(v.global)
-		if !ok {
-			return nil, fmt.Errorf("gess: Gess action references unknown global %s", v.global)
-		}
-		return value, nil
-	default:
-		return nil, fmt.Errorf("gess: Gess action value is not configured")
+	for k := range s.rhsBinds {
+		out.rhsBinds[k] = struct{}{}
 	}
+	return out
 }
 
 func splitGessRuleBody(items []gessSExpr) ([]gessSExpr, []gessSExpr, error) {
