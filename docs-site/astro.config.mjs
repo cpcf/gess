@@ -2,11 +2,16 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import mermaid from 'astro-mermaid';
+import { site, base } from './site-config.mjs';
 
 const repo = 'https://github.com/cpcf/gess';
 
 // https://astro.build/config
 export default defineConfig({
+	// GitHub Pages serves a project repo at <user>.github.io/<repo>, so
+	// internal links and asset URLs need the /gess base path baked in.
+	site,
+	base,
 	integrations: [
 		mermaid({
 			theme: 'neutral',

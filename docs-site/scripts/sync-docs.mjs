@@ -19,6 +19,14 @@ const sourceDir = path.join(repoRoot, "docs");
 const targetDir = path.join(siteRoot, "src", "content", "docs");
 const gendocDir = path.join(siteRoot, "tools", "gendoc");
 
+// Astro's markdown pipeline doesn't rewrite the `base` prefix into
+// cross-page links that include a #fragment (verified: a plain
+// "/tutorial/" link gets the base prefix, but "/tutorial/#anchor" does
+// not), so pages generated here bake the configured base path into every
+// internal link themselves instead of relying on Astro to do it.
+const { base } = await import(path.join(siteRoot, "site-config.mjs"));
+const basePath = base.replace(/\/$/, "");
+
 // slug, source filename, sidebar order, description.
 const pages = [
   {
@@ -164,7 +172,7 @@ function rewriteRelativeLinks(body, ownDir) {
       const dir = dirPrefix ? dirPrefix.replace(/\/$/, "") : ownDir;
       const slug = slugBySource.get(`${dir}/${name}.md`);
       if (!slug) return match;
-      return `](/${slug}/${anchor})`;
+      return `](${basePath}/${slug}/${anchor})`;
     },
   );
 }

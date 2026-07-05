@@ -10,7 +10,8 @@
     "prebuild": "npm run sync",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "check-links": "linkinator http://localhost:4321/gess/ --recurse --check-fragments --skip \"github\\.com\" --skip \"pkg\\.go\\.dev\" --skip \"cpcf\\.github\\.io\""
   },
   "dependencies": {
     "@astrojs/starlight": "^0.41.3",
@@ -18,5 +19,9 @@
     "astro-mermaid": "^2.1.0",
     "mermaid": "^11.16.0",
     "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "linkinator": "^7.6.1",
+    "wait-on": "^9.0.10"
   }
 }
