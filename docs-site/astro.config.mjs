@@ -26,6 +26,7 @@ export default defineConfig({
 				{ label: 'Command-line tools', slug: 'cli' },
 				{ label: 'Advanced behavior', slug: 'advanced' },
 				{ label: 'Examples map', slug: 'examples' },
+				{ label: 'Interactive tutorial workshop', slug: 'tutorial-workshop' },
 				{ label: 'Developer guide', slug: 'contributing' },
 				{
 					label: 'API reference',

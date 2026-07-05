@@ -204,6 +204,40 @@ Its test expects:
 O-100 -> W-1
 ```
 
+## Try a change
+
+The seed facts declare a second order, `O-300`, for the VIP customer
+`C-300` and SKU `SKU-2` — but `SKU-2`'s inventory fact has
+`available FALSE`, so `route-vip-order`'s inventory condition never
+matches it and `O-300` doesn't show up in the `expedite` query.
+
+Change one seed fact in `rules.gess` to make `SKU-2` available:
+
+```diff
+-  (inventory (sku "SKU-2") (warehouse "W-2") (available FALSE))
++  (inventory (sku "SKU-2") (warehouse "W-2") (available TRUE))
+```
+
+Regenerate and rerun:
+
+```sh
+go generate ./examples/gess-files/order_routing
+go run ./examples/gess-files/order_routing
+```
+
+The `expedite` output now includes the newly matched order:
+
+```text
+O-300 -> W-2
+O-100 -> W-1
+```
+
+Nothing about `route-vip-order` or `routes-by-lane` changed: the rule was
+already declarative over "VIP customer, available inventory," so making
+more inventory available surfaced a new match automatically. Revert the
+fact before moving on, or compare against
+[the checked-in `rules.gess`](https://github.com/cpcf/gess/blob/main/examples/gess-files/order_routing/rules.gess).
+
 ## Adding runtime facts
 
 `deffacts` is useful for fixed seed data and examples. Real applications often

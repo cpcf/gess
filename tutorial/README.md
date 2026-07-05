@@ -162,3 +162,12 @@ The tutorial runner can apply the starter or solution for you:
 gess-tutorial> reset
 gess-tutorial> solution
 ```
+
+## Next steps
+
+- [Core concepts](../docs/concepts.md) for the vocabulary behind what you
+  just built.
+- [The `.gess` language reference](../docs/gess-language.md) for every form
+  the parser accepts.
+- [Examples map](../docs/examples.md) for more `.gess` and Go-API examples,
+  organized by feature.

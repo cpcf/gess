@@ -18,7 +18,9 @@ New to Gess? Follow this path:
    [session lifecycle](session-lifecycle.md#queries).
 
 `TUTORIAL.md` walks through all four steps with one worked example,
-`examples/gess-files/order_routing`.
+`examples/gess-files/order_routing`. For a hands-on workshop with checkpoints
+and guided edits, run the [interactive tutorial](../tutorial/README.md)
+locally instead of reading along.
 
 ## Guides
 
@@ -39,5 +41,8 @@ Once the basics are working, these guides go deeper:
   backward chaining, and module focus.
 - [Examples map](examples.md): what each example demonstrates, organized
   by feature, and where to start.
+- [Interactive tutorial workshop](../tutorial/README.md): a local
+  browser or terminal workshop with checkpoints for the vulnerability
+  response scenario.
 - [Developer guide](contributing.md): repository layout, engine
   architecture, tests, benchmarks, and the documentation workflow.
