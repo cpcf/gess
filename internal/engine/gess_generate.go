@@ -808,11 +808,9 @@ func renderFactTarget(target FactTarget) string {
 	case FactTargetTemplateKey:
 		return fmt.Sprintf("gessrules.TemplateKeyFact(%s)", renderTemplateKey(target.TemplateKey()))
 	case FactTargetDynamic:
-		ref := target.Ref()
-		if !ref.Module.IsZero() {
-			return fmt.Sprintf("gessrules.DynamicFactIn(%s, %s)", renderModuleName(ref.Module), strconv.Quote(ref.Name))
-		}
-		return fmt.Sprintf("gessrules.DynamicFact(%s)", strconv.Quote(ref.Name))
+		// Dynamic (untemplated) facts are engine-internal only and cannot be
+		// authored in .gess, so they never reach code generation.
+		panic("gess: code generation does not support dynamic fact targets")
 	default:
 		return "gessrules.FactTarget{}"
 	}

@@ -991,7 +991,7 @@ func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "name-target-graph-session")
-	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "created"})); err != nil {
+	if _, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"kind": "created"})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
 	runtime, err := newReteRuntime(revision)
@@ -2074,7 +2074,7 @@ func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) 
 	if len(snapshot.UnsupportedReasons) != 0 {
 		t.Fatalf("unsupported reasons = %#v, want none", snapshot.UnsupportedReasons)
 	}
-	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"kind": "queued"})); err != nil {
+	if _, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"kind": "queued"})); err != nil {
 		t.Fatalf("Assert(event): %v", err)
 	}
 }

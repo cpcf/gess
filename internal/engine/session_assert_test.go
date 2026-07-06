@@ -10,7 +10,7 @@ import (
 func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "dynamic-template-assert-session")
 
-	dynamic, err := session.Assert(context.Background(), "order", mustFields(t, map[string]any{
+	dynamic, err := session.assertByName(context.Background(), "order", mustFields(t, map[string]any{
 		"status": "pending",
 		"count":  3,
 	}))
@@ -74,7 +74,7 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "workspace-fact-storage-session")
 
-	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	first, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
@@ -100,7 +100,7 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 		t.Fatalf("first payload fields = %#v, want name Ada", got)
 	}
 
-	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	second, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Bob",
 	}))
 	if err != nil {
@@ -132,7 +132,7 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 		t.Fatalf("fact count after retract = %d, want %d", got, want)
 	}
 	for i := range 8 {
-		if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+		if _, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 			"name": fmt.Sprintf("person-%d", i),
 		})); err != nil {
 			t.Fatalf("growth assert %d: %v", i, err)
@@ -497,7 +497,7 @@ func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 func TestSessionAssertDuplicateMetadataIsStable(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "duplicate-metadata-session")
 
-	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	first, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name":  "Ada",
 		"age":   30,
 		"roles": []any{"admin", "owner"},
@@ -506,7 +506,7 @@ func TestSessionAssertDuplicateMetadataIsStable(t *testing.T) {
 		t.Fatalf("first assert: %v", err)
 	}
 
-	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	second, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"roles": []any{"admin", "owner"},
 		"age":   30,
 		"name":  "Ada",
@@ -783,7 +783,7 @@ func TestSessionAssertImmediatelyReconcilesAgendaAndSkipsDuplicateNoise(t *testi
 
 func TestSessionAssertClosedSessionAndConcurrencyMisuse(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "closed-session")
-	if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+	if _, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"})); err != nil {
 		t.Fatalf("initial assert: %v", err)
 	}
 
@@ -791,7 +791,7 @@ func TestSessionAssertClosedSessionAndConcurrencyMisuse(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	result, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
+	result, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
 	if !errors.Is(err, ErrClosedSession) {
 		t.Fatalf("expected closed session error, got (%v, %v)", result.Status, err)
 	}
@@ -816,13 +816,13 @@ func TestSessionAssertReportsConcurrencyMisuse(t *testing.T) {
 	firstDone := make(chan struct{})
 	go func() {
 		defer close(firstDone)
-		if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		if _, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"})); err != nil {
 			// allow concurrent misuse from this call to avoid flakes; it should be in progress only once.
 		}
 	}()
 
 	<-review
-	result, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	result, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if !errors.Is(err, ErrConcurrencyMisuse) {
 		t.Fatalf("expected concurrency misuse error, got %v", err)
 	}

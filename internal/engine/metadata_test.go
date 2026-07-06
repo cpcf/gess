@@ -16,7 +16,7 @@ func TestFactsDefaultToStatedSupportMetadata(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	dynamic, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	dynamic, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("dynamic assert: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestMutationDeltasCarryMatcherMetadataAndCopies(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	asserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	asserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("assert: %v", err)
 	}

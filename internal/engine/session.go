@@ -949,7 +949,10 @@ func (s *Session) Close() error {
 	return nil
 }
 
-func (s *Session) Assert(ctx context.Context, name string, fields Fields) (AssertResult, error) {
+// assertByName asserts an untemplated (dynamic) fact. Dynamic facts are not a
+// public concept; this is engine-internal plumbing retained for query triggers
+// and white-box tests. Public callers use AssertTemplate.
+func (s *Session) assertByName(ctx context.Context, name string, fields Fields) (AssertResult, error) {
 	return s.insertFactWithContextAndOrigin(ctx, name, "", fields, mutationOrigin{})
 }
 

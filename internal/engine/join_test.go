@@ -370,7 +370,7 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if _, err := session.Assert(context.Background(), "baseline", mustFields(t, map[string]any{"age": 20})); err != nil {
+		if _, err := session.assertByName(context.Background(), "baseline", mustFields(t, map[string]any{"age": 20})); err != nil {
 			t.Fatalf("Assert baseline: %v", err)
 		}
 		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
@@ -448,7 +448,7 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AssertTemplate baseline: %v", err)
 		}
-		insertedCurrent, err := session.Assert(context.Background(), "candidate", mustFields(t, map[string]any{"age": 20}))
+		insertedCurrent, err := session.assertByName(context.Background(), "candidate", mustFields(t, map[string]any{"age": 20}))
 		if err != nil {
 			t.Fatalf("Assert candidate: %v", err)
 		}

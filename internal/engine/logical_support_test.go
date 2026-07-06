@@ -255,7 +255,7 @@ func TestLogicalSupportStatedMergeAndMutationGuards(t *testing.T) {
 		t.Fatalf("Retract(logical) error = %v, want ErrLogicalOnlyRetract", err)
 	}
 
-	stated, err := session.Assert(context.Background(), "derived", mustFields(t, map[string]any{"id": "shared"}))
+	stated, err := session.assertByName(context.Background(), "derived", mustFields(t, map[string]any{"id": "shared"}))
 	if err != nil {
 		t.Fatalf("AssertTemplate(stated duplicate): %v", err)
 	}
@@ -270,7 +270,7 @@ func TestLogicalSupportStatedMergeAndMutationGuards(t *testing.T) {
 		t.Fatalf("stated support retract = %#v, want logical fact retained", retracted)
 	}
 
-	if _, err := session.Assert(context.Background(), "derived", mustFields(t, map[string]any{"id": "shared"})); err != nil {
+	if _, err := session.assertByName(context.Background(), "derived", mustFields(t, map[string]any{"id": "shared"})); err != nil {
 		t.Fatalf("Assert(stated duplicate again): %v", err)
 	}
 	if _, err := session.Retract(context.Background(), source.Fact.ID()); err != nil {
@@ -327,7 +327,7 @@ func TestLogicalSupportFromFailedFiringIsCleanedUp(t *testing.T) {
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.AssertLogical("derived", Fields{"id": id})
+			_, err := ctx.assertLogicalByName("derived", Fields{"id": id})
 			return err
 		},
 	})
@@ -402,7 +402,7 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.AssertLogical("derived", Fields{"id": id})
+			_, err := ctx.assertLogicalByName("derived", Fields{"id": id})
 			return err
 		},
 	})
@@ -417,7 +417,7 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.AssertLogical("child", Fields{"id": id})
+			_, err := ctx.assertLogicalByName("child", Fields{"id": id})
 			return err
 		},
 	})

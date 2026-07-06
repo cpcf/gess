@@ -8,7 +8,7 @@ import (
 
 func TestSnapshotRemainsUnchangedAfterAssert(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "snapshot-assert-session")
-	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	baselineInserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
@@ -17,7 +17,7 @@ func TestSnapshotRemainsUnchangedAfterAssert(t *testing.T) {
 
 	baseline := mustSnapshot(t, context.Background(), session)
 
-	_, err = session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	_, err = session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Grace",
 	}))
 	if err != nil {
@@ -41,7 +41,7 @@ func TestSnapshotRemainsUnchangedAfterAssert(t *testing.T) {
 
 func TestSnapshotRemainsUnchangedAfterModify(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "snapshot-modify-session")
-	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	baselineInserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name":  "Ada",
 		"count": 1,
 	}))
@@ -77,13 +77,13 @@ func TestSnapshotRemainsUnchangedAfterModify(t *testing.T) {
 
 func TestSnapshotRemainsUnchangedAfterRetract(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "snapshot-retract-session")
-	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	first, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
 		t.Fatalf("insert first: %v", err)
 	}
-	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	second, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Grace",
 	}))
 	if err != nil {
@@ -110,7 +110,7 @@ func TestSnapshotRemainsUnchangedAfterRetract(t *testing.T) {
 
 func TestSnapshotRemainsUnchangedAfterReset(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "snapshot-reset-session")
-	baselineInserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	baselineInserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
@@ -305,7 +305,7 @@ func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("insert second person: %v", err)
 	}
-	if _, err = session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	if _, err = session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Untyped",
 	})); err != nil {
 		t.Fatalf("insert dynamic fact: %v", err)
@@ -362,7 +362,7 @@ func TestSnapshotRecencyAndGenerationMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert first: %v", err)
 	}
-	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	second, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("insert second: %v", err)
 	}

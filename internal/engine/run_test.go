@@ -2302,7 +2302,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddAction(ActionSpec{
 			Name: "seed-audit",
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.Assert("audit", mustFields(t, map[string]any{"kind": "created"}))
+				_, err := ctx.assertByName("audit", mustFields(t, map[string]any{"kind": "created"}))
 				return err
 			},
 		}); err != nil {
@@ -2345,7 +2345,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
 			t.Fatalf("session Rete runtime = %#v, want supported incremental agenda", session.rete)
 		}
-		if _, err := session.Assert(context.Background(), "seed", mustFields(t, map[string]any{"kind": "seed"})); err != nil {
+		if _, err := session.assertByName(context.Background(), "seed", mustFields(t, map[string]any{"kind": "seed"})); err != nil {
 			t.Fatalf("Assert(seed): %v", err)
 		}
 		result, err := session.Run(context.Background())
@@ -2391,7 +2391,7 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 		Name: "assert-dynamic",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-dynamic")
-			result, err := ctx.Assert("note", mustFields(t, map[string]any{"kind": "dynamic"}))
+			result, err := ctx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
 			assertResult = result
 			return err
 		},

@@ -93,13 +93,13 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 	ctx := context.Background()
-	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"risk": 95}})); err != nil {
+	if _, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"risk": 95}})); err != nil {
 		t.Fatalf("Assert matching event: %v", err)
 	}
-	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"risk": 70}})); err != nil {
+	if _, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"risk": 70}})); err != nil {
 		t.Fatalf("Assert low-risk event: %v", err)
 	}
-	if _, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"status": "missing-risk"}})); err != nil {
+	if _, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"payload": map[string]any{"status": "missing-risk"}})); err != nil {
 		t.Fatalf("Assert missing-risk event: %v", err)
 	}
 

@@ -65,13 +65,13 @@ func TestPureFunctionPredicatesExecuteAlphaAndBeta(t *testing.T) {
 	session := mustSession(t, revision, "pure-function-predicate-session")
 
 	ctx := context.Background()
-	if _, err := session.Assert(ctx, "system", mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+	if _, err := session.assertByName(ctx, "system", mustFields(t, map[string]any{"id": "s-1"})); err != nil {
 		t.Fatalf("Assert(system): %v", err)
 	}
-	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-1", "score": 95})); err != nil {
+	if _, err := session.assertByName(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-1", "score": 95})); err != nil {
 		t.Fatalf("Assert(finding high): %v", err)
 	}
-	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-2", "score": 20})); err != nil {
+	if _, err := session.assertByName(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-2", "score": 20})); err != nil {
 		t.Fatalf("Assert(finding low): %v", err)
 	}
 
@@ -144,7 +144,7 @@ func TestPureFunctionPredicatesExecuteFixedArityCalls(t *testing.T) {
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "pure-function-fixed-arity-session")
 
-	if _, err := session.Assert(context.Background(), "event", mustFields(t, map[string]any{"a": 1, "b": 2, "c": 3})); err != nil {
+	if _, err := session.assertByName(context.Background(), "event", mustFields(t, map[string]any{"a": 1, "b": 2, "c": 3})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
 	result, err := session.Run(context.Background())
@@ -294,7 +294,7 @@ func TestPureFunctionEvaluationErrorsAreStructured(t *testing.T) {
 			})
 			session := mustSession(t, mustCompileWorkspace(t, workspace), SessionID("pure-function-"+tc.name))
 
-			_, err := session.Assert(context.Background(), "event", Fields{})
+			_, err := session.assertByName(context.Background(), "event", Fields{})
 			if !errors.Is(err, ErrFunctionEvaluation) {
 				t.Fatalf("Assert error = %v, want ErrFunctionEvaluation", err)
 			}
@@ -313,7 +313,7 @@ func TestPureFunctionPredicateAssertFailureRollsBackFact(t *testing.T) {
 	revision := mustPureFunctionFailureRuleset(t)
 	session := mustSession(t, revision, "pure-function-assert-rollback")
 
-	_, err := session.Assert(context.Background(), "event", mustFields(t, map[string]any{"status": "bad"}))
+	_, err := session.assertByName(context.Background(), "event", mustFields(t, map[string]any{"status": "bad"}))
 	if !errors.Is(err, ErrFunctionEvaluation) {
 		t.Fatalf("Assert error = %v, want ErrFunctionEvaluation", err)
 	}
@@ -328,7 +328,7 @@ func TestPureFunctionPredicateModifyFailureRollsBackFact(t *testing.T) {
 	revision := mustPureFunctionFailureRuleset(t)
 	session := mustSession(t, revision, "pure-function-modify-rollback")
 
-	inserted, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"status": "good"}))
+	inserted, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"status": "good"}))
 	if err != nil {
 		t.Fatalf("Assert good: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestPureFunctionPredicateRetractFailureRollsBackFact(t *testing.T) {
 	revision := mustPureFunctionSwitchRuleset(t, &fail)
 	session := mustSession(t, revision, "pure-function-retract-rollback")
 
-	inserted, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"status": "good"}))
+	inserted, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"status": "good"}))
 	if err != nil {
 		t.Fatalf("Assert good: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestPureFunctionPredicateMissingGraphReturnsUnsupportedRuntime(t *testing.T
 	baseWorkspace := NewWorkspace()
 	mustAddAction(t, baseWorkspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
 	baseSession := mustSession(t, mustCompileWorkspace(t, baseWorkspace), "pure-function-classic-alpha-source")
-	inserted, err := baseSession.Assert(ctx, "event", mustFields(t, map[string]any{"status": "bad"}))
+	inserted, err := baseSession.assertByName(ctx, "event", mustFields(t, map[string]any{"status": "bad"}))
 	if err != nil {
 		t.Fatalf("Assert source fact: %v", err)
 	}
@@ -487,7 +487,7 @@ func TestPureFunctionPredicateApplyRulesetFailureRollsBackSessionState(t *testin
 	mustAddAction(t, baseWorkspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
 	baseRevision := mustCompileWorkspace(t, baseWorkspace)
 	session := mustSession(t, baseRevision, "pure-function-apply-ruleset-rollback")
-	inserted, err := session.Assert(ctx, "event", mustFields(t, map[string]any{"status": "bad"}))
+	inserted, err := session.assertByName(ctx, "event", mustFields(t, map[string]any{"status": "bad"}))
 	if err != nil {
 		t.Fatalf("Assert bad: %v", err)
 	}
@@ -577,10 +577,10 @@ func TestPureFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "pure-function-query-aggregate-session")
 
 	ctx := context.Background()
-	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 2})); err != nil {
+	if _, err := session.assertByName(ctx, "item", mustFields(t, map[string]any{"amount": 2})); err != nil {
 		t.Fatalf("Assert item 1: %v", err)
 	}
-	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 3})); err != nil {
+	if _, err := session.assertByName(ctx, "item", mustFields(t, map[string]any{"amount": 3})); err != nil {
 		t.Fatalf("Assert item 2: %v", err)
 	}
 	result, err := session.Run(ctx)
@@ -684,13 +684,13 @@ func TestExpressionFunctionPredicatesExecuteAlphaBetaAndTest(t *testing.T) {
 	session := mustSession(t, revision, "expression-function-predicate-session")
 
 	ctx := context.Background()
-	if _, err := session.Assert(ctx, "system", mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+	if _, err := session.assertByName(ctx, "system", mustFields(t, map[string]any{"id": "s-1"})); err != nil {
 		t.Fatalf("Assert(system): %v", err)
 	}
-	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-1", "score": 95})); err != nil {
+	if _, err := session.assertByName(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-1", "score": 95})); err != nil {
 		t.Fatalf("Assert(finding high): %v", err)
 	}
-	if _, err := session.Assert(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-2", "score": 20})); err != nil {
+	if _, err := session.assertByName(ctx, "finding", mustFields(t, map[string]any{"system-id": "s-2", "score": 20})); err != nil {
 		t.Fatalf("Assert(finding low): %v", err)
 	}
 
@@ -738,10 +738,10 @@ func TestExpressionFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "expression-function-query-aggregate-session")
 
 	ctx := context.Background()
-	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 2})); err != nil {
+	if _, err := session.assertByName(ctx, "item", mustFields(t, map[string]any{"amount": 2})); err != nil {
 		t.Fatalf("Assert item 1: %v", err)
 	}
-	if _, err := session.Assert(ctx, "item", mustFields(t, map[string]any{"amount": 3})); err != nil {
+	if _, err := session.assertByName(ctx, "item", mustFields(t, map[string]any{"amount": 3})); err != nil {
 		t.Fatalf("Assert item 2: %v", err)
 	}
 	result, err := session.Run(ctx)

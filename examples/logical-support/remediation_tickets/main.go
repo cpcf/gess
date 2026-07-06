@@ -12,6 +12,7 @@ import (
 )
 
 const findingTemplate = rules.TemplateKey("finding")
+const remediationTicketTemplate = rules.TemplateKey("remediation-ticket")
 
 func main() {
 	if err := run(os.Stdout); err != nil {
@@ -70,12 +71,21 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 	}); err != nil {
 		return nil, err
 	}
+	if err := workspace.AddTemplate(rules.TemplateSpec{
+		Name: string(remediationTicketTemplate),
+		Fields: []rules.FieldSpec{
+			{Name: "finding", Kind: rules.ValueString, Required: true},
+			{Name: "system", Kind: rules.ValueString, Required: true},
+		},
+	}); err != nil {
+		return nil, err
+	}
 	if err := workspace.AddAction(rules.ActionSpec{
 		Name: "open-ticket",
 		Fn: func(ctx rules.ActionContext) error {
 			id, _ := ctx.BindingScalarValue("finding", "id")
 			system, _ := ctx.BindingScalarValue("finding", "system")
-			_, err := ctx.AssertLogical("remediation-ticket", rules.Fields{"finding": id, "system": system})
+			_, err := ctx.AssertLogical(remediationTicketTemplate, rules.Fields{"finding": id, "system": system})
 			return err
 		},
 	}); err != nil {

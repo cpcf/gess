@@ -315,7 +315,7 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 	})); err != nil {
 		t.Fatalf("AssertTemplate(person): %v", err)
 	}
-	if _, err := session.Assert(context.Background(), "openPerson", mustFields(t, map[string]any{
+	if _, err := session.assertByName(context.Background(), "openPerson", mustFields(t, map[string]any{
 		"name": "Grace",
 	})); err != nil {
 		t.Fatalf("Assert(openPerson): %v", err)
@@ -2212,7 +2212,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		Name: "assert-dynamic",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-dynamic")
-			result, err := ctx.Assert("note", mustFields(t, map[string]any{"kind": "dynamic"}))
+			result, err := ctx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
 			assertResult = result
 			return err
 		},

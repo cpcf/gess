@@ -16,7 +16,7 @@ func TestSessionModifyMissingAndStaleFactID(t *testing.T) {
 		t.Fatalf("missing status = %v, want %v", result.Status, ModifyMissing)
 	}
 
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("insert fact for stale check: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestSessionModifyNoOpReturnsWithoutMutation(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	baseline, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	baseline, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name":  "Ada",
 		"count": 10,
 	}))
@@ -231,7 +231,7 @@ func TestSessionModifyDynamicFactsAdvanceVersionRecencyAndEmitDelta(t *testing.T
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	baseline, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	baseline, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name":  "Ada",
 		"count": 1,
 	}))
@@ -690,11 +690,11 @@ func TestSessionModifyDuplicateCollisionIsAtomicAndLeavesIndexes(t *testing.T) {
 
 func TestSessionModifyDynamicDuplicateCollisionIsAtomic(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "modify-dynamic-collision-session")
-	first, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	first, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("first assert: %v", err)
 	}
-	second, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
+	second, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
 	if err != nil {
 		t.Fatalf("second assert: %v", err)
 	}
@@ -790,7 +790,7 @@ func TestSessionModifyDuplicateIndexUpdatesOnRealKeyChange(t *testing.T) {
 
 func TestSessionModifyClosedAndConcurrencyStatus(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "modify-closed-session")
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("assert baseline: %v", err)
 	}
@@ -812,7 +812,7 @@ func TestSessionModifyClosedAndConcurrencyStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	activeFact, err := active.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	activeFact, err := active.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("assert active baseline: %v", err)
 	}

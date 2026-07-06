@@ -968,7 +968,7 @@ func mustLoadedBenchmarkSession(tb testing.TB, revision *Ruleset, id SessionID, 
 			}
 			continue
 		}
-		if _, err := session.Assert(context.Background(), fact.Name, fact.Fields); err != nil {
+		if _, err := session.assertByName(context.Background(), fact.Name, fact.Fields); err != nil {
 			tb.Fatalf("Assert(%s): %v", fact.Name, err)
 		}
 	}

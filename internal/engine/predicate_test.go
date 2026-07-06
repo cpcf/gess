@@ -321,7 +321,7 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"age": 18}))
+		inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"age": 18}))
 		if err != nil {
 			t.Fatalf("Assert: %v", err)
 		}

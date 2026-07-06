@@ -157,7 +157,7 @@ func TestSessionRetractStaleReturnsNoopResultWithoutEvent(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
 		t.Fatalf("initial snapshot length = %d, want 2", snapshot.Len())
 	}
 
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Bob"}))
 	if err != nil {
 		t.Fatalf("Assert pre-reset fact: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
 		t.Fatalf("expected stale error for pre-reset fact id %q", inserted.Fact.ID())
 	}
 
-	resultAfter, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Carol"}))
+	resultAfter, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Carol"}))
 	if err != nil {
 		t.Fatalf("Assert post-reset fact: %v", err)
 	}

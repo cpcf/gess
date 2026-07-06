@@ -2744,13 +2744,13 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"kind": "dynamic"})); err != nil {
+	if _, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"kind": "dynamic"})); err != nil {
 		t.Fatalf("Assert dynamic person: %v", err)
 	}
 	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
 		t.Fatalf("AssertTemplate person: %v", err)
 	}
-	if _, err := session.Assert(context.Background(), "other", mustFields(t, map[string]any{"kind": "noise"})); err != nil {
+	if _, err := session.assertByName(context.Background(), "other", mustFields(t, map[string]any{"kind": "noise"})); err != nil {
 		t.Fatalf("Assert other: %v", err)
 	}
 

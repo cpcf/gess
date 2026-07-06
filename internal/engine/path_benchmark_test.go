@@ -215,7 +215,7 @@ func collectNestedPathBenchmarkPropagationCounters(t testing.TB, revision *Rules
 	session.attachPropagationCounters()
 	ctx := context.Background()
 	for _, fact := range nestedPathBenchmarkInitialFacts(t, tc) {
-		if _, err := session.Assert(ctx, fact.Name, fact.Fields); err != nil {
+		if _, err := session.assertByName(ctx, fact.Name, fact.Fields); err != nil {
 			t.Fatalf("Assert(%q): %v", fact.Name, err)
 		}
 	}

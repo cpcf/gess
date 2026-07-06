@@ -291,8 +291,7 @@ type (
 	// directly by TemplateKey.
 	FactTargetKind = engine.FactTargetKind
 	// FactTarget names the facts a condition matches, built with
-	// [DynamicFact], [DynamicFactIn], [TemplateFact], [TemplateFactIn], or
-	// [TemplateKeyFact].
+	// [TemplateFact], [TemplateFactIn], or [TemplateKeyFact].
 	FactTarget = engine.FactTarget
 	// ConditionSpec is a node in a rule or query's left-hand-side tree.
 	// Implementations are [And], [Or], [Not], [Explicit], [ExistsCondition],
@@ -726,18 +725,6 @@ func ReturnFact(alias, binding string) QueryReturnSpec {
 // value under the column name alias.
 func ReturnValue(alias string, expression ExpressionSpec) QueryReturnSpec {
 	return engine.ReturnValue(alias, expression)
-}
-
-// DynamicFact builds a [FactTarget] matching untemplated facts asserted
-// by name, in the condition's own module.
-func DynamicFact(name string) FactTarget {
-	return engine.DynamicFact(name)
-}
-
-// DynamicFactIn builds a [FactTarget] matching untemplated facts asserted
-// by name in an explicit module.
-func DynamicFactIn(module ModuleName, name string) FactTarget {
-	return engine.DynamicFactIn(module, name)
 }
 
 // TemplateFact builds a [FactTarget] matching facts of the named

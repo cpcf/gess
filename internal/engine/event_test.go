@@ -72,7 +72,7 @@ func TestSessionEventClockCanBeInjectedForDeterministicTimestamps(t *testing.T) 
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	asserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{
+	asserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
@@ -159,7 +159,7 @@ func TestSessionListenerFailureDoesNotFailMutationAndStillDispatchesToLaterListe
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSessionEventMaskSkipsFactEventConstruction(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.Assert(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
@@ -387,7 +387,7 @@ func mustTraceRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Templat
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.AssertLogical("derived", Fields{"id": id})
+			_, err := ctx.assertLogicalByName("derived", Fields{"id": id})
 			return err
 		},
 	})
@@ -402,7 +402,7 @@ func mustTraceRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey, Templat
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.AssertLogical("child", Fields{"id": id})
+			_, err := ctx.assertLogicalByName("child", Fields{"id": id})
 			return err
 		},
 	})

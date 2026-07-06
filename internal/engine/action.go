@@ -275,7 +275,10 @@ func (c ActionContext) bindingScalarValueAtSlot(bindingSlot, fieldSlot int) (Val
 	return c.bindingScalarValueLiveAtSlot(bindingSlot, fieldSlot)
 }
 
-func (c ActionContext) Assert(name string, fields Fields) (AssertResult, error) {
+// assertByName asserts an untemplated (dynamic) fact. It is engine-internal
+// plumbing — dynamic facts are not a public concept — retained for query
+// triggers and white-box tests. Public callers use AssertTemplate.
+func (c ActionContext) assertByName(name string, fields Fields) (AssertResult, error) {
 	if c.session == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
@@ -289,7 +292,25 @@ func (c ActionContext) AssertTemplate(templateKey TemplateKey, fields Fields) (A
 	return c.session.insertFactWithContextAndOrigin(c.Context(), "", templateKey, fields, c.mutationOrigin())
 }
 
-func (c ActionContext) AssertLogical(name string, fields Fields) (AssertResult, error) {
+// AssertLogical asserts a logically-supported fact of the given template,
+// justified by the firing activation's matched facts. Retracting the
+// supporting facts cascades the retraction of this fact.
+func (c ActionContext) AssertLogical(templateKey TemplateKey, fields Fields) (AssertResult, error) {
+	if c.session == nil {
+		return AssertResult{Status: AssertClosed}, ErrClosedSession
+	}
+	if c.RuleRevisionID().IsZero() || c.ActivationID().IsZero() {
+		return AssertResult{Status: AssertValidationFailure}, ErrLogicalSupportUnavailable
+	}
+	if err := c.materializeAllBindings(); err != nil {
+		return AssertResult{Status: AssertValidationFailure}, err
+	}
+	return c.session.insertLogicalFactWithContextAndOrigin(c.Context(), "", templateKey, fields, c.mutationOrigin(), c.supportingFactIDs())
+}
+
+// assertLogicalByName is the untemplated form of AssertLogical, engine-internal
+// only (query triggers and white-box tests).
+func (c ActionContext) assertLogicalByName(name string, fields Fields) (AssertResult, error) {
 	if c.session == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
@@ -1964,15 +1985,13 @@ func (s *Session) executeEffectAction(ctx ActionContext, effect compiledEffectAc
 				_, err = ctx.session.insertLogicalFactWithContextAndOrigin(ctx.Context(), "", effect.templateKey, fields, ctx.mutationOrigin(), ctx.supportingFactIDs())
 				return err
 			}
-			_, err = ctx.AssertLogical(effect.factName, fields)
-			return err
+			return fmt.Errorf("%w: assert-logical target %q is not a declared template", ErrInvalidRuleset, effect.factName)
 		}
 		if effect.templateKey != "" {
 			_, err = ctx.AssertTemplate(effect.templateKey, fields)
 			return err
 		}
-		_, err = ctx.Assert(effect.factName, fields)
-		return err
+		return fmt.Errorf("%w: assert target %q is not a declared template", ErrInvalidRuleset, effect.factName)
 	default:
 		return fmt.Errorf("%w: unsupported action effect", ErrInvalidRuleset)
 	}

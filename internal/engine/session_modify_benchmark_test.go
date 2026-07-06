@@ -8,7 +8,7 @@ import (
 func BenchmarkSessionModifyUnroutedDynamicFact(b *testing.B) {
 	ctx := context.Background()
 	session := mustSession(b, mustCompileUnroutedModifyBenchmarkRuleset(b), "modify-unrouted-dynamic-benchmark-session")
-	inserted, err := session.Assert(ctx, "person", mustFields(b, map[string]any{
+	inserted, err := session.assertByName(ctx, "person", mustFields(b, map[string]any{
 		"name":  "Ada",
 		"count": 1,
 	}))

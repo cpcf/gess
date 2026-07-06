@@ -278,7 +278,7 @@ func TestSessionRuntimeDiagnosticsReportsFactMemoryOwner(t *testing.T) {
 	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "state": "ready"})); err != nil {
 		t.Fatalf("AssertTemplate(b): %v", err)
 	}
-	if _, err := session.Assert(ctx, "dynamic", mustFields(t, map[string]any{
+	if _, err := session.assertByName(ctx, "dynamic", mustFields(t, map[string]any{
 		"id":      "dynamic-1",
 		"payload": map[string]any{"risk": 95},
 	})); err != nil {
