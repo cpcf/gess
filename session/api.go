@@ -220,7 +220,18 @@ type (
 	WhyNotPartialMatch = engine.WhyNotPartialMatch
 	// WhyNotOption configures a Session.WhyNot probe.
 	WhyNotOption = engine.WhyNotOption
+	// SnapshotDiff is the working-memory difference between two snapshots, as
+	// returned by [DiffSnapshots].
+	SnapshotDiff = engine.SnapshotDiff
+	// FactModification is one changed fact in a [SnapshotDiff].
+	FactModification = engine.FactModification
 )
+
+// DiffSnapshots returns the difference from before to after: facts added,
+// retracted, and modified (by field value or support state), in fact-id order.
+func DiffSnapshots(before, after Snapshot) SnapshotDiff {
+	return engine.DiffSnapshots(before, after)
+}
 
 const (
 	// WhyNotActivated means the rule has a pending activation.
