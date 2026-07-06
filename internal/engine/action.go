@@ -1216,7 +1216,149 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 		}
 		out.values[i] = value
 	}
+	// Effects that name template fields or a target binding are validated at
+	// compile time so a firing can never abort partway through — after earlier
+	// effects have already mutated working memory — on a typo, a static type
+	// mismatch, a bad mutation target, or a malformed bind. Runtime enforces the
+	// same rules (template.applyDefaultsAndValidate, ctx.BindingID); mirroring
+	// them here keeps a compiled ruleset free of these static failures. Value
+	// expressions are already compiled above, so their errors surface first.
+	//
+	// Set fields pair positionally with their values; a spec supplying a
+	// different count of each would index out of range at fire time.
+	if out.kind == ActionEffectAssert || out.kind == ActionEffectAssertLogical || out.kind == ActionEffectModify {
+		if len(out.fields) != len(out.values) {
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         fmt.Sprintf("effect has %d fields but %d values", len(out.fields), len(out.values)),
+			}
+		}
+	}
+	switch out.kind {
+	case ActionEffectBind:
+		if len(out.values) != 1 {
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         "bind requires exactly one value",
+			}
+		}
+	case ActionEffectRetract:
+		if _, ok := factBindingTarget(out.target, conditions); !ok {
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         fmt.Sprintf("retract target %q is not a bound fact", out.target),
+			}
+		}
+	case ActionEffectModify:
+		templateKey, ok := factBindingTarget(out.target, conditions)
+		if !ok {
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         fmt.Sprintf("modify target %q is not a bound fact", out.target),
+			}
+		}
+		// A dynamic fact binding has no template key; its fields cannot be
+		// checked statically, so skip rather than risk a false rejection.
+		if template, ok := templatesByKey[templateKey]; templateKey != "" && ok {
+			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, out.unset, out.values); err != nil {
+				return compiledEffectAction{}, err
+			}
+		}
+	case ActionEffectAssert, ActionEffectAssertLogical:
+		// out.templateKey is already validated as declared above.
+		if template, ok := templatesByKey[out.templateKey]; ok {
+			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, nil, out.values); err != nil {
+				return compiledEffectAction{}, err
+			}
+		}
+	}
 	return out, nil
+}
+
+// factBindingTarget resolves a modify/retract target binding to its fact
+// condition at compile time, mirroring ActionContext.BindingID: a target names a
+// fact binding only when a condition binds it and that condition carries a fact
+// target (a template key or a dynamic name). List-pattern element bindings and
+// aggregate result bindings have an empty target and are value bindings, exactly
+// the entries BindingID rejects at fire time. The returned template key may be
+// empty for a dynamic fact binding, so callers must gate template-dependent
+// checks on a non-empty key. It matches the runtime binding lookup exactly —
+// same conditions slice, same trimmed exact-string compare (binding names never
+// carry a '?') — so it neither rejects a target the runtime accepts nor accepts
+// one the runtime rejects.
+func factBindingTarget(target string, conditions []RuleCondition) (TemplateKey, bool) {
+	name := strings.TrimSpace(target)
+	if name == "" {
+		return "", false
+	}
+	for _, cond := range conditions {
+		if cond.Binding() != name {
+			continue
+		}
+		if cond.TemplateKey() != "" || cond.Name() != "" {
+			return cond.TemplateKey(), true
+		}
+		return "", false
+	}
+	return "", false
+}
+
+// validateEffectTemplateFields checks that every named set and unset field of an
+// assert or modify effect is a declared slot of the template, and that a
+// statically-typed set value matches its field kind. It mirrors, at compile
+// time, the unknown-field and type checks template.applyDefaultsAndValidate
+// performs at fire time; the type comparison stays strict (no coercion) because
+// runtime field storage is exact-match. It intentionally does not enforce
+// required fields, since a modify patches a subset of slots.
+func validateEffectTemplateFields(ruleName string, actionIndex int, template Template, fields, unset []string, values []compiledExpression) error {
+	for i, name := range fields {
+		kind, ok := template.fieldKind(name)
+		if !ok {
+			return &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				TemplateName:   template.Name(),
+				FieldName:      name,
+				Reason:         "unknown field",
+			}
+		}
+		// expressionKindAssignable matches the runtime's tolerance: a value whose
+		// static kind is unknown, or numerically compatible (int/float) with the
+		// field, is accepted here because it may store successfully at fire time.
+		// Only a statically incompatible kind is rejected.
+		if i < len(values) && !expressionKindAssignable(kind, values[i].resultKind) {
+			return &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				TemplateName:   template.Name(),
+				FieldName:      name,
+				Reason:         "value type does not match template field",
+			}
+		}
+	}
+	for _, name := range unset {
+		if _, ok := template.fieldKind(name); !ok {
+			return &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				TemplateName:   template.Name(),
+				FieldName:      name,
+				Reason:         "unknown field",
+			}
+		}
+	}
+	return nil
 }
 
 func compileCallAction(ruleName string, actionIndex int, spec *ActionCallSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledCallAction, error) {

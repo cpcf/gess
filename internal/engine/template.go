@@ -186,6 +186,17 @@ func (t Template) fieldSlot(field string) (int, bool) {
 	return slot, ok
 }
 
+// fieldKind reports the declared kind of a named field and whether the field is
+// a slot of this template. Names match exactly: case-sensitive, unqualified,
+// against the compile-time trimmed field names.
+func (t Template) fieldKind(field string) (ValueKind, bool) {
+	spec, ok := t.fieldsByName[field]
+	if !ok {
+		return valueKindUnknown, false
+	}
+	return spec.Kind, true
+}
+
 func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresence) []factSlot {
 	if !t.closed || len(t.fields) == 0 {
 		return nil
