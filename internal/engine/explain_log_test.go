@@ -112,8 +112,13 @@ func TestSessionExplainLineageAndActionSource(t *testing.T) {
 	if derivation.ProducedBy.Action != `(modify ?r (set (status "active")))` {
 		t.Fatalf("ProducedBy.Action = %q, want rendered advance source", derivation.ProducedBy.Action)
 	}
-	if !derivation.ProducedBy.BindingsPartial {
-		t.Fatalf("ProducedBy.BindingsPartial = false, want true for reconstruction")
+	// With WithExplainLog, firing-time capture records the exact bindings, so
+	// the producing firing is not partial and carries the matched binding.
+	if derivation.ProducedBy.BindingsPartial {
+		t.Fatalf("ProducedBy.BindingsPartial = true, want false with firing-time capture")
+	}
+	if len(derivation.ProducedBy.Bindings) == 0 {
+		t.Fatalf("ProducedBy.Bindings empty, want the captured ?r binding")
 	}
 
 	if len(derivation.History) != 2 {

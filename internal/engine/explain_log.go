@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"sort"
 	"sync"
 )
 
@@ -68,6 +69,12 @@ type explainLog struct {
 	truncatedFacts map[FactID]struct{}
 	total          int
 	generation     Generation
+
+	// capturedBindings holds full-fidelity firing bindings keyed by
+	// activation, bounded like the entry ring. Populated only when firing-time
+	// capture is active; nil otherwise.
+	capturedBindings map[ActivationID][]BindingValue
+	bindingArrivals  []ActivationID
 }
 
 func newExplainLog(opts []ExplainLogOption) *explainLog {
@@ -155,6 +162,58 @@ func (l *explainLog) clear(generation Generation) {
 	l.truncatedFacts = make(map[FactID]struct{})
 	l.total = 0
 	l.generation = generation
+	l.capturedBindings = nil
+	l.bindingArrivals = nil
+}
+
+// captureBindings records the exact bindings a firing evaluated, keyed by
+// activation and bounded like the entry ring.
+func (l *explainLog) captureBindings(activationID ActivationID, bindings []BindingValue) {
+	if activationID.IsZero() {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.capturedBindings == nil {
+		l.capturedBindings = make(map[ActivationID][]BindingValue)
+	}
+	if _, exists := l.capturedBindings[activationID]; !exists {
+		l.bindingArrivals = append(l.bindingArrivals, activationID)
+	}
+	l.capturedBindings[activationID] = bindings
+	for len(l.bindingArrivals) > l.maxEntries {
+		oldest := l.bindingArrivals[0]
+		l.bindingArrivals = l.bindingArrivals[1:]
+		delete(l.capturedBindings, oldest)
+	}
+}
+
+// attachBindings replaces a reconstructed firing's bindings with the captured
+// ones when available, clearing BindingsPartial. Evicted captures fall back to
+// the reconstruction the firing already carries.
+func (l *explainLog) attachBindings(firing *Firing) {
+	if firing == nil || firing.ActivationID.IsZero() {
+		return
+	}
+	l.mu.Lock()
+	bindings, ok := l.capturedBindings[firing.ActivationID]
+	l.mu.Unlock()
+	if !ok {
+		return
+	}
+	firing.Bindings = cloneBindingValues(bindings)
+	firing.BindingsPartial = false
+}
+
+func cloneBindingValues(in []BindingValue) []BindingValue {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]BindingValue, len(in))
+	for i, binding := range in {
+		out[i] = BindingValue{Name: binding.Name, FromFact: binding.FromFact, Value: cloneValue(binding.Value)}
+	}
+	return out
 }
 
 // historyForFact returns a copy of a fact's recorded entries in arrival order
@@ -181,9 +240,11 @@ func (l *explainLog) enrich(d *Derivation, revision *Ruleset) {
 		var latest *explainLogEntry
 		for i := range entries {
 			entry := entries[i]
+			firing := entry.firing(revision)
+			l.attachBindings(firing)
 			history = append(history, MutationRecord{
 				Kind:          entry.kind,
-				Firing:        entry.firing(revision),
+				Firing:        firing,
 				ChangedFields: cloneFieldChanges(entry.changedFields),
 				Sequence:      entry.sequence,
 			})
@@ -210,6 +271,7 @@ func (l *explainLog) enrich(d *Derivation, revision *Ruleset) {
 // facts) and gains the rendered action source.
 func (l *explainLog) applyProducedBy(d *Derivation, latest *explainLogEntry, revision *Ruleset) {
 	firing := latest.firing(revision)
+	l.attachBindings(firing)
 	if d.ProducedBy == nil {
 		d.ProducedBy = firing
 		return
@@ -223,7 +285,14 @@ func (l *explainLog) applyProducedBy(d *Derivation, latest *explainLogEntry, rev
 	if d.ProducedBy.RuleName == "" {
 		d.ProducedBy.RuleName = firing.RuleName
 	}
-	d.ProducedBy.BindingsPartial = firing.BindingsPartial
+	// Prefer captured bindings for the producing firing of a logical fact too.
+	l.attachBindings(d.ProducedBy)
+	if len(firing.Bindings) > 0 && len(d.ProducedBy.Bindings) == 0 {
+		d.ProducedBy.Bindings = firing.Bindings
+		d.ProducedBy.BindingsPartial = false
+	} else {
+		d.ProducedBy.BindingsPartial = firing.BindingsPartial
+	}
 }
 
 // firing reconstructs the rule firing behind a mutation. It returns nil for a
@@ -254,6 +323,42 @@ func (e explainLogEntry) firing(revision *Ruleset) *Firing {
 		}
 	}
 	return firing
+}
+
+// captureFiringBindings snapshots an activation's condition bindings and any
+// RHS-bound values into the explain log at firing time. It runs only when a log
+// is attached and is a read of already-computed state: it does not change
+// firing semantics, ordering, or refraction.
+func (s *Session) captureFiringBindings(rule compiledRule, activation activation, actionCtx *ActionContext) {
+	if s.explainLog == nil {
+		return
+	}
+	entries := activation.bindings()
+	if len(entries) == 0 {
+		entries = activationBindingTupleEntriesForActivation(rule, &activation, false)
+	}
+	bindings := make([]BindingValue, 0, len(entries))
+	for _, entry := range entries {
+		if entry.binding == "" {
+			continue
+		}
+		binding := BindingValue{Name: "?" + entry.binding, FromFact: entry.factID}
+		if entry.hasValue {
+			binding.Value = cloneValue(entry.value)
+		}
+		bindings = append(bindings, binding)
+	}
+	if actionCtx != nil && actionCtx.rhsBinds != nil && len(actionCtx.rhsBinds.values) > 0 {
+		names := make([]string, 0, len(actionCtx.rhsBinds.values))
+		for name := range actionCtx.rhsBinds.values {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			bindings = append(bindings, BindingValue{Name: "?" + name, Value: cloneValue(actionCtx.rhsBinds.values[name])})
+		}
+	}
+	s.explainLog.captureBindings(activation.activationID(), bindings)
 }
 
 func mutatedFactID(event Event) FactID {

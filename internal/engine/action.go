@@ -1802,6 +1802,13 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 		}
 	}
 
+	if s.explainLog != nil {
+		var ctxPtr *ActionContext
+		if actionCtxReady {
+			ctxPtr = &actionCtx
+		}
+		s.captureFiringBindings(rule, activation, ctxPtr)
+	}
 	return nil
 }
 
