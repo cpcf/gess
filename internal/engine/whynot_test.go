@@ -242,6 +242,99 @@ func TestWhyNotNegationBlockedThenActivated(t *testing.T) {
 	}
 }
 
+// TestWhyNotResidualJoinChain covers a rule where a residual (inequality) join
+// compiles to two beta stages, so the beta chain is longer than the condition
+// count. A following equality-joined condition that fails must still be
+// identified (the old positional mapping produced FirstFailing = -1).
+func TestWhyNotResidualJoinChain(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-residual", func(w *Workspace) map[string]TemplateKey {
+		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "v", Kind: ValueInt, Required: true}}}).Key()
+		b := mustAddTemplate(t, w, TemplateSpec{Name: "b", Fields: []FieldSpec{{Name: "v", Kind: ValueInt, Required: true}, {Name: "w", Kind: ValueString, Required: true}}}).Key()
+		c := mustAddTemplate(t, w, TemplateSpec{Name: "c", Fields: []FieldSpec{{Name: "w", Kind: ValueString, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: And{Conditions: []ConditionSpec{
+				Match{Binding: "a", Target: TemplateKeyFact(a)},
+				Match{Binding: "b", Target: TemplateKeyFact(b), JoinConstraints: []JoinConstraintSpec{
+					{Field: "v", Operator: FieldConstraintGreaterThan, Ref: FieldRef{Binding: "a", Field: "v"}},
+				}},
+				Match{Binding: "c", Target: TemplateKeyFact(c), JoinConstraints: []JoinConstraintSpec{
+					{Field: "w", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "b", Field: "w"}},
+				}},
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"a": a, "b": b, "c": c}
+	})
+	ctx := context.Background()
+	mustAssert := func(key TemplateKey, fields map[string]any) {
+		if _, err := session.AssertTemplate(ctx, key, mustFields(t, fields)); err != nil {
+			t.Fatalf("AssertTemplate: %v", err)
+		}
+	}
+	mustAssert(keys["a"], map[string]any{"v": 5})
+	mustAssert(keys["b"], map[string]any{"v": 10, "w": "x"}) // 10 > 5, b matches
+	mustAssert(keys["c"], map[string]any{"w": "zzz"})        // zzz != x, c fails
+
+	report, err := session.WhyNot(ctx, "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("outcome = %q, want never_matched", report.Outcome)
+	}
+	branch := singleBranch(t, report) // asserts FirstFailing is in range (not -1)
+	if branch.Conditions[branch.FirstFailing].Binding != "c" {
+		t.Fatalf("first failing = %q, want c (the failing equality join)", branch.Conditions[branch.FirstFailing].Binding)
+	}
+}
+
+// TestWhyNotBlockerCountDistinct covers a single blocking fact that blocks two
+// distinct partial matches: BlockerCount must count distinct facts, not pairs.
+func TestWhyNotBlockerCountDistinct(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-blockers", func(w *Workspace) map[string]TemplateKey {
+		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "host", Kind: ValueString, Required: true}}}).Key()
+		alert := mustAddTemplate(t, w, TemplateSpec{Name: "alert", Fields: []FieldSpec{{Name: "host", Kind: ValueString, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: And{Conditions: []ConditionSpec{
+				Match{Binding: "a", Target: TemplateKeyFact(a)},
+				Not{Condition: Match{Binding: "alert", Target: TemplateKeyFact(alert), JoinConstraints: []JoinConstraintSpec{
+					{Field: "host", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "a", Field: "host"}},
+				}}},
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"a": a, "alert": alert}
+	})
+	ctx := context.Background()
+	// Two distinct a facts sharing host h1, each a separate partial match.
+	if _, err := session.AssertTemplate(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-1", "host": "h1"})); err != nil {
+		t.Fatalf("AssertTemplate(a-1): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-2", "host": "h1"})); err != nil {
+		t.Fatalf("AssertTemplate(a-2): %v", err)
+	}
+	if _, err := session.AssertTemplate(ctx, keys["alert"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
+		t.Fatalf("AssertTemplate(alert): %v", err)
+	}
+
+	report, err := session.WhyNot(ctx, "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	branch := singleBranch(t, report)
+	failing := branch.Conditions[branch.FirstFailing]
+	if len(failing.Blockers) != 1 {
+		t.Fatalf("distinct blockers = %d, want 1", len(failing.Blockers))
+	}
+	if failing.BlockerCount != 1 {
+		t.Fatalf("BlockerCount = %d, want 1 (distinct facts, not left-row pairs)", failing.BlockerCount)
+	}
+}
+
 func TestWhyNotErrors(t *testing.T) {
 	session, _ := whyNotSession(t, "whynot-errors", func(w *Workspace) map[string]TemplateKey {
 		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}}}).Key()

@@ -109,7 +109,6 @@ func (s *Session) collectBlockers(node *reteGraphBetaNode, betaID reteGraphBetaN
 	}
 	seen := make(map[FactID]struct{})
 	var blockers []FactID
-	total := 0
 	scanned := 0
 	negMem.memory.left.forEachRow(func(left *negativeBetaLeftRow) bool {
 		if left == nil || left.blockerCount == 0 {
@@ -129,7 +128,8 @@ func (s *Session) collectBlockers(node *reteGraphBetaNode, betaID reteGraphBetaN
 			if err != nil || !matched {
 				return true
 			}
-			total++
+			// Count distinct blocking facts, not (left-row, right-fact) pairs:
+			// one fact can block several partial matches.
 			if fm, ok := tokenLastMatch(rightRow.token); ok && !fm.fact.id.IsZero() {
 				if _, dup := seen[fm.fact.id]; !dup {
 					seen[fm.fact.id] = struct{}{}
@@ -140,6 +140,7 @@ func (s *Session) collectBlockers(node *reteGraphBetaNode, betaID reteGraphBetaN
 		})
 		return true
 	})
+	total := len(blockers)
 	sort.Slice(blockers, func(i, j int) bool { return factIDLess(blockers[i], blockers[j]) })
 	if cfg.maxBlockers > 0 && len(blockers) > cfg.maxBlockers {
 		blockers = blockers[:cfg.maxBlockers]

@@ -159,25 +159,26 @@ func (s *Session) whyNotBranch(rule compiledRule, insp reteGraphBranchInspection
 		}
 	}
 
-	// The failing condition is located by its planned position: the leaf is
-	// planned position 0, and each beta (leaf-to-top) adds the next.
-	failingPos := -1
+	// The failing condition is identified by the frontier node's own condition
+	// id; only negative/structural nodes (no condition id) fall back to a
+	// planned-position count, since a single condition can span more than one
+	// beta stage (e.g. a residual join compiles to a join plus a filter).
+	var failingConditionID ConditionID
 	var failure whyNotFailure
 	switch {
 	case frontierIdx < 0:
 		if s.leafMatched(insp, leafStage) {
 			return branch, true
 		}
-		failingPos = 0
+		failingConditionID = plannedConditionID(insp, 0)
 		failure = s.classifyLeaf(rule, insp)
 	case frontierIdx == len(betas)-1 && s.betaNodeProducesOutput(betas[frontierIdx]):
 		return branch, true
 	default:
-		failingPos = frontierIdx + 1
-		failure = s.classifyFrontier(rule, insp, betas[frontierIdx], failingPos, cfg, report)
+		failingConditionID = s.frontierConditionID(insp, betas, frontierIdx)
+		failure = s.classifyFrontier(rule, insp, betas[frontierIdx], failingConditionID, cfg, report)
 	}
 
-	failingConditionID := plannedConditionID(insp, failingPos)
 	for i, conditionID := range conditionIDs {
 		if conditionID == failingConditionID && !conditionID.IsZero() {
 			branch.Conditions[i].Reason = failure.reason
@@ -216,6 +217,23 @@ func plannedConditionID(insp reteGraphBranchInspection, plannedPos int) Conditio
 	return ""
 }
 
+// frontierConditionID resolves the failing condition for a frontier beta node.
+// Positive join/filter/aggregate nodes carry the condition id directly;
+// negative and other zero-id nodes are mapped by counting the distinct
+// conditions the chain already covers below them (the leaf is position 0).
+func (s *Session) frontierConditionID(insp reteGraphBranchInspection, betas []reteGraphBetaNodeID, frontierIdx int) ConditionID {
+	if node := s.rete.graph.betaNode(betas[frontierIdx]); node != nil && !node.entry.conditionID.IsZero() {
+		return node.entry.conditionID
+	}
+	seen := make(map[ConditionID]struct{})
+	for i := range frontierIdx {
+		if below := s.rete.graph.betaNode(betas[i]); below != nil && !below.entry.conditionID.IsZero() {
+			seen[below.entry.conditionID] = struct{}{}
+		}
+	}
+	return plannedConditionID(insp, 1+len(seen))
+}
+
 // leafMatched reports whether the leaf (first planned) condition has any
 // matching fact, i.e. a single-condition branch is completely satisfied.
 func (s *Session) leafMatched(insp reteGraphBranchInspection, leafStage reteGraphStageRef) bool {
@@ -236,7 +254,8 @@ func (s *Session) betaNodeProducesOutput(betaID reteGraphBetaNodeID) bool {
 		return false
 	}
 	produces := false
-	if node.kind == reteGraphBetaNodeNot {
+	switch node.kind {
+	case reteGraphBetaNodeNot:
 		mem.negative.left.forEachRow(func(row *negativeBetaLeftRow) bool {
 			if row != nil && row.blockerCount == 0 {
 				produces = true
@@ -244,7 +263,17 @@ func (s *Session) betaNodeProducesOutput(betaID reteGraphBetaNodeID) bool {
 			}
 			return true
 		})
-	} else {
+	case reteGraphBetaNodeFilter, reteGraphBetaNodeResidualFilter:
+		// Filter memories store only rows that passed the predicate (and never
+		// set outputHead), so a non-empty left memory is the output signal.
+		mem.left.forEachRow(func(row *betaTokenRow) bool {
+			if row != nil {
+				produces = true
+				return false
+			}
+			return true
+		})
+	default:
 		mem.left.forEachRow(func(row *betaTokenRow) bool {
 			if row != nil && row.outputHead != 0 {
 				produces = true
@@ -301,13 +330,12 @@ func (s *Session) classifyLeaf(rule compiledRule, insp reteGraphBranchInspection
 	return failure
 }
 
-func (s *Session) classifyFrontier(rule compiledRule, insp reteGraphBranchInspection, betaID reteGraphBetaNodeID, plannedPos int, cfg whyNotConfig, report *WhyNotReport) whyNotFailure {
+func (s *Session) classifyFrontier(rule compiledRule, insp reteGraphBranchInspection, betaID reteGraphBetaNodeID, conditionID ConditionID, cfg whyNotConfig, report *WhyNotReport) whyNotFailure {
 	node := s.rete.graph.betaNode(betaID)
 	mem := s.rete.graphBeta.betaNodeMemoryAt(betaID)
 	if node == nil || mem == nil {
 		return whyNotFailure{}
 	}
-	conditionID := plannedConditionID(insp, plannedPos)
 	slot, hasSlot := bindingSlotForCondition(insp, conditionID)
 	var failure whyNotFailure
 

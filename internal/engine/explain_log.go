@@ -148,7 +148,12 @@ func (l *explainLog) evictOldestLocked() {
 	if len(entries) > 0 {
 		l.byFact[oldest] = entries[1:]
 		if len(l.byFact[oldest]) == 0 {
+			// Fully evicted: no partial history remains to mark, and keeping
+			// the fact in truncatedFacts would leak one key per distinct fact
+			// ever mutated. Bound truncatedFacts to facts with retained entries.
 			delete(l.byFact, oldest)
+			delete(l.truncatedFacts, oldest)
+			return
 		}
 	}
 	l.truncatedFacts[oldest] = struct{}{}
@@ -285,9 +290,14 @@ func (l *explainLog) applyProducedBy(d *Derivation, latest *explainLogEntry, rev
 	if d.ProducedBy.RuleName == "" {
 		d.ProducedBy.RuleName = firing.RuleName
 	}
-	// Prefer captured bindings for the producing firing of a logical fact too.
+	// Prefer bindings captured for the support-edge activation itself; only if
+	// none were captured for it do we borrow the latest log firing's bindings.
+	// Never downgrade a complete capture to partial.
 	l.attachBindings(d.ProducedBy)
-	if len(firing.Bindings) > 0 && len(d.ProducedBy.Bindings) == 0 {
+	if len(d.ProducedBy.Bindings) > 0 {
+		return
+	}
+	if len(firing.Bindings) > 0 {
 		d.ProducedBy.Bindings = firing.Bindings
 		d.ProducedBy.BindingsPartial = false
 	} else {

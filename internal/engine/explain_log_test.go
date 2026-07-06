@@ -348,6 +348,55 @@ func TestSessionExplainForkRequiresReoptIn(t *testing.T) {
 	}
 }
 
+func TestExplainLogTruncatedFactsBounded(t *testing.T) {
+	log := newExplainLog([]ExplainLogOption{WithExplainLogMaxEntries(1)})
+	// Three distinct facts, one entry each; the first two are fully evicted.
+	for i := 1; i <= 3; i++ {
+		log.record(Event{Type: EventFactAsserted, FactIDs: []FactID{newFactID(1, uint64(i))}, RuleID: RuleID("r"), Sequence: uint64(i)})
+	}
+	if len(log.truncatedFacts) != 0 {
+		t.Fatalf("truncatedFacts = %d, want 0 (fully-evicted facts must be pruned)", len(log.truncatedFacts))
+	}
+	if len(log.byFact) != 1 || log.total != 1 {
+		t.Fatalf("byFact=%d total=%d, want 1/1", len(log.byFact), log.total)
+	}
+
+	// A fact that keeps a partial history stays marked truncated.
+	partial := newExplainLog([]ExplainLogOption{WithExplainLogMaxEntries(2)})
+	fid := newFactID(2, 1)
+	for i := range 3 {
+		partial.record(Event{Type: EventFactModified, FactIDs: []FactID{fid}, RuleID: RuleID("r"), Sequence: uint64(i)})
+	}
+	if _, ok := partial.truncatedFacts[fid]; !ok {
+		t.Fatalf("fact with evicted-but-remaining history should be marked truncated")
+	}
+}
+
+func TestExplainLogKeepsCapturedBindingsForEdgeFiring(t *testing.T) {
+	log := newExplainLog(nil)
+	edgeActivation := ActivationID("act-edge")
+	latestActivation := ActivationID("act-latest")
+	log.captureBindings(edgeActivation, []BindingValue{{Name: "?x", Value: newStringValue("v")}})
+
+	fid := newFactID(1, 1)
+	// The latest state-producing entry has a DIFFERENT activation with no capture.
+	log.record(Event{Type: EventFactModified, FactIDs: []FactID{fid}, RuleID: RuleID("r"), RuleRevisionID: RuleRevisionID("rev"), ActivationID: latestActivation, Generation: 1})
+
+	d := Derivation{
+		Fact:       FactSnapshot{id: fid, support: FactSupportProvenance{State: FactSupportLogical}},
+		Support:    FactSupportLogical,
+		ProducedBy: &Firing{ActivationID: edgeActivation},
+	}
+	log.enrich(&d, nil)
+
+	if d.ProducedBy.BindingsPartial {
+		t.Fatalf("BindingsPartial = true; a complete capture for the edge activation must not be downgraded")
+	}
+	if len(d.ProducedBy.Bindings) == 0 {
+		t.Fatalf("edge firing lost its captured bindings")
+	}
+}
+
 func BenchmarkSessionExplainLogRecording(b *testing.B) {
 	revision, _, recordKey := lineageRuleset(b)
 	session, err := NewSession(revision, WithSessionID("explain-log-bench"), WithExplainLog())
