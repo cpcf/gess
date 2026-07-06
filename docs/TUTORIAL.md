@@ -368,9 +368,10 @@ developing:
   readable line per fact change, activation, and firing. Rules compiled from
   `.gess` include their `file:line` in rule events and runtime errors.
 - `go run ./cmd/gess repl` opens an interactive shell: `load`, `assert`,
-  `run [n]`, `facts`, `explain <fact-id> [dot]`, `agenda`, `query`,
-  `watch on`, and `help`. The shell enables an explain log by default so
-  `explain` shows each fact's producing firing and mutation lineage.
+  `run [n]`, `facts`, `explain <fact-id> [dot]`, `whynot <rule>`, `agenda`,
+  `query`, `watch on`, and `help`. The shell enables an explain log by default
+  so `explain` shows each fact's producing firing and mutation lineage;
+  `whynot` diagnoses why a rule has no pending activation.
 
 ## Verify changes
 

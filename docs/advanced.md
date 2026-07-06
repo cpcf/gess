@@ -237,6 +237,42 @@ Render a derivation as an indented text tree with `Derivation.String()` or as
 a Graphviz digraph with `Derivation.DOT()`. In the REPL, `explain <fact-id>`
 prints the tree and `explain <fact-id> dot` prints the graph.
 
+### Why a rule did not fire
+
+The most common rules-engine question — *why didn't my rule fire?* —
+`Session.WhyNot(ctx, ruleName)` answers structurally by reading the live Rete
+memories the engine matches with. It never mutates the runtime and adds no
+per-fact state; it re-executes predicates only along the probed chain at call
+time, and is idle-only under the same guard as `Agenda`.
+
+A `WhyNotReport` has an `Outcome`:
+
+- `WhyNotActivated` — the rule *is* pending (the report lists the activations).
+- `WhyNotAlreadyFired` — it matched and fired; the activation is refracted.
+- `WhyNotNeverMatched` — no branch completed; each branch's first failing
+  condition is classified.
+- `WhyNotBlocked` — the closest branch failed on a negated condition currently
+  blocked by one or more facts (the report names them).
+
+Per branch, each condition reports its authored and planned order, whether it
+is satisfied, its alpha match count, and — on the first failing condition — a
+typed `Reason` (`no_alpha_matches`, `join_mismatch`, `predicate_rejected`, or
+`negation_blocked`), the rejecting constraint's `SourceSpan`, and the blocking
+facts for a negation. The deepest surviving partial matches are reported as
+near-misses with their bound values.
+
+```go
+report, err := session.WhyNot(ctx, "escalate-critical")
+// report.Outcome, report.Branches[0].Conditions[i].Reason, …
+```
+
+`WhyNotReport.String()` renders an answer-shaped diagnosis, and the REPL
+`whynot <rule>` command prints it — for example, `whynot ship-order` on a
+loaded `.gess` ruleset points at the failing condition with its
+`file:line:col` location. Partial-match and probe work are bounded by
+`WithWhyNotMaxPartialMatches`, `WithWhyNotMaxBlockers`, and
+`WithWhyNotMaxProbedRows`; a cap sets the report's `Truncated` flag.
+
 ## Backward chaining
 
 Backward chaining makes rules prove facts on demand instead of eagerly.

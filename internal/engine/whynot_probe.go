@@ -322,7 +322,10 @@ func (s *Session) classifyFrontier(rule compiledRule, insp reteGraphBranchInspec
 		failure.reason = WhyNotReasonPredicate
 		failure.rejectingSpan = firstPredicateSpan(node)
 	default:
-		if s.rete.graphBeta.alphaFactCount(conditionID) == 0 {
+		// The node's right memory holds the added condition's facts; an empty
+		// right side means the condition matched nothing (reliable even for
+		// constraint-free conditions, unlike the alpha fact count).
+		if frontierRightEmpty(mem) {
 			failure.reason = WhyNotReasonNoAlphaMatches
 			if hasSlot {
 				failure.rejectingSpan = s.conditionSpan(rule, slot)

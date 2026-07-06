@@ -66,6 +66,15 @@ func (s *Session) conditionSpan(rule compiledRule, bindingSlot int) SourceSpan {
 	return SourceSpan{}
 }
 
+func frontierRightEmpty(mem *reteGraphBetaNodeMemory) bool {
+	empty := true
+	mem.right.forEachRow(func(*betaTokenRow) bool {
+		empty = false
+		return false
+	})
+	return empty
+}
+
 func (s *Session) frontierBucketsAllEmpty(node *reteGraphBetaNode, mem *reteGraphBetaNodeMemory, cfg whyNotConfig, report *WhyNotReport) bool {
 	allEmpty := true
 	scanned := 0

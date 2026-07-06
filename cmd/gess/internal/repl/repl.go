@@ -118,6 +118,8 @@ func (s *replState) exec(ctx context.Context, line string) (bool, error) {
 		return false, s.facts(ctx, fields[1:])
 	case "explain":
 		return false, s.explain(ctx, fields[1:])
+	case "whynot":
+		return false, s.whyNot(ctx, fields[1:])
 	case "agenda":
 		return false, s.agenda(ctx, fields[1:])
 	case "query":
@@ -366,6 +368,24 @@ func (s *replState) explain(ctx context.Context, args []string) error {
 		fmt.Fprintln(s.out, "note: firing and mutation lineage need an explain log (this session has none)")
 	}
 	return nil
+}
+
+func (s *replState) whyNot(ctx context.Context, args []string) error {
+	if err := s.requireSession(); err != nil {
+		return err
+	}
+	if len(args) != 1 {
+		return fmt.Errorf("usage: whynot <rule>")
+	}
+	report, err := s.session.WhyNot(ctx, args[0])
+	if err != nil {
+		if errors.Is(err, sess.ErrRuleNotFound) {
+			return fmt.Errorf("unknown rule %q", args[0])
+		}
+		return err
+	}
+	_, err = io.WriteString(s.out, report.String())
+	return err
 }
 
 func (s *replState) agenda(ctx context.Context, args []string) error {
@@ -776,6 +796,7 @@ func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "  run [n]")
 	fmt.Fprintln(out, "  facts [template]")
 	fmt.Fprintln(out, "  explain <fact-id> [dot]")
+	fmt.Fprintln(out, "  whynot <rule>")
 	fmt.Fprintln(out, "  agenda")
 	fmt.Fprintln(out, "  query <name> [arg=value ...]")
 	fmt.Fprintln(out, "  rules")

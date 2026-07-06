@@ -54,6 +54,10 @@ deterministic order: higher salience first, then more recent matches, then
 declaration order. Retracting or modifying a fact that a pending activation
 depends on removes the activation before it can fire.
 
+When a rule you expected to fire has no activation, `Session.WhyNot` diagnoses
+why — the first failing condition, the nearest partial match, or the blocking
+fact for a negation. See "Why a rule did not fire" in `advanced.md`.
+
 ## Sessions
 
 A session is the mutable runtime for one compiled ruleset. It owns working
