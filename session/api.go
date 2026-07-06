@@ -185,6 +185,22 @@ type (
 	// SupportGraph is the logical support edges and counters visible in
 	// a [Snapshot], as of a given generation.
 	SupportGraph = engine.SupportGraph
+	// Derivation is the recursive explanation of one fact, as returned by
+	// Snapshot.Explain and Session.Explain: its support state, the firing
+	// that produced it, its logical supporters, and its mutation lineage.
+	Derivation = engine.Derivation
+	// Firing identifies the rule activation that produced a fact state,
+	// with the concrete bound values its action evaluated against.
+	Firing = engine.Firing
+	// BindingValue is one condition binding and the value an action saw
+	// for it, as reported in a [Firing].
+	BindingValue = engine.BindingValue
+	// MutationRecord is one entry in a fact's assert -> modify... lineage,
+	// as reconstructed from a retained explain log.
+	MutationRecord = engine.MutationRecord
+	// ExplainOption configures an Explain call, bounding derivation depth
+	// and node count.
+	ExplainOption = engine.ExplainOption
 )
 
 type (
@@ -484,6 +500,20 @@ func WithOutputWriter(w io.Writer) Option {
 // fails the run.
 func WithMaxFirings(n int) RunOption {
 	return engine.WithMaxFirings(n)
+}
+
+// WithExplainMaxDepth caps derivation recursion depth for an Explain call
+// (default [engine.DefaultExplainMaxDepth]). Depth beyond the cap surfaces
+// as a Truncated derivation node.
+func WithExplainMaxDepth(depth int) ExplainOption {
+	return engine.WithExplainMaxDepth(depth)
+}
+
+// WithExplainMaxNodes caps the total derivation node count for one Explain
+// call (default [engine.DefaultExplainMaxNodes]). Reaching the cap surfaces
+// as a Truncated derivation node.
+func WithExplainMaxNodes(nodes int) ExplainOption {
+	return engine.WithExplainMaxNodes(nodes)
 }
 
 // New builds a session from revision: it compiles the configured initial
