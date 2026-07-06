@@ -748,9 +748,6 @@ func renderInitialFacts(initials []SessionInitialFact) string {
 			b.WriteString(", ")
 		}
 		b.WriteString("{")
-		if initial.Name != "" {
-			fmt.Fprintf(&b, "Name: %s, ", strconv.Quote(initial.Name))
-		}
 		if initial.TemplateKey != "" {
 			fmt.Fprintf(&b, "TemplateKey: %s, ", renderTemplateKey(initial.TemplateKey))
 		}

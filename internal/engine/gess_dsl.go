@@ -487,11 +487,10 @@ func (l *gessLoader) loadFacts(form gessSExpr) ([]SessionInitialFact, error) {
 		}
 		module, factName := splitGessName(name)
 		key := l.templateKey(module, factName)
-		initial := SessionInitialFact{Name: name, Fields: fields}
-		if key != "" {
-			initial = SessionInitialFact{TemplateKey: key, Fields: fields}
+		if key == "" {
+			return nil, l.err(fact.Span, "deffacts fact %q is not a declared template", name)
 		}
-		out = append(out, initial)
+		out = append(out, SessionInitialFact{TemplateKey: key, Fields: fields})
 	}
 	return out, nil
 }

@@ -197,10 +197,13 @@ func TestSnapshotReconstructsPublicFactsFromCompactSlots(t *testing.T) {
 
 func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
 	session, err := NewSession(
-		mustCompile(t),
+		mustCompile(t, TemplateSpec{
+			Name:   "settings",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+		}),
 		WithResetBeforeSnapshot(true),
 		WithInitialFacts(SessionInitialFact{
-			Name: "settings",
+			TemplateKey: "settings",
 			Fields: mustFields(t, map[string]any{
 				"name": "Ada",
 			}),
@@ -247,10 +250,13 @@ func TestResetResultBeforeRemainsDefensiveAfterLaterReset(t *testing.T) {
 
 func TestResetCanSkipBeforeSnapshot(t *testing.T) {
 	session, err := NewSession(
-		mustCompile(t),
+		mustCompile(t, TemplateSpec{
+			Name:   "settings",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+		}),
 		WithResetBeforeSnapshot(false),
 		WithInitialFacts(SessionInitialFact{
-			Name: "settings",
+			TemplateKey: "settings",
 			Fields: mustFields(t, map[string]any{
 				"name": "Ada",
 			}),

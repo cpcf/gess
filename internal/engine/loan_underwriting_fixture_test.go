@@ -88,7 +88,7 @@ func BenchmarkLoanUnderwritingGessSessionCycle(b *testing.B) {
 
 func BenchmarkLoanUnderwritingGessResetRun(b *testing.B) {
 	revision := mustCompileLoanUnderwritingRuleset(b, nil)
-	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(b)...))
+	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingInitialFacts(b)...))
 	if err != nil {
 		b.Fatalf("NewSession: %v", err)
 	}
@@ -447,33 +447,23 @@ func loanUnderwritingInitialFacts(t testing.TB) []SessionInitialFact {
 	t.Helper()
 
 	return []SessionInitialFact{
-		{Name: "applicant", TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-100", "age": 42, "country": "US"})},
-		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-100", "annual-income": 148000, "monthly-debt": 1800, "credit-score": 755})},
-		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-100", "status": "employed", "months": 86})},
-		{Name: "applicant", TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-200", "age": 37, "country": "US"})},
-		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-200", "annual-income": 92000, "monthly-debt": 4100, "credit-score": 675})},
-		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-200", "status": "employed", "months": 28})},
-		{Name: "applicant", TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-300", "age": 19, "country": "GB"})},
-		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-300", "annual-income": 44000, "monthly-debt": 600, "credit-score": 580})},
-		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-300", "status": "student", "months": 3})},
-		{Name: "applicant", TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-400", "age": 55, "country": "US"})},
-		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "annual-income": 210000, "monthly-debt": 900, "credit-score": 690})},
-		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "status": "employed", "months": 140})},
-		{Name: "risk-flag", TemplateKey: "risk-flag", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "code": "sanctions", "severity": "high"})},
-		{Name: "applicant", TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-500", "age": 17, "country": "US"})},
-		{Name: "financial", TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "annual-income": 28000, "monthly-debt": 200, "credit-score": 710})},
-		{Name: "employment", TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "status": "employed", "months": 14})},
+		{TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-100", "age": 42, "country": "US"})},
+		{TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-100", "annual-income": 148000, "monthly-debt": 1800, "credit-score": 755})},
+		{TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-100", "status": "employed", "months": 86})},
+		{TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-200", "age": 37, "country": "US"})},
+		{TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-200", "annual-income": 92000, "monthly-debt": 4100, "credit-score": 675})},
+		{TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-200", "status": "employed", "months": 28})},
+		{TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-300", "age": 19, "country": "GB"})},
+		{TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-300", "annual-income": 44000, "monthly-debt": 600, "credit-score": 580})},
+		{TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-300", "status": "student", "months": 3})},
+		{TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-400", "age": 55, "country": "US"})},
+		{TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "annual-income": 210000, "monthly-debt": 900, "credit-score": 690})},
+		{TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "status": "employed", "months": 140})},
+		{TemplateKey: "risk-flag", Fields: mustFields(t, map[string]any{"applicant-id": "A-400", "code": "sanctions", "severity": "high"})},
+		{TemplateKey: "applicant", Fields: mustFields(t, map[string]any{"id": "A-500", "age": 17, "country": "US"})},
+		{TemplateKey: "financial", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "annual-income": 28000, "monthly-debt": 200, "credit-score": 710})},
+		{TemplateKey: "employment", Fields: mustFields(t, map[string]any{"applicant-id": "A-500", "status": "employed", "months": 14})},
 	}
-}
-
-func loanUnderwritingTemplateInitialFacts(t testing.TB) []SessionInitialFact {
-	t.Helper()
-
-	initials := loanUnderwritingInitialFacts(t)
-	for i := range initials {
-		initials[i].Name = ""
-	}
-	return initials
 }
 
 func expectedLoanUnderwritingTrace() []string {

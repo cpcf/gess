@@ -802,7 +802,7 @@ func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
 func TestPropagationPurityDiagnosticsRecordUnsupportedDeltaAndResetRebuild(t *testing.T) {
 	ctx := context.Background()
 	revision := mustCompileLoanUnderwritingRuleset(t, nil)
-	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingTemplateInitialFacts(t)...))
+	session, err := NewSession(revision, WithInitialFacts(loanUnderwritingInitialFacts(t)...))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}

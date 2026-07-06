@@ -30,9 +30,21 @@ type sessionConfig struct {
 }
 
 type SessionInitialFact struct {
-	Name        string
+	// name routes a schemaless dynamic initial fact. It is unexported so the
+	// public WithInitialFacts surface accepts only templated facts (a
+	// TemplateKey). Engine white-box tests seed dynamic initials with
+	// newDynamicInitialFact to exercise dynamic-fact assert, reset, and
+	// propagation paths.
+	name        string
 	TemplateKey TemplateKey
 	Fields      Fields
+}
+
+// newDynamicInitialFact builds a schemaless dynamic initial fact for engine
+// white-box tests. Dynamic facts are internal plumbing (query triggers,
+// name-routed conditions) and are not part of the public fact model.
+func newDynamicInitialFact(name string, fields Fields) SessionInitialFact {
+	return SessionInitialFact{name: name, Fields: fields}
 }
 
 func validatePublicTemplateMutation(template Template) error {
@@ -350,7 +362,7 @@ func cloneSessionInitialFacts(initials []SessionInitialFact) []SessionInitialFac
 	out := make([]SessionInitialFact, len(initials))
 	for i, initial := range initials {
 		out[i] = SessionInitialFact{
-			Name:        initial.Name,
+			name:        initial.name,
 			TemplateKey: initial.TemplateKey,
 			Fields:      cloneFields(initial.Fields),
 		}
@@ -6181,22 +6193,6 @@ func (w *factWorkspace) storeGeneratedFactSlots(fieldSlots []factSlot) []factSlo
 	return w.slotStorage[start:len(w.slotStorage):len(w.slotStorage)]
 }
 
-func (w *factWorkspace) applyInitialFacts(revision *Ruleset, initials []SessionInitialFact) error {
-	for _, initial := range initials {
-		if initial.TemplateKey == "" && initial.Name == "" {
-			return &ValidationError{TemplateName: "session", Reason: "initializer must set name or template key"}
-		}
-		if initial.TemplateKey != "" && initial.Name != "" {
-			return &ValidationError{TemplateName: initial.Name, Reason: "initializer must not set both name and template key"}
-		}
-		_, _, _, err := w.insertFact(revision, w.generation, initial.Name, initial.TemplateKey, initial.Fields)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 type compiledSessionInitialFact struct {
 	name            string
 	templateKey     TemplateKey
@@ -6272,14 +6268,14 @@ func (s *Session) compiledResetInitials() ([]compiledSessionInitialFact, error) 
 }
 
 func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (compiledSessionInitialFact, error) {
-	if initial.TemplateKey == "" && initial.Name == "" {
+	if initial.TemplateKey == "" && initial.name == "" {
 		return compiledSessionInitialFact{}, &ValidationError{TemplateName: "session", Reason: "initializer must set name or template key"}
 	}
-	if initial.TemplateKey != "" && initial.Name != "" {
-		return compiledSessionInitialFact{}, &ValidationError{TemplateName: initial.Name, Reason: "initializer must not set both name and template key"}
+	if initial.TemplateKey != "" && initial.name != "" {
+		return compiledSessionInitialFact{}, &ValidationError{TemplateName: initial.name, Reason: "initializer must not set both name and template key"}
 	}
 
-	name := initial.Name
+	name := initial.name
 	templateKey := initial.TemplateKey
 	template, templateExists := revision.templateByKey(templateKey)
 	if templateKey != "" && !templateExists {

@@ -448,10 +448,7 @@ func TestPureFunctionPredicateRetractFailureRollsBackFact(t *testing.T) {
 
 func TestPureFunctionPredicateInitialFactErrorsAreReturned(t *testing.T) {
 	revision := mustPureFunctionFailureRuleset(t)
-	_, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
-		Name:   "event",
-		Fields: mustFields(t, map[string]any{"status": "bad"}),
-	}))
+	_, err := NewSession(revision, WithInitialFacts(newDynamicInitialFact("event", mustFields(t, map[string]any{"status": "bad"}))))
 	if !errors.Is(err, ErrFunctionEvaluation) {
 		t.Fatalf("NewSession error = %v, want ErrFunctionEvaluation", err)
 	}
@@ -509,18 +506,12 @@ func TestPureFunctionPredicateApplyRulesetFailureRollsBackSessionState(t *testin
 func TestPureFunctionPredicateResetFailureRollsBackFactWorkspace(t *testing.T) {
 	ctx := context.Background()
 	revision := mustPureFunctionFailureRuleset(t)
-	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
-		Name:   "event",
-		Fields: mustFields(t, map[string]any{"status": "good"}),
-	}))
+	session, err := NewSession(revision, WithInitialFacts(newDynamicInitialFact("event", mustFields(t, map[string]any{"status": "good"}))))
 	if err != nil {
 		t.Fatalf("NewSession good: %v", err)
 	}
 
-	session.initials = append(session.initials, SessionInitialFact{
-		Name:   "event",
-		Fields: mustFields(t, map[string]any{"status": "bad"}),
-	})
+	session.initials = append(session.initials, newDynamicInitialFact("event", mustFields(t, map[string]any{"status": "bad"})))
 	result, err := session.Reset(ctx)
 	if !errors.Is(err, ErrFunctionEvaluation) {
 		t.Fatalf("Reset error = %v, want ErrFunctionEvaluation", err)

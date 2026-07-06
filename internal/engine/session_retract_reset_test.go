@@ -190,16 +190,26 @@ func TestSessionRetractClosedStatus(t *testing.T) {
 }
 
 func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
-	revision := mustCompile(t, TemplateSpec{
-		Name:   "person",
-		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "status", Kind: ValueString, Default: "active"}},
-	})
+	revision := mustCompile(t,
+		TemplateSpec{
+			Name:   "person",
+			Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}, {Name: "status", Kind: ValueString, Default: "active"}},
+		},
+		TemplateSpec{
+			Name:   "meta",
+			Fields: []FieldSpec{{Name: "version", Kind: ValueInt, Required: true}},
+		},
+	)
 	template, ok := revision.Template("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
+	metaTemplate, ok := revision.Template("meta")
+	if !ok {
+		t.Fatal("expected template meta")
+	}
 	initialTemplate := SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"name": "Ada"})}
-	initialDynamic := SessionInitialFact{Name: "meta", Fields: mustFields(t, map[string]any{"version": 1})}
+	initialDynamic := SessionInitialFact{TemplateKey: metaTemplate.Key(), Fields: mustFields(t, map[string]any{"version": 1})}
 
 	collector := &testEventCollector{}
 	session, err := NewSession(
@@ -417,18 +427,28 @@ func TestSessionResetFailureLeavesStateIntact(t *testing.T) {
 }
 
 func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
-	revision := mustCompile(t, TemplateSpec{
-		Name:              "person",
-		DuplicatePolicy:   DuplicateUniqueKey,
-		DuplicateKeyNames: []string{"id"},
-		Fields: []FieldSpec{
-			{Name: "id", Kind: ValueString, Required: true},
-			{Name: "status", Kind: ValueString},
+	revision := mustCompile(t,
+		TemplateSpec{
+			Name:              "person",
+			DuplicatePolicy:   DuplicateUniqueKey,
+			DuplicateKeyNames: []string{"id"},
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "status", Kind: ValueString},
+			},
 		},
-	})
+		TemplateSpec{
+			Name:   "note",
+			Fields: []FieldSpec{{Name: "value", Kind: ValueString, Required: true}},
+		},
+	)
 	template, ok := revision.Template("person")
 	if !ok {
 		t.Fatal("expected template person")
+	}
+	noteTemplate, ok := revision.Template("note")
+	if !ok {
+		t.Fatal("expected template note")
 	}
 
 	session, err := NewSession(
@@ -437,7 +457,7 @@ func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
 		WithInitialFacts(
 			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-1", "status": "active"})},
 			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-2", "status": "inactive"})},
-			SessionInitialFact{Name: "note", Fields: mustFields(t, map[string]any{"value": "baseline"})},
+			SessionInitialFact{TemplateKey: noteTemplate.Key(), Fields: mustFields(t, map[string]any{"value": "baseline"})},
 		),
 	)
 	if err != nil {
@@ -495,18 +515,28 @@ func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
 }
 
 func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
-	revision := mustCompile(t, TemplateSpec{
-		Name:              "person",
-		DuplicatePolicy:   DuplicateUniqueKey,
-		DuplicateKeyNames: []string{"id"},
-		Fields: []FieldSpec{
-			{Name: "id", Kind: ValueString, Required: true},
-			{Name: "status", Kind: ValueString},
+	revision := mustCompile(t,
+		TemplateSpec{
+			Name:              "person",
+			DuplicatePolicy:   DuplicateUniqueKey,
+			DuplicateKeyNames: []string{"id"},
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "status", Kind: ValueString},
+			},
 		},
-	})
+		TemplateSpec{
+			Name:   "note",
+			Fields: []FieldSpec{{Name: "value", Kind: ValueString, Required: true}},
+		},
+	)
 	template, ok := revision.Template("person")
 	if !ok {
 		t.Fatal("expected template person")
+	}
+	noteTemplate, ok := revision.Template("note")
+	if !ok {
+		t.Fatal("expected template note")
 	}
 
 	session, err := NewSession(
@@ -515,7 +545,7 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 		WithInitialFacts(
 			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-1", "status": "active"})},
 			SessionInitialFact{TemplateKey: template.Key(), Fields: mustFields(t, map[string]any{"id": "person-2", "status": "inactive"})},
-			SessionInitialFact{Name: "note", Fields: mustFields(t, map[string]any{"value": "baseline"})},
+			SessionInitialFact{TemplateKey: noteTemplate.Key(), Fields: mustFields(t, map[string]any{"value": "baseline"})},
 		),
 	)
 	if err != nil {
@@ -574,10 +604,21 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 }
 
 func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T) {
+	revision := mustCompile(t, TemplateSpec{
+		Name: "settings",
+		Fields: []FieldSpec{
+			{Name: "labels", Kind: ValueList, Required: true},
+			{Name: "meta", Kind: ValueMap, Required: true},
+		},
+	})
+	settingsTemplate, ok := revision.Template("settings")
+	if !ok {
+		t.Fatal("expected template settings")
+	}
 	session, err := NewSession(
-		mustCompile(t),
+		revision,
 		WithInitialFacts(SessionInitialFact{
-			Name: "settings",
+			TemplateKey: settingsTemplate.Key(),
 			Fields: mustFields(t, map[string]any{
 				"labels": []any{"stable"},
 				"meta":   map[string]any{"tier": "gold"},

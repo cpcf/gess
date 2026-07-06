@@ -14,8 +14,8 @@ type (
 	Option = engine.SessionOption
 	// InitialFact describes one fact to assert when a session is
 	// constructed and to re-assert on every Reset, matching deffacts in
-	// generated .gess code. Name identifies a dynamic fact; TemplateKey
-	// and Fields identify a templated fact.
+	// generated .gess code. TemplateKey names the declared template and
+	// Fields supplies its slot values.
 	InitialFact = engine.SessionInitialFact
 	// Session is the mutable runtime for one compiled ruleset: working
 	// memory, the agenda, the focus stack, logical support, backchain

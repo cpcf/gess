@@ -335,6 +335,33 @@ func TestGessDSLRejectsAggregateResultStandaloneTest(t *testing.T) {
 	}
 }
 
+func TestGessDSLRejectsDeffactsForUndeclaredTemplate(t *testing.T) {
+	ctx := context.Background()
+	source := []byte(`
+(deftemplate item
+  (slot id (type STRING) (required TRUE)))
+
+(deffacts seed
+  (item (id "I-1"))
+  (gadget (id "G-1")))
+`)
+	doc, err := ParseGess("undeclared-deffacts.gess", source)
+	if err != nil {
+		t.Fatalf("ParseGess: %v", err)
+	}
+	err = LoadGess(ctx, NewWorkspace(), doc, DSLRegistry{})
+	if err == nil {
+		t.Fatal("LoadGess succeeded, want an error for the undeclared deffacts template")
+	}
+	var gessErr *GessFileError
+	if !errors.As(err, &gessErr) {
+		t.Fatalf("error = %T, want *GessFileError", err)
+	}
+	if got := gessErr.Reason; got != `deffacts fact "gadget" is not a declared template` {
+		t.Fatalf("reason = %q", got)
+	}
+}
+
 func TestGessDSLCallSupportsRegisteredActionsAndArgumentCalls(t *testing.T) {
 	ctx := context.Background()
 	source := []byte(`

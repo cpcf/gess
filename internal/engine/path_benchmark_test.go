@@ -108,6 +108,13 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 	t.Helper()
 
 	workspace := NewWorkspace()
+	eventKey := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "event",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "payload", Kind: ValueMap, Required: true},
+		},
+	}).Key()
 	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "nested-risk-event",
@@ -126,7 +133,7 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 						Operator: FieldConstraintEqual,
 						Value:    true,
 					},
-				}, Target: DynamicFact("event"),
+				}, Target: TemplateKeyFact(eventKey),
 			},
 			Match{
 				Binding: "event",
@@ -143,7 +150,7 @@ func mustCompileNestedPathBenchmarkRuleset(t testing.TB) *Ruleset {
 						Left:     CurrentPath(Path("payload", MapKey("source"))),
 						Right:    ConstExpr{Value: "runtime"},
 					},
-				}, Target: DynamicFact("event"),
+				}, Target: TemplateKeyFact(eventKey),
 			},
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
@@ -185,7 +192,7 @@ func nestedPathBenchmarkInitialFacts(t testing.TB, tc nestedPathBenchmarkCase) [
 			source = "runtime"
 		}
 		initials = append(initials, SessionInitialFact{
-			Name: "event",
+			TemplateKey: "event",
 			Fields: mustFields(t, map[string]any{
 				"id": fmt.Sprintf("event-%06d", i),
 				"payload": map[string]any{
@@ -215,8 +222,8 @@ func collectNestedPathBenchmarkPropagationCounters(t testing.TB, revision *Rules
 	session.attachPropagationCounters()
 	ctx := context.Background()
 	for _, fact := range nestedPathBenchmarkInitialFacts(t, tc) {
-		if _, err := session.assertByName(ctx, fact.Name, fact.Fields); err != nil {
-			t.Fatalf("Assert(%q): %v", fact.Name, err)
+		if _, err := session.Assert(ctx, fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%q): %v", fact.TemplateKey, err)
 		}
 	}
 	result, err := session.Run(ctx)

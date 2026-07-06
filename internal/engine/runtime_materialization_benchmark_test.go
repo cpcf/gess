@@ -968,8 +968,8 @@ func mustLoadedBenchmarkSession(tb testing.TB, revision *Ruleset, id SessionID, 
 			}
 			continue
 		}
-		if _, err := session.assertByName(context.Background(), fact.Name, fact.Fields); err != nil {
-			tb.Fatalf("Assert(%s): %v", fact.Name, err)
+		if _, err := session.assertByName(context.Background(), fact.name, fact.Fields); err != nil {
+			tb.Fatalf("Assert(%s): %v", fact.name, err)
 		}
 	}
 	return session
