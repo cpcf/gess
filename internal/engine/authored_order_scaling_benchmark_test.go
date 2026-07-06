@@ -358,40 +358,40 @@ func seedAuthoredOrderFacts(t testing.TB, ctx context.Context, session *Session,
 		if authoredOrderRootSelected(id) {
 			group = "target"
 		}
-		if _, err := session.AssertTemplate(ctx, templates.root, Fields{
+		if _, err := session.Assert(ctx, templates.root, Fields{
 			"id":     newIntValue(int64(id)),
 			"group":  newStringValue(group),
 			"active": newBoolValue(true),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(root): %v", err)
+			t.Fatalf("Assert(root): %v", err)
 		}
 	}
 	for id := range items {
-		if _, err := session.AssertTemplate(ctx, templates.event, Fields{
+		if _, err := session.Assert(ctx, templates.event, Fields{
 			"id":    newIntValue(int64(id)),
 			"root":  newIntValue(int64(id % authoredOrderRootCount)),
 			"score": newIntValue(int64(authoredOrderScore(id))),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(event): %v", err)
+			t.Fatalf("Assert(event): %v", err)
 		}
-		if _, err := session.AssertTemplate(ctx, templates.detail, Fields{
+		if _, err := session.Assert(ctx, templates.detail, Fields{
 			"event": newIntValue(int64(id)),
 			"code":  newStringValue(authoredOrderDetailCode(id)),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(detail): %v", err)
+			t.Fatalf("Assert(detail): %v", err)
 		}
-		if _, err := session.AssertTemplate(ctx, templates.tag, Fields{
+		if _, err := session.Assert(ctx, templates.tag, Fields{
 			"event": newIntValue(int64(id)),
 			"label": newStringValue(authoredOrderTagLabel(id)),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(tag): %v", err)
+			t.Fatalf("Assert(tag): %v", err)
 		}
 		if authoredOrderBlocked(id) {
-			if _, err := session.AssertTemplate(ctx, templates.block, Fields{
+			if _, err := session.Assert(ctx, templates.block, Fields{
 				"event":  newIntValue(int64(id)),
 				"active": newBoolValue(true),
 			}); err != nil {
-				t.Fatalf("AssertTemplate(block): %v", err)
+				t.Fatalf("Assert(block): %v", err)
 			}
 		}
 	}

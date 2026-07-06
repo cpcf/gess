@@ -143,9 +143,9 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			}
 			session := mustSession(t, revision, SessionID(tc.name))
 
-			first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, tc.fields))
+			first, err := session.Assert(context.Background(), template.Key(), mustFields(t, tc.fields))
 			if err != nil {
-				t.Fatalf("AssertTemplate: %v", err)
+				t.Fatalf("Assert: %v", err)
 			}
 			if first.DuplicateKey == "" {
 				t.Fatal("expected public duplicate key")
@@ -158,9 +158,9 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 				t.Fatalf("duplicate index kind = %v, want %v", got, tc.wantIndex)
 			}
 
-			duplicate, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, tc.fields))
+			duplicate, err := session.Assert(context.Background(), template.Key(), mustFields(t, tc.fields))
 			if err != nil {
-				t.Fatalf("duplicate AssertTemplate: %v", err)
+				t.Fatalf("duplicate Assert: %v", err)
 			}
 			if duplicate.Status != AssertExisting {
 				t.Fatalf("duplicate status = %v, want %v", duplicate.Status, AssertExisting)
@@ -194,9 +194,9 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	session := mustSession(t, revision, "nan-duplicate-session")
 	fields := Fields{"score": newFloatValue(math.NaN())}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), fields)
+	first, err := session.Assert(context.Background(), template.Key(), fields)
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	internal := mustWorkingFactByID(t, session, first.Fact.ID())
 	if internal == nil {
@@ -206,9 +206,9 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 		t.Fatalf("NaN duplicate index kind = %v, want %v", got, duplicateIndexString)
 	}
 
-	duplicate, err := session.AssertTemplate(context.Background(), template.Key(), fields)
+	duplicate, err := session.Assert(context.Background(), template.Key(), fields)
 	if err != nil {
-		t.Fatalf("duplicate AssertTemplate: %v", err)
+		t.Fatalf("duplicate Assert: %v", err)
 	}
 	if duplicate.Status != AssertExisting {
 		t.Fatalf("duplicate status = %v, want %v", duplicate.Status, AssertExisting)
@@ -436,9 +436,9 @@ func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *test
 	}
 
 	firstFields := mustFields(t, map[string]any{"stream": 7, "n": 3, "lane": "north"})
-	first, err := session.AssertTemplate(context.Background(), template.Key(), firstFields)
+	first, err := session.Assert(context.Background(), template.Key(), firstFields)
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	firstKey := makeDuplicateKeyForTemplate("route", template, first.Fact.Fields())
 	if first.DuplicateKey != firstKey {
@@ -451,9 +451,9 @@ func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *test
 		t.Fatalf("assert event duplicate metadata = %#v", events)
 	}
 
-	duplicate, err := session.AssertTemplate(context.Background(), template.Key(), firstFields)
+	duplicate, err := session.Assert(context.Background(), template.Key(), firstFields)
 	if err != nil {
-		t.Fatalf("duplicate AssertTemplate: %v", err)
+		t.Fatalf("duplicate Assert: %v", err)
 	}
 	if duplicate.Status != AssertExisting || duplicate.DuplicateKey != firstKey || duplicate.Delta != nil {
 		t.Fatalf("duplicate assert result = %#v, want existing with key %q and nil delta", duplicate, firstKey)

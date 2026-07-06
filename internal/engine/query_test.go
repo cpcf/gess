@@ -359,16 +359,16 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
 	session := mustSession(t, revision, "joined-query-modify-fast-path-session")
-	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+	employee, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{
 		"name": "Ada",
 		"dept": "Engineering",
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
+		t.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert department: %v", err)
 	}
 	rows, err := session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
 	if err != nil {
@@ -447,16 +447,16 @@ func TestSessionJoinedQueryModifyJoinKeyUsesRouteScopedEventsAndRetractsRow(t *t
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustJoinedQueryModifyRevision(t)
 	session := mustSession(t, revision, "joined-query-modify-join-key-session")
-	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+	employee, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{
 		"name": "Ada",
 		"dept": "Engineering",
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
+		t.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert department: %v", err)
 	}
 	rows, err := session.QueryAll(ctx, "employees-by-dept", QueryArgs{"dept": "Engineering"})
 	if err != nil {

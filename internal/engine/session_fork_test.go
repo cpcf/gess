@@ -17,8 +17,8 @@ func TestSessionForkPreservesPendingAgendaRefractionAndFactIDs(t *testing.T) {
 		t.Fatalf("NewSession parent: %v", err)
 	}
 	for _, id := range []int64{1, 2} {
-		if _, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": id})); err != nil {
-			t.Fatalf("AssertTemplate(%d): %v", id, err)
+		if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": id})); err != nil {
+			t.Fatalf("Assert(%d): %v", id, err)
 		}
 	}
 	first, err := parent.Run(ctx, WithMaxFirings(1))
@@ -55,11 +55,11 @@ func TestSessionForkPreservesPendingAgendaRefractionAndFactIDs(t *testing.T) {
 		t.Fatal("fork listener did not receive fork events")
 	}
 
-	parentNext, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)}))
+	parentNext, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)}))
 	if err != nil {
 		t.Fatalf("parent tail assert: %v", err)
 	}
-	forkNext, err := fork.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)}))
+	forkNext, err := fork.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)}))
 	if err != nil {
 		t.Fatalf("fork tail assert: %v", err)
 	}
@@ -76,8 +76,8 @@ func TestSessionForkDoesNotInheritListeners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession parent: %v", err)
 	}
-	if _, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	before := len(parentEvents.Events())
 	fork, err := parent.Fork(ctx, WithSessionID("fork-listener-child"))
@@ -115,8 +115,8 @@ func TestSessionForkDivergesIndependentlyAndDiagnosticsMatch(t *testing.T) {
 	ctx := context.Background()
 	revision, taskKey := mustForkTaskRevision(t)
 	parent := mustSession(t, revision, "fork-diverge-parent")
-	if _, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	parentDiagnostics, err := parent.RuntimeDiagnostics(ctx)
 	if err != nil {
@@ -134,14 +134,14 @@ func TestSessionForkDivergesIndependentlyAndDiagnosticsMatch(t *testing.T) {
 		t.Fatalf("fork diagnostics differ from parent at fork:\nparent=%#v\nfork=%#v", parentDiagnostics, forkDiagnostics)
 	}
 
-	if _, err := fork.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(2)})); err != nil {
-		t.Fatalf("fork AssertTemplate: %v", err)
+	if _, err := fork.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(2)})); err != nil {
+		t.Fatalf("fork Assert: %v", err)
 	}
 	if got, want := mustSnapshot(t, ctx, parent).Len(), 1; got != want {
 		t.Fatalf("parent snapshot len after fork mutation = %d, want %d", got, want)
 	}
-	if _, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)})); err != nil {
-		t.Fatalf("parent AssertTemplate: %v", err)
+	if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(3)})); err != nil {
+		t.Fatalf("parent Assert: %v", err)
 	}
 	if got, want := mustSnapshot(t, ctx, fork).Len(), 2; got != want {
 		t.Fatalf("fork snapshot len after parent mutation = %d, want %d", got, want)
@@ -153,8 +153,8 @@ func TestSessionForkSupportsConcurrentUse(t *testing.T) {
 	revision, taskKey := mustForkTaskRevision(t)
 	parent := mustSession(t, revision, "fork-concurrent-parent")
 	for i := range 32 {
-		if _, err := parent.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": int64(i)})); err != nil {
-			t.Fatalf("AssertTemplate(%d): %v", i, err)
+		if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(i)})); err != nil {
+			t.Fatalf("Assert(%d): %v", i, err)
 		}
 	}
 	fork, err := parent.Fork(ctx, WithSessionID("fork-concurrent-child"))
@@ -212,8 +212,8 @@ func TestSessionForkRebuildsBackchainDemandOwners(t *testing.T) {
 	revision := mustCompileWorkspace(t, workspace)
 	demandKey := mustDemandKey(t, revision, answer.Key())
 	parent := mustSession(t, revision, "fork-backchain-parent")
-	if _, err := parent.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := parent.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 	if before := mustSnapshot(t, ctx, parent).BackchainDemandDiagnostics(); before.Active != 1 || before.Count(demandKey) != 1 {
 		t.Fatalf("parent demand diagnostics before fork = %#v, want one active %q", before, demandKey)
@@ -227,12 +227,12 @@ func TestSessionForkRebuildsBackchainDemandOwners(t *testing.T) {
 	}
 
 	for label, session := range map[string]*Session{"parent": parent, "fork": fork} {
-		if _, err := session.AssertTemplate(ctx, answer.Key(), mustFields(t, map[string]any{
+		if _, err := session.Assert(ctx, answer.Key(), mustFields(t, map[string]any{
 			"id":    "q1",
 			"kind":  "hardware",
 			"value": "provided",
 		})); err != nil {
-			t.Fatalf("%s AssertTemplate(answer): %v", label, err)
+			t.Fatalf("%s Assert(answer): %v", label, err)
 		}
 		after := mustSnapshot(t, ctx, session).BackchainDemandDiagnostics()
 		if after.Active != 0 || after.Count(demandKey) != 0 {
@@ -277,8 +277,8 @@ func BenchmarkSessionForkVsRebuild(b *testing.B) {
 				b.Fatalf("NewSession: %v", err)
 			}
 			for _, initial := range initials {
-				if _, err := session.AssertTemplate(ctx, initial.TemplateKey, initial.Fields); err != nil {
-					b.Fatalf("AssertTemplate: %v", err)
+				if _, err := session.Assert(ctx, initial.TemplateKey, initial.Fields); err != nil {
+					b.Fatalf("Assert: %v", err)
 				}
 			}
 			if _, err := session.Run(ctx, WithMaxFirings(128)); err != nil {
@@ -362,8 +362,8 @@ func TestSessionForkPreservesPendingAggregateActivationBindings(t *testing.T) {
 	}
 	defer parent.Close()
 	for id := int64(1); id <= 3; id++ {
-		if _, err := parent.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": id, "bucket": "b"})); err != nil {
-			t.Fatalf("AssertTemplate(%d): %v", id, err)
+		if _, err := parent.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": id, "bucket": "b"})); err != nil {
+			t.Fatalf("Assert(%d): %v", id, err)
 		}
 	}
 

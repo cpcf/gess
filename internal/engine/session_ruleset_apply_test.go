@@ -131,9 +131,9 @@ func TestSessionApplyRulesetRemovesPendingActivationsWithoutTouchingFacts(t *tes
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
@@ -210,8 +210,8 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
@@ -297,11 +297,11 @@ func TestSessionApplyRulesetUnchangedPreservesAgendaStateAndEvents(t *testing.T)
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(Ada): %v", err)
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(Ada): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Grace"})); err != nil {
-		t.Fatalf("AssertTemplate(Grace): %v", err)
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Grace"})); err != nil {
+		t.Fatalf("Assert(Grace): %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
@@ -383,9 +383,9 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
@@ -577,9 +577,9 @@ func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSes
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
@@ -694,11 +694,11 @@ func TestSessionApplyRulesetQueuesDuringRunBeforeNextActivation(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), auditTemplate.Key(), mustFields(t, map[string]any{"kind": "queued"})); err != nil {
-		t.Fatalf("AssertTemplate(audit): %v", err)
+	if _, err := session.Assert(context.Background(), auditTemplate.Key(), mustFields(t, map[string]any{"kind": "queued"})); err != nil {
+		t.Fatalf("Assert(audit): %v", err)
 	}
 
 	runDone := make(chan struct{})

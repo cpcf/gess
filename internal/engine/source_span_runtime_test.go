@@ -40,8 +40,8 @@ func TestGessRuntimeActionFailureCarriesSource(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer session.Close()
-	if _, err := session.AssertTemplate(ctx, "item", MustFields("id", "I-1")); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, "item", MustFields("id", "I-1")); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	_, err = session.Run(ctx)
 	if err == nil {
@@ -121,13 +121,13 @@ func TestGessRuntimeFunctionEvaluationCarriesConditionSource(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer session.Close()
-	_, err = session.AssertTemplate(ctx, "item", MustFields("id", "I-1"))
+	_, err = session.Assert(ctx, "item", MustFields("id", "I-1"))
 	if err == nil {
-		t.Fatal("AssertTemplate succeeded, want function evaluation error")
+		t.Fatal("Assert succeeded, want function evaluation error")
 	}
 	var eval *FunctionEvaluationError
 	if !errors.As(err, &eval) {
-		t.Fatalf("AssertTemplate error = %T, want *FunctionEvaluationError", err)
+		t.Fatalf("Assert error = %T, want *FunctionEvaluationError", err)
 	}
 	if got := eval.Source; got.Name != "predicate-errors.gess" || got.StartLine != 6 || got.StartColumn != 3 {
 		t.Fatalf("evaluation source = %+v, want predicate-errors.gess:6:3", got)

@@ -9,13 +9,13 @@ func BenchmarkReteGraphSlotSpecificModifySkip(b *testing.B) {
 	ctx := context.Background()
 	revision, personKey := mustSlotSpecificModifyBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-skip-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(b, map[string]any{
 		"id":     1,
 		"note":   "old",
 		"status": "inactive",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate person: %v", err)
+		b.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -46,13 +46,13 @@ func BenchmarkReteGraphSlotSpecificModifyMatchedRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, personKey := mustSlotSpecificModifyBenchmarkRulesetWithDeclaredReads(b, true)
 	session := mustSession(b, revision, "slot-specific-modify-matched-refresh-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(b, map[string]any{
 		"id":     1,
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate person: %v", err)
+		b.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -83,16 +83,16 @@ func BenchmarkReteGraphSlotSpecificModifyJoinedRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustSlotSpecificModifyJoinedBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-joined-refresh-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, employeeKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, employeeKey, mustFields(b, map[string]any{
 		"name": "Ada",
 		"dept": "Engineering",
 		"note": "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate employee: %v", err)
+		b.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(b, map[string]any{"id": "Engineering"})); err != nil {
-		b.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(b, map[string]any{"id": "Engineering"})); err != nil {
+		b.Fatalf("Assert department: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -123,13 +123,13 @@ func BenchmarkReteGraphSlotSpecificModifyFilterRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, eventKey := mustSlotSpecificModifyFilterBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-filter-refresh-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, eventKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, eventKey, mustFields(b, map[string]any{
 		"id":     "event-1",
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate event: %v", err)
+		b.Fatalf("Assert event: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -160,13 +160,13 @@ func BenchmarkReteGraphSlotSpecificModifyAlphaPredicateRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, personKey := mustSlotSpecificModifyAlphaPredicateBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-alpha-predicate-refresh-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(b, map[string]any{
 		"id":   "person-1",
 		"age":  20,
 		"note": "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate person: %v", err)
+		b.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -197,13 +197,13 @@ func BenchmarkReteGraphSlotSpecificModifyListPatternRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, eventKey := mustSlotSpecificModifyListPatternBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-list-pattern-refresh-benchmark-session")
-	inserted, err := session.AssertTemplate(ctx, eventKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, eventKey, mustFields(b, map[string]any{
 		"id":   "event-1",
 		"tags": []any{"vip", "blue", "gold", "active"},
 		"note": "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate event: %v", err)
+		b.Fatalf("Assert event: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -234,19 +234,19 @@ func BenchmarkReteGraphSlotSpecificModifyNegationRightRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, customerKey, blockKey := mustSlotSpecificModifyNegationBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-negation-right-refresh-benchmark-session")
-	if _, err := session.AssertTemplate(ctx, customerKey, mustFields(b, map[string]any{
+	if _, err := session.Assert(ctx, customerKey, mustFields(b, map[string]any{
 		"id":   "customer-1",
 		"note": "customer",
 	})); err != nil {
-		b.Fatalf("AssertTemplate customer: %v", err)
+		b.Fatalf("Assert customer: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, blockKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, blockKey, mustFields(b, map[string]any{
 		"customer_id": "customer-1",
 		"active":      "active",
 		"code":        "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate block: %v", err)
+		b.Fatalf("Assert block: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -277,20 +277,20 @@ func BenchmarkReteGraphSlotSpecificModifyAggregateRefresh(b *testing.B) {
 	ctx := context.Background()
 	revision, itemKey := mustSlotSpecificModifyAggregateBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-aggregate-refresh-benchmark-session")
-	if _, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	if _, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-1",
 		"amount": 3,
 		"note":   "first",
 	})); err != nil {
-		b.Fatalf("AssertTemplate first item: %v", err)
+		b.Fatalf("Assert first item: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-2",
 		"amount": 5,
 		"note":   "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate second item: %v", err)
+		b.Fatalf("Assert second item: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -321,28 +321,28 @@ func BenchmarkReteGraphSlotSpecificModifyBucketedAggregateRefresh(b *testing.B) 
 	ctx := context.Background()
 	revision, groupKey, itemKey := mustSlotSpecificModifyBucketedAggregateBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-bucketed-aggregate-refresh-benchmark-session")
-	if _, err := session.AssertTemplate(ctx, groupKey, mustFields(b, map[string]any{"id": "a", "note": "first"})); err != nil {
-		b.Fatalf("AssertTemplate group a: %v", err)
+	if _, err := session.Assert(ctx, groupKey, mustFields(b, map[string]any{"id": "a", "note": "first"})); err != nil {
+		b.Fatalf("Assert group a: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, groupKey, mustFields(b, map[string]any{"id": "b", "note": "second"})); err != nil {
-		b.Fatalf("AssertTemplate group b: %v", err)
+	if _, err := session.Assert(ctx, groupKey, mustFields(b, map[string]any{"id": "b", "note": "second"})); err != nil {
+		b.Fatalf("Assert group b: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	if _, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-1",
 		"group":  "a",
 		"amount": 3,
 		"note":   "first",
 	})); err != nil {
-		b.Fatalf("AssertTemplate first item: %v", err)
+		b.Fatalf("Assert first item: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	inserted, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-2",
 		"group":  "b",
 		"amount": 5,
 		"note":   "old",
 	}))
 	if err != nil {
-		b.Fatalf("AssertTemplate second item: %v", err)
+		b.Fatalf("Assert second item: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -373,28 +373,28 @@ func BenchmarkReteGraphSlotSpecificModifyBucketedAggregateOuterRefresh(b *testin
 	ctx := context.Background()
 	revision, groupKey, itemKey := mustSlotSpecificModifyBucketedAggregateBenchmarkRuleset(b)
 	session := mustSession(b, revision, "slot-specific-modify-bucketed-aggregate-outer-refresh-benchmark-session")
-	if _, err := session.AssertTemplate(ctx, groupKey, mustFields(b, map[string]any{"id": "a", "note": "first"})); err != nil {
-		b.Fatalf("AssertTemplate group a: %v", err)
+	if _, err := session.Assert(ctx, groupKey, mustFields(b, map[string]any{"id": "a", "note": "first"})); err != nil {
+		b.Fatalf("Assert group a: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, groupKey, mustFields(b, map[string]any{"id": "b", "note": "old"}))
+	inserted, err := session.Assert(ctx, groupKey, mustFields(b, map[string]any{"id": "b", "note": "old"}))
 	if err != nil {
-		b.Fatalf("AssertTemplate group b: %v", err)
+		b.Fatalf("Assert group b: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	if _, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-1",
 		"group":  "a",
 		"amount": 3,
 		"note":   "first",
 	})); err != nil {
-		b.Fatalf("AssertTemplate first item: %v", err)
+		b.Fatalf("Assert first item: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, itemKey, mustFields(b, map[string]any{
+	if _, err := session.Assert(ctx, itemKey, mustFields(b, map[string]any{
 		"id":     "item-2",
 		"group":  "b",
 		"amount": 5,
 		"note":   "second",
 	})); err != nil {
-		b.Fatalf("AssertTemplate second item: %v", err)
+		b.Fatalf("Assert second item: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		b.Fatalf("reconcileAgendaInternal: %v", err)
@@ -489,44 +489,44 @@ func mustSlotSpecificModifyMixedBenchmarkSession(tb testing.TB, id SessionID) (*
 	revision, keys := mustSlotSpecificModifyMixedBenchmarkRuleset(tb)
 	session := mustSession(tb, revision, id)
 
-	person, err := session.AssertTemplate(ctx, keys.person, mustFields(tb, map[string]any{"id": "person-1", "note": "old", "status": "active"}))
+	person, err := session.Assert(ctx, keys.person, mustFields(tb, map[string]any{"id": "person-1", "note": "old", "status": "active"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate person: %v", err)
+		tb.Fatalf("Assert person: %v", err)
 	}
-	employee, err := session.AssertTemplate(ctx, keys.employee, mustFields(tb, map[string]any{"name": "Ada", "dept": "Engineering", "note": "old"}))
+	employee, err := session.Assert(ctx, keys.employee, mustFields(tb, map[string]any{"name": "Ada", "dept": "Engineering", "note": "old"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate employee: %v", err)
+		tb.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, keys.department, mustFields(tb, map[string]any{"id": "Engineering"})); err != nil {
-		tb.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, keys.department, mustFields(tb, map[string]any{"id": "Engineering"})); err != nil {
+		tb.Fatalf("Assert department: %v", err)
 	}
-	event, err := session.AssertTemplate(ctx, keys.event, mustFields(tb, map[string]any{
+	event, err := session.Assert(ctx, keys.event, mustFields(tb, map[string]any{
 		"id":     "event-1",
 		"tags":   []any{"vip", "blue", "gold", "active"},
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate event: %v", err)
+		tb.Fatalf("Assert event: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, keys.customer, mustFields(tb, map[string]any{"id": "customer-1", "note": "customer"})); err != nil {
-		tb.Fatalf("AssertTemplate customer: %v", err)
+	if _, err := session.Assert(ctx, keys.customer, mustFields(tb, map[string]any{"id": "customer-1", "note": "customer"})); err != nil {
+		tb.Fatalf("Assert customer: %v", err)
 	}
-	block, err := session.AssertTemplate(ctx, keys.block, mustFields(tb, map[string]any{"customer_id": "customer-1", "active": "active", "code": "old"}))
+	block, err := session.Assert(ctx, keys.block, mustFields(tb, map[string]any{"customer_id": "customer-1", "active": "active", "code": "old"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate block: %v", err)
+		tb.Fatalf("Assert block: %v", err)
 	}
-	item, err := session.AssertTemplate(ctx, keys.item, mustFields(tb, map[string]any{"id": "item-1", "amount": 10, "note": "old"}))
+	item, err := session.Assert(ctx, keys.item, mustFields(tb, map[string]any{"id": "item-1", "amount": 10, "note": "old"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate item: %v", err)
+		tb.Fatalf("Assert item: %v", err)
 	}
-	group, err := session.AssertTemplate(ctx, keys.group, mustFields(tb, map[string]any{"id": "group-1", "note": "old"}))
+	group, err := session.Assert(ctx, keys.group, mustFields(tb, map[string]any{"id": "group-1", "note": "old"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate group: %v", err)
+		tb.Fatalf("Assert group: %v", err)
 	}
-	bucketItem, err := session.AssertTemplate(ctx, keys.bucketItem, mustFields(tb, map[string]any{"id": "bucket-item-1", "group": "group-1", "amount": 10, "note": "old"}))
+	bucketItem, err := session.Assert(ctx, keys.bucketItem, mustFields(tb, map[string]any{"id": "bucket-item-1", "group": "group-1", "amount": 10, "note": "old"}))
 	if err != nil {
-		tb.Fatalf("AssertTemplate bucket item: %v", err)
+		tb.Fatalf("Assert bucket item: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		tb.Fatalf("reconcileAgendaInternal: %v", err)

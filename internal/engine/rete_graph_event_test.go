@@ -97,13 +97,13 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-modify-add-remove-event-session")
-	asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	asserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    32,
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	before, ok := mustSnapshot(t, ctx, session).Fact(asserted.Fact.ID())
 	if !ok {
@@ -271,12 +271,12 @@ func TestReteGraphClearEventClearsRetainedMemory(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-clear-event-seed-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    32,
 		"note":   "old",
 		"status": "active",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	facts := mustSnapshot(t, ctx, session).Facts()
 	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation(), nil)
@@ -309,12 +309,12 @@ func TestReteGraphResetFactsClearsThroughEventAndReassertsFacts(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-reset-event-seed-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    32,
 		"note":   "old",
 		"status": "active",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	facts := mustSnapshot(t, ctx, session).Facts()
 	memory, err := newReteGraphBetaMemoryForGeneration(ctx, revision, revision.graph, facts, session.Generation(), nil)
@@ -346,24 +346,24 @@ func TestReteRuntimePropagatesAddRemoveAndUpdateEvents(t *testing.T) {
 	session := mustSession(t, revision, "graph-propagation-event-session")
 	session.attachPropagationCounters()
 
-	asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	asserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    32,
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if got := session.propagationCounterSnapshot().Totals.TerminalDeltasEmitted; got != 1 {
 		t.Fatalf("terminal deltas after add event = %d, want 1", got)
 	}
-	unmatched, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	unmatched, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    41,
 		"note":   "old",
 		"status": "inactive",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(unmatched): %v", err)
+		t.Fatalf("Assert(unmatched): %v", err)
 	}
 
 	if _, err := session.Modify(ctx, unmatched.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"note": "new"})}); err != nil {

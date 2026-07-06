@@ -41,7 +41,7 @@ func run(out io.Writer) error {
 	}
 	defer session.Close()
 
-	if _, err := session.AssertTemplate(ctx, eventKey, exampleutil.Fields("id", "E-100", "kind", "incident")); err != nil {
+	if _, err := session.Assert(ctx, eventKey, exampleutil.Fields("id", "E-100", "kind", "incident")); err != nil {
 		return err
 	}
 	if err := session.SetFocus(ctx, intakeModule); err != nil {
@@ -88,7 +88,7 @@ func buildRuleset(ctx context.Context, handled *[]string) (*rules.Ruleset, error
 		Fn: func(ctx rules.ActionContext) error {
 			id, _ := ctx.BindingScalarValue("event", "id")
 			kind, _ := ctx.BindingScalarValue("event", "kind")
-			if _, err := ctx.AssertTemplate(readyKey, rules.Fields{"id": id, "kind": kind}); err != nil {
+			if _, err := ctx.Assert(readyKey, rules.Fields{"id": id, "kind": kind}); err != nil {
 				return err
 			}
 			return ctx.PushFocus(responseModule)

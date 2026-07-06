@@ -180,7 +180,7 @@ func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "assert-audit",
 		Fn: func(ctx ActionContext) error {
-			_, err := ctx.AssertTemplate(audit.Key(), Fields{"id": mustValue(t, "audit-1")})
+			_, err := ctx.Assert(audit.Key(), Fields{"id": mustValue(t, "audit-1")})
 			return err
 		},
 	})
@@ -418,9 +418,9 @@ func BenchmarkReteAgendaDeltaAssert(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		session := mustReteAgendaDeltaBenchmarkSession(b, revision, initials)
-		result, err := session.AssertTemplate(context.Background(), employeeKey, fields)
+		result, err := session.Assert(context.Background(), employeeKey, fields)
 		if err != nil {
-			b.Fatalf("AssertTemplate: %v", err)
+			b.Fatalf("Assert: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -618,10 +618,10 @@ func BenchmarkReteGraphResidualJoinHighCollision(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustGraphResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds, true)
 		b.StartTimer()
-		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("AssertTemplate candidate: %v", err)
+			b.Fatalf("Assert candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -643,10 +643,10 @@ func BenchmarkReteGraphResidualJoinHighCollisionReject(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustGraphResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds, true)
 		b.StartTimer()
-		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("AssertTemplate candidate: %v", err)
+			b.Fatalf("Assert candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -668,10 +668,10 @@ func BenchmarkReteGraphResidualJoinSparseKey(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustGraphResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds, false)
 		b.StartTimer()
-		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("AssertTemplate candidate: %v", err)
+			b.Fatalf("Assert candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -698,10 +698,10 @@ func BenchmarkReteGraphCompoundEqualityResidualJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustCompoundEqualityResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds)
 		b.StartTimer()
-		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("AssertTemplate candidate: %v", err)
+			b.Fatalf("Assert candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -723,10 +723,10 @@ func BenchmarkReteGraphPureResidualJoin(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustPureResidualJoinBenchmarkSession(b, revision, thresholdKey, thresholds)
 		b.StartTimer()
-		result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+		result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 		b.StopTimer()
 		if err != nil {
-			b.Fatalf("AssertTemplate candidate: %v", err)
+			b.Fatalf("Assert candidate: %v", err)
 		}
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
@@ -963,8 +963,8 @@ func mustLoadedBenchmarkSession(tb testing.TB, revision *Ruleset, id SessionID, 
 	session := mustSession(tb, revision, id)
 	for _, fact := range facts {
 		if fact.TemplateKey != "" {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				tb.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				tb.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 			continue
 		}
@@ -1483,9 +1483,9 @@ func reportGraphResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, 
 	}
 	session := mustGraphResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds, highCollision)
 	session.attachPropagationCounters()
-	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+	result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 	if err != nil {
-		tb.Fatalf("diagnostic AssertTemplate candidate: %v", err)
+		tb.Fatalf("diagnostic Assert candidate: %v", err)
 	}
 	if result.Status != AssertInserted {
 		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
@@ -1585,9 +1585,9 @@ func reportCompoundEqualityResidualJoinBenchmarkCounters(tb testing.TB, revision
 	}
 	session := mustCompoundEqualityResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds)
 	session.attachPropagationCounters()
-	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+	result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 	if err != nil {
-		tb.Fatalf("diagnostic AssertTemplate candidate: %v", err)
+		tb.Fatalf("diagnostic Assert candidate: %v", err)
 	}
 	if result.Status != AssertInserted {
 		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
@@ -1670,9 +1670,9 @@ func reportPureResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, t
 	}
 	session := mustPureResidualJoinBenchmarkSession(tb, revision, thresholdKey, thresholds)
 	session.attachPropagationCounters()
-	result, err := session.AssertTemplate(context.Background(), candidateKey, candidateFields)
+	result, err := session.Assert(context.Background(), candidateKey, candidateFields)
 	if err != nil {
-		tb.Fatalf("diagnostic AssertTemplate candidate: %v", err)
+		tb.Fatalf("diagnostic Assert candidate: %v", err)
 	}
 	if result.Status != AssertInserted {
 		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)

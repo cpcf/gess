@@ -45,7 +45,7 @@ func run(out io.Writer) error {
 		{customerTemplate, exampleutil.Fields("id", "C-300", "status", "inactive")},
 		{holdTemplate, exampleutil.Fields("customer", "C-200", "reason", "sanctions-review")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}
@@ -85,7 +85,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 		Name: "assert-eligible",
 		Fn: func(ctx rules.ActionContext) error {
 			customer, _ := ctx.BindingScalarValue("customer", "id")
-			_, err := ctx.AssertTemplate(eligibleTemplate, rules.Fields{"customer": customer})
+			_, err := ctx.Assert(eligibleTemplate, rules.Fields{"customer": customer})
 			return err
 		},
 	}); err != nil {

@@ -323,8 +323,8 @@ func TestConditionTreeExplicitPositiveMatchMetadataAndRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"name": "Ada", "age": 20})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"name": "Ada", "age": 20})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -450,11 +450,11 @@ func TestConditionTreeAndFlatRulesProduceEquivalentActivations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(department): %v", err)
+	if _, err := session.Assert(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
+		t.Fatalf("Assert(department): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -737,11 +737,11 @@ func TestConditionTreeOrSingleBranchCompilesForInspection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada", "dept": "engineering"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(department): %v", err)
+	if _, err := session.Assert(context.Background(), department.Key(), mustFields(t, map[string]any{"id": "engineering"})); err != nil {
+		t.Fatalf("Assert(department): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -1161,8 +1161,8 @@ func TestDisjunctiveLiteralPredicateCompilesToAlphaMembershipConstraint(t *testi
 	session := mustSession(t, revision, "disjunctive-literal-membership")
 	ctx := context.Background()
 	for _, status := range []string{"open", "closed", "pending"} {
-		if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"status": status})); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", status, err)
+		if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{"status": status})); err != nil {
+			t.Fatalf("Assert(%s): %v", status, err)
 		}
 	}
 	result, err := session.Run(ctx)
@@ -1262,8 +1262,8 @@ func TestDisjunctiveJoinPredicateExpandsToHashJoinBranches(t *testing.T) {
 
 	session := mustSession(t, revision, "disjunctive-join-branches")
 	ctx := context.Background()
-	if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(system): %v", err)
+	if _, err := session.Assert(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(system): %v", err)
 	}
 	for _, row := range []map[string]any{
 		{"id": "primary", "primary-system": "s-1", "secondary-system": "none"},
@@ -1271,8 +1271,8 @@ func TestDisjunctiveJoinPredicateExpandsToHashJoinBranches(t *testing.T) {
 		{"id": "both", "primary-system": "s-1", "secondary-system": "s-1"},
 		{"id": "neither", "primary-system": "none", "secondary-system": "none"},
 	} {
-		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
-			t.Fatalf("AssertTemplate(finding): %v", err)
+		if _, err := session.Assert(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("Assert(finding): %v", err)
 		}
 	}
 	result, err := session.Run(ctx)
@@ -1436,16 +1436,16 @@ func TestReturnValueFieldConstraintsLowerToPredicatePlans(t *testing.T) {
 
 	session := mustSession(t, revision, "return-value-constraints")
 	ctx := context.Background()
-	if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1", "risk": 95, "band": "high"})); err != nil {
-		t.Fatalf("AssertTemplate(system): %v", err)
+	if _, err := session.Assert(ctx, system.Key(), mustFields(t, map[string]any{"id": "s-1", "risk": 95, "band": "high"})); err != nil {
+		t.Fatalf("Assert(system): %v", err)
 	}
 	for _, row := range []map[string]any{
 		{"id": "match", "system-id": "s-1", "band": "high"},
 		{"id": "wrong-band", "system-id": "s-1", "band": "low"},
 		{"id": "wrong-system", "system-id": "s-2", "band": "high"},
 	} {
-		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
-			t.Fatalf("AssertTemplate(finding): %v", err)
+		if _, err := session.Assert(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("Assert(finding): %v", err)
 		}
 	}
 	result, err := session.Run(ctx)
@@ -1559,16 +1559,16 @@ func TestStandaloneTestConditionCompilesToBetaFilter(t *testing.T) {
 		{"id": "s-1", "risk": 95},
 		{"id": "s-2", "risk": 50},
 	} {
-		if _, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, row)); err != nil {
-			t.Fatalf("AssertTemplate(system): %v", err)
+		if _, err := session.Assert(ctx, system.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("Assert(system): %v", err)
 		}
 	}
 	for _, row := range []map[string]any{
 		{"id": "match", "system-id": "s-1"},
 		{"id": "filtered", "system-id": "s-2"},
 	} {
-		if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, row)); err != nil {
-			t.Fatalf("AssertTemplate(finding): %v", err)
+		if _, err := session.Assert(ctx, finding.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("Assert(finding): %v", err)
 		}
 	}
 	result, err := session.Run(ctx)
@@ -2107,8 +2107,8 @@ func TestExpressionPredicatesAreExecutableByGraphRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations = %d, want 1", got)
@@ -2747,8 +2747,8 @@ func TestCompiledConditionScanMatchesFactsDeterministically(t *testing.T) {
 	if _, err := session.assertByName(context.Background(), "person", mustFields(t, map[string]any{"kind": "dynamic"})); err != nil {
 		t.Fatalf("Assert dynamic person: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+	if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.assertByName(context.Background(), "other", mustFields(t, map[string]any{"kind": "noise"})); err != nil {
 		t.Fatalf("Assert other: %v", err)

@@ -220,11 +220,11 @@ func runStrategyOrderScenario(t testing.TB, id string, opts ...SessionOption) []
 		{kind: "tie", seq: 9},
 		{kind: "urgent", seq: 0},
 	} {
-		if _, err := session.AssertTemplate(ctx, task.Key(), Fields{
+		if _, err := session.Assert(ctx, task.Key(), Fields{
 			"kind": newStringValue(assertion.kind),
 			"seq":  newIntValue(assertion.seq),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(%s:%d): %v", assertion.kind, assertion.seq, err)
+			t.Fatalf("Assert(%s:%d): %v", assertion.kind, assertion.seq, err)
 		}
 	}
 
@@ -343,11 +343,11 @@ func TestSessionStrategyBreadthSurvivesResetAndFork(t *testing.T) {
 	assertTasks := func(s *Session) {
 		t.Helper()
 		for seq := int64(1); seq <= 3; seq++ {
-			if _, err := s.AssertTemplate(ctx, task.Key(), Fields{
+			if _, err := s.Assert(ctx, task.Key(), Fields{
 				"kind": newStringValue("task"),
 				"seq":  newIntValue(seq),
 			}); err != nil {
-				t.Fatalf("AssertTemplate(%d): %v", seq, err)
+				t.Fatalf("Assert(%d): %v", seq, err)
 			}
 		}
 	}
@@ -419,11 +419,11 @@ func TestSessionForkWithStrategyOverridesOrdering(t *testing.T) {
 	assertTasks := func(s *Session) {
 		t.Helper()
 		for seq := int64(1); seq <= 3; seq++ {
-			if _, err := s.AssertTemplate(ctx, task.Key(), Fields{
+			if _, err := s.Assert(ctx, task.Key(), Fields{
 				"kind": newStringValue("task"),
 				"seq":  newIntValue(seq),
 			}); err != nil {
-				t.Fatalf("AssertTemplate(%d): %v", seq, err)
+				t.Fatalf("Assert(%d): %v", seq, err)
 			}
 		}
 	}

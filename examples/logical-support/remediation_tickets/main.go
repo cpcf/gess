@@ -33,7 +33,7 @@ func run(out io.Writer) error {
 	}
 	defer session.Close()
 
-	finding, err := session.AssertTemplate(ctx, findingTemplate, exampleutil.Fields("id", "F-100", "system", "api-01", "severity", "critical"))
+	finding, err := session.Assert(ctx, findingTemplate, exampleutil.Fields("id", "F-100", "system", "api-01", "severity", "critical"))
 	if err != nil {
 		return err
 	}

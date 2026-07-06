@@ -193,8 +193,8 @@ func TestSessionEventListenerMasksFilterDeliveryAndPreserveGlobalSequence(t *tes
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), personKey, mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), personKey, mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -294,9 +294,9 @@ func TestTraceListenerProducesDeterministicOutput(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	person, err := session.AssertTemplate(context.Background(), personKey, mustFields(t, map[string]any{"name": "Ada"}))
+	person, err := session.Assert(context.Background(), personKey, mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run(person): %v", err)
@@ -310,9 +310,9 @@ func TestTraceListenerProducesDeterministicOutput(t *testing.T) {
 		t.Fatalf("Retract(person): %v", err)
 	}
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run(source): %v", err)
@@ -321,8 +321,8 @@ func TestTraceListenerProducesDeterministicOutput(t *testing.T) {
 		t.Fatalf("Retract(source): %v", err)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), failKey, mustFields(t, map[string]any{"id": "f-1"})); err != nil {
-		t.Fatalf("AssertTemplate(fail): %v", err)
+	if _, err := session.Assert(context.Background(), failKey, mustFields(t, map[string]any{"id": "f-1"})); err != nil {
+		t.Fatalf("Assert(fail): %v", err)
 	}
 	if _, err := session.Run(context.Background()); !errors.Is(err, ErrActionFailed) {
 		t.Fatalf("Run(fail) error = %v, want ErrActionFailed", err)

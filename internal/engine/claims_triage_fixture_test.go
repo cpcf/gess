@@ -69,8 +69,8 @@ func TestReteRuntimeParityHarnessMatchesClaimsTriageOracle(t *testing.T) {
 
 	session := mustSession(t, revision, "claims-triage-rete-parity")
 	for _, fact := range claimsTriageInitialFacts(t, claimsTriageBenchmarkFactCount) {
-		if _, err := session.AssertTemplate(ctx, fact.TemplateKey, fact.Fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(ctx, fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 	snapshot := mustSnapshot(t, ctx, session)
@@ -91,8 +91,8 @@ func BenchmarkClaimsTriageGessSessionCycle(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustSession(b, revision, "claims-triage-session-cycle")
 		for _, fact := range initials {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 		}
 
@@ -141,8 +141,8 @@ func BenchmarkClaimsTriageGessRunOnly(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustSession(b, revision, "claims-triage-run-only")
 		for _, fact := range initials {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 		}
 
@@ -167,8 +167,8 @@ func BenchmarkClaimsTriageGessAssertOnly(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustSession(b, revision, "claims-triage-assert-only")
 		for _, fact := range initials {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 		}
 	}
@@ -179,8 +179,8 @@ func BenchmarkClaimsTriageGessMatchOnly(b *testing.B) {
 	initials := claimsTriageInitialFacts(b, claimsTriageBenchmarkFactCount)
 	session := mustSession(b, revision, "claims-triage-match-only")
 	for _, fact := range initials {
-		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-			b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 	snapshot := session.indexedSnapshotLocked()
@@ -204,8 +204,8 @@ func BenchmarkClaimsTriageGessReteMatchOnly(b *testing.B) {
 	initials := claimsTriageInitialFacts(b, claimsTriageBenchmarkFactCount)
 	session := mustSession(b, revision, "claims-triage-rete-match-only")
 	for _, fact := range initials {
-		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-			b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 	snapshot := session.indexedSnapshotLocked()
@@ -235,8 +235,8 @@ func runClaimsTriageFixture(t testing.TB, count int) []string {
 	session := mustSession(t, revision, "claims-triage-fixture")
 
 	for _, fact := range claimsTriageInitialFacts(t, count) {
-		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 
@@ -557,7 +557,7 @@ func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, tria
 					"TRIAGE|"+claimID+"|"+outcome+"|"+reason+"|"+queue,
 				)
 			}
-			_, err := ctx.AssertTemplate(triageKey, Fields{
+			_, err := ctx.Assert(triageKey, Fields{
 				"claim-id": idValue,
 				"outcome":  outcomeValue,
 				"reason":   reasonValue,

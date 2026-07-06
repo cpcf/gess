@@ -158,7 +158,7 @@ err := workspace.AddAction(rules.ActionSpec{
 	Fn: func(ctx rules.ActionContext) error {
 		order, _ := ctx.BindingScalarValue("order", "id")
 		warehouse, _ := ctx.BindingScalarValue("inventory", "warehouse")
-		_, err := ctx.AssertTemplate(rules.TemplateKey("fulfillment-route"), rules.Fields{
+		_, err := ctx.Assert(rules.TemplateKey("fulfillment-route"), rules.Fields{
 			"order":     order,
 			"lane":      mustValue("expedite"),
 			"warehouse": warehouse,
@@ -312,7 +312,7 @@ if err != nil {
 }
 defer session.Close()
 
-if _, err := session.AssertTemplate(ctx, rules.TemplateKey("order"), fields); err != nil {
+if _, err := session.Assert(ctx, rules.TemplateKey("order"), fields); err != nil {
 	return err
 }
 result, err := session.Run(ctx)

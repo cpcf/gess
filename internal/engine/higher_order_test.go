@@ -47,9 +47,9 @@ func TestExistsEmitsOneActivationForMultipleContributors(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-multiple-session")
-	mustAssertTemplate(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "open")})
-	mustAssertTemplate(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "ready")})
-	mustAssertTemplate(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "ready")})
+	mustAssert(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "open")})
+	mustAssert(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "ready")})
+	mustAssert(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "status": mustValue(t, "ready")})
 
 	result, err := session.Run(context.Background())
 	if err != nil {
@@ -99,7 +99,7 @@ func TestForallUsesCounterexamplesAndVacuousTruth(t *testing.T) {
 		t.Fatalf("empty Run fired/action count = %d/%d, want vacuous 1/1", result.Fired, fired)
 	}
 
-	mustAssertTemplate(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "score": mustValue(t, 12)})
+	mustAssert(t, session, item.Key(), Fields{"group": mustValue(t, "a"), "score": mustValue(t, 12)})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("passing Run: %v", err)
@@ -108,7 +108,7 @@ func TestForallUsesCounterexamplesAndVacuousTruth(t *testing.T) {
 		t.Fatalf("passing Run fired/action count = %d/%d, want unchanged 0/1", result.Fired, fired)
 	}
 
-	bad := mustAssertTemplate(t, session, item.Key(), Fields{"group": mustValue(t, "b"), "score": mustValue(t, 3)})
+	bad := mustAssert(t, session, item.Key(), Fields{"group": mustValue(t, "b"), "score": mustValue(t, 3)})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("counterexample Run: %v", err)
@@ -181,7 +181,7 @@ func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
 	if result.Fired != 1 || fired != 1 {
 		t.Fatalf("empty Run fired/action count = %d/%d, want vacuous 1/1", result.Fired, fired)
 	}
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("missing requirement Run: %v", err)
@@ -189,7 +189,7 @@ func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
 	if result.Fired != 0 || fired != 1 {
 		t.Fatalf("missing requirement Run fired/action count = %d/%d, want 0/1", result.Fired, fired)
 	}
-	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "other"), "status": mustValue(t, "ready")})
+	mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "other"), "status": mustValue(t, "ready")})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unrelated requirement Run: %v", err)
@@ -197,7 +197,7 @@ func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
 	if result.Fired != 0 || fired != 1 {
 		t.Fatalf("unrelated requirement Run fired/action count = %d/%d, want 0/1", result.Fired, fired)
 	}
-	ready := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "ready")})
+	ready := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "ready")})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("satisfied requirement Run: %v", err)
@@ -266,8 +266,8 @@ func TestForallRequirementMatchAndTestUsesQualifiedAbsence(t *testing.T) {
 		t.Fatalf("aggregate node count = %d, want qualified requirement lowered to negatives", got)
 	}
 
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
-	low := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	low := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
 	result, err := session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("low order Run: %v", err)
@@ -318,7 +318,7 @@ func TestExistsContributorReplacementDoesNotChurnWhenTruthUnchanged(t *testing.T
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-replacement-session")
-	first := mustAssertTemplate(t, session, item.Key(), Fields{"status": mustValue(t, "open")})
+	first := mustAssert(t, session, item.Key(), Fields{"status": mustValue(t, "open")})
 	result, err := session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("first Run: %v", err)
@@ -327,7 +327,7 @@ func TestExistsContributorReplacementDoesNotChurnWhenTruthUnchanged(t *testing.T
 		t.Fatalf("first Run fired = %d, want 1", result.Fired)
 	}
 
-	mustAssertTemplate(t, session, item.Key(), Fields{"status": mustValue(t, "open")})
+	mustAssert(t, session, item.Key(), Fields{"status": mustValue(t, "open")})
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
 		t.Fatalf("Retract: %v", err)
 	}
@@ -382,9 +382,9 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 		t.Fatalf("aggregate node count = %d, want scoped exists lowered to negatives", got)
 	}
 
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
-	first := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
+	first := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after first c1 order = %d, want %d", got, want)
 	}
@@ -396,7 +396,7 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 		t.Fatalf("first Run fired/action count = %d/%d, want 1/1", result.Fired, fired)
 	}
 
-	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
+	mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
 	if _, err := session.Retract(context.Background(), first.Fact.ID()); err != nil {
 		t.Fatalf("Retract first c1 order: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 		t.Fatalf("replacement Run fired/action count = %d/%d, want unchanged 0/1", result.Fired, fired)
 	}
 
-	mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c2"), "status": mustValue(t, "open")})
+	mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c2"), "status": mustValue(t, "open")})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("c2 Run: %v", err)
@@ -460,12 +460,12 @@ func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
 		t.Fatalf("aggregate node count = %d, want scoped forall lowered to negatives", got)
 	}
 
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
-	mustAssertTemplate(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
+	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
 	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations with vacuous truth = %d, want %d", got, want)
 	}
-	bad := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 3)})
+	bad := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 3)})
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after c1 counterexample = %d, want %d", got, want)
 	}
@@ -481,7 +481,7 @@ func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after c1 counterexample returns = %d, want %d", got, want)
 	}
-	secondBad := mustAssertTemplate(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
+	secondBad := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after second c1 counterexample = %d, want %d", got, want)
 	}
@@ -595,7 +595,7 @@ func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 		t.Fatalf("empty Run fired = %d, want vacuous forall activation", result.Fired)
 	}
 
-	bad := mustAssertTemplate(t, session, item.Key(), Fields{"amount": mustValue(t, 3)})
+	bad := mustAssert(t, session, item.Key(), Fields{"amount": mustValue(t, 3)})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("counterexample Run: %v", err)
@@ -614,7 +614,7 @@ func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 		t.Fatalf("restored vacuous Run fired = %d, want forall activation", result.Fired)
 	}
 
-	good := mustAssertTemplate(t, session, item.Key(), Fields{"amount": mustValue(t, 12)})
+	good := mustAssert(t, session, item.Key(), Fields{"amount": mustValue(t, 12)})
 	result, err = session.Run(context.Background())
 	if err != nil {
 		t.Fatalf("passing item Run: %v", err)
@@ -662,11 +662,11 @@ func TestHigherOrderRejectsUnsupportedShapes(t *testing.T) {
 	}
 }
 
-func mustAssertTemplate(t testing.TB, session *Session, key TemplateKey, fields Fields) AssertResult {
+func mustAssert(t testing.TB, session *Session, key TemplateKey, fields Fields) AssertResult {
 	t.Helper()
-	result, err := session.AssertTemplate(context.Background(), key, fields)
+	result, err := session.Assert(context.Background(), key, fields)
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	return result
 }

@@ -54,7 +54,7 @@ func run(out io.Writer) error {
 		{waiverTemplate, fields("service", "billing", "cve", "CVE-2026-9000", "reason", "isolated batch job")},
 	}
 	for _, fact := range facts {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}

@@ -79,8 +79,8 @@ func TestReteRuntimeUnsupportedPlanFailsExplicitly(t *testing.T) {
 		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 	})
 	session := mustSession(t, revision, "unsupported-runtime-match-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
 
@@ -110,8 +110,8 @@ func TestSessionRunFailsWhenGraphRuntimeUnsupported(t *testing.T) {
 		{Field: "age", Operator: FieldConstraintGreaterOrEqual, Value: 18},
 	})
 	session := mustSession(t, revision, "unsupported-runtime-run-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
 	session.agendaReady = false
@@ -139,7 +139,7 @@ func TestProductionGraphFlowsDoNotRequestOracleStyleMatching(t *testing.T) {
 	}
 	before := session.propagationCounterSnapshot().Totals
 
-	asserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	asserted, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    32,
 		"dept":   "engineering",
 		"id":     "p1",
@@ -147,10 +147,10 @@ func TestProductionGraphFlowsDoNotRequestOracleStyleMatching(t *testing.T) {
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if asserted.Fact.ID().IsZero() {
-		t.Fatal("AssertTemplate returned zero fact ID")
+		t.Fatal("Assert returned zero fact ID")
 	}
 	if _, err := session.QueryAll(ctx, "adults-by-dept", QueryArgs{"dept": "engineering"}); err != nil {
 		t.Fatalf("QueryAll: %v", err)
@@ -182,9 +182,9 @@ func TestProductionLogicalSupportFlowDoesNotRequestOracleStyleMatching(t *testin
 	}
 	before := session.propagationCounterSnapshot().Totals
 
-	asserted, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s1"}))
+	asserted, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -206,15 +206,15 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 	t.Run("assert", func(t *testing.T) {
 		session := mustSession(t, revision, "unsupported-runtime-assert-session")
 		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
-		_, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		_, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
 		assertUnsupportedRuntimeDetail(t, err)
 	})
 
 	t.Run("retract", func(t *testing.T) {
 		session := mustSession(t, revision, "unsupported-runtime-retract-session")
-		asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		asserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
 		if err != nil {
-			t.Fatalf("AssertTemplate setup: %v", err)
+			t.Fatalf("Assert setup: %v", err)
 		}
 		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
 		_, err = session.Retract(ctx, asserted.Fact.ID())
@@ -223,9 +223,9 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 
 	t.Run("modify", func(t *testing.T) {
 		session := mustSession(t, revision, "unsupported-runtime-modify-session")
-		asserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+		asserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
 		if err != nil {
-			t.Fatalf("AssertTemplate setup: %v", err)
+			t.Fatalf("Assert setup: %v", err)
 		}
 		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
 		_, err = session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "inactive"})})
@@ -276,8 +276,8 @@ func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnce(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 
-	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 
 	snapshot := session.propagationCounterSnapshot()
@@ -589,8 +589,8 @@ func TestReteRuntimeRoutesDeclaredTemplateSubscribersByTemplateKey(t *testing.T)
 		t.Fatalf("NewSession public: %v", err)
 	}
 	publicSession.attachPropagationCounters()
-	if _, err := publicSession.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": 2})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := publicSession.Assert(ctx, left.Key(), mustFields(t, map[string]any{"id": 2})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	snapshot = publicSession.propagationCounterSnapshot()
 	if got, want := snapshot.Totals.Asserts, 1; got != want {
@@ -666,8 +666,8 @@ func TestReteRuntimeRoutesBetaInsertToMatchingConditionNode(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	session.attachPropagationCounters()
-	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"id": 1})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, right.Key(), mustFields(t, map[string]any{"id": 1})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	snapshot := session.propagationCounterSnapshot()
 	if got, want := snapshot.Totals.RuleMemoriesVisited, 0; got != want {
@@ -846,8 +846,8 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 
 	session := mustSession(t, revision, "rete-parity-session")
 	for _, fact := range loanUnderwritingInitialFacts(t) {
-		if _, err := session.AssertTemplate(ctx, fact.TemplateKey, fact.Fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(ctx, fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 	if session.rete == nil || !session.rete.usesGraphBeta() || session.rete.graphBeta == nil {
@@ -870,17 +870,17 @@ func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) 
 	})
 	session := mustSession(t, revision, "alpha-lifecycle-session")
 
-	young, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"}))
+	young, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate young: %v", err)
+		t.Fatalf("Assert young: %v", err)
 	}
-	inactive, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "inactive"}))
+	inactive, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "inactive"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate inactive: %v", err)
+		t.Fatalf("Assert inactive: %v", err)
 	}
-	active, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 22, "status": "active"}))
+	active, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 22, "status": "active"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate active: %v", err)
+		t.Fatalf("Assert active: %v", err)
 	}
 	assertAlphaMemoryFillerFacts(t, session, templateKey, reteMemoryMinimumFacts-3)
 
@@ -931,8 +931,8 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
 
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 40, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate extra: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 40, "status": "active"})); err != nil {
+		t.Fatalf("Assert extra: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 3)
 	graphBetaMemory := session.rete.graphBeta
@@ -961,11 +961,11 @@ func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) 
 		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 	})
 	session := mustSession(t, revision1, "alpha-apply-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate young: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 17, "status": "active"})); err != nil {
+		t.Fatalf("Assert young: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
-		t.Fatalf("AssertTemplate adult: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
+		t.Fatalf("Assert adult: %v", err)
 	}
 	assertAlphaMemoryFillerFacts(t, session, templateKey, reteMemoryMinimumFacts-2)
 	assertAlphaMemoryCount(t, session, "adult-active", 1)
@@ -1063,9 +1063,9 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 		t.Fatalf("pending activations before left assert = %d, want 0", got)
 	}
 
-	inserted, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": "l1"}))
+	inserted, err := session.Assert(ctx, left.Key(), mustFields(t, map[string]any{"id": "l1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(left): %v", err)
+		t.Fatalf("Assert(left): %v", err)
 	}
 	if inserted.Status != AssertInserted {
 		t.Fatalf("left assert status = %v, want %v", inserted.Status, AssertInserted)
@@ -1096,8 +1096,8 @@ func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
-		t.Fatalf("AssertTemplate(Ben): %v", err)
+	if _, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
+		t.Fatalf("Assert(Ben): %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
@@ -1136,8 +1136,8 @@ func TestReteRuntimeAgendaDeltasMaintainParityForSmallSupportedSession(t *testin
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(Ben): %v", err)
+	if _, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Engineering"})); err != nil {
+		t.Fatalf("Assert(Ben): %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
@@ -1147,8 +1147,8 @@ func TestReteRuntimeAgendaDeltasMaintainParityForSmallSupportedSession(t *testin
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
-		t.Fatalf("AssertTemplate(Sales department): %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("Assert(Sales department): %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 }
@@ -1349,21 +1349,21 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 
 	assertGraphBetaRuntimeParity(t, revision, session)
 
-	thresholdFact, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
+	thresholdFact, err := session.Assert(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10}))
 	if err != nil {
-		t.Fatalf("AssertTemplate threshold: %v", err)
+		t.Fatalf("Assert threshold: %v", err)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
 
-	failingCandidate, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 8}))
+	failingCandidate, err := session.Assert(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 8}))
 	if err != nil {
-		t.Fatalf("AssertTemplate failing candidate: %v", err)
+		t.Fatalf("Assert failing candidate: %v", err)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
 
-	_, err = session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12}))
+	_, err = session.Assert(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12}))
 	if err != nil {
-		t.Fatalf("AssertTemplate passing candidate: %v", err)
+		t.Fatalf("Assert passing candidate: %v", err)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
 
@@ -1523,9 +1523,9 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 
-	young, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"age": 17}))
+	young, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"age": 17}))
 	if err != nil {
-		t.Fatalf("AssertTemplate young: %v", err)
+		t.Fatalf("Assert young: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after young assert = %d, want 0", got)
@@ -1612,24 +1612,24 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	}
 	session.attachPropagationCounters()
 
-	systemFact, err := session.AssertTemplate(ctx, system.Key(), mustFields(t, map[string]any{"id": "sys-1"}))
+	systemFact, err := session.Assert(ctx, system.Key(), mustFields(t, map[string]any{"id": "sys-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate system: %v", err)
+		t.Fatalf("Assert system: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-2", "risk": 99})); err != nil {
-		t.Fatalf("AssertTemplate wrong finding: %v", err)
+	if _, err := session.Assert(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-2", "risk": 99})); err != nil {
+		t.Fatalf("Assert wrong finding: %v", err)
 	}
-	lowRisk, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 70}))
+	lowRisk, err := session.Assert(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 70}))
 	if err != nil {
-		t.Fatalf("AssertTemplate low finding: %v", err)
+		t.Fatalf("Assert low finding: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before passing finding = %d, want 0", got)
 	}
 
-	passing, err := session.AssertTemplate(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 95}))
+	passing, err := session.Assert(ctx, finding.Key(), mustFields(t, map[string]any{"system-id": "sys-1", "risk": 95}))
 	if err != nil {
-		t.Fatalf("AssertTemplate passing finding: %v", err)
+		t.Fatalf("Assert passing finding: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after passing finding = %d, want 1", got)
@@ -1735,14 +1735,14 @@ func TestReteRuntimeResidualFilterEvaluatesExpressionPredicateOnce(t *testing.T)
 	session := mustSession(t, revision, "residual-filter-expression-once")
 	session.attachPropagationCounters()
 
-	if _, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "minimum": 10})); err != nil {
-		t.Fatalf("AssertTemplate threshold: %v", err)
+	if _, err := session.Assert(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "minimum": 10})); err != nil {
+		t.Fatalf("Assert threshold: %v", err)
 	}
 	if got := predicateCalls; got != 0 {
 		t.Fatalf("predicate calls after left input = %d, want 0", got)
 	}
-	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
-		t.Fatalf("AssertTemplate candidate: %v", err)
+	if _, err := session.Assert(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
+		t.Fatalf("Assert candidate: %v", err)
 	}
 	if got, want := predicateCalls, 1; got != want {
 		t.Fatalf("predicate calls = %d, want %d", got, want)
@@ -1798,8 +1798,8 @@ func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
 	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
 		t.Fatalf("graph beta runtime = %#v, want or branch support", session.rete)
 	}
-	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1", "active": true, "dept": "engineering"})); err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1", "active": true, "dept": "engineering"})); err != nil {
+		t.Fatalf("Assert person: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations = %d, want 1", got)
@@ -1853,16 +1853,16 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1"})); err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1"})); err != nil {
+		t.Fatalf("Assert person: %v", err)
 	}
 	pending := session.agenda.pendingActivations()
 	if got := len(pending); got != 1 {
 		t.Fatalf("pending activations after person = %d, want 1", got)
 	}
 	activationID := pending[0].activationID()
-	if _, err := session.AssertTemplate(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
-		t.Fatalf("AssertTemplate block: %v", err)
+	if _, err := session.Assert(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
+		t.Fatalf("Assert block: %v", err)
 	}
 	pending = session.agenda.pendingActivations()
 	if got := len(pending); got != 1 {
@@ -2087,12 +2087,12 @@ func TestReteRuntimeTerminalDeltaCandidatesUseIndependentScratchLanes(t *testing
 	})
 	session := mustSession(t, revision, "terminal-delta-scratch-session")
 
-	inserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"age":    20,
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	before, ok := session.factByID(inserted.Fact.ID())
 	if !ok {
@@ -2226,8 +2226,8 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	beforeVersions := cloneFactVersions(before.factVersions())
 	beforePath := cloneIntPath(before.path())
 
-	if _, err := session.AssertTemplate(ctx, noiseKey, mustFields(t, map[string]any{"bucket": 99})); err != nil {
-		t.Fatalf("AssertTemplate noise: %v", err)
+	if _, err := session.Assert(ctx, noiseKey, mustFields(t, map[string]any{"bucket": 99})); err != nil {
+		t.Fatalf("Assert noise: %v", err)
 	}
 	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
 		t.Fatalf("second reconcileAgenda: %v", err)
@@ -2282,11 +2282,11 @@ func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "beta-int-float-session")
 
-	if _, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"bucket": 7})); err != nil {
-		t.Fatalf("AssertTemplate left: %v", err)
+	if _, err := session.Assert(ctx, left.Key(), mustFields(t, map[string]any{"bucket": 7})); err != nil {
+		t.Fatalf("Assert left: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"bucket": 7.0})); err != nil {
-		t.Fatalf("AssertTemplate right: %v", err)
+	if _, err := session.Assert(ctx, right.Key(), mustFields(t, map[string]any{"bucket": 7.0})); err != nil {
+		t.Fatalf("Assert right: %v", err)
 	}
 
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
@@ -2473,9 +2473,9 @@ func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
 		{Field: "status", Operator: FieldConstraintEqual, Value: "active"},
 	})
 	session := mustSession(t, revision, "graph-beta-modify-stops-alpha-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
+	inserted, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2539,13 +2539,13 @@ func TestReteRuntimeGraphBetaModifyUnmatchedIrrelevantSlotSkipsPropagation(t *te
 	ctx := context.Background()
 	revision, personKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-unmatched-irrelevant-slot-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    20,
 		"note":   "old",
 		"status": "inactive",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2599,13 +2599,13 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t 
 	ctx := context.Background()
 	revision, personKey := mustModifyFastPathRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-matched-irrelevant-slot-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    20,
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2653,13 +2653,13 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotReplacesActivati
 	ctx := context.Background()
 	revision, personKey := mustModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-matched-declared-unobserved-slot-session")
-	inserted, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    20,
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2760,12 +2760,12 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotReplacesActivatio
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "graph-beta-modify-alpha-predicate-unobserved-slot-session")
-	inserted, err := session.AssertTemplate(ctx, person.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{
 		"age":  20,
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate person: %v", err)
+		t.Fatalf("Assert person: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2838,16 +2838,16 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotReplacesActivatio
 	ctx := context.Background()
 	revision, employeeKey, departmentKey := mustBetaModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-joined-declared-unobserved-slot-session")
-	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{
+	employee, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{
 		"name": "Ada",
 		"dept": "Engineering",
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
+		t.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert department: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2921,13 +2921,13 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotReplacesActivatio
 	ctx := context.Background()
 	revision, eventKey := mustFilterModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-filter-declared-unobserved-slot-session")
-	event, err := session.AssertTemplate(ctx, eventKey, mustFields(t, map[string]any{
+	event, err := session.Assert(ctx, eventKey, mustFields(t, map[string]any{
 		"id":     "event-1",
 		"note":   "old",
 		"status": "active",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate event: %v", err)
+		t.Fatalf("Assert event: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3001,12 +3001,12 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotReplacesAct
 	ctx := context.Background()
 	revision, customerKey, _ := mustNegationModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-negation-left-declared-unobserved-slot-session")
-	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{
+	customer, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{
 		"id":   "c-1",
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate customer: %v", err)
+		t.Fatalf("Assert customer: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3058,19 +3058,19 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	ctx := context.Background()
 	revision, customerKey, blockKey := mustNegationModifyFastPathDeclaredNoReadRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-negation-right-declared-unobserved-slot-session")
-	if _, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{
 		"id":   "c-1",
 		"note": "customer",
 	})); err != nil {
-		t.Fatalf("AssertTemplate customer: %v", err)
+		t.Fatalf("Assert customer: %v", err)
 	}
-	block, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{
+	block, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{
 		"customer_id": "c-1",
 		"active":      true,
 		"code":        "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate block: %v", err)
+		t.Fatalf("Assert block: %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before modify = %d, want 0", got)
@@ -3139,12 +3139,12 @@ func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 	ctx := context.Background()
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-joined-version-session")
-	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
+	employee, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
+		t.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate department: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert department: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3202,15 +3202,15 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	ctx := context.Background()
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-join-bucket-session")
-	employee, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
+	employee, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate employee: %v", err)
+		t.Fatalf("Assert employee: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate Engineering: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert Engineering: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
-		t.Fatalf("AssertTemplate Sales: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("Assert Sales: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3286,22 +3286,22 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 		t.Fatalf("runtime does not support graph beta: %#v", session.rete.plan.unsupported)
 	}
 
-	if _, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-2", "active": true})); err != nil {
-		t.Fatalf("AssertTemplate(unrelated block): %v", err)
+	if _, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-2", "active": true})); err != nil {
+		t.Fatalf("Assert(unrelated block): %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with only right facts = %d, want 0", got)
 	}
-	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
+	customer, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(customer): %v", err)
+		t.Fatalf("Assert(customer): %v", err)
 	}
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after customer = %d, want %d", got, want)
 	}
-	block, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true}))
+	block, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(block): %v", err)
+		t.Fatalf("Assert(block): %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after blocking fact = %d, want 0", got)
@@ -3318,9 +3318,9 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 	if fired != 1 {
 		t.Fatalf("fired actions = %d, want 1", fired)
 	}
-	blockAgain, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "after-run"}))
+	blockAgain, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "after-run"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(block after run): %v", err)
+		t.Fatalf("Assert(block after run): %v", err)
 	}
 	if _, err := session.Retract(ctx, blockAgain.Fact.ID()); err != nil {
 		t.Fatalf("Retract(block after run): %v", err)
@@ -3341,12 +3341,12 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 	ctx := context.Background()
 	revision, customerKey, blockKey := mustNegationRuleset(t, func(ActionContext) error { return nil })
 	session := mustSession(t, revision, "graph-beta-negation-modify-session")
-	if _, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"})); err != nil {
-		t.Fatalf("AssertTemplate(customer): %v", err)
+	if _, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"})); err != nil {
+		t.Fatalf("Assert(customer): %v", err)
 	}
-	inactive, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": false}))
+	inactive, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": false}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(inactive block): %v", err)
+		t.Fatalf("Assert(inactive block): %v", err)
 	}
 	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations with inactive block = %d, want %d", got, want)
@@ -3371,13 +3371,13 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 	}
 
 	session.attachPropagationCounters()
-	first, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
+	first, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(first active block): %v", err)
+		t.Fatalf("Assert(first active block): %v", err)
 	}
-	second, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
+	second, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(second active block): %v", err)
+		t.Fatalf("Assert(second active block): %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
@@ -3409,17 +3409,17 @@ func TestReteRuntimeGraphBetaNegationRetractBlockedLeftWithMultipleBlockers(t *t
 	ctx := context.Background()
 	revision, customerKey, blockKey := mustNegationRuleset(t, func(ActionContext) error { return nil })
 	session := mustSession(t, revision, "graph-beta-negation-retract-blocked-left-session")
-	customer, err := session.AssertTemplate(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
+	customer, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(customer): %v", err)
+		t.Fatalf("Assert(customer): %v", err)
 	}
-	first, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
+	first, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "first"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(first active block): %v", err)
+		t.Fatalf("Assert(first active block): %v", err)
 	}
-	second, err := session.AssertTemplate(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
+	second, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true, "code": "second"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(second active block): %v", err)
+		t.Fatalf("Assert(second active block): %v", err)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
@@ -3453,17 +3453,17 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	ctx := context.Background()
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	session := mustSession(t, revision, "graph-beta-modify-consumed-activation-session")
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate Ada: %v", err)
+	if _, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
+		t.Fatalf("Assert Ada: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
-		t.Fatalf("AssertTemplate Ben: %v", err)
+	if _, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ben", "dept": "Sales"})); err != nil {
+		t.Fatalf("Assert Ben: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate Engineering: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert Engineering: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
-		t.Fatalf("AssertTemplate Sales: %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Sales"})); err != nil {
+		t.Fatalf("Assert Sales: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3587,9 +3587,9 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "graph-beta-reasserted-token-identity-session")
 
-	first, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
+	first, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate first: %v", err)
+		t.Fatalf("Assert first: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcile first: %v", err)
@@ -3608,9 +3608,9 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 		t.Fatalf("pending after retract = %d, want 0", got)
 	}
 
-	second, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
+	second, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "same"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate second: %v", err)
+		t.Fatalf("Assert second: %v", err)
 	}
 	if first.Fact.ID() == second.Fact.ID() {
 		t.Fatalf("reasserted fact reused ID %q", second.Fact.ID())
@@ -3673,14 +3673,14 @@ func TestReteRuntimeGraphBetaTerminalTokenIdentityIndexesUseFactIdentity(t *test
 	}
 	session.attachPropagationCounters()
 
-	if _, err := session.AssertTemplate(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10})); err != nil {
-		t.Fatalf("AssertTemplate threshold: %v", err)
+	if _, err := session.Assert(ctx, threshold.Key(), mustFields(t, map[string]any{"group": "A", "score": 10})); err != nil {
+		t.Fatalf("Assert threshold: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
-		t.Fatalf("AssertTemplate candidate 12: %v", err)
+	if _, err := session.Assert(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 12})); err != nil {
+		t.Fatalf("Assert candidate 12: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 13})); err != nil {
-		t.Fatalf("AssertTemplate candidate 13: %v", err)
+	if _, err := session.Assert(ctx, candidate.Key(), mustFields(t, map[string]any{"group": "A", "score": 13})); err != nil {
+		t.Fatalf("Assert candidate 13: %v", err)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
 
@@ -4455,8 +4455,8 @@ func assertGraphBetaAlphaFactCount(t testing.TB, session *Session, ruleName stri
 func assertAlphaMemoryFillerFacts(t testing.TB, session *Session, templateKey TemplateKey, count int) {
 	t.Helper()
 	for i := range count {
-		if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{"age": 15, "status": "inactive"})); err != nil {
-			t.Fatalf("AssertTemplate filler %d: %v", i, err)
+		if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{"age": 15, "status": "inactive"})); err != nil {
+			t.Fatalf("Assert filler %d: %v", i, err)
 		}
 	}
 }

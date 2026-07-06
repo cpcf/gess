@@ -141,8 +141,8 @@ type (
 	// before and after, version and support changes, and which
 	// activation or rule caused it, if any.
 	MutationDelta = engine.MutationDelta
-	// AssertStatus is the outcome of a Session.Assert or AssertTemplate
-	// call.
+	// AssertStatus is the outcome of a Session.Assert or
+	// AssertTemplateValues call.
 	AssertStatus = engine.AssertStatus
 	// AssertResult reports the outcome of an assert: its status, the
 	// resulting fact, and the mutation delta.

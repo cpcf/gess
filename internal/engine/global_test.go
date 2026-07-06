@@ -370,8 +370,8 @@ func TestGessGlobalsResolveInRHSAssert(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled ruleset missing order template")
 	}
-	if _, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "O-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, template.Key(), mustFields(t, map[string]any{"id": "O-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)

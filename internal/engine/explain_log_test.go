@@ -28,7 +28,7 @@ func lineageRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
 		GessSource: `(assert (record (id ?t.id) (status "open")))`,
 		Fn: func(ctx ActionContext) error {
 			id, _ := ctx.BindingScalarValue("t", "id")
-			_, err := ctx.AssertTemplate(recordKey, Fields{"id": id, "status": newStringValue("open")})
+			_, err := ctx.Assert(recordKey, Fields{"id": id, "status": newStringValue("open")})
 			return err
 		},
 	})
@@ -67,8 +67,8 @@ func lineageRuleset(t testing.TB) (*Ruleset, TemplateKey, TemplateKey) {
 func TestSessionExplainWithoutLogUnavailable(t *testing.T) {
 	revision, triggerKey, _ := lineageRuleset(t)
 	session := mustSession(t, revision, "explain-no-log")
-	if _, err := session.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -90,8 +90,8 @@ func TestSessionExplainLineageAndActionSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -160,12 +160,12 @@ func TestSessionExplainMultiActionAttribution(t *testing.T) {
 	}).Key()
 	mustAddAction(t, workspace, ActionSpec{Name: "make-a", Fn: func(ctx ActionContext) error {
 		id, _ := ctx.BindingScalarValue("s", "id")
-		_, err := ctx.AssertTemplate(aKey, Fields{"id": id})
+		_, err := ctx.Assert(aKey, Fields{"id": id})
 		return err
 	}})
 	mustAddAction(t, workspace, ActionSpec{Name: "make-b", Fn: func(ctx ActionContext) error {
 		id, _ := ctx.BindingScalarValue("s", "id")
-		_, err := ctx.AssertTemplate(bKey, Fields{"id": id})
+		_, err := ctx.Assert(bKey, Fields{"id": id})
 		return err
 	}})
 	mustAddRule(t, workspace, RuleSpec{
@@ -181,8 +181,8 @@ func TestSessionExplainMultiActionAttribution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), srcKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), srcKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -212,8 +212,8 @@ func TestExplainLogRecordsRetractLineage(t *testing.T) {
 	}
 	log := session.explainLog
 
-	if _, err := session.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -248,9 +248,9 @@ func TestSessionExplainEvictionTruncatesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	record, err := session.AssertTemplate(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
+	record, err := session.Assert(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	recordID := record.Fact.ID()
 	for _, status := range []string{"active", "closed"} {
@@ -277,9 +277,9 @@ func TestSessionExplainResetEmptiesLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	record, err := session.AssertTemplate(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
+	record, err := session.Assert(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if entries, _ := session.explainLog.historyForFact(record.Fact.ID()); len(entries) == 0 {
 		t.Fatalf("log did not record the assert")
@@ -298,8 +298,8 @@ func TestSessionExplainForkRequiresReoptIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -332,8 +332,8 @@ func TestSessionExplainForkRequiresReoptIn(t *testing.T) {
 	if loggedFork.explainLog.total != 0 {
 		t.Fatalf("re-opted fork log total = %d, want 0 (fresh)", loggedFork.explainLog.total)
 	}
-	if _, err := loggedFork.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-2"})); err != nil {
-		t.Fatalf("fork AssertTemplate: %v", err)
+	if _, err := loggedFork.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-2"})); err != nil {
+		t.Fatalf("fork Assert: %v", err)
 	}
 	var forkMinSeq uint64
 	for _, entries := range loggedFork.explainLog.byFact {
@@ -407,9 +407,9 @@ func BenchmarkSessionExplainLogRecording(b *testing.B) {
 	fields := mustFields(b, map[string]any{"id": "r-1", "status": "open"})
 	b.ReportAllocs()
 	for b.Loop() {
-		record, err := session.AssertTemplate(ctx, recordKey, fields)
+		record, err := session.Assert(ctx, recordKey, fields)
 		if err != nil {
-			b.Fatalf("AssertTemplate: %v", err)
+			b.Fatalf("Assert: %v", err)
 		}
 		if _, err := session.Modify(ctx, record.Fact.ID(), FactPatch{Set: Fields{"status": newStringValue("active")}}); err != nil {
 			b.Fatalf("Modify: %v", err)
@@ -430,9 +430,9 @@ func BenchmarkSessionAssertNoExplainLog(b *testing.B) {
 	fields := mustFields(b, map[string]any{"id": "r-1", "status": "open"})
 	b.ReportAllocs()
 	for b.Loop() {
-		record, err := session.AssertTemplate(ctx, recordKey, fields)
+		record, err := session.Assert(ctx, recordKey, fields)
 		if err != nil {
-			b.Fatalf("AssertTemplate: %v", err)
+			b.Fatalf("Assert: %v", err)
 		}
 		if _, err := session.Modify(ctx, record.Fact.ID(), FactPatch{Set: Fields{"status": newStringValue("active")}}); err != nil {
 			b.Fatalf("Modify: %v", err)

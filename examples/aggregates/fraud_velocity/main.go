@@ -47,7 +47,7 @@ func run(out io.Writer) error {
 		{transactionTemplate, exampleutil.Fields("id", "T-3", "account", "A-100", "amount", 350, "window", "5m")},
 		{transactionTemplate, exampleutil.Fields("id", "T-4", "account", "A-200", "amount", 950, "window", "5m")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}
@@ -95,7 +95,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 			if countValue < 3 || totalValue < 1000 {
 				return nil
 			}
-			_, err := ctx.AssertTemplate(alertTemplate, rules.Fields{"account": account, "count": count, "total": total})
+			_, err := ctx.Assert(alertTemplate, rules.Fields{"account": account, "count": count, "total": total})
 			return err
 		},
 	}); err != nil {

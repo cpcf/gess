@@ -48,7 +48,7 @@ func run(out io.Writer) error {
 		{checkTemplate, exampleutil.Fields("service", "billing", "name", "tests", "status", "pass")},
 		{checkTemplate, exampleutil.Fields("service", "billing", "name", "security", "status", "fail")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}
@@ -95,7 +95,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 		Fn: func(ctx rules.ActionContext) error {
 			service, _ := ctx.BindingScalarValue("request", "service")
 			version, _ := ctx.BindingScalarValue("request", "version")
-			_, err := ctx.AssertTemplate(hasCheckTemplate, rules.Fields{"service": service, "version": version})
+			_, err := ctx.Assert(hasCheckTemplate, rules.Fields{"service": service, "version": version})
 			return err
 		},
 	}); err != nil {
@@ -106,7 +106,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 		Fn: func(ctx rules.ActionContext) error {
 			service, _ := ctx.BindingScalarValue("request", "service")
 			version, _ := ctx.BindingScalarValue("request", "version")
-			_, err := ctx.AssertTemplate(gateTemplate, rules.Fields{"service": service, "version": version})
+			_, err := ctx.Assert(gateTemplate, rules.Fields{"service": service, "version": version})
 			return err
 		},
 	}); err != nil {

@@ -71,8 +71,8 @@ func BenchmarkLoanUnderwritingGessSessionCycle(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustLoanUnderwritingSession(b, revision)
 		for _, fact := range initials {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 		}
 
@@ -119,8 +119,8 @@ func BenchmarkLoanUnderwritingGessRunOnly(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustLoanUnderwritingSession(b, revision)
 		for _, fact := range initials {
-			if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-				b.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+				b.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 			}
 		}
 
@@ -144,8 +144,8 @@ func runLoanUnderwritingFixture(t testing.TB) []string {
 	session := mustSession(t, revision, "loan-underwriting-fixture")
 
 	for _, fact := range loanUnderwritingInitialFacts(t) {
-		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 
@@ -432,7 +432,7 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 					"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,
 				)
 			}
-			_, err := ctx.AssertTemplate(decisionKey, Fields{
+			_, err := ctx.Assert(decisionKey, Fields{
 				"applicant-id": idValue,
 				"outcome":      outcomeValue,
 				"reason":       reasonValue,

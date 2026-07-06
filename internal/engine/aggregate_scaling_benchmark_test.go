@@ -80,8 +80,8 @@ func BenchmarkRuntimeMaterializationAggregateValueProjection(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		session := mustSession(b, revision, SessionID(fmt.Sprintf("aggregate-value-projection-benchmark-session-%d", i)))
 		for itemIndex := range itemCount {
-			if _, err := session.AssertTemplate(ctx, itemKey, Fields{"amount": newIntValue(int64(itemIndex + 1))}); err != nil {
-				b.Fatalf("AssertTemplate(item): %v", err)
+			if _, err := session.Assert(ctx, itemKey, Fields{"amount": newIntValue(int64(itemIndex + 1))}); err != nil {
+				b.Fatalf("Assert(item): %v", err)
 			}
 		}
 		result, err := session.Run(ctx)
@@ -427,7 +427,7 @@ func mustCompileAggregateScalingRuleset(t testing.TB, tc aggregateScalingCase) (
 				if !ok {
 					return fmt.Errorf("missing total binding")
 				}
-				_, err := ctx.AssertTemplate(summary.Key(), Fields{
+				_, err := ctx.Assert(summary.Key(), Fields{
 					"stream": newIntValue(int64(stream)),
 					"total":  total,
 				})
@@ -519,13 +519,13 @@ func runAggregateScalingSeedRun(t testing.TB, ctx context.Context, session *Sess
 	for stream := range tc.streams {
 		streamValue := newIntValue(int64(stream))
 		for id := range tc.itemsPerStream {
-			_, err := session.AssertTemplate(ctx, itemKey, Fields{
+			_, err := session.Assert(ctx, itemKey, Fields{
 				"stream": streamValue,
 				"id":     newIntValue(int64(id)),
 				"amount": newIntValue(int64(aggregateScalingAmount(id))),
 			})
 			if err != nil {
-				t.Fatalf("AssertTemplate(item): %v", err)
+				t.Fatalf("Assert(item): %v", err)
 			}
 		}
 	}
@@ -541,7 +541,7 @@ func runAggregateScalingSeedRun(t testing.TB, ctx context.Context, session *Sess
 func runAggregateScalingSteadyAssert(t testing.TB, ctx context.Context, session *Session, itemKey TemplateKey, tc aggregateScalingCase, targetFact FactID) RunResult {
 	t.Helper()
 
-	_, err := session.AssertTemplate(ctx, itemKey, Fields{
+	_, err := session.Assert(ctx, itemKey, Fields{
 		"stream": newIntValue(0),
 		"id":     newIntValue(int64(tc.itemsPerStream)),
 		"amount": newIntValue(1),

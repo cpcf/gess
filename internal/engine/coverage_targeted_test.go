@@ -26,8 +26,8 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "coverage-action-token-fallback")
-	if _, err := session.AssertTemplate(ctx, source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, ok, err := session.reconcileAgendaWithoutSnapshot(ctx); err != nil {
 		t.Fatalf("reconcileAgendaWithoutSnapshot: %v", err)

@@ -39,7 +39,7 @@ func run(out io.Writer) error {
 		exampleutil.Fields("id", "A-200", "region", "emea", "balance", 9000),
 		exampleutil.Fields("id", "A-300", "region", "amer", "balance", 250000),
 	} {
-		if _, err := session.AssertTemplate(ctx, accountTemplate, fact); err != nil {
+		if _, err := session.Assert(ctx, accountTemplate, fact); err != nil {
 			return err
 		}
 	}

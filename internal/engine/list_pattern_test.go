@@ -49,24 +49,24 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	first, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{
 		"id":   "e1",
 		"tags": []any{"vip", "blue", "gold", "active"},
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate first: %v", err)
+		t.Fatalf("Assert first: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{
 		"id":   "e2",
 		"tags": []any{"vip", "active"},
 	})); err != nil {
-		t.Fatalf("AssertTemplate second: %v", err)
+		t.Fatalf("Assert second: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{
 		"id":   "e3",
 		"tags": []any{"vip", "blue"},
 	})); err != nil {
-		t.Fatalf("AssertTemplate miss: %v", err)
+		t.Fatalf("Assert miss: %v", err)
 	}
 
 	pending := session.agenda.pendingActivations()
@@ -141,13 +141,13 @@ func TestListPatternModifyUnobservedSlotReplacesActivation(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "list-pattern-unobserved-modify-session")
-	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{
 		"id":   "e1",
 		"tags": []any{"vip", "blue", "gold", "active"},
 		"note": "old",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate event: %v", err)
+		t.Fatalf("Assert event: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)

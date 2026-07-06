@@ -221,7 +221,7 @@ func (s *replState) assert(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	result, err := s.session.AssertTemplate(ctx, template.Key(), fields)
+	result, err := s.session.Assert(ctx, template.Key(), fields)
 	if err != nil {
 		return err
 	}

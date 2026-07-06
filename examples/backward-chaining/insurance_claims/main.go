@@ -64,7 +64,7 @@ func run(out io.Writer) error {
 		{claimTemplate, fields("id", "C-400", "policy", "P-100", "cause", "wind")},
 		{estimateTemplate, fields("claim", "C-400", "vendor", "national-restoration")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}

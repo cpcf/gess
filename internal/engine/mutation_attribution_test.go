@@ -23,7 +23,7 @@ func TestMutationEventAttributesAssertsToActions(t *testing.T) {
 		Name: "make-a",
 		Fn: func(ctx ActionContext) error {
 			id, _ := ctx.BindingScalarValue("s", "id")
-			_, err := ctx.AssertTemplate(aKey, Fields{"id": id})
+			_, err := ctx.Assert(aKey, Fields{"id": id})
 			return err
 		},
 	})
@@ -31,7 +31,7 @@ func TestMutationEventAttributesAssertsToActions(t *testing.T) {
 		Name: "make-b",
 		Fn: func(ctx ActionContext) error {
 			id, _ := ctx.BindingScalarValue("s", "id")
-			_, err := ctx.AssertTemplate(bKey, Fields{"id": id})
+			_, err := ctx.Assert(bKey, Fields{"id": id})
 			return err
 		},
 	})
@@ -50,8 +50,8 @@ func TestMutationEventAttributesAssertsToActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), srcKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(src): %v", err)
+	if _, err := session.Assert(context.Background(), srcKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(src): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -135,11 +135,11 @@ func TestMutationEventAttributesModifyAndRetract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), taskKey, mustFields(t, map[string]any{"id": "task-1", "status": "open"})); err != nil {
-		t.Fatalf("AssertTemplate(task): %v", err)
+	if _, err := session.Assert(context.Background(), taskKey, mustFields(t, map[string]any{"id": "task-1", "status": "open"})); err != nil {
+		t.Fatalf("Assert(task): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), tempKey, mustFields(t, map[string]any{"id": "temp-1"})); err != nil {
-		t.Fatalf("AssertTemplate(temp): %v", err)
+	if _, err := session.Assert(context.Background(), tempKey, mustFields(t, map[string]any{"id": "temp-1"})); err != nil {
+		t.Fatalf("Assert(temp): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -183,7 +183,7 @@ func BenchmarkSessionRuleActionAttribution(b *testing.B) {
 		Name: "make-a",
 		Fn: func(ctx ActionContext) error {
 			id, _ := ctx.BindingScalarValue("s", "id")
-			_, err := ctx.AssertTemplate(aKey, Fields{"id": id})
+			_, err := ctx.Assert(aKey, Fields{"id": id})
 			return err
 		},
 	})
@@ -191,7 +191,7 @@ func BenchmarkSessionRuleActionAttribution(b *testing.B) {
 		Name: "make-b",
 		Fn: func(ctx ActionContext) error {
 			id, _ := ctx.BindingScalarValue("s", "id")
-			_, err := ctx.AssertTemplate(bKey, Fields{"id": id})
+			_, err := ctx.Assert(bKey, Fields{"id": id})
 			return err
 		},
 	})
@@ -213,8 +213,8 @@ func BenchmarkSessionRuleActionAttribution(b *testing.B) {
 
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := session.AssertTemplate(ctx, srcKey, fields); err != nil {
-			b.Fatalf("AssertTemplate: %v", err)
+		if _, err := session.Assert(ctx, srcKey, fields); err != nil {
+			b.Fatalf("Assert: %v", err)
 		}
 		if _, err := session.Run(ctx); err != nil {
 			b.Fatalf("Run: %v", err)

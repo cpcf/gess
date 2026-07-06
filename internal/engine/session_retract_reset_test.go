@@ -26,9 +26,9 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "person-1", "status": "active"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "person-1", "status": "active"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
 		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
@@ -107,9 +107,9 @@ func TestSessionRetractImmediatelyDeactivatesPendingActivation(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if got := len(collector.Events()); got != 2 {
 		t.Fatalf("events after assert = %d, want 2", got)
@@ -1058,14 +1058,14 @@ func TestSessionResetWithoutInitialFactsDefersDuplicateIndexReserve(t *testing.T
 		t.Fatalf("duplicate index length = %d, want 0 after empty reset", got)
 	}
 
-	if _, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
-		t.Fatalf("AssertTemplate first: %v", err)
+	if _, err := session.Assert(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("Assert first: %v", err)
 	}
 	if got := session.factsByDuplicate.len(); got != 1 {
 		t.Fatalf("duplicate index length = %d, want 1 after first assert", got)
 	}
-	if result, err := session.AssertTemplate(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
-		t.Fatalf("AssertTemplate duplicate: %v", err)
+	if result, err := session.Assert(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("Assert duplicate: %v", err)
 	} else if result.Inserted() {
 		t.Fatal("duplicate unique-key assert inserted a second fact")
 	}

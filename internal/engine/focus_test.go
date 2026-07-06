@@ -105,11 +105,11 @@ func TestRunDrainsFocusedModuleBeforeMain(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "focused-run-session")
-	if _, err := session.AssertTemplate(ctx, mainEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate main: %v", err)
+	if _, err := session.Assert(ctx, mainEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert main: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, askEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate ask: %v", err)
+	if _, err := session.Assert(ctx, askEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert ask: %v", err)
 	}
 	if err := session.PushFocus(ctx, "ask"); err != nil {
 		t.Fatalf("PushFocus ask: %v", err)
@@ -147,8 +147,8 @@ func TestRunPopsEmptyFocusBeforeAllMainFastPath(t *testing.T) {
 		t.Fatal("allRulesInMainModule = false, want true")
 	}
 	session := mustSession(t, revision, "empty-focus-main-run-session")
-	if _, err := session.AssertTemplate(ctx, mainEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate main: %v", err)
+	if _, err := session.Assert(ctx, mainEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert main: %v", err)
 	}
 	if err := session.PushFocus(ctx, "ask"); err != nil {
 		t.Fatalf("PushFocus ask: %v", err)
@@ -184,8 +184,8 @@ func TestRunLeavesUnfocusedNonMainActivationsPending(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "unfocused-run-session")
-	if _, err := session.AssertTemplate(ctx, askEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate ask: %v", err)
+	if _, err := session.Assert(ctx, askEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert ask: %v", err)
 	}
 
 	result, err := session.Run(ctx)
@@ -229,11 +229,11 @@ func TestAutoFocusPushesModuleWhenActivationEntersAgenda(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "auto-focus-run-session")
-	if _, err := session.AssertTemplate(ctx, mainEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate main: %v", err)
+	if _, err := session.Assert(ctx, mainEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert main: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, askEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate ask: %v", err)
+	if _, err := session.Assert(ctx, askEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert ask: %v", err)
 	}
 	if got := session.CurrentFocus(); got != "ask" {
 		t.Fatalf("current focus after auto-focus activation = %q, want ask", got)
@@ -279,11 +279,11 @@ func TestActionContextPushFocusAffectsNextActivation(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "action-focus-session")
-	if _, err := session.AssertTemplate(ctx, startEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate start: %v", err)
+	if _, err := session.Assert(ctx, startEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert start: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, askEvent.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate ask: %v", err)
+	if _, err := session.Assert(ctx, askEvent.Key(), nil); err != nil {
+		t.Fatalf("Assert ask: %v", err)
 	}
 
 	result, err := session.Run(ctx)

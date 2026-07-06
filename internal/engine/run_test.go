@@ -158,7 +158,7 @@ func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
 		Name: "before",
 		Fn: func(ctx ActionContext) error {
 			actions = append(actions, "before")
-			_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "before"}))
+			_, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "before"}))
 			return err
 		},
 	}); err != nil {
@@ -177,7 +177,7 @@ func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
 		Name: "after",
 		Fn: func(ctx ActionContext) error {
 			actions = append(actions, "after")
-			_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "after"}))
+			_, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "after"}))
 			return err
 		},
 	}); err != nil {
@@ -221,8 +221,8 @@ func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
-		t.Fatalf("AssertTemplate(event): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
+		t.Fatalf("Assert(event): %v", err)
 	}
 
 	result, err := session.Run(context.Background())
@@ -312,8 +312,8 @@ func TestSessionRunActionFailureRemainsDistinctFromHalt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
-		t.Fatalf("AssertTemplate(event): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("event"), mustFields(t, map[string]any{"id": "e-1"})); err != nil {
+		t.Fatalf("Assert(event): %v", err)
 	}
 
 	result, err := session.Run(context.Background(), WithMaxFirings(1))
@@ -465,7 +465,7 @@ func TestSessionRunWithMaxFiringsDrainsQueuedMutationsBeforeReturning(t *testing
 		Name: "enqueue-external",
 		Fn: func(ActionContext) error {
 			go func() {
-				_, err := session.AssertTemplate(context.Background(), TemplateKey("external"), mustFields(t, map[string]any{"id": "x-1"}))
+				_, err := session.Assert(context.Background(), TemplateKey("external"), mustFields(t, map[string]any{"id": "x-1"}))
 				queuedDone <- err
 			}()
 			waitForQueuedMutationCount(t, session, 1)
@@ -504,10 +504,10 @@ func TestSessionRunWithMaxFiringsDrainsQueuedMutationsBeforeReturning(t *testing
 	select {
 	case err := <-queuedDone:
 		if err != nil {
-			t.Fatalf("queued AssertTemplate: %v", err)
+			t.Fatalf("queued Assert: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("queued AssertTemplate did not complete")
+		t.Fatal("queued Assert did not complete")
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)
 	externalFacts := 0
@@ -630,12 +630,12 @@ func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 				t.Fatal("session has no graph beta runtime")
 			}
 
-			asserted, err := session.AssertTemplate(ctx, task.Key(), mustFields(t, map[string]any{
+			asserted, err := session.Assert(ctx, task.Key(), mustFields(t, map[string]any{
 				"id":     "t-1",
 				"status": "open",
 			}))
 			if err != nil {
-				t.Fatalf("AssertTemplate: %v", err)
+				t.Fatalf("Assert: %v", err)
 			}
 			if got := len(session.agenda.pendingActivations()); got != 1 {
 				t.Fatalf("pending activations after assert = %d, want 1", got)
@@ -688,7 +688,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 		if err := workspace.AddAction(ActionSpec{
 			Name: name,
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.AssertTemplate(TemplateKey("child"), mustFields(t, map[string]any{"id": id}))
+				_, err := ctx.Assert(TemplateKey("child"), mustFields(t, map[string]any{"id": id}))
 				return err
 			},
 		}); err != nil {
@@ -745,8 +745,8 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("seed"), mustFields(t, map[string]any{"id": "seed"})); err != nil {
-		t.Fatalf("AssertTemplate(seed): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("seed"), mustFields(t, map[string]any{"id": "seed"})); err != nil {
+		t.Fatalf("Assert(seed): %v", err)
 	}
 
 	result, err := session.Run(context.Background())
@@ -791,7 +791,7 @@ func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
 		if err := workspace.AddAction(ActionSpec{
 			Name: name,
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.AssertTemplate(TemplateKey("child"), mustFields(t, map[string]any{"id": "same"}))
+				_, err := ctx.Assert(TemplateKey("child"), mustFields(t, map[string]any{"id": "same"}))
 				return err
 			},
 		}); err != nil {
@@ -842,8 +842,8 @@ func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("seed"), mustFields(t, map[string]any{"id": "seed"})); err != nil {
-		t.Fatalf("AssertTemplate(seed): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("seed"), mustFields(t, map[string]any{"id": "seed"})); err != nil {
+		t.Fatalf("Assert(seed): %v", err)
 	}
 
 	result, err := session.Run(context.Background())
@@ -989,12 +989,12 @@ func TestSessionRunFiresActivationAndAllowsActionContextMutations(t *testing.T) 
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+	personFact, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
 		"name":   "Ada",
 		"status": "pending",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	result, err := session.Run(context.Background())
@@ -1224,7 +1224,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "assert-audit",
 			Fn: func(ctx ActionContext) error {
 				actionsSeen = append(actionsSeen, "assert-audit")
-				result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
 				if err != nil {
 					return err
 				}
@@ -1442,16 +1442,16 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		task, err := session.AssertTemplate(context.Background(), TemplateKey("task"), mustFields(t, map[string]any{
+		task, err := session.Assert(context.Background(), TemplateKey("task"), mustFields(t, map[string]any{
 			"id":     "task-1",
 			"status": "open",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate(task): %v", err)
+			t.Fatalf("Assert(task): %v", err)
 		}
 		taskID = task.Fact.ID()
-		if _, err := session.AssertTemplate(context.Background(), TemplateKey("trigger"), mustFields(t, map[string]any{"id": "trigger-1"})); err != nil {
-			t.Fatalf("AssertTemplate(trigger): %v", err)
+		if _, err := session.Assert(context.Background(), TemplateKey("trigger"), mustFields(t, map[string]any{"id": "trigger-1"})); err != nil {
+			t.Fatalf("Assert(trigger): %v", err)
 		}
 
 		runEventOffset := len(collector.Events())
@@ -1534,7 +1534,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "assert-audit",
 			Fn: func(ctx ActionContext) error {
 				actionsSeen = append(actionsSeen, "assert-audit")
-				_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				_, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
 				return err
 			},
 		}); err != nil {
@@ -1658,7 +1658,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "assert-audit",
 			Fn: func(ctx ActionContext) error {
 				actionsSeen = append(actionsSeen, "assert-audit")
-				_, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
+				_, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"id": "a-1"}))
 				return err
 			},
 		}); err != nil {
@@ -1825,17 +1825,17 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		})
 		revision := mustCompileWorkspace(t, workspace)
 		session = mustSession(t, revision, "run-supported-route-scoped-modify-delta-session")
-		inserted, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		inserted, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"id":     "p-1",
 			"status": "active",
 			"note":   "old",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate person: %v", err)
+			t.Fatalf("Assert person: %v", err)
 		}
 		personID = inserted.Fact.ID()
-		if _, err := session.AssertTemplate(context.Background(), trigger.Key(), mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-			t.Fatalf("AssertTemplate trigger: %v", err)
+		if _, err := session.Assert(context.Background(), trigger.Key(), mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+			t.Fatalf("Assert trigger: %v", err)
 		}
 		session.attachPropagationCounters()
 
@@ -1900,7 +1900,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "assert-audit",
 			Fn: func(ctx ActionContext) error {
 				actionsSeen = append(actionsSeen, "assert-audit")
-				result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{
+				result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{
 					"kind": "created",
 				}))
 				assertResult = result
@@ -2048,17 +2048,17 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+		personFact, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
 			"name":   "Ada",
 			"status": "pending",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+			t.Fatalf("Assert(person): %v", err)
 		}
-		if _, err := session.AssertTemplate(context.Background(), TemplateKey("obsolete"), mustFields(t, map[string]any{
+		if _, err := session.Assert(context.Background(), TemplateKey("obsolete"), mustFields(t, map[string]any{
 			"kind": "stale",
 		})); err != nil {
-			t.Fatalf("AssertTemplate(obsolete): %v", err)
+			t.Fatalf("Assert(obsolete): %v", err)
 		}
 
 		runEventOffset := len(collector.Events())
@@ -2174,7 +2174,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 			Name: "assert-temp",
 			Fn: func(ctx ActionContext) error {
 				actionsSeen = append(actionsSeen, "assert-temp")
-				result, err := ctx.AssertTemplate(TemplateKey("temp"), mustFields(t, map[string]any{"id": "tmp-1"}))
+				result, err := ctx.Assert(TemplateKey("temp"), mustFields(t, map[string]any{"id": "tmp-1"}))
 				if err != nil {
 					return err
 				}
@@ -2402,7 +2402,7 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 		Name: "assert-template",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-template")
-			result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
+			result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
 			templateResult = result
 			return err
 		},
@@ -2472,9 +2472,9 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	personFact, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	result, err := session.Run(context.Background())
@@ -2702,8 +2702,8 @@ func TestSessionRunCancellationBeforeLaterActionReturnsCanceled(t *testing.T) {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	cancel = runCancel
 	session := mustSession(t, revision, "run-cancel-later-session")
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	result, err := session.Run(runCtx)
@@ -2763,8 +2763,8 @@ func TestSessionRunRejectsRecursiveAndOverlappingRuns(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		session = mustSession(t, revision, "run-recursive-session")
-		if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+		if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		result, err := session.Run(context.Background())
@@ -2820,8 +2820,8 @@ func TestSessionRunRejectsRecursiveAndOverlappingRuns(t *testing.T) {
 			t.Fatalf("Compile: %v", err)
 		}
 		session := mustSession(t, revision, "run-overlap-session")
-		if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+		if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		firstDone := make(chan struct{})
@@ -2951,12 +2951,12 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	asserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+	asserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
 		"name":   "Ada",
 		"status": "pending",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	personID = asserted.Fact.ID()
 	session.attachPropagationCounters()
@@ -2982,7 +2982,7 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 
 	assertDone := make(chan assertOutcome, 1)
 	go func() {
-		result, err := session.AssertTemplate(context.Background(), TemplateKey("audit"), mustFields(t, map[string]any{"kind": "queued"}))
+		result, err := session.Assert(context.Background(), TemplateKey("audit"), mustFields(t, map[string]any{"kind": "queued"}))
 		assertDone <- assertOutcome{result: result, err: err}
 	}()
 	waitForQueuedMutationCount(t, session, 1)
@@ -3193,8 +3193,8 @@ func TestSessionRunWithMaxFiringsExactLimitMatchesDrainedFocusStack(t *testing.T
 			t.Fatalf("NewSession: %v", err)
 		}
 		for i := int64(1); i <= 2; i++ {
-			if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
-				t.Fatalf("AssertTemplate(%d): %v", i, err)
+			if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+				t.Fatalf("Assert(%d): %v", i, err)
 			}
 		}
 		return session, event.Key()
@@ -3251,8 +3251,8 @@ func TestSessionRunCancellationTakesPrecedenceOverFireLimit(t *testing.T) {
 	}
 	defer session.Close()
 	for i := int64(1); i <= 2; i++ {
-		if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
-			t.Fatalf("AssertTemplate(%d): %v", i, err)
+		if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{"id": i})); err != nil {
+			t.Fatalf("Assert(%d): %v", i, err)
 		}
 	}
 	result, err := session.Run(runCtx, WithMaxFirings(1))

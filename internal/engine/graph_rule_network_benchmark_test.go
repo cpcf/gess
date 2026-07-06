@@ -117,8 +117,8 @@ func TestGraphRuleNetworkSessionOwnsFactSourceIndexes(t *testing.T) {
 	revision, templates := mustCompileGraphRuleNetworkBenchmark(t, tc)
 	session := mustSession(t, revision, "graph-rule-network-fact-source-index-session")
 	for _, fact := range graphRuleNetworkFactSnapshots(t, revision, templates, tc.items) {
-		if _, err := session.AssertTemplate(ctx, fact.TemplateKey(), fact.Fields()); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey(), err)
+		if _, err := session.Assert(ctx, fact.TemplateKey(), fact.Fields()); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey(), err)
 		}
 	}
 	eventFacts, ok := session.factsForTarget(conditionTarget{kind: conditionTargetTemplateKey, templateKey: templates.event})

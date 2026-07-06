@@ -99,9 +99,9 @@ func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -158,8 +158,8 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-lazy-binding-session")
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -309,11 +309,11 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-scalar-fast-path-session")
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{
 		"name":    "Ada",
 		"profile": map[string]any{"likes": "jazz"},
 	})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	if _, err := session.assertByName(context.Background(), "openPerson", mustFields(t, map[string]any{
 		"name": "Grace",
@@ -399,8 +399,8 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 	if session.rete == nil || session.rete.graphBeta == nil {
 		t.Fatalf("session graph beta = %#v, want token-backed graph runtime", session.rete)
 	}
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -436,7 +436,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 				return errors.New("scalar read materialized snapshots")
 			}
 
-			if _, err := ctx.AssertTemplate(auditTemplate.Key(), Fields{"name": value}); err != nil {
+			if _, err := ctx.Assert(auditTemplate.Key(), Fields{"name": value}); err != nil {
 				return err
 			}
 			if ctx.bindings.snapshots != nil {
@@ -470,8 +470,8 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-scalar-assert-session")
-	if _, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -522,9 +522,9 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-scalar-stale-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
@@ -650,9 +650,9 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 				t.Fatalf("Compile: %v", err)
 			}
 			session := mustSession(t, revision, SessionID("action-scalar-mutation-session-"+tc.name))
-			inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+			inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 			if err != nil {
-				t.Fatalf("AssertTemplate(person): %v", err)
+				t.Fatalf("Assert(person): %v", err)
 			}
 			personID = inserted.Fact.ID()
 
@@ -754,9 +754,9 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-lazy-freeze-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	personID = inserted.Fact.ID()
 
@@ -826,9 +826,9 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-escaped-context-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -916,9 +916,9 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-non-escaping-context-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -1007,9 +1007,9 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *t
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-escaped-context-cancel-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -1176,9 +1176,9 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -1276,7 +1276,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	}
 }
 
-func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t *testing.T) {
+func TestSessionExecuteActivationActionsAssertUsesSlotBackedInsertion(t *testing.T) {
 	collector := &testEventCollector{}
 	workspace := NewWorkspace()
 
@@ -1313,12 +1313,12 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 	if err := workspace.AddAction(ActionSpec{
 		Name: "assert-audit",
 		Fn: func(ctx ActionContext) error {
-			result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"id": "audit-1"}))
+			result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"id": "audit-1"}))
 			firstResult = result
 			if err != nil {
 				return err
 			}
-			duplicate, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{
+			duplicate, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{
 				"id":     "audit-1",
 				"status": "active",
 			}))
@@ -1363,9 +1363,9 @@ func TestSessionExecuteActivationActionsAssertTemplateUsesSlotBackedInsertion(t 
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	personFact, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -1462,8 +1462,8 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "effect-assert-values-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -1482,9 +1482,9 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 		t.Fatalf("missing internal generated fact %q", fact.ID())
 	}
 
-	duplicate, err := session.AssertTemplate(ctx, generated.Key(), Fields{"id": mustValue(t, 7)})
+	duplicate, err := session.Assert(ctx, generated.Key(), Fields{"id": mustValue(t, 7)})
 	if err != nil {
-		t.Fatalf("AssertTemplate(generated duplicate): %v", err)
+		t.Fatalf("Assert(generated duplicate): %v", err)
 	}
 	if duplicate.Status != AssertExisting {
 		t.Fatalf("duplicate status = %v, want %v", duplicate.Status, AssertExisting)
@@ -1533,8 +1533,8 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyDuplicateKey(t *testi
 	})
 
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-action-session")
-	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	result, err := session.Run(context.Background())
 	if err != nil {
@@ -1600,8 +1600,8 @@ func TestNativeAssertTemplateValuesActionEmitsListenerEventWithOrigin(t *testing
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	result, err := session.Run(context.Background())
 	if err != nil {
@@ -1696,8 +1696,8 @@ func TestNativeAssertTemplateValuesActionDiscardsUntargetedTokenFastPath(t *test
 	}
 
 	session := mustSession(t, revision, "native-assert-action-token-fast-path-session")
-	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	session.attachPropagationCounters()
 	result, err := session.Run(context.Background())
@@ -1766,11 +1766,11 @@ func TestNativeAssertTemplateValuesActionUsesAggregateValueTokenFastPath(t *test
 	}
 
 	session := mustSession(t, revision, "native-assert-action-aggregate-token-fast-path-session")
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 3})); err != nil {
-		t.Fatalf("AssertTemplate(item 3): %v", err)
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 3})); err != nil {
+		t.Fatalf("Assert(item 3): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 4})); err != nil {
-		t.Fatalf("AssertTemplate(item 4): %v", err)
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"amount": 4})); err != nil {
+		t.Fatalf("Assert(item 4): %v", err)
 	}
 	result, err := session.Run(context.Background())
 	if err != nil {
@@ -1818,11 +1818,11 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyFullFields(t *testing
 	})
 
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-fast-slot-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
-		t.Fatalf("AssertTemplate(source 7): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
+		t.Fatalf("Assert(source 7): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 8)}); err != nil {
-		t.Fatalf("AssertTemplate(source 8): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 8)}); err != nil {
+		t.Fatalf("Assert(source 8): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -1886,8 +1886,8 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyWideSlotsWithoutFactE
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, "s-1")}); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, "s-1")}); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -1948,8 +1948,8 @@ func TestNativeAssertTemplateValuesActionPartialUsesDefaults(t *testing.T) {
 	})
 
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-partial-default-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 7)}); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -1999,11 +1999,11 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyDuplicatePreparedSlot
 	})
 
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "native-assert-duplicate-output-discard-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
-		t.Fatalf("AssertTemplate(source 1): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("Assert(source 1): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
-		t.Fatalf("AssertTemplate(source 2): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
+		t.Fatalf("Assert(source 2): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -2062,8 +2062,8 @@ func TestActionContextAssertTemplateValuesKeepsFactAssertionSemantics(t *testing
 
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "effect-assert-scratch-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -2134,11 +2134,11 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "effect-assert-duplicate-slot-rollback-session")
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
-		t.Fatalf("AssertTemplate(source 1): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 1)}); err != nil {
+		t.Fatalf("Assert(source 1): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
-		t.Fatalf("AssertTemplate(source 2): %v", err)
+	if _, err := session.Assert(ctx, source.Key(), Fields{"id": mustValue(t, 2)}); err != nil {
+		t.Fatalf("Assert(source 2): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -2223,7 +2223,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		Name: "assert-template",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-template")
-			result, err := ctx.AssertTemplate(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
+			result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
 			templateResult = result
 			return err
 		},
@@ -2290,9 +2290,9 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	personFact, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	personFact, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -2425,9 +2425,9 @@ func TestSessionExecuteActivationActionsRejectsStaleBindings(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "action-stale-session")
-	inserted, err := session.AssertTemplate(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)

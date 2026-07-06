@@ -11,8 +11,8 @@ func TestFiringBindingCaptureRecordsExactBindings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -62,9 +62,9 @@ func TestFiringBindingCaptureEvictionDegrades(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	// Drive several external mutations to overflow the tiny ring.
-	record, err := session.AssertTemplate(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
+	record, err := session.Assert(context.Background(), recordKey, mustFields(t, map[string]any{"id": "r-1", "status": "open"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	for _, status := range []string{"active", "closed"} {
 		if _, err := session.Modify(context.Background(), record.Fact.ID(), FactPatch{Set: Fields{"status": newStringValue(status)}}); err != nil {
@@ -94,8 +94,8 @@ func BenchmarkSessionFiringBindingCapture(b *testing.B) {
 	fields := mustFields(b, map[string]any{"id": "t-1"})
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := session.AssertTemplate(ctx, triggerKey, fields); err != nil {
-			b.Fatalf("AssertTemplate: %v", err)
+		if _, err := session.Assert(ctx, triggerKey, fields); err != nil {
+			b.Fatalf("Assert: %v", err)
 		}
 		if _, err := session.Run(ctx); err != nil {
 			b.Fatalf("Run: %v", err)

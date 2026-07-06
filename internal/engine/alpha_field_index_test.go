@@ -11,13 +11,13 @@ func TestSessionAlphaLiteralEqualityIndexInvalidatesAcrossModify(t *testing.T) {
 	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-literal-equality-index-session")
 
-	cold, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
+	cold, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	hot, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+		t.Fatalf("Assert(hot): %v", err)
 	}
 
 	session.attachPropagationCounters()
@@ -51,13 +51,13 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-fact-route-index-session")
 
-	cold, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
+	cold, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	hot, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+		t.Fatalf("Assert(hot): %v", err)
 	}
 	memory := session.rete.graphBeta
 	if memory == nil {
@@ -99,9 +99,9 @@ func TestGraphBetaAlphaFactRoutesClearTouchedKeysOnReset(t *testing.T) {
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-fact-route-reset-session")
 
-	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	hot, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+		t.Fatalf("Assert(hot): %v", err)
 	}
 	memory := session.rete.graphBeta
 	if memory == nil {
@@ -128,11 +128,11 @@ func TestSessionRuntimeDiagnosticsReportsAlphaMemoryOwner(t *testing.T) {
 	revision, templateKey, _ := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-memory-diagnostics-session")
 
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("Assert(hot): %v", err)
 	}
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)
@@ -167,11 +167,11 @@ func TestGraphBetaAlphaMemoryDiagnosticsIncludeRouteIndexes(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-memory-index-diagnostics-session")
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("Assert(hot): %v", err)
 	}
 	memory := session.rete.graphBeta
 	if memory == nil {
@@ -205,11 +205,11 @@ func TestGraphBetaAlphaLiteralEqualityIndexRecordsRouteCounters(t *testing.T) {
 	session := mustSession(t, revision, "alpha-literal-equality-route-counters-session")
 	session.attachPropagationCounters()
 
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1})); err != nil {
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
+		t.Fatalf("Assert(hot): %v", err)
 	}
 
 	counters := session.propagationCounterSnapshot().Totals
@@ -323,13 +323,13 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsAfterFactTableSwap(t *testing
 	ctx := context.Background()
 	revision, templateKey, ruleName := mustCompileAlphaLiteralEqualityRuleset(t)
 	session := mustSession(t, revision, "alpha-field-index-fact-table-swap-session")
-	cold, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
+	cold, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "cold", "score": 1}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(cold): %v", err)
+		t.Fatalf("Assert(cold): %v", err)
 	}
-	hot, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
+	hot, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(hot): %v", err)
+		t.Fatalf("Assert(hot): %v", err)
 	}
 	memory := session.rete.graphBeta
 	if memory == nil {
@@ -414,14 +414,14 @@ func TestGraphBetaAlphaRouteIDsAreSortedAndStableAcrossIndexes(t *testing.T) {
 	}
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "alpha-route-order-session")
-	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{
 		"category": "hot",
 		"score":    2,
 		"priority": "high",
 		"region":   "emea",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	snapshot, err := session.Snapshot(ctx)
 	if err != nil {

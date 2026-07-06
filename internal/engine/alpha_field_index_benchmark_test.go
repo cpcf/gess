@@ -157,11 +157,11 @@ func mustAlphaLiteralEqualitySession(t testing.TB, ctx context.Context, revision
 		if i == factCount/2 {
 			category = "hot"
 		}
-		if _, err := session.AssertTemplate(ctx, templateKey, Fields{
+		if _, err := session.Assert(ctx, templateKey, Fields{
 			"category": newStringValue(category),
 			"score":    newIntValue(int64(i)),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(%d): %v", i, err)
+			t.Fatalf("Assert(%d): %v", i, err)
 		}
 	}
 	return session

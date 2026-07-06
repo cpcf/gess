@@ -12,8 +12,8 @@ type (
 	ActionFunc = engine.ActionFunc
 	// ActionContext is passed to an [ActionFunc]. It exposes the
 	// activation's identity and generation, read access to bound facts
-	// and values, and the mutation API (Assert, AssertTemplate,
-	// AssertLogical, AssertTemplateValues, Modify, Retract, Halt).
+	// and values, and the mutation API (Assert, AssertLogical,
+	// AssertTemplateValues, Modify, Retract, Halt).
 	ActionContext = engine.ActionContext
 	// ActionSpec names one action implementation registered on a
 	// [Workspace]. Exactly one of Fn or AssertTemplateValues must be set.

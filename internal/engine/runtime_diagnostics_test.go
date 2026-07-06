@@ -10,11 +10,11 @@ func TestSessionRuntimeDiagnosticsReportsBetaMemoryOwner(t *testing.T) {
 	revision, _, employeeKey, departmentKey := mustBetaMemoryRuleset(t)
 	session := mustSession(t, revision, "beta-memory-diagnostics-session")
 
-	if _, err := session.AssertTemplate(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(employee): %v", err)
+	if _, err := session.Assert(ctx, employeeKey, mustFields(t, map[string]any{"name": "Ada", "dept": "Engineering"})); err != nil {
+		t.Fatalf("Assert(employee): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
-		t.Fatalf("AssertTemplate(department): %v", err)
+	if _, err := session.Assert(ctx, departmentKey, mustFields(t, map[string]any{"id": "Engineering"})); err != nil {
+		t.Fatalf("Assert(department): %v", err)
 	}
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)
@@ -53,14 +53,14 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 	revision, personKey := mustRuntimeGuardRuleset(t)
 	session := mustSession(t, revision, "terminal-memory-diagnostics-session")
 
-	if _, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    42,
 		"dept":   "Engineering",
 		"id":     "ada",
 		"note":   "ready",
 		"status": "active",
 	})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	if rows, err := session.QueryAll(ctx, "adults-by-dept", QueryArgs{"dept": "Engineering"}); err != nil {
 		t.Fatalf("QueryAll: %v", err)
@@ -160,14 +160,14 @@ func TestSessionRuntimeDiagnosticsReportsReleasedAgendaAfterRun(t *testing.T) {
 	revision, personKey := mustRuntimeGuardRuleset(t)
 	session := mustSession(t, revision, "agenda-memory-diagnostics-session")
 
-	if _, err := session.AssertTemplate(ctx, personKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, personKey, mustFields(t, map[string]any{
 		"age":    42,
 		"dept":   "Engineering",
 		"id":     "ada",
 		"note":   "ready",
 		"status": "active",
 	})); err != nil {
-		t.Fatalf("AssertTemplate(person): %v", err)
+		t.Fatalf("Assert(person): %v", err)
 	}
 	result, err := session.Run(ctx)
 	if err != nil {
@@ -224,11 +224,11 @@ func TestSessionRuntimeDiagnosticsReportsAggregateMemoryOwner(t *testing.T) {
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-memory-diagnostics-session")
 
-	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
-		t.Fatalf("AssertTemplate(a): %v", err)
+	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+		t.Fatalf("Assert(a): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
-		t.Fatalf("AssertTemplate(b): %v", err)
+	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+		t.Fatalf("Assert(b): %v", err)
 	}
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)
@@ -268,15 +268,15 @@ func TestSessionRuntimeDiagnosticsReportsFactMemoryOwner(t *testing.T) {
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "fact-memory-diagnostics-session")
 
-	first, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "state": "ready"}))
+	first, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "state": "ready"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(a): %v", err)
+		t.Fatalf("Assert(a): %v", err)
 	}
 	if first.DuplicateKey == "" {
 		t.Fatalf("duplicate key is empty")
 	}
-	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "state": "ready"})); err != nil {
-		t.Fatalf("AssertTemplate(b): %v", err)
+	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "state": "ready"})); err != nil {
+		t.Fatalf("Assert(b): %v", err)
 	}
 	if _, err := session.assertByName(ctx, "dynamic", mustFields(t, map[string]any{
 		"id":      "dynamic-1",

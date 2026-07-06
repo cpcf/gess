@@ -33,7 +33,7 @@ func TestSemanticScenario(t *testing.T) {
 				return errors.New("missing person binding")
 			}
 			fields := personFact.Fields()
-			_, err := ctx.AssertTemplate(classification.Key(), mustFields(t, map[string]any{
+			_, err := ctx.Assert(classification.Key(), mustFields(t, map[string]any{
 				"subject": fields["name"],
 				"label":   "adult",
 			}))
@@ -55,11 +55,11 @@ func TestSemanticScenario(t *testing.T) {
 
 		revision := mustCompileWorkspace(t, workspace)
 		session := mustScenarioSession(t, revision, "semantic-classification-session")
-		if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name": "Ada",
 			"age":  21,
 		})); err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		result, err := session.Run(context.Background())
@@ -121,7 +121,7 @@ func TestSemanticScenario(t *testing.T) {
 			}
 			personFields := personFact.Fields()
 			departmentFields := departmentFact.Fields()
-			_, err := ctx.AssertTemplate(match.Key(), mustFields(t, map[string]any{
+			_, err := ctx.Assert(match.Key(), mustFields(t, map[string]any{
 				"person":     personFields["name"],
 				"department": departmentFields["name"],
 			}))
@@ -148,16 +148,16 @@ func TestSemanticScenario(t *testing.T) {
 			{"name": "Ada", "dept": "Engineering"},
 			{"name": "Ben", "dept": "Sales"},
 		} {
-			if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, fact)); err != nil {
-				t.Fatalf("AssertTemplate(person): %v", err)
+			if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, fact)); err != nil {
+				t.Fatalf("Assert(person): %v", err)
 			}
 		}
 		for _, fact := range []map[string]any{
 			{"name": "Engineering"},
 			{"name": "Support"},
 		} {
-			if _, err := session.AssertTemplate(context.Background(), department.Key(), mustFields(t, fact)); err != nil {
-				t.Fatalf("AssertTemplate(department): %v", err)
+			if _, err := session.Assert(context.Background(), department.Key(), mustFields(t, fact)); err != nil {
+				t.Fatalf("Assert(department): %v", err)
 			}
 		}
 
@@ -232,11 +232,11 @@ func TestSemanticScenario(t *testing.T) {
 
 		revision := mustCompileWorkspace(t, workspace)
 		session := mustScenarioSession(t, revision, "semantic-self-join-session")
-		if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name":  "Ada",
 			"group": "ops",
 		})); err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		result, err := session.Run(context.Background())
@@ -291,7 +291,7 @@ func TestSemanticScenario(t *testing.T) {
 				if !ok {
 					return fmt.Errorf("unexpected session %q", ctx.SessionID())
 				}
-				_, err := ctx.AssertTemplate(audit.Key(), mustFields(t, map[string]any{
+				_, err := ctx.Assert(audit.Key(), mustFields(t, map[string]any{
 					"subject": subject,
 				}))
 				return err
@@ -318,17 +318,17 @@ func TestSemanticScenario(t *testing.T) {
 		sessionA := mustScenarioSession(t, revision, "semantic-session-a", WithEventListener(collectorA))
 		sessionB := mustScenarioSession(t, revision, "semantic-session-b", WithEventListener(collectorB))
 
-		if _, err := sessionA.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		if _, err := sessionA.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name":   "Ada",
 			"status": "pending",
 		})); err != nil {
-			t.Fatalf("AssertTemplate(session A): %v", err)
+			t.Fatalf("Assert(session A): %v", err)
 		}
-		if _, err := sessionB.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		if _, err := sessionB.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name":   "Grace",
 			"status": "pending",
 		})); err != nil {
-			t.Fatalf("AssertTemplate(session B): %v", err)
+			t.Fatalf("Assert(session B): %v", err)
 		}
 
 		resultA1, err := sessionA.Run(context.Background())
@@ -405,11 +405,11 @@ func TestSemanticScenario(t *testing.T) {
 
 		revision1 := mustCompileWorkspace(t, workspace)
 		session := mustScenarioSession(t, revision1, "semantic-apply-session")
-		if _, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name":   "Ada",
 			"status": "pending",
 		})); err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		result1, err := session.Run(context.Background())
@@ -578,12 +578,12 @@ func TestSemanticScenario(t *testing.T) {
 		revision := mustCompileWorkspace(t, workspace)
 		collector := &testEventCollector{}
 		session := mustScenarioSession(t, revision, "semantic-action-failure-session", WithEventListener(collector))
-		inserted, err := session.AssertTemplate(context.Background(), person.Key(), mustFields(t, map[string]any{
+		inserted, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{
 			"name":   "Ada",
 			"status": "pending",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate(person): %v", err)
+			t.Fatalf("Assert(person): %v", err)
 		}
 
 		result, err := session.Run(context.Background())
@@ -821,8 +821,8 @@ func runOrderingScenarioTrace(t *testing.T) (string, string) {
 	collector := &testEventCollector{}
 	session := mustScenarioSession(t, revision, "semantic-order-helper-session", WithEventListener(collector))
 	for _, bucket := range []string{"tie", "recent-old", "recent-new", "top"} {
-		if _, err := session.AssertTemplate(context.Background(), task.Key(), mustFields(t, map[string]any{"bucket": bucket})); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", bucket, err)
+		if _, err := session.Assert(context.Background(), task.Key(), mustFields(t, map[string]any{"bucket": bucket})); err != nil {
+			t.Fatalf("Assert(%s): %v", bucket, err)
 		}
 	}
 

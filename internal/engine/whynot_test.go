@@ -33,8 +33,8 @@ func TestWhyNotActivatedAndAlreadyFired(t *testing.T) {
 		return map[string]TemplateKey{"a": a}
 	})
 
-	if _, err := session.AssertTemplate(context.Background(), keys["a"], mustFields(t, map[string]any{"id": "a-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), keys["a"], mustFields(t, map[string]any{"id": "a-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 
 	report, err := session.WhyNot(context.Background(), "r")
@@ -76,8 +76,8 @@ func TestWhyNotNeverMatched(t *testing.T) {
 		return map[string]TemplateKey{"a": a, "b": b}
 	})
 
-	if _, err := session.AssertTemplate(context.Background(), keys["a"], mustFields(t, map[string]any{"id": "a-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), keys["a"], mustFields(t, map[string]any{"id": "a-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 
 	report, err := session.WhyNot(context.Background(), "r")
@@ -118,11 +118,11 @@ func TestWhyNotJoinMismatch(t *testing.T) {
 		return map[string]TemplateKey{"a": a, "b": b}
 	})
 
-	if _, err := session.AssertTemplate(context.Background(), keys["a"], mustFields(t, map[string]any{"x": "1"})); err != nil {
-		t.Fatalf("AssertTemplate(a): %v", err)
+	if _, err := session.Assert(context.Background(), keys["a"], mustFields(t, map[string]any{"x": "1"})); err != nil {
+		t.Fatalf("Assert(a): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), keys["b"], mustFields(t, map[string]any{"x": "2"})); err != nil {
-		t.Fatalf("AssertTemplate(b): %v", err)
+	if _, err := session.Assert(context.Background(), keys["b"], mustFields(t, map[string]any{"x": "2"})); err != nil {
+		t.Fatalf("Assert(b): %v", err)
 	}
 
 	report, err := session.WhyNot(context.Background(), "r")
@@ -167,11 +167,11 @@ func TestWhyNotResidualPredicate(t *testing.T) {
 		return map[string]TemplateKey{"a": a, "b": b}
 	})
 
-	if _, err := session.AssertTemplate(context.Background(), keys["a"], mustFields(t, map[string]any{"k": "j", "v": 5})); err != nil {
-		t.Fatalf("AssertTemplate(a): %v", err)
+	if _, err := session.Assert(context.Background(), keys["a"], mustFields(t, map[string]any{"k": "j", "v": 5})); err != nil {
+		t.Fatalf("Assert(a): %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), keys["b"], mustFields(t, map[string]any{"k": "j", "v": 5})); err != nil {
-		t.Fatalf("AssertTemplate(b): %v", err)
+	if _, err := session.Assert(context.Background(), keys["b"], mustFields(t, map[string]any{"k": "j", "v": 5})); err != nil {
+		t.Fatalf("Assert(b): %v", err)
 	}
 
 	report, err := session.WhyNot(context.Background(), "r")
@@ -206,12 +206,12 @@ func TestWhyNotNegationBlockedThenActivated(t *testing.T) {
 		return map[string]TemplateKey{"a": a, "alert": alert}
 	})
 
-	if _, err := session.AssertTemplate(context.Background(), keys["a"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
-		t.Fatalf("AssertTemplate(a): %v", err)
+	if _, err := session.Assert(context.Background(), keys["a"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
+		t.Fatalf("Assert(a): %v", err)
 	}
-	blocker, err := session.AssertTemplate(context.Background(), keys["alert"], mustFields(t, map[string]any{"host": "h1"}))
+	blocker, err := session.Assert(context.Background(), keys["alert"], mustFields(t, map[string]any{"host": "h1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(alert): %v", err)
+		t.Fatalf("Assert(alert): %v", err)
 	}
 
 	report, err := session.WhyNot(context.Background(), "r")
@@ -269,8 +269,8 @@ func TestWhyNotResidualJoinChain(t *testing.T) {
 	})
 	ctx := context.Background()
 	mustAssert := func(key TemplateKey, fields map[string]any) {
-		if _, err := session.AssertTemplate(ctx, key, mustFields(t, fields)); err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+		if _, err := session.Assert(ctx, key, mustFields(t, fields)); err != nil {
+			t.Fatalf("Assert: %v", err)
 		}
 	}
 	mustAssert(keys["a"], map[string]any{"v": 5})
@@ -311,14 +311,14 @@ func TestWhyNotBlockerCountDistinct(t *testing.T) {
 	})
 	ctx := context.Background()
 	// Two distinct a facts sharing host h1, each a separate partial match.
-	if _, err := session.AssertTemplate(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-1", "host": "h1"})); err != nil {
-		t.Fatalf("AssertTemplate(a-1): %v", err)
+	if _, err := session.Assert(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-1", "host": "h1"})); err != nil {
+		t.Fatalf("Assert(a-1): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-2", "host": "h1"})); err != nil {
-		t.Fatalf("AssertTemplate(a-2): %v", err)
+	if _, err := session.Assert(ctx, keys["a"], mustFields(t, map[string]any{"id": "a-2", "host": "h1"})); err != nil {
+		t.Fatalf("Assert(a-2): %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, keys["alert"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
-		t.Fatalf("AssertTemplate(alert): %v", err)
+	if _, err := session.Assert(ctx, keys["alert"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
+		t.Fatalf("Assert(alert): %v", err)
 	}
 
 	report, err := session.WhyNot(ctx, "r")
@@ -381,11 +381,11 @@ func BenchmarkSessionWhyNot(b *testing.B) {
 	}
 	ctx := context.Background()
 	for i := range 64 {
-		if _, err := session.AssertTemplate(ctx, aKey, mustFields(b, map[string]any{"x": "a" + itoa(i)})); err != nil {
-			b.Fatalf("AssertTemplate(a): %v", err)
+		if _, err := session.Assert(ctx, aKey, mustFields(b, map[string]any{"x": "a" + itoa(i)})); err != nil {
+			b.Fatalf("Assert(a): %v", err)
 		}
-		if _, err := session.AssertTemplate(ctx, bKey, mustFields(b, map[string]any{"x": "b" + itoa(i)})); err != nil {
-			b.Fatalf("AssertTemplate(b): %v", err)
+		if _, err := session.Assert(ctx, bKey, mustFields(b, map[string]any{"x": "b" + itoa(i)})); err != nil {
+			b.Fatalf("Assert(b): %v", err)
 		}
 	}
 

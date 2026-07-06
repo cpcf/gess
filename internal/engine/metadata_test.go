@@ -30,7 +30,7 @@ func TestFactsDefaultToStatedSupportMetadata(t *testing.T) {
 		t.Fatalf("dynamic delta support state = %q, want %q", got, FactSupportStated)
 	}
 
-	templated, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	templated, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("template assert: %v", err)
 	}

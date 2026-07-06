@@ -302,12 +302,12 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		inserted, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 			"age":   20,
 			"label": "alpha",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 
 		snapshot := session.indexedSnapshotLocked()
@@ -373,12 +373,12 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if _, err := session.assertByName(context.Background(), "baseline", mustFields(t, map[string]any{"age": 20})); err != nil {
 			t.Fatalf("Assert baseline: %v", err)
 		}
-		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		inserted, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 			"age":   20,
 			"label": "beta",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 
 		snapshot := session.indexedSnapshotLocked()
@@ -441,12 +441,12 @@ func TestJoinConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		insertedRef, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		insertedRef, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 			"age":   20,
 			"label": "gamma",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate baseline: %v", err)
+			t.Fatalf("Assert baseline: %v", err)
 		}
 		insertedCurrent, err := session.assertByName(context.Background(), "candidate", mustFields(t, map[string]any{"age": 20}))
 		if err != nil {
@@ -542,9 +542,9 @@ func TestJoinConstraintMatching(t *testing.T) {
 		}
 		var factIDs []FactID
 		for _, tc := range values {
-			result, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": tc.age, "label": tc.label}))
+			result, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": tc.age, "label": tc.label}))
 			if err != nil {
-				t.Fatalf("AssertTemplate(%v): %v", tc, err)
+				t.Fatalf("Assert(%v): %v", tc, err)
 			}
 			factIDs = append(factIDs, result.Fact.ID())
 		}
@@ -616,9 +616,9 @@ func TestJoinConstraintMatching(t *testing.T) {
 		values := []any{20.5, 20, 21}
 		var factIDs []FactID
 		for _, age := range values {
-			result, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age}))
+			result, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age}))
 			if err != nil {
-				t.Fatalf("AssertTemplate(%v): %v", age, err)
+				t.Fatalf("Assert(%v): %v", age, err)
 			}
 			factIDs = append(factIDs, result.Fact.ID())
 		}
@@ -687,8 +687,8 @@ func TestJoinConstraintMatching(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+		if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
+			t.Fatalf("Assert: %v", err)
 		}
 		snapshot := mustSnapshot(t, context.Background(), session)
 
@@ -738,8 +738,8 @@ func TestJoinConstraintCancellation(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	for _, age := range []any{20, 21} {
-		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age})); err != nil {
-			t.Fatalf("AssertTemplate(%v): %v", age, err)
+		if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age})); err != nil {
+			t.Fatalf("Assert(%v): %v", age, err)
 		}
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)

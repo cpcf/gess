@@ -108,7 +108,7 @@ attributes don't fail loading.
   `need-<template>` that rules can match to prove goals on demand. See
   `advanced.md`.
 - `(key VALUE)`: set an explicit template key used by
-  `session.AssertTemplate` and generated code.
+  `session.Assert` and generated code.
 
 ## `deffacts`
 

@@ -776,14 +776,14 @@ func TestReteGraphPlansCompoundEqualityKeysAndResidualJoins(t *testing.T) {
 	session := mustCompoundEqualityResidualJoinBenchmarkSession(t, revision, thresholdKey, thresholds)
 	session.attachPropagationCounters()
 	ctx := context.Background()
-	_, err = session.AssertTemplate(ctx, candidateKey, mustFields(t, map[string]any{
+	_, err = session.Assert(ctx, candidateKey, mustFields(t, map[string]any{
 		"group":  "A",
 		"region": "R007",
 		"meta":   map[string]any{"id": "T007"},
 		"score":  10,
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate candidate: %v", err)
+		t.Fatalf("Assert candidate: %v", err)
 	}
 	snapshot := session.propagationCounterSnapshot()
 	if snapshot.RuntimePath != propagationRuntimeGraphBeta {
@@ -1292,15 +1292,15 @@ func TestReteGraphIndexesCertifiedKeyExtractorFunctionPredicates(t *testing.T) {
 
 	session := mustSession(t, revision, "key-extractor-function-join")
 	ctx := context.Background()
-	if _, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"id": "left", "group": "Prod"})); err != nil {
-		t.Fatalf("AssertTemplate(left): %v", err)
+	if _, err := session.Assert(ctx, left.Key(), mustFields(t, map[string]any{"id": "left", "group": "Prod"})); err != nil {
+		t.Fatalf("Assert(left): %v", err)
 	}
 	for _, row := range []map[string]any{
 		{"id": "case-match", "group": "prod"},
 		{"id": "miss", "group": "dev"},
 	} {
-		if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, row)); err != nil {
-			t.Fatalf("AssertTemplate(right): %v", err)
+		if _, err := session.Assert(ctx, right.Key(), mustFields(t, row)); err != nil {
+			t.Fatalf("Assert(right): %v", err)
 		}
 	}
 	result, err := session.Run(ctx)

@@ -51,26 +51,26 @@ func TestNaiveMatcherProducesCanonicalPerRuleCandidates(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"age":  30,
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate first: %v", err)
+		t.Fatalf("Assert first: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"age":  20,
 		"name": "Grace",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate second: %v", err)
+		t.Fatalf("Assert second: %v", err)
 	}
-	third, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	third, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"age":  40,
 		"name": "Barbara",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate third: %v", err)
+		t.Fatalf("Assert third: %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -477,11 +477,11 @@ func mustMatcherJoinFixture(tb testing.TB) (*Ruleset, Snapshot) {
 		tb.Fatalf("NewSession: %v", err)
 	}
 	for i, age := range []any{20, 21, 22, 23} {
-		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(tb, map[string]any{
+		if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(tb, map[string]any{
 			"age":  age,
 			"name": string(rune('a' + i)),
 		})); err != nil {
-			tb.Fatalf("AssertTemplate(%v): %v", age, err)
+			tb.Fatalf("Assert(%v): %v", age, err)
 		}
 	}
 
@@ -522,8 +522,8 @@ func TestNaiveMatcherCancellationReturnsContextError(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	for _, age := range []any{20, 21, 22, 23} {
-		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age})); err != nil {
-			t.Fatalf("AssertTemplate(%v): %v", age, err)
+		if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": age})); err != nil {
+			t.Fatalf("Assert(%v): %v", age, err)
 		}
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)

@@ -116,26 +116,26 @@ func runNegationScalingSeedRun(t testing.TB, ctx context.Context, session *Sessi
 	for stream := range tc.streams {
 		streamValue := newIntValue(int64(stream))
 		for id := range tc.customersPerStream {
-			_, err := session.AssertTemplate(ctx, customerKey, Fields{
+			_, err := session.Assert(ctx, customerKey, Fields{
 				"stream": streamValue,
 				"id":     newIntValue(int64(id)),
 				"tier":   newStringValue(negationScalingTier(id)),
 			})
 			if err != nil {
-				t.Fatalf("AssertTemplate(customer): %v", err)
+				t.Fatalf("Assert(customer): %v", err)
 			}
 		}
 	}
 	for stream := range tc.streams {
 		streamValue := newIntValue(int64(stream))
 		for id := 0; id < tc.customersPerStream; id += tc.blockEvery {
-			_, err := session.AssertTemplate(ctx, blockKey, Fields{
+			_, err := session.Assert(ctx, blockKey, Fields{
 				"stream":   streamValue,
 				"customer": newIntValue(int64(id)),
 				"active":   newBoolValue(true),
 			})
 			if err != nil {
-				t.Fatalf("AssertTemplate(block): %v", err)
+				t.Fatalf("Assert(block): %v", err)
 			}
 		}
 	}

@@ -337,9 +337,9 @@ func TestBackchainReactiveTemplateGeneratesDemandTemplateMetadata(t *testing.T) 
 	}
 
 	session := mustSession(t, revision, "backchain-demand-public-assert-session")
-	_, err = session.AssertTemplate(context.Background(), demandKey, nil)
+	_, err = session.Assert(context.Background(), demandKey, nil)
 	if err == nil {
-		t.Fatal("public AssertTemplate succeeded for engine-owned demand template")
+		t.Fatal("public Assert succeeded for engine-owned demand template")
 	}
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("errors.Is(err, ErrValidation) = false for %v", err)
@@ -481,8 +481,8 @@ func TestBackchainDemandTemplateRejectsPublicGeneratedFactActions(t *testing.T) 
 	})
 	revision = mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "backchain-demand-context-action-session")
-	if _, err := session.AssertTemplate(context.Background(), trigger.Key(), nil); err != nil {
-		t.Fatalf("AssertTemplate(trigger): %v", err)
+	if _, err := session.Assert(context.Background(), trigger.Key(), nil); err != nil {
+		t.Fatalf("Assert(trigger): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err == nil || !errors.Is(err, ErrValidation) {
 		t.Fatalf("Run context action error = %v, want ErrValidation", err)

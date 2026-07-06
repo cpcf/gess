@@ -48,11 +48,11 @@ func TestAccumulateBuiltInsBindValuesAndUpdateAcrossMutations(t *testing.T) {
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-session")
 
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
 	if err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
 	if err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
@@ -188,12 +188,12 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.rete)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
 	if err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
 	if err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
@@ -258,10 +258,10 @@ func TestAccumulateGraphMatchMaterializesFromSourceBoundary(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.rete)
 	}
 
-	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3})); err != nil {
+	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3})); err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5})); err != nil {
+	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5})); err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
 
@@ -360,10 +360,10 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-unobserved-member-modify-session")
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3, "note": "first"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3, "note": "first"})); err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5, "note": "old"}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5, "note": "old"}))
 	if err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
@@ -482,17 +482,17 @@ func TestAccumulateMinAndMaxUseIncrementalAgendaDeltas(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want incremental min/max aggregate agenda support", session.rete)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
 	if err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
 	if err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	third, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c", "amount": 1}))
+	third, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c", "amount": 1}))
 	if err != nil {
 		t.Fatalf("assert third: %v", err)
 	}
@@ -587,12 +587,12 @@ func TestAccumulateCollectUsesIncrementalAgendaDeltas(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want incremental collect aggregate agenda support", session.rete)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
 	if err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
 	if err != nil {
 		t.Fatalf("assert second: %v", err)
 	}
@@ -712,20 +712,20 @@ func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) 
 		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.rete)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
 		t.Fatalf("assert group a: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
 		t.Fatalf("assert group b: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3}))
 	if err != nil {
 		t.Fatalf("assert item i1: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5}))
 	if err != nil {
 		t.Fatalf("assert item i2: %v", err)
 	}
@@ -827,11 +827,11 @@ func TestAccumulateBucketReuseClearsNumericState(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.rete)
 	}
 
-	firstGroup, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"}))
+	firstGroup, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"}))
 	if err != nil {
 		t.Fatalf("assert group a: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 10})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 10})); err != nil {
 		t.Fatalf("assert item i1: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -870,7 +870,7 @@ func TestAccumulateBucketReuseClearsNumericState(t *testing.T) {
 		t.Fatalf("second Run fired = %d, want 0", result.Fired)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
 		t.Fatalf("assert group b: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -953,16 +953,16 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "bucketed-aggregate-unobserved-member-modify-session")
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
 		t.Fatalf("assert group a: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
 		t.Fatalf("assert group b: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3, "note": "first"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3, "note": "first"})); err != nil {
 		t.Fatalf("assert item i1: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5, "note": "old"}))
+	second, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5, "note": "old"}))
 	if err != nil {
 		t.Fatalf("assert item i2: %v", err)
 	}
@@ -1110,17 +1110,17 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "bucketed-aggregate-unobserved-outer-modify-session")
-	if _, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a", "note": "first"})); err != nil {
+	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a", "note": "first"})); err != nil {
 		t.Fatalf("assert group a: %v", err)
 	}
-	secondGroup, err := session.AssertTemplate(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b", "note": "old"}))
+	secondGroup, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "b", "note": "old"}))
 	if err != nil {
 		t.Fatalf("assert group b: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i1", "group": "a", "amount": 3})); err != nil {
 		t.Fatalf("assert item i1: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "i2", "group": "b", "amount": 5})); err != nil {
 		t.Fatalf("assert item i2: %v", err)
 	}
 	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
@@ -1257,15 +1257,15 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want downstream aggregate incremental agenda support", session.rete)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 2})); err != nil {
+	if _, err := session.Assert(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 2})); err != nil {
 		t.Fatalf("assert gate 2: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
 		t.Fatalf("assert item a: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
 		t.Fatalf("assert item b: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -1277,10 +1277,10 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 		t.Fatalf("first Run fired/observed = %d/%v, want 1/2", result.Fired, observed)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 3})); err != nil {
+	if _, err := session.Assert(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 3})); err != nil {
 		t.Fatalf("assert gate 3: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c"})); err != nil {
 		t.Fatalf("assert item c: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -1339,11 +1339,11 @@ func TestAccumulateSharedInputRulesUseIncrementalAgendaDeltas(t *testing.T) {
 		t.Fatalf("rete runtime = %#v, want shared aggregate incremental agenda support", session.rete)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
 		t.Fatalf("assert item a: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	if _, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
+	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "b"})); err != nil {
 		t.Fatalf("assert item b: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -1392,17 +1392,17 @@ func TestAccumulateSumHandlesDuplicateFactsAndNumericTransitionsIncrementally(t 
 		t.Fatalf("rete runtime = %#v, want numeric aggregate incremental agenda support", session.rete)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
+	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
 	if err != nil {
 		t.Fatalf("assert first: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	duplicate, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
+	duplicate, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))
 	if err != nil {
 		t.Fatalf("assert duplicate: %v", err)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	floaty, err := session.AssertTemplate(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c", "amount": 1.5}))
+	floaty, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "c", "amount": 1.5}))
 	if err != nil {
 		t.Fatalf("assert floaty: %v", err)
 	}

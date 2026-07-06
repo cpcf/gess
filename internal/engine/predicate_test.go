@@ -267,12 +267,12 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		inserted, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+		inserted, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 			"age":  18,
 			"name": "Ada",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 
 		snapshot := session.indexedSnapshotLocked()
@@ -394,8 +394,8 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 18})); err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+		if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 18})); err != nil {
+			t.Fatalf("Assert: %v", err)
 		}
 
 		snapshot := session.indexedSnapshotLocked()
@@ -580,18 +580,18 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"age":  18,
 		"name": "Ada",
 		"tag":  "blue",
 	})); err != nil {
-		t.Fatalf("AssertTemplate first: %v", err)
+		t.Fatalf("Assert first: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"age":  21,
 		"name": "Zoe",
 	})); err != nil {
-		t.Fatalf("AssertTemplate second: %v", err)
+		t.Fatalf("Assert second: %v", err)
 	}
 
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -659,8 +659,8 @@ func TestFieldConstraintScanCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 18})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{"age": 18})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)
 

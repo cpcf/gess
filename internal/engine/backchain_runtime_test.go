@@ -35,8 +35,8 @@ func TestBackchainDemandGenerationAssertsNeedFactOnJoinMiss(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, ctx, session)
@@ -67,7 +67,7 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 			}
 			id, _ := demand.Field("id")
 			kind, _ := demand.Field("kind")
-			_, err := ctx.AssertTemplate(answer.Key(), Fields{
+			_, err := ctx.Assert(answer.Key(), Fields{
 				"id":    id,
 				"kind":  kind,
 				"value": newStringValue("provided"),
@@ -116,8 +116,8 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 	demandKey := mustDemandKey(t, revision, answer.Key())
 	beforeRun := mustSnapshot(t, ctx, session)
@@ -172,8 +172,8 @@ func TestExplicitBackchainConditionDoesNotGenerateDemand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, ctx, session)
@@ -207,8 +207,8 @@ func TestNegatedBackchainConditionDoesNotGenerateDemand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 
 	snapshot := mustSnapshot(t, ctx, session)
@@ -245,8 +245,8 @@ func TestBackchainDemandNonEqualityConstraintLeavesSlotUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 
 	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
@@ -275,7 +275,7 @@ func TestBackchainQueryParametersPopulateDemandSlots(t *testing.T) {
 			}
 			id, _ := demand.Field("id")
 			kind, _ := demand.Field("kind")
-			_, err := ctx.AssertTemplate(answer.Key(), Fields{
+			_, err := ctx.Assert(answer.Key(), Fields{
 				"id":    id,
 				"kind":  kind,
 				"value": newStringValue("generated"),
@@ -361,20 +361,20 @@ func TestBackchainDemandDiagnosticsTrackActiveDemands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 
 	before := mustSnapshot(t, ctx, session).BackchainDemandDiagnostics()
 	if before.Active != 1 || before.Count(demandKey) != 1 {
 		t.Fatalf("backchain demand diagnostics before answer = %#v, want one active %q", before, demandKey)
 	}
-	if _, err := session.AssertTemplate(ctx, answer.Key(), mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, answer.Key(), mustFields(t, map[string]any{
 		"id":    "q1",
 		"kind":  "hardware",
 		"value": "provided",
 	})); err != nil {
-		t.Fatalf("AssertTemplate(answer): %v", err)
+		t.Fatalf("Assert(answer): %v", err)
 	}
 	after := mustSnapshot(t, ctx, session).BackchainDemandDiagnostics()
 	if after.Active != 0 || after.Count(demandKey) != 0 {
@@ -484,9 +484,9 @@ func TestBackchainDemandRetractedWhenWaitingFactRetracted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"}))
+	inserted, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+		t.Fatalf("Assert(request): %v", err)
 	}
 	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 1 {
 		t.Fatalf("demands after assert = %d, want 1", len(demands))
@@ -529,9 +529,9 @@ func TestBackchainDemandReplacedWhenJoinedFieldModified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	inserted, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"}))
+	inserted, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+		t.Fatalf("Assert(request): %v", err)
 	}
 	before := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
 	if len(before) != 1 {
@@ -581,20 +581,20 @@ func TestBackchainDemandRegeneratedWhenAnswerRetracted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
 	if len(demands) != 1 {
 		t.Fatalf("demands after request = %d, want 1", len(demands))
 	}
-	answerFact, err := session.AssertTemplate(ctx, answer.Key(), mustFields(t, map[string]any{
+	answerFact, err := session.Assert(ctx, answer.Key(), mustFields(t, map[string]any{
 		"id":    "q1",
 		"kind":  "hardware",
 		"value": "provided",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(answer): %v", err)
+		t.Fatalf("Assert(answer): %v", err)
 	}
 	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 0 {
 		t.Fatalf("demands after answer = %d, want 0", len(demands))
@@ -639,8 +639,8 @@ func TestBackchainDemandResetClearsRuntimeDemands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
-		t.Fatalf("AssertTemplate(request): %v", err)
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
 	}
 	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 1 {
 		t.Fatalf("demands before reset = %d, want 1", len(demands))

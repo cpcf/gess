@@ -93,9 +93,9 @@ func TestSessionModifyNoOpDoesNotCreateAgendaNoise(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if got := len(collector.Events()); got != 2 {
 		t.Fatalf("events after assert = %d, want 2", got)
@@ -144,9 +144,9 @@ func TestSessionModifyReconcilesAgendaForChangedAndDroppedMatches(t *testing.T) 
 			t.Fatalf("NewSession: %v", err)
 		}
 
-		inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+		inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 
 		modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
@@ -199,9 +199,9 @@ func TestSessionModifyReconcilesAgendaForChangedAndDroppedMatches(t *testing.T) 
 			t.Fatalf("NewSession: %v", err)
 		}
 
-		inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"status": "pending"}))
+		inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"status": "pending"}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 
 		modified, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
@@ -347,12 +347,12 @@ func TestSessionModifyRebuildsDeclaredTemplateSlots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"age":  18,
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	snapshot := session.indexedSnapshotLocked()
@@ -402,13 +402,13 @@ func TestSessionModifyTemplateUnsetDefaultAndOptionalBehavior(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"status": "inactive",
 		"tag":    "open",
 		"id":     "evt-1",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate baseline: %v", err)
+		t.Fatalf("Assert baseline: %v", err)
 	}
 
 	result, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
@@ -477,12 +477,12 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 		t.Fatal("expected template event")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"id":  "evt-1",
 		"tag": "blue",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if internal := mustWorkingFactByID(t, session, first.Fact.ID()); internal.fieldsMap() != nil || len(internal.fieldSlotSlice()) == 0 {
 		t.Fatalf("slot-backed fact storage = (fields=%v slots=%d)", internal.fieldsMap(), len(internal.fieldSlotSlice()))
@@ -561,7 +561,7 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 		t.Fatal("session changed after failed required-field modify")
 	}
 
-	second, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"id":     "evt-2",
 		"status": "open",
 	}))
@@ -600,9 +600,9 @@ func TestSessionModifyTemplateUnsetRequiredFieldFailsAndLeavesWorkingMemory(t *t
 		t.Fatal("expected template strict")
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "s-1"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "s-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	before := mustSnapshot(t, context.Background(), session)
 
@@ -652,11 +652,11 @@ func TestSessionModifyDuplicateCollisionIsAtomicAndLeavesIndexes(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1", "status": "open"}))
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1", "status": "open"}))
 	if err != nil {
 		t.Fatalf("first assert: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-2", "status": "open"}))
+	second, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-2", "status": "open"}))
 	if err != nil {
 		t.Fatalf("second assert: %v", err)
 	}
@@ -739,11 +739,11 @@ func TestSessionModifyDuplicateIndexUpdatesOnRealKeyChange(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1", "status": "open"}))
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1", "status": "open"}))
 	if err != nil {
 		t.Fatalf("first assert: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-2", "status": "open"}))
+	second, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-2", "status": "open"}))
 	if err != nil {
 		t.Fatalf("second assert: %v", err)
 	}

@@ -10,8 +10,8 @@ func whatIfBaseSession(t testing.TB) (*Session, TemplateKey) {
 	t.Helper()
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
 	session := mustSession(t, revision, "whatif-base")
-	if _, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(s-1): %v", err)
+	if _, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(s-1): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -25,7 +25,7 @@ func TestWhatIfAssertScenario(t *testing.T) {
 	baseBefore := mustSnapshot(t, ctx, session)
 
 	report, err := session.WhatIf(ctx, func(ctx context.Context, fork *Session) error {
-		_, err := fork.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
+		_, err := fork.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
 		return err
 	}, WithWhatIfExplain())
 	if err != nil {
@@ -82,7 +82,7 @@ func TestWhatIfFireLimit(t *testing.T) {
 	session, sourceKey := whatIfBaseSession(t)
 	ctx := context.Background()
 	report, err := session.WhatIf(ctx, func(ctx context.Context, fork *Session) error {
-		_, err := fork.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
+		_, err := fork.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
 		return err
 	}, WithWhatIfMaxFirings(1))
 	if err != nil {
@@ -103,7 +103,7 @@ func TestWhatIfScenarioErrorLeavesBaseIntact(t *testing.T) {
 
 	sentinel := errors.New("scenario boom")
 	_, err := session.WhatIf(ctx, func(ctx context.Context, fork *Session) error {
-		_, _ = fork.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-9"}))
+		_, _ = fork.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-9"}))
 		return sentinel
 	})
 	if !errors.Is(err, sentinel) {
@@ -124,7 +124,7 @@ func BenchmarkSessionWhatIf(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		if _, err := session.WhatIf(ctx, func(ctx context.Context, fork *Session) error {
-			_, err := fork.AssertTemplate(ctx, sourceKey, fields)
+			_, err := fork.Assert(ctx, sourceKey, fields)
 			return err
 		}); err != nil {
 			b.Fatalf("WhatIf: %v", err)
@@ -136,7 +136,7 @@ func TestWhatIfRetainFork(t *testing.T) {
 	session, sourceKey := whatIfBaseSession(t)
 	ctx := context.Background()
 	report, err := session.WhatIf(ctx, func(ctx context.Context, fork *Session) error {
-		_, err := fork.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
+		_, err := fork.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"}))
 		return err
 	}, WithWhatIfRetainFork())
 	if err != nil {
@@ -147,7 +147,7 @@ func TestWhatIfRetainFork(t *testing.T) {
 	}
 	defer report.ForkSession.Close()
 	// The retained fork is usable for follow-up.
-	if _, err := report.ForkSession.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-3"})); err != nil {
+	if _, err := report.ForkSession.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-3"})); err != nil {
 		t.Fatalf("follow-up assert on retained fork: %v", err)
 	}
 	if _, err := report.ForkSession.Run(ctx); err != nil {

@@ -951,12 +951,12 @@ func (s *Session) Close() error {
 
 // assertByName asserts an untemplated (dynamic) fact. Dynamic facts are not a
 // public concept; this is engine-internal plumbing retained for query triggers
-// and white-box tests. Public callers use AssertTemplate.
+// and white-box tests. Public callers use Assert.
 func (s *Session) assertByName(ctx context.Context, name string, fields Fields) (AssertResult, error) {
 	return s.insertFactWithContextAndOrigin(ctx, name, "", fields, mutationOrigin{})
 }
 
-func (s *Session) AssertTemplate(ctx context.Context, templateKey TemplateKey, fields Fields) (AssertResult, error) {
+func (s *Session) Assert(ctx context.Context, templateKey TemplateKey, fields Fields) (AssertResult, error) {
 	return s.insertFactWithContextAndOrigin(ctx, "", templateKey, fields, mutationOrigin{})
 }
 

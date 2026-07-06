@@ -52,7 +52,7 @@ func run(out io.Writer) error {
 		{orderTemplate, exampleutil.Fields("id", "O-200", "customer", "C-200", "sku", "SKU-1")},
 		{orderTemplate, exampleutil.Fields("id", "O-300", "customer", "C-100", "sku", "SKU-2")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}
@@ -107,7 +107,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 		Fn: func(ctx rules.ActionContext) error {
 			order, _ := ctx.BindingScalarValue("order", "id")
 			warehouse, _ := ctx.BindingScalarValue("inventory", "warehouse")
-			_, err := ctx.AssertTemplate(routeTemplate, rules.Fields{
+			_, err := ctx.Assert(routeTemplate, rules.Fields{
 				"order":     order,
 				"lane":      mustValue("expedite"),
 				"warehouse": warehouse,
@@ -122,7 +122,7 @@ func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
 		Fn: func(ctx rules.ActionContext) error {
 			order, _ := ctx.BindingScalarValue("order", "id")
 			warehouse, _ := ctx.BindingScalarValue("inventory", "warehouse")
-			_, err := ctx.AssertTemplate(routeTemplate, rules.Fields{
+			_, err := ctx.Assert(routeTemplate, rules.Fields{
 				"order":     order,
 				"lane":      mustValue("standard"),
 				"warehouse": warehouse,

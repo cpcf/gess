@@ -757,34 +757,34 @@ func seedMixedCascadeScalingSession(t testing.TB, session *Session, tc mixedCasc
 	ctx := context.Background()
 	for region := 0; region < mixedCascadeRegionCount(); region++ {
 		for segment := 0; segment < mixedCascadeSegmentCount(); segment++ {
-			if _, err := session.AssertTemplate(ctx, TemplateKey("policy"), Fields{
+			if _, err := session.Assert(ctx, TemplateKey("policy"), Fields{
 				"region":   steadyStateIntValue(region),
 				"segment":  steadyStateStringValue(mixedCascadeSegmentName(segment)),
 				"limit":    steadyStateIntValue(mixedCascadePolicyLimit(region, segment)),
 				"priority": steadyStateStringValue(mixedCascadePolicyPriority(region, segment)),
 			}); err != nil {
-				t.Fatalf("AssertTemplate(policy region=%d segment=%d): %v", region, segment, err)
+				t.Fatalf("Assert(policy region=%d segment=%d): %v", region, segment, err)
 			}
 		}
 	}
 	for stream := 0; stream < tc.streams; stream++ {
 		region := mixedCascadeRegion(stream)
 		customer := mixedCascadeCustomer(stream)
-		if _, err := session.AssertTemplate(ctx, TemplateKey("account"), Fields{
+		if _, err := session.Assert(ctx, TemplateKey("account"), Fields{
 			"customer": steadyStateIntValue(customer),
 			"region":   steadyStateIntValue(region),
 			"segment":  steadyStateStringValue(mixedCascadeSegment(stream)),
 			"tier":     steadyStateStringValue(mixedCascadeTier(stream)),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(account stream=%d): %v", stream, err)
+			t.Fatalf("Assert(account stream=%d): %v", stream, err)
 		}
-		if _, err := session.AssertTemplate(ctx, TemplateKey("tick"), Fields{
+		if _, err := session.Assert(ctx, TemplateKey("tick"), Fields{
 			"stream":   steadyStateIntValue(stream),
 			"n":        steadyStateIntValue(0),
 			"customer": steadyStateIntValue(customer),
 			"region":   steadyStateIntValue(region),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(tick stream=%d): %v", stream, err)
+			t.Fatalf("Assert(tick stream=%d): %v", stream, err)
 		}
 	}
 }

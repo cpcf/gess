@@ -11,8 +11,8 @@ func TestDiffSnapshots(t *testing.T) {
 	ctx := context.Background()
 
 	// Baseline: assert one source, run so the logical chain forms.
-	if _, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if _, err := session.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -25,8 +25,8 @@ func TestDiffSnapshots(t *testing.T) {
 	}
 
 	// Add a second source.
-	if _, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"})); err != nil {
-		t.Fatalf("AssertTemplate(s-2): %v", err)
+	if _, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-2"})); err != nil {
+		t.Fatalf("Assert(s-2): %v", err)
 	}
 	if _, err := session.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -74,9 +74,9 @@ func TestDiffSnapshotsFieldAndSupportChange(t *testing.T) {
 	session := mustSession(t, revision, "diff-fields")
 	ctx := context.Background()
 
-	task, err := session.AssertTemplate(ctx, taskKey, mustFields(t, map[string]any{"id": "t-1", "status": "open"}))
+	task, err := session.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": "t-1", "status": "open"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	before := mustSnapshot(t, ctx, session)
 

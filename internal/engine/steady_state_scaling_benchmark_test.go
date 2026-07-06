@@ -384,11 +384,11 @@ func seedSteadyStateScalingSession(t testing.TB, session *Session, tc steadyStat
 		t.Fatal("session is nil")
 	}
 	for stream := 0; stream < tc.streams; stream++ {
-		if _, err := session.AssertTemplate(context.Background(), TemplateKey("step"), Fields{
+		if _, err := session.Assert(context.Background(), TemplateKey("step"), Fields{
 			"stream": steadyStateIntValue(stream),
 			"n":      steadyStateIntValue(0),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(step stream=%d): %v", stream, err)
+			t.Fatalf("Assert(step stream=%d): %v", stream, err)
 		}
 	}
 }

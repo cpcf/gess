@@ -277,7 +277,7 @@ func (c ActionContext) bindingScalarValueAtSlot(bindingSlot, fieldSlot int) (Val
 
 // assertByName asserts an untemplated (dynamic) fact. It is engine-internal
 // plumbing — dynamic facts are not a public concept — retained for query
-// triggers and white-box tests. Public callers use AssertTemplate.
+// triggers and white-box tests. Public callers use Assert.
 func (c ActionContext) assertByName(name string, fields Fields) (AssertResult, error) {
 	if c.session == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
@@ -285,7 +285,7 @@ func (c ActionContext) assertByName(name string, fields Fields) (AssertResult, e
 	return c.session.insertFactWithContextAndOrigin(c.Context(), name, "", fields, c.mutationOrigin())
 }
 
-func (c ActionContext) AssertTemplate(templateKey TemplateKey, fields Fields) (AssertResult, error) {
+func (c ActionContext) Assert(templateKey TemplateKey, fields Fields) (AssertResult, error) {
 	if c.session == nil {
 		return AssertResult{Status: AssertClosed}, ErrClosedSession
 	}
@@ -1988,7 +1988,7 @@ func (s *Session) executeEffectAction(ctx ActionContext, effect compiledEffectAc
 			return fmt.Errorf("%w: assert-logical target %q is not a declared template", ErrInvalidRuleset, effect.factName)
 		}
 		if effect.templateKey != "" {
-			_, err = ctx.AssertTemplate(effect.templateKey, fields)
+			_, err = ctx.Assert(effect.templateKey, fields)
 			return err
 		}
 		return fmt.Errorf("%w: assert target %q is not a declared template", ErrInvalidRuleset, effect.factName)

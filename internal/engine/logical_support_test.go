@@ -14,9 +14,9 @@ func TestActionContextAssertLogicalCreatesSupportAndCascadesOnSourceRetract(t *t
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	run, err := session.Run(context.Background())
 	if err != nil {
@@ -76,9 +76,9 @@ func TestLogicalSupportRetractCascadeUsesGraphDeltas(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
 	session := mustSession(t, revision, "logical-retract-graph-delta-session")
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -103,9 +103,9 @@ func TestLogicalSupportModifyCascadeUsesGraphDeltas(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-modify-graph-delta-session")
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -134,11 +134,11 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-compact-source-identity-session")
 
-	if _, err := session.AssertTemplate(ctx, sourceKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{
 		"id":    "s-1",
 		"group": "shared",
 	})); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -187,13 +187,13 @@ func TestLogicalSupportDuplicateAssertionsShareFactUntilLastSupportRemoved(t *te
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-duplicate-session")
 
-	first, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
+	first, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(first source): %v", err)
+		t.Fatalf("Assert(first source): %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-2", "group": "shared"}))
+	second, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-2", "group": "shared"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(second source): %v", err)
+		t.Fatalf("Assert(second source): %v", err)
 	}
 	run, err := session.Run(context.Background())
 	if err != nil {
@@ -239,9 +239,9 @@ func TestLogicalSupportStatedMergeAndMutationGuards(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-stated-merge-session")
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -257,7 +257,7 @@ func TestLogicalSupportStatedMergeAndMutationGuards(t *testing.T) {
 
 	stated, err := session.assertByName(context.Background(), "derived", mustFields(t, map[string]any{"id": "shared"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(stated duplicate): %v", err)
+		t.Fatalf("Assert(stated duplicate): %v", err)
 	}
 	if stated.Status != AssertExisting || stated.Fact.Support().State != FactSupportStatedAndLogical {
 		t.Fatalf("stated merge result = %#v, want existing stated_and_logical", stated)
@@ -289,8 +289,8 @@ func TestLogicalSupportStatedMergeAndMutationGuards(t *testing.T) {
 func TestLogicalSupportClearsOnReset(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
 	session := mustSession(t, revision, "logical-reset-session")
-	if _, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"})); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"})); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -347,8 +347,8 @@ func TestLogicalSupportFromFailedFiringIsCleanedUp(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 	session := mustSession(t, revision, "logical-failed-firing-session")
-	if _, err := session.AssertTemplate(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(context.Background(), source.Key(), mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	run, err := session.Run(context.Background())
 	if !errors.Is(err, ErrActionFailed) || run.Status != RunActionFailed {

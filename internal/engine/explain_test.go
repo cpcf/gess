@@ -11,8 +11,8 @@ func TestSnapshotExplainLogicalChain(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
 	session := mustSession(t, revision, "explain-chain-session")
 
-	if _, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+	if _, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -73,9 +73,9 @@ func TestSnapshotExplainRetractCascade(t *testing.T) {
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
 	session := mustSession(t, revision, "explain-cascade-session")
 
-	source, err := session.AssertTemplate(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	source, err := session.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(source): %v", err)
+		t.Fatalf("Assert(source): %v", err)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)

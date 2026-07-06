@@ -230,8 +230,8 @@ func collectPureFunctionPredicatePropagationCounters(t testing.TB, revision *Rul
 	}
 	session.attachPropagationCounters()
 	for _, fact := range pureFunctionPredicateInitialFacts(tc) {
-		if _, err := session.AssertTemplate(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+		if _, err := session.Assert(context.Background(), fact.TemplateKey, fact.Fields); err != nil {
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
 	result, err := session.Run(context.Background())

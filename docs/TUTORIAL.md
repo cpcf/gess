@@ -244,7 +244,7 @@ fact before moving on, or compare against
 assert request or database facts after creating the session:
 
 ```go
-_, err := session.AssertTemplate(ctx, rules.TemplateKey("order"), rules.MustFields(
+_, err := session.Assert(ctx, rules.TemplateKey("order"), rules.MustFields(
 	"id", "O-400",
 	"customer", "C-100",
 	"sku", "SKU-1",

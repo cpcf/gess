@@ -124,9 +124,9 @@ func prepareClaimsTriageMutationSession(t testing.TB, ctx context.Context, revis
 	session := mustSession(t, revision, "claims-triage-mutation-cycle")
 	var targetSignal FactID
 	for _, fact := range claimsTriageInitialFacts(t, factCount) {
-		inserted, err := session.AssertTemplate(ctx, fact.TemplateKey, fact.Fields)
+		inserted, err := session.Assert(ctx, fact.TemplateKey, fact.Fields)
 		if err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", fact.TemplateKey, err)
+			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 		if fact.TemplateKey == "signal" && claimsTriageInitialFactStringField(fact, "claim-id") == claimsTriageMutationTargetClaimID {
 			targetSignal = inserted.Fact.ID()

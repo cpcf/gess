@@ -63,12 +63,10 @@ memory, and computes the initial agenda. Options:
 
 ## Asserting facts
 
-Three entry points assert facts:
+Two entry points assert facts, both against a declared template:
 
-- `Assert(ctx, name, fields)`: assert by template name (or a dynamic fact
-  name when no template matches).
-- `AssertTemplate(ctx, templateKey, fields)`: assert against a template by
-  key, with slot validation.
+- `Assert(ctx, templateKey, fields)`: assert a fact of the template
+  addressed by key, validated against its slots.
 - `AssertTemplateValues(ctx, templateKey, values...)`: assert with values in
   template field order, skipping field-map construction.
 
@@ -76,7 +74,7 @@ Build fields with `rules.NewFields`, `rules.NewFieldsFromPairs`, or
 `rules.MustFields`:
 
 ```go
-result, err := session.AssertTemplate(ctx, rules.TemplateKey("order"),
+result, err := session.Assert(ctx, rules.TemplateKey("order"),
 	rules.MustFields("id", "O-400", "customer", "C-100", "sku", "SKU-1"))
 ```
 
@@ -227,7 +225,7 @@ with `WithWhatIfExplain` — a derivation for every added fact.
 
 ```go
 report, err := session.WhatIf(ctx, func(ctx context.Context, fork *session.Session) error {
-	_, err := fork.AssertTemplate(ctx, findingKey, exampleutil.Fields("id", "F-200", "severity", "critical"))
+	_, err := fork.Assert(ctx, findingKey, exampleutil.Fields("id", "F-200", "severity", "critical"))
 	return err
 }, session.WithWhatIfExplain())
 // report.Firings, report.Diff.Added, report.Derivations — base session unchanged.

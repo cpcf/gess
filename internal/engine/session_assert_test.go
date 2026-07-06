@@ -53,12 +53,12 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	templateResult, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	templateResult, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "boot",
 		"status": "ok",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if !templateResult.Inserted() {
 		t.Fatalf("template assert status = %v, want inserted", templateResult.Status)
@@ -188,12 +188,12 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"tag": "blue",
 		"id":  "evt-1",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	internal := mustWorkingFactByID(t, session, inserted.Fact.ID())
@@ -231,7 +231,7 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 		t.Fatalf("slot-backed fact rendering changed between reads: %q != %q", rendered, inserted.Fact.String())
 	}
 
-	duplicate, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	duplicate, err := session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"id":     "evt-1",
 		"status": "active",
 		"tag":    "blue",
@@ -246,7 +246,7 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 		t.Fatalf("duplicate key changed: %q != %q", duplicate.DuplicateKey, inserted.DuplicateKey)
 	}
 
-	_, err = session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	_, err = session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"status": "active",
 		"tag":    "blue",
 	}))
@@ -261,7 +261,7 @@ func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *t
 		t.Fatalf("required field validation error = %q, want id", validation.FieldName)
 	}
 
-	_, err = session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	_, err = session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"id":     "evt-2",
 		"status": "blocked",
 	}))
@@ -360,13 +360,13 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 			}
 
 			fields := mustFields(t, map[string]any{"id": "evt-1"})
-			mapResult, err := mapSession.AssertTemplate(context.Background(), mapTemplate.Key(), fields)
+			mapResult, err := mapSession.Assert(context.Background(), mapTemplate.Key(), fields)
 			if err != nil {
-				t.Fatalf("map-backed AssertTemplate: %v", err)
+				t.Fatalf("map-backed Assert: %v", err)
 			}
-			slotResult, err := slotSession.AssertTemplate(context.Background(), slotTemplate.Key(), fields)
+			slotResult, err := slotSession.Assert(context.Background(), slotTemplate.Key(), fields)
 			if err != nil {
-				t.Fatalf("slot-backed AssertTemplate: %v", err)
+				t.Fatalf("slot-backed Assert: %v", err)
 			}
 
 			if mapResult.DuplicateKey != slotResult.DuplicateKey {
@@ -414,14 +414,14 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	first, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"status": "open",
 		"id":     "evt-1",
 	}))
 	if err != nil {
 		t.Fatalf("first assert: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{
 		"id":     "evt-1",
 		"status": "closed",
 	}))
@@ -474,17 +474,17 @@ func TestSessionAssertSkipsSlotsForUntargetedDeclaredTemplate(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	targetedResult, err := session.AssertTemplate(context.Background(), targeted.Key(), mustFields(t, map[string]any{"id": "a"}))
+	targetedResult, err := session.Assert(context.Background(), targeted.Key(), mustFields(t, map[string]any{"id": "a"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate targeted: %v", err)
+		t.Fatalf("Assert targeted: %v", err)
 	}
 	if got := len(mustWorkingFactByID(t, session, targetedResult.Fact.ID()).fieldSlotSlice()); got == 0 {
 		t.Fatalf("targeted field slots = %d, want non-zero", got)
 	}
 
-	untargetedResult, err := session.AssertTemplate(context.Background(), untargeted.Key(), mustFields(t, map[string]any{"id": "b"}))
+	untargetedResult, err := session.Assert(context.Background(), untargeted.Key(), mustFields(t, map[string]any{"id": "b"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate untargeted: %v", err)
+		t.Fatalf("Assert untargeted: %v", err)
 	}
 	if got := len(mustWorkingFactByID(t, session, untargetedResult.Fact.ID()).fieldSlotSlice()); got != 0 {
 		t.Fatalf("untargeted field slots = %d, want zero", got)
@@ -555,7 +555,7 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-1",
 		"status": "open",
 	}))
@@ -563,7 +563,7 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 		t.Fatalf("first assert: %v", err)
 	}
 
-	existing, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	existing, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-1",
 		"status": "closed",
 	}))
@@ -583,7 +583,7 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 		t.Fatal("expected unique-key duplicate key in result")
 	}
 
-	_, err = session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	_, err = session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-2",
 		"status": "open",
 	}))
@@ -612,14 +612,14 @@ func TestSessionAssertDuplicateAllowPolicyAllowsMultiplicity(t *testing.T) {
 		t.Fatal("expected template event")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-1",
 		"status": "open",
 	}))
 	if err != nil {
 		t.Fatalf("first allow-duplicates assert: %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-1",
 		"status": "open",
 	}))
@@ -660,7 +660,7 @@ func TestSessionAssertValidationFailureLeavesMemoryAndEventsUnchanged(t *testing
 		t.Fatal("expected template person")
 	}
 
-	_, err = session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	_, err = session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"title": "Dr.",
 	}))
 	if err == nil {
@@ -694,7 +694,7 @@ func TestSessionAssertEmitsOnlyForInsertedFacts(t *testing.T) {
 		t.Fatal("expected template")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("first assert: %v", err)
 	}
@@ -705,14 +705,14 @@ func TestSessionAssertEmitsOnlyForInsertedFacts(t *testing.T) {
 		t.Fatalf("event type = %v, want %v", got, EventFactAsserted)
 	}
 
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
 		t.Fatalf("duplicate assert: %v", err)
 	}
 	if got := len(collector.Events()); got != 1 {
 		t.Fatalf("events after duplicate = %d, want 1", got)
 	}
 
-	_, err = session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": ""}))
+	_, err = session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": ""}))
 	if err != nil {
 		t.Fatalf("insert distinct fact: %v", err)
 	}
@@ -753,9 +753,9 @@ func TestSessionAssertImmediatelyReconcilesAgendaAndSkipsDuplicateNoise(t *testi
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if !inserted.Inserted() {
 		t.Fatalf("assert status = %v, want inserted", inserted.Status)
@@ -769,7 +769,7 @@ func TestSessionAssertImmediatelyReconcilesAgendaAndSkipsDuplicateNoise(t *testi
 		t.Fatalf("event order after first assert = %#v", []EventType{events[0].Type, events[1].Type})
 	}
 
-	duplicate, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
+	duplicate, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"}))
 	if err != nil {
 		t.Fatalf("duplicate assert: %v", err)
 	}

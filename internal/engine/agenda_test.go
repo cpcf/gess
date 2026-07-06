@@ -16,11 +16,11 @@ func TestAgendaReconcileSuppressesDuplicateMatchesAndBuildsEvents(t *testing.T) 
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-session")
 
-	inserted, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -94,8 +94,8 @@ func TestSessionAgendaMatchesFocusedRunOrder(t *testing.T) {
 		{key: reviewKey, fields: mustFields(t, map[string]any{"kind": "review"})},
 		{key: mainKey, fields: mustFields(t, map[string]any{"kind": "high"})},
 	} {
-		if _, err := session.AssertTemplate(ctx, assertion.key, assertion.fields); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", assertion.key, err)
+		if _, err := session.Assert(ctx, assertion.key, assertion.fields); err != nil {
+			t.Fatalf("Assert(%s): %v", assertion.key, err)
 		}
 	}
 
@@ -146,11 +146,11 @@ func TestSessionAgendaFocusOrderAndModuleViews(t *testing.T) {
 	trace := make([]string, 0, 2)
 	revision, mainKey, reviewKey := mustAgendaIntrospectionRevision(t, &trace, false)
 	session := mustSession(t, revision, "agenda-view-focus-session")
-	if _, err := session.AssertTemplate(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
-		t.Fatalf("AssertTemplate main: %v", err)
+	if _, err := session.Assert(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
+		t.Fatalf("Assert main: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, reviewKey, mustFields(t, map[string]any{"kind": "review"})); err != nil {
-		t.Fatalf("AssertTemplate review: %v", err)
+	if _, err := session.Assert(ctx, reviewKey, mustFields(t, map[string]any{"kind": "review"})); err != nil {
+		t.Fatalf("Assert review: %v", err)
 	}
 
 	before, err := session.Agenda(ctx)
@@ -194,8 +194,8 @@ func TestSessionAgendaOmitsConsumedActivation(t *testing.T) {
 	trace := make([]string, 0, 1)
 	revision, mainKey, _ := mustAgendaIntrospectionRevision(t, &trace, false)
 	session := mustSession(t, revision, "agenda-view-refraction-session")
-	if _, err := session.AssertTemplate(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, mainKey, mustFields(t, map[string]any{"kind": "low"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	before, err := session.Agenda(ctx)
 	if err != nil {
@@ -411,10 +411,10 @@ func TestAgendaReconcileCopiesCandidateSlices(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-candidate-ownership-session")
 
-	if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -464,11 +464,11 @@ func TestAgendaActivationIdentityChangesWhenFactVersionChanges(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-version-session")
 
-	inserted, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -530,10 +530,10 @@ func TestAgendaCandidateDeltasDoNotRequeueConsumedActivation(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-delta-refraction-session")
 
-	if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -611,10 +611,10 @@ func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-token-no-row-arena-session")
 
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	if got := session.agenda.activationRows.count; got != 0 {
 		t.Fatalf("session terminal delta activationRows.count = %d, want 0", got)
@@ -787,11 +787,11 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 		ctx := context.Background()
 		revision, templateKey := mustAgendaStatusRevision(t)
 		session := mustSession(t, revision, id)
-		inserted, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{
+		inserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
 			"status": "open",
 		}))
 		if err != nil {
-			t.Fatalf("AssertTemplate: %v", err)
+			t.Fatalf("Assert: %v", err)
 		}
 		var pending []*activation
 		session.agenda.forEachPendingActivation(func(stored *activation) bool {
@@ -949,8 +949,8 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "compact-graph-order-focus-session")
 	for _, bucket := range []string{"tie", "recent-old", "ask", "recent-new", "top"} {
-		if _, err := session.AssertTemplate(ctx, task.Key(), mustFields(t, map[string]any{"bucket": bucket})); err != nil {
-			t.Fatalf("AssertTemplate(%s): %v", bucket, err)
+		if _, err := session.Assert(ctx, task.Key(), mustFields(t, map[string]any{"bucket": bucket})); err != nil {
+			t.Fatalf("Assert(%s): %v", bucket, err)
 		}
 	}
 	session.agenda.forEachPendingActivation(func(stored *activation) bool {
@@ -1158,17 +1158,17 @@ func TestAgendaCandidateDeltasReturnStableChangesWhenScratchIsReused(t *testing.
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-delta-scratch-session")
 
-	first, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(Ada): %v", err)
+		t.Fatalf("Assert(Ada): %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Bob",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(Bob): %v", err)
+		t.Fatalf("Assert(Bob): %v", err)
 	}
 
 	agenda := newAgenda()
@@ -1418,17 +1418,17 @@ func TestAgendaPurgeRuleRevisionsRemovesPurgedActivationsFromAllIndexes(t *testi
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-purge-session")
 
-	first, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	first, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(Ada): %v", err)
+		t.Fatalf("Assert(Ada): %v", err)
 	}
-	second, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	second, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Bob",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate(Bob): %v", err)
+		t.Fatalf("Assert(Bob): %v", err)
 	}
 
 	agenda := newAgenda()
@@ -1572,11 +1572,11 @@ func TestAgendaReconcileDeactivatesMissingPendingActivation(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-missing-session")
 
-	inserted, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -1616,10 +1616,10 @@ func TestAgendaNextConsumesBeforeFutureReconcile(t *testing.T) {
 	revision, templateKey := mustAgendaRevision(t, 10)
 	session := mustSession(t, revision, "agenda-next-session")
 
-	if _, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -1736,8 +1736,8 @@ func TestAgendaReplacementUsesNewRevisionIdentityAndDoesNotShareRefractionState(
 		t.Fatalf("Compile revision 1: %v", err)
 	}
 	session := mustSession(t, revision1, "agenda-replace-session")
-	if _, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 
 	agenda := newAgenda()
@@ -1948,11 +1948,11 @@ func TestSessionReconcileAgendaEmitsActivationEvents(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), templateKey, mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	pending := session.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
@@ -2103,8 +2103,8 @@ func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T)
 		t.Fatalf("initial pending activations = %d, want 0 before boundary materialization", got)
 	}
 
-	if _, err := session.AssertTemplate(ctx, templateKey, mustFields(t, map[string]any{"name": "Bea"})); err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"name": "Bea"})); err != nil {
+		t.Fatalf("Assert: %v", err)
 	}
 	if !session.agendaReady || session.agendaDirty {
 		t.Fatalf("agenda state after mutation = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
@@ -2554,11 +2554,11 @@ func TestSessionAgendaMainOnlyFastPathMatchesRunOrderWithTieBreaks(t *testing.T)
 		{kind: "high", seq: 3},
 		{kind: "tie", seq: 4},
 	} {
-		if _, err := session.AssertTemplate(ctx, task.Key(), Fields{
+		if _, err := session.Assert(ctx, task.Key(), Fields{
 			"kind": newStringValue(assertion.kind),
 			"seq":  newIntValue(assertion.seq),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(%s:%d): %v", assertion.kind, assertion.seq, err)
+			t.Fatalf("Assert(%s:%d): %v", assertion.kind, assertion.seq, err)
 		}
 	}
 

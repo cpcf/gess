@@ -164,14 +164,14 @@ func TestNestedPathBetaResidualJoin(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := session.AssertTemplate(ctx, left.Key(), mustFields(t, map[string]any{"payload": map[string]any{"id": "a"}})); err != nil {
-		t.Fatalf("AssertTemplate left: %v", err)
+	if _, err := session.Assert(ctx, left.Key(), mustFields(t, map[string]any{"payload": map[string]any{"id": "a"}})); err != nil {
+		t.Fatalf("Assert left: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"meta": map[string]any{"id": "a"}})); err != nil {
-		t.Fatalf("AssertTemplate right matching: %v", err)
+	if _, err := session.Assert(ctx, right.Key(), mustFields(t, map[string]any{"meta": map[string]any{"id": "a"}})); err != nil {
+		t.Fatalf("Assert right matching: %v", err)
 	}
-	if _, err := session.AssertTemplate(ctx, right.Key(), mustFields(t, map[string]any{"meta": map[string]any{"id": "b"}})); err != nil {
-		t.Fatalf("AssertTemplate right nonmatching: %v", err)
+	if _, err := session.Assert(ctx, right.Key(), mustFields(t, map[string]any{"meta": map[string]any{"id": "b"}})); err != nil {
+		t.Fatalf("Assert right nonmatching: %v", err)
 	}
 
 	result, err := session.Run(ctx)

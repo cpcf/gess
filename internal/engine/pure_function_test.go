@@ -392,7 +392,7 @@ func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T)
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "pure-function-modify-duplicate-index-rollback")
 
-	inserted, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": "a", "status": "good"}))
+	inserted, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{"id": "a", "status": "good"}))
 	if err != nil {
 		t.Fatalf("Assert good: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestPureFunctionPredicateModifyFailureRollsBackDuplicateIndex(t *testing.T)
 	if !ok || !id.Equal(mustValue(t, "a")) {
 		t.Fatalf("id after failed modify = %v/%v, want a/true", id, ok)
 	}
-	if _, err := session.AssertTemplate(ctx, event.Key(), mustFields(t, map[string]any{"id": "b", "status": "good"})); err != nil {
+	if _, err := session.Assert(ctx, event.Key(), mustFields(t, map[string]any{"id": "b", "status": "good"})); err != nil {
 		t.Fatalf("Assert after failed modify should not see stale duplicate index: %v", err)
 	}
 	counters := session.propagationCounterSnapshot()

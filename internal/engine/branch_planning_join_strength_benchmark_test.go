@@ -231,25 +231,25 @@ func joinStrengthFactSnapshots(t testing.TB, revision *Ruleset, templates joinSt
 	ctx := context.Background()
 	for rootID := range roots {
 		region := joinStrengthRegion(rootID)
-		if _, err := session.AssertTemplate(ctx, templates.root, Fields{
+		if _, err := session.Assert(ctx, templates.root, Fields{
 			"id":     newIntValue(int64(rootID)),
 			"region": newStringValue(region),
 			"active": newBoolValue(true),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(root): %v", err)
+			t.Fatalf("Assert(root): %v", err)
 		}
-		if _, err := session.AssertTemplate(ctx, templates.grant, Fields{
+		if _, err := session.Assert(ctx, templates.grant, Fields{
 			"root":   newIntValue(int64(rootID)),
 			"region": newStringValue(region),
 		}); err != nil {
-			t.Fatalf("AssertTemplate(grant): %v", err)
+			t.Fatalf("Assert(grant): %v", err)
 		}
 		for eventIndex := range eventsPerRoot {
-			if _, err := session.AssertTemplate(ctx, templates.event, Fields{
+			if _, err := session.Assert(ctx, templates.event, Fields{
 				"id":   newIntValue(int64(rootID*eventsPerRoot + eventIndex)),
 				"root": newIntValue(int64(rootID)),
 			}); err != nil {
-				t.Fatalf("AssertTemplate(event): %v", err)
+				t.Fatalf("Assert(event): %v", err)
 			}
 		}
 	}

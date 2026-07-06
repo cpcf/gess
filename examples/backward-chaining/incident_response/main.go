@@ -54,7 +54,7 @@ func run(out io.Writer) error {
 		{connectionTemplate, fields("src", "internet", "dst", "admin", "protocol", "ssh", "open", true)},
 		{controlTemplate, fields("src", "internet", "dst", "admin", "reason", "emergency-access-disabled")},
 	} {
-		if _, err := session.AssertTemplate(ctx, fact.template, fact.fields); err != nil {
+		if _, err := session.Assert(ctx, fact.template, fact.fields); err != nil {
 			return err
 		}
 	}

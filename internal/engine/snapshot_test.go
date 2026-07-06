@@ -294,13 +294,13 @@ func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 		t.Fatal("expected event template")
 	}
 
-	person, err := session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	person, err := session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"name": "Ada",
 	}))
 	if err != nil {
 		t.Fatalf("insert person: %v", err)
 	}
-	if _, err = session.AssertTemplate(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
+	if _, err = session.Assert(context.Background(), personTemplate.Key(), mustFields(t, map[string]any{
 		"name": "Grace",
 	})); err != nil {
 		t.Fatalf("insert second person: %v", err)
@@ -310,7 +310,7 @@ func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("insert dynamic fact: %v", err)
 	}
-	if _, err = session.AssertTemplate(context.Background(), eventTemplate.Key(), mustFields(t, map[string]any{
+	if _, err = session.Assert(context.Background(), eventTemplate.Key(), mustFields(t, map[string]any{
 		"id": "evt-1",
 	})); err != nil {
 		t.Fatalf("insert event: %v", err)
@@ -358,7 +358,7 @@ func TestSnapshotRecencyAndGenerationMetadata(t *testing.T) {
 		t.Fatal("expected event template")
 	}
 
-	first, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1"}))
+	first, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{"id": "evt-1"}))
 	if err != nil {
 		t.Fatalf("insert first: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
 		t.Fatal("expected person template")
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":    "Ada",
 		"profile": map[string]any{"likes": "jazz"},
 	}))
@@ -520,12 +520,12 @@ func TestSnapshotSlotBackedAccessorsReturnDefensiveCopies(t *testing.T) {
 	}
 	session := mustSession(t, revision, "slot-snapshot-defensive-session")
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"id":      "p-1",
 		"profile": map[string]any{"likes": "jazz"},
 	}))
 	if err != nil {
-		t.Fatalf("AssertTemplate: %v", err)
+		t.Fatalf("Assert: %v", err)
 	}
 	internal := mustWorkingFactByID(t, session, inserted.Fact.ID())
 	if internal.fieldsMap() != nil || internal.fieldPresenceMap() != nil || len(internal.fieldSlotSlice()) == 0 {
@@ -587,7 +587,7 @@ func TestSnapshotRenderingIsDeterministic(t *testing.T) {
 		t.Fatal("expected payload template")
 	}
 
-	inserted, err := session.AssertTemplate(context.Background(), template.Key(), mustFields(t, map[string]any{
+	inserted, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"zeta":   2,
 		"alpha":  "done",
 		"nested": map[string]any{"c": 3, "b": 2, "a": 1},
