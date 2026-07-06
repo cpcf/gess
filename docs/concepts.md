@@ -59,8 +59,9 @@ depends on removes the activation before it can fire.
 A session is the mutable runtime for one compiled ruleset. It owns working
 memory, the agenda, the focus stack, logical support, and event delivery.
 Host code asserts, modifies, and retracts facts, calls `Run` to fire rules
-until quiescence, executes queries, and takes snapshots. See
-`session-lifecycle.md`.
+until quiescence, executes queries, and takes snapshots. It can also
+interrogate *why* a fact exists with `Explain` — see "Explaining facts" in
+`advanced.md`. See `session-lifecycle.md`.
 
 :::caution
 A session has one logical owner. Overlapping calls from other goroutines

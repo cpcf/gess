@@ -181,6 +181,62 @@ including cascade retraction totals and cascade depth. The
 `EventLogicalSupportAdded` and `EventLogicalSupportRemoved` events track
 edge lifecycle. `Reset` clears all logical support.
 
+## Explaining facts
+
+Logical support and mutation lineage answer *why a fact exists*, but you
+normally have to piece that together from the support graph and the event
+stream. `Explain` returns it as one typed, renderable structure.
+
+A `Derivation` carries the fact, its `FactSupportState`, the `Firing` that
+produced it (rule, activation, rendered `.gess` action source, and — with
+firing-time capture — the bound values the action evaluated), the facts it
+logically depends on (recursively, cycle-guarded), and its
+assert→modify… `History` for the current generation.
+
+There are two tiers:
+
+- **`Snapshot.Explain(id, opts…)` (tier 1)** is a pure read of a
+  session-produced snapshot. It always works and allocates only at call
+  time. It fills the support state and the recursive logical-support tree,
+  and, for logically-supported facts, the producing rule from the support
+  edge. It does not know the lineage of *stated* facts — that needs a log.
+
+  ```go
+  snap, _ := session.Snapshot(ctx)
+  derivation, ok := snap.Explain(factID)
+  ```
+
+- **`Session.Explain(ctx, id, opts…)` (tier 2)** adds the producing firing
+  (with rendered action source) and the `History` for the fact and its
+  supporters, reconstructed from an opt-in event log. Attach the log with
+  `session.WithExplainLog()`; without it, `Session.Explain` returns
+  `ErrExplainLogUnavailable` and you fall back to `Snapshot.Explain`.
+
+  ```go
+  session, _ := session.New(ruleset, session.WithExplainLog())
+  // …assert, run…
+  derivation, err := session.Explain(ctx, factID)
+  ```
+
+The log is bounded (`WithExplainLogMaxEntries`, default 4096). When a fact's
+earliest entries are evicted, its reconstructed `History` is reported with
+`Truncated` set — never silently dropped. `Reset` clears the log, and a
+`Fork` does not inherit it (pass `WithExplainLog` to the fork to record
+lineage there; event sequences continue from the parent).
+
+Recursion is bounded by `WithExplainMaxDepth` (default 64) and
+`WithExplainMaxNodes` (default 10000); a node cut short by a cap or a cycle
+revisit is marked `Truncated`.
+
+Reconstruction from the event stream alone cannot recover computed or scalar
+bindings (`?total` from `(+ ?subtotal ?tax)`), so `Firing.BindingsPartial`
+is set honestly; a session that captures bindings at firing time reports
+them exactly with `BindingsPartial` unset.
+
+Render a derivation as an indented text tree with `Derivation.String()` or as
+a Graphviz digraph with `Derivation.DOT()`. In the REPL, `explain <fact-id>`
+prints the tree and `explain <fact-id> dot` prints the graph.
+
 ## Backward chaining
 
 Backward chaining makes rules prove facts on demand instead of eagerly.

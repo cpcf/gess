@@ -116,6 +116,8 @@ func (s *replState) exec(ctx context.Context, line string) (bool, error) {
 		return false, s.run(ctx, fields[1:])
 	case "facts":
 		return false, s.facts(ctx, fields[1:])
+	case "explain":
+		return false, s.explain(ctx, fields[1:])
 	case "agenda":
 		return false, s.agenda(ctx, fields[1:])
 	case "query":
@@ -177,7 +179,10 @@ func (s *replState) load(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	opts := []sess.Option{sess.WithInitialFacts(dsl.InitialFacts(doc)...)}
+	opts := []sess.Option{
+		sess.WithInitialFacts(dsl.InitialFacts(doc)...),
+		sess.WithExplainLog(),
+	}
 	if s.watch {
 		listenerOpts := make([]sess.EventListenerOption, 0, 1)
 		if len(s.watchTypes) > 0 {
@@ -316,6 +321,49 @@ func (s *replState) facts(ctx context.Context, args []string) error {
 	fmt.Fprintf(s.out, "facts count=%d\n", len(facts))
 	for _, fact := range facts {
 		fmt.Fprintln(s.out, formatFact(fact))
+	}
+	return nil
+}
+
+func (s *replState) explain(ctx context.Context, args []string) error {
+	if err := s.requireSession(); err != nil {
+		return err
+	}
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "dot") {
+		return fmt.Errorf("usage: explain <fact-id> [dot]")
+	}
+	id, err := s.factID(ctx, args[0])
+	if err != nil {
+		return err
+	}
+
+	lineageAvailable := true
+	derivation, err := s.session.Explain(ctx, id)
+	if err != nil {
+		if !errors.Is(err, sess.ErrExplainLogUnavailable) {
+			return err
+		}
+		lineageAvailable = false
+		snapshot, serr := s.session.Snapshot(ctx)
+		if serr != nil {
+			return serr
+		}
+		tier1, ok := snapshot.Explain(id)
+		if !ok {
+			return fmt.Errorf("unknown fact id %q", args[0])
+		}
+		derivation = tier1
+	}
+
+	if len(args) == 2 {
+		_, err := io.WriteString(s.out, derivation.DOT())
+		return err
+	}
+	if _, err := io.WriteString(s.out, derivation.String()); err != nil {
+		return err
+	}
+	if !lineageAvailable {
+		fmt.Fprintln(s.out, "note: firing and mutation lineage need an explain log (this session has none)")
 	}
 	return nil
 }
@@ -727,6 +775,7 @@ func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "  modify <fact-id> <field>=<value> ...")
 	fmt.Fprintln(out, "  run [n]")
 	fmt.Fprintln(out, "  facts [template]")
+	fmt.Fprintln(out, "  explain <fact-id> [dot]")
 	fmt.Fprintln(out, "  agenda")
 	fmt.Fprintln(out, "  query <name> [arg=value ...]")
 	fmt.Fprintln(out, "  rules")
