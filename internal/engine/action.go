@@ -1184,6 +1184,23 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 		unset:       append([]string(nil), spec.Unset...),
 		values:      make([]compiledExpression, len(spec.Values)),
 	}
+	// Assert effects require a declared template; reject an undeclared target at
+	// compile time rather than failing mid-firing (dynamic facts are not a
+	// public concept).
+	if out.kind == ActionEffectAssert || out.kind == ActionEffectAssertLogical {
+		if _, ok := templatesByKey[out.templateKey]; out.templateKey == "" || !ok {
+			verb := "assert"
+			if out.kind == ActionEffectAssertLogical {
+				verb = "assert-logical"
+			}
+			return compiledEffectAction{}, &ValidationError{
+				RuleName:       ruleName,
+				ActionIndex:    actionIndex,
+				HasActionIndex: true,
+				Reason:         fmt.Sprintf("%s target %q is not a declared template", verb, out.factName),
+			}
+		}
+	}
 	for i, valueSpec := range spec.Values {
 		if nativeActionExpressionUsesCurrent(valueSpec) {
 			return compiledEffectAction{}, &ValidationError{
