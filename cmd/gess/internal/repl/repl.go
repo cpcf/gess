@@ -213,14 +213,15 @@ func (s *replState) assert(ctx context.Context, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: assert <template> <field>=<value> ...")
 	}
-	if _, ok := s.ruleset.Template(args[0]); !ok {
+	template, ok := s.ruleset.Template(args[0])
+	if !ok {
 		return fmt.Errorf("unknown template %q", args[0])
 	}
 	fields, err := parseAssignments(args[1:])
 	if err != nil {
 		return err
 	}
-	result, err := s.session.Assert(ctx, args[0], fields)
+	result, err := s.session.AssertTemplate(ctx, template.Key(), fields)
 	if err != nil {
 		return err
 	}
