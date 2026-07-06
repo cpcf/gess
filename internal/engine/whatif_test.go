@@ -78,6 +78,30 @@ func TestWhatIfRetractScenario(t *testing.T) {
 	}
 }
 
+// With WithWhatIfExplain the report promises a derivation for every added
+// fact, so a failure to explain one must abort rather than yield a report with
+// derivations silently missing.
+func TestWhatIfDerivationsPropagatesExplainError(t *testing.T) {
+	session, sourceKey := whatIfBaseSession(t)
+	fork, err := session.Fork(context.Background(), WithExplainLog())
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	defer func() { _ = fork.Close() }()
+	res, err := fork.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-err"}))
+	if err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := whatIfDerivations(ctx, fork, []FactSnapshot{res.Fact}); err == nil {
+		t.Fatalf("whatIfDerivations with a canceled context = nil error, want a propagated failure")
+	} else if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled wrapped", err)
+	}
+}
+
 func TestWhatIfFireLimit(t *testing.T) {
 	session, sourceKey := whatIfBaseSession(t)
 	ctx := context.Background()

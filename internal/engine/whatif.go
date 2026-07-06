@@ -94,6 +94,9 @@ func WithWhatIfRetainFork() WhatIfOption {
 // The scenario receives the fork and uses the normal Assert/Modify/Retract/
 // Focus API. A scenario error aborts, closes the fork, and is returned wrapped.
 // WhatIf during an active base Run returns ErrConcurrencyMisuse (from Fork).
+// With WithWhatIfExplain, a failure to derive any added fact (e.g. a canceled
+// context) aborts and is returned wrapped rather than yielding a report with
+// derivations silently missing.
 func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context, fork *Session) error, opts ...WhatIfOption) (WhatIfReport, error) {
 	if s == nil || s.closed {
 		return WhatIfReport{}, ErrClosedSession
@@ -166,7 +169,10 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 		AgendaAfter:  agendaAfter,
 	}
 	if cfg.explain {
-		report.Derivations = whatIfDerivations(ctx, fork, report.Diff.Added)
+		report.Derivations, err = whatIfDerivations(ctx, fork, report.Diff.Added)
+		if err != nil {
+			return WhatIfReport{}, err
+		}
 	}
 	if cfg.retainFork {
 		report.ForkSession = fork
@@ -175,14 +181,16 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 	return report, nil
 }
 
-func whatIfDerivations(ctx context.Context, fork *Session, added []FactSnapshot) []Derivation {
+func whatIfDerivations(ctx context.Context, fork *Session, added []FactSnapshot) ([]Derivation, error) {
 	derivations := make([]Derivation, 0, len(added))
 	for _, fact := range added {
-		if derivation, err := fork.Explain(ctx, fact.ID()); err == nil {
-			derivations = append(derivations, derivation)
+		derivation, err := fork.Explain(ctx, fact.ID())
+		if err != nil {
+			return nil, fmt.Errorf("gess: what-if explain failed for fact %s: %w", fact.ID(), err)
 		}
+		derivations = append(derivations, derivation)
 	}
-	return derivations
+	return derivations, nil
 }
 
 type whatIfFiringRecorder struct {
