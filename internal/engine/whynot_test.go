@@ -100,6 +100,155 @@ func TestWhyNotNeverMatched(t *testing.T) {
 	}
 }
 
+// whyNotGroupAggregateRule builds a rule of the shape `group + Accumulate(Min)`:
+// an outer grouping condition followed by an aggregate whose Min yields no row
+// over an empty bucket.
+func whyNotGroupAggregateRule(t *testing.T, w *Workspace) map[string]TemplateKey {
+	t.Helper()
+	group := mustAddTemplate(t, w, TemplateSpec{
+		Name:            "group",
+		DuplicatePolicy: DuplicateAllow,
+		Fields:          []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	}).Key()
+	item := mustAddTemplate(t, w, TemplateSpec{
+		Name:            "item",
+		DuplicatePolicy: DuplicateAllow,
+		Fields: []FieldSpec{
+			{Name: "group", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	}).Key()
+	mustAddAction(t, w, noopAction())
+	mustAddRule(t, w, RuleSpec{
+		Name: "r",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "group", Target: TemplateKeyFact(group)},
+			Accumulate(
+				Match{
+					Binding: "item",
+					Target:  TemplateKeyFact(item),
+					JoinConstraints: []JoinConstraintSpec{
+						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					},
+				},
+				Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
+			),
+		}},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+	return map[string]TemplateKey{"group": group, "item": item}
+}
+
+func TestWhyNotAggregateNoOutputWithOuterToken(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-aggregate", func(w *Workspace) map[string]TemplateKey {
+		return whyNotGroupAggregateRule(t, w)
+	})
+
+	// The group fact exists (the aggregate's outer token) but no item matches,
+	// so Min over the empty bucket produces no output and the branch cannot
+	// fire. The aggregate condition — not the matched outer condition — is the
+	// frontier.
+	if _, err := session.Assert(context.Background(), keys["group"], mustFields(t, map[string]any{"id": "g-1"})); err != nil {
+		t.Fatalf("Assert(group): %v", err)
+	}
+
+	report, err := session.WhyNot(context.Background(), "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, WhyNotNeverMatched)
+	}
+	branch := singleBranch(t, report)
+	if branch.FirstFailing < 0 {
+		t.Fatalf("FirstFailing = %d, want the aggregate condition", branch.FirstFailing)
+	}
+	// The frontier is the aggregate condition (order 1), not the matched outer
+	// group condition (order 0) — the bug reported it as order 0.
+	failing := branch.Conditions[branch.FirstFailing]
+	if failing.Order != 1 {
+		t.Fatalf("first failing order = %d, want 1 (the aggregate condition, not the outer group)", failing.Order)
+	}
+	if failing.Reason != WhyNotReasonNoAlphaMatches {
+		t.Fatalf("failing reason = %q, want %q", failing.Reason, WhyNotReasonNoAlphaMatches)
+	}
+	group := branch.Conditions[0]
+	if group.Order != 0 || group.Binding != "group" {
+		t.Fatalf("condition 0 = %+v, want the outer group", group)
+	}
+	if !group.Satisfied {
+		t.Fatalf("outer group condition should be satisfied: %+v", group)
+	}
+	if group.Reason != WhyNotReasonNone {
+		t.Fatalf("outer group condition should carry no failure reason: %+v", group)
+	}
+	// The near-miss shows the grouping fact whose bucket produced no row.
+	if len(branch.PartialMatches) != 1 || len(branch.PartialMatches[0].Facts) != 1 {
+		t.Fatalf("partial matches = %+v, want one showing the group fact", branch.PartialMatches)
+	}
+}
+
+func TestWhyNotAggregateNoOuterToken(t *testing.T) {
+	session, _ := whyNotSession(t, "whynot-aggregate-noouter", func(w *Workspace) map[string]TemplateKey {
+		return whyNotGroupAggregateRule(t, w)
+	})
+
+	// No group fact at all: no outer token opens a bucket, so the failure is
+	// upstream in the outer group condition, not the aggregate.
+	report, err := session.WhyNot(context.Background(), "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, WhyNotNeverMatched)
+	}
+	branch := singleBranch(t, report)
+	if branch.FirstFailing != 0 {
+		t.Fatalf("FirstFailing = %d, want 0 (the outer group condition)", branch.FirstFailing)
+	}
+	failing := branch.Conditions[0]
+	if failing.Binding != "group" || failing.Reason != WhyNotReasonNoAlphaMatches {
+		t.Fatalf("failing condition = %+v, want the group condition with no_alpha_matches", failing)
+	}
+}
+
+func TestWhyNotAggregateNoOutputWithoutOuter(t *testing.T) {
+	session, _ := whyNotSession(t, "whynot-aggregate-solo", func(w *Workspace) map[string]TemplateKey {
+		item := mustAddTemplate(t, w, TemplateSpec{
+			Name:            "item",
+			DuplicatePolicy: DuplicateAllow,
+			Fields:          []FieldSpec{{Name: "amount", Kind: ValueInt, Required: true}},
+		}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: Accumulate(
+				Match{Binding: "item", Target: TemplateKeyFact(item)},
+				Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
+			),
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"item": item}
+	})
+
+	// No items: Min produces no output, and with no outer grouping the aggregate
+	// is itself the sole failing condition rather than a nonexistent condition 0.
+	report, err := session.WhyNot(context.Background(), "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, WhyNotNeverMatched)
+	}
+	branch := singleBranch(t, report)
+	if branch.FirstFailing != 0 {
+		t.Fatalf("FirstFailing = %d, want 0 (the sole aggregate condition)", branch.FirstFailing)
+	}
+	if got := branch.Conditions[branch.FirstFailing].Reason; got != WhyNotReasonNoAlphaMatches {
+		t.Fatalf("failing reason = %q, want %q", got, WhyNotReasonNoAlphaMatches)
+	}
+}
+
 func TestWhyNotJoinMismatch(t *testing.T) {
 	session, keys := whyNotSession(t, "whynot-join", func(w *Workspace) map[string]TemplateKey {
 		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "x", Kind: ValueString, Required: true}}}).Key()

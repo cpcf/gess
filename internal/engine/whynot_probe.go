@@ -149,34 +149,9 @@ func (s *Session) whyNotBranch(rule compiledRule, insp reteGraphBranchInspection
 	if !ok {
 		return branch, false
 	}
-	betas, leafStage := s.betaChain(topStage)
-
-	frontierIdx := -1
-	for i := len(betas) - 1; i >= 0; i-- {
-		if s.betaNodeLeftHasRows(betas[i]) {
-			frontierIdx = i
-			break
-		}
-	}
-
-	// The failing condition is identified by the frontier node's own condition
-	// id; only negative/structural nodes (no condition id) fall back to a
-	// planned-position count, since a single condition can span more than one
-	// beta stage (e.g. a residual join compiles to a join plus a filter).
-	var failingConditionID ConditionID
-	var failure whyNotFailure
-	switch {
-	case frontierIdx < 0:
-		if s.leafMatched(insp, leafStage) {
-			return branch, true
-		}
-		failingConditionID = plannedConditionID(insp, 0)
-		failure = s.classifyLeaf(rule, insp)
-	case frontierIdx == len(betas)-1 && s.betaNodeProducesOutput(betas[frontierIdx]):
+	complete, failingConditionID, failure := s.classifyChainFrontier(rule, insp, topStage, cfg, report)
+	if complete {
 		return branch, true
-	default:
-		failingConditionID = s.frontierConditionID(insp, betas, frontierIdx)
-		failure = s.classifyFrontier(rule, insp, betas[frontierIdx], failingConditionID, cfg, report)
 	}
 
 	for i, conditionID := range conditionIDs {
@@ -203,6 +178,117 @@ func (s *Session) whyNotBranch(rule compiledRule, insp reteGraphBranchInspection
 		}
 	}
 	return branch, false
+}
+
+// classifyChainFrontier walks a branch chain from its top stage to the leaf,
+// finds the frontier (the deepest beta still receiving input that stops
+// producing output), and classifies the failure there. It reports whether the
+// chain matches completely, and otherwise the failing condition id with its
+// classified failure.
+//
+// The failing condition is identified by the frontier node's own condition id;
+// only negative/structural nodes (no condition id) fall back to a
+// planned-position count, since a single condition can span more than one beta
+// stage (e.g. a residual join compiles to a join plus a filter).
+func (s *Session) classifyChainFrontier(rule compiledRule, insp reteGraphBranchInspection, topStage reteGraphStageRef, cfg whyNotConfig, report *WhyNotReport) (bool, ConditionID, whyNotFailure) {
+	betas, leafStage := s.betaChain(topStage)
+
+	frontierIdx := -1
+	for i := len(betas) - 1; i >= 0; i-- {
+		if s.betaNodeLeftHasRows(betas[i]) {
+			frontierIdx = i
+			break
+		}
+	}
+
+	switch {
+	case frontierIdx < 0:
+		switch {
+		case leafStage.kind == reteGraphStageAggregate:
+			return s.classifyAggregateLeaf(rule, insp, leafStage, cfg, report)
+		case s.leafMatched(insp, leafStage):
+			return true, "", whyNotFailure{}
+		default:
+			return false, plannedConditionID(insp, 0), s.classifyLeaf(rule, insp)
+		}
+	case frontierIdx == len(betas)-1 && s.betaNodeProducesOutput(betas[frontierIdx]):
+		return true, "", whyNotFailure{}
+	default:
+		failingConditionID := s.frontierConditionID(insp, betas, frontierIdx)
+		return false, failingConditionID, s.classifyFrontier(rule, insp, betas[frontierIdx], failingConditionID, cfg, report)
+	}
+}
+
+// classifyAggregateLeaf diagnoses a branch whose chain terminates on (or is fed
+// from) an aggregate stage that produced no output row — a branch reaches here
+// only when the aggregate emitted nothing, since any output would have filled
+// the beta above it or the terminal itself. It reports a complete match when
+// the aggregate does hold an output row (the rule fired and is refracted);
+// otherwise the failing condition: the outer chain when no outer token opened a
+// bucket, else the aggregate condition itself.
+func (s *Session) classifyAggregateLeaf(rule compiledRule, insp reteGraphBranchInspection, leafStage reteGraphStageRef, cfg whyNotConfig, report *WhyNotReport) (bool, ConditionID, whyNotFailure) {
+	aggID := reteGraphAggregateNodeID(leafStage.id)
+	node := s.rete.graph.aggregateNode(aggID)
+	if node == nil {
+		return false, plannedConditionID(insp, 0), s.classifyLeaf(rule, insp)
+	}
+	mem := s.rete.graphBeta.aggregateMemory(aggID)
+	if aggregateHasOutput(mem) {
+		return true, "", whyNotFailure{}
+	}
+	// With a grouping outer chain, no bucket means no outer token reached the
+	// aggregate: the failure is upstream, in the conditions before it.
+	if node.outer.kind != reteGraphStageUnknown && mem.bucketCount() == 0 {
+		if complete, condID, outerFailure := s.classifyChainFrontier(rule, insp, node.outer, cfg, report); !complete {
+			return false, condID, outerFailure
+		}
+	}
+	// The outer token exists (or the aggregate has no grouping) but the
+	// aggregate produced nothing (e.g. min/max over an empty bucket): the
+	// aggregate condition is the frontier.
+	failure := whyNotFailure{reason: WhyNotReasonNoAlphaMatches}
+	if slot, ok := bindingSlotForCondition(insp, node.conditionID); ok {
+		failure.rejectingSpan = s.conditionSpan(rule, slot)
+	}
+	failure.partialMatches = s.decodeAggregatePartialMatches(rule, mem, failure.rejectingSpan, cfg, report)
+	return false, node.conditionID, failure
+}
+
+func aggregateHasOutput(mem *reteGraphAggregateNodeMemory) bool {
+	has := false
+	mem.forEachBucket(func(bucket *reteGraphAggregateBucket) {
+		if bucket != nil && bucket.hasValue {
+			has = true
+		}
+	})
+	return has
+}
+
+// decodeAggregatePartialMatches reports the outer tokens that opened aggregate
+// buckets as near-miss partial matches: the grouping facts that were present
+// but whose bucket produced no aggregate row.
+func (s *Session) decodeAggregatePartialMatches(rule compiledRule, mem *reteGraphAggregateNodeMemory, span SourceSpan, cfg whyNotConfig, report *WhyNotReport) []WhyNotPartialMatch {
+	var matches []WhyNotPartialMatch
+	scanned := 0
+	mem.forEachBucket(func(bucket *reteGraphAggregateBucket) {
+		if bucket == nil || bucket.parent.isZero() {
+			return
+		}
+		scanned++
+		if scanned > cfg.maxProbedRows {
+			report.Truncated = true
+			return
+		}
+		if pm := s.partialMatchForToken(rule, bucket.parent, span); pm.Satisfied > 0 {
+			matches = append(matches, pm)
+		}
+	})
+	sort.SliceStable(matches, func(i, j int) bool { return partialMatchLess(matches[i], matches[j]) })
+	if cfg.maxPartialMatches > 0 && len(matches) > cfg.maxPartialMatches {
+		matches = matches[:cfg.maxPartialMatches]
+		report.Truncated = true
+	}
+	return matches
 }
 
 func plannedConditionID(insp reteGraphBranchInspection, plannedPos int) ConditionID {
