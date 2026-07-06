@@ -213,6 +213,35 @@ deterministic insertion order, lookup by ID, name, or template key, the
 logical `SupportGraph()`, backchain demand diagnostics, and snapshot-scoped
 `Query`/`QueryAll`. Snapshots don't change after later mutations.
 
+`DiffSnapshots(before, after)` reports the working-memory difference between
+two snapshots — facts added, retracted, and modified (by field value or
+support state) — in deterministic fact-id order.
+
+## What-if runs
+
+`Session.WhatIf` answers "what would happen if …?" without touching the base
+session. It forks the session, applies the scenario's hypothetical mutations,
+runs the fork bounded, and returns a structured `WhatIfReport`: the rules that
+fired in order, the working-memory `Diff`, the agenda before and after, and —
+with `WithWhatIfExplain` — a derivation for every added fact.
+
+```go
+report, err := session.WhatIf(ctx, func(ctx context.Context, fork *session.Session) error {
+	_, err := fork.AssertTemplate(ctx, findingKey, exampleutil.Fields("id", "F-200", "severity", "critical"))
+	return err
+}, session.WithWhatIfExplain())
+// report.Firings, report.Diff.Added, report.Derivations — base session unchanged.
+```
+
+The scenario receives the fork and uses the normal
+`Assert`/`Modify`/`Retract`/`Focus` API, so it can express anything the engine
+supports. The base session is untouched in every path, including scenario
+error and cancellation. The fork run is bounded by `WithWhatIfMaxFirings`
+(default 10000); pass `WithWhatIfRetainFork` to keep the fork open for
+follow-up interaction (you then own closing it), otherwise it is closed before
+`WhatIf` returns. Calling `WhatIf` during an active base `Run` returns
+`ErrConcurrencyMisuse`.
+
 ## Reset
 
 ```go

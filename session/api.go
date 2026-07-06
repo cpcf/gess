@@ -225,12 +225,36 @@ type (
 	SnapshotDiff = engine.SnapshotDiff
 	// FactModification is one changed fact in a [SnapshotDiff].
 	FactModification = engine.FactModification
+	// WhatIfReport is the structured result of a Session.WhatIf run.
+	WhatIfReport = engine.WhatIfReport
+	// WhatIfFiring is one rule firing during a what-if run.
+	WhatIfFiring = engine.WhatIfFiring
+	// WhatIfOption configures a Session.WhatIf run.
+	WhatIfOption = engine.WhatIfOption
 )
 
 // DiffSnapshots returns the difference from before to after: facts added,
 // retracted, and modified (by field value or support state), in fact-id order.
 func DiffSnapshots(before, after Snapshot) SnapshotDiff {
 	return engine.DiffSnapshots(before, after)
+}
+
+// WithWhatIfMaxFirings bounds a Session.WhatIf fork run at n firings (default
+// [engine.DefaultWhatIfMaxFirings]). Pass n <= 0 to opt out of the bound.
+func WithWhatIfMaxFirings(n int) WhatIfOption {
+	return engine.WithWhatIfMaxFirings(n)
+}
+
+// WithWhatIfExplain attaches an explain log to the what-if fork so the report
+// includes a derivation for every added fact.
+func WithWhatIfExplain() WhatIfOption {
+	return engine.WithWhatIfExplain()
+}
+
+// WithWhatIfRetainFork keeps the what-if fork open and returns it in the
+// report; the caller then owns closing it.
+func WithWhatIfRetainFork() WhatIfOption {
+	return engine.WithWhatIfRetainFork()
 }
 
 const (
