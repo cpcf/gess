@@ -34,6 +34,7 @@ var (
 	ErrDivideByZero                = errors.New("gess: divide by zero")
 	ErrBuiltinArgument             = errors.New("gess: built-in function argument error")
 	ErrExplainLogUnavailable       = errors.New("gess: explain log unavailable")
+	ErrRuleNotFound                = errors.New("gess: rule not found")
 )
 
 type ValidationError struct {

@@ -204,6 +204,48 @@ type (
 	// ExplainLogOption configures the bounded explain log installed by
 	// [WithExplainLog].
 	ExplainLogOption = engine.ExplainLogOption
+	// WhyNotReport is the structured diagnosis of why a rule has no pending
+	// activation, as returned by Session.WhyNot.
+	WhyNotReport = engine.WhyNotReport
+	// WhyNotOutcome is the top-level answer in a [WhyNotReport].
+	WhyNotOutcome = engine.WhyNotOutcome
+	// WhyNotBranch diagnoses one condition branch of a rule.
+	WhyNotBranch = engine.WhyNotBranch
+	// WhyNotCondition reports one condition's status within a branch.
+	WhyNotCondition = engine.WhyNotCondition
+	// WhyNotConditionReason classifies why a condition failed to extend a
+	// partial match.
+	WhyNotConditionReason = engine.WhyNotConditionReason
+	// WhyNotPartialMatch is one near-miss with its bound values.
+	WhyNotPartialMatch = engine.WhyNotPartialMatch
+	// WhyNotOption configures a Session.WhyNot probe.
+	WhyNotOption = engine.WhyNotOption
+)
+
+const (
+	// WhyNotActivated means the rule has a pending activation.
+	WhyNotActivated = engine.WhyNotActivated
+	// WhyNotAlreadyFired means the rule matched and fired (refraction).
+	WhyNotAlreadyFired = engine.WhyNotAlreadyFired
+	// WhyNotNeverMatched means no branch produced a complete match.
+	WhyNotNeverMatched = engine.WhyNotNeverMatched
+	// WhyNotBlocked means the closest branch failed on a blocked negation.
+	WhyNotBlocked = engine.WhyNotBlocked
+
+	// WhyNotReasonNone is the zero condition reason.
+	WhyNotReasonNone = engine.WhyNotReasonNone
+	// WhyNotReasonNoAlphaMatches means the condition's pattern matched no
+	// fact.
+	WhyNotReasonNoAlphaMatches = engine.WhyNotReasonNoAlphaMatches
+	// WhyNotReasonJoinMismatch means facts exist but their join keys do not
+	// align with the partial match.
+	WhyNotReasonJoinMismatch = engine.WhyNotReasonJoinMismatch
+	// WhyNotReasonPredicate means a residual predicate or test rejected the
+	// candidate.
+	WhyNotReasonPredicate = engine.WhyNotReasonPredicate
+	// WhyNotReasonNegationBlocked means a negated condition is blocked by
+	// one or more facts.
+	WhyNotReasonNegationBlocked = engine.WhyNotReasonNegationBlocked
 )
 
 type (
@@ -427,6 +469,9 @@ var (
 	// session was built without [WithExplainLog]; fall back to
 	// Snapshot.Explain for a support-only derivation.
 	ErrExplainLogUnavailable = engine.ErrExplainLogUnavailable
+	// ErrRuleNotFound is returned by Session.WhyNot when the named rule is
+	// not in the session's ruleset.
+	ErrRuleNotFound = engine.ErrRuleNotFound
 )
 
 // WithSessionID sets the [SessionID] returned later by [Session].ID.
@@ -538,6 +583,25 @@ func WithExplainLog(opts ...ExplainLogOption) Option {
 // Truncated.
 func WithExplainLogMaxEntries(n int) ExplainLogOption {
 	return engine.WithExplainLogMaxEntries(n)
+}
+
+// WithWhyNotMaxPartialMatches caps the near-miss partial matches Session.WhyNot
+// reports per branch (default 3).
+func WithWhyNotMaxPartialMatches(n int) WhyNotOption {
+	return engine.WithWhyNotMaxPartialMatches(n)
+}
+
+// WithWhyNotMaxBlockers caps the blocking facts Session.WhyNot lists for a
+// blocked negation (default 16); the reported BlockerCount is still the true
+// total.
+func WithWhyNotMaxBlockers(n int) WhyNotOption {
+	return engine.WithWhyNotMaxBlockers(n)
+}
+
+// WithWhyNotMaxProbedRows bounds the beta rows Session.WhyNot scans per node
+// (default 4096); reaching it sets the report's Truncated flag.
+func WithWhyNotMaxProbedRows(n int) WhyNotOption {
+	return engine.WithWhyNotMaxProbedRows(n)
 }
 
 // New builds a session from revision: it compiles the configured initial
