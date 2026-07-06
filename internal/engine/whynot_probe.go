@@ -375,22 +375,24 @@ func (s *Session) whyNotConditions(rule compiledRule, insp reteGraphBranchInspec
 	conditions := make([]WhyNotCondition, 0, len(insp.AuthoredOrder))
 	for _, authored := range insp.AuthoredOrder {
 		cond := WhyNotCondition{
-			Order:     authored.Order,
-			Binding:   authored.Binding,
-			Negated:   authored.Negated,
-			Test:      authored.Test,
-			Aggregate: authored.Aggregate,
+			Order:   authored.Order,
+			Binding: authored.Binding,
+			Negated: authored.Negated,
 		}
 		if plan, ok := rule.conditionPlanForBindingSlot(authored.BindingSlot); ok {
 			cond.Source = plan.source
 		}
+		// The authored order carries no aggregate/test marker; the planned order
+		// (built from the compiled plans) does, so resolve them by condition id.
 		for _, planned := range insp.PlannedOrder {
 			if planned.ConditionID == authored.ConditionID {
 				cond.PlannedOrder = planned.Order
+				cond.Aggregate = planned.Aggregate
+				cond.Test = planned.Test
 				break
 			}
 		}
-		if !authored.Test && !authored.Negated && !authored.Aggregate {
+		if !cond.Test && !cond.Negated && !cond.Aggregate {
 			cond.AlphaMatches = s.rete.graphBeta.alphaFactCount(authored.ConditionID)
 		}
 		conditions = append(conditions, cond)

@@ -169,12 +169,15 @@ func TestWhyNotAggregateNoOutputWithOuterToken(t *testing.T) {
 	if failing.Order != 1 {
 		t.Fatalf("first failing order = %d, want 1 (the aggregate condition, not the outer group)", failing.Order)
 	}
+	if !failing.Aggregate {
+		t.Fatalf("failing condition = %+v, want the Aggregate flag set", failing)
+	}
 	if failing.Reason != WhyNotReasonNoAlphaMatches {
 		t.Fatalf("failing reason = %q, want %q", failing.Reason, WhyNotReasonNoAlphaMatches)
 	}
 	group := branch.Conditions[0]
-	if group.Order != 0 || group.Binding != "group" {
-		t.Fatalf("condition 0 = %+v, want the outer group", group)
+	if group.Order != 0 || group.Binding != "group" || group.Aggregate {
+		t.Fatalf("condition 0 = %+v, want the non-aggregate outer group", group)
 	}
 	if !group.Satisfied {
 		t.Fatalf("outer group condition should be satisfied: %+v", group)
@@ -244,8 +247,12 @@ func TestWhyNotAggregateNoOutputWithoutOuter(t *testing.T) {
 	if branch.FirstFailing != 0 {
 		t.Fatalf("FirstFailing = %d, want 0 (the sole aggregate condition)", branch.FirstFailing)
 	}
-	if got := branch.Conditions[branch.FirstFailing].Reason; got != WhyNotReasonNoAlphaMatches {
-		t.Fatalf("failing reason = %q, want %q", got, WhyNotReasonNoAlphaMatches)
+	failing := branch.Conditions[branch.FirstFailing]
+	if !failing.Aggregate {
+		t.Fatalf("failing condition = %+v, want the Aggregate flag set", failing)
+	}
+	if failing.Reason != WhyNotReasonNoAlphaMatches {
+		t.Fatalf("failing reason = %q, want %q", failing.Reason, WhyNotReasonNoAlphaMatches)
 	}
 }
 
