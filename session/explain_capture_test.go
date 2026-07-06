@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"testing"
 
@@ -9,6 +10,61 @@ import (
 	"github.com/cpcf/gess/rules"
 	"github.com/cpcf/gess/session"
 )
+
+func TestExplainJSONThroughFacade(t *testing.T) {
+	ctx := context.Background()
+	source, err := os.ReadFile("../examples/gess-files/order_lifecycle/rules.gess")
+	if err != nil {
+		t.Fatalf("read ruleset: %v", err)
+	}
+	doc, err := dsl.Parse("rules.gess", source)
+	if err != nil {
+		t.Fatalf("dsl.Parse: %v", err)
+	}
+	workspace := rules.NewWorkspace()
+	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{}); err != nil {
+		t.Fatalf("dsl.Load: %v", err)
+	}
+	ruleset, err := rules.Compile(ctx, workspace)
+	if err != nil {
+		t.Fatalf("rules.Compile: %v", err)
+	}
+	sess, err := session.New(ruleset, session.WithInitialFacts(dsl.InitialFacts(doc)...), session.WithExplainLog())
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer sess.Close()
+	if _, err := sess.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	snapshot, err := sess.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	order := snapshot.FactsByName("order")[0]
+
+	derivation, err := sess.Explain(ctx, order.ID())
+	if err != nil {
+		t.Fatalf("Explain: %v", err)
+	}
+	raw, err := json.Marshal(derivation)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if parsed["gessExplainSchema"] != float64(session.ExplainSchemaVersion) {
+		t.Fatalf("schema = %v, want %d", parsed["gessExplainSchema"], session.ExplainSchemaVersion)
+	}
+	if parsed["kind"] != "derivation" {
+		t.Fatalf("kind = %v, want derivation", parsed["kind"])
+	}
+	if _, ok := parsed["fact"].(map[string]any)["id"]; !ok {
+		t.Fatalf("fact.id missing in %s", raw)
+	}
+}
 
 // TestExplainCapturesComputedBinding drives the order_lifecycle .gess ruleset,
 // whose ship-order rule binds a computed scalar with (bind ?total (+ ?subtotal

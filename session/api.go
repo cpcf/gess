@@ -281,6 +281,11 @@ const (
 	// WhyNotReasonNegationBlocked means a negated condition is blocked by
 	// one or more facts.
 	WhyNotReasonNegationBlocked = engine.WhyNotReasonNegationBlocked
+
+	// ExplainSchemaVersion is the version of the machine-readable JSON
+	// explain contract emitted by MarshalJSON on Derivation, WhyNotReport,
+	// and WhatIfReport.
+	ExplainSchemaVersion = engine.ExplainSchemaVersion
 )
 
 type (
