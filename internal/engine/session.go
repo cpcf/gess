@@ -1650,6 +1650,8 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
 			ActivationID:   origin.activationID(),
+			ActionName:     origin.ActionName,
+			ActionIndex:    origin.ActionIndex,
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
@@ -1778,6 +1780,8 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
 			ActivationID:   origin.activationID(),
+			ActionName:     origin.ActionName,
+			ActionIndex:    origin.ActionIndex,
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})
@@ -2304,6 +2308,8 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
 		ActivationID:   origin.activationID(),
+		ActionName:     origin.ActionName,
+		ActionIndex:    origin.ActionIndex,
 		FactIDs:        []FactID{fact.id},
 		Delta:          &delta,
 	})
@@ -2522,6 +2528,8 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
 			ActivationID:   origin.activationID(),
+			ActionName:     origin.ActionName,
+			ActionIndex:    origin.ActionIndex,
 			FactIDs:        []FactID{factID},
 			Delta:          &delta,
 		})
@@ -3725,6 +3733,8 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
 			ActivationID:   origin.activationID(),
+			ActionName:     origin.ActionName,
+			ActionIndex:    origin.ActionIndex,
 			FactIDs:        []FactID{fact.id},
 			Delta:          &delta,
 		})

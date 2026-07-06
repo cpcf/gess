@@ -127,6 +127,8 @@ type mutationOrigin struct {
 	ActivationID   ActivationID
 	RuleID         RuleID
 	RuleRevisionID RuleRevisionID
+	ActionName     string
+	ActionIndex    int
 
 	activationIdentityKey candidateIdentityKey
 	activationOrdinal     uint64

@@ -36,6 +36,8 @@ type ActionContext struct {
 	generation     Generation
 	bindings       *actionContextBindingState
 	rhsBinds       *rhsBindStore
+	actionName     string
+	actionIndex    int
 }
 
 // rhsBindStore holds the RHS-local variables produced by bind actions. It is
@@ -376,6 +378,8 @@ func (c ActionContext) mutationOrigin() mutationOrigin {
 	return mutationOrigin{
 		RuleID:                c.ruleID,
 		RuleRevisionID:        c.ruleRevisionID,
+		ActionName:            c.actionName,
+		ActionIndex:           c.actionIndex,
 		activationIdentityKey: c.activationKey,
 		activationOrdinal:     c.activationOrd,
 	}
@@ -1737,6 +1741,8 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				actionCtxReady = true
 				activationValidated = true
 			}
+			actionCtx.actionName = actionSpec.name
+			actionCtx.actionIndex = actionSpec.order
 			if actionSpec.fn == nil {
 				actionErr = fmt.Errorf("%w: missing action %q", ErrInvalidRuleset, actionSpec.name)
 			} else {
@@ -1752,6 +1758,8 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				actionCtxReady = true
 				activationValidated = true
 			}
+			actionCtx.actionName = actionSpec.name
+			actionCtx.actionIndex = actionSpec.order
 			actionErr = s.executeEffectAction(actionCtx, actionSpec.effect)
 		case compiledRuleActionCall:
 			if !actionCtxReady {
@@ -1763,6 +1771,8 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				actionCtxReady = true
 				activationValidated = true
 			}
+			actionCtx.actionName = actionSpec.name
+			actionCtx.actionIndex = actionSpec.order
 			actionErr = s.executeCallAction(actionCtx, actionSpec.call)
 		case compiledRuleActionAssertTemplateValues:
 			if !activationValidated {
@@ -1771,7 +1781,7 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 				}
 				activationValidated = true
 			}
-			actionErr = s.executeAssertTemplateValuesAction(ctx, activation, rule, actionSpec.assertTemplateValues)
+			actionErr = s.executeAssertTemplateValuesAction(ctx, activation, rule, actionSpec.assertTemplateValues, actionSpec.name, actionSpec.order)
 		default:
 			actionErr = fmt.Errorf("%w: unsupported action %q", ErrInvalidRuleset, actionSpec.name)
 		}
@@ -1980,9 +1990,9 @@ func (s *Session) executeCallAction(ctx ActionContext, action compiledCallAction
 	return action.fn(ctx, args)
 }
 
-func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
+func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction, actionName string, actionIndex int) error {
 	if len(action.values) == len(action.template.fields) {
-		return s.executePreparedAssertTemplateValuesAction(ctx, activation, rule, action)
+		return s.executePreparedAssertTemplateValuesAction(ctx, activation, rule, action, actionName, actionIndex)
 	}
 
 	values, err := s.evaluateAssertTemplateValuesAction(ctx, activation, rule, action)
@@ -1990,6 +2000,8 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 		return err
 	}
 	origin := mutationOriginForRuleActivation(rule, activation)
+	origin.ActionName = actionName
+	origin.ActionIndex = actionIndex
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return ErrConcurrencyMisuse
@@ -2061,8 +2073,10 @@ func (s *Session) executeAssertTemplateValuesAction(ctx context.Context, activat
 	return nil
 }
 
-func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction) error {
+func (s *Session) executePreparedAssertTemplateValuesAction(ctx context.Context, activation activation, rule compiledRule, action compiledAssertTemplateValuesAction, actionName string, actionIndex int) error {
 	origin := mutationOriginForRuleActivation(rule, activation)
+	origin.ActionName = actionName
+	origin.ActionIndex = actionIndex
 	locked, ok := s.beginMutationForOrigin(origin)
 	if !ok {
 		return ErrConcurrencyMisuse
