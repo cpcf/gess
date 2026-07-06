@@ -33,6 +33,7 @@ var (
 	ErrLogicalFactModify           = errors.New("gess: cannot modify fact with logical support")
 	ErrDivideByZero                = errors.New("gess: divide by zero")
 	ErrBuiltinArgument             = errors.New("gess: built-in function argument error")
+	ErrExplainLogUnavailable       = errors.New("gess: explain log unavailable")
 )
 
 type ValidationError struct {

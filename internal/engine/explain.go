@@ -1,5 +1,7 @@
 package engine
 
+import "context"
+
 // Derivation is the recursive explanation of one fact: its support state, the
 // rule firing that produced it, the facts it logically depends on (recursively),
 // and — with a retained explain log — its mutation lineage this generation.
@@ -187,6 +189,38 @@ func (s Snapshot) firingFromSupportEdge(edge LogicalSupportEdge) *Firing {
 	}
 	firing.RuleName = s.ruleName(edge.RuleRevisionID, edge.RuleID)
 	return firing
+}
+
+// Explain returns the derivation of the fact identified by id, enriched with
+// mutation lineage from the session's explain log: the producing firing (with
+// rendered action source) and the assert -> modify... history for the fact and
+// its supporters, on top of the logical-support derivation Snapshot.Explain
+// provides.
+//
+// A session built without WithExplainLog returns ErrExplainLogUnavailable, and
+// callers can fall back to Snapshot.Explain for a support-only derivation. A
+// fact absent from the current snapshot returns ErrFactNotFound.
+//
+// Like other inspection APIs, Explain is idle-only: the snapshot it reads is
+// taken under the session's run guard, so calling it during an active Run
+// returns ErrConcurrencyMisuse.
+func (s *Session) Explain(ctx context.Context, id FactID, opts ...ExplainOption) (Derivation, error) {
+	if s == nil || s.closed {
+		return Derivation{}, ErrClosedSession
+	}
+	if s.explainLog == nil {
+		return Derivation{}, ErrExplainLogUnavailable
+	}
+	snapshot, err := s.Snapshot(ctx)
+	if err != nil {
+		return Derivation{}, err
+	}
+	derivation, ok := snapshot.Explain(id, opts...)
+	if !ok {
+		return Derivation{}, ErrFactNotFound
+	}
+	s.explainLog.enrich(&derivation, s.revision)
+	return derivation, nil
 }
 
 func (s Snapshot) ruleName(revisionID RuleRevisionID, ruleID RuleID) string {

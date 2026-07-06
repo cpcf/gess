@@ -26,6 +26,7 @@ type sessionConfig struct {
 	eventClock          func() time.Time
 	resetBeforeSnapshot bool
 	output              io.Writer
+	explainLog          *explainLog
 }
 
 type SessionInitialFact struct {
@@ -144,6 +145,7 @@ type Session struct {
 	listeners            []eventListenerRegistration
 	allEventListeners    int
 	eventListenerCounts  map[EventType]int
+	explainLog           *explainLog
 	eventClock           func() time.Time
 	output               io.Writer
 	closed               bool
@@ -305,6 +307,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		listeners:           listeners,
 		allEventListeners:   allEventListeners,
 		eventListenerCounts: eventListenerCounts,
+		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
 		runGuard:            make(chan struct{}, 1),
@@ -852,6 +855,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		listeners:           listeners,
 		allEventListeners:   allEventListeners,
 		eventListenerCounts: eventListenerCounts,
+		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
 		runGuard:            make(chan struct{}, 1),

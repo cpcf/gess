@@ -201,6 +201,9 @@ type (
 	// ExplainOption configures an Explain call, bounding derivation depth
 	// and node count.
 	ExplainOption = engine.ExplainOption
+	// ExplainLogOption configures the bounded explain log installed by
+	// [WithExplainLog].
+	ExplainLogOption = engine.ExplainLogOption
 )
 
 type (
@@ -420,6 +423,10 @@ var (
 	// carries logical support, whether logical-only or stated-and-
 	// logical.
 	ErrLogicalFactModify = engine.ErrLogicalFactModify
+	// ErrExplainLogUnavailable is returned by Session.Explain when the
+	// session was built without [WithExplainLog]; fall back to
+	// Snapshot.Explain for a support-only derivation.
+	ErrExplainLogUnavailable = engine.ErrExplainLogUnavailable
 )
 
 // WithSessionID sets the [SessionID] returned later by [Session].ID.
@@ -514,6 +521,23 @@ func WithExplainMaxDepth(depth int) ExplainOption {
 // as a Truncated derivation node.
 func WithExplainMaxNodes(nodes int) ExplainOption {
 	return engine.WithExplainMaxNodes(nodes)
+}
+
+// WithExplainLog attaches a bounded, in-memory recorder of fact-mutation
+// events so Session.Explain can report a fact's producing firing and its
+// assert -> modify... lineage. Without it, Session.Explain returns
+// [ErrExplainLogUnavailable]. A fork does not inherit the log; pass this
+// option to Fork to record lineage on the fork. Reset clears the log.
+func WithExplainLog(opts ...ExplainLogOption) Option {
+	return engine.WithExplainLog(opts...)
+}
+
+// WithExplainLogMaxEntries bounds the explain log to the most recent n
+// fact-mutation entries (default [engine.DefaultExplainLogMaxEntries]).
+// Evicting a fact's earliest entries marks its reconstructed history
+// Truncated.
+func WithExplainLogMaxEntries(n int) ExplainLogOption {
+	return engine.WithExplainLogMaxEntries(n)
 }
 
 // New builds a session from revision: it compiles the configured initial
