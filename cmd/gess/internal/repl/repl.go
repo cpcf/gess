@@ -50,12 +50,16 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, opts Options) error {
 			_ = state.session.Close()
 		}
 	}()
+	if opts.Interactive {
+		return runInteractive(ctx, state, in, out, opts)
+	}
+	return runScript(ctx, state, in, out)
+}
+
+func runScript(ctx context.Context, state *replState, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	failed := false
 	for {
-		if opts.Interactive {
-			fmt.Fprint(out, opts.Prompt)
-		}
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
 			return readErr
@@ -64,9 +68,7 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, opts Options) error {
 		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
 			exit, err := state.exec(ctx, trimmed)
 			if err != nil {
-				if !opts.Interactive {
-					failed = true
-				}
+				failed = true
 				fmt.Fprintf(out, "error: %v\n", err)
 			}
 			if exit {

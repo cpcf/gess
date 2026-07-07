@@ -1,14 +1,49 @@
 # Command-line tools
 
-Gess ships two commands. The `gessc` command compiles `.gess` files to
-Go, and `gessfmt` formats `.gess` files. Both live under `cmd/` and run
+Gess ships three commands. The `gess` command runs the interactive REPL,
+`gessc` compiles `.gess` files to Go, and `gessfmt` formats `.gess` files.
+All three live under `cmd/` and run
 with `go run` from the module root. When a standalone binary is more
 convenient, install them:
 
 ```sh
+go install github.com/cpcf/gess/cmd/gess@latest
 go install github.com/cpcf/gess/cmd/gessc@latest
 go install github.com/cpcf/gess/cmd/gessfmt@latest
 ```
+
+## `gess repl`
+
+```sh
+gess repl [--stub-calls] [--no-prompt]
+```
+
+The REPL is a shell over the public session API:
+
+```sh
+gess> load examples/gess-files/order_routing/rules.gess
+gess> facts
+gess> run 1
+gess> agenda
+gess> query routes-by-lane lane=expedite
+```
+
+Interactive terminals support shell-style editing: up/down arrow history,
+`ctrl-r` reverse history search, `tab` completion, `ctrl-l` clear-screen, and
+`ctrl-d` exit on an empty line. Completion uses the current ruleset when one is
+loaded, including template names, field names, rule names, query names, fact
+IDs, module names, and watch event types. Command history is persisted in the
+user state directory.
+
+Piped mode is deterministic and exits non-zero if any command reports an error:
+
+```sh
+gess repl < script.txt
+```
+
+Use `--stub-calls` when loading `.gess` files with unregistered `(call ...)`
+actions that should print stub invocations instead of failing. Use
+`--no-prompt` to force line-oriented behavior even when stdin is a terminal.
 
 ## `gessc`
 

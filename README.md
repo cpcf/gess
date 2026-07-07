@@ -170,6 +170,13 @@ gess> agenda
 gess> query routes-by-lane lane=expedite
 ```
 
+In an interactive terminal, the REPL uses shell-style line editing: up/down
+arrow history, `ctrl-r` reverse history search, `tab` completion, `ctrl-l`
+clear-screen, and `ctrl-d` exit on an empty line. Completion is context-aware
+for commands, `.gess` files, loaded templates, rules, queries, fact IDs,
+fields, modules, and watch event names. History is persisted under the user's
+state directory.
+
 Piped mode (`gess repl < script.txt`) is deterministic and exits non-zero if
 any command fails. Files whose `(call ...)` actions are not registered load
 with `--stub-calls`, which prints stub invocations instead of failing; missing
