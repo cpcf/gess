@@ -233,3 +233,7 @@ refer to examples.
 Gess uses rule-engine concepts associated with Rete-family systems, including
 Jess and CLIPS. It is a Go-native implementation and is not intended to be a
 Jess compatibility layer.
+
+## License
+
+Gess is licensed under the [Apache License 2.0](LICENSE).

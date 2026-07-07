@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Locally built command binaries (produced by `go build`/`go run` at the repo root)
+/gess
+/gessc
+/gessfmt
+/gess-tutorial
+
+# Go test and profiling artifacts
+*.test
+*.prof
+coverage.out
+coverage.html
+
+# Node / Astro build output (docs-site/.gitignore also covers these under docs-site/)
+node_modules/
+dist/
+.astro/
+
+# Editor and IDE
+.idea/
+.vscode/
+*.swp
+
