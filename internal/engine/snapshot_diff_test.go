@@ -100,6 +100,67 @@ func TestDiffSnapshotsFieldAndSupportChange(t *testing.T) {
 	}
 }
 
+// A fact whose fields are unchanged but whose support state transitions must
+// appear in Modified with empty ChangedFields and the support transition
+// recorded in SupportBefore/SupportAfter.
+func TestDiffSnapshotsSupportOnlyChange(t *testing.T) {
+	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, true)
+	session := mustSession(t, revision, "diff-support")
+	ctx := context.Background()
+
+	// Assert a source and run so derived{id:shared} exists as a logical-only
+	// fact (the derive action keys the derived fact off the source's group).
+	if _, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-1", "group": "shared"})); err != nil {
+		t.Fatalf("Assert(source): %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	before := mustSnapshot(t, ctx, session)
+	derivedID := singleFactByField(t, before, "derived", "id", "shared")
+	if got := factSupportStateByID(t, before, derivedID); got != FactSupportLogical {
+		t.Fatalf("derived support before = %v, want %v", got, FactSupportLogical)
+	}
+
+	// A stated assert of the same derived key merges into the logical fact:
+	// identical fields, support state transitions to stated_and_logical.
+	res, err := session.assertByName(ctx, "derived", mustFields(t, map[string]any{"id": "shared"}))
+	if err != nil {
+		t.Fatalf("assert(derived stated): %v", err)
+	}
+	if res.Status != AssertExisting {
+		t.Fatalf("stated assert status = %v, want AssertExisting (merge)", res.Status)
+	}
+	after := mustSnapshot(t, ctx, session)
+
+	diff := DiffSnapshots(before, after)
+	var mod *FactModification
+	for i := range diff.Modified {
+		if diff.Modified[i].After.ID() == derivedID {
+			mod = &diff.Modified[i]
+			break
+		}
+	}
+	if mod == nil {
+		t.Fatalf("derived fact not in Modified; diff = %+v", diff)
+	}
+	if len(mod.ChangedFields) != 0 {
+		t.Fatalf("ChangedFields = %+v, want empty (support-only change)", mod.ChangedFields)
+	}
+	if mod.SupportBefore != FactSupportLogical || mod.SupportAfter != FactSupportStatedAndLogical {
+		t.Fatalf("support transition = %v -> %v, want %v -> %v", mod.SupportBefore, mod.SupportAfter, FactSupportLogical, FactSupportStatedAndLogical)
+	}
+}
+
+func factSupportStateByID(t *testing.T, snapshot Snapshot, id FactID) FactSupportState {
+	t.Helper()
+	fact, ok := snapshot.Fact(id)
+	if !ok {
+		t.Fatalf("fact %s not in snapshot", id)
+	}
+	return fact.Support().State
+}
+
 func sameAdded(a, b SnapshotDiff) bool {
 	if len(a.Added) != len(b.Added) {
 		return false
