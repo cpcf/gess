@@ -79,26 +79,29 @@ func TestWhatIfRetractScenario(t *testing.T) {
 }
 
 // With WithWhatIfExplain the report promises a derivation for every added
-// fact, so a failure to explain one must abort rather than yield a report with
-// derivations silently missing.
-func TestWhatIfDerivationsPropagatesExplainError(t *testing.T) {
+// fact, so a fact that cannot be explained from the reused snapshot must abort
+// rather than yield a report with derivations silently missing.
+func TestWhatIfDerivationsAbortsOnMissingFact(t *testing.T) {
 	session, sourceKey := whatIfBaseSession(t)
 	fork, err := session.Fork(context.Background(), WithExplainLog())
 	if err != nil {
 		t.Fatalf("Fork: %v", err)
 	}
 	defer func() { _ = fork.Close() }()
+	// Snapshot before asserting, so the fact is absent from this snapshot.
+	snapshot, err := fork.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
 	res, err := fork.Assert(context.Background(), sourceKey, mustFields(t, map[string]any{"id": "s-err"}))
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := whatIfDerivations(ctx, fork, []FactSnapshot{res.Fact}); err == nil {
-		t.Fatalf("whatIfDerivations with a canceled context = nil error, want a propagated failure")
-	} else if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context.Canceled wrapped", err)
+	if _, err := whatIfDerivations(fork, snapshot, []FactSnapshot{res.Fact}); err == nil {
+		t.Fatalf("whatIfDerivations for a fact absent from the snapshot = nil error, want an abort")
+	} else if !errors.Is(err, ErrFactNotFound) {
+		t.Fatalf("error = %v, want ErrFactNotFound wrapped", err)
 	}
 }
 

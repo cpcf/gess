@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -50,6 +51,7 @@ type whatIfConfig struct {
 	maxFirings int
 	explain    bool
 	retainFork bool
+	output     io.Writer
 }
 
 // WhatIfOption configures a Session.WhatIf run.
@@ -84,6 +86,14 @@ func WithWhatIfRetainFork() WhatIfOption {
 	return func(cfg *whatIfConfig) { cfg.retainFork = true }
 }
 
+// WithWhatIfOutputWriter captures the emit output of the counterfactual run to
+// w. By default the fork's output is discarded so a hypothetical run never
+// writes to the base session's live output sink; pass this to inspect what the
+// scenario would have emitted.
+func WithWhatIfOutputWriter(w io.Writer) WhatIfOption {
+	return func(cfg *whatIfConfig) { cfg.output = w }
+}
+
 // WhatIf forks the session, applies the scenario's hypothetical mutations, runs
 // the fork bounded, and returns a structured report — the fired rules, the
 // working-memory diff, the agenda delta, and (with WithWhatIfExplain)
@@ -113,7 +123,18 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 	cfg := newWhatIfConfig(opts)
 
 	recorder := &whatIfFiringRecorder{}
-	forkOpts := []SessionOption{WithEventListener(recorder, ForEventTypes(EventRuleFired))}
+	// Isolate the fork's emit output: without this the fork inherits the base
+	// session's live writer, so a hypothetical emit would pollute real output
+	// and could race a concurrent base Run. Default to discarding; a caller can
+	// capture it with WithWhatIfOutputWriter.
+	output := cfg.output
+	if output == nil {
+		output = io.Discard
+	}
+	forkOpts := []SessionOption{
+		WithEventListener(recorder, ForEventTypes(EventRuleFired)),
+		WithOutputWriter(output),
+	}
 	if cfg.explain {
 		forkOpts = append(forkOpts, WithExplainLog())
 	}
@@ -169,7 +190,7 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 		AgendaAfter:  agendaAfter,
 	}
 	if cfg.explain {
-		report.Derivations, err = whatIfDerivations(ctx, fork, report.Diff.Added)
+		report.Derivations, err = whatIfDerivations(fork, forkSnapshot, report.Diff.Added)
 		if err != nil {
 			return WhatIfReport{}, err
 		}
@@ -181,12 +202,20 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 	return report, nil
 }
 
-func whatIfDerivations(ctx context.Context, fork *Session, added []FactSnapshot) ([]Derivation, error) {
+// whatIfDerivations explains each added fact against the single fork snapshot
+// already taken for the report, reusing it rather than re-snapshotting working
+// memory per fact (the fork is idle, so every derivation sees the same state).
+// It mirrors Session.Explain: a support-only derivation from the snapshot,
+// enriched with lineage from the fork's explain log.
+func whatIfDerivations(fork *Session, snapshot Snapshot, added []FactSnapshot) ([]Derivation, error) {
 	derivations := make([]Derivation, 0, len(added))
 	for _, fact := range added {
-		derivation, err := fork.Explain(ctx, fact.ID())
-		if err != nil {
-			return nil, fmt.Errorf("gess: what-if explain failed for fact %s: %w", fact.ID(), err)
+		derivation, ok := snapshot.Explain(fact.ID())
+		if !ok {
+			return nil, fmt.Errorf("gess: what-if explain failed for fact %s: %w", fact.ID(), ErrFactNotFound)
+		}
+		if fork.explainLog != nil {
+			fork.explainLog.enrich(&derivation, snapshot.revision)
 		}
 		derivations = append(derivations, derivation)
 	}

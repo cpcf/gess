@@ -257,6 +257,13 @@ func WithWhatIfRetainFork() WhatIfOption {
 	return engine.WithWhatIfRetainFork()
 }
 
+// WithWhatIfOutputWriter captures the emit output of the what-if run to w. By
+// default the fork's output is discarded so a hypothetical run never writes to
+// the base session's live output sink.
+func WithWhatIfOutputWriter(w io.Writer) WhatIfOption {
+	return engine.WithWhatIfOutputWriter(w)
+}
+
 const (
 	// WhyNotActivated means the rule has a pending activation.
 	WhyNotActivated = engine.WhyNotActivated
