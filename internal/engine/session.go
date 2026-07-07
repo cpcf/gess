@@ -6269,7 +6269,7 @@ func (s *Session) compiledResetInitials() ([]compiledSessionInitialFact, error) 
 
 func compileSessionInitialFact(revision *Ruleset, initial SessionInitialFact) (compiledSessionInitialFact, error) {
 	if initial.TemplateKey == "" && initial.name == "" {
-		return compiledSessionInitialFact{}, &ValidationError{TemplateName: "session", Reason: "initializer must set name or template key"}
+		return compiledSessionInitialFact{}, &ValidationError{TemplateName: "session", Reason: "initializer must set a template key"}
 	}
 	if initial.TemplateKey != "" && initial.name != "" {
 		return compiledSessionInitialFact{}, &ValidationError{TemplateName: initial.name, Reason: "initializer must not set both name and template key"}
