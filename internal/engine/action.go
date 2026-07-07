@@ -1266,16 +1266,20 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 			}
 		}
 		// A dynamic fact binding has no template key; its fields cannot be
-		// checked statically, so skip rather than risk a false rejection.
+		// checked statically, so skip rather than risk a false rejection. A
+		// modify patches a subset of slots, so it does not enforce required
+		// fields.
 		if template, ok := templatesByKey[templateKey]; templateKey != "" && ok {
-			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, out.unset, out.values); err != nil {
+			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, out.unset, out.values, false); err != nil {
 				return compiledEffectAction{}, err
 			}
 		}
 	case ActionEffectAssert, ActionEffectAssertLogical:
-		// out.templateKey is already validated as declared above.
+		// out.templateKey is already validated as declared above. An assert
+		// materializes a whole fact, so every required no-default field must be
+		// supplied.
 		if template, ok := templatesByKey[out.templateKey]; ok {
-			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, nil, out.values); err != nil {
+			if err := validateEffectTemplateFields(ruleName, actionIndex, template, out.fields, nil, out.values, true); err != nil {
 				return compiledEffectAction{}, err
 			}
 		}
@@ -1311,15 +1315,35 @@ func factBindingTarget(target string, conditions []RuleCondition) (TemplateKey, 
 	return "", false
 }
 
-// validateEffectTemplateFields checks that every named set and unset field of an
-// assert or modify effect is a declared slot of the template, and that a
-// statically-typed set value matches its field kind. It mirrors, at compile
-// time, the unknown-field and type checks template.applyDefaultsAndValidate
-// performs at fire time; the type comparison stays strict (no coercion) because
-// runtime field storage is exact-match. It intentionally does not enforce
-// required fields, since a modify patches a subset of slots.
-func validateEffectTemplateFields(ruleName string, actionIndex int, template Template, fields, unset []string, values []compiledExpression) error {
+// effectValueKindAssignable reports whether a set value of static kind got may
+// store into a template field of kind want. It mirrors the runtime's
+// isValueCompatibleWithKind: a ValueAny field accepts any value, and an
+// indeterminate value kind (unknown or ValueAny) is deferred to fire time.
+// Every other pair must match exactly — the storage path performs no int/float
+// coercion, so a numeric cross is rejected here just as it would abort at fire
+// time.
+func effectValueKindAssignable(want, got ValueKind) bool {
+	if want == ValueAny || want == valueKindUnknown {
+		return true
+	}
+	if got == ValueAny || got == valueKindUnknown {
+		return true
+	}
+	return want == got
+}
+
+// validateEffectTemplateFields checks, at compile time, the field-level rules
+// template.applyDefaultsAndValidate enforces at fire time: every named set and
+// unset field is a declared slot; a statically-typed set value matches its
+// field kind (strict, no coercion, since runtime storage is exact-match); a
+// constant set value is a member of the field's allowed set when it has one.
+// With enforceRequired (asserts, which materialize a whole fact), it also
+// rejects an omitted required no-default field; a modify patches a subset of
+// slots, so it passes enforceRequired=false.
+func validateEffectTemplateFields(ruleName string, actionIndex int, template Template, fields, unset []string, values []compiledExpression, enforceRequired bool) error {
+	set := make(map[string]struct{}, len(fields))
 	for i, name := range fields {
+		set[name] = struct{}{}
 		kind, ok := template.fieldKind(name)
 		if !ok {
 			return &ValidationError{
@@ -1331,11 +1355,40 @@ func validateEffectTemplateFields(ruleName string, actionIndex int, template Tem
 				Reason:         "unknown field",
 			}
 		}
-		// expressionKindAssignable matches the runtime's tolerance: a value whose
-		// static kind is unknown, or numerically compatible (int/float) with the
-		// field, is accepted here because it may store successfully at fire time.
-		// Only a statically incompatible kind is rejected.
-		if i < len(values) && !expressionKindAssignable(kind, values[i].resultKind) {
+		if i >= len(values) {
+			continue
+		}
+		value := values[i]
+		if value.kind == expressionNodeConst {
+			// A constant's static kind is exactly its runtime kind, so a
+			// mismatch — including an int/float cross — will abort at fire time;
+			// reject it strictly. Its literal is also checkable against the
+			// field's allowed set.
+			if !effectValueKindAssignable(kind, value.resultKind) {
+				return &ValidationError{
+					RuleName:       ruleName,
+					ActionIndex:    actionIndex,
+					HasActionIndex: true,
+					TemplateName:   template.Name(),
+					FieldName:      name,
+					Reason:         "value type does not match template field",
+				}
+			}
+			if allowed, ok := template.fieldAllowedValues(name); ok && !valueAllowed(allowed, value.value) {
+				return &ValidationError{
+					RuleName:       ruleName,
+					ActionIndex:    actionIndex,
+					HasActionIndex: true,
+					TemplateName:   template.Name(),
+					FieldName:      name,
+					Reason:         "value not in allowed set",
+				}
+			}
+		} else if !expressionKindAssignable(kind, value.resultKind) {
+			// A binding or computed value carries only a declared/hint kind that
+			// may resolve to a compatible kind at fire time (e.g. a function
+			// declared to return float that returns int), so keep the runtime's
+			// numeric tolerance rather than risk a false compile-time rejection.
 			return &ValidationError{
 				RuleName:       ruleName,
 				ActionIndex:    actionIndex,
@@ -1355,6 +1408,23 @@ func validateEffectTemplateFields(ruleName string, actionIndex int, template Tem
 				TemplateName:   template.Name(),
 				FieldName:      name,
 				Reason:         "unknown field",
+			}
+		}
+	}
+	if enforceRequired {
+		for _, field := range template.fields {
+			if _, provided := set[field.Name]; provided {
+				continue
+			}
+			if template.requiredFieldMissing(field) {
+				return &ValidationError{
+					RuleName:       ruleName,
+					ActionIndex:    actionIndex,
+					HasActionIndex: true,
+					TemplateName:   template.Name(),
+					FieldName:      field.Name,
+					Reason:         "required field is missing",
+				}
 			}
 		}
 	}

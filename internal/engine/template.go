@@ -197,6 +197,24 @@ func (t Template) fieldKind(field string) (ValueKind, bool) {
 	return spec.Kind, true
 }
 
+// requiredFieldMissing reports whether the named field is a required slot with
+// no default, which the runtime rejects when an assert omits it. It mirrors the
+// required-field enforcement in applyDefaultsAndValidate.
+func (t Template) requiredFieldMissing(field FieldSpec) bool {
+	if !field.Required {
+		return false
+	}
+	_, hasDefault := t.fieldDefaults[field.Name]
+	return !hasDefault
+}
+
+// fieldAllowedValues returns the allowed-value set of a named field, or false
+// when the field has no set (any value of its kind is allowed).
+func (t Template) fieldAllowedValues(field string) ([]Value, bool) {
+	allowed, ok := t.fieldAllowed[field]
+	return allowed, ok && len(allowed) > 0
+}
+
 func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresence) []factSlot {
 	if !t.closed || len(t.fields) == 0 {
 		return nil

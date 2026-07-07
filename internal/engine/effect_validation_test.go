@@ -240,3 +240,135 @@ func TestCompileAcceptsNumericFunctionReturnIntoNumericField(t *testing.T) {
 		t.Fatalf("Compile rejected a numeric-return function value into a numeric field: %v", err)
 	}
 }
+
+// An assert that omits a required no-default field, a constant whose kind
+// crosses a strictly-typed numeric field, and a constant outside a field's
+// allowed set each abort at fire time on the runtime storage path, so they must
+// be rejected at compile time rather than left to break a non-atomic firing.
+func TestCompileRejectsEffectRuntimeStorageFailures(t *testing.T) {
+	template := TemplateSpec{
+		Name: "record",
+		Fields: []FieldSpec{
+			{Name: "key", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueFloat},
+			{Name: "state", Kind: ValueString, AllowedValues: []any{"open", "closed"}},
+		},
+	}
+	for _, tc := range []struct {
+		name   string
+		effect func(key TemplateKey) *ActionEffectSpec
+		want   string
+	}{
+		{
+			name: "assert omits required no-default field",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "record", Fields: []string{"score"}, Values: []ExpressionSpec{ConstExpr{Value: float64(1)}}}
+			},
+			want: "required field is missing",
+		},
+		{
+			name: "assert-logical omits required no-default field",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssertLogical, TemplateKey: key, FactName: "record", Fields: []string{"score"}, Values: []ExpressionSpec{ConstExpr{Value: float64(1)}}}
+			},
+			want: "required field is missing",
+		},
+		{
+			name: "assert int constant into float field",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "record", Fields: []string{"key", "score"}, Values: []ExpressionSpec{ConstExpr{Value: "k"}, ConstExpr{Value: int64(5)}}}
+			},
+			want: "value type does not match template field",
+		},
+		{
+			name: "modify int constant into float field",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectModify, Target: "r", Fields: []string{"score"}, Values: []ExpressionSpec{ConstExpr{Value: int64(5)}}}
+			},
+			want: "value type does not match template field",
+		},
+		{
+			name: "assert constant outside allowed set",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "record", Fields: []string{"key", "state"}, Values: []ExpressionSpec{ConstExpr{Value: "k"}, ConstExpr{Value: "banana"}}}
+			},
+			want: "value not in allowed set",
+		},
+		{
+			name: "modify constant outside allowed set",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectModify, Target: "r", Fields: []string{"state"}, Values: []ExpressionSpec{ConstExpr{Value: "banana"}}}
+			},
+			want: "value not in allowed set",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			key := mustAddTemplate(t, workspace, template).Key()
+			mustAddAction(t, workspace, ActionSpec{Name: "act", Effect: tc.effect(key)})
+			mustAddRule(t, workspace, RuleSpec{
+				Name:       "r",
+				Conditions: []RuleConditionSpec{{Binding: "r", Target: TemplateKeyFact(key)}},
+				Actions:    []RuleActionSpec{{Name: "act"}},
+			})
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatalf("Compile succeeded; want a compile error containing %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A modify may omit a required field (it patches a subset of slots), and an
+// assert or modify constant that is a member of the field's allowed set, or a
+// matching-kind constant into a strictly-typed field, must still compile.
+func TestCompileAcceptsRequiredAndAllowedEffects(t *testing.T) {
+	template := TemplateSpec{
+		Name: "record",
+		Fields: []FieldSpec{
+			{Name: "key", Kind: ValueString, Required: true},
+			{Name: "score", Kind: ValueFloat},
+			{Name: "state", Kind: ValueString, AllowedValues: []any{"open", "closed"}},
+		},
+	}
+	for _, tc := range []struct {
+		name   string
+		effect func(key TemplateKey) *ActionEffectSpec
+	}{
+		{
+			name: "modify omits required field",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectModify, Target: "r", Fields: []string{"score"}, Values: []ExpressionSpec{ConstExpr{Value: float64(2)}}}
+			},
+		},
+		{
+			name: "assert supplies required field and matching float",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "record", Fields: []string{"key", "score"}, Values: []ExpressionSpec{ConstExpr{Value: "k"}, ConstExpr{Value: float64(5)}}}
+			},
+		},
+		{
+			name: "assert allowed-set member",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "record", Fields: []string{"key", "state"}, Values: []ExpressionSpec{ConstExpr{Value: "k"}, ConstExpr{Value: "open"}}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			key := mustAddTemplate(t, workspace, template).Key()
+			mustAddAction(t, workspace, ActionSpec{Name: "act", Effect: tc.effect(key)})
+			mustAddRule(t, workspace, RuleSpec{
+				Name:       "r",
+				Conditions: []RuleConditionSpec{{Binding: "r", Target: TemplateKeyFact(key)}},
+				Actions:    []RuleActionSpec{{Name: "act"}},
+			})
+			if _, err := workspace.Compile(context.Background()); err != nil {
+				t.Fatalf("Compile with a valid effect failed: %v", err)
+			}
+		})
+	}
+}
