@@ -55,7 +55,8 @@ type WhyNotReport struct {
 // WhyNotBranch diagnoses one condition branch of a rule.
 type WhyNotBranch struct {
 	BranchID int
-	// Conditions is the branch's conditions in authored order.
+	// Conditions is the branch's conditions in evaluation (planned) order,
+	// including any standalone `test` conditions.
 	Conditions []WhyNotCondition
 	// FirstFailing indexes Conditions at the first condition that stopped a
 	// partial match from extending, or -1 when the branch has a complete

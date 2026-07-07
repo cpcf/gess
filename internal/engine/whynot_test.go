@@ -191,6 +191,65 @@ func TestWhyNotAggregateNoOutputWithOuterToken(t *testing.T) {
 	}
 }
 
+// A condition after an aggregate must be blamed for the failure, not the
+// aggregate. The aggregate feeds a beta as a non-beta stage, so the conditions
+// below it are off the frontier's left spine and its planned position must
+// offset the frontier count.
+func TestWhyNotConditionAfterAggregate(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-after-aggregate", func(w *Workspace) map[string]TemplateKey {
+		group := mustAddTemplate(t, w, TemplateSpec{Name: "group", DuplicatePolicy: DuplicateAllow, Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}}}).Key()
+		item := mustAddTemplate(t, w, TemplateSpec{Name: "item", DuplicatePolicy: DuplicateAllow, Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}, {Name: "amount", Kind: ValueInt, Required: true}}}).Key()
+		after := mustAddTemplate(t, w, TemplateSpec{Name: "after", DuplicatePolicy: DuplicateAllow, Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: And{Conditions: []ConditionSpec{
+				Match{Binding: "group", Target: TemplateKeyFact(group)},
+				Accumulate(
+					Match{Binding: "item", Target: TemplateKeyFact(item), JoinConstraints: []JoinConstraintSpec{
+						{Field: "group", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "group", Field: "id"}},
+					}},
+					Min(BindingFieldExpr{Binding: "item", Field: "amount"}).As("min"),
+				),
+				Match{Binding: "after", Target: TemplateKeyFact(after)},
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"group": group, "item": item, "after": after}
+	})
+	ctx := context.Background()
+	// group and item present so the aggregate produces its min row; no `after`
+	// fact, so the trailing condition is the frontier.
+	if _, err := session.Assert(ctx, keys["group"], mustFields(t, map[string]any{"id": "g-1"})); err != nil {
+		t.Fatalf("Assert(group): %v", err)
+	}
+	if _, err := session.Assert(ctx, keys["item"], mustFields(t, map[string]any{"group": "g-1", "amount": int64(3)})); err != nil {
+		t.Fatalf("Assert(item): %v", err)
+	}
+
+	report, err := session.WhyNot(ctx, "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, WhyNotNeverMatched)
+	}
+	branch := singleBranch(t, report)
+	failing := branch.Conditions[branch.FirstFailing]
+	if failing.Binding != "after" {
+		t.Fatalf("FirstFailing blames %+v, want the `after` condition (planned 2), not the aggregate", failing)
+	}
+	if failing.Reason != WhyNotReasonNoAlphaMatches {
+		t.Errorf("failing reason = %q, want %q", failing.Reason, WhyNotReasonNoAlphaMatches)
+	}
+	// The aggregate matched (produced its row) and must not be blamed.
+	for _, cond := range branch.Conditions {
+		if cond.Aggregate && (!cond.Satisfied || cond.Reason != WhyNotReasonNone) {
+			t.Errorf("aggregate wrongly blamed: %+v", cond)
+		}
+	}
+}
+
 func TestWhyNotAggregateNoOuterToken(t *testing.T) {
 	session, _ := whyNotSession(t, "whynot-aggregate-noouter", func(w *Workspace) map[string]TemplateKey {
 		return whyNotGroupAggregateRule(t, w)
@@ -489,6 +548,131 @@ func TestWhyNotBlockerCountDistinct(t *testing.T) {
 	if failing.BlockerCount != 1 {
 		t.Fatalf("BlockerCount = %d, want 1 (distinct facts, not left-row pairs)", failing.BlockerCount)
 	}
+}
+
+// When more facts block a negation than WithWhyNotMaxBlockers allows, the
+// listed Blockers are capped but BlockerCount reports the true total and the
+// report is marked Truncated.
+func TestWhyNotBlockerCapTruncates(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-blocker-cap", func(w *Workspace) map[string]TemplateKey {
+		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "host", Kind: ValueString, Required: true}}}).Key()
+		alert := mustAddTemplate(t, w, TemplateSpec{Name: "alert", Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "host", Kind: ValueString, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: And{Conditions: []ConditionSpec{
+				Match{Binding: "a", Target: TemplateKeyFact(a)},
+				Not{Condition: Match{Binding: "alert", Target: TemplateKeyFact(alert), JoinConstraints: []JoinConstraintSpec{
+					{Field: "host", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "a", Field: "host"}},
+				}}},
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"a": a, "alert": alert}
+	})
+	ctx := context.Background()
+	if _, err := session.Assert(ctx, keys["a"], mustFields(t, map[string]any{"host": "h1"})); err != nil {
+		t.Fatalf("Assert(a): %v", err)
+	}
+	// Five distinct alert facts all block the single negation on host h1.
+	for _, id := range []string{"al-1", "al-2", "al-3", "al-4", "al-5"} {
+		if _, err := session.Assert(ctx, keys["alert"], mustFields(t, map[string]any{"id": id, "host": "h1"})); err != nil {
+			t.Fatalf("Assert(%s): %v", id, err)
+		}
+	}
+
+	report, err := session.WhyNot(ctx, "r", WithWhyNotMaxBlockers(2))
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if !report.Truncated {
+		t.Fatalf("report.Truncated = false, want true when the blocker cap is hit")
+	}
+	branch := singleBranch(t, report)
+	failing := branch.Conditions[branch.FirstFailing]
+	if failing.Reason != WhyNotReasonNegationBlocked {
+		t.Fatalf("failing reason = %q, want %q", failing.Reason, WhyNotReasonNegationBlocked)
+	}
+	if len(failing.Blockers) != 2 {
+		t.Fatalf("listed Blockers = %d, want 2 (capped)", len(failing.Blockers))
+	}
+	if failing.BlockerCount != 5 {
+		t.Fatalf("BlockerCount = %d, want 5 (true total despite the cap)", failing.BlockerCount)
+	}
+}
+
+// An "or" rule compiles to more than one branch; WhyNot must report every
+// branch in BranchID order and diagnose each independently. Only the branch
+// closest to matching has a satisfied condition.
+func TestWhyNotOrRuleReportsEveryBranch(t *testing.T) {
+	session, keys := whyNotSession(t, "whynot-or", func(w *Workspace) map[string]TemplateKey {
+		order := mustAddTemplate(t, w, TemplateSpec{Name: "order", Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "status", Kind: ValueString, Required: true}}}).Key()
+		item := mustAddTemplate(t, w, TemplateSpec{Name: "item", Fields: []FieldSpec{{Name: "order_id", Kind: ValueString, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		// Both or arms expose the same bindings (x, y) over the same templates,
+		// differing only in the status constraint, so exactly one arm can match
+		// a given order.
+		arm := func(status string) ConditionSpec {
+			return And{Conditions: []ConditionSpec{
+				Match{Binding: "x", Target: TemplateKeyFact(order), FieldConstraints: []FieldConstraintSpec{
+					{Field: "status", Operator: FieldConstraintEqual, Value: status},
+				}},
+				Match{Binding: "y", Target: TemplateKeyFact(item), JoinConstraints: []JoinConstraintSpec{
+					{Field: "order_id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "x", Field: "id"}},
+				}},
+			}}
+		}
+		mustAddRule(t, w, RuleSpec{
+			Name:          "r",
+			ConditionTree: Or{Conditions: []ConditionSpec{arm("new"), arm("urgent")}},
+			Actions:       []RuleActionSpec{{Name: "noop"}},
+		})
+		return map[string]TemplateKey{"order": order, "item": item}
+	})
+	ctx := context.Background()
+	// A "new" order with no item: the "new" arm matches x but is missing y; the
+	// "urgent" arm matches nothing.
+	if _, err := session.Assert(ctx, keys["order"], mustFields(t, map[string]any{"id": "o-1", "status": "new"})); err != nil {
+		t.Fatalf("Assert(order): %v", err)
+	}
+
+	report, err := session.WhyNot(ctx, "r")
+	if err != nil {
+		t.Fatalf("WhyNot: %v", err)
+	}
+	if report.Outcome != WhyNotNeverMatched {
+		t.Fatalf("Outcome = %q, want %q", report.Outcome, WhyNotNeverMatched)
+	}
+	if len(report.Branches) != 2 {
+		t.Fatalf("Branches = %d, want 2 (an or rule has one branch per arm)", len(report.Branches))
+	}
+	if report.Branches[0].BranchID > report.Branches[1].BranchID {
+		t.Fatalf("branches not sorted by BranchID: %d then %d", report.Branches[0].BranchID, report.Branches[1].BranchID)
+	}
+	// Exactly one branch (the "new" arm) has a satisfied condition; that branch
+	// has a failing condition (the missing item). The other arm matched nothing.
+	satisfied := 0
+	for i := range report.Branches {
+		branch := report.Branches[i]
+		if branchHasSatisfied(branch) {
+			satisfied++
+			if branch.FirstFailing < 0 {
+				t.Fatalf("closest branch has no failing condition: %+v", branch.Conditions)
+			}
+		}
+	}
+	if satisfied != 1 {
+		t.Fatalf("branches with a satisfied condition = %d, want 1 (only the closest arm)", satisfied)
+	}
+}
+
+func branchHasSatisfied(branch WhyNotBranch) bool {
+	for _, cond := range branch.Conditions {
+		if cond.Satisfied {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWhyNotErrors(t *testing.T) {

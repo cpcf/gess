@@ -895,6 +895,21 @@ func (r compiledRule) conditionPlanForBindingSlot(bindingSlot int) (compiledCond
 	return compiledConditionPlan{}, false
 }
 
+// conditionPlanAtOrder returns the compiled plan at the given planned position
+// within a branch, matching the planned order the graph inspection reports.
+func (r compiledRule) conditionPlanAtOrder(branchID, order int) (compiledConditionPlan, bool) {
+	for _, branch := range r.executionConditionBranches() {
+		if branch.id != branchID {
+			continue
+		}
+		if order < 0 || order >= len(branch.plans) {
+			return compiledConditionPlan{}, false
+		}
+		return branch.plans[order], true
+	}
+	return compiledConditionPlan{}, false
+}
+
 func (r compiledRule) executionConditionBranches() []compiledConditionBranch {
 	if len(r.conditionBranches) > 0 {
 		return r.conditionBranches
