@@ -219,7 +219,11 @@ func (s *Session) Explain(ctx context.Context, id FactID, opts ...ExplainOption)
 	if !ok {
 		return Derivation{}, ErrFactNotFound
 	}
-	s.explainLog.enrich(&derivation, s.revision)
+	// Enrich against the ruleset the snapshot captured under the lock, not a
+	// fresh read of the live s.revision field: Snapshot has released the lock,
+	// and ApplyRuleset may replace s.revision concurrently. Using the captured
+	// revision keeps enrichment race-free and consistent with the derivation.
+	s.explainLog.enrich(&derivation, snapshot.revision)
 	return derivation, nil
 }
 
