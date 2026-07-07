@@ -155,7 +155,16 @@ func writeBindingValues(b *strings.Builder, bindings []BindingValue) {
 		}
 		b.WriteString(binding.Name)
 		b.WriteByte('=')
-		traceWriteValue(b, binding.Value)
+		if binding.FromFact.IsZero() {
+			traceWriteValue(b, binding.Value)
+			continue
+		}
+		b.WriteString(binding.FromFact.String())
+		if binding.Value.Kind() != ValueNull {
+			b.WriteByte('(')
+			traceWriteValue(b, binding.Value)
+			b.WriteByte(')')
+		}
 	}
 }
 

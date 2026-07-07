@@ -33,6 +33,27 @@ func TestDerivationStringGolden(t *testing.T) {
 	}
 }
 
+func TestDerivationStringRendersBindingFactReferences(t *testing.T) {
+	d := Derivation{
+		Fact:    renderTestFact(newFactID(1, 3), "record", FactSupportStated),
+		Support: FactSupportStated,
+		ProducedBy: &Firing{
+			RuleName: "advance",
+			Action:   `(assert (record (id ?id)))`,
+			Bindings: []BindingValue{
+				{Name: "?__gess1", FromFact: newFactID(1, 1)},
+				{Name: "?id", FromFact: newFactID(1, 1), Value: newStringValue("R-100")},
+				{Name: "?count", Value: newIntValue(2)},
+			},
+		},
+	}
+
+	want := "record fact:g1:3 [stated] <- rule advance action (assert (record (id ?id))) {?__gess1=fact:g1:1, ?id=fact:g1:1(\"R-100\"), ?count=2}\n"
+	if got := d.String(); got != want {
+		t.Fatalf("String() mismatch:\n got: %q\nwant: %q", got, want)
+	}
+}
+
 func TestDerivationStringTruncated(t *testing.T) {
 	d := Derivation{
 		Fact:      renderTestFact(newFactID(1, 5), "loop", FactSupportLogical),
