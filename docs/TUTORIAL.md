@@ -62,9 +62,11 @@ and assert:
 )
 ```
 
-The `duplicate-policy unique-key` declaration makes `fulfillment-route` facts
-unique by `order`, so repeated runs do not create duplicate routes for the same
-order.
+The `duplicate-policy unique-key` declaration keeps one current
+`fulfillment-route` fact per `order`, so repeated runs do not create duplicate
+routes for the same order. Re-asserting a route for an order with a different
+lane or warehouse replaces the previous route (retract old, assert new) rather
+than adding a second one.
 
 Seed facts can live in the same file:
 

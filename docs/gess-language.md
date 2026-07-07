@@ -100,8 +100,11 @@ attributes don't fail loading.
 
 - `(duplicate-policy structural|allow|unique-key)`: how duplicate facts are
   handled. `allow` (the `.gess` default) permits duplicates, `structural`
-  deduplicates facts with identical field values, and `unique-key`
-  deduplicates by the fields named in `duplicate-key`.
+  deduplicates facts with identical field values, and `unique-key` keeps one
+  current fact per key: asserting a fact whose key fields match an existing
+  fact but whose non-key fields differ replaces the old fact (retract old,
+  assert new, with a new fact ID), while asserting an identical fact is a
+  no-op.
 - `(duplicate-key field...)`: the key fields for the `unique-key` policy.
 - `(backchain-reactive TRUE|FALSE)`: enable backward chaining for the
   template. Compilation also creates a demand template named
@@ -215,6 +218,11 @@ the language. Use `test` conditions for anything beyond equality.
 bindings. The aggregate forms are `(count)`, `(sum EXPR)`, `(min EXPR)`,
 `(max EXPR)`, `(collect EXPR)`. Result variables are usable in the rule's
 actions and in later expressions.
+
+Because `critical-vulnerability-summary` uses a `unique-key` duplicate policy,
+adding another critical vulnerability re-fires this rule and replaces the
+existing summary fact in place with the new `count` and `total`, rather than
+leaving a stale summary alongside a new one.
 
 ### Actions
 

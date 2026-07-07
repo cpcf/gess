@@ -428,14 +428,14 @@ func TestSessionAssertSlotBackedUniqueKeyPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("duplicate assert: %v", err)
 	}
-	if second.Status != AssertExisting {
-		t.Fatalf("duplicate status = %v, want %v", second.Status, AssertExisting)
+	if second.Status != AssertReplaced {
+		t.Fatalf("differing unique-key assert status = %v, want %v", second.Status, AssertReplaced)
 	}
-	if second.Fact.ID() != first.Fact.ID() {
-		t.Fatalf("duplicate fact id = %q, want %q", second.Fact.ID(), first.Fact.ID())
+	if second.Fact.ID() == first.Fact.ID() {
+		t.Fatalf("replacement reused fact id %q, want a new fact id", first.Fact.ID())
 	}
-	if second.DuplicateKey == "" {
-		t.Fatal("expected unique-key duplicate key")
+	if second.DuplicateKey == "" || second.DuplicateKey != first.DuplicateKey {
+		t.Fatalf("replacement duplicate key = %q, want %q", second.DuplicateKey, first.DuplicateKey)
 	}
 }
 
@@ -563,24 +563,39 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 		t.Fatalf("first assert: %v", err)
 	}
 
-	existing, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
+	replaced, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
 		"name":   "evt-1",
 		"status": "closed",
 	}))
 	if err != nil {
-		t.Fatalf("duplicate by unique key: %v", err)
+		t.Fatalf("replace by unique key: %v", err)
 	}
-	if existing.Status != AssertExisting {
-		t.Fatalf("expected duplicate-by-key assertion status %v, got %v", AssertExisting, existing.Status)
+	if replaced.Status != AssertReplaced {
+		t.Fatalf("expected differing-by-key assertion status %v, got %v", AssertReplaced, replaced.Status)
 	}
-	if existing.Fact.ID() != first.Fact.ID() {
-		t.Fatalf("duplicate ID = %q, want %q", existing.Fact.ID(), first.Fact.ID())
+	if replaced.Fact.ID() == first.Fact.ID() {
+		t.Fatalf("replacement reused fact ID %q, want a new fact ID", first.Fact.ID())
 	}
-	if existing.Delta != nil {
-		t.Fatalf("duplicate assertion should not return mutation delta: %#v", existing.Delta)
+	if replaced.Delta == nil {
+		t.Fatalf("replacement should return a mutation delta")
 	}
-	if existing.DuplicateKey == "" {
-		t.Fatal("expected unique-key duplicate key in result")
+	if replaced.DuplicateKey == "" || replaced.DuplicateKey != first.DuplicateKey {
+		t.Fatalf("replacement duplicate key = %q, want %q", replaced.DuplicateKey, first.DuplicateKey)
+	}
+
+	// An identical re-assert of the current value is a no-op.
+	identical, err := session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
+		"name":   "evt-1",
+		"status": "closed",
+	}))
+	if err != nil {
+		t.Fatalf("identical re-assert: %v", err)
+	}
+	if identical.Status != AssertExisting {
+		t.Fatalf("identical re-assert status = %v, want %v", identical.Status, AssertExisting)
+	}
+	if identical.Fact.ID() != replaced.Fact.ID() {
+		t.Fatalf("identical re-assert id = %q, want %q", identical.Fact.ID(), replaced.Fact.ID())
 	}
 
 	_, err = session.Assert(context.Background(), template.Key(), mustFields(t, map[string]any{
@@ -593,7 +608,7 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 
 	snapshot := mustSnapshot(t, context.Background(), session)
 	if snapshot.Len() != 2 {
-		t.Fatalf("snapshot length = %d, want 2", snapshot.Len())
+		t.Fatalf("snapshot length = %d, want 2 (one current fact per key)", snapshot.Len())
 	}
 }
 

@@ -82,7 +82,12 @@ result, err := session.Assert(ctx, rules.TemplateKey("order"),
 
 - `AssertInserted`: a new fact entered working memory.
 - `AssertExisting`: the template's duplicate policy matched an existing
-  fact; the error is nil and `Fact` identifies the existing fact.
+  fact with identical fields; the error is nil and `Fact` identifies the
+  existing fact.
+- `AssertReplaced`: a `unique-key` template matched an existing fact whose
+  non-key fields differed, so the old fact was retracted and a new fact
+  (with a new fact ID) was inserted in its place; `Fact` identifies the
+  replacement.
 - `AssertValidationFailure`: the fields failed template validation; the
   error wraps `rules.ErrValidation`.
 
@@ -92,10 +97,15 @@ describing the change. Use `result.Inserted()` to test for a new fact.
 ### Duplicate policies
 
 Each template has a duplicate policy that decides how a colliding assert
-resolves: `structural` deduplicates facts with identical fields,
-`unique-key` deduplicates by declared key fields, and `allow` permits
-duplicates. Asserting a fact that already exists as a logical-only fact adds
-stated support to it and returns `AssertExisting`.
+resolves: `structural` deduplicates facts with identical fields, `allow`
+permits duplicates, and `unique-key` keeps one current fact per key.
+Asserting a `unique-key` fact whose key matches an existing fact but whose
+non-key fields differ replaces the old fact — it behaves like a retract of
+the old fact followed by an assert of the new one, so the agenda,
+aggregates, queries, logical support, and any downstream derived facts all
+observe the change; asserting an identical fact is a no-op. Asserting a fact
+that already exists as a logical-only fact adds stated support to it and
+returns `AssertExisting`.
 
 ## Modifying facts
 

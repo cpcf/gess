@@ -1558,6 +1558,9 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
+
 	state := s.clonedFactWorkspace()
 	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
 	if err != nil {
@@ -1568,46 +1571,76 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		origin:           origin,
 		sourceGeneration: s.generation,
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		before := fact.snapshotForRevision(s.revision, state.compactSlotStore)
-		_, err := s.addLogicalSupportForPropagationEvent(ctx, fact, supportEvent, supportingFacts)
-		if err != nil {
-			s.restoreLogicalSupportState(supportState)
-			return AssertResult{Status: AssertValidationFailure, Fact: before}, reteAgendaDelta{}, err
+		differs, derr := s.uniqueKeyReplaceTargetFields(templateKey, fact, fields)
+		if derr != nil {
+			return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, derr
 		}
-		if before.Support().State == FactSupportLogical {
-			s.updateFactSupportState(fact)
-		}
-		state.replaceWorkingFact(fact)
-		after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
-		s.commitFactWorkspace(state)
-		var delta *MutationDelta
-		if before.Support().State != after.Support().State {
-			metadataDelta := MutationDelta{
-				Kind:           MutationAssert,
-				Generation:     s.generation,
-				ActivationID:   origin.activationID(),
-				RuleID:         origin.RuleID,
-				RuleRevisionID: origin.RuleRevisionID,
-				SupportBefore:  before.Support(),
-				SupportAfter:   after.Support(),
-				Recency:        fact.recency,
-				FactID:         fact.id,
-				OldVersion:     fact.version,
-				NewVersion:     fact.version,
-				Before:         &before,
-				After:          &after,
-				OldDuplicate:   duplicateKey,
-				NewDuplicate:   duplicateKey,
+		if !differs {
+			before := fact.snapshotForRevision(s.revision, state.compactSlotStore)
+			_, err := s.addLogicalSupportForPropagationEvent(ctx, fact, supportEvent, supportingFacts)
+			if err != nil {
+				s.restoreLogicalSupportState(supportState)
+				return AssertResult{Status: AssertValidationFailure, Fact: before}, reteAgendaDelta{}, err
 			}
-			delta = &metadataDelta
+			if before.Support().State == FactSupportLogical {
+				s.updateFactSupportState(fact)
+			}
+			state.replaceWorkingFact(fact)
+			after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
+			s.commitFactWorkspace(state)
+			var delta *MutationDelta
+			if before.Support().State != after.Support().State {
+				metadataDelta := MutationDelta{
+					Kind:           MutationAssert,
+					Generation:     s.generation,
+					ActivationID:   origin.activationID(),
+					RuleID:         origin.RuleID,
+					RuleRevisionID: origin.RuleRevisionID,
+					SupportBefore:  before.Support(),
+					SupportAfter:   after.Support(),
+					Recency:        fact.recency,
+					FactID:         fact.id,
+					OldVersion:     fact.version,
+					NewVersion:     fact.version,
+					Before:         &before,
+					After:          &after,
+					OldDuplicate:   duplicateKey,
+					NewDuplicate:   duplicateKey,
+				}
+				delta = &metadataDelta
+			}
+			return AssertResult{
+				Status:       AssertExisting,
+				Fact:         after,
+				DuplicateKey: duplicateKey,
+				Delta:        delta,
+			}, reteAgendaDelta{}, nil
 		}
-		return AssertResult{
-			Status:       AssertExisting,
-			Fact:         after,
-			DuplicateKey: duplicateKey,
-			Delta:        delta,
-		}, reteAgendaDelta{}, nil
+
+		// Unique-key collision with differing non-key fields: retract the old
+		// fact (including any support it held) and insert a fresh logical fact
+		// that receives support from the current activation. Arm the rollback
+		// before the retract so a later propagation failure restores the
+		// pre-existing fact.
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		rd, rerr := s.fullyRetractFactForReplace(ctx, fact.id, origin)
+		if rerr != nil {
+			return AssertResult{Status: AssertValidationFailure}, rd, rerr
+		}
+		retractDelta = rd
+		replaced = true
+		state = s.clonedFactWorkspace()
+		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.generation, name, templateKey, fields)
+		if err != nil {
+			return AssertResult{Status: AssertValidationFailure}, retractDelta, err
+		}
+		if !inserted {
+			return AssertResult{Status: AssertValidationFailure}, retractDelta, ErrInvalidRuleset
+		}
+		supportState = s.captureLogicalSupportState()
 	}
 
 	s.makeFactLogicalOnly(fact)
@@ -1636,6 +1669,10 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		span.finish()
 	}
 	s.commitFactWorkspace(state)
+	replaceUndo.disarm()
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
@@ -1651,7 +1688,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 	}
 
 	result := AssertResult{
-		Status:       AssertInserted,
+		Status:       assertStatusForReplace(replaced),
 		Fact:         snapshot,
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
@@ -1684,47 +1721,79 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		return AssertResult{Status: AssertClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
+
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
 	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
 	if err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		before := fact.snapshotForRevision(s.revision, state.compactSlotStore)
-		if s.addStatedSupportToFact(fact) {
-			state.replaceWorkingFact(fact)
-			after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
-			s.commitFactWorkspace(state)
-			delta := MutationDelta{
-				Kind:           MutationAssert,
-				Generation:     s.generation,
-				ActivationID:   origin.activationID(),
-				RuleID:         origin.RuleID,
-				RuleRevisionID: origin.RuleRevisionID,
-				SupportBefore:  before.Support(),
-				SupportAfter:   after.Support(),
-				Recency:        fact.recency,
-				FactID:         fact.id,
-				OldVersion:     fact.version,
-				NewVersion:     fact.version,
-				Before:         &before,
-				After:          &after,
-				OldDuplicate:   duplicateKey,
-				NewDuplicate:   duplicateKey,
+		differs, derr := s.uniqueKeyReplaceTargetFields(templateKey, fact, fields)
+		if derr != nil {
+			return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, derr
+		}
+		if !differs {
+			before := fact.snapshotForRevision(s.revision, state.compactSlotStore)
+			if s.addStatedSupportToFact(fact) {
+				state.replaceWorkingFact(fact)
+				after := fact.snapshotForRevision(s.revision, state.compactSlotStore)
+				s.commitFactWorkspace(state)
+				delta := MutationDelta{
+					Kind:           MutationAssert,
+					Generation:     s.generation,
+					ActivationID:   origin.activationID(),
+					RuleID:         origin.RuleID,
+					RuleRevisionID: origin.RuleRevisionID,
+					SupportBefore:  before.Support(),
+					SupportAfter:   after.Support(),
+					Recency:        fact.recency,
+					FactID:         fact.id,
+					OldVersion:     fact.version,
+					NewVersion:     fact.version,
+					Before:         &before,
+					After:          &after,
+					OldDuplicate:   duplicateKey,
+					NewDuplicate:   duplicateKey,
+				}
+				return AssertResult{
+					Status:       AssertExisting,
+					Fact:         after,
+					DuplicateKey: duplicateKey,
+					Delta:        &delta,
+				}, reteAgendaDelta{}, nil
 			}
 			return AssertResult{
 				Status:       AssertExisting,
-				Fact:         after,
+				Fact:         before,
 				DuplicateKey: duplicateKey,
-				Delta:        &delta,
 			}, reteAgendaDelta{}, nil
 		}
-		return AssertResult{
-			Status:       AssertExisting,
-			Fact:         before,
-			DuplicateKey: duplicateKey,
-		}, reteAgendaDelta{}, nil
+
+		// Unique-key collision with differing non-key fields: retract the old
+		// fact and insert a new one (with a new fact ID) in its place. Arm the
+		// rollback before the retract so a later propagation failure restores
+		// the pre-existing fact instead of destroying it.
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		rd, rerr := s.fullyRetractFactForReplace(ctx, fact.id, origin)
+		if rerr != nil {
+			return AssertResult{Status: AssertValidationFailure}, rd, rerr
+		}
+		retractDelta = rd
+		replaced = true
+		state = s.activeFactWorkspace()
+		mark = state.markGeneratedFactInsert()
+		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.generation, name, templateKey, fields)
+		if err != nil {
+			return AssertResult{Status: AssertValidationFailure}, retractDelta, err
+		}
+		if !inserted {
+			return AssertResult{Status: AssertValidationFailure}, retractDelta, ErrInvalidRuleset
+		}
 	}
 
 	snapshot := fact.snapshotForRevision(s.revision, state.compactSlotStore)
@@ -1766,6 +1835,10 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		span.finish()
 	}
 	s.commitFactWorkspace(state)
+	replaceUndo.disarm()
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 	delta := MutationDelta{
 		Kind:           MutationAssert,
 		Generation:     s.generation,
@@ -1781,7 +1854,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 
 	result := AssertResult{
-		Status:       AssertInserted,
+		Status:       assertStatusForReplace(replaced),
 		Fact:         snapshot,
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
@@ -1877,19 +1950,36 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 			Reason: "generated fact insert plan is missing",
 		}
 	}
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
+	var proposed []compactFactSlot
+	if plan.duplicatePolicy == DuplicateUniqueKey {
+		proposed = cloneCompactFactSlots(compactSlots)
+	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, false, reteAgendaDelta{}, err
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		return fact, false, reteAgendaDelta{}, nil
+		if !s.uniqueKeyReplaceTargetCompactSlots(plan, fact, proposed) {
+			return fact, false, reteAgendaDelta{}, nil
+		}
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		newFact, newMark, rd, rerr := s.replaceUniqueKeyGeneratedCompactFactSlots(ctx, &state, plan, proposed, fact.id, origin)
+		if rerr != nil {
+			return nil, false, rd, rerr
+		}
+		fact, mark, retractDelta, replaced = newFact, newMark, rd, true
 	}
 
 	if !plan.affectsRete {
 		s.commitFactWorkspace(state)
+		replaceUndo.disarm()
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
-		return fact, true, reteAgendaDelta{}, nil
+		return fact, true, retractDelta, nil
 	}
 
 	var span *propagationCounterSpan
@@ -1904,7 +1994,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, agendaDelta, err
+		return nil, false, mergeReteAgendaDelta(retractDelta, agendaDelta), err
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, &state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
@@ -1912,7 +2002,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+		return nil, false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), resolvedDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
@@ -1922,7 +2012,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+		return nil, false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), demandDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
@@ -1930,7 +2020,11 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 		span.finish()
 	}
 	s.commitFactWorkspace(state)
+	replaceUndo.disarm()
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 
 	return fact, true, agendaDelta, nil
 }
@@ -1942,19 +2036,37 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 			Reason: "generated fact insert plan is missing",
 		}
 	}
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
+	var proposed []factSlot
+	if plan.duplicatePolicy == DuplicateUniqueKey {
+		proposed = cloneFactSlots(fieldSlots)
+	}
 	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlan(s.revision, s.generation, plan, fieldSlots, slotMark)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, "", false, reteAgendaDelta{}, err
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		return fact, duplicateKey, false, reteAgendaDelta{}, nil
+		if !s.uniqueKeyReplaceTargetSlots(plan, fact, proposed) {
+			return fact, duplicateKey, false, reteAgendaDelta{}, nil
+		}
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		newFact, newMark, rd, rerr := s.replaceUniqueKeyGeneratedFactSlots(ctx, &state, plan, proposed, fact.id, origin)
+		if rerr != nil {
+			return nil, "", false, rd, rerr
+		}
+		fact, mark, retractDelta, replaced = newFact, newMark, rd, true
+		duplicateKey = fact.publicDuplicateKey(s.revision, state.compactSlotStore)
 	}
 
 	if !plan.affectsRete {
 		s.commitFactWorkspace(state)
+		replaceUndo.disarm()
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
-		return fact, duplicateKey, true, reteAgendaDelta{}, nil
+		return fact, duplicateKey, true, retractDelta, nil
 	}
 
 	var span *propagationCounterSpan
@@ -1969,7 +2081,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, "", false, agendaDelta, err
+		return nil, "", false, mergeReteAgendaDelta(retractDelta, agendaDelta), err
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, &state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
@@ -1977,7 +2089,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, "", false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+		return nil, "", false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), resolvedDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
@@ -1987,7 +2099,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return nil, "", false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+		return nil, "", false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), demandDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
@@ -1995,7 +2107,11 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 		span.finish()
 	}
 	s.commitFactWorkspace(state)
+	replaceUndo.disarm()
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 
 	return fact, duplicateKey, true, agendaDelta, nil
 }
@@ -2009,23 +2125,43 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 			Reason: "generated fact insert plan is missing",
 		}
 	}
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
 	if plan.outputOnlyNoRetainEligible() {
 		s.discardGeneratedOutputFactSlots(state, slotMark)
 		return true, reteAgendaDelta{}, nil
+	}
+	// Snapshot the proposed slots before the insert: on a unique-key collision
+	// the workspace insert rolls back (and clears) the reserved slot region, so
+	// a replacement must reinsert from a copy taken beforehand.
+	var proposed []factSlot
+	if plan.duplicatePolicy == DuplicateUniqueKey {
+		proposed = cloneFactSlots(fieldSlots)
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		return false, reteAgendaDelta{}, nil
+		if !s.uniqueKeyReplaceTargetSlots(plan, fact, proposed) {
+			return false, reteAgendaDelta{}, nil
+		}
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		newFact, newMark, rd, rerr := s.replaceUniqueKeyGeneratedFactSlots(ctx, state, plan, proposed, fact.id, origin)
+		if rerr != nil {
+			return false, rd, rerr
+		}
+		fact, mark, retractDelta, replaced = newFact, newMark, rd, true
 	}
 
 	if !plan.affectsRete {
 		s.commitFactWorkspace(*state)
+		replaceUndo.disarm()
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
-		return true, reteAgendaDelta{}, nil
+		return true, retractDelta, nil
 	}
 
 	var span *propagationCounterSpan
@@ -2040,7 +2176,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, agendaDelta, err
+		return false, mergeReteAgendaDelta(retractDelta, agendaDelta), err
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
@@ -2048,7 +2184,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+		return false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), resolvedDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
@@ -2058,7 +2194,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+		return false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), demandDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
@@ -2066,7 +2202,11 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 		span.finish()
 	}
 	s.commitFactWorkspace(*state)
+	replaceUndo.disarm()
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 
 	return true, agendaDelta, nil
 }
@@ -2080,23 +2220,41 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 			Reason: "generated fact insert plan is missing",
 		}
 	}
+	var replaceUndo uniqueKeyReplaceUndo
+	defer s.rollbackUniqueKeyReplace(&replaceUndo)
 	if plan.outputOnlyNoRetainEligible() {
 		s.discardGeneratedOutputCompactSlots(state, compactSlotMark)
 		return true, reteAgendaDelta{}, nil
+	}
+	// Snapshot the proposed slots before the insert (see the broad variant).
+	var proposed []compactFactSlot
+	if plan.duplicatePolicy == DuplicateUniqueKey {
+		proposed = cloneCompactFactSlots(compactSlots)
 	}
 	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
 	}
+	replaced := false
+	var retractDelta reteAgendaDelta
 	if !inserted {
-		return false, reteAgendaDelta{}, nil
+		if !s.uniqueKeyReplaceTargetCompactSlots(plan, fact, proposed) {
+			return false, reteAgendaDelta{}, nil
+		}
+		replaceUndo = s.armUniqueKeyReplaceUndo()
+		newFact, newMark, rd, rerr := s.replaceUniqueKeyGeneratedCompactFactSlots(ctx, state, plan, proposed, fact.id, origin)
+		if rerr != nil {
+			return false, rd, rerr
+		}
+		fact, mark, retractDelta, replaced = newFact, newMark, rd, true
 	}
 
 	if !plan.affectsRete {
 		s.commitFactWorkspace(*state)
+		replaceUndo.disarm()
 		s.emitGeneratedAssertEvent(ctx, fact, origin)
-		return true, reteAgendaDelta{}, nil
+		return true, retractDelta, nil
 	}
 
 	var span *propagationCounterSpan
@@ -2111,7 +2269,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, agendaDelta, err
+		return false, mergeReteAgendaDelta(retractDelta, agendaDelta), err
 	}
 	if resolvedDelta, err := s.resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx, state, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
 		if span != nil {
@@ -2119,7 +2277,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, mergeReteAgendaDelta(agendaDelta, resolvedDelta), err
+		return false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), resolvedDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
 	}
@@ -2129,7 +2287,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		}
 		state.rollbackGeneratedFactInsert(mark, fact, s.revision)
 		s.restoreReteAfterPropagationFailure()
-		return false, mergeReteAgendaDelta(agendaDelta, demandDelta), err
+		return false, mergeReteAgendaDelta(mergeReteAgendaDelta(retractDelta, agendaDelta), demandDelta), err
 	} else {
 		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
 	}
@@ -2137,7 +2295,11 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 		span.finish()
 	}
 	s.commitFactWorkspace(*state)
+	replaceUndo.disarm()
 	s.emitGeneratedAssertEvent(ctx, fact, origin)
+	if replaced {
+		agendaDelta = coalesceReteAgendaDelta(s.revision, mergeReteAgendaDelta(retractDelta, agendaDelta))
+	}
 
 	return true, agendaDelta, nil
 }
@@ -2555,6 +2717,238 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	}
 
 	return result, agendaDelta, nil
+}
+
+// fullyRetractFactForReplace removes an existing fact from working memory, the
+// Rete network, the duplicate index, and every supporting structure so a
+// replacement fact can take its place. A unique-key replacement is defined as
+// "retract the old fact, assert a new one", so the old fact must disappear
+// regardless of its support state (stated, logical, or stated-and-logical) —
+// unlike retractImmediate, which refuses logical-only facts and only strips the
+// stated half of stated-and-logical facts. The returned delta is merged but not
+// coalesced; the caller merges it with the replacement fact's assert delta and
+// coalesces the combined result once, so same-identity token pairs collapse to
+// a single agenda update.
+func (s *Session) fullyRetractFactForReplace(ctx context.Context, id FactID, origin mutationOrigin) (reteAgendaDelta, error) {
+	if _, ok := s.workingFactByID(id); !ok {
+		return reteAgendaDelta{}, ErrFactNotFound
+	}
+
+	// Drop logical support the old fact received so its edges do not dangle.
+	s.purgeReceivedLogicalSupport(ctx, id)
+
+	_, agendaDelta, err := s.removeFactImmediate(ctx, id, origin, false)
+	if err != nil {
+		return agendaDelta, err
+	}
+	if demandDelta, err := s.removeBackchainDemandSupportsForFact(ctx, id, origin); err != nil {
+		return agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
+	}
+	if resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, agendaDelta.resolvedDemands, agendaDelta.resolvedOwners, origin); err != nil {
+		return agendaDelta, err
+	} else {
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, resolvedDelta)
+	}
+	demandState := s.activeFactWorkspace()
+	if demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, agendaDelta.demands, origin); err != nil {
+		return agendaDelta, err
+	} else {
+		s.commitFactWorkspace(demandState)
+		agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, demandDelta)
+	}
+	supportEvent := reteGraphPropagationEvent{
+		origin:           origin,
+		sourceGeneration: s.generation,
+	}
+	cascadeDelta, err := s.removeLogicalSupportsForPropagationEventDelta(ctx, supportEvent, agendaDelta)
+	if err != nil {
+		return agendaDelta, err
+	}
+	return mergeReteAgendaDelta(agendaDelta, cascadeDelta), nil
+}
+
+// assertStatusForReplace reports the assert status to surface when an insert did
+// or did not replace an existing unique-key fact.
+func assertStatusForReplace(replaced bool) AssertStatus {
+	if replaced {
+		return AssertReplaced
+	}
+	return AssertInserted
+}
+
+// uniqueKeyReplaceUndo snapshots the mutable session state before a unique-key
+// replacement. A replacement retracts (and commits) the old fact before the new
+// fact's propagation, so if that propagation later fails the ordinary
+// per-insert rollback would leave the pre-existing fact permanently destroyed.
+// Arming captures the pre-replacement workspace and logical support so the whole
+// replacement can be rolled back atomically; it is disarmed once the
+// replacement has committed successfully.
+type uniqueKeyReplaceUndo struct {
+	workspace factWorkspace
+	support   logicalSupportState
+	armed     bool
+}
+
+// armUniqueKeyReplaceUndo captures the pre-replacement state. It must be called
+// before the old fact is retracted. It deep-clones the workspace, so callers
+// only arm it once a replacement is certain (a differing unique-key collision).
+func (s *Session) armUniqueKeyReplaceUndo() uniqueKeyReplaceUndo {
+	return uniqueKeyReplaceUndo{
+		workspace: s.clonedFactWorkspace(),
+		support:   s.captureLogicalSupportState(),
+		armed:     true,
+	}
+}
+
+func (u *uniqueKeyReplaceUndo) disarm() {
+	if u != nil {
+		u.armed = false
+	}
+}
+
+// rollbackUniqueKeyReplace restores the session to its pre-replacement state. It
+// is a no-op unless the undo is armed, so it is safe to defer unconditionally.
+func (s *Session) rollbackUniqueKeyReplace(u *uniqueKeyReplaceUndo) {
+	if u == nil || !u.armed {
+		return
+	}
+	u.armed = false
+	s.commitFactWorkspace(u.workspace)
+	s.restoreLogicalSupportState(u.support)
+	s.restoreReteAfterPropagationFailure()
+}
+
+// uniqueKeyReplaceTargetFields reports whether asserting fields against the given
+// template would replace existing: it returns true only when the template uses
+// the unique-key duplicate policy and the proposed fields differ (after template
+// defaults are applied) from the existing fact's current values on any field.
+// Because the duplicate index keys on the key fields alone, the two facts share
+// the same key, so any difference is necessarily in a non-key field.
+func (s *Session) uniqueKeyReplaceTargetFields(templateKey TemplateKey, existing *workingFact, fields Fields) (bool, error) {
+	if templateKey == "" || existing == nil {
+		return false, nil
+	}
+	template, ok := s.revision.templateByKey(templateKey)
+	if !ok || template.duplicatePolicy != DuplicateUniqueKey {
+		return false, nil
+	}
+	canonical, _, err := template.applyDefaultsAndValidate(normalizeFields(fields))
+	if err != nil {
+		return false, err
+	}
+	current := existing.snapshotForRevision(s.revision, s.compactSlotStore)
+	keyed := make(map[string]struct{}, len(template.duplicateKeyNames))
+	for _, name := range template.duplicateKeyNames {
+		keyed[name] = struct{}{}
+	}
+	for _, spec := range template.fields {
+		// The collision already establishes equality on the key fields, so
+		// only the non-key fields decide whether this is a replacement.
+		if _, ok := keyed[spec.Name]; ok {
+			continue
+		}
+		proposed, proposedOK := canonical[spec.Name]
+		existingValue, existingOK := current.Field(spec.Name)
+		if proposedOK != existingOK {
+			return true, nil
+		}
+		if proposedOK && !proposed.Equal(existingValue) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// uniqueKeyReplaceTargetSlots reports whether the proposed validated slots differ
+// from the existing fact on any field. It is the slot-backed counterpart of
+// uniqueKeyReplaceTargetFields for the generated/native assert paths, where the
+// proposed fact is already materialized as field slots. Comparison is by value
+// only, so a field that matches after defaults is not treated as a difference.
+func (s *Session) uniqueKeyReplaceTargetSlots(plan *compiledGeneratedFactInsertPlan, existing *workingFact, proposed []factSlot) bool {
+	if plan == nil || existing == nil || plan.duplicatePolicy != DuplicateUniqueKey {
+		return false
+	}
+	// Read the existing fact through its snapshot so map-stored, slot-stored,
+	// and compact-stored facts all compare correctly; comparing only the
+	// existing fact's slot slice would treat a map-stored fact as empty and
+	// spuriously report a difference.
+	current := existing.snapshotForRevision(s.revision, s.compactSlotStore)
+	for i, spec := range plan.template.fields {
+		// Key fields are equal by construction of the collision; only the
+		// non-key fields decide whether this is a replacement.
+		if slices.Contains(plan.duplicateKeySlots, i) {
+			continue
+		}
+		proposedValue, proposedOK := Value{}, false
+		if i < len(proposed) && proposed[i].ok {
+			proposedValue, proposedOK = proposed[i].value, true
+		}
+		existingValue, existingOK := current.Field(spec.Name)
+		if proposedOK != existingOK {
+			return true
+		}
+		if proposedOK && !proposedValue.Equal(existingValue) {
+			return true
+		}
+	}
+	return false
+}
+
+// uniqueKeyReplaceTargetCompactSlots is the compact-slot counterpart of
+// uniqueKeyReplaceTargetSlots.
+func (s *Session) uniqueKeyReplaceTargetCompactSlots(plan *compiledGeneratedFactInsertPlan, existing *workingFact, proposed []compactFactSlot) bool {
+	return s.uniqueKeyReplaceTargetSlots(plan, existing, materializeFactSlotsFromCompactSlots(proposed))
+}
+
+// replaceUniqueKeyGeneratedFactSlots retracts the existing unique-key fact oldID
+// and inserts a new generated fact built from proposed on state. It refreshes
+// state to the active workspace and returns the new fact, the insert mark for
+// caller-side rollback, and the (uncoalesced) retract agenda delta to merge with
+// the assert delta.
+func (s *Session) replaceUniqueKeyGeneratedFactSlots(ctx context.Context, state *factWorkspace, plan *compiledGeneratedFactInsertPlan, proposed []factSlot, oldID FactID, origin mutationOrigin) (*workingFact, factWorkspaceInsertMark, reteAgendaDelta, error) {
+	snapshot := cloneFactSlots(proposed)
+	retractDelta, err := s.fullyRetractFactForReplace(ctx, oldID, origin)
+	if err != nil {
+		return nil, factWorkspaceInsertMark{}, retractDelta, err
+	}
+	*state = s.activeFactWorkspace()
+	mark := state.markGeneratedFactInsert()
+	slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(snapshot))
+	copy(slots, snapshot)
+	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, slots, slotMark, factTargetIndexDirty)
+	if err != nil {
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
+		return nil, mark, retractDelta, err
+	}
+	if !inserted {
+		return nil, mark, retractDelta, ErrInvalidRuleset
+	}
+	return fact, mark, retractDelta, nil
+}
+
+// replaceUniqueKeyGeneratedCompactFactSlots is the compact-slot counterpart of
+// replaceUniqueKeyGeneratedFactSlots.
+func (s *Session) replaceUniqueKeyGeneratedCompactFactSlots(ctx context.Context, state *factWorkspace, plan *compiledGeneratedFactInsertPlan, proposed []compactFactSlot, oldID FactID, origin mutationOrigin) (*workingFact, factWorkspaceInsertMark, reteAgendaDelta, error) {
+	snapshot := cloneCompactFactSlots(proposed)
+	retractDelta, err := s.fullyRetractFactForReplace(ctx, oldID, origin)
+	if err != nil {
+		return nil, factWorkspaceInsertMark{}, retractDelta, err
+	}
+	*state = s.activeFactWorkspace()
+	mark := state.markGeneratedFactInsert()
+	slots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(snapshot))
+	copy(slots, snapshot)
+	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, slots, compactSlotMark, factTargetIndexDirty)
+	if err != nil {
+		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
+		return nil, mark, retractDelta, err
+	}
+	if !inserted {
+		return nil, mark, retractDelta, ErrInvalidRuleset
+	}
+	return fact, mark, retractDelta, nil
 }
 
 func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id FactID, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -7003,7 +7397,7 @@ func (s *Session) drainQueuedMutations(ctx context.Context) error {
 func mutationResultNeedsReconcile(value any, revision *Ruleset) bool {
 	switch result := value.(type) {
 	case AssertResult:
-		return result.Status == AssertInserted && revision.factMayAffectRuleMatches(result.Fact)
+		return (result.Status == AssertInserted || result.Status == AssertReplaced) && revision.factMayAffectRuleMatches(result.Fact)
 	case ModifyResult:
 		return result.Status == ModifyChanged && revision.factMayAffectRuleMatches(result.Fact)
 	case RetractResult:

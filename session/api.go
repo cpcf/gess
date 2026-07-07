@@ -379,8 +379,14 @@ const (
 	// AssertInserted reports that a new fact entered working memory.
 	AssertInserted = engine.AssertInserted
 	// AssertExisting reports that the template's duplicate policy
-	// matched an existing fact instead of inserting a new one.
+	// matched an existing fact with identical fields, so no new fact
+	// was inserted.
 	AssertExisting = engine.AssertExisting
+	// AssertReplaced reports that a unique-key template matched an
+	// existing fact whose non-key fields differed, so the old fact was
+	// retracted and a new fact (with a new fact ID) was inserted in its
+	// place.
+	AssertReplaced = engine.AssertReplaced
 	// AssertValidationFailure reports that the fields failed template
 	// validation; the error wraps [rules.ErrValidation].
 	AssertValidationFailure = engine.AssertValidationFailure

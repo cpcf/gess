@@ -59,8 +59,12 @@ and `BackchainReactive`. `FieldSpec` fields: `Name`, `Kind` (defaults to
 
 Duplicate policies: `DuplicateStructural` (the zero value) deduplicates
 facts with identical fields, `DuplicateAllow` permits duplicates, and
-`DuplicateUniqueKey` deduplicates by `DuplicateKeyNames`, which must name
-declared fields.
+`DuplicateUniqueKey` keeps one current fact per key (`DuplicateKeyNames`,
+which must name declared fields). Asserting a `DuplicateUniqueKey` fact
+whose key matches an existing fact but whose non-key fields differ replaces
+the old fact — retract old, assert new, with a new fact ID, reported as
+`AssertReplaced` — while asserting an identical fact is a no-op
+(`AssertExisting`).
 
 ## Rules
 

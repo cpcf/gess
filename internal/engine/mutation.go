@@ -203,6 +203,7 @@ type AssertStatus string
 const (
 	AssertInserted          AssertStatus = "inserted"
 	AssertExisting          AssertStatus = "existing"
+	AssertReplaced          AssertStatus = "replaced"
 	AssertValidationFailure AssertStatus = "validation_failure"
 	AssertClosed            AssertStatus = "closed"
 	AssertConcurrencyMisuse AssertStatus = "concurrency_misuse"

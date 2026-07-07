@@ -415,6 +415,41 @@ func (s *Session) removeLogicalSupportSource(ctx context.Context, source logical
 	return s.logicalSupportMemory().removeSource(ctx, source)
 }
 
+// purgeReceivedLogicalSupport removes every logical-support edge whose target is
+// factID. It is used when a fact is fully removed outside the normal cascade
+// (for example a unique-key replacement) so the fact leaves no dangling support
+// edges behind. It is a no-op for stated facts, which receive no support.
+func (s *Session) purgeReceivedLogicalSupport(ctx context.Context, factID FactID) {
+	if s == nil || len(s.logicalSupportByFact) == 0 {
+		return
+	}
+	edges := s.logicalSupportByFact[factID]
+	if len(edges) == 0 {
+		return
+	}
+	supportIDs := make([]SupportID, 0, len(edges))
+	for supportID := range edges {
+		supportIDs = append(supportIDs, supportID)
+	}
+	slices.Sort(supportIDs)
+	for _, supportID := range supportIDs {
+		record, ok := s.logicalSupportEdges[supportID]
+		if !ok {
+			continue
+		}
+		delete(s.logicalSupportEdges, supportID)
+		if bySource := s.logicalSupportBySource[record.source]; bySource != nil {
+			delete(bySource, supportID)
+			if len(bySource) == 0 {
+				delete(s.logicalSupportBySource, record.source)
+			}
+		}
+		s.logicalSupportCounters.SupportEdgesRemoved++
+		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
+	}
+	delete(s.logicalSupportByFact, factID)
+}
+
 func (s *Session) clearLogicalSupports() {
 	if s == nil {
 		return
