@@ -330,8 +330,8 @@ plus activation metadata:
 - Bindings: `BoundFacts()`, `Binding(name)` for fact bindings,
   `BindingValue(name)` for value bindings such as aggregate results, and
   `BindingScalarValue(name, field)` for one field of a bound fact.
-- Mutations: `Assert`, `AssertTemplate`, `AssertTemplateValues`,
-  `AssertLogical`, `Modify`, `Retract`.
+- Mutations: `Assert`, `AssertTemplateValues`, `AssertLogical`, `Modify`,
+  `Retract`.
 - Control: `Halt`, `PushFocus`, `SetFocus`, `PopFocus`, `ClearFocusStack`.
 
 `AssertLogical` asserts a fact whose support is the activation's matched
