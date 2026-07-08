@@ -3225,10 +3225,11 @@ func (s *reteGraphAccumulatorState) removeMemberSubtractive(node *reteGraphAggre
 			if !ok || value.Kind() != ValueInt || i >= len(s.floaty) || s.floaty[i] {
 				return false
 			}
-			if value.intValue == math.MinInt64 {
+			integer := valueInt64(value)
+			if integer == math.MinInt64 {
 				return false
 			}
-			if _, overflow := safeAddInt64(s.intSums[i], -value.intValue); overflow {
+			if _, overflow := safeAddInt64(s.intSums[i], -integer); overflow {
 				return false
 			}
 		case AggregateMin, AggregateMax:
@@ -3253,7 +3254,7 @@ func (s *reteGraphAccumulatorState) removeMemberSubtractive(node *reteGraphAggre
 			continue
 		}
 		value, _ := member.value(spec.valueIndex)
-		s.intSums[i], _ = safeAddInt64(s.intSums[i], -value.intValue)
+		s.intSums[i], _ = safeAddInt64(s.intSums[i], -valueInt64(value))
 	}
 	return true
 }
@@ -3423,11 +3424,12 @@ func (s *reteGraphAccumulatorState) addSum(index int, value Value) error {
 	}
 	switch value.Kind() {
 	case ValueInt:
+		integer := valueInt64(value)
 		if s.floaty[index] {
-			s.floatSums[index] += float64(value.intValue)
+			s.floatSums[index] += float64(integer)
 			return nil
 		}
-		next, overflow := safeAddInt64(s.intSums[index], value.intValue)
+		next, overflow := safeAddInt64(s.intSums[index], integer)
 		if overflow {
 			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
 		}
@@ -3438,7 +3440,7 @@ func (s *reteGraphAccumulatorState) addSum(index int, value Value) error {
 			s.intSums[index] = 0
 			s.floaty[index] = true
 		}
-		s.floatSums[index] += value.floatValue
+		s.floatSums[index] += valueFloat64(value)
 	default:
 		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)
 	}
@@ -4088,11 +4090,11 @@ func (m *reteGraphBetaMemory) appendBackchainDemandSupportFactsForToken(token to
 }
 
 func compareBackchainDemandSupportFacts(left, right backchainDemandSupportFact) int {
-	if left.id.generation != right.id.generation {
-		return cmpUint64(uint64(left.id.generation), uint64(right.id.generation))
+	if left.id.Generation() != right.id.Generation() {
+		return cmpUint64(uint64(left.id.Generation()), uint64(right.id.Generation()))
 	}
-	if left.id.sequence != right.id.sequence {
-		return cmpUint64(left.id.sequence, right.id.sequence)
+	if left.id.Sequence() != right.id.Sequence() {
+		return cmpUint64(left.id.Sequence(), right.id.Sequence())
 	}
 	return cmpUint64(uint64(left.version), uint64(right.version))
 }

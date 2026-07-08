@@ -42,11 +42,11 @@ func TestFiringBindingCaptureRecordsExactBindings(t *testing.T) {
 func TestFiringBindingCaptureDeepCopiesValues(t *testing.T) {
 	list := mustValue(t, []any{"a", "b"})
 	captured := cloneBindingValues([]BindingValue{{Name: "?xs", Value: list}})
-	// Mutate the original backing slice; the captured copy must be unaffected.
-	if raw, ok := list.data.([]Value); ok {
+	// Mutate the returned slice; the captured copy must be unaffected.
+	if raw, ok := list.AsList(); ok {
 		raw[0] = newStringValue("mutated")
 	}
-	got, ok := captured[0].Value.data.([]Value)
+	got, ok := captured[0].Value.AsList()
 	if !ok || len(got) != 2 {
 		t.Fatalf("captured list = %+v, want a 2-element clone", captured[0].Value)
 	}

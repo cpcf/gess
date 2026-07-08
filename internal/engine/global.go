@@ -1,55 +1,18 @@
 package engine
 
-import "strings"
+import (
+	"strings"
 
-type GlobalSpec struct {
-	Name        string
-	Kind        ValueKind
-	Default     any
-	HasDefault  bool
-	Description string
+	gessrules "github.com/cpcf/gess/rules"
+)
+
+type GlobalSpec = gessrules.GlobalSpec
+
+func cloneGlobalSpec(s GlobalSpec) GlobalSpec {
+	return gessrules.CloneGlobalSpec(s)
 }
 
-func (s GlobalSpec) clone() GlobalSpec {
-	s.Name = strings.TrimSpace(s.Name)
-	if s.Kind == valueKindUnknown {
-		s.Kind = ValueAny
-	}
-	s.Default = cloneSpecValue(s.Default)
-	return s
-}
-
-type Global struct {
-	name         string
-	kind         ValueKind
-	defaultValue Value
-	hasDefault   bool
-	description  string
-	slot         int
-}
-
-func (g Global) Name() string {
-	return g.name
-}
-
-func (g Global) Kind() ValueKind {
-	return g.kind
-}
-
-func (g Global) Default() (Value, bool) {
-	if !g.hasDefault {
-		return Value{}, false
-	}
-	return cloneValue(g.defaultValue), true
-}
-
-func (g Global) Description() string {
-	return g.description
-}
-
-func (g Global) DeclarationOrder() int {
-	return g.slot
-}
+type Global = gessrules.Global
 
 type compiledGlobal struct {
 	name         string
@@ -62,17 +25,17 @@ type compiledGlobal struct {
 
 func (g compiledGlobal) public() Global {
 	return Global{
-		name:         g.name,
-		kind:         g.kind,
-		defaultValue: cloneValue(g.defaultValue),
-		hasDefault:   g.hasDefault,
-		description:  g.description,
-		slot:         g.slot,
+		NameValue:       g.name,
+		KindValue:       g.kind,
+		DefaultValue:    cloneValue(g.defaultValue),
+		HasDefaultValue: g.hasDefault,
+		DescriptionText: g.description,
+		Order:           g.slot,
 	}
 }
 
 func compileGlobalSpec(spec GlobalSpec, slot int) (compiledGlobal, error) {
-	normalized := spec.clone()
+	normalized := cloneGlobalSpec(spec)
 	if normalized.Name == "" {
 		return compiledGlobal{}, &ValidationError{Reason: "global name is required"}
 	}

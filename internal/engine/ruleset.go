@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
 type Workspace struct {
@@ -32,7 +34,7 @@ func (w *Workspace) AddModule(spec ModuleSpec) error {
 		return err
 	}
 
-	w.modules = append(w.modules, module.spec())
+	w.modules = append(w.modules, moduleSpec(module))
 	return nil
 }
 
@@ -82,7 +84,7 @@ func (w *Workspace) AddGlobal(spec GlobalSpec) error {
 		}
 	}
 
-	w.globals = append(w.globals, spec.clone())
+	w.globals = append(w.globals, cloneGlobalSpec(spec))
 	return nil
 }
 
@@ -98,7 +100,7 @@ func (w *Workspace) ReplaceGlobal(spec GlobalSpec) error {
 		}
 	}
 
-	w.globals[idx] = spec.clone()
+	w.globals[idx] = cloneGlobalSpec(spec)
 	return nil
 }
 
@@ -192,7 +194,7 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 		}
 	}
 
-	w.functions = append(w.functions, spec.clone())
+	w.functions = append(w.functions, clonePureFunctionSpec(spec))
 	return nil
 }
 
@@ -204,7 +206,7 @@ func (w *Workspace) AddFunction(spec PureFunctionSpec) error {
 // ruleset at Workspace.Compile, so body errors surface there rather than
 // here.
 func (w *Workspace) AddExpressionFunction(spec ExpressionFunctionSpec) error {
-	normalized := spec.clone()
+	normalized := cloneExpressionFunctionSpec(spec)
 	if normalized.Name == "" {
 		return &ValidationError{Reason: "function name is required", Err: ErrFunctionValidation}
 	}
@@ -263,7 +265,7 @@ func (w *Workspace) ReplaceFunction(spec PureFunctionSpec) error {
 		}
 	}
 
-	w.functions[idx] = spec.clone()
+	w.functions[idx] = clonePureFunctionSpec(spec)
 	return nil
 }
 
@@ -364,7 +366,7 @@ func (w *Workspace) RemoveRule(name string) error {
 }
 
 func (w *Workspace) AddQuery(spec QuerySpec) error {
-	normalized := spec.clone()
+	normalized := cloneQuerySpec(spec)
 	if normalized.Name == "" {
 		return &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
 	}
@@ -376,7 +378,7 @@ func (w *Workspace) AddQuery(spec QuerySpec) error {
 }
 
 func (w *Workspace) ReplaceQuery(spec QuerySpec) error {
-	normalized := spec.clone()
+	normalized := cloneQuerySpec(spec)
 	if normalized.Name == "" {
 		return &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
 	}
@@ -417,7 +419,7 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		return nil, err
 	}
 
-	compiledTemplates := make([]Template, 0, len(w.templates))
+	compiledTemplates := make([]compiledTemplate, 0, len(w.templates))
 	for _, spec := range w.templates {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -438,10 +440,10 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		return compiledTemplates[i].name < compiledTemplates[j].name
 	})
 
-	templates := make(map[string]Template, len(compiledTemplates))
-	templatesByKey := make(map[TemplateKey]Template, len(compiledTemplates))
-	templatesByQualifiedName := make(map[QualifiedName]Template, len(compiledTemplates))
-	templatesByID := make([]Template, 0, len(compiledTemplates))
+	templates := make(map[string]compiledTemplate, len(compiledTemplates))
+	templatesByKey := make(map[TemplateKey]compiledTemplate, len(compiledTemplates))
+	templatesByQualifiedName := make(map[QualifiedName]compiledTemplate, len(compiledTemplates))
+	templatesByID := make([]compiledTemplate, 0, len(compiledTemplates))
 	templateIDsByName := make(map[string]templateID, len(compiledTemplates))
 	templateIDsByKey := make(map[TemplateKey]templateID, len(compiledTemplates))
 	templateOrder := make([]string, 0, len(compiledTemplates))
@@ -705,9 +707,9 @@ type Ruleset struct {
 	id                         RulesetID
 	modules                    map[ModuleName]Module
 	moduleOrder                []ModuleName
-	templates                  map[string]Template
-	templatesByKey             map[TemplateKey]Template
-	templatesByID              []Template
+	templates                  map[string]compiledTemplate
+	templatesByKey             map[TemplateKey]compiledTemplate
+	templatesByID              []compiledTemplate
 	templateIDsByName          map[string]templateID
 	templateIDsByKey           map[TemplateKey]templateID
 	templateOrder              []string
@@ -742,38 +744,15 @@ type generatedAssertReserve struct {
 	compactSlots int
 }
 
-// GeneratedFactObservabilityKind classifies whether generated facts must enter
-// working memory for downstream rule/query visibility.
-type GeneratedFactObservabilityKind string
+type GeneratedFactObservabilityKind = gessrules.GeneratedFactObservabilityKind
 
 const (
-	// GeneratedFactReactiveWorkingMemory means generated facts can affect rule
-	// matching and must retain working-memory identity.
-	GeneratedFactReactiveWorkingMemory GeneratedFactObservabilityKind = "reactive-working-memory"
-	// GeneratedFactQueryVisible means generated facts are not rule-reactive but
-	// can be returned by compiled queries.
-	GeneratedFactQueryVisible GeneratedFactObservabilityKind = "query-visible"
-	// GeneratedFactOutputOnly means no compiled rule or query condition observes
-	// the generated template.
-	GeneratedFactOutputOnly GeneratedFactObservabilityKind = "output-only"
+	GeneratedFactReactiveWorkingMemory = gessrules.GeneratedFactReactiveWorkingMemory
+	GeneratedFactQueryVisible          = gessrules.GeneratedFactQueryVisible
+	GeneratedFactOutputOnly            = gessrules.GeneratedFactOutputOnly
 )
 
-// GeneratedFactObservability describes the compiler proof for a generated
-// template's downstream visibility.
-type GeneratedFactObservability struct {
-	TemplateKey       TemplateKey
-	TemplateName      string
-	Kind              GeneratedFactObservabilityKind
-	RuleMatchVisible  bool
-	QueryVisible      bool
-	StoresName        bool
-	DiagnosticReasons []string
-}
-
-func (o GeneratedFactObservability) clone() GeneratedFactObservability {
-	o.DiagnosticReasons = append([]string(nil), o.DiagnosticReasons...)
-	return o
-}
+type GeneratedFactObservability = gessrules.GeneratedFactObservability
 
 func (r *Ruleset) hasAutoFocusRules() bool {
 	return r != nil && r.hasEffectiveAutoFocus
@@ -847,7 +826,7 @@ func generatedAssertReserveByRuleRevision(rules []compiledRule) map[RuleRevision
 	return out
 }
 
-func templateSupportsCompactGeneratedSlots(template Template) bool {
+func templateSupportsCompactGeneratedSlots(template compiledTemplate) bool {
 	if !template.closed || len(template.fields) == 0 {
 		return false
 	}
@@ -861,7 +840,7 @@ func templateSupportsCompactGeneratedSlots(template Template) bool {
 	return true
 }
 
-func templateSupportsCompactGeneratedValueSlots(template Template) bool {
+func templateSupportsCompactGeneratedValueSlots(template compiledTemplate) bool {
 	if !templateSupportsCompactGeneratedSlots(template) {
 		return false
 	}
@@ -885,7 +864,7 @@ func (r *Ruleset) generatedAssertReserveByRuleRevision() map[RuleRevisionID][]ge
 	return r.generatedAssertReserve
 }
 
-func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]Template, templateIDsByKey map[TemplateKey]templateID, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
+func compileGeneratedFactInsertPlans(templatesByKey map[TemplateKey]compiledTemplate, templateIDsByKey map[TemplateKey]templateID, conditionTemplateKeys map[TemplateKey]struct{}, conditionNames map[string]struct{}, queryConditionTemplateKeys map[TemplateKey]struct{}, queryConditionNames map[string]struct{}) map[TemplateKey]*compiledGeneratedFactInsertPlan {
 	if len(templatesByKey) == 0 {
 		return nil
 	}
@@ -1008,16 +987,16 @@ func (r *Ruleset) templateIDByName(name string) (templateID, bool) {
 	return id, ok && id != 0
 }
 
-func (r *Ruleset) templateByID(id templateID) (Template, bool) {
+func (r *Ruleset) templateByID(id templateID) (compiledTemplate, bool) {
 	if ref, ok := r.templateRefByID(id); ok {
 		return *ref, true
 	}
-	return Template{}, false
+	return compiledTemplate{}, false
 }
 
 // templateRefByID avoids copying the compiled template; the returned
 // pointer aliases immutable post-compile state and must not be mutated.
-func (r *Ruleset) templateRefByID(id templateID) (*Template, bool) {
+func (r *Ruleset) templateRefByID(id templateID) (*compiledTemplate, bool) {
 	if r == nil || id == 0 {
 		return nil, false
 	}
@@ -1099,7 +1078,7 @@ func (r *Ruleset) Module(name ModuleName) (Module, bool) {
 	if !ok {
 		return Module{}, false
 	}
-	return module.clone(), true
+	return cloneModule(module), true
 }
 
 func (r *Ruleset) Modules() []Module {
@@ -1108,20 +1087,28 @@ func (r *Ruleset) Modules() []Module {
 	}
 	out := make([]Module, 0, len(r.moduleOrder))
 	for _, name := range r.moduleOrder {
-		out = append(out, r.modules[name].clone())
+		out = append(out, cloneModule(r.modules[name]))
 	}
 	return out
 }
 
-func (r *Ruleset) Template(name string) (Template, bool) {
+func (r *Ruleset) compiledTemplate(name string) (compiledTemplate, bool) {
 	if r == nil {
-		return Template{}, false
+		return compiledTemplate{}, false
 	}
 	template, ok := r.templates[name]
 	if !ok {
-		return Template{}, false
+		return compiledTemplate{}, false
 	}
 	return template.clone(), true
+}
+
+func (r *Ruleset) Template(name string) (Template, bool) {
+	template, ok := r.compiledTemplate(name)
+	if !ok {
+		return Template{}, false
+	}
+	return template.inspect(), true
 }
 
 func (r *Ruleset) TemplateByKey(key TemplateKey) (Template, bool) {
@@ -1132,18 +1119,18 @@ func (r *Ruleset) TemplateByKey(key TemplateKey) (Template, bool) {
 	if !ok {
 		return Template{}, false
 	}
-	return template.clone(), true
+	return template.inspect(), true
 }
 
-func (r *Ruleset) templateByKey(key TemplateKey) (Template, bool) {
+func (r *Ruleset) templateByKey(key TemplateKey) (compiledTemplate, bool) {
 	if r == nil {
-		return Template{}, false
+		return compiledTemplate{}, false
 	}
 	template, ok := r.templatesByKey[key]
 	return template, ok
 }
 
-func (r *Ruleset) usesFieldSlots(template Template) bool {
+func (r *Ruleset) usesFieldSlots(template compiledTemplate) bool {
 	if r == nil || !template.closed || template.key == "" {
 		return false
 	}
@@ -1151,7 +1138,7 @@ func (r *Ruleset) usesFieldSlots(template Template) bool {
 	return ok
 }
 
-func (r *Ruleset) buildFieldSlots(template Template, fields Fields, presence map[string]FieldPresence) []factSlot {
+func (r *Ruleset) buildFieldSlots(template compiledTemplate, fields Fields, presence map[string]FieldPresence) []factSlot {
 	if r == nil || template.key == "" {
 		return nil
 	}
@@ -1167,7 +1154,7 @@ func (r *Ruleset) Templates() []Template {
 	}
 	out := make([]Template, 0, len(r.templateOrder))
 	for _, name := range r.templateOrder {
-		out = append(out, r.templates[name].clone())
+		out = append(out, r.templates[name].inspect())
 	}
 	return out
 }
@@ -1180,7 +1167,7 @@ func (r *Ruleset) Action(name string) (Action, bool) {
 	if !ok {
 		return Action{}, false
 	}
-	return action.inspect().clone(), true
+	return cloneAction(action.inspect()), true
 }
 
 func (r *Ruleset) Actions() []Action {
@@ -1189,7 +1176,7 @@ func (r *Ruleset) Actions() []Action {
 	}
 	out := make([]Action, 0, len(r.actionOrder))
 	for _, name := range r.actionOrder {
-		out = append(out, r.actions[name].inspect().clone())
+		out = append(out, cloneAction(r.actions[name].inspect()))
 	}
 	return out
 }
@@ -1249,7 +1236,7 @@ func (r *Ruleset) Rule(name string) (Rule, bool) {
 	if !ok {
 		return Rule{}, false
 	}
-	return rule.inspect().clone(), true
+	return cloneRule(rule.inspect()), true
 }
 
 func (r *Ruleset) RuleByID(id RuleID) (Rule, bool) {
@@ -1260,7 +1247,7 @@ func (r *Ruleset) RuleByID(id RuleID) (Rule, bool) {
 	if !ok {
 		return Rule{}, false
 	}
-	return rule.inspect().clone(), true
+	return cloneRule(rule.inspect()), true
 }
 
 func (r *Ruleset) RuleByRevisionID(id RuleRevisionID) (Rule, bool) {
@@ -1271,7 +1258,7 @@ func (r *Ruleset) RuleByRevisionID(id RuleRevisionID) (Rule, bool) {
 	if !ok {
 		return Rule{}, false
 	}
-	return rule.inspect().clone(), true
+	return cloneRule(rule.inspect()), true
 }
 
 func (r *Ruleset) Rules() []Rule {
@@ -1280,7 +1267,7 @@ func (r *Ruleset) Rules() []Rule {
 	}
 	out := make([]Rule, 0, len(r.ruleOrder))
 	for _, name := range r.ruleOrder {
-		out = append(out, r.rules[name].inspect().clone())
+		out = append(out, cloneRule(r.rules[name].inspect()))
 	}
 	return out
 }
@@ -1319,7 +1306,7 @@ func (r *Ruleset) GeneratedFactObservability(templateKey TemplateKey) (Generated
 	if !ok {
 		return GeneratedFactObservability{}, false
 	}
-	return plan.generatedFactObservability().clone(), true
+	return gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()), true
 }
 
 // GeneratedFactObservabilityDiagnostics returns compiler visibility proofs for
@@ -1336,7 +1323,7 @@ func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObserva
 		if !ok {
 			continue
 		}
-		out = append(out, plan.generatedFactObservability().clone())
+		out = append(out, gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()))
 		seen[template.Key()] = struct{}{}
 	}
 	if len(seen) == len(r.generatedFactInsertPlans) {
@@ -1358,7 +1345,7 @@ func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObserva
 		if !ok {
 			continue
 		}
-		out = append(out, plan.generatedFactObservability().clone())
+		out = append(out, gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()))
 	}
 	return out
 }
@@ -1544,13 +1531,13 @@ func (w *Workspace) validateDefinitionModules(modules map[ModuleName]Module) err
 	return nil
 }
 
-func rulesetID(modules []Module, templates []Template, actions []compiledAction, functions []compiledPureFunction, globals []compiledGlobal, rules []compiledRule, queries []compiledQuery) RulesetID {
+func rulesetID(modules []Module, templates []compiledTemplate, actions []compiledAction, functions []compiledPureFunction, globals []compiledGlobal, rules []compiledRule, queries []compiledQuery) RulesetID {
 	sum := sha256.New()
 	sum.Write([]byte("gess/ruleset/v2\n"))
 	sum.Write([]byte("modules:\n"))
 	for _, module := range modules {
-		sum.Write(fmt.Appendf(nil, "module:%s:", module.name))
-		sum.Write([]byte(module.description))
+		sum.Write(fmt.Appendf(nil, "module:%s:", module.NameValue))
+		sum.Write([]byte(module.DescriptionText))
 		if autoFocus, ok := module.AutoFocusDefault(); ok {
 			sum.Write(fmt.Appendf(nil, ":auto-focus:%t", autoFocus))
 		}
@@ -1570,13 +1557,13 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 		for _, field := range template.fields {
 			sum.Write(fmt.Appendf(nil, "field:%s:%s:%t", field.Name, field.Kind, field.Required))
 			if fieldDefault, hasDefault := template.fieldDefaults[field.Name]; hasDefault {
-				sum.Write(fmt.Appendf(nil, ":default:%s", fieldDefault.canonicalKey()))
+				sum.Write(fmt.Appendf(nil, ":default:%s", fieldDefault.CanonicalKey()))
 			}
 			sum.Write([]byte("\n"))
 			if allowed, hasAllowed := template.fieldAllowed[field.Name]; hasAllowed {
 				sum.Write(fmt.Appendf(nil, "allowed:%s:", field.Name))
 				for _, allowedValue := range allowed {
-					sum.Write([]byte(allowedValue.canonicalKey()))
+					sum.Write([]byte(allowedValue.CanonicalKey()))
 					sum.Write([]byte(","))
 				}
 				sum.Write([]byte("\n"))
@@ -1616,7 +1603,7 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 	for _, global := range globals {
 		sum.Write(fmt.Appendf(nil, "global:%s:%d:%s:%t:", global.name, global.slot, global.kind, global.hasDefault))
 		if global.hasDefault {
-			sum.Write([]byte(global.defaultValue.canonicalKey()))
+			sum.Write([]byte(global.defaultValue.CanonicalKey()))
 		}
 		sum.Write([]byte("\n"))
 	}
@@ -1636,11 +1623,11 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 		sum.Write([]byte("\n"))
 		sum.Write(fmt.Appendf(nil, "condition-count:%d\n", len(rule.conditions)))
 		for _, condition := range rule.conditions {
-			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s\n", condition.order, condition.binding, condition.name, condition.templateKey))
+			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s\n", condition.Order, condition.BindingName, condition.NameValue, condition.TemplateKeyValue))
 		}
 		sum.Write(fmt.Appendf(nil, "action-count:%d\n", len(rule.actions)))
 		for _, action := range rule.actions {
-			sum.Write(fmt.Appendf(nil, "action:%d:%s\n", action.order, action.name))
+			sum.Write(fmt.Appendf(nil, "action:%d:%s\n", action.Order, action.NameValue))
 		}
 		for _, action := range rule.actionExecutions {
 			sum.Write([]byte("action-exec:"))
@@ -1653,11 +1640,11 @@ func rulesetID(modules []Module, templates []Template, actions []compiledAction,
 	for _, query := range queries {
 		sum.Write(fmt.Appendf(nil, "query:%s:%s:%d\n", query.module, query.name, len(query.parameters)))
 		for _, param := range query.parameters {
-			sum.Write(fmt.Appendf(nil, "param:%d:%s:%s\n", param.order, param.name, param.kind))
+			sum.Write(fmt.Appendf(nil, "param:%d:%s:%s\n", param.Order, param.NameValue, param.KindValue))
 		}
 		sum.Write(fmt.Appendf(nil, "condition-count:%d\n", len(query.conditions)))
 		for _, condition := range query.conditions {
-			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s:%s\n", condition.order, condition.id, condition.binding, condition.name, condition.templateKey))
+			sum.Write(fmt.Appendf(nil, "condition:%d:%s:%s:%s:%s\n", condition.Order, condition.IDValue, condition.BindingName, condition.NameValue, condition.TemplateKeyValue))
 		}
 		for branchIndex, branch := range query.conditionBranches {
 			sum.Write(fmt.Appendf(nil, "branch:%d:\n", branchIndex))

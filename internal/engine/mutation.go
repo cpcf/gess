@@ -1,14 +1,18 @@
 package engine
 
-import "fmt"
+import (
+	"fmt"
 
-type MutationKind string
+	gessrules "github.com/cpcf/gess/rules"
+)
+
+type MutationKind = gessrules.MutationKind
 
 const (
-	MutationAssert  MutationKind = "assert"
-	MutationModify  MutationKind = "modify"
-	MutationRetract MutationKind = "retract"
-	MutationReset   MutationKind = "reset"
+	MutationAssert  = gessrules.MutationAssert
+	MutationModify  = gessrules.MutationModify
+	MutationRetract = gessrules.MutationRetract
+	MutationReset   = gessrules.MutationReset
 )
 
 type RunStatus string
@@ -91,37 +95,22 @@ func (e *ActionFailureError) Is(target error) bool {
 	return target == ErrActionFailed
 }
 
-type DuplicateKey string
+type DuplicateKey = gessrules.DuplicateKey
 
-type FactSupportState string
+type FactSupportState = gessrules.FactSupportState
 
 const (
-	FactSupportStated           FactSupportState = "stated"
-	FactSupportLogical          FactSupportState = "logical"
-	FactSupportStatedAndLogical FactSupportState = "stated_and_logical"
-	FactSupportMetadataOnly     FactSupportState = "metadata_only"
+	FactSupportStated           = gessrules.FactSupportStated
+	FactSupportLogical          = gessrules.FactSupportLogical
+	FactSupportStatedAndLogical = gessrules.FactSupportStatedAndLogical
+	FactSupportMetadataOnly     = gessrules.FactSupportMetadataOnly
 )
 
-type FactSupportProvenance struct {
-	State      FactSupportState
-	provenance supportProvenance
-}
+type FactSupportProvenance = gessrules.FactSupportProvenance
 
-type supportProvenance struct {
-	source uint64
-	trace  uint64
-}
+type FieldChange = gessrules.FieldChange
 
-type FieldChange struct {
-	Field string
-	Old   Value
-	New   Value
-}
-
-type FactPatch struct {
-	Set   Fields
-	Unset []string
-}
+type FactPatch = gessrules.FactPatch
 
 type mutationOrigin struct {
 	ActivationID   ActivationID
@@ -198,15 +187,15 @@ func (d MutationDelta) FieldChanges() []FieldChange {
 	return out
 }
 
-type AssertStatus string
+type AssertStatus = gessrules.AssertStatus
 
 const (
-	AssertInserted          AssertStatus = "inserted"
-	AssertExisting          AssertStatus = "existing"
-	AssertReplaced          AssertStatus = "replaced"
-	AssertValidationFailure AssertStatus = "validation_failure"
-	AssertClosed            AssertStatus = "closed"
-	AssertConcurrencyMisuse AssertStatus = "concurrency_misuse"
+	AssertInserted          = gessrules.AssertInserted
+	AssertExisting          = gessrules.AssertExisting
+	AssertReplaced          = gessrules.AssertReplaced
+	AssertValidationFailure = gessrules.AssertValidationFailure
+	AssertClosed            = gessrules.AssertClosed
+	AssertConcurrencyMisuse = gessrules.AssertConcurrencyMisuse
 )
 
 type AssertResult struct {
@@ -220,18 +209,18 @@ func (r AssertResult) Inserted() bool {
 	return r.Status == AssertInserted
 }
 
-type ModifyStatus string
+type ModifyStatus = gessrules.ModifyStatus
 
 const (
-	ModifyChanged           ModifyStatus = "changed"
-	ModifyNoOp              ModifyStatus = "no_op"
-	ModifyMissing           ModifyStatus = "missing"
-	ModifyStale             ModifyStatus = "stale"
-	ModifyValidationFailure ModifyStatus = "validation_failure"
-	ModifyDuplicate         ModifyStatus = "duplicate"
-	ModifyLogicalSupport    ModifyStatus = "logical_support"
-	ModifyClosed            ModifyStatus = "closed"
-	ModifyConcurrencyMisuse ModifyStatus = "concurrency_misuse"
+	ModifyChanged           = gessrules.ModifyChanged
+	ModifyNoOp              = gessrules.ModifyNoOp
+	ModifyMissing           = gessrules.ModifyMissing
+	ModifyStale             = gessrules.ModifyStale
+	ModifyValidationFailure = gessrules.ModifyValidationFailure
+	ModifyDuplicate         = gessrules.ModifyDuplicate
+	ModifyLogicalSupport    = gessrules.ModifyLogicalSupport
+	ModifyClosed            = gessrules.ModifyClosed
+	ModifyConcurrencyMisuse = gessrules.ModifyConcurrencyMisuse
 )
 
 type ModifyResult struct {
@@ -244,17 +233,17 @@ func (r ModifyResult) Changed() bool {
 	return r.Status == ModifyChanged
 }
 
-type RetractStatus string
+type RetractStatus = gessrules.RetractStatus
 
 const (
-	RetractRemoved              RetractStatus = "removed"
-	RetractStatedSupportRemoved RetractStatus = "stated_support_removed"
-	RetractLogicalOnly          RetractStatus = "logical_only"
-	RetractMissing              RetractStatus = "missing"
-	RetractStale                RetractStatus = "stale"
-	RetractClosed               RetractStatus = "closed"
-	RetractValidationFailure    RetractStatus = "validation_failure"
-	RetractConcurrencyMisuse    RetractStatus = "concurrency_misuse"
+	RetractRemoved              = gessrules.RetractRemoved
+	RetractStatedSupportRemoved = gessrules.RetractStatedSupportRemoved
+	RetractLogicalOnly          = gessrules.RetractLogicalOnly
+	RetractMissing              = gessrules.RetractMissing
+	RetractStale                = gessrules.RetractStale
+	RetractClosed               = gessrules.RetractClosed
+	RetractValidationFailure    = gessrules.RetractValidationFailure
+	RetractConcurrencyMisuse    = gessrules.RetractConcurrencyMisuse
 )
 
 type RetractResult struct {

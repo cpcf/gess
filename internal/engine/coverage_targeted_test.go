@@ -63,7 +63,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 		nil,
 		rule.conditions,
 		map[string]int{"source": 0},
-		map[TemplateKey]Template{source.Key(): source},
+		map[TemplateKey]compiledTemplate{source.Key(): source},
 	)
 	if err != nil || !ok {
 		t.Fatalf("compileExpressionSpec = (%v, %v), want ok", err, ok)
@@ -149,7 +149,7 @@ func TestCoverageLowerQueryConditionTreeParamsAcrossShapes(t *testing.T) {
 	if got, want := len(aggregateInput.JoinConstraints), 1; got != want {
 		t.Fatalf("aggregate input joins = %d, want %d", got, want)
 	}
-	assertExpressionUsesQueryTrigger(t, loweredAggregate.Specs[0].expression)
+	assertExpressionUsesQueryTrigger(t, loweredAggregate.Specs[0].Expression())
 
 	for _, nilSpec := range []ConditionSpec{(*And)(nil), (*Or)(nil), (*Not)(nil), (*ExistsCondition)(nil), (*ForallCondition)(nil), (*Test)(nil), (*Match)(nil), (*AccumulateCondition)(nil)} {
 		if got := lowerQueryConditionTreeParams(nilSpec, params); got != nil {
@@ -205,7 +205,7 @@ func TestCoverageAggregateStateResultsAcrossKinds(t *testing.T) {
 	if err != nil || !ok || collected.Kind() != ValueList {
 		t.Fatalf("collect result = (%v, %v, %v), want list", collected, ok, err)
 	}
-	values := collected.data.([]Value)
+	values, _ := collected.AsList()
 	if len(values) != 2 || !values[0].Equal(newIntValue(3)) || !values[1].Equal(newIntValue(5)) {
 		t.Fatalf("collect values = %#v, want [3 5]", values)
 	}
@@ -374,9 +374,9 @@ func TestCoverageAgendaActivationFromCandidateAndTerminalToken(t *testing.T) {
 		declarationOrder:  3,
 		identityScopeHash: candidateIdentityScopeHash("rule", "rule-revision"),
 		conditions: []RuleCondition{{
-			id:      "event",
-			binding: "event",
-			order:   0,
+			IDValue:     "event",
+			BindingName: "event",
+			Order:       0,
 		}},
 		conditionPlans: []compiledConditionPlan{{
 			id:          "event",

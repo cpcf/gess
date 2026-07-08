@@ -1,0 +1,281 @@
+package rules
+
+import "strings"
+
+// RuleConditionSpec is the field set behind a positive fact match condition.
+type RuleConditionSpec struct {
+	Binding          string
+	Target           FactTarget
+	FieldConstraints []FieldConstraintSpec
+	ListPatterns     []ListPatternSpec
+	JoinConstraints  []JoinConstraintSpec
+	Predicates       []ExpressionSpec
+	Source           SourceSpan
+}
+
+// CloneRuleConditionSpec returns a defensive copy of s.
+func CloneRuleConditionSpec(s RuleConditionSpec) RuleConditionSpec {
+	out := s
+	out.Binding = strings.TrimSpace(out.Binding)
+	out.Target = out.Target.Normalized()
+	out.FieldConstraints = make([]FieldConstraintSpec, len(s.FieldConstraints))
+	for i, constraint := range s.FieldConstraints {
+		out.FieldConstraints[i] = CloneFieldConstraintSpec(constraint)
+	}
+	out.ListPatterns = make([]ListPatternSpec, len(s.ListPatterns))
+	for i, pattern := range s.ListPatterns {
+		out.ListPatterns[i] = CloneListPatternSpec(pattern)
+	}
+	out.JoinConstraints = make([]JoinConstraintSpec, len(s.JoinConstraints))
+	for i, constraint := range s.JoinConstraints {
+		out.JoinConstraints[i] = CloneJoinConstraintSpec(constraint)
+	}
+	out.Predicates = make([]ExpressionSpec, len(s.Predicates))
+	for i, predicate := range s.Predicates {
+		out.Predicates[i] = CloneExpressionSpec(predicate)
+	}
+	return out
+}
+
+// RuleCondition is the compiled, inspectable form of a fact match condition.
+type RuleCondition struct {
+	IDValue               ConditionID
+	BindingName           string
+	NameValue             string
+	TemplateKeyValue      TemplateKey
+	FieldConstraintValues []FieldConstraint
+	ListPatternValues     []RuleListPattern
+	JoinConstraintValues  []JoinConstraint
+	PredicateValues       []ExpressionPredicate
+	ExplicitValue         bool
+	Order                 int
+	SourceSpan            SourceSpan
+}
+
+func (c RuleCondition) ID() ConditionID {
+	return c.IDValue
+}
+
+func (c RuleCondition) Binding() string {
+	return c.BindingName
+}
+
+func (c RuleCondition) Name() string {
+	return c.NameValue
+}
+
+func (c RuleCondition) TemplateKey() TemplateKey {
+	return c.TemplateKeyValue
+}
+
+func (c RuleCondition) Target() FactTarget {
+	if c.TemplateKeyValue != "" {
+		return TemplateKeyFact(c.TemplateKeyValue)
+	}
+	if c.NameValue != "" {
+		return DynamicFact(c.NameValue)
+	}
+	return FactTarget{}
+}
+
+func (c RuleCondition) FieldConstraints() []FieldConstraint {
+	return cloneFieldConstraints(c.FieldConstraintValues)
+}
+
+func (c RuleCondition) ListPatterns() []RuleListPattern {
+	return CloneRuleListPatterns(c.ListPatternValues)
+}
+
+func (c RuleCondition) JoinConstraints() []JoinConstraint {
+	return cloneJoinConstraints(c.JoinConstraintValues)
+}
+
+func (c RuleCondition) Predicates() []ExpressionPredicate {
+	return CloneExpressionPredicates(c.PredicateValues)
+}
+
+func (c RuleCondition) Explicit() bool {
+	return c.ExplicitValue
+}
+
+func (c RuleCondition) DeclarationOrder() int {
+	return c.Order
+}
+
+func (c RuleCondition) Source() SourceSpan {
+	return c.SourceSpan
+}
+
+// CloneRuleCondition returns a defensive copy of c.
+func CloneRuleCondition(c RuleCondition) RuleCondition {
+	out := c
+	out.FieldConstraintValues = cloneFieldConstraints(c.FieldConstraintValues)
+	out.ListPatternValues = CloneRuleListPatterns(c.ListPatternValues)
+	out.JoinConstraintValues = cloneJoinConstraints(c.JoinConstraintValues)
+	out.PredicateValues = CloneExpressionPredicates(c.PredicateValues)
+	return out
+}
+
+// CloneRuleConditions returns a defensive copy of conditions.
+func CloneRuleConditions(conditions []RuleCondition) []RuleCondition {
+	out := make([]RuleCondition, len(conditions))
+	for i, condition := range conditions {
+		out[i] = CloneRuleCondition(condition)
+	}
+	return out
+}
+
+// RuleConditionBranch is one compiled branch in a condition tree. Flat rules
+// and tree rules without disjunction expose one branch; disjunctive trees expose
+// one branch for each expanded alternative in source order.
+type RuleConditionBranch struct {
+	IDValue         int
+	ConditionValues []RuleConditionBranchCondition
+}
+
+func (b RuleConditionBranch) ID() int {
+	return b.IDValue
+}
+
+func (b RuleConditionBranch) Conditions() []RuleConditionBranchCondition {
+	return CloneRuleConditionBranchConditions(b.ConditionValues)
+}
+
+// CloneRuleConditionBranch returns a defensive copy of b.
+func CloneRuleConditionBranch(b RuleConditionBranch) RuleConditionBranch {
+	out := b
+	out.ConditionValues = CloneRuleConditionBranchConditions(b.ConditionValues)
+	return out
+}
+
+// CloneRuleConditionBranches returns a defensive copy of branches.
+func CloneRuleConditionBranches(branches []RuleConditionBranch) []RuleConditionBranch {
+	out := make([]RuleConditionBranch, len(branches))
+	for i, branch := range branches {
+		out[i] = CloneRuleConditionBranch(branch)
+	}
+	return out
+}
+
+// RuleConditionBranchCondition describes a condition within an expanded branch.
+// Path is the authored condition-tree path, while Visible indicates whether the
+// binding is exposed to actions. Negated conditions are local and not visible.
+type RuleConditionBranchCondition struct {
+	ConditionValue RuleCondition
+	PathValue      []int
+	VisibleValue   bool
+	NegatedValue   bool
+	ExplicitValue  bool
+}
+
+func (c RuleConditionBranchCondition) Condition() RuleCondition {
+	return CloneRuleCondition(c.ConditionValue)
+}
+
+func (c RuleConditionBranchCondition) Path() []int {
+	return cloneIntPath(c.PathValue)
+}
+
+func (c RuleConditionBranchCondition) Visible() bool {
+	return c.VisibleValue
+}
+
+func (c RuleConditionBranchCondition) Negated() bool {
+	return c.NegatedValue
+}
+
+func (c RuleConditionBranchCondition) Explicit() bool {
+	return c.ExplicitValue
+}
+
+// CloneRuleConditionBranchCondition returns a defensive copy of c.
+func CloneRuleConditionBranchCondition(c RuleConditionBranchCondition) RuleConditionBranchCondition {
+	out := c
+	out.ConditionValue = CloneRuleCondition(c.ConditionValue)
+	out.PathValue = cloneIntPath(c.PathValue)
+	return out
+}
+
+// CloneRuleConditionBranchConditions returns a defensive copy of conditions.
+func CloneRuleConditionBranchConditions(conditions []RuleConditionBranchCondition) []RuleConditionBranchCondition {
+	out := make([]RuleConditionBranchCondition, len(conditions))
+	for i, condition := range conditions {
+		out[i] = CloneRuleConditionBranchCondition(condition)
+	}
+	return out
+}
+
+func cloneIntPath(path []int) []int {
+	if len(path) == 0 {
+		return nil
+	}
+	out := make([]int, len(path))
+	copy(out, path)
+	return out
+}
+
+// RuleConditionTree is the compiled, inspectable condition tree for a rule or
+// query.
+type RuleConditionTree struct {
+	KindValue      ConditionTreeKind
+	ChildrenValue  []RuleConditionTree
+	MatchCondition RuleCondition
+	HasMatch       bool
+	TestExpression ExpressionSpec
+	HasTest        bool
+	AggregateValue AccumulateCondition
+	HasAggregate   bool
+	SourceSpan     SourceSpan
+}
+
+func (t RuleConditionTree) Kind() ConditionTreeKind {
+	return t.KindValue
+}
+
+func (t RuleConditionTree) Children() []RuleConditionTree {
+	return CloneRuleConditionTrees(t.ChildrenValue)
+}
+
+func (t RuleConditionTree) Match() (RuleCondition, bool) {
+	if !t.HasMatch {
+		return RuleCondition{}, false
+	}
+	return CloneRuleCondition(t.MatchCondition), true
+}
+
+func (t RuleConditionTree) Test() (ExpressionSpec, bool) {
+	if !t.HasTest {
+		return nil, false
+	}
+	return CloneExpressionSpec(t.TestExpression), true
+}
+
+func (t RuleConditionTree) Aggregate() (AccumulateCondition, bool) {
+	if !t.HasAggregate {
+		return AccumulateCondition{}, false
+	}
+	return CloneAccumulateCondition(t.AggregateValue), true
+}
+
+func (t RuleConditionTree) Source() SourceSpan {
+	return t.SourceSpan
+}
+
+// CloneRuleConditionTree returns a defensive copy of t.
+func CloneRuleConditionTree(t RuleConditionTree) RuleConditionTree {
+	out := t
+	out.ChildrenValue = CloneRuleConditionTrees(t.ChildrenValue)
+	out.MatchCondition = CloneRuleCondition(t.MatchCondition)
+	out.TestExpression = CloneExpressionSpec(t.TestExpression)
+	out.AggregateValue = CloneAccumulateCondition(t.AggregateValue)
+	return out
+}
+
+// CloneRuleConditionTrees returns a defensive copy of trees.
+func CloneRuleConditionTrees(trees []RuleConditionTree) []RuleConditionTree {
+	out := make([]RuleConditionTree, len(trees))
+	for i, tree := range trees {
+		out[i] = CloneRuleConditionTree(tree)
+	}
+	return out
+}

@@ -296,8 +296,8 @@ func candidateIdentityHashFactStep(hash uint64, bindingSlot int, id FactID, vers
 	entry := fnvhash.Offset64
 	entry = fnvhash.MixUint64(entry, 0)
 	entry = fnvhash.MixUint64(entry, uint64(bindingSlot))
-	entry = fnvhash.MixUint64(entry, uint64(id.generation))
-	entry = fnvhash.MixUint64(entry, id.sequence)
+	entry = fnvhash.MixUint64(entry, uint64(id.Generation()))
+	entry = fnvhash.MixUint64(entry, id.Sequence())
 	entry = fnvhash.MixUint64(entry, uint64(version))
 	return hash + fnvhash.Avalanche(entry)
 }
@@ -306,7 +306,7 @@ func candidateIdentityHashValueStep(hash uint64, bindingSlot int, value Value) u
 	entry := fnvhash.Offset64
 	entry = fnvhash.MixUint64(entry, 1)
 	entry = fnvhash.MixUint64(entry, uint64(bindingSlot))
-	entry = fnvhash.MixString(entry, value.canonicalKey())
+	entry = fnvhash.MixString(entry, value.CanonicalKey())
 	return hash + fnvhash.Avalanche(entry)
 }
 
@@ -411,14 +411,14 @@ func bindingTupleEntryLess(left, right bindingTupleEntry) bool {
 	if left.hasValue != right.hasValue {
 		return !left.hasValue
 	}
-	return left.value.canonicalKey() < right.value.canonicalKey()
+	return left.value.CanonicalKey() < right.value.CanonicalKey()
 }
 
 func factIDLess(left, right FactID) bool {
-	if left.generation != right.generation {
-		return left.generation < right.generation
+	if left.Generation() != right.Generation() {
+		return left.Generation() < right.Generation()
 	}
-	return left.sequence < right.sequence
+	return left.Sequence() < right.Sequence()
 }
 
 func writeUintToBuilder(b *strings.Builder, value uint64) {
@@ -468,10 +468,10 @@ func bindingTupleEntryForMatch(rule compiledRule, match conditionMatch) (binding
 		return bindingTupleEntry{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
 	}
 	return bindingTupleEntry{
-		binding:        condition.binding,
+		binding:        condition.BindingName,
 		bindingSlot:    match.bindingSlot,
-		conditionOrder: condition.order,
-		conditionID:    condition.id,
+		conditionOrder: condition.Order,
+		conditionID:    condition.IDValue,
 		conditionPath:  plan.path,
 		factID:         match.fact.ID(),
 		factVersion:    match.fact.Version(),

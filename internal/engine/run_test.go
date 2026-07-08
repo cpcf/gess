@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
 func TestSessionRunCompletesWithoutMatchingActivations(t *testing.T) {
@@ -709,7 +711,7 @@ func TestSessionRunKeepsMultipleActionAssertDeltasDistinct(t *testing.T) {
 			if !ok || value.Kind() != ValueString {
 				return ErrInvalidRuleset
 			}
-			recorded = append(recorded, value.stringValue)
+			recorded = append(recorded, valueString(value))
 			return nil
 		},
 	}); err != nil {
@@ -886,10 +888,10 @@ func TestSessionRunFiresActivationAndAllowsActionContextMutations(t *testing.T) 
 
 	var (
 		actionsSeen       []string
-		initialBinding    FactSnapshot
-		initialBoundFacts []FactSnapshot
-		laterBinding      FactSnapshot
-		laterBoundFacts   []FactSnapshot
+		initialBinding    gessrules.FactSnapshot
+		initialBoundFacts []gessrules.FactSnapshot
+		laterBinding      gessrules.FactSnapshot
+		laterBoundFacts   []gessrules.FactSnapshot
 		personFactID      FactID
 	)
 
@@ -1228,7 +1230,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if result.Status != AssertInserted {
+				if result.Status != gessrules.AssertInserted {
 					return errors.New("audit was not inserted")
 				}
 				if session.agendaDirty {
@@ -1357,7 +1359,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if result.Status != ModifyChanged {
+				if result.Status != gessrules.ModifyChanged {
 					return errors.New("task was not modified")
 				}
 				if session.agendaDirty {
@@ -1781,7 +1783,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if result.Status != ModifyChanged {
+				if result.Status != gessrules.ModifyChanged {
 					return errors.New("person was not modified")
 				}
 				if session.agendaDirty {
@@ -1888,9 +1890,9 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		var (
 			session       *Session
 			actionsSeen   []string
-			assertResult  AssertResult
-			modifyResult  ModifyResult
-			retractResult RetractResult
+			assertResult  gessrules.AssertResult
+			modifyResult  gessrules.ModifyResult
+			retractResult gessrules.RetractResult
 			personID      FactID
 			obsoleteID    FactID
 			auditID       FactID
@@ -2088,14 +2090,14 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				t.Fatalf("follow-on actions = %#v, want record-audit and record-done once each", got[len(want):])
 			}
 		}
-		if assertResult.Status != AssertInserted {
-			t.Fatalf("assert result status = %v, want %v", assertResult.Status, AssertInserted)
+		if assertResult.Status != gessrules.AssertInserted {
+			t.Fatalf("assert result status = %v, want %v", assertResult.Status, gessrules.AssertInserted)
 		}
-		if modifyResult.Status != ModifyChanged {
-			t.Fatalf("modify result status = %v, want %v", modifyResult.Status, ModifyChanged)
+		if modifyResult.Status != gessrules.ModifyChanged {
+			t.Fatalf("modify result status = %v, want %v", modifyResult.Status, gessrules.ModifyChanged)
 		}
-		if retractResult.Status != RetractRemoved {
-			t.Fatalf("retract result status = %v, want %v", retractResult.Status, RetractRemoved)
+		if retractResult.Status != gessrules.RetractRemoved {
+			t.Fatalf("retract result status = %v, want %v", retractResult.Status, gessrules.RetractRemoved)
 		}
 		if assertResult.Delta == nil || modifyResult.Delta == nil || retractResult.Delta == nil {
 			t.Fatalf("expected action deltas for supported run: %#v %#v %#v", assertResult, modifyResult, retractResult)
@@ -2178,7 +2180,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if result.Status != AssertInserted {
+				if result.Status != gessrules.AssertInserted {
 					return errors.New("temp was not inserted")
 				}
 				tempID = result.Fact.ID()
@@ -2207,7 +2209,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err != nil {
 					return err
 				}
-				if result.Status != RetractRemoved {
+				if result.Status != gessrules.RetractRemoved {
 					return errors.New("temp was not retracted")
 				}
 				if session.agendaDirty {
@@ -2302,7 +2304,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err := workspace.AddAction(ActionSpec{
 			Name: "seed-audit",
 			Fn: func(ctx ActionContext) error {
-				_, err := ctx.assertByName("audit", mustFields(t, map[string]any{"kind": "created"}))
+				internalCtx := actionContextForTest(t, ctx)
+				_, err := internalCtx.assertByName("audit", mustFields(t, map[string]any{"kind": "created"}))
 				return err
 			},
 		}); err != nil {
@@ -2380,10 +2383,10 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 	var (
 		actionsSeen    []string
 		assertResult   AssertResult
-		templateResult AssertResult
-		retractResult  RetractResult
+		templateResult gessrules.AssertResult
+		retractResult  gessrules.RetractResult
 		terminalCalled bool
-		personBinding  FactSnapshot
+		personBinding  gessrules.FactSnapshot
 		terminalErr    = errors.New("stop actions")
 	)
 
@@ -2391,7 +2394,8 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 		Name: "assert-dynamic",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-dynamic")
-			result, err := ctx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
+			internalCtx := actionContextForTest(t, ctx)
+			result, err := internalCtx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
 			assertResult = result
 			return err
 		},
@@ -2512,10 +2516,10 @@ func TestSessionRunActionFailureStopsLaterActionsAndEmitsFailureEvent(t *testing
 	if assertResult.Status != AssertInserted || assertResult.Delta == nil {
 		t.Fatalf("assert result = %#v", assertResult)
 	}
-	if templateResult.Status != AssertInserted || templateResult.Delta == nil {
+	if templateResult.Status != gessrules.AssertInserted || templateResult.Delta == nil {
 		t.Fatalf("template assert result = %#v", templateResult)
 	}
-	if retractResult.Status != RetractRemoved || retractResult.Delta == nil {
+	if retractResult.Status != gessrules.RetractRemoved || retractResult.Delta == nil {
 		t.Fatalf("retract result = %#v", retractResult)
 	}
 	if assertResult.Delta.RuleID != failure.RuleID || assertResult.Delta.RuleRevisionID != failure.RuleRevisionID || assertResult.Delta.ActivationID != failure.ActivationID {

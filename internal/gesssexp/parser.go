@@ -5,22 +5,11 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type SourceSpan struct {
-	Name        string
-	StartLine   int
-	StartColumn int
-	EndLine     int
-	EndColumn   int
-}
-
-func (s SourceSpan) String() string {
-	if s.Name == "" {
-		return fmt.Sprintf("%d:%d", s.StartLine, s.StartColumn)
-	}
-	return fmt.Sprintf("%s:%d:%d", s.Name, s.StartLine, s.StartColumn)
-}
+type SourceSpan = gessrules.SourceSpan
 
 type FileError struct {
 	Span   SourceSpan
@@ -119,10 +108,10 @@ func (l *lexer) next() (token, error) {
 	switch r {
 	case '(':
 		l.advance(r)
-		return token{kind: tokenLParen, text: "(", span: start.withEnd(l.span())}, nil
+		return token{kind: tokenLParen, text: "(", span: spanWithEnd(start, l.span())}, nil
 	case ')':
 		l.advance(r)
-		return token{kind: tokenRParen, text: ")", span: start.withEnd(l.span())}, nil
+		return token{kind: tokenRParen, text: ")", span: spanWithEnd(start, l.span())}, nil
 	case '"':
 		return l.stringToken()
 	default:
@@ -135,7 +124,7 @@ func (l *lexer) next() (token, error) {
 			b.WriteRune(r)
 			l.advance(r)
 		}
-		return token{kind: tokenAtom, text: b.String(), span: start.withEnd(l.span())}, nil
+		return token{kind: tokenAtom, text: b.String(), span: spanWithEnd(start, l.span())}, nil
 	}
 }
 
@@ -147,7 +136,7 @@ func (l *lexer) stringToken() (token, error) {
 		r := l.input[l.offset]
 		if r == '"' {
 			l.advance(r)
-			return token{kind: tokenString, text: b.String(), span: start.withEnd(l.span())}, nil
+			return token{kind: tokenString, text: b.String(), span: spanWithEnd(start, l.span())}, nil
 		}
 		if r == '\\' {
 			l.advance(r)
@@ -190,10 +179,10 @@ func (l *lexer) span() SourceSpan {
 	return SourceSpan{Name: l.name, StartLine: l.line, StartColumn: l.col, EndLine: l.line, EndColumn: l.col}
 }
 
-func (s SourceSpan) withEnd(end SourceSpan) SourceSpan {
-	s.EndLine = end.StartLine
-	s.EndColumn = end.StartColumn
-	return s
+func spanWithEnd(start, end SourceSpan) SourceSpan {
+	start.EndLine = end.StartLine
+	start.EndColumn = end.StartColumn
+	return start
 }
 
 type parser struct {
@@ -244,7 +233,7 @@ func (p *parser) expr() (Expr, error) {
 			case tokenEOF:
 				return Expr{}, &FileError{Span: start, Reason: "unterminated list"}
 			case tokenRParen:
-				return Expr{List: list, Span: start.withEnd(next.span)}, nil
+				return Expr{List: list, Span: spanWithEnd(start, next.span)}, nil
 			default:
 				p.unread(next)
 				child, err := p.expr()

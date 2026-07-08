@@ -1046,7 +1046,7 @@ func backchainDemandSlotKeyForFactSlot(slot factSlot) backchainDemandSlotKey {
 		out.stringValue = scalar.stringValue
 		return out
 	}
-	out.signature = slot.value.canonicalKey()
+	out.signature = slot.value.CanonicalKey()
 	return out
 }
 
@@ -1106,10 +1106,10 @@ func compareBackchainDemandOwnerSupportRecords(left, right backchainDemandOwnerS
 }
 
 func compareFactIDs(left, right FactID) int {
-	if left.generation != right.generation {
-		return cmpUint64(uint64(left.generation), uint64(right.generation))
+	if left.Generation() != right.Generation() {
+		return cmpUint64(uint64(left.Generation()), uint64(right.Generation()))
 	}
-	return cmpUint64(left.sequence, right.sequence)
+	return cmpUint64(left.Sequence(), right.Sequence())
 }
 
 func compareBackchainDemandSlotKey(left, right backchainDemandSlotKey) int {
@@ -1236,8 +1236,8 @@ func hashBackchainDemandSupportFacts(supportFacts []backchainDemandSupportFact) 
 	hash := backchainDemandHashStart()
 	hash = backchainDemandHashAddUint64(hash, uint64(len(supportFacts)))
 	for _, support := range supportFacts {
-		hash = backchainDemandHashAddUint64(hash, uint64(support.id.generation))
-		hash = backchainDemandHashAddUint64(hash, support.id.sequence)
+		hash = backchainDemandHashAddUint64(hash, uint64(support.id.Generation()))
+		hash = backchainDemandHashAddUint64(hash, support.id.Sequence())
 		hash = backchainDemandHashAddUint64(hash, uint64(support.version))
 	}
 	return hash

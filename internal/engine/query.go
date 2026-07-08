@@ -7,186 +7,58 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
 type QueryArgs map[string]any
 
-type QueryParameterSpec struct {
-	Name string
-	Kind ValueKind
+type QueryParameterSpec = gessrules.QueryParameterSpec
+
+func cloneQueryParameterSpec(s QueryParameterSpec) QueryParameterSpec {
+	return gessrules.CloneQueryParameterSpec(s)
 }
 
-func (s QueryParameterSpec) clone() QueryParameterSpec {
-	s.Name = strings.TrimSpace(s.Name)
-	if s.Kind == valueKindUnknown {
-		s.Kind = ValueAny
-	}
-	return s
-}
+type QueryReturnSpec = gessrules.QueryReturnSpec
 
-type QueryReturnSpec struct {
-	Alias      string
-	Binding    string
-	Expression ExpressionSpec
-	Source     SourceSpan
-}
-
-func (s QueryReturnSpec) clone() QueryReturnSpec {
-	s.Alias = strings.TrimSpace(s.Alias)
-	s.Binding = strings.TrimSpace(s.Binding)
-	s.Expression = cloneExpressionSpec(s.Expression)
-	return s
+func cloneQueryReturnSpec(s QueryReturnSpec) QueryReturnSpec {
+	return gessrules.CloneQueryReturnSpec(s)
 }
 
 func ReturnFact(alias, binding string) QueryReturnSpec {
-	return QueryReturnSpec{Alias: alias, Binding: binding}
+	return gessrules.ReturnFact(alias, binding)
 }
 
 func ReturnValue(alias string, expression ExpressionSpec) QueryReturnSpec {
-	return QueryReturnSpec{Alias: alias, Expression: cloneExpressionSpec(expression)}
+	return gessrules.ReturnValue(alias, expression)
 }
 
-type QuerySpec struct {
-	Name          string
-	Module        ModuleName
-	Description   string
-	Source        SourceSpan
-	GessSource    string
-	Parameters    []QueryParameterSpec
-	Conditions    []RuleConditionSpec
-	ConditionTree ConditionSpec
-	Returns       []QueryReturnSpec
+type QuerySpec = gessrules.QuerySpec
+
+func cloneQuerySpec(s QuerySpec) QuerySpec {
+	return gessrules.CloneQuerySpec(s)
 }
 
-func (s QuerySpec) clone() QuerySpec {
-	out := s
-	out.Name = strings.TrimSpace(out.Name)
-	out.Module = normalizeModuleName(out.Module)
-	out.Parameters = make([]QueryParameterSpec, len(s.Parameters))
-	for i, param := range s.Parameters {
-		out.Parameters[i] = param.clone()
-	}
-	out.Conditions = make([]RuleConditionSpec, len(s.Conditions))
-	for i, condition := range s.Conditions {
-		out.Conditions[i] = condition.clone()
-	}
-	out.ConditionTree = cloneConditionSpec(s.ConditionTree)
-	out.Returns = make([]QueryReturnSpec, len(s.Returns))
-	for i, ret := range s.Returns {
-		out.Returns[i] = ret.clone()
-	}
-	return out
+type QueryParameter = gessrules.QueryParameter
+
+func cloneQueryParameters(parameters []QueryParameter) []QueryParameter {
+	return gessrules.CloneQueryParameters(parameters)
 }
 
-type QueryParameter struct {
-	name  string
-	kind  ValueKind
-	order int
+type QueryReturn = gessrules.QueryReturn
+
+func cloneQueryReturn(ret QueryReturn) QueryReturn {
+	return gessrules.CloneQueryReturn(ret)
 }
 
-func (p QueryParameter) Name() string {
-	return p.name
+func cloneQueryReturns(returns []QueryReturn) []QueryReturn {
+	return gessrules.CloneQueryReturns(returns)
 }
 
-func (p QueryParameter) Kind() ValueKind {
-	return p.kind
-}
+type Query = gessrules.Query
 
-func (p QueryParameter) DeclarationOrder() int {
-	return p.order
-}
-
-type QueryReturn struct {
-	alias      string
-	binding    string
-	expression ExpressionSpec
-	fact       bool
-	order      int
-	source     SourceSpan
-}
-
-func (r QueryReturn) Alias() string {
-	return r.alias
-}
-
-func (r QueryReturn) Binding() string {
-	return r.binding
-}
-
-func (r QueryReturn) Expression() ExpressionSpec {
-	return cloneExpressionSpec(r.expression)
-}
-
-func (r QueryReturn) Fact() bool {
-	return r.fact
-}
-
-func (r QueryReturn) DeclarationOrder() int {
-	return r.order
-}
-
-func (r QueryReturn) Source() SourceSpan {
-	return r.source
-}
-
-type Query struct {
-	name              string
-	module            ModuleName
-	description       string
-	source            SourceSpan
-	gessSource        string
-	parameters        []QueryParameter
-	conditions        []RuleCondition
-	conditionTree     RuleConditionTree
-	conditionBranches []RuleConditionBranch
-	returns           []QueryReturn
-}
-
-func (q Query) Name() string {
-	return q.name
-}
-
-func (q Query) Module() ModuleName {
-	return q.module
-}
-
-func (q Query) Description() string {
-	return q.description
-}
-
-func (q Query) Source() SourceSpan {
-	return q.source
-}
-
-func (q Query) GessSource() string {
-	return q.gessSource
-}
-
-func (q Query) Parameters() []QueryParameter {
-	out := make([]QueryParameter, len(q.parameters))
-	copy(out, q.parameters)
-	return out
-}
-
-func (q Query) Conditions() []RuleCondition {
-	return cloneRuleConditions(q.conditions)
-}
-
-func (q Query) ConditionTree() RuleConditionTree {
-	return q.conditionTree.clone()
-}
-
-func (q Query) ConditionBranches() []RuleConditionBranch {
-	return cloneRuleConditionBranches(q.conditionBranches)
-}
-
-func (q Query) Returns() []QueryReturn {
-	out := make([]QueryReturn, len(q.returns))
-	for i, ret := range q.returns {
-		out[i] = ret
-		out[i].expression = cloneExpressionSpec(ret.expression)
-	}
-	return out
+func cloneQuery(q Query) Query {
+	return gessrules.CloneQuery(q)
 }
 
 type compiledQuery struct {
@@ -233,7 +105,7 @@ func (a *compiledQueryArgs) mapView(query compiledQuery) map[string]Value {
 		values := make(map[string]Value, len(query.parameters))
 		for i, param := range query.parameters {
 			if value, ok := a.value(i); ok {
-				values[param.name] = value
+				values[param.NameValue] = value
 			}
 		}
 		a.byName = values
@@ -272,16 +144,16 @@ type compiledQueryReturnProjection struct {
 
 func (q compiledQuery) inspect() Query {
 	return Query{
-		name:              q.name,
-		module:            q.module,
-		description:       q.description,
-		source:            q.source,
-		gessSource:        q.gessSource,
-		parameters:        append([]QueryParameter(nil), q.parameters...),
-		conditions:        cloneRuleConditions(q.conditions),
-		conditionTree:     q.conditionTree.clone(),
-		conditionBranches: cloneRuleConditionBranches(q.conditionBranchPlans),
-		returns:           q.inspectReturns(),
+		NameValue:             q.name,
+		ModuleValue:           q.module,
+		DescriptionText:       q.description,
+		SourceSpan:            q.source,
+		GessSourceText:        q.gessSource,
+		ParameterValues:       cloneQueryParameters(q.parameters),
+		ConditionValues:       cloneRuleConditions(q.conditions),
+		ConditionTreeValue:    cloneRuleConditionTree(q.conditionTree),
+		ConditionBranchValues: cloneRuleConditionBranches(q.conditionBranchPlans),
+		ReturnValues:          q.inspectReturns(),
 	}
 }
 
@@ -289,19 +161,19 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 	out := make([]QueryReturn, len(q.returns))
 	for i, ret := range q.returns {
 		out[i] = QueryReturn{
-			alias:      ret.alias,
-			binding:    ret.binding,
-			expression: cloneExpressionSpec(ret.rawExpr),
-			fact:       ret.fact,
-			order:      ret.order,
-			source:     ret.source,
+			AliasValue:     ret.alias,
+			BindingName:    ret.binding,
+			ExpressionSpec: cloneExpressionSpec(ret.rawExpr),
+			FactValue:      ret.fact,
+			Order:          ret.order,
+			SourceSpan:     ret.source,
 		}
 	}
 	return out
 }
 
 func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledQuery, error) {
-	normalized := spec.clone()
+	normalized := cloneQuerySpec(spec)
 	if normalized.Name == "" {
 		return compiledQuery{}, &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
 	}
@@ -368,13 +240,13 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 	conditionBranches := make([]RuleConditionBranch, len(compiledBranches))
 	for i, branch := range compiledBranches {
 		conditionBranches[i] = RuleConditionBranch{
-			id:         branch.id,
-			conditions: cloneRuleConditionBranchConditions(branch.conditions),
+			IDValue:         branch.id,
+			ConditionValues: cloneRuleConditionBranchConditions(branch.conditions),
 		}
 	}
 	bindingSlots := make(map[string]int, len(representative.conditions))
 	for i, condition := range representative.conditions {
-		bindingSlots[condition.binding] = i
+		bindingSlots[condition.BindingName] = i
 	}
 	returns, err := compileQueryReturns(normalized.Name, normalized.Returns, representative.conditions, bindingSlots, templates.byKey, paramTypes, functions, globals)
 	if err != nil {
@@ -413,7 +285,7 @@ func compileQueryParameters(spec QuerySpec) ([]QueryParameter, map[string]ValueK
 	params := make([]QueryParameter, 0, len(spec.Parameters))
 	paramTypes := make(map[string]ValueKind, len(spec.Parameters))
 	for i, param := range spec.Parameters {
-		param = param.clone()
+		param = cloneQueryParameterSpec(param)
 		if param.Name == "" {
 			return nil, nil, &ValidationError{RuleName: spec.Name, Reason: "query parameter name is required", Err: ErrQueryValidation}
 		}
@@ -427,7 +299,7 @@ func compileQueryParameters(spec QuerySpec) ([]QueryParameter, map[string]ValueK
 			return nil, nil, &ValidationError{RuleName: spec.Name, Reason: "invalid query parameter kind", Err: ErrQueryValidation}
 		}
 		paramTypes[param.Name] = param.Kind
-		params = append(params, QueryParameter{name: param.Name, kind: param.Kind, order: i})
+		params = append(params, QueryParameter{NameValue: param.Name, KindValue: param.Kind, Order: i})
 	}
 	return params, paramTypes, nil
 }
@@ -441,11 +313,11 @@ func validQueryParameterKind(kind ValueKind) bool {
 	}
 }
 
-func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]Template, params map[string]ValueKind, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledQueryReturn, error) {
+func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledQueryReturn, error) {
 	returns := make([]compiledQueryReturn, 0, len(specs))
 	aliases := make(map[string]struct{}, len(specs))
 	for i, spec := range specs {
-		spec = spec.clone()
+		spec = cloneQueryReturnSpec(spec)
 		if spec.Alias == "" {
 			return nil, &ValidationError{RuleName: queryName, Reason: "query return alias is required", Err: ErrQueryValidation}
 		}
@@ -566,7 +438,7 @@ func compileQueryTriggerFieldSpecs(params []QueryParameter) []FieldSpec {
 	}
 	specs := make([]FieldSpec, len(params))
 	for i, param := range params {
-		specs[i] = FieldSpec{Name: param.name, Kind: param.kind, Required: true}
+		specs[i] = FieldSpec{Name: param.NameValue, Kind: param.KindValue, Required: true}
 	}
 	return specs
 }
@@ -584,7 +456,7 @@ func compileQueryGraphBranch(queryName string, queryRuleID RuleID, author Module
 }
 
 func lowerQueryConditionParams(condition RuleConditionSpec, params map[string]ValueKind) RuleConditionSpec {
-	out := condition.clone()
+	out := cloneRuleConditionSpec(condition)
 	if len(params) == 0 {
 		return out
 	}
@@ -601,13 +473,13 @@ func lowerQueryConditionParams(condition RuleConditionSpec, params map[string]Va
 }
 
 func lowerQueryAggregateConditionParams(condition AccumulateCondition, params map[string]ValueKind) AccumulateCondition {
-	out := condition.clone()
+	out := cloneAccumulateCondition(condition)
 	if len(params) == 0 {
 		return out
 	}
 	out.Input = lowerQueryConditionTreeParams(out.Input, params)
 	for i := range out.Specs {
-		out.Specs[i].expression = lowerQueryParamExpression(out.Specs[i].expression, params)
+		out.Specs[i].ExpressionSpec = lowerQueryParamExpression(out.Specs[i].ExpressionSpec, params)
 	}
 	return out
 }
@@ -620,7 +492,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 	case nil:
 		return nil
 	case And:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(And)
 		for i := range out.Conditions {
 			out.Conditions[i] = lowerQueryConditionTreeParams(out.Conditions[i], params)
 		}
@@ -632,7 +504,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(And)
 		return &out
 	case Or:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(Or)
 		for i := range out.Conditions {
 			out.Conditions[i] = lowerQueryConditionTreeParams(out.Conditions[i], params)
 		}
@@ -644,7 +516,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(Or)
 		return &out
 	case Not:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(Not)
 		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
 		return out
 	case *Not:
@@ -654,7 +526,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(Not)
 		return &out
 	case Explicit:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(Explicit)
 		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
 		return out
 	case *Explicit:
@@ -664,7 +536,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(Explicit)
 		return &out
 	case ExistsCondition:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(ExistsCondition)
 		out.Condition = lowerQueryConditionTreeParams(out.Condition, params)
 		return out
 	case *ExistsCondition:
@@ -674,7 +546,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(ExistsCondition)
 		return &out
 	case ForallCondition:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(ForallCondition)
 		out.Domain = lowerQueryConditionTreeParams(out.Domain, params)
 		out.Requirement = lowerQueryConditionTreeParams(out.Requirement, params)
 		return out
@@ -685,7 +557,7 @@ func lowerQueryConditionTreeParams(spec ConditionSpec, params map[string]ValueKi
 		out := lowerQueryConditionTreeParams(*condition, params).(ForallCondition)
 		return &out
 	case Test:
-		out := condition.clone()
+		out := cloneConditionSpec(condition).(Test)
 		out.Expression = lowerQueryParamExpression(out.Expression, params)
 		return out
 	case *Test:
@@ -774,22 +646,20 @@ func queryCurrentFieldExpr(spec ExpressionSpec) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return path.root(), true
+	return pathRoot(path), true
 }
 
 func queryCurrentPathExpr(spec ExpressionSpec) (PathSpec, bool) {
 	switch expression := spec.(type) {
 	case CurrentFieldExpr:
-		normalized := expression.clone()
+		normalized := cloneExpressionSpec(expression).(CurrentFieldExpr)
 		path := pathOrField(normalized.Path, normalized.Field)
-		return path, !path.isZero()
+		return path, !pathIsZero(path)
 	case *CurrentFieldExpr:
 		if expression == nil {
 			return PathSpec{}, false
 		}
-		normalized := expression.clone()
-		path := pathOrField(normalized.Path, normalized.Field)
-		return path, !path.isZero()
+		return queryCurrentPathExpr(*expression)
 	default:
 		return PathSpec{}, false
 	}
@@ -858,14 +728,14 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 		if _, ok := params[name]; ok {
 			return BindingPath(internalQueryTriggerBinding, Path(name))
 		}
-		return expression.clone()
+		return cloneExpressionSpec(expression)
 	case *ParamExpr:
 		if expression == nil {
 			return nil
 		}
 		return lowerQueryParamExpression(*expression, params)
 	case CompareExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(CompareExpr)
 		out.Left = lowerQueryParamExpression(out.Left, params)
 		out.Right = lowerQueryParamExpression(out.Right, params)
 		return out
@@ -873,12 +743,12 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(CompareExpr)
 		out.Left = lowerQueryParamExpression(out.Left, params)
 		out.Right = lowerQueryParamExpression(out.Right, params)
 		return &out
 	case BooleanExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(BooleanExpr)
 		for i := range out.Operands {
 			out.Operands[i] = lowerQueryParamExpression(out.Operands[i], params)
 		}
@@ -887,13 +757,13 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(BooleanExpr)
 		for i := range out.Operands {
 			out.Operands[i] = lowerQueryParamExpression(out.Operands[i], params)
 		}
 		return &out
 	case CallExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(CallExpr)
 		for i := range out.Args {
 			out.Args[i] = lowerQueryParamExpression(out.Args[i], params)
 		}
@@ -902,7 +772,7 @@ func lowerQueryParamExpression(spec ExpressionSpec, params map[string]ValueKind)
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(CallExpr)
 		for i := range out.Args {
 			out.Args[i] = lowerQueryParamExpression(out.Args[i], params)
 		}
@@ -1574,18 +1444,18 @@ func (q compiledQuery) compileArgs(args QueryArgs) (compiledQueryArgs, error) {
 	}
 	values := make([]Value, len(q.parameters))
 	for _, param := range q.parameters {
-		raw, ok := args[param.name]
+		raw, ok := args[param.NameValue]
 		if !ok {
-			return compiledQueryArgs{}, fmt.Errorf("%w: missing argument %q", ErrQueryArgument, param.name)
+			return compiledQueryArgs{}, fmt.Errorf("%w: missing argument %q", ErrQueryArgument, param.NameValue)
 		}
 		value, err := canonicalValue(raw)
 		if err != nil {
 			return compiledQueryArgs{}, fmt.Errorf("%w: %v", ErrQueryArgument, err)
 		}
-		if param.kind != ValueAny && value.Kind() != param.kind {
-			return compiledQueryArgs{}, fmt.Errorf("%w: argument %q has kind %s, want %s", ErrQueryArgument, param.name, value.Kind(), param.kind)
+		if param.KindValue != ValueAny && value.Kind() != param.KindValue {
+			return compiledQueryArgs{}, fmt.Errorf("%w: argument %q has kind %s, want %s", ErrQueryArgument, param.NameValue, value.Kind(), param.KindValue)
 		}
-		values[param.order] = value
+		values[param.Order] = value
 	}
 	return compiledQueryArgs{values: values}, nil
 }

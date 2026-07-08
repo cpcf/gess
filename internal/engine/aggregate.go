@@ -4,97 +4,57 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type AggregateKind string
+type AggregateKind = gessrules.AggregateKind
 
 const (
-	AggregateCount   AggregateKind = "count"
-	AggregateSum     AggregateKind = "sum"
-	AggregateMin     AggregateKind = "min"
-	AggregateMax     AggregateKind = "max"
-	AggregateCollect AggregateKind = "collect"
+	AggregateCount   = gessrules.AggregateCount
+	AggregateSum     = gessrules.AggregateSum
+	AggregateMin     = gessrules.AggregateMin
+	AggregateMax     = gessrules.AggregateMax
+	AggregateCollect = gessrules.AggregateCollect
 
 	aggregateExists AggregateKind = "exists"
 	aggregateForall AggregateKind = "forall"
 )
 
-type AggregateSpec struct {
-	kind       AggregateKind
-	expression ExpressionSpec
-	binding    string
-}
+type AggregateSpec = gessrules.AggregateSpec
 
 func Count() AggregateSpec {
-	return AggregateSpec{kind: AggregateCount}
+	return gessrules.Count()
 }
 
 func Sum(expression ExpressionSpec) AggregateSpec {
-	return AggregateSpec{kind: AggregateSum, expression: cloneExpressionSpec(expression)}
+	return gessrules.Sum(expression)
 }
 
 func Min(expression ExpressionSpec) AggregateSpec {
-	return AggregateSpec{kind: AggregateMin, expression: cloneExpressionSpec(expression)}
+	return gessrules.Min(expression)
 }
 
 func Max(expression ExpressionSpec) AggregateSpec {
-	return AggregateSpec{kind: AggregateMax, expression: cloneExpressionSpec(expression)}
+	return gessrules.Max(expression)
 }
 
 func Collect(expression ExpressionSpec) AggregateSpec {
-	return AggregateSpec{kind: AggregateCollect, expression: cloneExpressionSpec(expression)}
+	return gessrules.Collect(expression)
 }
 
-func (s AggregateSpec) As(binding string) AggregateSpec {
-	s.binding = strings.TrimSpace(binding)
-	return s
+func cloneAggregateSpec(s AggregateSpec) AggregateSpec {
+	return gessrules.CloneAggregateSpec(s)
 }
 
-func (s AggregateSpec) Kind() AggregateKind {
-	return s.kind
-}
-
-func (s AggregateSpec) Expression() ExpressionSpec {
-	return cloneExpressionSpec(s.expression)
-}
-
-func (s AggregateSpec) Binding() string {
-	return s.binding
-}
-
-func (s AggregateSpec) clone() AggregateSpec {
-	s.expression = cloneExpressionSpec(s.expression)
-	s.binding = strings.TrimSpace(s.binding)
-	return s
-}
-
-type AccumulateCondition struct {
-	Input  ConditionSpec
-	Specs  []AggregateSpec
-	Source SourceSpan
-}
-
-func (AccumulateCondition) conditionSpecNode() {}
+type AccumulateCondition = gessrules.AccumulateCondition
 
 func Accumulate(input ConditionSpec, specs ...AggregateSpec) AccumulateCondition {
-	out := AccumulateCondition{
-		Input: cloneConditionSpec(input),
-		Specs: make([]AggregateSpec, len(specs)),
-	}
-	for i, spec := range specs {
-		out.Specs[i] = spec.clone()
-	}
-	return out
+	return gessrules.Accumulate(input, specs...)
 }
 
-func (s AccumulateCondition) clone() AccumulateCondition {
-	out := s
-	out.Input = cloneConditionSpec(s.Input)
-	out.Specs = make([]AggregateSpec, len(s.Specs))
-	for i, spec := range s.Specs {
-		out.Specs[i] = spec.clone()
-	}
-	return out
+func cloneAccumulateCondition(s AccumulateCondition) AccumulateCondition {
+	return gessrules.CloneAccumulateCondition(s)
 }
 
 type compiledAggregateSpec struct {
@@ -111,7 +71,7 @@ type compiledAggregatePlan struct {
 	higherOrder conditionHigherOrderKind
 }
 
-func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]Template, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledAggregateSpec, []RuleCondition, error) {
+func compileAggregateSpecList(ruleName string, conditionIndex int, specs []AggregateSpec, inputConditions []RuleCondition, inputBindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) ([]compiledAggregateSpec, []RuleCondition, error) {
 	if len(specs) == 0 {
 		return nil, nil, aggregateValidationError(ruleName, conditionIndex, -1, "accumulate requires at least one aggregate spec", nil)
 	}
@@ -120,28 +80,28 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 	seen := make(map[string]struct{}, len(specs))
 	valueIndexes := make(map[string]int)
 	for i, spec := range specs {
-		normalized := spec.clone()
-		if !validAggregateKind(normalized.kind) {
+		normalized := cloneAggregateSpec(spec)
+		if !validAggregateKind(normalized.KindValue) {
 			return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "invalid aggregate kind", nil)
 		}
-		if !isValidBindingName(normalized.binding) {
+		if !isValidBindingName(normalized.BindingName) {
 			return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "aggregate result binding is required", nil)
 		}
-		if _, exists := seen[normalized.binding]; exists {
+		if _, exists := seen[normalized.BindingName]; exists {
 			return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "duplicate aggregate result binding", nil)
 		}
-		seen[normalized.binding] = struct{}{}
+		seen[normalized.BindingName] = struct{}{}
 
 		compiled := compiledAggregateSpec{
-			kind:       normalized.kind,
-			binding:    normalized.binding,
+			kind:       normalized.KindValue,
+			binding:    normalized.BindingName,
 			valueIndex: -1,
 		}
-		if normalized.kind != AggregateCount {
-			if normalized.expression == nil {
+		if normalized.KindValue != AggregateCount {
+			if normalized.ExpressionSpec == nil {
 				return nil, nil, aggregateValidationError(ruleName, conditionIndex, i, "aggregate expression is required", nil)
 			}
-			expression, _, err := compileExpressionSpecWithParams(normalized.expression, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey, nil, functions, globals)
+			expression, _, err := compileExpressionSpecWithParams(normalized.ExpressionSpec, ruleName, conditionIndex, i, nil, inputConditions, inputBindingSlots, templatesByKey, nil, functions, globals)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -157,8 +117,8 @@ func compileAggregateSpecList(ruleName string, conditionIndex int, specs []Aggre
 		}
 		out = append(out, compiled)
 		resultConditions = append(resultConditions, RuleCondition{
-			binding: normalized.binding,
-			order:   conditionIndex + i,
+			BindingName: normalized.BindingName,
+			Order:       conditionIndex + i,
 		})
 	}
 	return out, resultConditions, nil

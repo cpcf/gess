@@ -12,8 +12,8 @@ func TestNarrowedTokenRowsPreserveBoundaryMaterialization(t *testing.T) {
 		revisionID:        "narrowed-token-rule-revision",
 		identityScopeHash: candidateIdentityScopeHash("narrowed-token-rule", "narrowed-token-rule-revision"),
 		conditions: []RuleCondition{
-			{id: "first", binding: "first", order: 0},
-			{id: "second", binding: "second", order: 1},
+			{IDValue: "first", BindingName: "first", Order: 0},
+			{IDValue: "second", BindingName: "second", Order: 1},
 		},
 		conditionPlans: []compiledConditionPlan{
 			{id: "first", binding: "first", bindingSlot: 0, path: []int{0}},

@@ -135,10 +135,10 @@ func buildMatchCandidateFromMatches(rule compiledRule, generation Generation, ma
 			return matchCandidate{}, fmt.Errorf("%w: missing condition plan for binding slot %d in rule %q", ErrMatcher, match.bindingSlot, rule.name)
 		}
 		entries = append(entries, bindingTupleEntry{
-			binding:        condition.binding,
+			binding:        condition.BindingName,
 			bindingSlot:    match.bindingSlot,
-			conditionOrder: condition.order,
-			conditionID:    condition.id,
+			conditionOrder: condition.Order,
+			conditionID:    condition.IDValue,
 			conditionPath:  plan.path,
 			factID:         match.fact.ID(),
 			factVersion:    match.fact.Version(),
@@ -335,9 +335,9 @@ func bindingTupleEntryForMatchUnchecked(rule compiledRule, plan compiledConditio
 		condition = rule.conditions[match.bindingSlot]
 	}
 	return bindingTupleEntry{
-		binding:        condition.binding,
+		binding:        condition.BindingName,
 		bindingSlot:    match.bindingSlot,
-		conditionOrder: condition.order,
+		conditionOrder: condition.Order,
 		conditionID:    plan.id,
 		conditionPath:  plan.path,
 		factID:         match.fact.ID(),
@@ -1009,18 +1009,19 @@ func (s *aggregateState) add(ctx context.Context, current conditionFactRef, bind
 func (s *aggregateState) addSum(value Value) error {
 	switch value.Kind() {
 	case ValueInt:
+		integer := valueInt64(value)
 		if s.floaty {
-			s.floatSum += float64(value.intValue)
+			s.floatSum += float64(integer)
 			return nil
 		}
-		next, overflow := safeAddInt64(s.intSum, value.intValue)
+		next, overflow := safeAddInt64(s.intSum, integer)
 		if overflow {
 			return fmt.Errorf("%w: integer sum overflow", ErrAggregateEvaluation)
 		}
 		s.intSum = next
 	case ValueFloat:
 		s.floaty = true
-		s.floatSum += float64(s.intSum) + value.floatValue
+		s.floatSum += float64(s.intSum) + valueFloat64(value)
 		s.intSum = 0
 	default:
 		return fmt.Errorf("%w: sum input must be numeric", ErrAggregateEvaluation)

@@ -10,10 +10,6 @@ import (
 	"testing"
 )
 
-type unsupportedExpressionSpec struct{}
-
-func (unsupportedExpressionSpec) expressionSpecNode() {}
-
 func TestWorkspaceCompilesRulesIntoImmutableRevision(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{
@@ -1843,7 +1839,7 @@ func TestExpressionPredicatesInvertGuaranteedNegatedComparisons(t *testing.T) {
 func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
-		conditions      func(person Template) []RuleConditionSpec
+		conditions      func(person compiledTemplate) []RuleConditionSpec
 		wantReason      string
 		wantField       string
 		wantCondition   int
@@ -1852,7 +1848,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 	}{
 		{
 			name: "future binding",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{
 					{
 						Binding: "person",
@@ -1872,7 +1868,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "unknown binding",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -1889,7 +1885,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "unknown current field",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -1907,7 +1903,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "unknown binding field",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{
 					{Binding: "left", Target: TemplateKeyFact(person.Key())},
 					{
@@ -1928,7 +1924,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "missing operand",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -1944,7 +1940,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "invalid operator",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -1961,7 +1957,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "type mismatch",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -1977,21 +1973,8 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 			wantPredicate: 0,
 		},
 		{
-			name: "unsupported node",
-			conditions: func(person Template) []RuleConditionSpec {
-				return []RuleConditionSpec{{
-					Binding: "person",
-
-					Predicates: []ExpressionSpec{unsupportedExpressionSpec{}}, Target: TemplateKeyFact(person.Key()),
-				}}
-			},
-			wantReason:    "unsupported expression node",
-			wantCondition: 0,
-			wantPredicate: 0,
-		},
-		{
 			name: "predicate not bool",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -2004,7 +1987,7 @@ func TestWorkspaceCompileRejectsInvalidExpressionPredicates(t *testing.T) {
 		},
 		{
 			name: "boolean operand not bool",
-			conditions: func(person Template) []RuleConditionSpec {
+			conditions: func(person compiledTemplate) []RuleConditionSpec {
 				return []RuleConditionSpec{{
 					Binding: "person",
 
@@ -2838,7 +2821,7 @@ func TestRuleRevisionIDIncludesActionFreezeSemantics(t *testing.T) {
 	}
 }
 
-func mustAddTemplate(t testing.TB, workspace *Workspace, spec TemplateSpec) Template {
+func mustAddTemplate(t testing.TB, workspace *Workspace, spec TemplateSpec) compiledTemplate {
 	t.Helper()
 	if err := workspace.AddTemplate(spec); err != nil {
 		t.Fatalf("AddTemplate: %v", err)

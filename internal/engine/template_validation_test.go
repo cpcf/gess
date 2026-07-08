@@ -15,7 +15,7 @@ func TestTemplateDefaultsApplyBeforeValidation(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "default-session")
-	template, ok := revision.Template("order")
+	template, ok := revision.compiledTemplate("order")
 	if !ok {
 		t.Fatal("expected compiled template order")
 	}
@@ -33,7 +33,7 @@ func TestTemplateDefaultsApplyBeforeValidation(t *testing.T) {
 	if status.Kind() != ValueString {
 		t.Fatalf("status kind = %q, want %q", status.Kind(), ValueString)
 	}
-	if status.stringValue != "active" {
+	if valueString(status) != "active" {
 		t.Fatalf("status value = %v, want active", status)
 	}
 
@@ -54,7 +54,7 @@ func TestTemplateExplicitNullDefault(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "null-default-session")
-	template, ok := revision.Template("item")
+	template, ok := revision.compiledTemplate("item")
 	if !ok {
 		t.Fatal("expected compiled template item")
 	}
@@ -78,7 +78,7 @@ func TestTemplateMissingRequiredFieldsFailValidation(t *testing.T) {
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	session := mustSession(t, revision, "required-session")
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected compiled template person")
 	}
@@ -105,7 +105,7 @@ func TestTemplateDeclaredTemplateRejectsUnknownFields(t *testing.T) {
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	session := mustSession(t, revision, "closed-session")
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected compiled template person")
 	}
@@ -132,7 +132,7 @@ func TestTemplateInvalidTypeAndAllowedValues(t *testing.T) {
 		Fields: []FieldSpec{{Name: "count", Kind: ValueInt, Required: true}},
 	})
 	session := mustSession(t, revision, "invalid-type-session")
-	template, ok := revision.Template("device")
+	template, ok := revision.compiledTemplate("device")
 	if !ok {
 		t.Fatal("expected compiled template device")
 	}
@@ -153,7 +153,7 @@ func TestTemplateInvalidTypeAndAllowedValues(t *testing.T) {
 		Fields: []FieldSpec{{Name: "status", Kind: ValueString, AllowedValues: []any{"on", "off"}}},
 	})
 	session = mustSession(t, revision, "allowed-session")
-	template, ok = revision.Template("light")
+	template, ok = revision.compiledTemplate("light")
 	if !ok {
 		t.Fatal("expected compiled template light")
 	}
@@ -179,7 +179,7 @@ func TestTemplateDuplicateKeysUsePostDefaultValues(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "duplicate-default-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected compiled template event")
 	}
@@ -231,11 +231,11 @@ func TestTemplateStableKeysAndCompatibilityMetadata(t *testing.T) {
 		DuplicatePolicy:  DuplicateStructural,
 	})
 
-	templateA, ok := revisionA.Template("person")
+	templateA, ok := revisionA.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template from revision A")
 	}
-	templateB, ok := revisionB.Template("person")
+	templateB, ok := revisionB.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template from revision B")
 	}
@@ -281,7 +281,7 @@ func TestBackchainReactiveTemplateGeneratesDemandTemplateMetadata(t *testing.T) 
 		t.Fatalf("Compile: %v", err)
 	}
 
-	answer, ok := revision.Template("answer")
+	answer, ok := revision.compiledTemplate("answer")
 	if !ok {
 		t.Fatal("compiled revision missing answer template")
 	}
@@ -293,7 +293,7 @@ func TestBackchainReactiveTemplateGeneratesDemandTemplateMetadata(t *testing.T) 
 		t.Fatalf("answer demand key = (%q, %t), want need-ask.answer:v1", demandKey, ok)
 	}
 
-	demand, ok := revision.Template("need-answer")
+	demand, ok := revision.compiledTemplate("need-answer")
 	if !ok {
 		t.Fatal("compiled revision missing need-answer template")
 	}
@@ -452,7 +452,7 @@ func TestBackchainDemandTemplateRejectsPublicGeneratedFactActions(t *testing.T) 
 		t.Fatalf("AddTemplate(answer): %v", err)
 	}
 	revision := mustCompileWorkspace(t, workspace)
-	answer, ok := revision.Template("answer")
+	answer, ok := revision.compiledTemplate("answer")
 	if !ok {
 		t.Fatal("compiled revision missing answer template")
 	}
@@ -564,7 +564,7 @@ func TestTemplateDoesNotRetainCallerOwnedDefaultOrAllowedValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	template, ok := revision.Template("payload")
+	template, ok := revision.compiledTemplate("payload")
 	if !ok {
 		t.Fatal("expected compiled payload template")
 	}
@@ -574,8 +574,8 @@ func TestTemplateDoesNotRetainCallerOwnedDefaultOrAllowedValues(t *testing.T) {
 		t.Fatalf("insert with canonical default: %v", err)
 	}
 
-	body := result.Fact.Fields()["body"].data.(map[string]Value)
-	if got := body["count"].intValue; got != 1 {
+	body, _ := result.Fact.Fields()["body"].AsMap()
+	if got := valueInt64(body["count"]); got != 1 {
 		t.Fatalf("default count = %d, want 1", got)
 	}
 }

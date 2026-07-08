@@ -326,7 +326,7 @@ func hashBackchainDemandSupportTableKey(key backchainDemandSupportKey) uint64 {
 
 func hashBackchainDemandFactSupportTableKey(key FactID) uint64 {
 	hash := backchainDemandHashStart()
-	hash = backchainDemandHashAddUint64(hash, uint64(key.generation))
-	hash = backchainDemandHashAddUint64(hash, key.sequence)
+	hash = backchainDemandHashAddUint64(hash, uint64(key.Generation()))
+	hash = backchainDemandHashAddUint64(hash, key.Sequence())
 	return hash
 }

@@ -327,7 +327,8 @@ func TestLogicalSupportFromFailedFiringIsCleanedUp(t *testing.T) {
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.assertLogicalByName("derived", Fields{"id": id})
+			internalCtx := actionContextForTest(t, ctx)
+			_, err := internalCtx.assertLogicalByName("derived", Fields{"id": id})
 			return err
 		},
 	})
@@ -402,7 +403,8 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.assertLogicalByName("derived", Fields{"id": id})
+			internalCtx := actionContextForTest(t, ctx)
+			_, err := internalCtx.assertLogicalByName("derived", Fields{"id": id})
 			return err
 		},
 	})
@@ -417,7 +419,8 @@ func mustLogicalSupportRuleset(t testing.TB, duplicateOnly bool) (*Ruleset, Temp
 			if !ok {
 				return ErrFactNotFound
 			}
-			_, err := ctx.assertLogicalByName("child", Fields{"id": id})
+			internalCtx := actionContextForTest(t, ctx)
+			_, err := internalCtx.assertLogicalByName("child", Fields{"id": id})
 			return err
 		},
 	})

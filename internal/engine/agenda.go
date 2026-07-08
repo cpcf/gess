@@ -579,10 +579,10 @@ func activationBindingTupleEntries(rule compiledRule, factIDs []FactID, factVers
 			return nil
 		}
 		entries[i] = bindingTupleEntry{
-			binding:        condition.binding,
+			binding:        condition.BindingName,
 			bindingSlot:    i,
-			conditionOrder: condition.order,
-			conditionID:    condition.id,
+			conditionOrder: condition.Order,
+			conditionID:    condition.IDValue,
 			factID:         factIDs[i],
 			factVersion:    factVersions[i],
 		}
@@ -620,10 +620,10 @@ func activationBindingTupleEntriesForActivation(rule compiledRule, act *activati
 			return nil
 		}
 		entries[i] = bindingTupleEntry{
-			binding:        condition.binding,
+			binding:        condition.BindingName,
 			bindingSlot:    i,
-			conditionOrder: condition.order,
-			conditionID:    condition.id,
+			conditionOrder: condition.Order,
+			conditionID:    condition.IDValue,
 			factID:         factIDs[i],
 			factVersion:    factVersions[i],
 		}
@@ -656,10 +656,10 @@ func fillActivationBindingTupleEntriesFromTokenRef(entries []bindingTupleEntry, 
 		return index
 	}
 	entries[index] = bindingTupleEntry{
-		binding:        condition.binding,
+		binding:        condition.BindingName,
 		bindingSlot:    index,
-		conditionOrder: condition.order,
-		conditionID:    condition.id,
+		conditionOrder: condition.Order,
+		conditionID:    condition.IDValue,
 		factID:         match.fact.ID(),
 		factVersion:    match.fact.Version(),
 		value:          cloneValue(match.value),

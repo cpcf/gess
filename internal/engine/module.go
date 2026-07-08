@@ -1,41 +1,30 @@
 package engine
 
-import "strings"
+import (
+	"strings"
 
-type QualifiedName struct {
-	Module ModuleName
-	Name   string
+	gessrules "github.com/cpcf/gess/rules"
+)
+
+type QualifiedName = gessrules.QualifiedName
+type NameRef = gessrules.NameRef
+
+func Ref(name string) NameRef {
+	return gessrules.Ref(name)
 }
 
-func (n QualifiedName) normalized() QualifiedName {
+func ModuleRef(module ModuleName, name string) NameRef {
+	return gessrules.ModuleRef(module, name)
+}
+
+func normalizeQualifiedName(n QualifiedName) QualifiedName {
 	return QualifiedName{
 		Module: normalizeModuleName(n.Module),
 		Name:   strings.TrimSpace(n.Name),
 	}
 }
 
-func (n QualifiedName) String() string {
-	normalized := n.normalized()
-	if normalized.Name == "" {
-		return normalized.Module.String()
-	}
-	return normalized.Module.String() + "." + normalized.Name
-}
-
-type NameRef struct {
-	Module ModuleName
-	Name   string
-}
-
-func Ref(name string) NameRef {
-	return NameRef{Name: name}
-}
-
-func ModuleRef(module ModuleName, name string) NameRef {
-	return NameRef{Module: module, Name: name}
-}
-
-func (r NameRef) normalized(author ModuleName) QualifiedName {
+func normalizeNameRef(r NameRef, author ModuleName) QualifiedName {
 	module := normalizeModuleName(r.Module)
 	if r.Module.IsZero() {
 		module = normalizeModuleName(author)
@@ -46,78 +35,37 @@ func (r NameRef) normalized(author ModuleName) QualifiedName {
 	}
 }
 
-type ModuleSpec struct {
-	Name        ModuleName
-	Description string
-	AutoFocus   *bool
+type ModuleSpec = gessrules.ModuleSpec
+
+func cloneModuleSpec(s ModuleSpec) ModuleSpec {
+	return gessrules.CloneModuleSpec(s)
 }
 
-func (s ModuleSpec) clone() ModuleSpec {
-	out := s
-	if s.AutoFocus != nil {
-		autoFocus := *s.AutoFocus
-		out.AutoFocus = &autoFocus
-	}
-	return out
+type Module = gessrules.Module
+
+func cloneModule(m Module) Module {
+	return gessrules.CloneModule(m)
 }
 
-type Module struct {
-	name        ModuleName
-	description string
-	autoFocus   *bool
-}
-
-func (m Module) Name() ModuleName {
-	return m.name
-}
-
-func (m Module) Description() string {
-	return m.description
-}
-
-func (m Module) AutoFocusDefault() (bool, bool) {
-	if m.autoFocus == nil {
-		return false, false
-	}
-	return *m.autoFocus, true
-}
-
-func (m Module) clone() Module {
-	out := m
-	if m.autoFocus != nil {
-		autoFocus := *m.autoFocus
-		out.autoFocus = &autoFocus
-	}
-	return out
-}
-
-func (m Module) spec() ModuleSpec {
-	out := ModuleSpec{
-		Name:        m.name,
-		Description: m.description,
-	}
-	if m.autoFocus != nil {
-		autoFocus := *m.autoFocus
-		out.AutoFocus = &autoFocus
-	}
-	return out
+func moduleSpec(m Module) ModuleSpec {
+	return gessrules.ModuleSpecFromModule(m)
 }
 
 func compileModuleSpec(spec ModuleSpec) (Module, error) {
-	normalized := spec.clone()
+	normalized := cloneModuleSpec(spec)
 	normalized.Name = ModuleName(strings.TrimSpace(string(normalized.Name)))
 	if normalized.Name.IsZero() {
 		return Module{}, &ValidationError{Reason: "module name is required"}
 	}
 	return Module{
-		name:        normalized.Name,
-		description: normalized.Description,
-		autoFocus:   normalized.AutoFocus,
+		NameValue:       normalized.Name,
+		DescriptionText: normalized.Description,
+		AutoFocusValue:  normalized.AutoFocus,
 	}, nil
 }
 
 func implicitMainModule() Module {
-	return Module{name: MainModule}
+	return Module{NameValue: MainModule}
 }
 
 func normalizeModuleName(name ModuleName) ModuleName {
@@ -129,13 +77,13 @@ func normalizeModuleName(name ModuleName) ModuleName {
 }
 
 func sameModuleDeclaration(left, right Module) bool {
-	if left.name != right.name || left.description != right.description {
+	if left.NameValue != right.NameValue || left.DescriptionText != right.DescriptionText {
 		return false
 	}
-	if left.autoFocus == nil || right.autoFocus == nil {
-		return left.autoFocus == nil && right.autoFocus == nil
+	if left.AutoFocusValue == nil || right.AutoFocusValue == nil {
+		return left.AutoFocusValue == nil && right.AutoFocusValue == nil
 	}
-	return *left.autoFocus == *right.autoFocus
+	return *left.AutoFocusValue == *right.AutoFocusValue
 }
 
 func compileWorkspaceModules(specs []ModuleSpec) ([]Module, map[ModuleName]Module, []ModuleName, error) {
@@ -151,23 +99,23 @@ func compileWorkspaceModules(specs []ModuleSpec) ([]Module, map[ModuleName]Modul
 			return nil, nil, nil, err
 		}
 
-		if _, exists := explicit[module.name]; exists {
-			if sameModuleDeclaration(modules[module.name], module) {
+		if _, exists := explicit[module.NameValue]; exists {
+			if sameModuleDeclaration(modules[module.NameValue], module) {
 				continue
 			}
 			return nil, nil, nil, &ValidationError{Reason: "duplicate module"}
 		}
 
-		if _, exists := modules[module.name]; !exists {
-			moduleOrder = append(moduleOrder, module.name)
+		if _, exists := modules[module.NameValue]; !exists {
+			moduleOrder = append(moduleOrder, module.NameValue)
 		}
-		modules[module.name] = module.clone()
-		explicit[module.name] = struct{}{}
+		modules[module.NameValue] = cloneModule(module)
+		explicit[module.NameValue] = struct{}{}
 	}
 
 	compiledModules := make([]Module, 0, len(moduleOrder))
 	for _, name := range moduleOrder {
-		compiledModules = append(compiledModules, modules[name].clone())
+		compiledModules = append(compiledModules, cloneModule(modules[name]))
 	}
 	return compiledModules, modules, moduleOrder, nil
 }

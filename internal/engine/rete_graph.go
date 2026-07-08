@@ -402,7 +402,7 @@ type reteGraphAlphaRouteTable struct {
 	indexedFields []int
 }
 
-func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQuery, templatesByKey map[TemplateKey]Template) *reteGraph {
+func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQuery, templatesByKey map[TemplateKey]compiledTemplate) *reteGraph {
 	graph := &reteGraph{
 		routesByTemplateKey: make(map[TemplateKey][]reteGraphAlphaNodeID),
 		routesByTemplateID:  make(map[templateID][]reteGraphAlphaNodeID),
@@ -631,7 +631,7 @@ func (g *reteGraph) compileGeneratedAlphaOps() {
 	}
 }
 
-func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) {
+func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) {
 	if g == nil {
 		return
 	}
@@ -662,7 +662,7 @@ func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alpha
 	}
 }
 
-func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) (reteGraphStageRef, bool) {
+func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
 	if g == nil || len(branch.plans) == 0 {
 		return reteGraphStageRef{}, false
 	}
@@ -727,7 +727,7 @@ func (g *reteGraph) compileConditionBranchStages(owner RuleRevisionID, branch co
 	return current, haveStage
 }
 
-func (g *reteGraph) compileHigherOrderBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]Template) bool {
+func (g *reteGraph) compileHigherOrderBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]compiledTemplate) bool {
 	if g == nil || len(branch.plans) == 0 {
 		return false
 	}
@@ -848,7 +848,7 @@ func (g *reteGraph) compileHigherOrderBranch(rule compiledRule, branch compiledC
 	return true
 }
 
-func (g *reteGraph) compileExistsAbsenceStage(owner RuleRevisionID, inputPlans []compiledConditionPlan, outer reteGraphStageRef, outerEntry bindingTupleEntry, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) (reteGraphStageRef, bool) {
+func (g *reteGraph) compileExistsAbsenceStage(owner RuleRevisionID, inputPlans []compiledConditionPlan, outer reteGraphStageRef, outerEntry bindingTupleEntry, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
 	if g == nil || len(inputPlans) != 1 || outer.kind == reteGraphStageUnknown {
 		return reteGraphStageRef{}, false
 	}
@@ -875,7 +875,7 @@ func (g *reteGraph) compileExistsAbsenceStage(owner RuleRevisionID, inputPlans [
 	return reteGraphStageRef{kind: reteGraphStageBeta, id: int(innerID)}, true
 }
 
-func (g *reteGraph) compileForallCounterexampleNegationStage(owner RuleRevisionID, inputPlans []compiledConditionPlan, outer reteGraphStageRef, outerEntry bindingTupleEntry, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) (reteGraphStageRef, bool) {
+func (g *reteGraph) compileForallCounterexampleNegationStage(owner RuleRevisionID, inputPlans []compiledConditionPlan, outer reteGraphStageRef, outerEntry bindingTupleEntry, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
 	if g == nil || len(inputPlans) < 2 || outer.kind == reteGraphStageUnknown {
 		return reteGraphStageRef{}, false
 	}
@@ -912,7 +912,7 @@ func (g *reteGraph) compileForallCounterexampleNegationStage(owner RuleRevisionI
 	return reteGraphStageRef{kind: reteGraphStageBeta, id: int(outerID)}, true
 }
 
-func (g *reteGraph) compilePlanSequence(owner RuleRevisionID, plans []compiledConditionPlan, start reteGraphStageRef, startEntry bindingTupleEntry, haveStage bool, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) (reteGraphStageRef, bindingTupleEntry, bool) {
+func (g *reteGraph) compilePlanSequence(owner RuleRevisionID, plans []compiledConditionPlan, start reteGraphStageRef, startEntry bindingTupleEntry, haveStage bool, conditionOffset int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate, appendConsumer bool) (reteGraphStageRef, bindingTupleEntry, bool) {
 	if g == nil {
 		return reteGraphStageRef{}, bindingTupleEntry{}, false
 	}
@@ -981,7 +981,7 @@ func (g *reteGraph) compilePlanSequence(owner RuleRevisionID, plans []compiledCo
 	return current, currentEntry, haveStage
 }
 
-func (g *reteGraph) compileAggregateBranchStages(owner RuleRevisionID, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template, aggregateEntries func(compiledConditionPlan) []bindingTupleEntry) (reteGraphStageRef, bool) {
+func (g *reteGraph) compileAggregateBranchStages(owner RuleRevisionID, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate, aggregateEntries func(compiledConditionPlan) []bindingTupleEntry) (reteGraphStageRef, bool) {
 	if g == nil || len(branch.plans) == 0 {
 		return reteGraphStageRef{}, false
 	}
@@ -1168,7 +1168,7 @@ func (g *reteGraph) compileAggregateBranchStages(owner RuleRevisionID, branch co
 	return current, haveStage
 }
 
-func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]Template) bool {
+func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]compiledTemplate) bool {
 	current, ok := g.compileAggregateBranchStages(rule.revisionID, branch, alphaIndex, betaIndex, templatesByKey, func(condition compiledConditionPlan) []bindingTupleEntry {
 		return graphTokenEntriesForAggregateBindings(rule, condition)
 	})
@@ -1200,7 +1200,7 @@ func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledCon
 	return true
 }
 
-func (g *reteGraph) compileQueryAggregateBranch(query compiledQuery, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]Template) bool {
+func (g *reteGraph) compileQueryAggregateBranch(query compiledQuery, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) bool {
 	current, ok := g.compileAggregateBranchStages(RuleRevisionID("query:"+query.name), branch, alphaIndex, betaIndex, templatesByKey, func(condition compiledConditionPlan) []bindingTupleEntry {
 		return graphTokenEntriesForAggregateBranch(branch, condition)
 	})
@@ -1223,11 +1223,11 @@ func (g *reteGraph) compileQueryAggregateBranch(query compiledQuery, branch comp
 	return true
 }
 
-func (g *reteGraph) compileConditionAlpha(rule compiledRule, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) reteGraphAlphaNodeID {
+func (g *reteGraph) compileConditionAlpha(rule compiledRule, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]compiledTemplate, appendConsumer bool) reteGraphAlphaNodeID {
 	return g.compileConditionAlphaForOwner(rule.revisionID, condition, conditionIndex, alphaIndex, templatesByKey, appendConsumer)
 }
 
-func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]Template, appendConsumer bool) reteGraphAlphaNodeID {
+func (g *reteGraph) compileConditionAlphaForOwner(owner RuleRevisionID, condition compiledConditionPlan, conditionIndex int, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, templatesByKey map[TemplateKey]compiledTemplate, appendConsumer bool) reteGraphAlphaNodeID {
 	alphaConstraints, alphaPredicates := graphAlphaConstraintsAndPredicates(condition.constraints, condition.predicates)
 	alphaID, created := g.internAlphaNode(alphaIndex, condition.target, alphaConstraints, condition.listPatterns, alphaPredicates)
 	if alphaNode := g.alphaNode(alphaID); alphaNode != nil && alphaNode.entry.conditionID == "" && conditionIndex == 0 {
@@ -1311,7 +1311,7 @@ func reteGraphSupportsAggregateCondition(condition compiledConditionPlan, allowI
 	return true
 }
 
-func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]Template) bool {
+func reteGraphSupportsAlpha(target conditionTarget, templatesByKey map[TemplateKey]compiledTemplate) bool {
 	switch target.kind {
 	case conditionTargetTemplateKey:
 		if target.templateKey == "" {
@@ -1732,7 +1732,7 @@ func (s factModifySummary) observesAccess(access compiledPathAccess) bool {
 	return false
 }
 
-func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
+func reteGraphAlphaRouteSelectorForConstraints(template compiledTemplate, constraints []compiledFieldConstraint) reteGraphAlphaRouteSelector {
 	for _, constraint := range constraints {
 		if constraint.operator != FieldConstraintOpEqual || constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
 			continue
@@ -1753,7 +1753,7 @@ func reteGraphAlphaRouteSelectorForConstraints(template Template, constraints []
 	return reteGraphAlphaRouteSelector{}
 }
 
-func (n *reteGraphAlphaNode) configureGeneratedMatch(template Template, route reteGraphAlphaRouteSelector) {
+func (n *reteGraphAlphaNode) configureGeneratedMatch(template compiledTemplate, route reteGraphAlphaRouteSelector) {
 	if n == nil || len(n.listPatterns) != 0 || len(n.predicates) != 0 {
 		return
 	}
@@ -1793,7 +1793,7 @@ func (n *reteGraphAlphaNode) configureGeneratedMatch(template Template, route re
 // generated asserts skip the generic constraint path. Constant kinds are
 // limited to bool/int/string, which keeps the comparisons free of the
 // cross-kind numeric coercion the generic path handles.
-func (n *reteGraphAlphaNode) configureGeneratedCompareMatch(template Template) {
+func (n *reteGraphAlphaNode) configureGeneratedCompareMatch(template compiledTemplate) {
 	comparisons := make([]reteGraphAlphaGeneratedComparison, 0, len(n.constraints))
 	for _, constraint := range n.constraints {
 		if constraint.access.rootSlot < 0 || !constraint.access.topLevel() {
@@ -1830,7 +1830,7 @@ func (n *reteGraphAlphaNode) configureGeneratedCompareMatch(template Template) {
 	}
 }
 
-func reteGraphAlphaRouteFieldKindMatches(template Template, fieldSlot int, kind ValueKind) bool {
+func reteGraphAlphaRouteFieldKindMatches(template compiledTemplate, fieldSlot int, kind ValueKind) bool {
 	if fieldSlot < 0 || fieldSlot >= len(template.fields) {
 		return false
 	}
@@ -1847,14 +1847,14 @@ func (s reteGraphAlphaRouteSelector) key() reteGraphAlphaRouteKey {
 func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, bool) {
 	switch value.Kind() {
 	case ValueBool:
-		if value.boolValue {
+		if valueBool(value) {
 			return reteGraphAlphaRouteValue{kind: ValueBool, bits: 1, valid: true}, true
 		}
 		return reteGraphAlphaRouteValue{kind: ValueBool, valid: true}, true
 	case ValueInt:
-		return reteGraphAlphaRouteValue{kind: ValueInt, bits: value.intValue, valid: true}, true
+		return reteGraphAlphaRouteValue{kind: ValueInt, bits: valueInt64(value), valid: true}, true
 	case ValueString:
-		return reteGraphAlphaRouteValue{kind: ValueString, text: value.stringValue, valid: true}, true
+		return reteGraphAlphaRouteValue{kind: ValueString, text: valueString(value), valid: true}, true
 	default:
 		return reteGraphAlphaRouteValue{}, false
 	}
@@ -2001,14 +2001,15 @@ func (c reteGraphAlphaGeneratedComparison) matchesValue(value Value) bool {
 	var comparison int
 	switch c.value.kind {
 	case ValueInt:
+		integer := valueInt64(value)
 		switch {
-		case value.intValue < c.value.bits:
+		case integer < c.value.bits:
 			comparison = -1
-		case value.intValue > c.value.bits:
+		case integer > c.value.bits:
 			comparison = 1
 		}
 	case ValueString:
-		comparison = strings.Compare(value.stringValue, c.value.text)
+		comparison = strings.Compare(valueString(value), c.value.text)
 	default:
 		return false
 	}
@@ -2046,14 +2047,14 @@ func (v reteGraphAlphaRouteValue) matchesValue(value Value) bool {
 	}
 	switch v.kind {
 	case ValueBool:
-		if value.boolValue {
+		if valueBool(value) {
 			return v.bits == 1
 		}
 		return v.bits == 0
 	case ValueInt:
-		return value.intValue == v.bits
+		return valueInt64(value) == v.bits
 	case ValueString:
-		return value.stringValue == v.text
+		return valueString(value) == v.text
 	default:
 		return false
 	}
@@ -2141,7 +2142,7 @@ func (g *reteGraph) internJoinWithResidualFilter(index map[reteGraphBetaKey]rete
 	return betaID, reteGraphStageRef{kind: reteGraphStageBeta, id: int(filterID)}
 }
 
-func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condition compiledConditionPlan, side reteGraphBetaInputSide, joins []compiledJoinConstraint, templatesByKey map[TemplateKey]Template) {
+func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condition compiledConditionPlan, side reteGraphBetaInputSide, joins []compiledJoinConstraint, templatesByKey map[TemplateKey]compiledTemplate) {
 	if g == nil || betaID == 0 || condition.explicit || condition.negated || condition.target.kind != conditionTargetTemplateKey {
 		return
 	}
@@ -2185,7 +2186,7 @@ func (g *reteGraph) appendBackchainDemandPlan(betaID reteGraphBetaNodeID, condit
 	node.backchainDemands = append(node.backchainDemands, plan)
 }
 
-func compileReteGraphBackchainDemandDefaultSlots(template Template, constraints []compiledFieldConstraint) []factSlot {
+func compileReteGraphBackchainDemandDefaultSlots(template compiledTemplate, constraints []compiledFieldConstraint) []factSlot {
 	if len(template.fields) == 0 {
 		return nil
 	}
@@ -2203,7 +2204,7 @@ func compileReteGraphBackchainDemandDefaultSlots(template Template, constraints 
 	return out
 }
 
-func compileReteGraphBackchainDemandConstSlots(template Template, constraints []compiledFieldConstraint) []reteGraphBackchainDemandConstSlot {
+func compileReteGraphBackchainDemandConstSlots(template compiledTemplate, constraints []compiledFieldConstraint) []reteGraphBackchainDemandConstSlot {
 	if len(constraints) == 0 || len(template.fields) == 0 {
 		return nil
 	}
@@ -2231,7 +2232,7 @@ func compileReteGraphBackchainDemandConstSlots(template Template, constraints []
 	return out
 }
 
-func compileReteGraphBackchainDemandJoinSlots(template Template, side reteGraphBetaInputSide, joins []compiledJoinConstraint) []reteGraphBackchainDemandJoinSlot {
+func compileReteGraphBackchainDemandJoinSlots(template compiledTemplate, side reteGraphBetaInputSide, joins []compiledJoinConstraint) []reteGraphBackchainDemandJoinSlot {
 	if len(joins) == 0 || len(template.fields) == 0 {
 		return nil
 	}
@@ -2390,9 +2391,9 @@ func graphTokenEntriesForAggregateBindings(rule compiledRule, condition compiled
 		}
 		if bindingSlot >= 0 && bindingSlot < len(rule.conditions) {
 			public := rule.conditions[bindingSlot]
-			entry.binding = public.binding
-			entry.conditionOrder = public.order
-			entry.conditionID = public.id
+			entry.binding = public.BindingName
+			entry.conditionOrder = public.Order
+			entry.conditionID = public.IDValue
 		}
 		entries[i] = entry
 	}
@@ -2414,13 +2415,13 @@ func graphTokenEntriesForAggregateBranch(branch compiledConditionBranch, conditi
 			conditionPath:  cloneIntPath(condition.path),
 		}
 		for _, branchCondition := range branch.conditions {
-			public := branchCondition.condition
-			if public.order != bindingSlot {
+			public := branchCondition.ConditionValue
+			if public.Order != bindingSlot {
 				continue
 			}
-			entry.binding = public.binding
-			entry.conditionOrder = public.order
-			entry.conditionID = public.id
+			entry.binding = public.BindingName
+			entry.conditionOrder = public.Order
+			entry.conditionID = public.IDValue
 			break
 		}
 		entries[i] = entry
@@ -2608,7 +2609,7 @@ func inspectReteGraphRuleProjections(rule compiledRule) []reteGraphTerminalProje
 			} else {
 				projection.Kind = reteGraphTerminalProjectionActionField
 				projection.Field = read.access.root
-				projection.Path = read.access.path.clone()
+				projection.Path = clonePathSpec(read.access.path)
 			}
 			out = append(out, projection)
 		}
@@ -2635,7 +2636,7 @@ func inspectReteGraphQueryProjections(query compiledQuery) []reteGraphTerminalPr
 		case compiledQueryReturnProjectionBindingField:
 			out[i].Kind = reteGraphTerminalProjectionQueryField
 			out[i].Field = ret.projection.access.root
-			out[i].Path = ret.projection.access.path.clone()
+			out[i].Path = clonePathSpec(ret.projection.access.path)
 		case compiledQueryReturnProjectionBindingValue:
 			out[i].Kind = reteGraphTerminalProjectionQueryValue
 		case compiledQueryReturnProjectionConst:
@@ -2649,8 +2650,8 @@ func inspectReteGraphQueryProjections(query compiledQuery) []reteGraphTerminalPr
 
 func inspectReteGraphQueryAuthoredOrder(query compiledQuery, branchID int) []reteGraphConditionOrderInspection {
 	for _, branch := range query.conditionBranchPlans {
-		if branch.id == branchID {
-			return inspectReteGraphAuthoredOrder(branch.conditions)
+		if branch.IDValue == branchID {
+			return inspectReteGraphAuthoredOrder(branch.ConditionValues)
 		}
 	}
 	return nil
@@ -2662,20 +2663,20 @@ func inspectReteGraphAuthoredOrder(conditions []RuleConditionBranchCondition) []
 	}
 	out := make([]reteGraphConditionOrderInspection, len(conditions))
 	for i, condition := range conditions {
-		public := condition.condition
+		public := condition.ConditionValue
 		out[i] = reteGraphConditionOrderInspection{
 			Order:       i,
-			ConditionID: public.id,
-			Binding:     public.binding,
-			BindingSlot: public.order,
-			Path:        condition.Path(),
-			Visible:     condition.visible,
-			Negated:     condition.negated,
-			Explicit:    condition.explicit,
+			ConditionID: public.IDValue,
+			Binding:     public.BindingName,
+			BindingSlot: public.Order,
+			Path:        condition.PathValue,
+			Visible:     condition.VisibleValue,
+			Negated:     condition.NegatedValue,
+			Explicit:    condition.ExplicitValue,
 			Target: conditionTarget{
 				kind:        conditionTargetKindForRuleCondition(public),
-				name:        public.name,
-				templateKey: public.templateKey,
+				name:        public.NameValue,
+				templateKey: public.TemplateKeyValue,
 			},
 		}
 	}
@@ -2706,10 +2707,10 @@ func inspectReteGraphPlannedOrder(plans []compiledConditionPlan) []reteGraphCond
 }
 
 func conditionTargetKindForRuleCondition(condition RuleCondition) conditionTargetKind {
-	if condition.templateKey != "" {
+	if condition.TemplateKeyValue != "" {
 		return conditionTargetTemplateKey
 	}
-	if condition.name != "" {
+	if condition.NameValue != "" {
 		return conditionTargetName
 	}
 	return conditionTargetUnknown
@@ -2853,7 +2854,7 @@ func cloneReteGraphTerminalProjectionInspections(in []reteGraphTerminalProjectio
 	out := make([]reteGraphTerminalProjectionInspection, len(in))
 	for i, projection := range in {
 		out[i] = projection
-		out[i].Path = projection.Path.clone()
+		out[i].Path = clonePathSpec(projection.Path)
 	}
 	return out
 }
@@ -3271,7 +3272,7 @@ func expressionPredicateAlphaMembershipConstraint(expression compiledExpression)
 		} else if current.access.display() != access.display() {
 			return compiledFieldConstraint{}, false
 		}
-		key := constant.value.canonicalKey()
+		key := constant.value.CanonicalKey()
 		if _, ok := seen[key]; ok {
 			continue
 		}
@@ -3385,10 +3386,10 @@ func serializeCompiledFieldConstraints(constraints []compiledFieldConstraint) st
 }
 
 func serializeCompiledFieldConstraint(constraint compiledFieldConstraint) string {
-	valueKey := constraint.value.canonicalKey()
+	valueKey := constraint.value.CanonicalKey()
 	valueKeys := make([]string, 0, len(constraint.values))
 	for _, value := range constraint.values {
-		valueKeys = append(valueKeys, value.canonicalKey())
+		valueKeys = append(valueKeys, value.CanonicalKey())
 	}
 	sort.Strings(valueKeys)
 	valuesKey := strings.Join(valueKeys, ",")

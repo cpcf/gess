@@ -2018,7 +2018,7 @@ func TestReteGraphAlphaExpressionPredicateErrorsAreCounted(t *testing.T) {
 		}},
 	}
 	fact := FactSnapshot{
-		id:     FactID{generation: 1, sequence: 1},
+		id:     newFactID(1, 1),
 		name:   "event",
 		fields: Fields{"score": newIntValue(20)},
 	}
@@ -2162,7 +2162,7 @@ func TestReteRuntimeTerminalDeltaScratchUsesCompiledPathLen(t *testing.T) {
 		id := ConditionID(fmt.Sprintf("c%d", i))
 		binding := fmt.Sprintf("b%d", i)
 		path := []int{i, i + conditionCount}
-		rule.conditions[i] = RuleCondition{id: id, binding: binding, order: i}
+		rule.conditions[i] = RuleCondition{IDValue: id, BindingName: binding, Order: i}
 		rule.conditionPlans[i] = compiledConditionPlan{
 			id:          id,
 			binding:     binding,

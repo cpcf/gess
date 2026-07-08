@@ -288,11 +288,11 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsFromSnapshot(t *testing.T) {
 		category, _ := fact.Field("category")
 		routeIDs := runtime.graphBeta.snapshotAlphaRouteIDsForFactInsert(fact, nil)
 		switch {
-		case category.Kind() == ValueString && category.stringValue == "hot":
+		case category.Kind() == ValueString && valueString(category) == "hot":
 			if got, want := len(routeIDs), 1; got != want {
 				t.Fatalf("hot fact route IDs = %d, want %d", got, want)
 			}
-		case category.Kind() == ValueString && category.stringValue == "cold":
+		case category.Kind() == ValueString && valueString(category) == "cold":
 			if got := len(routeIDs); got != 0 {
 				t.Fatalf("cold fact route IDs = %d, want 0", got)
 			}

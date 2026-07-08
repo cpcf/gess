@@ -112,7 +112,8 @@ func TestAccumulateEmptyCountSumCollectAndMinMaxNoContinuation(t *testing.T) {
 				return errors.New("sum did not bind zero")
 			}
 			collected, ok := ctx.BindingValue("collected")
-			if !ok || collected.Kind() != ValueList || len(collected.data.([]Value)) != 0 {
+			values, _ := collected.AsList()
+			if !ok || collected.Kind() != ValueList || len(values) != 0 {
 				return errors.New("collect did not bind empty list")
 			}
 			return nil
@@ -1226,7 +1227,7 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 			if !ok {
 				return errors.New("missing count binding")
 			}
-			observed = append(observed, count.intValue)
+			observed = append(observed, valueInt64(count))
 			return nil
 		},
 	})

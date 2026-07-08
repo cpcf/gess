@@ -48,7 +48,7 @@ func TestSessionAssertDynamicAndTemplateFact(t *testing.T) {
 		DuplicatePolicy: DuplicateAllow,
 	})
 	session = mustSession(t, revision, "template-assert-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -96,7 +96,7 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	if row, compact := decodeCompactFactRow(firstHandle); !compact || row != 0 {
 		t.Fatalf("first fact row = %d compact=%v, want compact row 0", firstHandle, compact)
 	}
-	if got := mustWorkingFactByID(t, session, first.Fact.ID()).fieldsMap(); got == nil || got["name"].stringValue != "Ada" {
+	if got := mustWorkingFactByID(t, session, first.Fact.ID()).fieldsMap(); got == nil || valueString(got["name"]) != "Ada" {
 		t.Fatalf("first payload fields = %#v, want name Ada", got)
 	}
 
@@ -312,7 +312,7 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 
 			mapRevision := mustCompile(t, baseSpec)
 			mapSession := mustSession(t, mapRevision, "map-duplicate-parity-session")
-			mapTemplate, ok := mapRevision.Template("event")
+			mapTemplate, ok := mapRevision.compiledTemplate("event")
 			if !ok {
 				t.Fatal("expected map-backed event template")
 			}
@@ -354,7 +354,7 @@ func TestSessionAssertDuplicateKeyParityForSlotBackedAndMapBackedFacts(t *testin
 				t.Fatalf("Compile(slot revision): %v", err)
 			}
 			slotSession := mustSession(t, slotRevision, "slot-duplicate-parity-session")
-			slotTemplate, ok := slotRevision.Template("event")
+			slotTemplate, ok := slotRevision.compiledTemplate("event")
 			if !ok {
 				t.Fatal("expected slot-backed event template")
 			}
@@ -550,7 +550,7 @@ func TestSessionAssertDuplicateUniqueKeyPolicy(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "unique-dup-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -622,7 +622,7 @@ func TestSessionAssertDuplicateAllowPolicyAllowsMultiplicity(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "allow-dup-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -670,7 +670,7 @@ func TestSessionAssertValidationFailureLeavesMemoryAndEventsUnchanged(t *testing
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
@@ -704,7 +704,7 @@ func TestSessionAssertEmitsOnlyForInsertedFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template")
 	}

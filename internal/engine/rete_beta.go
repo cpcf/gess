@@ -406,7 +406,7 @@ func (a *tokenArena) internFactRef(fact conditionFactRef, hasValue bool) *condit
 	if a == nil || hasValue || fact.ID().IsZero() {
 		return nil
 	}
-	if fact.ID().sequence > transientFactSequenceThreshold {
+	if fact.ID().Sequence() > transientFactSequenceThreshold {
 		return a.appendFactRef(fact)
 	}
 	key := tokenFactRefKey{id: fact.ID(), version: fact.Version(), recency: fact.Recency()}
@@ -943,7 +943,7 @@ func betaJoinKeyForPlanWithError(plan compiledConditionPlan, valueForJoin func(j
 		}
 		return betaJoinKey{
 			kind:        betaJoinKeyCanonical,
-			stringValue: value.canonicalKey(),
+			stringValue: value.CanonicalKey(),
 		}, true, nil
 	}
 
@@ -986,7 +986,7 @@ func betaJoinKeyForPlanWithError(plan compiledConditionPlan, valueForJoin func(j
 			return betaJoinKey{}, false, err
 		}
 		b.WriteByte('|')
-		b.WriteString(value.canonicalKey())
+		b.WriteString(value.CanonicalKey())
 	}
 	return betaJoinKey{
 		kind:        betaJoinKeyCanonical,
@@ -1034,7 +1034,7 @@ func betaJoinKeyForSingleValue(value Value) (betaJoinKey, bool) {
 	}
 	return betaJoinKey{
 		kind:        betaJoinKeyCanonical,
-		stringValue: value.canonicalKey(),
+		stringValue: value.CanonicalKey(),
 	}, true
 }
 
@@ -1066,16 +1066,17 @@ func betaJoinKeySlotFromValue(value Value) (betaJoinKeySlot, bool) {
 	case ValueNull:
 		return betaJoinKeySlot{kind: betaJoinKeyNull}, true
 	case ValueBool:
-		return betaJoinKeySlot{kind: betaJoinKeyBool, boolValue: value.boolValue}, true
+		return betaJoinKeySlot{kind: betaJoinKeyBool, boolValue: valueBool(value)}, true
 	case ValueInt:
-		return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: value.intValue}, true
+		return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: valueInt64(value)}, true
 	case ValueFloat:
-		if integer, ok := betaJoinIntFromFloat(value.floatValue); ok {
+		floating := valueFloat64(value)
+		if integer, ok := betaJoinIntFromFloat(floating); ok {
 			return betaJoinKeySlot{kind: betaJoinKeyInt, intValue: integer}, true
 		}
-		return betaJoinKeySlot{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.floatValue)}, true
+		return betaJoinKeySlot{kind: betaJoinKeyFloat, floatBits: math.Float64bits(floating)}, true
 	case ValueString:
-		return betaJoinKeySlot{kind: betaJoinKeyString, stringValue: value.stringValue}, true
+		return betaJoinKeySlot{kind: betaJoinKeyString, stringValue: valueString(value)}, true
 	default:
 		return betaJoinKeySlot{}, false
 	}
@@ -1209,16 +1210,17 @@ func betaJoinKeyForValue(value Value) (betaJoinKey, bool) {
 	case ValueNull:
 		return betaJoinKey{kind: betaJoinKeyNull}, true
 	case ValueBool:
-		return betaJoinKey{kind: betaJoinKeyBool, boolValue: value.boolValue}, true
+		return betaJoinKey{kind: betaJoinKeyBool, boolValue: valueBool(value)}, true
 	case ValueInt:
-		return betaJoinKey{kind: betaJoinKeyInt, intValue: value.intValue}, true
+		return betaJoinKey{kind: betaJoinKeyInt, intValue: valueInt64(value)}, true
 	case ValueFloat:
-		if integer, ok := betaJoinIntFromFloat(value.floatValue); ok {
+		floating := valueFloat64(value)
+		if integer, ok := betaJoinIntFromFloat(floating); ok {
 			return betaJoinKey{kind: betaJoinKeyInt, intValue: integer}, true
 		}
-		return betaJoinKey{kind: betaJoinKeyFloat, floatBits: math.Float64bits(value.floatValue)}, true
+		return betaJoinKey{kind: betaJoinKeyFloat, floatBits: math.Float64bits(floating)}, true
 	case ValueString:
-		return betaJoinKey{kind: betaJoinKeyString, stringValue: value.stringValue}, true
+		return betaJoinKey{kind: betaJoinKeyString, stringValue: valueString(value)}, true
 	default:
 		return betaJoinKey{}, false
 	}

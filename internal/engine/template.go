@@ -5,47 +5,31 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type DuplicatePolicy int
+type DuplicatePolicy = gessrules.DuplicatePolicy
 
 const (
-	DuplicateStructural DuplicatePolicy = iota
-	DuplicateAllow
-	DuplicateUniqueKey
+	DuplicateStructural = gessrules.DuplicateStructural
+	DuplicateAllow      = gessrules.DuplicateAllow
+	DuplicateUniqueKey  = gessrules.DuplicateUniqueKey
 )
 
-type FieldPresence string
+type FieldPresence = gessrules.FieldPresence
 
 const (
-	FieldPresenceOmitted  FieldPresence = "omitted"
-	FieldPresenceDefault  FieldPresence = "default"
-	FieldPresenceExplicit FieldPresence = "explicit"
+	FieldPresenceOmitted  = gessrules.FieldPresenceOmitted
+	FieldPresenceDefault  = gessrules.FieldPresenceDefault
+	FieldPresenceExplicit = gessrules.FieldPresenceExplicit
 )
 
-type FieldSpec struct {
-	Name          string
-	Kind          ValueKind
-	Required      bool
-	Default       any
-	HasDefault    bool
-	AllowedValues []any
-}
+type FieldSpec = gessrules.FieldSpec
+type TemplateSpec = gessrules.TemplateSpec
+type Template = gessrules.Template
 
-type TemplateSpec struct {
-	Name              string
-	Module            ModuleName
-	Key               TemplateKey
-	CompatibilityKey  TemplateKey
-	Source            SourceSpan
-	GessSource        string
-	Fields            []FieldSpec
-	DuplicatePolicy   DuplicatePolicy
-	DuplicateKeyNames []string
-	BackchainReactive bool
-}
-
-type Template struct {
+type compiledTemplate struct {
 	name               string
 	module             ModuleName
 	key                TemplateKey
@@ -80,17 +64,6 @@ type fieldValidationSpec struct {
 	allowedValues []Value
 }
 
-func (s TemplateSpec) clone() TemplateSpec {
-	out := s
-	out.Module = normalizeModuleName(out.Module)
-	out.Fields = make([]FieldSpec, len(s.Fields))
-	for i, field := range s.Fields {
-		out.Fields[i] = cloneFieldSpec(field)
-	}
-	out.DuplicateKeyNames = append(out.DuplicateKeyNames[:0:0], s.DuplicateKeyNames...)
-	return out
-}
-
 func cloneFieldSpec(field FieldSpec) FieldSpec {
 	out := field
 	out.Default = cloneSpecValue(field.Default)
@@ -110,67 +83,67 @@ func cloneSpecValue(value any) any {
 	}
 }
 
-func (t Template) Name() string {
+func (t compiledTemplate) Name() string {
 	return t.name
 }
 
-func (t Template) Module() ModuleName {
+func (t compiledTemplate) Module() ModuleName {
 	return t.module
 }
 
-func (t Template) QualifiedName() QualifiedName {
-	return QualifiedName{Module: t.module, Name: t.name}.normalized()
+func (t compiledTemplate) QualifiedName() QualifiedName {
+	return normalizeQualifiedName(QualifiedName{Module: t.module, Name: t.name})
 }
 
-func (t Template) Key() TemplateKey {
+func (t compiledTemplate) Key() TemplateKey {
 	return t.key
 }
 
-func (t Template) CompatibilityKey() TemplateKey {
+func (t compiledTemplate) CompatibilityKey() TemplateKey {
 	return t.compatibilityKey
 }
 
-func (t Template) DuplicatePolicy() DuplicatePolicy {
+func (t compiledTemplate) DuplicatePolicy() DuplicatePolicy {
 	return t.duplicatePolicy
 }
 
-func (t Template) DuplicateKeys() []string {
+func (t compiledTemplate) DuplicateKeys() []string {
 	out := make([]string, len(t.duplicateKeyNames))
 	copy(out, t.duplicateKeyNames)
 	return out
 }
 
-func (t Template) BackchainReactive() bool {
+func (t compiledTemplate) BackchainReactive() bool {
 	return t.backchainReactive
 }
 
-func (t Template) Source() SourceSpan {
+func (t compiledTemplate) Source() SourceSpan {
 	return t.source
 }
 
-func (t Template) GessSource() string {
+func (t compiledTemplate) GessSource() string {
 	return t.gessSource
 }
 
-func (t Template) BackchainDemandTemplateKey() (TemplateKey, bool) {
+func (t compiledTemplate) BackchainDemandTemplateKey() (TemplateKey, bool) {
 	if !t.backchainReactive || t.backchainDemandKey == "" {
 		return "", false
 	}
 	return t.backchainDemandKey, true
 }
 
-func (t Template) IsBackchainDemandTemplate() bool {
+func (t compiledTemplate) IsBackchainDemandTemplate() bool {
 	return t.backchainDemand
 }
 
-func (t Template) BackchainSourceTemplateKey() (TemplateKey, bool) {
+func (t compiledTemplate) BackchainSourceTemplateKey() (TemplateKey, bool) {
 	if !t.backchainDemand || t.backchainSourceKey == "" {
 		return "", false
 	}
 	return t.backchainSourceKey, true
 }
 
-func (t Template) Fields() []FieldSpec {
+func (t compiledTemplate) Fields() []FieldSpec {
 	out := make([]FieldSpec, len(t.fields))
 	for i, field := range t.fields {
 		out[i] = cloneFieldSpec(field)
@@ -178,7 +151,7 @@ func (t Template) Fields() []FieldSpec {
 	return out
 }
 
-func (t Template) fieldSlot(field string) (int, bool) {
+func (t compiledTemplate) fieldSlot(field string) (int, bool) {
 	if len(t.fieldIndexes) == 0 {
 		return 0, false
 	}
@@ -189,7 +162,7 @@ func (t Template) fieldSlot(field string) (int, bool) {
 // fieldKind reports the declared kind of a named field and whether the field is
 // a slot of this template. Names match exactly: case-sensitive, unqualified,
 // against the compile-time trimmed field names.
-func (t Template) fieldKind(field string) (ValueKind, bool) {
+func (t compiledTemplate) fieldKind(field string) (ValueKind, bool) {
 	spec, ok := t.fieldsByName[field]
 	if !ok {
 		return valueKindUnknown, false
@@ -200,7 +173,7 @@ func (t Template) fieldKind(field string) (ValueKind, bool) {
 // requiredFieldMissing reports whether the named field is a required slot with
 // no default, which the runtime rejects when an assert omits it. It mirrors the
 // required-field enforcement in applyDefaultsAndValidate.
-func (t Template) requiredFieldMissing(field FieldSpec) bool {
+func (t compiledTemplate) requiredFieldMissing(field FieldSpec) bool {
 	if !field.Required {
 		return false
 	}
@@ -210,12 +183,12 @@ func (t Template) requiredFieldMissing(field FieldSpec) bool {
 
 // fieldAllowedValues returns the allowed-value set of a named field, or false
 // when the field has no set (any value of its kind is allowed).
-func (t Template) fieldAllowedValues(field string) ([]Value, bool) {
+func (t compiledTemplate) fieldAllowedValues(field string) ([]Value, bool) {
 	allowed, ok := t.fieldAllowed[field]
 	return allowed, ok && len(allowed) > 0
 }
 
-func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresence) []factSlot {
+func (t compiledTemplate) buildFieldSlots(fields Fields, presence map[string]FieldPresence) []factSlot {
 	if !t.closed || len(t.fields) == 0 {
 		return nil
 	}
@@ -238,7 +211,7 @@ func (t Template) buildFieldSlots(fields Fields, presence map[string]FieldPresen
 	return slots
 }
 
-func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
+func (t compiledTemplate) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 	if !t.closed || len(t.fields) == 0 {
 		return nil, nil
 	}
@@ -307,11 +280,11 @@ func (t Template) buildValidatedFieldSlots(fields Fields) ([]factSlot, error) {
 	return slots, nil
 }
 
-func (t Template) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot, error) {
+func (t compiledTemplate) buildValidatedFieldSlotsFromValues(values []Value) ([]factSlot, error) {
 	return t.buildValidatedFieldSlotsFromValuesInto(nil, values)
 }
 
-func (t Template) buildValidatedCompactFieldSlotsFromValuesInto(dst []compactFactSlot, values []Value) ([]compactFactSlot, error) {
+func (t compiledTemplate) buildValidatedCompactFieldSlotsFromValuesInto(dst []compactFactSlot, values []Value) ([]compactFactSlot, error) {
 	if !t.closed {
 		return nil, &ValidationError{
 			TemplateName: t.name,
@@ -424,7 +397,7 @@ func (t Template) buildValidatedCompactFieldSlotsFromValuesInto(dst []compactFac
 	return dst, nil
 }
 
-func (t Template) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values []Value) ([]factSlot, error) {
+func (t compiledTemplate) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values []Value) ([]factSlot, error) {
 	if !t.closed {
 		return nil, &ValidationError{
 			TemplateName: t.name,
@@ -519,7 +492,7 @@ func (t Template) buildValidatedFieldSlotsFromValuesInto(dst []factSlot, values 
 	return dst, nil
 }
 
-func (t Template) buildValidatedFieldSlotsFromSpecs(fields Fields) ([]factSlot, error) {
+func (t compiledTemplate) buildValidatedFieldSlotsFromSpecs(fields Fields) ([]factSlot, error) {
 	slots := make([]factSlot, len(t.fields))
 	for i := range t.fields {
 		slots[i].presence = fieldPresenceOmitted
@@ -581,7 +554,7 @@ func (t Template) buildValidatedFieldSlotsFromSpecs(fields Fields) ([]factSlot, 
 	return slots, nil
 }
 
-func (t Template) clone() Template {
+func (t compiledTemplate) clone() compiledTemplate {
 	out := t
 	out.fields = make([]FieldSpec, len(t.fields))
 	for i, field := range t.fields {
@@ -606,7 +579,25 @@ func (t Template) clone() Template {
 	return out
 }
 
-func (t Template) spec() TemplateSpec {
+func (t compiledTemplate) inspect() Template {
+	return Template{
+		NameValue:              t.name,
+		ModuleValue:            t.module,
+		KeyValue:               t.key,
+		CompatibilityKeyValue:  t.compatibilityKey,
+		FieldValues:            t.Fields(),
+		DuplicatePolicyValue:   t.duplicatePolicy,
+		DuplicateKeyValues:     t.DuplicateKeys(),
+		BackchainReactiveValue: t.backchainReactive,
+		BackchainDemandKey:     t.backchainDemandKey,
+		BackchainDemandValue:   t.backchainDemand,
+		BackchainSourceKey:     t.backchainSourceKey,
+		SourceSpan:             t.source,
+		GessSourceText:         t.gessSource,
+	}
+}
+
+func (t compiledTemplate) spec() TemplateSpec {
 	return TemplateSpec{
 		Name:              t.name,
 		Module:            t.module,
@@ -621,7 +612,7 @@ func (t Template) spec() TemplateSpec {
 	}
 }
 
-func (t Template) applyDefaultsAndValidate(raw Fields) (Fields, map[string]FieldPresence, error) {
+func (t compiledTemplate) applyDefaultsAndValidate(raw Fields) (Fields, map[string]FieldPresence, error) {
 	provided := cloneFields(raw)
 	result := make(Fields, len(raw)+len(t.fields))
 	maps.Copy(result, provided)
@@ -683,10 +674,10 @@ func (t Template) applyDefaultsAndValidate(raw Fields) (Fields, map[string]Field
 	return result, presence, nil
 }
 
-func compileTemplateSpec(spec TemplateSpec) (Template, error) {
+func compileTemplateSpec(spec TemplateSpec) (compiledTemplate, error) {
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
-		return Template{}, &ValidationError{Reason: "template name is required"}
+		return compiledTemplate{}, &ValidationError{Reason: "template name is required"}
 	}
 	module := normalizeModuleName(spec.Module)
 	key := TemplateKey(strings.TrimSpace(string(spec.Key)))
@@ -703,7 +694,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	switch spec.DuplicatePolicy {
 	case DuplicateStructural, DuplicateAllow, DuplicateUniqueKey:
 	default:
-		return Template{}, &ValidationError{TemplateName: name, Reason: "invalid duplicate policy"}
+		return compiledTemplate{}, &ValidationError{TemplateName: name, Reason: "invalid duplicate policy"}
 	}
 
 	fieldsByName := make(map[string]FieldSpec, len(spec.Fields))
@@ -714,13 +705,13 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	for _, field := range spec.Fields {
 		field.Name = strings.TrimSpace(field.Name)
 		if field.Name == "" {
-			return Template{}, &ValidationError{
+			return compiledTemplate{}, &ValidationError{
 				TemplateName: name,
 				Reason:       "field name is required",
 			}
 		}
 		if _, exists := fieldsByName[field.Name]; exists {
-			return Template{}, &ValidationError{
+			return compiledTemplate{}, &ValidationError{
 				TemplateName: name,
 				FieldName:    field.Name,
 				Reason:       "duplicate field",
@@ -731,7 +722,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			field.Kind = ValueAny
 		}
 		if !isSupportedKind(field.Kind) {
-			return Template{}, &ValidationError{
+			return compiledTemplate{}, &ValidationError{
 				TemplateName: name,
 				FieldName:    field.Name,
 				Reason:       "unsupported field kind",
@@ -743,7 +734,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		if hasDefault {
 			defaultValue, err := canonicalValue(field.Default)
 			if err != nil {
-				return Template{}, &ValidationError{
+				return compiledTemplate{}, &ValidationError{
 					TemplateName: name,
 					FieldName:    field.Name,
 					Reason:       "invalid default",
@@ -751,7 +742,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 				}
 			}
 			if field.Kind != ValueAny && !isValueCompatibleWithKind(field.Kind, defaultValue) {
-				return Template{}, &ValidationError{
+				return compiledTemplate{}, &ValidationError{
 					TemplateName: name,
 					FieldName:    field.Name,
 					Reason:       "invalid default type",
@@ -764,7 +755,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 		if len(field.AllowedValues) > 0 {
 			allowedValues, err := normalizeAllowedValues(field.AllowedValues)
 			if err != nil {
-				return Template{}, &ValidationError{
+				return compiledTemplate{}, &ValidationError{
 					TemplateName: name,
 					FieldName:    field.Name,
 					Reason:       "invalid allowed value",
@@ -773,7 +764,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			}
 			for _, allowed := range allowedValues {
 				if field.Kind != ValueAny && !isValueCompatibleWithKind(field.Kind, allowed) {
-					return Template{}, &ValidationError{
+					return compiledTemplate{}, &ValidationError{
 						TemplateName: name,
 						FieldName:    field.Name,
 						Reason:       "invalid allowed value type",
@@ -784,7 +775,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 			if field.Default != nil {
 				defaultValue := fieldDefaults[field.Name]
 				if !valueAllowed(allowedValues, defaultValue) {
-					return Template{}, &ValidationError{
+					return compiledTemplate{}, &ValidationError{
 						TemplateName: name,
 						FieldName:    field.Name,
 						Reason:       "default value not allowed",
@@ -825,21 +816,21 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 
 	duplicateKeyNames, err := normalizeTemplateDuplicateFields(spec.DuplicateKeyNames, fieldsByName)
 	if err != nil {
-		return Template{}, &ValidationError{
+		return compiledTemplate{}, &ValidationError{
 			TemplateName: name,
 			Reason:       err.Error(),
 		}
 	}
 
 	if spec.DuplicatePolicy != DuplicateUniqueKey && len(duplicateKeyNames) > 0 {
-		return Template{}, &ValidationError{
+		return compiledTemplate{}, &ValidationError{
 			TemplateName: name,
 			Reason:       "duplicate key fields require duplicate unique-key policy",
 		}
 	}
 
 	if spec.DuplicatePolicy == DuplicateUniqueKey && len(duplicateKeyNames) == 0 {
-		return Template{}, &ValidationError{
+		return compiledTemplate{}, &ValidationError{
 			TemplateName: name,
 			Reason:       "duplicate unique-key policy requires duplicate key fields",
 		}
@@ -854,7 +845,7 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	closed := true
 	duplicateIndexMode := duplicateIndexKeyMode(closed, spec.DuplicatePolicy, fields, duplicateKeyNames)
 
-	return Template{
+	return compiledTemplate{
 		name:               name,
 		module:             module,
 		key:                key,
@@ -876,19 +867,19 @@ func compileTemplateSpec(spec TemplateSpec) (Template, error) {
 	}, nil
 }
 
-func compileBackchainDemandTemplates(templates []Template) ([]Template, error) {
+func compileBackchainDemandTemplates(templates []compiledTemplate) ([]compiledTemplate, error) {
 	if len(templates) == 0 {
 		return nil, nil
 	}
 
-	names := make(map[string]Template, len(templates))
-	keys := make(map[TemplateKey]Template, len(templates))
+	names := make(map[string]compiledTemplate, len(templates))
+	keys := make(map[TemplateKey]compiledTemplate, len(templates))
 	for _, template := range templates {
 		names[template.name] = template
 		keys[template.key] = template
 	}
 
-	demands := make([]Template, 0)
+	demands := make([]compiledTemplate, 0)
 	for i := range templates {
 		template := &templates[i]
 		if !template.backchainReactive {
@@ -938,7 +929,7 @@ func compileBackchainDemandTemplates(templates []Template) ([]Template, error) {
 	return demands, nil
 }
 
-func backchainDemandTemplateSpec(source Template, name string, key TemplateKey) TemplateSpec {
+func backchainDemandTemplateSpec(source compiledTemplate, name string, key TemplateKey) TemplateSpec {
 	fields := make([]FieldSpec, len(source.fields))
 	for i, field := range source.fields {
 		fields[i] = FieldSpec{
@@ -1094,7 +1085,7 @@ func normalizeAllowedValues(values []any) ([]Value, error) {
 		return nil, err
 	}
 	slices.SortFunc(canonical, func(a, b Value) int {
-		return strings.Compare(a.canonicalKey(), b.canonicalKey())
+		return strings.Compare(a.CanonicalKey(), b.CanonicalKey())
 	})
 
 	out := canonical[:0]

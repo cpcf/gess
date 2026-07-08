@@ -104,7 +104,7 @@ func TestBranchPlanningIRReordersAndCanonicalizesJoins(t *testing.T) {
 		t.Fatalf("second condition joins = %d, want %d", got, want)
 	}
 	join := planned[1].spec.JoinConstraints[0]
-	if join.Path.display() != "root" || join.Operator != FieldConstraintEqual || join.Ref.Binding != "root" || join.Ref.Path.display() != "id" {
+	if pathDisplay(join.Path) != "root" || join.Operator != FieldConstraintEqual || join.Ref.Binding != "root" || pathDisplay(join.Ref.Path) != "id" {
 		t.Fatalf("planned join = %#v, want event.root == root.id", join)
 	}
 }
@@ -247,7 +247,7 @@ func TestBranchPlanningIRPreservesJoinsWithoutReordering(t *testing.T) {
 		t.Fatalf("planned second binding = %q, want %q", got, want)
 	}
 	join := planned[1].spec.JoinConstraints[0]
-	if pathOrField(join.Path, join.Field).display() != "id" || join.Operator != FieldConstraintEqual || join.Ref.Binding != "event" || pathOrField(join.Ref.Path, join.Ref.Field).display() != "root" {
+	if pathDisplay(pathOrField(join.Path, join.Field)) != "id" || join.Operator != FieldConstraintEqual || join.Ref.Binding != "event" || pathDisplay(pathOrField(join.Ref.Path, join.Ref.Field)) != "root" {
 		t.Fatalf("preserved join = %#v, want root.id == event.root", join)
 	}
 }
@@ -349,7 +349,7 @@ func TestQueryGraphBranchPlanningIRLowersTriggerAndParameters(t *testing.T) {
 		t.Fatalf("lowered joins = %d, want %d", got, want)
 	}
 	join := lowered.JoinConstraints[0]
-	if join.Path.display() != "dept" || join.Operator != FieldConstraintEqual || join.Ref.Binding != internalQueryTriggerBinding || join.Ref.Path.display() != "dept" {
+	if pathDisplay(join.Path) != "dept" || join.Operator != FieldConstraintEqual || join.Ref.Binding != internalQueryTriggerBinding || pathDisplay(join.Ref.Path) != "dept" {
 		t.Fatalf("lowered join = %#v, want dept == query trigger dept", join)
 	}
 

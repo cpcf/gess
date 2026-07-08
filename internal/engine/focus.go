@@ -121,25 +121,25 @@ func (s *Session) ClearFocusStack(ctx context.Context) error {
 	return nil
 }
 
-func (c ActionContext) PushFocus(module ModuleName) error {
+func (c actionContext) PushFocus(module ModuleName) error {
 	if c.session == nil {
 		return ErrClosedSession
 	}
 	return c.session.pushFocusWithOrigin(c.Context(), module, c.mutationOrigin())
 }
 
-func (c ActionContext) SetFocus(module ModuleName) error {
+func (c actionContext) SetFocus(module ModuleName) error {
 	return c.PushFocus(module)
 }
 
-func (c ActionContext) PopFocus() (ModuleName, error) {
+func (c actionContext) PopFocus() (ModuleName, error) {
 	if c.session == nil {
 		return MainModule, ErrClosedSession
 	}
 	return c.session.popFocusWithOrigin(c.Context(), c.mutationOrigin())
 }
 
-func (c ActionContext) ClearFocusStack() error {
+func (c actionContext) ClearFocusStack() error {
 	if c.session == nil {
 		return ErrClosedSession
 	}

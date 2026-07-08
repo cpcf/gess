@@ -2,51 +2,30 @@ package engine
 
 import (
 	"fmt"
-	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type FieldRef struct {
-	Binding string
-	Field   string
-	Path    PathSpec
+type FieldRef = gessrules.FieldRef
+
+func cloneFieldRef(r FieldRef) FieldRef {
+	return gessrules.CloneFieldRef(r)
 }
 
-func (r FieldRef) clone() FieldRef {
-	out := r
-	out.Binding = strings.TrimSpace(out.Binding)
-	out.Field = strings.TrimSpace(out.Field)
-	out.Path = out.Path.clone()
-	return out
+type JoinConstraintSpec = gessrules.JoinConstraintSpec
+
+func cloneJoinConstraintSpec(s JoinConstraintSpec) JoinConstraintSpec {
+	return gessrules.CloneJoinConstraintSpec(s)
 }
 
-type JoinConstraintSpec struct {
-	Field    string
-	Path     PathSpec
-	Operator FieldConstraintOperator
-	Ref      FieldRef
-}
+type JoinConstraint = gessrules.JoinConstraint
 
-func (s JoinConstraintSpec) clone() JoinConstraintSpec {
-	out := s
-	out.Field = strings.TrimSpace(out.Field)
-	out.Path = out.Path.clone()
-	out.Ref = out.Ref.clone()
-	return out
-}
-
-type JoinConstraint struct {
-	Field    string
-	Path     PathSpec
-	Operator FieldConstraintOperator
-	Ref      FieldRef
-}
-
-func (c JoinConstraint) clone() JoinConstraint {
+func cloneJoinConstraint(c JoinConstraint) JoinConstraint {
 	return JoinConstraint{
 		Field:    c.Field,
-		Path:     c.Path.clone(),
+		Path:     clonePathSpec(c.Path),
 		Operator: c.Operator,
-		Ref:      c.Ref.clone(),
+		Ref:      cloneFieldRef(c.Ref),
 	}
 }
 
@@ -179,11 +158,9 @@ func compileJoinConstraintSpec(
 	spec JoinConstraintSpec,
 	ruleName string,
 	conditionIndex, joinIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-) (JoinConstraint, compiledJoinConstraint, error) {
+	templatesByKey map[TemplateKey]compiledTemplate) (JoinConstraint, compiledJoinConstraint, error) {
 	return compileJoinConstraintSpecWithSource(spec, SourceSpan{}, ruleName, conditionIndex, joinIndex, template, conditions, bindingSlots, templatesByKey)
 }
 
@@ -192,11 +169,9 @@ func compileJoinConstraintSpecWithSource(
 	source SourceSpan,
 	ruleName string,
 	conditionIndex, joinIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-) (JoinConstraint, compiledJoinConstraint, error) {
+	templatesByKey map[TemplateKey]compiledTemplate) (JoinConstraint, compiledJoinConstraint, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -219,10 +194,10 @@ func compileJoinConstraintSpecWithSource(
 			Err:               ErrInvalidPath,
 		}
 	}
-	normalized := spec.clone()
+	normalized := cloneJoinConstraintSpec(spec)
 	normalized.Path = pathOrField(normalized.Path, normalized.Field)
 	normalized.Ref.Path = pathOrField(normalized.Ref.Path, normalized.Ref.Field)
-	if normalized.Path.isZero() {
+	if pathIsZero(normalized.Path) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
 			ConditionIndex:    conditionIndex,
@@ -233,7 +208,7 @@ func compileJoinConstraintSpecWithSource(
 			Err:               ErrInvalidPath,
 		}
 	}
-	normalized.Field = normalized.Path.root()
+	normalized.Field = pathRoot(normalized.Path)
 	if normalized.Ref.Binding == "" {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -244,7 +219,7 @@ func compileJoinConstraintSpecWithSource(
 			Reason:            "join binding reference is required",
 		}
 	}
-	if normalized.Ref.Path.isZero() {
+	if pathIsZero(normalized.Ref.Path) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
 			ConditionIndex:    conditionIndex,
@@ -255,7 +230,7 @@ func compileJoinConstraintSpecWithSource(
 			Err:               ErrInvalidPath,
 		}
 	}
-	normalized.Ref.Field = normalized.Ref.Path.root()
+	normalized.Ref.Field = pathRoot(normalized.Ref.Path)
 	if !validJoinOperator(normalized.Operator) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
@@ -288,11 +263,11 @@ func compileJoinConstraintSpecWithSource(
 	}
 
 	refCondition := conditions[refSlot]
-	refAccess := compiledPathAccess{path: normalized.Ref.Path.clone(), root: normalized.Ref.Path.root(), rootSlot: -1}
-	if err := normalized.Ref.Path.validate(); err != nil {
+	refAccess := compiledPathAccess{path: clonePathSpec(normalized.Ref.Path), root: pathRoot(normalized.Ref.Path), rootSlot: -1}
+	if err := validatePathSpec(normalized.Ref.Path); err != nil {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,
-			FieldName:         normalized.Ref.Path.root(),
+			FieldName:         pathRoot(normalized.Ref.Path),
 			ConditionIndex:    conditionIndex,
 			HasConditionIndex: true,
 			JoinIndex:         joinIndex,
@@ -301,8 +276,8 @@ func compileJoinConstraintSpecWithSource(
 			Err:               err,
 		}
 	}
-	if refCondition.templateKey != "" {
-		refTemplate, ok := templatesByKey[refCondition.templateKey]
+	if refCondition.TemplateKeyValue != "" {
+		refTemplate, ok := templatesByKey[refCondition.TemplateKeyValue]
 		if !ok {
 			return JoinConstraint{}, compiledJoinConstraint{}, fmt.Errorf("%w: missing template for join binding %q", ErrMatcher, normalized.Ref.Binding)
 		}
@@ -324,9 +299,9 @@ func compileJoinConstraintSpecWithSource(
 
 	return JoinConstraint{
 			Field:    normalized.Field,
-			Path:     normalized.Path.clone(),
+			Path:     clonePathSpec(normalized.Path),
 			Operator: normalized.Operator,
-			Ref:      normalized.Ref.clone(),
+			Ref:      cloneFieldRef(normalized.Ref),
 		}, newCompiledJoinConstraint(compiledJoinConstraint{
 			path:           []int{conditionIndex, joinIndex},
 			source:         source,
@@ -348,13 +323,13 @@ func newCompiledJoinConstraint(join compiledJoinConstraint) compiledJoinConstrai
 	return join
 }
 
-func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinIndex int, template *Template) (compiledPathAccess, error) {
-	if template != nil && template.closed && path.root() != "" {
-		if _, ok := template.fieldSlot(path.root()); !ok {
+func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinIndex int, template *compiledTemplate) (compiledPathAccess, error) {
+	if template != nil && template.closed && pathRoot(path) != "" {
+		if _, ok := template.fieldSlot(pathRoot(path)); !ok {
 			return compiledPathAccess{}, &ValidationError{
 				RuleName:          ruleName,
 				TemplateName:      template.name,
-				FieldName:         path.root(),
+				FieldName:         pathRoot(path),
 				ConditionIndex:    conditionIndex,
 				HasConditionIndex: true,
 				JoinIndex:         joinIndex,
@@ -367,7 +342,7 @@ func compileJoinPathAccess(path PathSpec, ruleName string, conditionIndex, joinI
 	if err != nil {
 		validation := &ValidationError{
 			RuleName:          ruleName,
-			FieldName:         path.root(),
+			FieldName:         pathRoot(path),
 			ConditionIndex:    conditionIndex,
 			HasConditionIndex: true,
 			JoinIndex:         joinIndex,

@@ -3,7 +3,7 @@ package engine
 import "testing"
 
 func renderTestFact(id FactID, name string, state FactSupportState) FactSnapshot {
-	return FactSnapshot{id: id, name: name, generation: id.generation, support: FactSupportProvenance{State: state}}
+	return FactSnapshot{id: id, name: name, generation: id.Generation(), support: FactSupportProvenance{State: state}}
 }
 
 func sampleDerivation() Derivation {

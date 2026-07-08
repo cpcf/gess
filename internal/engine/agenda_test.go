@@ -1062,8 +1062,8 @@ func TestTerminalTokenIdentityUsesFastBindingMetadata(t *testing.T) {
 		revisionID:        "rule-revision",
 		identityScopeHash: candidateIdentityScopeHash("rule", "rule-revision"),
 		conditions: []RuleCondition{
-			{id: "first", binding: "first", order: 0},
-			{id: "second", binding: "second", order: 1},
+			{IDValue: "first", BindingName: "first", Order: 0},
+			{IDValue: "second", BindingName: "second", Order: 1},
 		},
 		conditionPlans: []compiledConditionPlan{
 			{id: "first", binding: "first", bindingSlot: 0, path: []int{0}},
@@ -1096,8 +1096,8 @@ func TestTerminalTokenFastIdentityUsesBindingSlotsOutOfOrder(t *testing.T) {
 		revisionID:        "rule-revision",
 		identityScopeHash: candidateIdentityScopeHash("rule", "rule-revision"),
 		conditions: []RuleCondition{
-			{id: "first", binding: "first", order: 0},
-			{id: "second", binding: "second", order: 1},
+			{IDValue: "first", BindingName: "first", Order: 0},
+			{IDValue: "second", BindingName: "second", Order: 1},
 		},
 		conditionPlans: []compiledConditionPlan{
 			{id: "first", binding: "first", bindingSlot: 0, path: []int{0}},

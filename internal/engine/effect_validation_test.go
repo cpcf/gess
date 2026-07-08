@@ -219,7 +219,7 @@ func TestCompileAcceptsNumericFunctionReturnIntoNumericField(t *testing.T) {
 		Args:   []ValueKind{ValueInt},
 		Return: ValueFloat,
 		Func1: func(_ context.Context, v Value) (Value, error) {
-			return newIntValue(v.intValue), nil
+			return newIntValue(valueInt64(v)), nil
 		},
 	})
 	mustAddAction(t, workspace, ActionSpec{

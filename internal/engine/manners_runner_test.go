@@ -109,14 +109,14 @@ func mustCompileMannersRuleset(t testing.TB) *Ruleset {
 		if !ok || value.Kind() != ValueInt {
 			return 0, fmt.Errorf("missing int field %q on binding %q", field, binding)
 		}
-		return value.intValue, nil
+		return valueInt64(value), nil
 	}
 	bindingString := func(ctx ActionContext, binding, field string) (string, error) {
 		value, ok := ctx.BindingScalarValue(binding, field)
 		if !ok || value.Kind() != ValueString {
 			return "", fmt.Errorf("missing string field %q on binding %q", field, binding)
 		}
-		return value.stringValue, nil
+		return valueString(value), nil
 	}
 	modifyBinding := func(ctx ActionContext, binding string, patch FactPatch) error {
 		fact, ok := ctx.Binding(binding)
@@ -468,9 +468,9 @@ func validateMannersSolution(t testing.TB, ctx context.Context, session *Session
 		switch fact.Name() {
 		case "seating":
 			seat2, _ := fact.Field("seat2")
-			if seat2.Kind() == ValueInt && seat2.intValue == int64(guestCount) {
+			if seat2.Kind() == ValueInt && valueInt64(seat2) == int64(guestCount) {
 				id, _ := fact.Field("id")
-				winningID = id.intValue
+				winningID = valueInt64(id)
 			}
 		}
 	}
@@ -482,12 +482,12 @@ func validateMannersSolution(t testing.TB, ctx context.Context, session *Session
 			continue
 		}
 		id, _ := fact.Field("id")
-		if id.intValue != winningID {
+		if valueInt64(id) != winningID {
 			continue
 		}
 		name, _ := fact.Field("name")
 		seat, _ := fact.Field("seat")
-		paths = append(paths, pathRow{name: name.stringValue, seat: seat.intValue})
+		paths = append(paths, pathRow{name: valueString(name), seat: valueInt64(seat)})
 	}
 	if len(paths) != guestCount {
 		t.Fatalf("winning seating %d has %d path facts, want %d", winningID, len(paths), guestCount)

@@ -1,146 +1,25 @@
 package engine
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
-)
+import gessrules "github.com/cpcf/gess/rules"
 
-type RulesetID string
+type RulesetID = gessrules.RulesetID
+type ModuleName = gessrules.ModuleName
 
-func (id RulesetID) String() string {
-	return string(id)
-}
+const MainModule = gessrules.MainModule
 
-type ModuleName string
-
-const MainModule ModuleName = "MAIN"
-
-func (name ModuleName) String() string {
-	if name.IsZero() {
-		return string(MainModule)
-	}
-	return string(name)
-}
-
-func (name ModuleName) IsZero() bool {
-	return strings.TrimSpace(string(name)) == ""
-}
-
-type SessionID string
-
-func (id SessionID) String() string {
-	return string(id)
-}
-
-type RunID uint64
-
-func (id RunID) String() string {
-	if id.IsZero() {
-		return "run:zero"
-	}
-	return "run:" + strconv.FormatUint(uint64(id), 10)
-}
-
-func (id RunID) IsZero() bool {
-	return id == 0
-}
-
-type RuleID string
-
-func (id RuleID) String() string {
-	if id.IsZero() {
-		return "rule:zero"
-	}
-	return string(id)
-}
-
-func (id RuleID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
-}
-
-type RuleRevisionID string
-
-func (id RuleRevisionID) String() string {
-	if id.IsZero() {
-		return "rule-revision:zero"
-	}
-	return string(id)
-}
-
-func (id RuleRevisionID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
-}
-
-type ActivationID string
-
-func (id ActivationID) String() string {
-	if id.IsZero() {
-		return "activation:zero"
-	}
-	return string(id)
-}
-
-func (id ActivationID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
-}
-
-type SupportID string
-
-func (id SupportID) String() string {
-	if id.IsZero() {
-		return "support:zero"
-	}
-	return string(id)
-}
-
-func (id SupportID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
-}
-
-type ConditionID string
-
-func (id ConditionID) String() string {
-	if id.IsZero() {
-		return "condition:zero"
-	}
-	return string(id)
-}
-
-func (id ConditionID) IsZero() bool {
-	return strings.TrimSpace(string(id)) == ""
-}
-
-type TemplateKey string
-
-func (key TemplateKey) String() string {
-	return string(key)
-}
-
-type FactID struct {
-	generation Generation
-	sequence   uint64
-}
+type SessionID = gessrules.SessionID
+type RunID = gessrules.RunID
+type RuleID = gessrules.RuleID
+type RuleRevisionID = gessrules.RuleRevisionID
+type ActivationID = gessrules.ActivationID
+type SupportID = gessrules.SupportID
+type ConditionID = gessrules.ConditionID
+type TemplateKey = gessrules.TemplateKey
+type FactVersion = gessrules.FactVersion
+type Recency = gessrules.Recency
+type Generation = gessrules.Generation
+type FactID = gessrules.FactID
 
 func newFactID(generation Generation, sequence uint64) FactID {
-	return FactID{generation: generation, sequence: sequence}
-}
-
-func (id FactID) Generation() Generation {
-	return id.generation
-}
-
-func (id FactID) Sequence() uint64 {
-	return id.sequence
-}
-
-func (id FactID) IsZero() bool {
-	return id.generation == 0 && id.sequence == 0
-}
-
-func (id FactID) String() string {
-	if id.IsZero() {
-		return "fact:zero"
-	}
-	return fmt.Sprintf("fact:g%d:%d", id.generation, id.sequence)
+	return gessrules.NewFactID(generation, sequence)
 }

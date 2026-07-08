@@ -9,14 +9,6 @@ import (
 	"strings"
 )
 
-type FactVersion uint32
-
-type Recency uint32
-
-// Generation is the working-memory reset epoch. Fact IDs include a generation
-// component so IDs from before Reset cannot address post-reset facts.
-type Generation uint64
-
 type FactSnapshot struct {
 	id            FactID
 	name          string
@@ -1052,14 +1044,14 @@ func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
 		return duplicateScalarKey{kind: duplicateScalarNull}, true
 	case ValueBool:
 		var bits uint64
-		if value.boolValue {
+		if valueBool(value) {
 			bits = 1
 		}
 		return duplicateScalarKey{kind: duplicateScalarBool, bits: bits}, true
 	case ValueInt:
-		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(value.intValue)}, true
+		return duplicateScalarKey{kind: duplicateScalarInt, bits: uint64(valueInt64(value))}, true
 	case ValueFloat:
-		floating := value.floatValue
+		floating := valueFloat64(value)
 		if math.IsNaN(floating) {
 			return duplicateScalarKey{}, false
 		}
@@ -1070,7 +1062,7 @@ func duplicateScalarKeyFromValue(value Value) (duplicateScalarKey, bool) {
 		}
 		return duplicateScalarKey{kind: duplicateScalarFloat, bits: math.Float64bits(floating)}, true
 	case ValueString:
-		return duplicateScalarKey{kind: duplicateScalarString, stringValue: value.stringValue}, true
+		return duplicateScalarKey{kind: duplicateScalarString, stringValue: valueString(value)}, true
 	default:
 		return duplicateScalarKey{}, false
 	}
@@ -1107,7 +1099,7 @@ type duplicateIndexKey struct {
 }
 
 type compiledGeneratedFactInsertPlan struct {
-	template              Template
+	template              compiledTemplate
 	templateID            templateID
 	name                  string
 	templateKey           TemplateKey
@@ -1123,7 +1115,7 @@ type compiledGeneratedFactInsertPlan struct {
 	affectsRete           bool
 }
 
-func newCompiledGeneratedFactInsertPlan(template Template) compiledGeneratedFactInsertPlan {
+func newCompiledGeneratedFactInsertPlan(template compiledTemplate) compiledGeneratedFactInsertPlan {
 	plan := compiledGeneratedFactInsertPlan{
 		template:           template,
 		templateID:         template.id,
@@ -1364,7 +1356,7 @@ func (p *compiledGeneratedFactInsertPlan) structuralDuplicateIndex(slots []factS
 	}, true
 }
 
-func compiledStructuralDuplicateScalarKinds(template Template) []ValueKind {
+func compiledStructuralDuplicateScalarKinds(template compiledTemplate) []ValueKind {
 	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(template.fields) == 0 {
 		return nil
 	}
@@ -1477,7 +1469,7 @@ func (k duplicateIndexKey) isZero() bool {
 	return k.kind == duplicateIndexString && k.templateKey == "" && k.stringKey == ""
 }
 
-func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) DuplicateKey {
+func (k duplicateIndexKey) publicKeyForTemplate(name string, template compiledTemplate) DuplicateKey {
 	switch k.kind {
 	case duplicateIndexSingleInt:
 		var b strings.Builder
@@ -1572,7 +1564,7 @@ func (k duplicateIndexKey) publicKeyForTemplate(name string, template Template) 
 	}
 }
 
-func (k duplicateIndexKey) publicKeyCapacity(name string, template Template) int {
+func (k duplicateIndexKey) publicKeyCapacity(name string, template compiledTemplate) int {
 	size := len("name:") + len(name) + len("|template:") + len(k.templateKey) + len("|fields:")
 	switch k.kind {
 	case duplicateIndexSingleInt:
@@ -1886,9 +1878,9 @@ func (f *workingFact) templateKeyForRevision(revision *Ruleset) TemplateKey {
 	return ""
 }
 
-func (f *workingFact) templateForRevision(revision *Ruleset) (Template, bool) {
+func (f *workingFact) templateForRevision(revision *Ruleset) (compiledTemplate, bool) {
 	if f == nil || revision == nil {
-		return Template{}, false
+		return compiledTemplate{}, false
 	}
 	if f.templateID != 0 {
 		return revision.templateByID(f.templateID)
@@ -1896,14 +1888,14 @@ func (f *workingFact) templateForRevision(revision *Ruleset) (Template, bool) {
 	if key := f.storedTemplateKey(); key != "" {
 		return revision.templateByKey(key)
 	}
-	return Template{}, false
+	return compiledTemplate{}, false
 }
 
 // templateRefForRevision resolves the compiled template without copying it;
 // the returned pointer aliases immutable post-compile state. It only serves
 // facts carrying a template ID, which every validated template fact does;
 // key-only facts must use templateForRevision.
-func (f *workingFact) templateRefForRevision(revision *Ruleset) (*Template, bool) {
+func (f *workingFact) templateRefForRevision(revision *Ruleset) (*compiledTemplate, bool) {
 	if f == nil || revision == nil || f.templateID == 0 {
 		return nil, false
 	}
@@ -1928,7 +1920,7 @@ func (f *workingFact) duplicateIndexForRevision(revision *Ruleset, compactSlotSt
 	if f == nil {
 		return duplicateIndexKey{}
 	}
-	template := Template{key: f.templateKeyForRevision(revision)}
+	template := compiledTemplate{key: f.templateKeyForRevision(revision)}
 	if revision != nil {
 		if resolved, ok := f.templateForRevision(revision); ok {
 			template = resolved
@@ -1945,7 +1937,7 @@ func (f *workingFact) publicDuplicateKey(revision *Ruleset, compactSlotStore *fa
 	if f == nil || duplicateIndex.isZero() {
 		return ""
 	}
-	template := Template{key: f.templateKeyForRevision(revision)}
+	template := compiledTemplate{key: f.templateKeyForRevision(revision)}
 	name := f.nameForRevision(revision)
 	if revision != nil {
 		if resolved, ok := f.templateForRevision(revision); ok {
@@ -2065,10 +2057,10 @@ func emitOrderedPresenceString(b *strings.Builder, presence map[string]FieldPres
 }
 
 func makeDuplicateKey(name string, templateKey TemplateKey, fields Fields) DuplicateKey {
-	return makeDuplicateKeyForTemplate(name, Template{key: templateKey}, fields)
+	return makeDuplicateKeyForTemplate(name, compiledTemplate{key: templateKey}, fields)
 }
 
-func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) DuplicateKey {
+func makeDuplicateKeyForTemplate(name string, template compiledTemplate, fields Fields) DuplicateKey {
 	var b strings.Builder
 	b.WriteString("name:")
 	b.WriteString(name)
@@ -2079,17 +2071,17 @@ func makeDuplicateKeyForTemplate(name string, template Template, fields Fields) 
 	return DuplicateKey(b.String())
 }
 
-func makeDuplicateKeyForValidatedFact(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+func makeDuplicateKeyForValidatedFact(name string, template compiledTemplate, fields Fields, slots []factSlot) DuplicateKey {
 	_, duplicateKey := makeDuplicateIdentityForValidatedFact(name, template, fields, slots)
 	return duplicateKey
 }
 
-func makeDuplicateIdentityForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, DuplicateKey) {
+func makeDuplicateIdentityForValidatedFact(name string, template compiledTemplate, fields Fields, slots []factSlot) (duplicateIndexKey, DuplicateKey) {
 	index := makeDuplicateIndexForValidatedFact(name, template, fields, slots)
 	return index, index.publicKeyForTemplate(name, template)
 }
 
-func makeDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) duplicateIndexKey {
+func makeDuplicateIndexForValidatedFact(name string, template compiledTemplate, fields Fields, slots []factSlot) duplicateIndexKey {
 	if template.duplicatePolicy == DuplicateAllow {
 		return duplicateIndexKey{}
 	}
@@ -2119,7 +2111,7 @@ func makeDuplicateIndexForValidatedFact(name string, template Template, fields F
 	}
 }
 
-func makeStructuralDuplicateIndexForValidatedFact(template Template, slots []factSlot) (duplicateIndexKey, bool) {
+func makeStructuralDuplicateIndexForValidatedFact(template compiledTemplate, slots []factSlot) (duplicateIndexKey, bool) {
 	if template.duplicatePolicy != DuplicateStructural || !template.closed || len(slots) == 0 || len(template.fields) == 0 {
 		return duplicateIndexKey{}, false
 	}
@@ -2134,7 +2126,7 @@ func makeStructuralDuplicateIndexForValidatedFact(template Template, slots []fac
 	}, true
 }
 
-func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields Fields, slots []factSlot) DuplicateKey {
+func makeDuplicateKeyForTemplateWithSlots(name string, template compiledTemplate, fields Fields, slots []factSlot) DuplicateKey {
 	var b strings.Builder
 	if len(slots) > 0 {
 		b.Grow(duplicateKeyCapacity(name, template, fields, slots))
@@ -2148,7 +2140,7 @@ func makeDuplicateKeyForTemplateWithSlots(name string, template Template, fields
 	return DuplicateKey(b.String())
 }
 
-func makeTypedDuplicateIndexForValidatedFact(name string, template Template, fields Fields, slots []factSlot) (duplicateIndexKey, bool) {
+func makeTypedDuplicateIndexForValidatedFact(name string, template compiledTemplate, fields Fields, slots []factSlot) (duplicateIndexKey, bool) {
 	switch template.duplicateIndexMode {
 	case duplicateIndexSingleScalar:
 		fieldName := template.duplicateKeyNames[0]
@@ -2295,13 +2287,13 @@ const (
 	structuralDuplicateHashPrime  = uint64(1099511628211)
 )
 
-func structuralDuplicateSlotsHash(template Template, slots []factSlot) (uint64, bool) {
+func structuralDuplicateSlotsHash(template compiledTemplate, slots []factSlot) (uint64, bool) {
 	hash := structuralDuplicateHashOffset
 	hash = structuralDuplicateHashString(hash, template.key.String())
 	return structuralDuplicateSlotsHashWithPrefix(template, slots, hash)
 }
 
-func structuralDuplicateSlotsHashWithPrefix(template Template, slots []factSlot, hash uint64) (uint64, bool) {
+func structuralDuplicateSlotsHashWithPrefix(template compiledTemplate, slots []factSlot, hash uint64) (uint64, bool) {
 	for i := range template.fields {
 		if i >= len(slots) {
 			break
@@ -2320,7 +2312,7 @@ func structuralDuplicateSlotsHashWithPrefix(template Template, slots []factSlot,
 	return hash, true
 }
 
-func structuralDuplicateSlotsEqual(template Template, left, right []factSlot) bool {
+func structuralDuplicateSlotsEqual(template compiledTemplate, left, right []factSlot) bool {
 	for i := range template.fields {
 		var leftSlot, rightSlot factSlot
 		if i < len(left) {
@@ -2348,14 +2340,14 @@ func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool)
 	case ValueNull:
 		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
 	case ValueBool:
-		if value.boolValue {
+		if valueBool(value) {
 			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
 	case ValueInt:
-		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(valueInt64(value)), ""), true
 	case ValueFloat:
-		floating := value.floatValue
+		floating := valueFloat64(value)
 		if math.IsNaN(floating) {
 			return 0, false
 		}
@@ -2366,10 +2358,10 @@ func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool)
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
 	case ValueString:
-		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, valueString(value)), true
 	case ValueList:
 		hash = structuralDuplicateHashByte(hash, 6)
-		values, ok := value.data.([]Value)
+		values, ok := value.AsListShared()
 		if !ok {
 			return 0, false
 		}
@@ -2390,28 +2382,28 @@ func structuralDuplicateHashScalarValue(hash uint64, value Value) (uint64, bool)
 func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value Value) (uint64, bool) {
 	switch kind {
 	case ValueNull:
-		if value.kind != valueKindUnknown && value.kind != ValueNull {
+		if value.Kind() != ValueNull {
 			return 0, false
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarNull, 0, ""), true
 	case ValueBool:
-		if value.kind != ValueBool {
+		if value.Kind() != ValueBool {
 			return 0, false
 		}
-		if value.boolValue {
+		if valueBool(value) {
 			return structuralDuplicateHashScalar(hash, duplicateScalarBool, 1, ""), true
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarBool, 0, ""), true
 	case ValueInt:
-		if value.kind != ValueInt {
+		if value.Kind() != ValueInt {
 			return 0, false
 		}
-		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(value.intValue), ""), true
+		return structuralDuplicateHashScalar(hash, duplicateScalarInt, uint64(valueInt64(value)), ""), true
 	case ValueFloat:
-		if value.kind != ValueFloat {
+		if value.Kind() != ValueFloat {
 			return 0, false
 		}
-		floating := value.floatValue
+		floating := valueFloat64(value)
 		if math.IsNaN(floating) {
 			return 0, false
 		}
@@ -2422,10 +2414,10 @@ func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value 
 		}
 		return structuralDuplicateHashScalar(hash, duplicateScalarFloat, math.Float64bits(floating), ""), true
 	case ValueString:
-		if value.kind != ValueString {
+		if value.Kind() != ValueString {
 			return 0, false
 		}
-		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, value.stringValue), true
+		return structuralDuplicateHashScalar(hash, duplicateScalarString, 0, valueString(value)), true
 	default:
 		return 0, false
 	}
@@ -2434,29 +2426,29 @@ func structuralDuplicateHashKnownScalarValue(hash uint64, kind ValueKind, value 
 func structuralDuplicateScalarValuesEqual(kind ValueKind, left, right Value) (bool, bool) {
 	switch kind {
 	case ValueNull:
-		leftNull := left.kind == valueKindUnknown || left.kind == ValueNull
-		rightNull := right.kind == valueKindUnknown || right.kind == ValueNull
+		leftNull := left.Kind() == ValueNull
+		rightNull := right.Kind() == ValueNull
 		return leftNull && rightNull, true
 	case ValueBool:
-		if left.kind != ValueBool || right.kind != ValueBool {
+		if left.Kind() != ValueBool || right.Kind() != ValueBool {
 			return false, false
 		}
-		return left.boolValue == right.boolValue, true
+		return valueBool(left) == valueBool(right), true
 	case ValueInt:
-		if left.kind != ValueInt || right.kind != ValueInt {
+		if left.Kind() != ValueInt || right.Kind() != ValueInt {
 			return false, false
 		}
-		return left.intValue == right.intValue, true
+		return valueInt64(left) == valueInt64(right), true
 	case ValueFloat:
-		if left.kind != ValueFloat || right.kind != ValueFloat {
+		if left.Kind() != ValueFloat || right.Kind() != ValueFloat {
 			return false, false
 		}
-		return left.floatValue == right.floatValue, true
+		return valueFloat64(left) == valueFloat64(right), true
 	case ValueString:
-		if left.kind != ValueString || right.kind != ValueString {
+		if left.Kind() != ValueString || right.Kind() != ValueString {
 			return false, false
 		}
-		return left.stringValue == right.stringValue, true
+		return valueString(left) == valueString(right), true
 	default:
 		return false, false
 	}
@@ -2496,7 +2488,7 @@ func structuralDuplicateHashByte(hash uint64, value byte) uint64 {
 	return hash
 }
 
-func duplicateFields(values Fields, template Template) Fields {
+func duplicateFields(values Fields, template compiledTemplate) Fields {
 	if template.duplicatePolicy == DuplicateAllow {
 		return nil
 	}
@@ -2513,7 +2505,7 @@ func duplicateFields(values Fields, template Template) Fields {
 	return out
 }
 
-func workingFactStructuralDuplicateSlotsEqual(template Template, slots []factSlot, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+func workingFactStructuralDuplicateSlotsEqual(template compiledTemplate, slots []factSlot, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
 	if fact == nil {
 		return false
 	}
@@ -2755,7 +2747,7 @@ func cloneCompactFactSlots(in []compactFactSlot) []compactFactSlot {
 	return out
 }
 
-func emitDuplicateKeyFields(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+func emitDuplicateKeyFields(b *strings.Builder, template compiledTemplate, fields Fields, slots []factSlot) {
 	if template.duplicatePolicy == DuplicateAllow {
 		return
 	}
@@ -2773,10 +2765,10 @@ func emitDuplicateKeyFields(b *strings.Builder, template Template, fields Fields
 	if fields == nil {
 		return
 	}
-	b.WriteString(fields.duplicateKey())
+	b.WriteString(fields.DuplicateKey())
 }
 
-func emitDuplicateKeyFieldsByNames(b *strings.Builder, template Template, fields Fields, slots []factSlot) {
+func emitDuplicateKeyFieldsByNames(b *strings.Builder, template compiledTemplate, fields Fields, slots []factSlot) {
 	if len(template.duplicateKeyNames) == 0 {
 		return
 	}
@@ -2814,7 +2806,7 @@ func emitDuplicateKeyFieldsByTemplateOrder(b *strings.Builder, specs []FieldSpec
 	}
 }
 
-func duplicateFieldValue(fieldName string, template Template, fields Fields, slots []factSlot) (Value, bool) {
+func duplicateFieldValue(fieldName string, template compiledTemplate, fields Fields, slots []factSlot) (Value, bool) {
 	if len(slots) > 0 {
 		if slot, ok := template.fieldSlot(fieldName); ok && slot >= 0 && slot < len(slots) {
 			resolved := slots[slot]
@@ -2835,7 +2827,7 @@ func writeDuplicateKeyEntry(b *strings.Builder, fieldName string, value Value) {
 	b.WriteByte(';')
 }
 
-func duplicateKeyCapacity(name string, template Template, fields Fields, slots []factSlot) int {
+func duplicateKeyCapacity(name string, template compiledTemplate, fields Fields, slots []factSlot) int {
 	size := len("name:") + len(name) + len("|template:") + len(template.key) + len("|fields:")
 	if template.duplicatePolicy == DuplicateAllow {
 		return size

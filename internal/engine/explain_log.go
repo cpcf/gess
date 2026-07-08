@@ -339,7 +339,7 @@ func (e explainLogEntry) firing(revision *Ruleset) *Firing {
 // RHS-bound values into the explain log at firing time. It runs only when a log
 // is attached and is a read of already-computed state: it does not change
 // firing semantics, ordering, or refraction.
-func (s *Session) captureFiringBindings(rule compiledRule, activation activation, actionCtx *ActionContext) {
+func (s *Session) captureFiringBindings(rule compiledRule, activation activation, actionCtx *actionContext) {
 	if s.explainLog == nil {
 		return
 	}

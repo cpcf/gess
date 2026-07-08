@@ -212,7 +212,15 @@ func Parse(name string, source []byte) (*Document, error) {
 // populates doc's [InitialFacts]. Loading fails if the document references
 // an action, call, or function name registry doesn't provide.
 func Load(ctx context.Context, workspace *rules.Workspace, doc *Document, registry Registry) error {
-	return wrapError(engine.LoadGess(ctx, workspace, doc.engineDocument(), registry.engineRegistry()))
+	var engineWorkspace *engine.Workspace
+	if workspace != nil {
+		var err error
+		engineWorkspace, err = engine.WorkspaceFromPublic(workspace)
+		if err != nil {
+			return wrapError(err)
+		}
+	}
+	return wrapError(engine.LoadGess(ctx, engineWorkspace, doc.engineDocument(), registry.engineRegistry()))
 }
 
 // Compile parses and loads .gess source into a new workspace and compiles
@@ -225,7 +233,7 @@ func Compile(ctx context.Context, name string, source []byte, registry Registry)
 	if err != nil {
 		return nil, wrapError(err)
 	}
-	return ruleset, nil
+	return engine.PublicRuleset(ruleset), nil
 }
 
 // GenerateGo emits Go source that builds the same workspace as the given
@@ -244,35 +252,66 @@ func GenerateGo(ctx context.Context, sources []SourceFile, opts GoGeneratorOptio
 // RenderRuleset renders every module, template, function, rule, and query
 // in a compiled ruleset back to canonical .gess source.
 func RenderRuleset(revision *rules.Ruleset) ([]byte, error) {
-	return engine.RenderGessRuleset(revision)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessRuleset(engineRevision)
 }
 
 // RenderModule renders one module of a compiled ruleset, and everything
 // defined in it, back to canonical .gess source.
 func RenderModule(revision *rules.Ruleset, name rules.ModuleName) ([]byte, error) {
-	return engine.RenderGessModule(revision, name)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessModule(engineRevision, name)
 }
 
 // RenderTemplate renders one template definition back to canonical .gess
 // source.
 func RenderTemplate(revision *rules.Ruleset, name string) ([]byte, error) {
-	return engine.RenderGessTemplate(revision, name)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessTemplate(engineRevision, name)
 }
 
 // RenderRule renders one rule definition back to canonical .gess source.
 func RenderRule(revision *rules.Ruleset, name string) ([]byte, error) {
-	return engine.RenderGessRule(revision, name)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessRule(engineRevision, name)
 }
 
 // RenderQuery renders one query definition back to canonical .gess source.
 func RenderQuery(revision *rules.Ruleset, name string) ([]byte, error) {
-	return engine.RenderGessQuery(revision, name)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessQuery(engineRevision, name)
 }
 
 // RenderFunction renders one deffunction definition back to canonical
 // .gess source.
 func RenderFunction(revision *rules.Ruleset, name string) ([]byte, error) {
-	return engine.RenderGessFunction(revision, name)
+	engineRevision, err := engineRuleset(revision)
+	if err != nil {
+		return nil, err
+	}
+	return engine.RenderGessFunction(engineRevision, name)
+}
+
+func engineRuleset(revision *rules.Ruleset) (*engine.Ruleset, error) {
+	if revision == nil {
+		return nil, nil
+	}
+	return engine.RulesetFromPublic(revision)
 }
 
 // InitialFacts returns the deffacts-declared seed facts from doc for use

@@ -516,7 +516,7 @@ func (r gessRenderer) renderPredicateSlot(spec ExpressionSpec, currentBinding st
 func currentFieldName(spec ExpressionSpec) (string, bool) {
 	switch expr := spec.(type) {
 	case CurrentFieldExpr:
-		if !expr.Path.isZero() && !expr.Path.topLevel() {
+		if !pathIsZero(expr.Path) && !pathTopLevel(expr.Path) {
 			return "", false
 		}
 		field, ok := renderTopLevelField(expr.Field, expr.Path)
@@ -581,7 +581,7 @@ func conditionSpecToTree(spec ConditionSpec) (RuleConditionTree, error) {
 			}
 			children = append(children, tree)
 		}
-		return RuleConditionTree{kind: ConditionTreeKindAnd, children: children}, nil
+		return RuleConditionTree{KindValue: ConditionTreeKindAnd, ChildrenValue: children}, nil
 	case *And:
 		if condition == nil {
 			return RuleConditionTree{}, fmt.Errorf("%w: nil aggregate input", ErrInvalidRuleset)
@@ -601,46 +601,46 @@ func conditionSpecToTree(spec ConditionSpec) (RuleConditionTree, error) {
 
 func matchSpecToTree(spec RuleConditionSpec) (RuleConditionTree, error) {
 	compiled := RuleCondition{
-		binding: spec.Binding,
-		source:  spec.Source,
+		BindingName: spec.Binding,
+		SourceSpan:  spec.Source,
 	}
-	target := spec.Target.normalized()
+	target := spec.Target.Normalized()
 	switch target.Kind() {
 	case FactTargetDynamic:
-		compiled.name = target.Ref().Name
+		compiled.NameValue = target.Ref().Name
 	case FactTargetTemplate:
-		compiled.name = target.Ref().Name
+		compiled.NameValue = target.Ref().Name
 	case FactTargetTemplateKey:
-		compiled.templateKey = target.TemplateKey()
+		compiled.TemplateKeyValue = target.TemplateKey()
 	}
 	for _, constraint := range spec.FieldConstraints {
 		value, err := NewValue(constraint.Value)
 		if err != nil {
 			return RuleConditionTree{}, err
 		}
-		compiled.fieldConstraints = append(compiled.fieldConstraints, FieldConstraint{
+		compiled.FieldConstraintValues = append(compiled.FieldConstraintValues, FieldConstraint{
 			Field:    constraint.Field,
-			Path:     constraint.Path.clone(),
+			Path:     clonePathSpec(constraint.Path),
 			Operator: constraint.Operator,
 			Value:    value,
 		})
 	}
 	for _, join := range spec.JoinConstraints {
-		compiled.joinConstraints = append(compiled.joinConstraints, JoinConstraint{
+		compiled.JoinConstraintValues = append(compiled.JoinConstraintValues, JoinConstraint{
 			Field:    join.Field,
-			Path:     join.Path.clone(),
+			Path:     clonePathSpec(join.Path),
 			Operator: join.Operator,
-			Ref:      join.Ref.clone(),
+			Ref:      cloneFieldRef(join.Ref),
 		})
 	}
 	for i, predicate := range spec.Predicates {
-		compiled.predicates = append(compiled.predicates, ExpressionPredicate{
-			expression: cloneExpressionSpec(predicate),
-			order:      i,
-			source:     spec.Source,
+		compiled.PredicateValues = append(compiled.PredicateValues, ExpressionPredicate{
+			ExpressionSpec: cloneExpressionSpec(predicate),
+			Order:          i,
+			SourceSpan:     spec.Source,
 		})
 	}
-	return RuleConditionTree{kind: ConditionTreeKindMatch, match: compiled, hasMatch: true}, nil
+	return RuleConditionTree{KindValue: ConditionTreeKindMatch, MatchCondition: compiled, HasMatch: true}, nil
 }
 
 func (r gessRenderer) renderRuleAction(action RuleAction) (string, error) {
@@ -793,13 +793,13 @@ func renderProjection(binding, field string, path PathSpec) (string, error) {
 }
 
 func renderTopLevelField(field string, path PathSpec) (string, bool) {
-	if path.isZero() {
+	if pathIsZero(path) {
 		return field, strings.TrimSpace(field) != ""
 	}
-	if !path.topLevel() {
+	if !pathTopLevel(path) {
 		return "", false
 	}
-	return path.root(), true
+	return pathRoot(path), true
 }
 
 func joinTail(items []string) string {

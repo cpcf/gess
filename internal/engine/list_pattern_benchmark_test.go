@@ -7,6 +7,7 @@ import (
 )
 
 var benchmarkListPatternFired int
+var benchmarkListPatternMatchCaptures []listPatternCapture
 
 type listPatternBenchmarkShape string
 
@@ -45,6 +46,55 @@ func BenchmarkGessListPatternScaling(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			benchmarkListPatternSeedRun(b, tc)
 		})
+	}
+}
+
+func BenchmarkListPatternMatch(b *testing.B) {
+	listValue, err := NewValue([]any{"vip", "active"})
+	if err != nil {
+		b.Fatalf("NewValue: %v", err)
+	}
+	fact := conditionFactRef{
+		fields: Fields{"tags": listValue},
+	}
+	pattern := compiledListPattern{
+		path: compiledPathAccess{
+			path:     Path("tags"),
+			root:     "tags",
+			rootSlot: -1,
+		},
+		elements: []compiledListPatternElement{
+			{kind: ListPatternElementWildcard},
+			{kind: ListPatternElementWildcard},
+		},
+	}
+	var bindings tokenRef
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		captures, ok, err := pattern.matchesFact(fact, bindings)
+		if err != nil {
+			b.Fatalf("matchesFact: %v", err)
+		}
+		if !ok {
+			b.Fatal("matchesFact did not match")
+		}
+		benchmarkListPatternMatchCaptures = captures
+	})
+	if allocs != 0 {
+		b.Fatalf("matchesFact allocs/op = %v, want 0", allocs)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		captures, ok, err := pattern.matchesFact(fact, bindings)
+		if err != nil {
+			b.Fatalf("matchesFact: %v", err)
+		}
+		if !ok {
+			b.Fatal("matchesFact did not match")
+		}
+		benchmarkListPatternMatchCaptures = captures
 	}
 }
 

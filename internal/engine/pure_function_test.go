@@ -595,9 +595,9 @@ func TestPureFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 		if !ok {
 			t.Fatal("missing doubled value")
 		}
-		values[value.canonicalKey()] = true
+		values[value.CanonicalKey()] = true
 	}
-	if !values[mustValue(t, 4).canonicalKey()] || !values[mustValue(t, 6).canonicalKey()] {
+	if !values[mustValue(t, 4).CanonicalKey()] || !values[mustValue(t, 6).CanonicalKey()] {
 		t.Fatalf("query doubled values = %#v, want 4 and 6", values)
 	}
 }
@@ -756,9 +756,9 @@ func TestExpressionFunctionCallsInQueryReturnsAndAggregates(t *testing.T) {
 		if !ok {
 			t.Fatal("missing amount value")
 		}
-		values[value.canonicalKey()] = true
+		values[value.CanonicalKey()] = true
 	}
-	if !values[mustValue(t, 2).canonicalKey()] || !values[mustValue(t, 3).canonicalKey()] {
+	if !values[mustValue(t, 2).CanonicalKey()] || !values[mustValue(t, 3).CanonicalKey()] {
 		t.Fatalf("query amount values = %#v, want 2 and 3", values)
 	}
 }

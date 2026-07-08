@@ -137,7 +137,7 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			revision := mustCompile(t, tc.spec)
-			template, ok := revision.Template(tc.spec.Name)
+			template, ok := revision.compiledTemplate(tc.spec.Name)
 			if !ok {
 				t.Fatalf("expected template %q", tc.spec.Name)
 			}
@@ -187,7 +187,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 			{Name: "score", Kind: ValueFloat, Required: true},
 		},
 	})
-	template, ok := revision.Template("reading")
+	template, ok := revision.compiledTemplate("reading")
 	if !ok {
 		t.Fatal("expected reading template")
 	}
@@ -283,7 +283,7 @@ func TestDuplicateStringStringIntIndexTableUsesWorkspaceCollisionCheck(t *testin
 			{Name: "ordinal", Kind: ValueInt, Required: true},
 		},
 	})
-	template, ok := revision.Template("response")
+	template, ok := revision.compiledTemplate("response")
 	if !ok {
 		t.Fatal("expected response template")
 	}
@@ -340,7 +340,7 @@ func TestCompiledGeneratedFactInsertPlanUsesStructuralScalarDuplicatePath(t *tes
 			{Name: "value", Kind: ValueString},
 		},
 	})
-	template, ok := revision.Template("answer")
+	template, ok := revision.compiledTemplate("answer")
 	if !ok {
 		t.Fatal("expected answer template")
 	}
@@ -398,7 +398,7 @@ func TestCompiledGeneratedFactInsertPlanKeepsGenericStructuralPathForLists(t *te
 			{Name: "items", Kind: ValueList},
 		},
 	})
-	template, ok := revision.Template("answer")
+	template, ok := revision.compiledTemplate("answer")
 	if !ok {
 		t.Fatal("expected answer template")
 	}
@@ -419,7 +419,7 @@ func TestDuplicateIndexTypedPathPreservesPublicDuplicateResultsAndEvents(t *test
 			{Name: "lane", Kind: ValueString, Required: true},
 		},
 	})
-	template, ok := revision.Template("route")
+	template, ok := revision.compiledTemplate("route")
 	if !ok {
 		t.Fatal("expected route template")
 	}

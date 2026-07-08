@@ -430,11 +430,15 @@ func mustCompileLargeSteadyStateScalingRuleset(t testing.TB, tc largeSteadyState
 				if err != nil {
 					return err
 				}
-				bandValue, ok := ctx.bindingScalarValueAtSlot(0, scoreBandSlot)
+				internalCtx, ok := unwrapActionContext(ctx)
+				if !ok {
+					return fmt.Errorf("missing engine action context")
+				}
+				bandValue, ok := internalCtx.bindingScalarValueAtSlot(0, scoreBandSlot)
 				if !ok || bandValue.Kind() != ValueString {
 					return fmt.Errorf("missing score band on binding slot 0")
 				}
-				return ctx.AssertTemplateValues(review.Key(), steadyStateIntValue(n), steadyStateStringValue(largeSteadyStateReviewReason(n, bandValue.stringValue)), streamValue)
+				return ctx.AssertTemplateValues(review.Key(), steadyStateIntValue(n), steadyStateStringValue(largeSteadyStateReviewReason(n, valueString(bandValue))), streamValue)
 			},
 		})
 		mustAddRule(t, workspace, RuleSpec{
@@ -625,7 +629,7 @@ func largeSteadyStateTemplate(name string, fields []FieldSpec, duplicateKeys []s
 	}
 }
 
-func mustLargeSteadyStateSlot(t testing.TB, template Template, field string) int {
+func mustLargeSteadyStateSlot(t testing.TB, template compiledTemplate, field string) int {
 	t.Helper()
 	slot, ok := template.fieldSlot(field)
 	if !ok {

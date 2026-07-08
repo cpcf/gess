@@ -740,8 +740,8 @@ func hashGraphTokenIdentityBucketKey(key graphTokenIdentityKey) uint64 {
 
 func hashFactTokenBucketKey(key FactID) uint64 {
 	hash := uint64(0x9e3779b97f4a7c15)
-	hash = graphTokenBucketMixAdd(hash, uint64(key.generation))
-	hash = graphTokenBucketMixAdd(hash, key.sequence)
+	hash = graphTokenBucketMixAdd(hash, uint64(key.Generation()))
+	hash = graphTokenBucketMixAdd(hash, key.Sequence())
 	return hash
 }
 

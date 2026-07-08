@@ -1,137 +1,30 @@
 package engine
 
 import (
-	"context"
 	"fmt"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-// PureFunction is a deterministic, side-effect-free function implementation
-// available to condition and query expressions.
-type PureFunction func(context.Context, []Value) (Value, error)
-type PureFunction0 func(context.Context) (Value, error)
-type PureFunction1 func(context.Context, Value) (Value, error)
-type PureFunction2 func(context.Context, Value, Value) (Value, error)
-type PureFunction3 func(context.Context, Value, Value, Value) (Value, error)
+type PureFunction = gessrules.PureFunction
+type PureFunction0 = gessrules.PureFunction0
+type PureFunction1 = gessrules.PureFunction1
+type PureFunction2 = gessrules.PureFunction2
+type PureFunction3 = gessrules.PureFunction3
+type PureFunctionSpec = gessrules.PureFunctionSpec
+type ExpressionFunctionParamSpec = gessrules.ExpressionFunctionParamSpec
+type ExpressionFunctionSpec = gessrules.ExpressionFunctionSpec
 
-type PureFunctionSpec struct {
-	Name               string
-	Args               []ValueKind
-	Return             ValueKind
-	Func               PureFunction
-	Func0              PureFunction0
-	Func1              PureFunction1
-	Func2              PureFunction2
-	Func3              PureFunction3
-	EqualityComparator bool
-	IndexKeyExtractor  bool
+func clonePureFunctionSpec(s PureFunctionSpec) PureFunctionSpec {
+	return gessrules.ClonePureFunctionSpec(s)
 }
 
-type ExpressionFunctionParamSpec struct {
-	Name string
-	Kind ValueKind
+func cloneExpressionFunctionSpec(s ExpressionFunctionSpec) ExpressionFunctionSpec {
+	return gessrules.CloneExpressionFunctionSpec(s)
 }
 
-type ExpressionFunctionSpec struct {
-	Name        string
-	Params      []ExpressionFunctionParamSpec
-	Return      ValueKind
-	Expression  ExpressionSpec
-	Description string
-	Source      SourceSpan
-}
-
-func (s PureFunctionSpec) clone() PureFunctionSpec {
-	out := s
-	out.Name = strings.TrimSpace(out.Name)
-	if out.Return == valueKindUnknown {
-		out.Return = ValueAny
-	}
-	out.Args = append([]ValueKind(nil), s.Args...)
-	for i, kind := range out.Args {
-		if kind == valueKindUnknown {
-			out.Args[i] = ValueAny
-		}
-	}
-	return out
-}
-
-func (s ExpressionFunctionSpec) clone() ExpressionFunctionSpec {
-	out := s
-	out.Name = strings.TrimSpace(out.Name)
-	out.Description = strings.TrimSpace(out.Description)
-	if out.Return == valueKindUnknown {
-		out.Return = ValueAny
-	}
-	out.Params = make([]ExpressionFunctionParamSpec, len(s.Params))
-	for i, param := range s.Params {
-		out.Params[i] = ExpressionFunctionParamSpec{
-			Name: strings.TrimSpace(param.Name),
-			Kind: param.Kind,
-		}
-		if out.Params[i].Kind == valueKindUnknown {
-			out.Params[i].Kind = ValueAny
-		}
-	}
-	out.Expression = cloneExpressionSpec(s.Expression)
-	return out
-}
-
-type PureFunctionDefinition struct {
-	name               string
-	paramNames         []string
-	args               []ValueKind
-	ret                ValueKind
-	description        string
-	expression         ExpressionSpec
-	expressionBacked   bool
-	order              int
-	equalityComparator bool
-	indexKeyExtractor  bool
-}
-
-func (f PureFunctionDefinition) Name() string {
-	return f.name
-}
-
-func (f PureFunctionDefinition) Args() []ValueKind {
-	return append([]ValueKind(nil), f.args...)
-}
-
-func (f PureFunctionDefinition) ParamNames() []string {
-	return append([]string(nil), f.paramNames...)
-}
-
-func (f PureFunctionDefinition) Return() ValueKind {
-	return f.ret
-}
-
-func (f PureFunctionDefinition) Description() string {
-	return f.description
-}
-
-func (f PureFunctionDefinition) Expression() (ExpressionSpec, bool) {
-	if !f.expressionBacked {
-		return nil, false
-	}
-	return cloneExpressionSpec(f.expression), true
-}
-
-func (f PureFunctionDefinition) ExpressionBacked() bool {
-	return f.expressionBacked
-}
-
-func (f PureFunctionDefinition) DeclarationOrder() int {
-	return f.order
-}
-
-func (f PureFunctionDefinition) EqualityComparator() bool {
-	return f.equalityComparator
-}
-
-func (f PureFunctionDefinition) IndexKeyExtractor() bool {
-	return f.indexKeyExtractor
-}
+type PureFunctionDefinition = gessrules.PureFunctionDefinition
 
 type compiledPureFunction struct {
 	name               string
@@ -153,7 +46,7 @@ type compiledPureFunction struct {
 }
 
 func compilePureFunctionSpec(spec PureFunctionSpec, order int) (compiledPureFunction, error) {
-	normalized := spec.clone()
+	normalized := clonePureFunctionSpec(spec)
 	if normalized.Name == "" {
 		return compiledPureFunction{}, &ValidationError{
 			Reason: "function name is required",
@@ -280,7 +173,7 @@ func (f compiledPureFunction) hasImplementation() bool {
 }
 
 func compileExpressionFunctionSpec(spec ExpressionFunctionSpec, order int, functions map[string]compiledPureFunction) (compiledPureFunction, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionFunctionSpec(spec)
 	if normalized.Name == "" {
 		return compiledPureFunction{}, &ValidationError{
 			Reason: "function name is required",
@@ -450,65 +343,17 @@ func validPureFunctionIndexKeyKind(kind ValueKind) bool {
 
 func (f compiledPureFunction) inspect() PureFunctionDefinition {
 	return PureFunctionDefinition{
-		name:               f.name,
-		paramNames:         append([]string(nil), f.paramNames...),
-		args:               append([]ValueKind(nil), f.args...),
-		ret:                f.ret,
-		description:        f.description,
-		expression:         cloneExpressionSpec(f.expressionSpec),
-		expressionBacked:   f.expressionBacked,
-		order:              f.order,
-		equalityComparator: f.equalityComparator,
-		indexKeyExtractor:  f.indexKeyExtractor,
+		NameValue:               f.name,
+		ParamNamesValue:         append([]string(nil), f.paramNames...),
+		ArgsValue:               append([]ValueKind(nil), f.args...),
+		ReturnKind:              f.ret,
+		DescriptionText:         f.description,
+		ExpressionSpec:          cloneExpressionSpec(f.expressionSpec),
+		ExpressionBackedValue:   f.expressionBacked,
+		Order:                   f.order,
+		EqualityComparatorValue: f.equalityComparator,
+		IndexKeyExtractorValue:  f.indexKeyExtractor,
 	}
 }
 
-type FunctionEvaluationError struct {
-	RuleName       string
-	QueryName      string
-	ConditionIndex int
-	PredicateIndex int
-	FunctionName   string
-	Source         SourceSpan
-	Err            error
-}
-
-func (e *FunctionEvaluationError) Error() string {
-	if e == nil {
-		return ErrFunctionEvaluation.Error()
-	}
-	msg := "gess: function evaluation failed"
-	if location := sourceSpanLocation(e.Source); location != "" {
-		msg += " at " + location
-	}
-	if e.RuleName != "" {
-		msg += fmt.Sprintf(" for rule %q", e.RuleName)
-	}
-	if e.QueryName != "" {
-		msg += fmt.Sprintf(" for query %q", e.QueryName)
-	}
-	if e.ConditionIndex >= 0 {
-		msg += fmt.Sprintf(" condition %d", e.ConditionIndex)
-	}
-	if e.PredicateIndex >= 0 {
-		msg += fmt.Sprintf(" predicate %d", e.PredicateIndex)
-	}
-	if e.FunctionName != "" {
-		msg += fmt.Sprintf(" function %q", e.FunctionName)
-	}
-	if e.Err != nil {
-		msg += ": " + e.Err.Error()
-	}
-	return msg
-}
-
-func (e *FunctionEvaluationError) Unwrap() error {
-	if e != nil && e.Err != nil {
-		return e.Err
-	}
-	return ErrFunctionEvaluation
-}
-
-func (e *FunctionEvaluationError) Is(target error) bool {
-	return target == ErrFunctionEvaluation
-}
+type FunctionEvaluationError = gessrules.FunctionEvaluationError

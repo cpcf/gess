@@ -23,7 +23,7 @@ import (
 //     Rete terminal-token deltas without session setup dominating the result.
 var (
 	benchmarkSnapshot          Snapshot
-	benchmarkActionContext     ActionContext
+	benchmarkActionContext     actionContext
 	benchmarkDuplicateKey      DuplicateKey
 	benchmarkTemplateFields    Fields
 	benchmarkTemplatePresence  map[string]FieldPresence
@@ -34,6 +34,7 @@ var (
 	benchmarkModifyResult      ModifyResult
 	benchmarkRetractResult     RetractResult
 	benchmarkRunResult         RunResult
+	benchmarkActionFired       int
 )
 
 func BenchmarkSnapshotConstructionLoanPublic(b *testing.B) {
@@ -122,6 +123,29 @@ func BenchmarkActionContextCreationClaims(b *testing.B) {
 	}
 }
 
+func BenchmarkActionContextFunctionFiring(b *testing.B) {
+	session, activation := mustActionContextFunctionFiringActivation(b)
+	ctx := context.Background()
+
+	const maxActionContextFunctionFiringAllocs = 11
+	allocs := testing.AllocsPerRun(1000, func() {
+		if err := session.executeActivationActionsInternal(ctx, RunID(1), activation, true); err != nil {
+			b.Fatalf("executeActivationActionsInternal: %v", err)
+		}
+	})
+	if allocs > maxActionContextFunctionFiringAllocs {
+		b.Fatalf("function action firing allocs/op = %v, want <= %d", allocs, maxActionContextFunctionFiringAllocs)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if err := session.executeActivationActionsInternal(ctx, RunID(1), activation, true); err != nil {
+			b.Fatalf("executeActivationActionsInternal: %v", err)
+		}
+	}
+}
+
 func BenchmarkRunActionOriginMultiDelta(b *testing.B) {
 	revision := mustCompileActionOriginMultiDeltaRuleset(b)
 	ctx := context.Background()
@@ -145,6 +169,42 @@ func BenchmarkRunActionOriginMultiDelta(b *testing.B) {
 		}
 		benchmarkRunResult = result
 	}
+}
+
+func mustActionContextFunctionFiringActivation(tb testing.TB) (*Session, activation) {
+	tb.Helper()
+
+	workspace := NewWorkspace()
+	event := mustAddTemplate(tb, workspace, TemplateSpec{
+		Name: "function-firing-event",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddAction(tb, workspace, ActionSpec{
+		Name: "record",
+		Fn: func(ActionContext) error {
+			benchmarkActionFired++
+			return nil
+		},
+	})
+	mustAddRule(tb, workspace, RuleSpec{
+		Name: "function-firing",
+		Conditions: []RuleConditionSpec{
+			{Binding: "event", Target: TemplateKeyFact(event.Key())},
+		},
+		Actions: []RuleActionSpec{{Name: "record"}},
+	})
+	revision := mustCompileWorkspace(tb, workspace)
+	session := mustSession(tb, revision, "action-context-function-firing-benchmark")
+	if _, err := session.Assert(context.Background(), event.Key(), mustFields(tb, map[string]any{"id": "e-1"})); err != nil {
+		tb.Fatalf("Assert: %v", err)
+	}
+	pending := session.agenda.pendingActivations()
+	if len(pending) != 1 {
+		tb.Fatalf("pending activations = %d, want 1", len(pending))
+	}
+	return session, pending[0]
 }
 
 func mustCompileActionOriginMultiDeltaRuleset(t testing.TB) *Ruleset {
@@ -927,7 +987,7 @@ func BenchmarkAgendaTerminalTokenDeltaRetract(b *testing.B) {
 	}
 }
 
-func mustBenchmarkTemplate(tb testing.TB) Template {
+func mustBenchmarkTemplate(tb testing.TB) compiledTemplate {
 	tb.Helper()
 
 	workspace := NewWorkspace()
@@ -1213,7 +1273,7 @@ func mustGraphNegativePropagationBenchmarkRuleset(tb testing.TB) (*Ruleset, grap
 	}
 }
 
-func mustAddGraphNegativePropagationTemplate(tb testing.TB, workspace *Workspace, name string) Template {
+func mustAddGraphNegativePropagationTemplate(tb testing.TB, workspace *Workspace, name string) compiledTemplate {
 	tb.Helper()
 
 	return mustAddTemplate(tb, workspace, TemplateSpec{

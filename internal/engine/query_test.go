@@ -1189,7 +1189,7 @@ func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T
 	if !ok {
 		t.Fatal("Fact(person) did not resolve")
 	}
-	if got, ok := fact.Field("dept"); !ok || got.Kind() != ValueString || got.stringValue != "engineering" {
+	if got, ok := fact.Field("dept"); !ok || got.Kind() != ValueString || valueString(got) != "engineering" {
 		t.Fatalf("Fact(person).dept = %#v, %v; want engineering", got, ok)
 	}
 	if owner.facts == nil {
@@ -1203,7 +1203,7 @@ func TestSessionQueryFactReturnRowsDetachFactsLazilyAndRemainStable(t *testing.T
 	if !ok {
 		t.Fatal("Fact(person) after modify did not resolve")
 	}
-	if got, ok := stable.Field("dept"); !ok || got.Kind() != ValueString || got.stringValue != "engineering" {
+	if got, ok := stable.Field("dept"); !ok || got.Kind() != ValueString || valueString(got) != "engineering" {
 		t.Fatalf("cached Fact(person).dept after modify = %#v, %v; want engineering", got, ok)
 	}
 }
@@ -1490,7 +1490,7 @@ func assertQueryRowListValue(t testing.TB, row QueryRow, alias string, want []Va
 	if value.Kind() != ValueList {
 		t.Fatalf("row value %q kind = %q, want list", alias, value.Kind())
 	}
-	got := value.data.([]Value)
+	got, _ := value.AsList()
 	if len(got) != len(want) {
 		t.Fatalf("row value %q length = %d, want %d: %#v", alias, len(got), len(want), got)
 	}

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
 func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.T) {
@@ -239,41 +241,42 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 	if err := workspace.AddAction(ActionSpec{
 		Name: "inspect",
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing binding state")
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("snapshots materialized before scalar read")
 			}
 
-			value, ok := ctx.bindingScalarValue("person", "name")
+			value, ok := internalCtx.bindingScalarValue("person", "name")
 			if !ok {
 				return errors.New("missing person name")
 			}
-			if value.Kind() != ValueString || value.stringValue != "Ada" {
+			if value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("person name = %v, want Ada", value)
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("scalar read materialized snapshots")
 			}
-			value, ok = ctx.bindingScalarValueAtSlot(0, personNameSlot)
+			value, ok = internalCtx.bindingScalarValueAtSlot(0, personNameSlot)
 			if !ok {
 				return errors.New("missing person name by field slot")
 			}
-			if value.Kind() != ValueString || value.stringValue != "Ada" {
+			if value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("person name by field slot = %v, want Ada", value)
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("slot scalar read materialized snapshots")
 			}
 
-			if _, ok := ctx.bindingScalarValue("person", "nickname"); ok {
+			if _, ok := internalCtx.bindingScalarValue("person", "nickname"); ok {
 				return errors.New("missing slot should not resolve")
 			}
-			if _, ok := ctx.bindingScalarValue("person", "profile"); ok {
+			if _, ok := internalCtx.bindingScalarValue("person", "profile"); ok {
 				return errors.New("non-scalar field should not resolve")
 			}
-			if _, ok := ctx.bindingScalarValue("openPerson", "name"); ok {
+			if _, ok := internalCtx.bindingScalarValue("openPerson", "name"); ok {
 				return errors.New("dynamic fact should not use scalar fast path")
 			}
 			if _, ok := ctx.Binding("openPerson"); !ok {
@@ -282,10 +285,10 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 			if _, ok := ctx.BindingScalarValue("openPerson", "name"); ok {
 				return errors.New("dynamic fact should not use scalar fast path after Binding materializes snapshots")
 			}
-			if _, ok := ctx.bindingScalarValue("missing", "name"); ok {
+			if _, ok := internalCtx.bindingScalarValue("missing", "name"); ok {
 				return errors.New("missing binding should not resolve")
 			}
-			if _, ok := ctx.bindingScalarValue("", "name"); ok {
+			if _, ok := internalCtx.bindingScalarValue("", "name"); ok {
 				return errors.New("empty binding should not resolve")
 			}
 			return nil
@@ -347,27 +350,28 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "inspect",
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing binding state")
 			}
-			if ctx.bindings.token.isZero() {
+			if internalCtx.bindings.token.isZero() {
 				return errors.New("binding state is not token-backed")
 			}
-			if len(ctx.bindings.entries) != 0 {
-				return fmt.Errorf("token-backed entries = %d, want 0 before materialization", len(ctx.bindings.entries))
+			if len(internalCtx.bindings.entries) != 0 {
+				return fmt.Errorf("token-backed entries = %d, want 0 before materialization", len(internalCtx.bindings.entries))
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("snapshots materialized before scalar read")
 			}
 			value, ok := ctx.BindingScalarValue("person", "name")
-			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
+			if !ok || value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("scalar read materialized snapshots")
 			}
-			if len(ctx.bindings.entries) != 0 {
-				return fmt.Errorf("scalar read populated entries = %d, want 0", len(ctx.bindings.entries))
+			if len(internalCtx.bindings.entries) != 0 {
+				return fmt.Errorf("scalar read populated entries = %d, want 0", len(internalCtx.bindings.entries))
 			}
 			binding, ok := ctx.Binding("person")
 			if !ok {
@@ -376,10 +380,10 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 			if got := binding.Fields()["name"]; !got.Equal(mustValue(t, "Ada")) {
 				return fmt.Errorf("Binding(person).name = %v, want Ada", got)
 			}
-			if len(ctx.bindings.entries) != 0 {
-				return fmt.Errorf("Binding populated entries = %d, want 0", len(ctx.bindings.entries))
+			if len(internalCtx.bindings.entries) != 0 {
+				return fmt.Errorf("Binding populated entries = %d, want 0", len(internalCtx.bindings.entries))
 			}
-			if got, want := len(ctx.bindings.snapshots), 1; got != want {
+			if got, want := len(internalCtx.bindings.snapshots), 1; got != want {
 				return fmt.Errorf("snapshots = %d, want %d", got, want)
 			}
 			return nil
@@ -428,26 +432,27 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 	if err := workspace.AddAction(ActionSpec{
 		Name: "inspect",
 		Fn: func(ctx ActionContext) error {
-			value, ok := ctx.bindingScalarValueAt(0, "name")
-			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
+			internalCtx := actionContextForTest(t, ctx)
+			value, ok := internalCtx.bindingScalarValueAt(0, "name")
+			if !ok || value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("initial name = %v, ok %t, want Ada", value, ok)
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("scalar read materialized snapshots")
 			}
 
 			if _, err := ctx.Assert(auditTemplate.Key(), Fields{"name": value}); err != nil {
 				return err
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("assert materialized snapshots")
 			}
 
-			value, ok = ctx.bindingScalarValueAt(0, "name")
-			if !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
+			value, ok = internalCtx.bindingScalarValueAt(0, "name")
+			if !ok || value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("name after assert = %v, ok %t, want Ada", value, ok)
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("second scalar read materialized snapshots")
 			}
 			return nil
@@ -539,7 +544,7 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("actionContextForActivation: %v", err)
 	}
-	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); !ok || value.stringValue != "Ada" {
+	if value, ok := actionCtx.bindingScalarValueAt(0, "name"); !ok || valueString(value) != "Ada" {
 		t.Fatalf("initial scalar value = %v, ok %t, want Ada", value, ok)
 	}
 	if _, err := session.Modify(context.Background(), inserted.Fact.ID(), FactPatch{
@@ -591,43 +596,44 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 			if err := workspace.AddAction(ActionSpec{
 				Name: "mutate",
 				Fn: func(ctx ActionContext) error {
-					if ctx.bindings == nil {
+					internalCtx := actionContextForTest(t, ctx)
+					if internalCtx.bindings == nil {
 						return errors.New("missing binding state")
 					}
-					if ctx.bindings.snapshots != nil {
+					if internalCtx.bindings.snapshots != nil {
 						return errors.New("snapshots materialized before scalar read")
 					}
 
-					value, ok := ctx.bindingScalarValue("person", "name")
+					value, ok := internalCtx.bindingScalarValue("person", "name")
 					if !ok {
 						return errors.New("missing person name")
 					}
-					if value.Kind() != ValueString || value.stringValue != "Ada" {
+					if value.Kind() != ValueString || valueString(value) != "Ada" {
 						return fmt.Errorf("person name = %v, want Ada", value)
 					}
-					if ctx.bindings.snapshots != nil {
+					if internalCtx.bindings.snapshots != nil {
 						return errors.New("scalar read materialized snapshots")
 					}
 
 					if err := tc.mutate(ctx, personID); err != nil {
 						return err
 					}
-					if ctx.bindings == nil || ctx.bindings.snapshots == nil {
+					if internalCtx.bindings == nil || internalCtx.bindings.snapshots == nil {
 						return errors.New("mutation should freeze binding snapshots")
 					}
 
-					value, ok = ctx.bindingScalarValue("person", "name")
+					value, ok = internalCtx.bindingScalarValue("person", "name")
 					if !ok {
 						return errors.New("missing frozen person name")
 					}
-					if value.Kind() != ValueString || value.stringValue != "Ada" {
+					if value.Kind() != ValueString || valueString(value) != "Ada" {
 						return fmt.Errorf("frozen person name = %v, want Ada", value)
 					}
-					value, ok = ctx.bindingScalarValueAt(0, "name")
+					value, ok = internalCtx.bindingScalarValueAt(0, "name")
 					if !ok {
 						return errors.New("missing frozen person name by binding slot")
 					}
-					if value.Kind() != ValueString || value.stringValue != "Ada" {
+					if value.Kind() != ValueString || valueString(value) != "Ada" {
 						return fmt.Errorf("frozen person name by binding slot = %v, want Ada", value)
 					}
 					return nil
@@ -704,10 +710,11 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 	if err := workspace.AddAction(ActionSpec{
 		Name: "mutate-before-read",
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing lazy binding state")
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("binding snapshots materialized before action read")
 			}
 
@@ -716,7 +723,7 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 			}); err != nil {
 				return err
 			}
-			if got, want := len(ctx.bindings.snapshots), 1; got != want {
+			if got, want := len(internalCtx.bindings.snapshots), 1; got != want {
 				return fmt.Errorf("snapshots after modify = %d, want %d", got, want)
 			}
 
@@ -795,17 +802,18 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 		t.Fatalf("AddTemplate(person): %v", err)
 	}
 
-	var saved ActionContext
+	var saved *actionContext
 	if err := workspace.AddAction(ActionSpec{
 		Name: "save-without-read",
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing lazy binding state")
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("binding snapshots materialized before action read")
 			}
-			saved = ctx
+			saved = internalCtx
 			return nil
 		},
 	}); err != nil {
@@ -881,21 +889,22 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 		t.Fatalf("AddTemplate(person): %v", err)
 	}
 
-	var saved ActionContext
+	var saved *actionContext
 	if err := workspace.AddAction(ActionSpec{
 		Name:        "save-without-read",
 		NonEscaping: true,
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing lazy binding state")
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("binding snapshots materialized before action read")
 			}
-			if value, ok := ctx.BindingScalarValue("person", "name"); !ok || value.Kind() != ValueString || value.stringValue != "Ada" {
+			if value, ok := ctx.BindingScalarValue("person", "name"); !ok || value.Kind() != ValueString || valueString(value) != "Ada" {
 				return fmt.Errorf("BindingScalarValue(person.name) = %v, ok %t, want Ada", value, ok)
 			}
-			saved = ctx
+			saved = internalCtx
 			return nil
 		},
 	}); err != nil {
@@ -963,20 +972,21 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *t
 	}
 
 	var (
-		saved        ActionContext
+		saved        *actionContext
 		secondCalled bool
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
 	if err := workspace.AddAction(ActionSpec{
 		Name: "save-cancel-without-read",
 		Fn: func(ctx ActionContext) error {
-			if ctx.bindings == nil {
+			internalCtx := actionContextForTest(t, ctx)
+			if internalCtx.bindings == nil {
 				return errors.New("missing lazy binding state")
 			}
-			if ctx.bindings.snapshots != nil {
+			if internalCtx.bindings.snapshots != nil {
 				return errors.New("binding snapshots materialized before action read")
 			}
-			saved = ctx
+			saved = internalCtx
 			cancel()
 			return nil
 		},
@@ -1068,10 +1078,10 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 		ruleID            RuleID
 		ruleRevisionID    RuleRevisionID
 		generation        Generation
-		initialBinding    FactSnapshot
-		initialBoundFacts []FactSnapshot
-		laterBinding      FactSnapshot
-		laterBoundFacts   []FactSnapshot
+		initialBinding    gessrules.FactSnapshot
+		initialBoundFacts []gessrules.FactSnapshot
+		laterBinding      gessrules.FactSnapshot
+		laterBoundFacts   []gessrules.FactSnapshot
 		storedContext     ActionContext
 	)
 
@@ -1306,8 +1316,8 @@ func TestSessionExecuteActivationActionsAssertUsesSlotBackedInsertion(t *testing
 	}
 
 	var (
-		firstResult  AssertResult
-		secondResult AssertResult
+		firstResult  gessrules.AssertResult
+		secondResult gessrules.AssertResult
 	)
 
 	if err := workspace.AddAction(ActionSpec{
@@ -1400,8 +1410,8 @@ func TestSessionExecuteActivationActionsAssertUsesSlotBackedInsertion(t *testing
 	if firstResult.Delta == nil || firstResult.Delta.ActivationID != selected.activationID() || firstResult.Delta.RuleID != selectedRuleID || firstResult.Delta.RuleRevisionID != selected.ruleRevisionID {
 		t.Fatalf("first assert delta origin = %#v", firstResult.Delta)
 	}
-	if secondResult.Status != AssertExisting {
-		t.Fatalf("duplicate assert status = %v, want %v", secondResult.Status, AssertExisting)
+	if secondResult.Status != gessrules.AssertExisting {
+		t.Fatalf("duplicate assert status = %v, want %v", secondResult.Status, gessrules.AssertExisting)
 	}
 	if secondResult.DuplicateKey != firstResult.DuplicateKey {
 		t.Fatalf("duplicate key mismatch: %q != %q", secondResult.DuplicateKey, firstResult.DuplicateKey)
@@ -1660,7 +1670,7 @@ func TestNativeAssertTemplateValuesActionDiscardsUntargetedTokenFastPath(t *test
 		Args:   []ValueKind{ValueString, ValueString},
 		Return: ValueString,
 		Func2: func(_ context.Context, prefix Value, id Value) (Value, error) {
-			return newStringValue(prefix.stringValue + id.stringValue), nil
+			return newStringValue(valueString(prefix) + valueString(id)), nil
 		},
 	})
 	mustAddInternalAction(t, workspace, ActionSpec{
@@ -2212,7 +2222,8 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		Name: "assert-dynamic",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-dynamic")
-			result, err := ctx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
+			internalCtx := actionContextForTest(t, ctx)
+			result, err := internalCtx.assertByName("note", mustFields(t, map[string]any{"kind": "dynamic"}))
 			assertResult = result
 			return err
 		},
@@ -2223,7 +2234,8 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		Name: "assert-template",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "assert-template")
-			result, err := ctx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
+			internalCtx := actionContextForTest(t, ctx)
+			result, err := internalCtx.Assert(TemplateKey("audit"), mustFields(t, map[string]any{"kind": "template"}))
 			templateResult = result
 			return err
 		},
@@ -2234,12 +2246,13 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 		Name: "retract",
 		Fn: func(ctx ActionContext) error {
 			actionsSeen = append(actionsSeen, "retract")
-			binding, ok := ctx.Binding("person")
+			internalCtx := actionContextForTest(t, ctx)
+			binding, ok := internalCtx.Binding("person")
 			if !ok {
 				return errors.New("missing person binding")
 			}
 			personBinding = binding
-			result, err := ctx.Retract(binding.ID())
+			result, err := internalCtx.Retract(binding.ID())
 			retractResult = result
 			return err
 		},

@@ -1,59 +1,45 @@
 package engine
 
-import "strings"
+import gessrules "github.com/cpcf/gess/rules"
 
-type FieldConstraintOperator string
+type FieldConstraintOperator = gessrules.FieldConstraintOperator
 
 const (
-	FieldConstraintOpUnknown        FieldConstraintOperator = ""
-	FieldConstraintOpExists         FieldConstraintOperator = "exists"
-	FieldConstraintOpEqual          FieldConstraintOperator = "eq"
-	FieldConstraintOpNotEqual       FieldConstraintOperator = "neq"
-	FieldConstraintOpLessThan       FieldConstraintOperator = "lt"
-	FieldConstraintOpLessOrEqual    FieldConstraintOperator = "lte"
-	FieldConstraintOpGreaterThan    FieldConstraintOperator = "gt"
-	FieldConstraintOpGreaterOrEqual FieldConstraintOperator = "gte"
+	FieldConstraintOpUnknown                                = gessrules.FieldConstraintOpUnknown
+	FieldConstraintOpExists                                 = gessrules.FieldConstraintOpExists
+	FieldConstraintOpEqual                                  = gessrules.FieldConstraintOpEqual
+	FieldConstraintOpNotEqual                               = gessrules.FieldConstraintOpNotEqual
+	FieldConstraintOpLessThan                               = gessrules.FieldConstraintOpLessThan
+	FieldConstraintOpLessOrEqual                            = gessrules.FieldConstraintOpLessOrEqual
+	FieldConstraintOpGreaterThan                            = gessrules.FieldConstraintOpGreaterThan
+	FieldConstraintOpGreaterOrEqual                         = gessrules.FieldConstraintOpGreaterOrEqual
 	fieldConstraintOpIn             FieldConstraintOperator = "in"
 
-	FieldConstraintExists         = FieldConstraintOpExists
-	FieldConstraintEqual          = FieldConstraintOpEqual
-	FieldConstraintNotEqual       = FieldConstraintOpNotEqual
-	FieldConstraintLessThan       = FieldConstraintOpLessThan
-	FieldConstraintLessOrEqual    = FieldConstraintOpLessOrEqual
-	FieldConstraintGreaterThan    = FieldConstraintOpGreaterThan
-	FieldConstraintGreaterOrEqual = FieldConstraintOpGreaterOrEqual
+	FieldConstraintExists         = gessrules.FieldConstraintExists
+	FieldConstraintEqual          = gessrules.FieldConstraintEqual
+	FieldConstraintNotEqual       = gessrules.FieldConstraintNotEqual
+	FieldConstraintLessThan       = gessrules.FieldConstraintLessThan
+	FieldConstraintLessOrEqual    = gessrules.FieldConstraintLessOrEqual
+	FieldConstraintGreaterThan    = gessrules.FieldConstraintGreaterThan
+	FieldConstraintGreaterOrEqual = gessrules.FieldConstraintGreaterOrEqual
 )
 
-type FieldConstraintSpec struct {
-	Field    string
-	Path     PathSpec
-	Operator FieldConstraintOperator
-	Value    any
-}
+type FieldConstraintSpec = gessrules.FieldConstraintSpec
 
 type RuleFieldConstraintSpec = FieldConstraintSpec
 
-func (s FieldConstraintSpec) clone() FieldConstraintSpec {
-	out := s
-	out.Field = strings.TrimSpace(out.Field)
-	out.Path = out.Path.clone()
-	out.Value = cloneSpecValue(out.Value)
-	return out
+func cloneFieldConstraintSpec(s FieldConstraintSpec) FieldConstraintSpec {
+	return gessrules.CloneFieldConstraintSpec(s)
 }
 
-type FieldConstraint struct {
-	Field    string
-	Path     PathSpec
-	Operator FieldConstraintOperator
-	Value    Value
-}
+type FieldConstraint = gessrules.FieldConstraint
 
 type RuleFieldConstraint = FieldConstraint
 
-func (c FieldConstraint) clone() FieldConstraint {
+func cloneFieldConstraint(c FieldConstraint) FieldConstraint {
 	return FieldConstraint{
 		Field:    c.Field,
-		Path:     c.Path.clone(),
+		Path:     clonePathSpec(c.Path),
 		Operator: c.Operator,
 		Value:    cloneValue(c.Value),
 	}
@@ -66,7 +52,7 @@ type compiledFieldConstraint struct {
 	access   compiledPathAccess
 }
 
-func (o FieldConstraintOperator) valid() bool {
+func fieldConstraintOperatorValid(o FieldConstraintOperator) bool {
 	switch o {
 	case FieldConstraintOpExists, FieldConstraintOpEqual, FieldConstraintOpNotEqual,
 		FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan,
@@ -77,7 +63,7 @@ func (o FieldConstraintOperator) valid() bool {
 	}
 }
 
-func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, conditionIndex, constraintIndex int, template *Template) (FieldConstraint, compiledFieldConstraint, error) {
+func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (FieldConstraint, compiledFieldConstraint, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
@@ -89,9 +75,9 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Err:                ErrInvalidPath,
 		}
 	}
-	normalized := spec.clone()
+	normalized := cloneFieldConstraintSpec(spec)
 	normalized.Path = pathOrField(normalized.Path, normalized.Field)
-	if normalized.Path.isZero() {
+	if pathIsZero(normalized.Path) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
 			ConditionIndex:     conditionIndex,
@@ -101,8 +87,8 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Reason:             "field name is required",
 		}
 	}
-	normalized.Field = normalized.Path.root()
-	if !normalized.Operator.valid() {
+	normalized.Field = pathRoot(normalized.Path)
+	if !fieldConstraintOperatorValid(normalized.Operator) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
 			ConditionIndex:     conditionIndex,
@@ -131,7 +117,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 
 		return FieldConstraint{
 				Field:    normalized.Field,
-				Path:     normalized.Path.clone(),
+				Path:     clonePathSpec(normalized.Path),
 				Operator: normalized.Operator,
 				Value:    NullValue(),
 			}, compiledFieldConstraint{
@@ -160,7 +146,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 
 	return FieldConstraint{
 			Field:    normalized.Field,
-			Path:     normalized.Path.clone(),
+			Path:     clonePathSpec(normalized.Path),
 			Operator: normalized.Operator,
 			Value:    cloneValue(value),
 		}, compiledFieldConstraint{
@@ -170,13 +156,13 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 		}, nil
 }
 
-func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionIndex, constraintIndex int, template *Template) (compiledPathAccess, error) {
-	if template != nil && template.closed && path.root() != "" {
-		if _, ok := template.fieldSlot(path.root()); !ok {
+func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (compiledPathAccess, error) {
+	if template != nil && template.closed && pathRoot(path) != "" {
+		if _, ok := template.fieldSlot(pathRoot(path)); !ok {
 			return compiledPathAccess{}, &ValidationError{
 				RuleName:           ruleName,
 				TemplateName:       template.name,
-				FieldName:          path.root(),
+				FieldName:          pathRoot(path),
 				ConditionIndex:     conditionIndex,
 				HasConditionIndex:  true,
 				ConstraintIndex:    constraintIndex,
@@ -189,7 +175,7 @@ func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionI
 	if err != nil {
 		validation := &ValidationError{
 			RuleName:           ruleName,
-			FieldName:          path.root(),
+			FieldName:          pathRoot(path),
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,

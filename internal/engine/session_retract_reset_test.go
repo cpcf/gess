@@ -16,7 +16,7 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 		},
 		DuplicateKeyNames: []string{"id"},
 	})
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
@@ -142,7 +142,7 @@ func TestSessionRetractMissingReturnsNoopResultWithoutEvent(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
-	if _, err := session.Retract(context.Background(), FactID{generation: 1, sequence: 1}); !errors.Is(err, ErrFactNotFound) {
+	if _, err := session.Retract(context.Background(), newFactID(1, 1)); !errors.Is(err, ErrFactNotFound) {
 		t.Fatalf("expected ErrFactNotFound, got %v", err)
 	}
 	if got := len(collector.Events()); got != 0 {
@@ -180,7 +180,7 @@ func TestSessionRetractClosedStatus(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	result, err := session.Retract(context.Background(), FactID{generation: 1, sequence: 1})
+	result, err := session.Retract(context.Background(), newFactID(1, 1))
 	if !errors.Is(err, ErrClosedSession) {
 		t.Fatalf("retract closed error = %v, want ErrClosedSession", err)
 	}
@@ -200,11 +200,11 @@ func TestSessionResetAppliesInitialFactsAndReordersEvents(t *testing.T) {
 			Fields: []FieldSpec{{Name: "version", Kind: ValueInt, Required: true}},
 		},
 	)
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
-	metaTemplate, ok := revision.Template("meta")
+	metaTemplate, ok := revision.compiledTemplate("meta")
 	if !ok {
 		t.Fatal("expected template meta")
 	}
@@ -388,7 +388,7 @@ func TestSessionResetFailureLeavesStateIntact(t *testing.T) {
 		DuplicateKeyNames: []string{"id"},
 		Fields:            []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
 	})
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
@@ -442,11 +442,11 @@ func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
 			Fields: []FieldSpec{{Name: "value", Kind: ValueString, Required: true}},
 		},
 	)
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
-	noteTemplate, ok := revision.Template("note")
+	noteTemplate, ok := revision.compiledTemplate("note")
 	if !ok {
 		t.Fatal("expected template note")
 	}
@@ -530,11 +530,11 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 			Fields: []FieldSpec{{Name: "value", Kind: ValueString, Required: true}},
 		},
 	)
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person")
 	}
-	noteTemplate, ok := revision.Template("note")
+	noteTemplate, ok := revision.compiledTemplate("note")
 	if !ok {
 		t.Fatal("expected template note")
 	}
@@ -611,7 +611,7 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 			{Name: "meta", Kind: ValueMap, Required: true},
 		},
 	})
-	settingsTemplate, ok := revision.Template("settings")
+	settingsTemplate, ok := revision.compiledTemplate("settings")
 	if !ok {
 		t.Fatal("expected template settings")
 	}
@@ -640,10 +640,13 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	if got := session.compactFacts.len(); got != 1 {
 		t.Fatalf("compact fact storage after reset = %d, want 1", got)
 	}
-	resetLabels := resetFact.fieldsMap()["labels"].data.([]Value)
+	resetFields := resetFact.fieldsMap()
+	resetLabels, _ := resetFields["labels"].AsList()
 	resetLabels[0] = mustValue(t, "mutated")
-	resetMeta := resetFact.fieldsMap()["meta"].data.(map[string]Value)
+	resetFields["labels"] = mustValue(t, resetLabels)
+	resetMeta, _ := resetFields["meta"].AsMap()
 	resetMeta["tier"] = mustValue(t, "mutated")
+	resetFields["meta"] = mustValue(t, resetMeta)
 	state := session.activeFactWorkspace()
 	state.replaceWorkingFact(resetFact)
 	session.commitFactWorkspace(state)
@@ -652,12 +655,12 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 		t.Fatalf("second Reset: %v", err)
 	}
 	nextFact := mustOnlyFact(t, session)
-	nextLabels := nextFact.fieldsMap()["labels"].data.([]Value)
-	if got, want := nextLabels[0].stringValue, "stable"; got != want {
+	nextLabels, _ := nextFact.fieldsMap()["labels"].AsList()
+	if got, want := valueString(nextLabels[0]), "stable"; got != want {
 		t.Fatalf("compiled list initial aliased reset fact = %q, want %q", got, want)
 	}
-	nextMeta := nextFact.fieldsMap()["meta"].data.(map[string]Value)
-	if got, want := nextMeta["tier"].stringValue, "gold"; got != want {
+	nextMeta, _ := nextFact.fieldsMap()["meta"].AsMap()
+	if got, want := valueString(nextMeta["tier"]), "gold"; got != want {
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
 	if got := session.resetWorkspace.compactFacts.len(); got == 0 {
@@ -665,8 +668,8 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	}
 
 	snapshotFact := firstSnapshot.Facts()[0]
-	snapshotLabels := snapshotFact.Fields()["labels"].data.([]Value)
-	if got, want := snapshotLabels[0].stringValue, "stable"; got != want {
+	snapshotLabels, _ := snapshotFact.Fields()["labels"].AsList()
+	if got, want := valueString(snapshotLabels[0]), "stable"; got != want {
 		t.Fatalf("pre-reset snapshot list changed = %q, want %q", got, want)
 	}
 }
@@ -690,7 +693,7 @@ func TestSessionResetDoesNotReemitInitializersAsAsserts(t *testing.T) {
 		Name:   "event",
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -806,7 +809,7 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 			if !ok {
 				continue
 			}
-			if value, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("id"); ok && value.stringValue == id {
+			if value, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("id"); ok && valueString(value) == id {
 				return fact
 			}
 		}
@@ -832,8 +835,8 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 		t.Fatalf("missing labels/meta slots: labels=%d meta=%d", labelsSlot, metaSlot)
 	}
 	firstSlots := firstFact.fieldSlotSlice()
-	firstSlots[labelsSlot].value.data.([]Value)[0] = mustValue(t, "mutated")
-	firstSlots[metaSlot].value.data.(map[string]Value)["tier"] = mustValue(t, "mutated")
+	firstSlots[labelsSlot].value = mustValue(t, []any{"mutated"})
+	firstSlots[metaSlot].value = mustValue(t, map[string]any{"tier": "mutated"})
 	state := session.activeFactWorkspace()
 	state.replaceWorkingFact(firstFact)
 	session.commitFactWorkspace(state)
@@ -849,7 +852,7 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 		if !ok {
 			t.Fatal("reset snapshot fact missing id")
 		}
-		byID[id.stringValue] = fact
+		byID[valueString(id)] = fact
 	}
 
 	first, ok := byID["settings-1"]
@@ -871,10 +874,21 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	if got, ok := first.Field("meta"); !ok || !got.Equal(mustValue(t, map[string]any{"tier": "gold"})) {
 		t.Fatalf("meta value = (%v, %v), want gold", got, ok)
 	}
-	labels := first.Fields()["labels"].data.([]Value)
+	fields := first.Fields()
+	labelsValue := fields["labels"]
+	labels, _ := labelsValue.AsList()
 	labels[0] = mustValue(t, "changed")
-	meta := first.Fields()["meta"].data.(map[string]Value)
+	rereadLabels, _ := labelsValue.AsList()
+	if !rereadLabels[0].Equal(mustValue(t, "stable")) {
+		t.Fatalf("labels AsList returned aliased storage")
+	}
+	metaValue := fields["meta"]
+	meta, _ := metaValue.AsMap()
 	meta["tier"] = mustValue(t, "changed")
+	rereadMeta, _ := metaValue.AsMap()
+	if !rereadMeta["tier"].Equal(mustValue(t, "gold")) {
+		t.Fatalf("meta AsMap returned aliased storage")
+	}
 	if got, ok := first.Field("labels"); !ok || !got.Equal(mustValue(t, []any{"stable"})) {
 		t.Fatalf("labels accessor was not defensive: (%v, %v)", got, ok)
 	}

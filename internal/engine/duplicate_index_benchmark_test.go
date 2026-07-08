@@ -104,7 +104,7 @@ func benchmarkDuplicateIndexLookupInsert(b *testing.B, spec TemplateSpec, rawFie
 		b.Fatalf("AddTemplate(%q): %v", spec.Name, err)
 	}
 	revision := mustCompileWorkspace(b, definition)
-	template, ok := revision.Template(spec.Name)
+	template, ok := revision.compiledTemplate(spec.Name)
 	if !ok {
 		b.Fatalf("expected template %q", spec.Name)
 	}

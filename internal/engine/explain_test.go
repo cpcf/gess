@@ -222,7 +222,7 @@ func explainTestFact(id FactID, name string, state FactSupportState) FactSnapsho
 	return FactSnapshot{
 		id:         id,
 		name:       name,
-		generation: id.generation,
+		generation: id.Generation(),
 		support:    FactSupportProvenance{State: state},
 	}
 }

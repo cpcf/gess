@@ -88,7 +88,7 @@ func TestDefinitionsDefaultToMainModule(t *testing.T) {
 
 	revision := mustCompileWorkspace(t, workspace)
 
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("compiled revision missing person template")
 	}
@@ -203,7 +203,7 @@ func TestDeclaredModuleDefinitionsKeepCurrentMatchingBehavior(t *testing.T) {
 	}
 
 	revision := mustCompileWorkspace(t, workspace)
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok || template.Module() != "ask" {
 		t.Fatalf("template module = (%q, %t), want ask", template.Module(), ok)
 	}

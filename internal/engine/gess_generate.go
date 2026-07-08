@@ -420,7 +420,7 @@ func renderActionEffectSpec(spec *ActionEffectSpec) string {
 
 func renderActionCallSpec(spec *ActionCallSpec) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "&gessrules.ActionCallSpec{Name: %s, Fn: registry.Calls[%s]", strconv.Quote(spec.Name), strconv.Quote(spec.Name))
+	fmt.Fprintf(&b, "&gessrules.ActionCallSpec{Name: %s, Fn: func(ctx gessrules.ActionContext, args []gessrules.Value) error { return registry.Calls[%s](ctx, args) }", strconv.Quote(spec.Name), strconv.Quote(spec.Name))
 	if len(spec.Args) > 0 {
 		fmt.Fprintf(&b, ", Args: []gessrules.ExpressionSpec{%s}", renderExpressions(spec.Args))
 	}

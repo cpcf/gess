@@ -289,7 +289,7 @@ func traceWriteValue(b *strings.Builder, value Value) {
 		raw, _ := value.AsString()
 		b.WriteString(strconv.Quote(raw))
 	case ValueList:
-		raw := value.data.([]Value)
+		raw, _ := value.AsList()
 		b.WriteByte('[')
 		for i, item := range raw {
 			if i > 0 {
@@ -299,7 +299,7 @@ func traceWriteValue(b *strings.Builder, value Value) {
 		}
 		b.WriteByte(']')
 	case ValueMap:
-		raw := value.data.(map[string]Value)
+		raw, _ := value.AsMap()
 		keys := make([]string, 0, len(raw))
 		for key := range raw {
 			keys = append(keys, key)

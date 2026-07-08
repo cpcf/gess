@@ -2,27 +2,21 @@ package engine
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type PathSegmentKind string
+type PathSegmentKind = gessrules.PathSegmentKind
 
 const (
-	PathSegmentRoot  PathSegmentKind = "root"
-	PathSegmentMap   PathSegmentKind = "map"
-	PathSegmentIndex PathSegmentKind = "index"
+	PathSegmentRoot  = gessrules.PathSegmentRoot
+	PathSegmentMap   = gessrules.PathSegmentMap
+	PathSegmentIndex = gessrules.PathSegmentIndex
 )
 
-type PathSegment struct {
-	Kind  PathSegmentKind
-	Key   string
-	Index int
-}
-
-type PathSpec struct {
-	Segments []PathSegment
-}
+type PathSegment = gessrules.PathSegment
+type PathSpec = gessrules.PathSpec
 
 type compiledPathAccess struct {
 	path               PathSpec
@@ -32,18 +26,15 @@ type compiledPathAccess struct {
 }
 
 func Path(root string, segments ...PathSegment) PathSpec {
-	out := PathSpec{Segments: make([]PathSegment, 0, len(segments)+1)}
-	out.Segments = append(out.Segments, PathSegment{Kind: PathSegmentRoot, Key: strings.TrimSpace(root)})
-	out.Segments = append(out.Segments, segments...)
-	return out
+	return gessrules.Path(root, segments...)
 }
 
 func MapKey(key string) PathSegment {
-	return PathSegment{Kind: PathSegmentMap, Key: key}
+	return gessrules.MapKey(key)
 }
 
 func ListIndex(index int) PathSegment {
-	return PathSegment{Kind: PathSegmentIndex, Index: index}
+	return gessrules.ListIndex(index)
 }
 
 func fieldPath(field string) PathSpec {
@@ -51,8 +42,8 @@ func fieldPath(field string) PathSpec {
 }
 
 func pathOrField(path PathSpec, field string) PathSpec {
-	if !path.isZero() {
-		return path.clone()
+	if !pathIsZero(path) {
+		return clonePathSpec(path)
 	}
 	field = strings.TrimSpace(field)
 	if field == "" {
@@ -62,63 +53,36 @@ func pathOrField(path PathSpec, field string) PathSpec {
 }
 
 func hasAmbiguousFieldAndPath(field string, path PathSpec) bool {
-	return strings.TrimSpace(field) != "" && !path.isZero()
+	return strings.TrimSpace(field) != "" && !pathIsZero(path)
 }
 
-func (p PathSpec) clone() PathSpec {
+func clonePathSpec(p PathSpec) PathSpec {
 	if len(p.Segments) == 0 {
 		return PathSpec{}
 	}
 	return PathSpec{Segments: append([]PathSegment(nil), p.Segments...)}
 }
 
-func (p PathSpec) isZero() bool {
+func pathIsZero(p PathSpec) bool {
 	return len(p.Segments) == 0
 }
 
-func (p PathSpec) root() string {
+func pathRoot(p PathSpec) string {
 	if len(p.Segments) == 0 || p.Segments[0].Kind != PathSegmentRoot {
 		return ""
 	}
 	return p.Segments[0].Key
 }
 
-func (p PathSpec) topLevel() bool {
+func pathTopLevel(p PathSpec) bool {
 	return len(p.Segments) == 1 && p.Segments[0].Kind == PathSegmentRoot
 }
 
-func (p PathSpec) String() string {
-	return p.display()
+func pathDisplay(p PathSpec) string {
+	return p.String()
 }
 
-func (p PathSpec) display() string {
-	if len(p.Segments) == 0 {
-		return "<invalid-path>"
-	}
-	var b strings.Builder
-	for i, segment := range p.Segments {
-		switch segment.Kind {
-		case PathSegmentRoot:
-			if i != 0 {
-				b.WriteString(".<invalid-root>")
-				continue
-			}
-			b.WriteString(segment.Key)
-		case PathSegmentMap:
-			b.WriteByte('.')
-			b.WriteString(strconv.Quote(segment.Key))
-		case PathSegmentIndex:
-			b.WriteByte('[')
-			b.WriteString(strconv.Itoa(segment.Index))
-			b.WriteByte(']')
-		default:
-			b.WriteString(".<invalid-segment>")
-		}
-	}
-	return b.String()
-}
-
-func (p PathSpec) validate() error {
+func validatePathSpec(p PathSpec) error {
 	if len(p.Segments) == 0 {
 		return fmt.Errorf("%w: path requires a root segment", ErrInvalidPath)
 	}
@@ -149,15 +113,15 @@ func (p PathSpec) validate() error {
 	return nil
 }
 
-func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, ValueKind, error) {
-	normalized := path.clone()
+func compilePathAccess(path PathSpec, template *compiledTemplate) (compiledPathAccess, ValueKind, error) {
+	normalized := clonePathSpec(path)
 	if len(normalized.Segments) > 0 && normalized.Segments[0].Kind == PathSegmentRoot {
 		normalized.Segments[0].Key = strings.TrimSpace(normalized.Segments[0].Key)
 	}
-	if err := normalized.validate(); err != nil {
+	if err := validatePathSpec(normalized); err != nil {
 		return compiledPathAccess{}, valueKindUnknown, err
 	}
-	root := normalized.root()
+	root := pathRoot(normalized)
 	access := compiledPathAccess{
 		path:     normalized,
 		root:     root,
@@ -198,12 +162,12 @@ func compilePathAccess(path PathSpec, template *Template) (compiledPathAccess, V
 }
 
 func (a compiledPathAccess) clone() compiledPathAccess {
-	a.path = a.path.clone()
+	a.path = clonePathSpec(a.path)
 	return a
 }
 
 func (a compiledPathAccess) topLevel() bool {
-	return a.path.topLevel()
+	return pathTopLevel(a.path)
 }
 
 func (a compiledPathAccess) nested() bool {
@@ -211,7 +175,7 @@ func (a compiledPathAccess) nested() bool {
 }
 
 func (a compiledPathAccess) display() string {
-	return a.path.display()
+	return pathDisplay(a.path)
 }
 
 func (a compiledPathAccess) valueFromFact(fact conditionFactRef) (Value, bool) {
@@ -271,10 +235,7 @@ func resolveValuePathTail(value Value, segments []PathSegment) (Value, bool) {
 			if current.Kind() != ValueMap {
 				return Value{}, false
 			}
-			values, ok := current.data.(map[string]Value)
-			if !ok {
-				return Value{}, false
-			}
+			values, _ := current.AsMapShared()
 			next, ok := values[segment.Key]
 			if !ok {
 				return Value{}, false
@@ -284,8 +245,8 @@ func resolveValuePathTail(value Value, segments []PathSegment) (Value, bool) {
 			if current.Kind() != ValueList {
 				return Value{}, false
 			}
-			values, ok := current.data.([]Value)
-			if !ok || segment.Index < 0 || segment.Index >= len(values) {
+			values, _ := current.AsListShared()
+			if segment.Index < 0 || segment.Index >= len(values) {
 				return Value{}, false
 			}
 			current = values[segment.Index]

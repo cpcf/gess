@@ -417,7 +417,8 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: name,
 		Fn: func(ctx ActionContext) error {
-			idValue, ok := ctx.bindingScalarValueAtSlot(0, applicantIDSlot)
+			internalCtx := actionContextForTest(t, ctx)
+			idValue, ok := internalCtx.bindingScalarValueAtSlot(0, applicantIDSlot)
 			if !ok {
 				t.Fatalf("action %s missing applicant id", name)
 			}
@@ -426,7 +427,7 @@ func addDecisionAction(t testing.TB, workspace *Workspace, name string, decision
 			}
 
 			if trace != nil {
-				id := idValue.stringValue
+				id := valueString(idValue)
 				*trace = append(*trace,
 					"FIRED|"+ruleName+"|"+id,
 					"DECISION|"+id+"|"+outcome+"|"+reason+"|"+tier,

@@ -824,7 +824,7 @@ func TestBackchainSnapshotQueryTimeDemandRemainsUnsupported(t *testing.T) {
 	}
 }
 
-func mustBackchainDemandTemplates(t testing.TB, workspace *Workspace) (Template, Template) {
+func mustBackchainDemandTemplates(t testing.TB, workspace *Workspace) (compiledTemplate, compiledTemplate) {
 	t.Helper()
 	request := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "request",

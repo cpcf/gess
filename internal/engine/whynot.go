@@ -3,36 +3,38 @@ package engine
 import (
 	"context"
 	"fmt"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
 // WhyNotOutcome is the top-level answer to "why has this rule not fired?".
-type WhyNotOutcome string
+type WhyNotOutcome = gessrules.WhyNotOutcome
 
 const (
 	// WhyNotActivated means the rule has a pending activation; it will fire
 	// (see Activations). It is not "why not" at all — report it plainly.
-	WhyNotActivated WhyNotOutcome = "activated"
+	WhyNotActivated = gessrules.WhyNotActivated
 	// WhyNotAlreadyFired means the rule matched and fired; the activation is
 	// refracted and will not fire again until the match changes.
-	WhyNotAlreadyFired WhyNotOutcome = "already_fired"
+	WhyNotAlreadyFired = gessrules.WhyNotAlreadyFired
 	// WhyNotNeverMatched means no branch produced a complete match; the
 	// per-branch conditions locate the first failing condition.
-	WhyNotNeverMatched WhyNotOutcome = "never_matched"
+	WhyNotNeverMatched = gessrules.WhyNotNeverMatched
 	// WhyNotBlocked means the closest branch failed on a negated condition
 	// that is currently blocked by one or more facts.
-	WhyNotBlocked WhyNotOutcome = "blocked"
+	WhyNotBlocked = gessrules.WhyNotBlocked
 )
 
 // WhyNotConditionReason classifies why one condition did not extend a partial
 // match. It is set only on a branch's first failing condition.
-type WhyNotConditionReason string
+type WhyNotConditionReason = gessrules.WhyNotConditionReason
 
 const (
-	WhyNotReasonNone            WhyNotConditionReason = ""
-	WhyNotReasonNoAlphaMatches  WhyNotConditionReason = "no_alpha_matches"
-	WhyNotReasonJoinMismatch    WhyNotConditionReason = "join_mismatch"
-	WhyNotReasonPredicate       WhyNotConditionReason = "predicate_rejected"
-	WhyNotReasonNegationBlocked WhyNotConditionReason = "negation_blocked"
+	WhyNotReasonNone            = gessrules.WhyNotReasonNone
+	WhyNotReasonNoAlphaMatches  = gessrules.WhyNotReasonNoAlphaMatches
+	WhyNotReasonJoinMismatch    = gessrules.WhyNotReasonJoinMismatch
+	WhyNotReasonPredicate       = gessrules.WhyNotReasonPredicate
+	WhyNotReasonNegationBlocked = gessrules.WhyNotReasonNegationBlocked
 )
 
 // WhyNotReport is the structured diagnosis for one rule.

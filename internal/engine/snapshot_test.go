@@ -143,7 +143,7 @@ func TestSnapshotReconstructsPublicFactsFromCompactSlots(t *testing.T) {
 			{Name: "status", Kind: ValueString, Default: "active"},
 		},
 	})
-	template, ok := revision.Template("device")
+	template, ok := revision.compiledTemplate("device")
 	if !ok {
 		t.Fatal("missing device template")
 	}
@@ -291,11 +291,11 @@ func TestSnapshotTemplateFilteringAndPresenceCopies(t *testing.T) {
 	})
 	session := mustSession(t, revision, "snapshot-filter-session")
 
-	personTemplate, ok := revision.Template("person")
+	personTemplate, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected person template")
 	}
-	eventTemplate, ok := revision.Template("event")
+	eventTemplate, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected event template")
 	}
@@ -359,7 +359,7 @@ func TestSnapshotRecencyAndGenerationMetadata(t *testing.T) {
 		Fields: []FieldSpec{{Name: "id", Kind: ValueString}},
 	})
 	session := mustSession(t, revision, "snapshot-metadata-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected event template")
 	}
@@ -428,7 +428,7 @@ func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "snapshot-defensive-accessors-session")
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected person template")
 	}
@@ -465,8 +465,12 @@ func TestSnapshotAccessorsReturnDefensiveCopies(t *testing.T) {
 	if !ok {
 		t.Fatal("fact missing profile field")
 	}
-	factProfileMap := factProfile.data.(map[string]Value)
+	factProfileMap, _ := factProfile.AsMap()
 	factProfileMap["likes"] = mustValue(t, "rock")
+	factProfileMap, _ = factProfile.AsMap()
+	if !factProfileMap["likes"].Equal(mustValue(t, "jazz")) {
+		t.Fatalf("snapshot fact profile AsMap returned aliased storage")
+	}
 	factPresence := fact.FieldPresenceMap()
 	factPresence["name"] = FieldPresenceDefault
 
@@ -555,7 +559,12 @@ func TestSnapshotSlotBackedAccessorsReturnDefensiveCopies(t *testing.T) {
 	if !ok {
 		t.Fatal("fact missing profile field")
 	}
-	profile.data.(map[string]Value)["likes"] = mustValue(t, "rock")
+	profileMap, _ := profile.AsMap()
+	profileMap["likes"] = mustValue(t, "rock")
+	profileMap, _ = profile.AsMap()
+	if !profileMap["likes"].Equal(mustValue(t, "jazz")) {
+		t.Fatalf("slot-backed profile AsMap returned aliased storage")
+	}
 	presence := fact.FieldPresenceMap()
 	presence["status"] = FieldPresenceExplicit
 	snapshot.FactsByTemplateKey(template.Key())[0].Fields()["status"] = mustValue(t, "MUT")
@@ -588,7 +597,7 @@ func TestSnapshotRenderingIsDeterministic(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "snapshot-render-session")
-	template, ok := revision.Template("payload")
+	template, ok := revision.compiledTemplate("payload")
 	if !ok {
 		t.Fatal("expected payload template")
 	}

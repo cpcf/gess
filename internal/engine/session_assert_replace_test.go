@@ -124,7 +124,7 @@ func TestSessionAssertTemplateValuesUniqueKeyMapStoredIdenticalIsNoOp(t *testing
 	// Identical values through the generated slot path must not replace.
 	// AssertTemplateValues takes values in compiled field order, which may
 	// differ from declaration order, so build the slice from the template.
-	template, _ := session.revision.Template("acct")
+	template, _ := session.revision.compiledTemplate("acct")
 	byName := map[string]Value{"id": newStringValue("a"), "bal": newIntValue(10)}
 	values := make([]Value, len(template.fields))
 	for i, field := range template.fields {
@@ -254,7 +254,7 @@ func TestSessionAssertUniqueKeyIdenticalAfterDefaultsIsNoOp(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "unique-default-noop-session")
-	template, ok := revision.Template("audit")
+	template, ok := revision.compiledTemplate("audit")
 	if !ok {
 		t.Fatal("expected template audit")
 	}
@@ -297,7 +297,7 @@ func TestSessionAssertUniqueKeyReplaceEmitsRetractThenAssertEvents(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}

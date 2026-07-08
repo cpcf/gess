@@ -542,7 +542,8 @@ func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, tria
 	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: name,
 		Fn: func(ctx ActionContext) error {
-			idValue, ok := ctx.bindingScalarValueAtSlot(0, claimIDSlot)
+			internalCtx := actionContextForTest(t, ctx)
+			idValue, ok := internalCtx.bindingScalarValueAtSlot(0, claimIDSlot)
 			if !ok {
 				t.Fatalf("action %s missing claim id", name)
 			}
@@ -550,7 +551,7 @@ func addClaimsTriageAction(t testing.TB, workspace *Workspace, name string, tria
 				t.Fatalf("action %s claim id kind = %s, want %s", name, idValue.Kind(), ValueString)
 			}
 
-			claimID := idValue.stringValue
+			claimID := valueString(idValue)
 			if trace != nil {
 				*trace = append(*trace,
 					"FIRED|"+ruleName+"|"+claimID,

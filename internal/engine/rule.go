@@ -7,121 +7,66 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type RuleConditionSpec struct {
-	Binding          string
-	Target           FactTarget
-	FieldConstraints []FieldConstraintSpec
-	ListPatterns     []ListPatternSpec
-	JoinConstraints  []JoinConstraintSpec
-	Predicates       []ExpressionSpec
-	Source           SourceSpan
+type RuleConditionSpec = gessrules.RuleConditionSpec
+
+func cloneRuleConditionSpec(s RuleConditionSpec) RuleConditionSpec {
+	return gessrules.CloneRuleConditionSpec(s)
 }
 
-func (s RuleConditionSpec) clone() RuleConditionSpec {
-	out := s
-	out.Binding = strings.TrimSpace(out.Binding)
-	out.Target = out.Target.normalized()
-	out.FieldConstraints = make([]FieldConstraintSpec, len(s.FieldConstraints))
-	for i, constraint := range s.FieldConstraints {
-		out.FieldConstraints[i] = constraint.clone()
-	}
-	out.ListPatterns = make([]ListPatternSpec, len(s.ListPatterns))
-	for i, pattern := range s.ListPatterns {
-		out.ListPatterns[i] = pattern.clone()
-	}
-	out.JoinConstraints = make([]JoinConstraintSpec, len(s.JoinConstraints))
-	for i, constraint := range s.JoinConstraints {
-		out.JoinConstraints[i] = constraint.clone()
-	}
-	out.Predicates = make([]ExpressionSpec, len(s.Predicates))
-	for i, predicate := range s.Predicates {
-		out.Predicates[i] = cloneExpressionSpec(predicate)
-	}
-	return out
-}
-
-type FactTargetKind uint8
+type FactTargetKind = gessrules.FactTargetKind
+type FactTarget = gessrules.FactTarget
 
 const (
-	FactTargetUnknown FactTargetKind = iota
-	FactTargetDynamic
-	FactTargetTemplate
-	FactTargetTemplateKey
+	FactTargetUnknown     = gessrules.FactTargetUnknown
+	FactTargetDynamic     = gessrules.FactTargetDynamic
+	FactTargetTemplate    = gessrules.FactTargetTemplate
+	FactTargetTemplateKey = gessrules.FactTargetTemplateKey
 )
 
-type FactTarget struct {
-	kind        FactTargetKind
-	ref         NameRef
-	templateKey TemplateKey
-}
-
 func DynamicFact(name string) FactTarget {
-	return FactTarget{kind: FactTargetDynamic, ref: Ref(name)}.normalized()
+	return gessrules.DynamicFact(name)
 }
 
 func DynamicFactIn(module ModuleName, name string) FactTarget {
-	return FactTarget{kind: FactTargetDynamic, ref: ModuleRef(module, name)}.normalized()
+	return gessrules.DynamicFactIn(module, name)
 }
 
 func TemplateFact(name string) FactTarget {
-	return FactTarget{kind: FactTargetTemplate, ref: Ref(name)}.normalized()
+	return gessrules.TemplateFact(name)
 }
 
 func TemplateFactIn(module ModuleName, name string) FactTarget {
-	return FactTarget{kind: FactTargetTemplate, ref: ModuleRef(module, name)}.normalized()
+	return gessrules.TemplateFactIn(module, name)
 }
 
 func TemplateKeyFact(key TemplateKey) FactTarget {
-	return FactTarget{kind: FactTargetTemplateKey, templateKey: key}.normalized()
-}
-
-func (t FactTarget) Kind() FactTargetKind {
-	return t.kind
-}
-
-func (t FactTarget) Ref() NameRef {
-	return t.ref
-}
-
-func (t FactTarget) TemplateKey() TemplateKey {
-	return t.templateKey
-}
-
-func (t FactTarget) normalized() FactTarget {
-	out := t
-	out.ref.Name = strings.TrimSpace(out.ref.Name)
-	out.ref.Module = ModuleName(strings.TrimSpace(string(out.ref.Module)))
-	out.templateKey = TemplateKey(strings.TrimSpace(string(out.templateKey)))
-	switch {
-	case out.kind == FactTargetUnknown && out.templateKey != "":
-		out.kind = FactTargetTemplateKey
-	case out.kind == FactTargetUnknown && out.ref.Name != "":
-		out.kind = FactTargetDynamic
-	}
-	return out
+	return gessrules.TemplateKeyFact(key)
 }
 
 type templateResolver struct {
-	byKey  map[TemplateKey]Template
-	byName map[QualifiedName]Template
+	byKey  map[TemplateKey]compiledTemplate
+	byName map[QualifiedName]compiledTemplate
 }
 
-func newTemplateResolver(byKey map[TemplateKey]Template, byName map[QualifiedName]Template) templateResolver {
+func newTemplateResolver(byKey map[TemplateKey]compiledTemplate, byName map[QualifiedName]compiledTemplate) templateResolver {
 	return templateResolver{byKey: byKey, byName: byName}
 }
 
-func (r templateResolver) templateByKey(key TemplateKey) (Template, bool) {
+func (r templateResolver) templateByKey(key TemplateKey) (compiledTemplate, bool) {
 	template, ok := r.byKey[key]
 	return template, ok
 }
 
-func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int, author ModuleName, target FactTarget) (conditionTarget, conditionIndexKind, *Template, string, TemplateKey, error) {
-	target = target.normalized()
-	switch target.kind {
+func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int, author ModuleName, target FactTarget) (conditionTarget, conditionIndexKind, *compiledTemplate, string, TemplateKey, error) {
+	target = target.Normalized()
+	switch target.Kind() {
 	case FactTargetDynamic:
-		ref := target.ref.normalized(author)
+		targetRef := target.Ref()
+		ref := normalizeNameRef(targetRef, author)
 		if ref.Name == "" {
 			return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 				RuleName:          ruleName,
@@ -131,12 +76,12 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 			}
 		}
 		name := ref.Name
-		if target.ref.Module != "" {
+		if targetRef.Module != "" {
 			name = ref.Module.String() + "::" + ref.Name
 		}
 		return conditionTarget{kind: conditionTargetName, name: name}, conditionIndexName, nil, name, "", nil
 	case FactTargetTemplate:
-		ref := target.ref.normalized(author)
+		ref := normalizeNameRef(target.Ref(), author)
 		if ref.Name == "" {
 			return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 				RuleName:          ruleName,
@@ -156,7 +101,8 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 		}
 		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: template.key, templateID: template.id}, conditionIndexTemplateKey, &template, "", template.key, nil
 	case FactTargetTemplateKey:
-		if target.templateKey == "" {
+		templateKey := target.TemplateKey()
+		if templateKey == "" {
 			return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 				RuleName:          ruleName,
 				ConditionIndex:    conditionIndex,
@@ -164,7 +110,7 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 				Reason:            "template key target is required",
 			}
 		}
-		template, ok := r.byKey[target.templateKey]
+		template, ok := r.byKey[templateKey]
 		if !ok {
 			return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 				RuleName:          ruleName,
@@ -173,7 +119,7 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 				Reason:            "unknown template key",
 			}
 		}
-		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: target.templateKey, templateID: template.id}, conditionIndexTemplateKey, &template, "", target.templateKey, nil
+		return conditionTarget{kind: conditionTargetTemplateKey, templateKey: templateKey, templateID: template.id}, conditionIndexTemplateKey, &template, "", templateKey, nil
 	default:
 		return conditionTarget{}, conditionIndexUnknown, nil, "", "", &ValidationError{
 			RuleName:          ruleName,
@@ -184,644 +130,76 @@ func (r templateResolver) resolveFactTarget(ruleName string, conditionIndex int,
 	}
 }
 
-// ConditionSpec is a rule left-hand-side condition tree node.
-type ConditionSpec interface {
-	conditionSpecNode()
-}
-
-// And groups condition tree nodes into a conjunction.
-type And struct {
-	Conditions []ConditionSpec
-	Source     SourceSpan
-}
-
-func (And) conditionSpecNode() {}
-
-func (s And) clone() And {
-	out := s
-	out.Conditions = make([]ConditionSpec, len(s.Conditions))
-	for i, condition := range s.Conditions {
-		out.Conditions[i] = cloneConditionSpec(condition)
-	}
-	return out
-}
-
-// Or groups condition tree branches into a disjunction.
-type Or struct {
-	Conditions []ConditionSpec
-	Source     SourceSpan
-}
-
-func (Or) conditionSpecNode() {}
-
-func (s Or) clone() Or {
-	out := s
-	out.Conditions = make([]ConditionSpec, len(s.Conditions))
-	for i, condition := range s.Conditions {
-		out.Conditions[i] = cloneConditionSpec(condition)
-	}
-	return out
-}
-
-// Not negates a condition tree node. Bindings declared inside Not are local to
-// the negated condition and are not exposed to later conditions or actions.
-type Not struct {
-	Condition ConditionSpec
-	Source    SourceSpan
-}
-
-func (Not) conditionSpecNode() {}
-
-func (s Not) clone() Not {
-	out := s
-	out.Condition = cloneConditionSpec(s.Condition)
-	return out
-}
-
-// Explicit marks a positive match as ineligible for backward-chaining demand
-// generation while keeping ordinary match behavior unchanged.
-type Explicit struct {
-	Condition ConditionSpec
-	Source    SourceSpan
-}
-
-func (Explicit) conditionSpecNode() {}
-
-func (s Explicit) clone() Explicit {
-	out := s
-	out.Condition = cloneConditionSpec(s.Condition)
-	return out
-}
-
-// Exists tests whether at least one tuple matching Condition exists. Bindings
-// introduced inside Exists are local to the condition.
-type ExistsCondition struct {
-	Condition ConditionSpec
-	Source    SourceSpan
-}
-
-func (ExistsCondition) conditionSpecNode() {}
+type ConditionSpec = gessrules.ConditionSpec
+type And = gessrules.And
+type Or = gessrules.Or
+type Not = gessrules.Not
+type Explicit = gessrules.Explicit
+type ExistsCondition = gessrules.ExistsCondition
+type ForallCondition = gessrules.ForallCondition
+type Test = gessrules.Test
+type Match = gessrules.Match
 
 func Exists(condition ConditionSpec) ExistsCondition {
-	return ExistsCondition{Condition: cloneConditionSpec(condition)}
+	return gessrules.Exists(condition)
 }
-
-func (s ExistsCondition) clone() ExistsCondition {
-	out := s
-	out.Condition = cloneConditionSpec(s.Condition)
-	return out
-}
-
-// Forall tests whether every tuple matching Domain also satisfies Requirement.
-// Bindings introduced inside Forall are local to the condition.
-type ForallCondition struct {
-	Domain      ConditionSpec
-	Requirement ConditionSpec
-	Source      SourceSpan
-}
-
-func (ForallCondition) conditionSpecNode() {}
 
 func Forall(domain ConditionSpec, requirement ConditionSpec) ForallCondition {
-	return ForallCondition{
-		Domain:      cloneConditionSpec(domain),
-		Requirement: cloneConditionSpec(requirement),
-	}
-}
-
-func (s ForallCondition) clone() ForallCondition {
-	out := s
-	out.Domain = cloneConditionSpec(s.Domain)
-	out.Requirement = cloneConditionSpec(s.Requirement)
-	return out
-}
-
-// Test evaluates a standalone boolean condition over earlier local bindings.
-type Test struct {
-	Expression ExpressionSpec
-	Source     SourceSpan
-}
-
-func (Test) conditionSpecNode() {}
-
-func (s Test) clone() Test {
-	s.Expression = cloneExpressionSpec(s.Expression)
-	return s
-}
-
-// Match is a positive fact match condition tree node.
-type Match RuleConditionSpec
-
-func (Match) conditionSpecNode() {}
-
-func (s Match) clone() Match {
-	return Match(RuleConditionSpec(s).clone())
+	return gessrules.Forall(domain, requirement)
 }
 
 func cloneConditionSpec(spec ConditionSpec) ConditionSpec {
-	switch condition := spec.(type) {
-	case nil:
-		return nil
-	case And:
-		return condition.clone()
-	case *And:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case Or:
-		return condition.clone()
-	case *Or:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case Not:
-		return condition.clone()
-	case *Not:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case Explicit:
-		return condition.clone()
-	case *Explicit:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case ExistsCondition:
-		return condition.clone()
-	case *ExistsCondition:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case ForallCondition:
-		return condition.clone()
-	case *ForallCondition:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case Test:
-		return condition.clone()
-	case *Test:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case Match:
-		return condition.clone()
-	case *Match:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	case AccumulateCondition:
-		return condition.clone()
-	case *AccumulateCondition:
-		if condition == nil {
-			return nil
-		}
-		cloned := condition.clone()
-		return &cloned
-	default:
-		return spec
-	}
+	return gessrules.CloneConditionSpec(spec)
 }
 
-type RuleActionSpec struct {
-	Name   string
-	Source SourceSpan
+type RuleActionSpec = gessrules.RuleActionSpec
+
+func cloneRuleActionSpec(s RuleActionSpec) RuleActionSpec {
+	return gessrules.CloneRuleActionSpec(s)
 }
 
-func (s RuleActionSpec) clone() RuleActionSpec {
-	out := s
-	out.Name = strings.TrimSpace(out.Name)
-	return out
+type RuleSpec = gessrules.RuleSpec
+
+func cloneRuleSpec(s RuleSpec) RuleSpec {
+	return gessrules.CloneRuleSpec(s)
 }
 
-type RuleSpec struct {
-	Name        string
-	Module      ModuleName
-	ID          RuleID
-	Description string
-	Source      SourceSpan
-	GessSource  string
-	Tags        []string
-	Salience    int
-	AutoFocus   *bool
-	// Conditions is the flat positive conjunction form. When ConditionTree is
-	// nil, compile normalizes Conditions to And(Match...) without changing
-	// condition ordering, condition identity, graph topology, or agenda behavior.
-	Conditions []RuleConditionSpec
-	// ConditionTree is the structured left-hand side form. It is mutually
-	// exclusive with Conditions in one RuleSpec.
-	ConditionTree ConditionSpec
-	Actions       []RuleActionSpec
-}
+type RuleCondition = gessrules.RuleCondition
 
-func (s RuleSpec) clone() RuleSpec {
-	out := s
-	out.Name = strings.TrimSpace(out.Name)
-	out.Module = normalizeModuleName(out.Module)
-	out.ID = RuleID(strings.TrimSpace(string(out.ID)))
-	out.Tags = append([]string(nil), s.Tags...)
-	if s.AutoFocus != nil {
-		autoFocus := *s.AutoFocus
-		out.AutoFocus = &autoFocus
-	}
-	out.Conditions = make([]RuleConditionSpec, len(s.Conditions))
-	for i, condition := range s.Conditions {
-		out.Conditions[i] = condition.clone()
-	}
-	out.ConditionTree = cloneConditionSpec(s.ConditionTree)
-	out.Actions = make([]RuleActionSpec, len(s.Actions))
-	for i, action := range s.Actions {
-		out.Actions[i] = action.clone()
-	}
-	return out
-}
+type RuleConditionBranch = gessrules.RuleConditionBranch
 
-type RuleCondition struct {
-	id               ConditionID
-	binding          string
-	name             string
-	templateKey      TemplateKey
-	fieldConstraints []FieldConstraint
-	listPatterns     []RuleListPattern
-	joinConstraints  []JoinConstraint
-	predicates       []ExpressionPredicate
-	explicit         bool
-	order            int
-	source           SourceSpan
-}
+type RuleConditionBranchCondition = gessrules.RuleConditionBranchCondition
 
-func (c RuleCondition) ID() ConditionID {
-	return c.id
-}
-
-func (c RuleCondition) Binding() string {
-	return c.binding
-}
-
-func (c RuleCondition) Name() string {
-	return c.name
-}
-
-func (c RuleCondition) TemplateKey() TemplateKey {
-	return c.templateKey
-}
-
-func (c RuleCondition) Target() FactTarget {
-	if c.templateKey != "" {
-		return TemplateKeyFact(c.templateKey)
-	}
-	if c.name != "" {
-		return DynamicFact(c.name)
-	}
-	return FactTarget{}
-}
-
-func (c RuleCondition) FieldConstraints() []FieldConstraint {
-	out := make([]FieldConstraint, len(c.fieldConstraints))
-	for i, constraint := range c.fieldConstraints {
-		out[i] = constraint.clone()
-	}
-	return out
-}
-
-func (c RuleCondition) ListPatterns() []RuleListPattern {
-	out := make([]RuleListPattern, len(c.listPatterns))
-	for i, pattern := range c.listPatterns {
-		out[i] = pattern.clone()
-	}
-	return out
-}
-
-func (c RuleCondition) JoinConstraints() []JoinConstraint {
-	out := make([]JoinConstraint, len(c.joinConstraints))
-	for i, constraint := range c.joinConstraints {
-		out[i] = constraint.clone()
-	}
-	return out
-}
-
-func (c RuleCondition) Predicates() []ExpressionPredicate {
-	return cloneExpressionPredicates(c.predicates)
-}
-
-func (c RuleCondition) Explicit() bool {
-	return c.explicit
-}
-
-func (c RuleCondition) DeclarationOrder() int {
-	return c.order
-}
-
-func (c RuleCondition) Source() SourceSpan {
-	return c.source
-}
-
-func (c RuleCondition) clone() RuleCondition {
-	out := c
-	out.fieldConstraints = make([]FieldConstraint, len(c.fieldConstraints))
-	for i, constraint := range c.fieldConstraints {
-		out.fieldConstraints[i] = constraint.clone()
-	}
-	out.listPatterns = make([]RuleListPattern, len(c.listPatterns))
-	for i, pattern := range c.listPatterns {
-		out.listPatterns[i] = pattern.clone()
-	}
-	out.joinConstraints = make([]JoinConstraint, len(c.joinConstraints))
-	for i, constraint := range c.joinConstraints {
-		out.joinConstraints[i] = constraint.clone()
-	}
-	out.predicates = cloneExpressionPredicates(c.predicates)
-	return out
-}
-
-// RuleConditionBranch is one compiled branch in a condition tree. Flat rules
-// and tree rules without disjunction expose one branch; disjunctive trees expose
-// one branch for each expanded alternative in source order.
-type RuleConditionBranch struct {
-	id         int
-	conditions []RuleConditionBranchCondition
-}
-
-func (b RuleConditionBranch) ID() int {
-	return b.id
-}
-
-func (b RuleConditionBranch) Conditions() []RuleConditionBranchCondition {
-	out := make([]RuleConditionBranchCondition, len(b.conditions))
-	for i, condition := range b.conditions {
-		out[i] = condition.clone()
-	}
-	return out
-}
-
-func (b RuleConditionBranch) clone() RuleConditionBranch {
-	out := b
-	out.conditions = make([]RuleConditionBranchCondition, len(b.conditions))
-	for i, condition := range b.conditions {
-		out.conditions[i] = condition.clone()
-	}
-	return out
-}
-
-// RuleConditionBranchCondition describes a condition within an expanded branch.
-// Path is the authored condition-tree path, while Visible indicates whether the
-// binding is exposed to actions. Negated conditions are local and not visible.
-type RuleConditionBranchCondition struct {
-	condition RuleCondition
-	path      []int
-	visible   bool
-	negated   bool
-	explicit  bool
-}
-
-func (c RuleConditionBranchCondition) Condition() RuleCondition {
-	return c.condition.clone()
-}
-
-func (c RuleConditionBranchCondition) Path() []int {
-	return cloneIntPath(c.path)
-}
-
-func (c RuleConditionBranchCondition) Visible() bool {
-	return c.visible
-}
-
-func (c RuleConditionBranchCondition) Negated() bool {
-	return c.negated
-}
-
-func (c RuleConditionBranchCondition) Explicit() bool {
-	return c.explicit
-}
-
-func (c RuleConditionBranchCondition) clone() RuleConditionBranchCondition {
-	out := c
-	out.condition = c.condition.clone()
-	out.path = cloneIntPath(c.path)
-	return out
-}
-
-type ConditionTreeKind string
+type ConditionTreeKind = gessrules.ConditionTreeKind
 
 const (
-	ConditionTreeKindUnknown    ConditionTreeKind = ""
-	ConditionTreeKindAnd        ConditionTreeKind = "and"
-	ConditionTreeKindMatch      ConditionTreeKind = "match"
-	ConditionTreeKindTest       ConditionTreeKind = "test"
-	ConditionTreeKindNot        ConditionTreeKind = "not"
-	ConditionTreeKindOr         ConditionTreeKind = "or"
-	ConditionTreeKindExists     ConditionTreeKind = "exists"
-	ConditionTreeKindForall     ConditionTreeKind = "forall"
-	ConditionTreeKindAccumulate ConditionTreeKind = "accumulate"
+	ConditionTreeKindUnknown    = gessrules.ConditionTreeKindUnknown
+	ConditionTreeKindAnd        = gessrules.ConditionTreeKindAnd
+	ConditionTreeKindMatch      = gessrules.ConditionTreeKindMatch
+	ConditionTreeKindTest       = gessrules.ConditionTreeKindTest
+	ConditionTreeKindNot        = gessrules.ConditionTreeKindNot
+	ConditionTreeKindOr         = gessrules.ConditionTreeKindOr
+	ConditionTreeKindExists     = gessrules.ConditionTreeKindExists
+	ConditionTreeKindForall     = gessrules.ConditionTreeKindForall
+	ConditionTreeKindAccumulate = gessrules.ConditionTreeKindAccumulate
 )
 
-type RuleConditionTree struct {
-	kind         ConditionTreeKind
-	children     []RuleConditionTree
-	match        RuleCondition
-	hasMatch     bool
-	test         ExpressionSpec
-	hasTest      bool
-	aggregate    AccumulateCondition
-	hasAggregate bool
-	source       SourceSpan
+type RuleConditionTree = gessrules.RuleConditionTree
+
+type RuleAction = gessrules.RuleAction
+
+func cloneRuleAction(a RuleAction) RuleAction {
+	return gessrules.CloneRuleAction(a)
 }
 
-func (t RuleConditionTree) Kind() ConditionTreeKind {
-	return t.kind
+func cloneRuleActions(actions []RuleAction) []RuleAction {
+	return gessrules.CloneRuleActions(actions)
 }
 
-func (t RuleConditionTree) Children() []RuleConditionTree {
-	out := make([]RuleConditionTree, len(t.children))
-	for i, child := range t.children {
-		out[i] = child.clone()
-	}
-	return out
-}
+type Rule = gessrules.Rule
 
-func (t RuleConditionTree) Match() (RuleCondition, bool) {
-	if !t.hasMatch {
-		return RuleCondition{}, false
-	}
-	return t.match.clone(), true
-}
-
-func (t RuleConditionTree) Test() (ExpressionSpec, bool) {
-	if !t.hasTest {
-		return nil, false
-	}
-	return cloneExpressionSpec(t.test), true
-}
-
-func (t RuleConditionTree) Aggregate() (AccumulateCondition, bool) {
-	if !t.hasAggregate {
-		return AccumulateCondition{}, false
-	}
-	return t.aggregate.clone(), true
-}
-
-func (t RuleConditionTree) Source() SourceSpan {
-	return t.source
-}
-
-func (t RuleConditionTree) clone() RuleConditionTree {
-	out := t
-	out.children = make([]RuleConditionTree, len(t.children))
-	for i, child := range t.children {
-		out.children[i] = child.clone()
-	}
-	out.match = t.match.clone()
-	out.test = cloneExpressionSpec(t.test)
-	out.aggregate = t.aggregate.clone()
-	return out
-}
-
-type RuleAction struct {
-	name   string
-	order  int
-	source SourceSpan
-}
-
-func (a RuleAction) Name() string {
-	return a.name
-}
-
-func (a RuleAction) DeclarationOrder() int {
-	return a.order
-}
-
-func (a RuleAction) Source() SourceSpan {
-	return a.source
-}
-
-func (a RuleAction) clone() RuleAction {
-	return a
-}
-
-type Rule struct {
-	id                 RuleID
-	revisionID         RuleRevisionID
-	name               string
-	module             ModuleName
-	description        string
-	tags               []string
-	salience           int
-	autoFocus          bool
-	hasAutoFocus       bool
-	effectiveAutoFocus bool
-	declarationOrder   int
-	source             SourceSpan
-	gessSource         string
-	conditions         []RuleCondition
-	conditionTree      RuleConditionTree
-	conditionBranches  []RuleConditionBranch
-	actions            []RuleAction
-}
-
-func (r Rule) ID() RuleID {
-	return r.id
-}
-
-func (r Rule) RevisionID() RuleRevisionID {
-	return r.revisionID
-}
-
-func (r Rule) Name() string {
-	return r.name
-}
-
-func (r Rule) Module() ModuleName {
-	return r.module
-}
-
-func (r Rule) Description() string {
-	return r.description
-}
-
-func (r Rule) Tags() []string {
-	out := make([]string, len(r.tags))
-	copy(out, r.tags)
-	return out
-}
-
-func (r Rule) Salience() int {
-	return r.salience
-}
-
-func (r Rule) AutoFocus() (bool, bool) {
-	return r.autoFocus, r.hasAutoFocus
-}
-
-func (r Rule) EffectiveAutoFocus() bool {
-	return r.effectiveAutoFocus
-}
-
-func (r Rule) DeclarationOrder() int {
-	return r.declarationOrder
-}
-
-func (r Rule) Source() SourceSpan {
-	return r.source
-}
-
-func (r Rule) GessSource() string {
-	return r.gessSource
-}
-
-func (r Rule) Conditions() []RuleCondition {
-	out := make([]RuleCondition, len(r.conditions))
-	for i, condition := range r.conditions {
-		out[i] = condition.clone()
-	}
-	return out
-}
-
-func (r Rule) ConditionTree() RuleConditionTree {
-	return r.conditionTree.clone()
-}
-
-func (r Rule) ConditionBranches() []RuleConditionBranch {
-	return cloneRuleConditionBranches(r.conditionBranches)
-}
-
-func (r Rule) Actions() []RuleAction {
-	out := make([]RuleAction, len(r.actions))
-	for i, action := range r.actions {
-		out[i] = action.clone()
-	}
-	return out
-}
-
-func (r Rule) clone() Rule {
-	out := r
-	out.tags = append([]string(nil), r.tags...)
-	out.conditions = make([]RuleCondition, len(r.conditions))
-	for i, condition := range r.conditions {
-		out.conditions[i] = condition.clone()
-	}
-	out.conditionTree = r.conditionTree.clone()
-	out.conditionBranches = cloneRuleConditionBranches(r.conditionBranches)
-	out.actions = make([]RuleAction, len(r.actions))
-	for i, action := range r.actions {
-		out.actions[i] = action.clone()
-	}
-	return out
+func cloneRule(rule Rule) Rule {
+	return gessrules.CloneRule(rule)
 }
 
 type compiledRule struct {
@@ -853,23 +231,23 @@ type compiledRule struct {
 
 func (r compiledRule) inspect() Rule {
 	return Rule{
-		id:                 r.id,
-		revisionID:         r.revisionID,
-		name:               r.name,
-		module:             r.module,
-		description:        r.description,
-		tags:               append([]string(nil), r.tags...),
-		salience:           r.salience,
-		autoFocus:          r.autoFocus,
-		hasAutoFocus:       r.hasAutoFocus,
-		effectiveAutoFocus: r.effectiveAutoFocus,
-		declarationOrder:   r.declarationOrder,
-		source:             r.source,
-		gessSource:         r.gessSource,
-		conditions:         cloneRuleConditions(r.conditions),
-		conditionTree:      r.conditionTree.clone(),
-		conditionBranches:  cloneRuleConditionBranches(r.conditionBranchPlans),
-		actions:            append([]RuleAction(nil), r.actions...),
+		IDValue:                r.id,
+		RevisionIDValue:        r.revisionID,
+		NameValue:              r.name,
+		ModuleValue:            r.module,
+		DescriptionText:        r.description,
+		TagValues:              append([]string(nil), r.tags...),
+		SalienceValue:          r.salience,
+		AutoFocusValue:         r.autoFocus,
+		HasAutoFocus:           r.hasAutoFocus,
+		EffectiveAutoFocusFlag: r.effectiveAutoFocus,
+		Order:                  r.declarationOrder,
+		SourceSpan:             r.source,
+		GessSourceText:         r.gessSource,
+		ConditionValues:        cloneRuleConditions(r.conditions),
+		ConditionTreeValue:     cloneRuleConditionTree(r.conditionTree),
+		ConditionBranchValues:  cloneRuleConditionBranches(r.conditionBranchPlans),
+		ActionValues:           append([]RuleAction(nil), r.actions...),
 	}
 }
 
@@ -932,27 +310,27 @@ func (r compiledRule) hasAggregateConditions() bool {
 }
 
 func cloneRuleConditions(conditions []RuleCondition) []RuleCondition {
-	out := make([]RuleCondition, len(conditions))
-	for i, condition := range conditions {
-		out[i] = condition.clone()
-	}
-	return out
+	return gessrules.CloneRuleConditions(conditions)
+}
+
+func cloneRuleCondition(condition RuleCondition) RuleCondition {
+	return gessrules.CloneRuleCondition(condition)
 }
 
 func cloneRuleConditionBranches(branches []RuleConditionBranch) []RuleConditionBranch {
-	out := make([]RuleConditionBranch, len(branches))
-	for i, branch := range branches {
-		out[i] = branch.clone()
-	}
-	return out
+	return gessrules.CloneRuleConditionBranches(branches)
 }
 
 func cloneRuleConditionBranchConditions(conditions []RuleConditionBranchCondition) []RuleConditionBranchCondition {
-	out := make([]RuleConditionBranchCondition, len(conditions))
-	for i, condition := range conditions {
-		out[i] = condition.clone()
-	}
-	return out
+	return gessrules.CloneRuleConditionBranchConditions(conditions)
+}
+
+func cloneRuleConditionBranchCondition(condition RuleConditionBranchCondition) RuleConditionBranchCondition {
+	return gessrules.CloneRuleConditionBranchCondition(condition)
+}
+
+func cloneRuleConditionTree(tree RuleConditionTree) RuleConditionTree {
+	return gessrules.CloneRuleConditionTree(tree)
 }
 
 type compiledConditionTreeShape struct {
@@ -971,7 +349,7 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 		out.children[i] = child.clone()
 	}
 	out.test = cloneExpressionSpec(s.test)
-	out.aggregate = s.aggregate.clone()
+	out.aggregate = cloneAccumulateCondition(s.aggregate)
 	return out
 }
 
@@ -1030,7 +408,7 @@ func (b compiledConditionBranch) clone() compiledConditionBranch {
 	out := b
 	out.conditions = make([]RuleConditionBranchCondition, len(b.conditions))
 	for i, condition := range b.conditions {
-		out.conditions[i] = condition.clone()
+		out.conditions[i] = cloneRuleConditionBranchCondition(condition)
 	}
 	out.plans = make([]compiledConditionPlan, len(b.plans))
 	for i, plan := range b.plans {
@@ -1040,7 +418,7 @@ func (b compiledConditionBranch) clone() compiledConditionBranch {
 }
 
 func normalizeRuleSpec(spec RuleSpec) (RuleSpec, error) {
-	normalized := spec.clone()
+	normalized := cloneRuleSpec(spec)
 	if normalized.Name == "" {
 		return RuleSpec{}, &ValidationError{
 			Reason: "rule name is required",
@@ -1067,7 +445,7 @@ func normalizeRuleConditions(spec RuleSpec) ([]normalizedRuleCondition, compiled
 	children := make([]compiledConditionTreeShape, len(spec.Conditions))
 	for i, condition := range spec.Conditions {
 		conditions[i] = normalizedRuleCondition{
-			spec:    condition.clone(),
+			spec:    cloneRuleConditionSpec(condition),
 			path:    []int{i},
 			visible: true,
 			source:  condition.Source,
@@ -1101,7 +479,7 @@ func normalizeRuleConditionBranches(spec RuleSpec) ([]normalizedRuleConditionBra
 	}
 	for i, condition := range spec.Conditions {
 		branch.conditions[i] = normalizedRuleCondition{
-			spec:    condition.clone(),
+			spec:    cloneRuleConditionSpec(condition),
 			path:    []int{i},
 			visible: true,
 			source:  condition.Source,
@@ -1123,7 +501,7 @@ func lowerReturnValueFieldConstraints(constraints []FieldConstraintSpec) ([]Fiel
 			continue
 		}
 		if constant, ok := constExpressionValue(expression); ok {
-			out := constraint.clone()
+			out := cloneFieldConstraintSpec(constraint)
 			out.Value = cloneSpecValue(constant)
 			fieldConstraints = append(fieldConstraints, out)
 			continue
@@ -1324,24 +702,24 @@ func isDisjunctiveJoinPredicateAlternative(spec ExpressionSpec) bool {
 
 func currentFieldAndBindingFieldExpression(currentSpec, bindingSpec ExpressionSpec) bool {
 	currentPath, ok := currentFieldExpressionPath(currentSpec)
-	if !ok || !currentPath.topLevel() {
+	if !ok || !pathTopLevel(currentPath) {
 		return false
 	}
 	bindingPath, ok := bindingFieldExpressionPath(bindingSpec)
-	return ok && bindingPath.topLevel()
+	return ok && pathTopLevel(bindingPath)
 }
 
 func currentFieldExpressionPath(spec ExpressionSpec) (PathSpec, bool) {
 	switch expression := spec.(type) {
 	case CurrentFieldExpr:
 		path := pathOrField(expression.Path, expression.Field)
-		return path, path.root() != ""
+		return path, pathRoot(path) != ""
 	case *CurrentFieldExpr:
 		if expression == nil {
 			return PathSpec{}, false
 		}
 		path := pathOrField(expression.Path, expression.Field)
-		return path, path.root() != ""
+		return path, pathRoot(path) != ""
 	default:
 		return PathSpec{}, false
 	}
@@ -1354,13 +732,13 @@ func bindingFieldExpressionPath(spec ExpressionSpec) (PathSpec, bool) {
 			return PathSpec{}, false
 		}
 		path := pathOrField(expression.Path, expression.Field)
-		return path, path.root() != ""
+		return path, pathRoot(path) != ""
 	case *BindingFieldExpr:
 		if expression == nil || strings.TrimSpace(expression.Binding) == "" {
 			return PathSpec{}, false
 		}
 		path := pathOrField(expression.Path, expression.Field)
-		return path, path.root() != ""
+		return path, pathRoot(path) != ""
 	default:
 		return PathSpec{}, false
 	}
@@ -1510,7 +888,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 	case Match:
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
-				spec:    RuleConditionSpec(condition).clone(),
+				spec:    cloneRuleConditionSpec(RuleConditionSpec(condition)),
 				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
@@ -1526,7 +904,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 		}
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
-				spec:    RuleConditionSpec(*condition).clone(),
+				spec:    cloneRuleConditionSpec(RuleConditionSpec(*condition)),
 				path:    cloneIntPath(path),
 				visible: visible,
 				negated: negated,
@@ -1542,7 +920,7 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 		}
 		return []normalizedRuleConditionBranch{{
 			conditions: []normalizedRuleCondition{{
-				aggregate:   condition.clone(),
+				aggregate:   cloneAccumulateCondition(condition),
 				isAggregate: true,
 				path:        cloneIntPath(path),
 				visible:     true,
@@ -1823,7 +1201,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 	case Match:
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
-			spec:    RuleConditionSpec(condition).clone(),
+			spec:    cloneRuleConditionSpec(RuleConditionSpec(condition)),
 			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
@@ -1842,7 +1220,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 		}
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
-			spec:    RuleConditionSpec(*condition).clone(),
+			spec:    cloneRuleConditionSpec(RuleConditionSpec(*condition)),
 			path:    cloneIntPath(path),
 			visible: visible,
 			negated: negated,
@@ -1861,7 +1239,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 		}
 		index := len(*conditions)
 		*conditions = append(*conditions, normalizedRuleCondition{
-			aggregate:   condition.clone(),
+			aggregate:   cloneAccumulateCondition(condition),
 			isAggregate: true,
 			path:        cloneIntPath(path),
 			visible:     true,
@@ -1870,7 +1248,7 @@ func flattenConditionTreeNode(ruleName string, spec ConditionSpec, conditions *[
 		return compiledConditionTreeShape{
 			kind:           ConditionTreeKindAccumulate,
 			conditionIndex: index,
-			aggregate:      condition.clone(),
+			aggregate:      cloneAccumulateCondition(condition),
 			source:         condition.Source,
 		}, nil
 	case *AccumulateCondition:
@@ -2034,7 +1412,7 @@ func explicitMatchCondition(ruleName string, spec ConditionSpec, negated bool) (
 	}
 	switch condition := spec.(type) {
 	case Match:
-		return RuleConditionSpec(condition).clone(), nil
+		return cloneRuleConditionSpec(RuleConditionSpec(condition)), nil
 	case *Match:
 		if condition == nil {
 			return RuleConditionSpec{}, &ValidationError{
@@ -2042,7 +1420,7 @@ func explicitMatchCondition(ruleName string, spec ConditionSpec, negated bool) (
 				Reason:   "explicit condition requires a positive match",
 			}
 		}
-		return RuleConditionSpec(*condition).clone(), nil
+		return cloneRuleConditionSpec(RuleConditionSpec(*condition)), nil
 	default:
 		return RuleConditionSpec{}, &ValidationError{
 			RuleName: ruleName,
@@ -2123,8 +1501,8 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 	conditionBranches := make([]RuleConditionBranch, len(publicBranches))
 	for i, branch := range publicBranches {
 		conditionBranches[i] = RuleConditionBranch{
-			id:         i,
-			conditions: cloneRuleConditionBranchConditions(branch.branchConditions),
+			IDValue:         i,
+			ConditionValues: cloneRuleConditionBranchConditions(branch.branchConditions),
 		}
 	}
 	autoFocus, hasAutoFocus, effectiveAutoFocus := ruleAutoFocusValues(normalized, modules)
@@ -2160,9 +1538,9 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		}
 		actionExecution.source = action.Source
 		actions = append(actions, RuleAction{
-			name:   action.Name,
-			order:  i,
-			source: action.Source,
+			NameValue:  action.Name,
+			Order:      i,
+			SourceSpan: action.Source,
 		})
 		actionExecutions = append(actionExecutions, actionExecution)
 	}
@@ -2215,11 +1593,11 @@ func ruleAutoFocusValues(rule RuleSpec, modules map[ModuleName]Module) (bool, bo
 func bindingSlotsForRuleConditions(conditions []RuleCondition) map[string]int {
 	out := make(map[string]int, len(conditions))
 	for i, condition := range conditions {
-		if condition.binding == "" {
+		if condition.BindingName == "" {
 			continue
 		}
-		if _, exists := out[condition.binding]; !exists {
-			out[condition.binding] = i
+		if _, exists := out[condition.BindingName]; !exists {
+			out[condition.BindingName] = i
 		}
 	}
 	return out
@@ -2281,7 +1659,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			inputOnlyConditions := inputSet.conditions[len(conditions):]
 			for _, inputCondition := range inputOnlyConditions {
-				if _, exists := bindingSlots[inputCondition.binding]; exists {
+				if _, exists := bindingSlots[inputCondition.BindingName]; exists {
 					return compiledRuleConditionSet{}, higherOrderValidationError(ruleName, i, "higher-order input binding collides with an outer binding")
 				}
 			}
@@ -2292,12 +1670,12 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			compiledSpecs := []compiledAggregateSpec{{kind: specKind}}
 			conditionID := aggregateConditionIDFor(ruleID, i, compiledSpecs, inputSet.conditionPlans)
-			treeCondition := RuleCondition{id: conditionID, binding: string(node.higherOrder.kind), order: i}
+			treeCondition := RuleCondition{IDValue: conditionID, BindingName: string(node.higherOrder.kind), Order: i}
 			treeConditions = append(treeConditions, treeCondition)
 			branchConditions = append(branchConditions, RuleConditionBranchCondition{
-				condition: treeCondition,
-				path:      cloneIntPath(node.path),
-				visible:   false,
+				ConditionValue: treeCondition,
+				PathValue:      cloneIntPath(node.path),
+				VisibleValue:   false,
 			})
 			conditionPlans = append(conditionPlans, compiledConditionPlan{
 				id:          conditionID,
@@ -2349,7 +1727,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			inputOnlyConditions := inputSet.conditions[len(conditions):]
 			for _, inputCondition := range inputOnlyConditions {
-				if _, exists := bindingSlots[inputCondition.binding]; exists {
+				if _, exists := bindingSlots[inputCondition.BindingName]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
 						ConditionIndex:    i,
@@ -2361,14 +1739,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			inputBindingSlots := make(map[string]int, len(inputSet.conditions))
 			for j, condition := range inputSet.conditions {
-				inputBindingSlots[condition.binding] = j
+				inputBindingSlots[condition.BindingName] = j
 			}
 			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputSet.conditions, inputBindingSlots, templates.byKey, functions, globals)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
 			for _, result := range resultConditions {
-				if _, exists := allBindingSlots[result.binding]; exists {
+				if _, exists := allBindingSlots[result.BindingName]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
 						ConditionIndex:    i,
@@ -2381,18 +1759,18 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			aggregateID := aggregateConditionIDFor(ruleID, i, compiledSpecs, inputSet.conditionPlans)
 			firstSlot := len(conditions)
 			for j, result := range resultConditions {
-				result.id = aggregateID
-				result.order = firstSlot + j
+				result.IDValue = aggregateID
+				result.Order = firstSlot + j
 				conditions = append(conditions, result)
-				bindingSlots[result.binding] = firstSlot + j
-				allBindingSlots[result.binding] = firstSlot + j
+				bindingSlots[result.BindingName] = firstSlot + j
+				allBindingSlots[result.BindingName] = firstSlot + j
 			}
-			treeCondition := RuleCondition{id: aggregateID, binding: "accumulate", order: i, source: node.source}
+			treeCondition := RuleCondition{IDValue: aggregateID, BindingName: "accumulate", Order: i, SourceSpan: node.source}
 			treeConditions = append(treeConditions, treeCondition)
 			branchConditions = append(branchConditions, RuleConditionBranchCondition{
-				condition: treeCondition,
-				path:      cloneIntPath(node.path),
-				visible:   true,
+				ConditionValue: treeCondition,
+				PathValue:      cloneIntPath(node.path),
+				VisibleValue:   true,
 			})
 			conditionPlans = append(conditionPlans, compiledConditionPlan{
 				id:          aggregateID,
@@ -2495,10 +1873,10 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			return compiledRuleConditionSet{}, err
 		}
 		for _, result := range listPatternBindings {
-			if result.binding == condition.Binding {
+			if result.BindingName == condition.Binding {
 				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with condition binding", ErrInvalidListPattern)
 			}
-			if _, exists := allBindingSlots[result.binding]; exists {
+			if _, exists := allBindingSlots[result.BindingName]; exists {
 				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with an existing binding", ErrInvalidListPattern)
 			}
 		}
@@ -2532,17 +1910,17 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 
 		conditionID := conditionIDFor(ruleID, i, condition.Binding, conditionName, conditionTemplateKey, fieldConstraints, compiledListPatterns, joinConstraints, compiledPredicates, node.negated)
 		compiledCondition := RuleCondition{
-			id:               conditionID,
-			binding:          condition.Binding,
-			name:             conditionName,
-			templateKey:      conditionTemplateKey,
-			fieldConstraints: fieldConstraints,
-			listPatterns:     listPatterns,
-			joinConstraints:  joinConstraints,
-			predicates:       predicates,
-			explicit:         node.explicit,
-			order:            i,
-			source:           node.source,
+			IDValue:               conditionID,
+			BindingName:           condition.Binding,
+			NameValue:             conditionName,
+			TemplateKeyValue:      conditionTemplateKey,
+			FieldConstraintValues: fieldConstraints,
+			ListPatternValues:     listPatterns,
+			JoinConstraintValues:  joinConstraints,
+			PredicateValues:       predicates,
+			ExplicitValue:         node.explicit,
+			Order:                 i,
+			SourceSpan:            node.source,
 		}
 		publicBindingSlot := -1
 		if node.visible {
@@ -2555,26 +1933,26 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		}
 		setCompiledExpressionPredicatesCurrentBindingSlot(compiledPredicates, publicBindingSlot)
 		for j := range listPatternBindings {
-			listPatternBindings[j].id = conditionID
-			listPatternBindings[j].order = len(conditions)
+			listPatternBindings[j].IDValue = conditionID
+			listPatternBindings[j].Order = len(conditions)
 			conditions = append(conditions, listPatternBindings[j])
-			bindingSlots[listPatternBindings[j].binding] = listPatternBindings[j].order
-			allBindingSlots[listPatternBindings[j].binding] = listPatternBindings[j].order
+			bindingSlots[listPatternBindings[j].BindingName] = listPatternBindings[j].Order
+			allBindingSlots[listPatternBindings[j].BindingName] = listPatternBindings[j].Order
 			for patternIndex := range compiledListPatterns {
 				for elementIndex := range compiledListPatterns[patternIndex].elements {
-					if compiledListPatterns[patternIndex].elements[elementIndex].binding == listPatternBindings[j].binding {
-						compiledListPatterns[patternIndex].elements[elementIndex].bindingSlot = listPatternBindings[j].order
+					if compiledListPatterns[patternIndex].elements[elementIndex].binding == listPatternBindings[j].BindingName {
+						compiledListPatterns[patternIndex].elements[elementIndex].bindingSlot = listPatternBindings[j].Order
 					}
 				}
 			}
 		}
-		treeConditions = append(treeConditions, compiledCondition.clone())
+		treeConditions = append(treeConditions, cloneRuleCondition(compiledCondition))
 		branchConditions = append(branchConditions, RuleConditionBranchCondition{
-			condition: compiledCondition.clone(),
-			path:      cloneIntPath(node.path),
-			visible:   node.visible,
-			negated:   node.negated,
-			explicit:  node.explicit,
+			ConditionValue: cloneRuleCondition(compiledCondition),
+			PathValue:      cloneIntPath(node.path),
+			VisibleValue:   node.visible,
+			NegatedValue:   node.negated,
+			ExplicitValue:  node.explicit,
 		})
 		conditionPlans = append(conditionPlans, compiledConditionPlan{
 			id:           conditionID,
@@ -2726,7 +2104,7 @@ func higherOrderCounterInputSpec(ruleName string, conditionIndex int, spec compi
 			return nil, higherOrderValidationError(ruleName, conditionIndex, "forall requirement currently supports at most one positive match")
 		}
 		if len(parts.matches) == 1 {
-			requirement := parts.matches[0].clone()
+			requirement := cloneRuleConditionSpec(parts.matches[0])
 			for _, test := range parts.tests {
 				requirement.Predicates = append(requirement.Predicates, rewriteBindingFieldExpressionsToCurrent(test, requirement.Binding))
 			}
@@ -2771,12 +2149,12 @@ func collectForallRequirementParts(spec ConditionSpec, out *forallRequirementPar
 			out.tests = append(out.tests, cloneExpressionSpec(condition.Expression))
 		}
 	case Match:
-		out.matches = append(out.matches, RuleConditionSpec(condition).clone())
+		out.matches = append(out.matches, cloneRuleConditionSpec(RuleConditionSpec(condition)))
 	case *Match:
 		if condition == nil {
 			return fmt.Errorf("forall requirement is required")
 		}
-		out.matches = append(out.matches, RuleConditionSpec(*condition).clone())
+		out.matches = append(out.matches, cloneRuleConditionSpec(RuleConditionSpec(*condition)))
 	case Explicit:
 		match, err := explicitMatchCondition("", condition.Condition, false)
 		if err != nil {
@@ -2814,16 +2192,16 @@ func rewriteBindingFieldExpressionsToCurrent(spec ExpressionSpec, binding string
 		return nil
 	case BindingFieldExpr:
 		if expression.Binding == binding {
-			return CurrentFieldExpr{Field: expression.Field, Path: expression.Path.clone()}
+			return CurrentFieldExpr{Field: expression.Field, Path: clonePathSpec(expression.Path)}
 		}
-		return expression.clone()
+		return cloneExpressionSpec(expression)
 	case *BindingFieldExpr:
 		if expression == nil {
 			return nil
 		}
 		return rewriteBindingFieldExpressionsToCurrent(*expression, binding)
 	case CallExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(CallExpr)
 		for i, arg := range out.Args {
 			out.Args[i] = rewriteBindingFieldExpressionsToCurrent(arg, binding)
 		}
@@ -2832,13 +2210,13 @@ func rewriteBindingFieldExpressionsToCurrent(spec ExpressionSpec, binding string
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(CallExpr)
 		for i, arg := range out.Args {
 			out.Args[i] = rewriteBindingFieldExpressionsToCurrent(arg, binding)
 		}
 		return &out
 	case CompareExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(CompareExpr)
 		out.Left = rewriteBindingFieldExpressionsToCurrent(out.Left, binding)
 		out.Right = rewriteBindingFieldExpressionsToCurrent(out.Right, binding)
 		return out
@@ -2846,12 +2224,12 @@ func rewriteBindingFieldExpressionsToCurrent(spec ExpressionSpec, binding string
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(CompareExpr)
 		out.Left = rewriteBindingFieldExpressionsToCurrent(out.Left, binding)
 		out.Right = rewriteBindingFieldExpressionsToCurrent(out.Right, binding)
 		return &out
 	case BooleanExpr:
-		out := expression.clone()
+		out := cloneExpressionSpec(expression).(BooleanExpr)
 		for i, operand := range out.Operands {
 			out.Operands[i] = rewriteBindingFieldExpressionsToCurrent(operand, binding)
 		}
@@ -2860,7 +2238,7 @@ func rewriteBindingFieldExpressionsToCurrent(spec ExpressionSpec, binding string
 		if expression == nil {
 			return nil
 		}
-		out := expression.clone()
+		out := cloneExpressionSpec(*expression).(BooleanExpr)
 		for i, operand := range out.Operands {
 			out.Operands[i] = rewriteBindingFieldExpressionsToCurrent(operand, binding)
 		}
@@ -2891,7 +2269,7 @@ func validateBranchBindingContract(ruleName string, expected, actual []RuleCondi
 		}
 	}
 	for i := range expected {
-		if expected[i].binding != actual[i].binding || expected[i].name != actual[i].name || expected[i].templateKey != actual[i].templateKey {
+		if expected[i].BindingName != actual[i].BindingName || expected[i].NameValue != actual[i].NameValue || expected[i].TemplateKeyValue != actual[i].TemplateKeyValue {
 			return &ValidationError{
 				RuleName:          ruleName,
 				ConditionIndex:    i,
@@ -2907,75 +2285,75 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 	switch shape.kind {
 	case ConditionTreeKindAnd:
 		tree := RuleConditionTree{
-			kind:     ConditionTreeKindAnd,
-			children: make([]RuleConditionTree, 0, len(shape.children)),
+			KindValue:     ConditionTreeKindAnd,
+			ChildrenValue: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
-			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+			tree.ChildrenValue = append(tree.ChildrenValue, buildRuleConditionTree(child, conditions))
 		}
 		return tree
 	case ConditionTreeKindMatch:
 		if shape.conditionIndex < 0 || shape.conditionIndex >= len(conditions) {
-			return RuleConditionTree{kind: ConditionTreeKindUnknown}
+			return RuleConditionTree{KindValue: ConditionTreeKindUnknown}
 		}
 		return RuleConditionTree{
-			kind:     ConditionTreeKindMatch,
-			match:    conditions[shape.conditionIndex].clone(),
-			hasMatch: true,
-			source:   conditions[shape.conditionIndex].source,
+			KindValue:      ConditionTreeKindMatch,
+			MatchCondition: cloneRuleCondition(conditions[shape.conditionIndex]),
+			HasMatch:       true,
+			SourceSpan:     conditions[shape.conditionIndex].SourceSpan,
 		}
 	case ConditionTreeKindTest:
 		return RuleConditionTree{
-			kind:    ConditionTreeKindTest,
-			test:    cloneExpressionSpec(shape.test),
-			hasTest: true,
-			source:  shape.source,
+			KindValue:      ConditionTreeKindTest,
+			TestExpression: cloneExpressionSpec(shape.test),
+			HasTest:        true,
+			SourceSpan:     shape.source,
 		}
 	case ConditionTreeKindNot:
 		tree := RuleConditionTree{
-			kind:     ConditionTreeKindNot,
-			children: make([]RuleConditionTree, 0, len(shape.children)),
+			KindValue:     ConditionTreeKindNot,
+			ChildrenValue: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
-			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+			tree.ChildrenValue = append(tree.ChildrenValue, buildRuleConditionTree(child, conditions))
 		}
 		return tree
 	case ConditionTreeKindOr:
 		tree := RuleConditionTree{
-			kind:     ConditionTreeKindOr,
-			children: make([]RuleConditionTree, 0, len(shape.children)),
+			KindValue:     ConditionTreeKindOr,
+			ChildrenValue: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
-			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+			tree.ChildrenValue = append(tree.ChildrenValue, buildRuleConditionTree(child, conditions))
 		}
 		return tree
 	case ConditionTreeKindExists:
 		tree := RuleConditionTree{
-			kind:     ConditionTreeKindExists,
-			children: make([]RuleConditionTree, 0, len(shape.children)),
+			KindValue:     ConditionTreeKindExists,
+			ChildrenValue: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
-			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+			tree.ChildrenValue = append(tree.ChildrenValue, buildRuleConditionTree(child, conditions))
 		}
 		return tree
 	case ConditionTreeKindForall:
 		tree := RuleConditionTree{
-			kind:     ConditionTreeKindForall,
-			children: make([]RuleConditionTree, 0, len(shape.children)),
+			KindValue:     ConditionTreeKindForall,
+			ChildrenValue: make([]RuleConditionTree, 0, len(shape.children)),
 		}
 		for _, child := range shape.children {
-			tree.children = append(tree.children, buildRuleConditionTree(child, conditions))
+			tree.ChildrenValue = append(tree.ChildrenValue, buildRuleConditionTree(child, conditions))
 		}
 		return tree
 	case ConditionTreeKindAccumulate:
 		return RuleConditionTree{
-			kind:         ConditionTreeKindAccumulate,
-			aggregate:    shape.aggregate.clone(),
-			hasAggregate: true,
-			source:       shape.source,
+			KindValue:      ConditionTreeKindAccumulate,
+			AggregateValue: cloneAccumulateCondition(shape.aggregate),
+			HasAggregate:   true,
+			SourceSpan:     shape.source,
 		}
 	default:
-		return RuleConditionTree{kind: ConditionTreeKindUnknown}
+		return RuleConditionTree{KindValue: ConditionTreeKindUnknown}
 	}
 }
 
@@ -2996,14 +2374,14 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	sum.Write(fmt.Appendf(nil, "%t", rule.allActionsSkipBindingFreeze))
 	sum.Write([]byte("\nconditions:"))
 	for _, condition := range rule.conditions {
-		sum.Write(fmt.Appendf(nil, "%d:", condition.order))
-		sum.Write([]byte(condition.binding))
+		sum.Write(fmt.Appendf(nil, "%d:", condition.Order))
+		sum.Write([]byte(condition.BindingName))
 		sum.Write([]byte(":"))
-		sum.Write([]byte(condition.name))
+		sum.Write([]byte(condition.NameValue))
 		sum.Write([]byte(":"))
-		sum.Write([]byte(condition.templateKey.String()))
+		sum.Write([]byte(condition.TemplateKeyValue.String()))
 		sum.Write([]byte(":"))
-		for _, constraint := range condition.fieldConstraints {
+		for _, constraint := range condition.FieldConstraintValues {
 			sum.Write([]byte(constraint.Field))
 			sum.Write([]byte("="))
 			sum.Write([]byte(string(constraint.Operator)))
@@ -3012,8 +2390,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte(","))
 		}
 		sum.Write([]byte("|"))
-		for _, pattern := range condition.listPatterns {
-			sum.Write([]byte(pattern.Path().display()))
+		for _, pattern := range condition.ListPatternValues {
+			sum.Write([]byte(pathDisplay(pattern.Path())))
 			sum.Write([]byte(":"))
 			for _, element := range pattern.Elements() {
 				sum.Write([]byte(string(element.Kind())))
@@ -3023,11 +2401,11 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			}
 			sum.Write([]byte(";"))
 		}
-		if condition.order >= 0 && condition.order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.order].listPatterns) > 0 {
-			sum.Write([]byte(serializeCompiledListPatterns(rule.conditionPlans[condition.order].listPatterns)))
+		if condition.Order >= 0 && condition.Order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.Order].listPatterns) > 0 {
+			sum.Write([]byte(serializeCompiledListPatterns(rule.conditionPlans[condition.Order].listPatterns)))
 		}
 		sum.Write([]byte("|"))
-		for _, join := range condition.joinConstraints {
+		for _, join := range condition.JoinConstraintValues {
 			sum.Write([]byte(join.Field))
 			sum.Write([]byte("="))
 			sum.Write([]byte(string(join.Operator)))
@@ -3037,11 +2415,11 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte(join.Ref.Field))
 			sum.Write([]byte(","))
 		}
-		if condition.order >= 0 && condition.order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.order].predicates) > 0 {
+		if condition.Order >= 0 && condition.Order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.Order].predicates) > 0 {
 			sum.Write([]byte("|"))
-			sum.Write([]byte(serializeCompiledExpressionPredicates(rule.conditionPlans[condition.order].predicates)))
+			sum.Write([]byte(serializeCompiledExpressionPredicates(rule.conditionPlans[condition.Order].predicates)))
 		}
-		if condition.explicit {
+		if condition.ExplicitValue {
 			sum.Write([]byte("|explicit"))
 		}
 		sum.Write([]byte(";"))
@@ -3076,20 +2454,20 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			if !ok {
 				continue
 			}
-			sum.Write(fmt.Appendf(nil, "%d:", condition.order))
+			sum.Write(fmt.Appendf(nil, "%d:", condition.Order))
 			if plan.negated {
 				sum.Write([]byte("not:"))
 			}
 			if plan.explicit {
 				sum.Write([]byte("explicit:"))
 			}
-			sum.Write([]byte(condition.binding))
+			sum.Write([]byte(condition.BindingName))
 			sum.Write([]byte(":"))
-			sum.Write([]byte(condition.name))
+			sum.Write([]byte(condition.NameValue))
 			sum.Write([]byte(":"))
-			sum.Write([]byte(condition.templateKey.String()))
+			sum.Write([]byte(condition.TemplateKeyValue.String()))
 			sum.Write([]byte(":"))
-			for _, constraint := range condition.fieldConstraints {
+			for _, constraint := range condition.FieldConstraintValues {
 				sum.Write([]byte(constraint.Field))
 				sum.Write([]byte("="))
 				sum.Write([]byte(string(constraint.Operator)))
@@ -3098,8 +2476,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 				sum.Write([]byte(","))
 			}
 			sum.Write([]byte("|"))
-			for _, pattern := range condition.listPatterns {
-				sum.Write([]byte(pattern.Path().display()))
+			for _, pattern := range condition.ListPatternValues {
+				sum.Write([]byte(pathDisplay(pattern.Path())))
 				sum.Write([]byte(":"))
 				for _, element := range pattern.Elements() {
 					sum.Write([]byte(string(element.Kind())))
@@ -3110,7 +2488,7 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 				sum.Write([]byte(";"))
 			}
 			sum.Write([]byte("|"))
-			for _, join := range condition.joinConstraints {
+			for _, join := range condition.JoinConstraintValues {
 				sum.Write([]byte(join.Field))
 				sum.Write([]byte("="))
 				sum.Write([]byte(string(join.Operator)))
@@ -3173,8 +2551,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 	}
 	sum.Write([]byte("\nactions:"))
 	for _, action := range rule.actions {
-		sum.Write(fmt.Appendf(nil, "%d:", action.order))
-		sum.Write([]byte(action.name))
+		sum.Write(fmt.Appendf(nil, "%d:", action.Order))
+		sum.Write([]byte(action.NameValue))
 		sum.Write([]byte(";"))
 	}
 	sum.Write([]byte("\naction-executions:"))
@@ -3233,7 +2611,7 @@ func ruleTreeConditionByOrder(conditions []RuleCondition, path []int) (RuleCondi
 	}
 	order := path[0]
 	for _, condition := range conditions {
-		if condition.order == order {
+		if condition.Order == order {
 			return condition, true
 		}
 	}

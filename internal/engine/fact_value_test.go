@@ -85,13 +85,13 @@ func TestValueImmutabilityAgainstCallerMapsAndPointers(t *testing.T) {
 	stored := mustSnapshot(t, context.Background(), session).Facts()[0]
 	storedFields := stored.Fields()
 	storedPayload := storedFields["payload"]
-	storedPayloadMap := storedPayload.data.(map[string]Value)
+	storedPayloadMap, _ := storedPayload.AsMap()
 
-	if got := storedPayloadMap["count"].intValue; got != 1 {
+	if got := valueInt64(storedPayloadMap["count"]); got != 1 {
 		t.Fatalf("stored map count = %d, want %d", got, 1)
 	}
-	storedTags := storedPayloadMap["tags"].data.([]Value)
-	if got := storedTags[0].stringValue; got != "alpha" {
+	storedTags, _ := storedPayloadMap["tags"].AsList()
+	if got := valueString(storedTags[0]); got != "alpha" {
 		t.Fatalf("stored tags[0] = %q, want %q", got, "alpha")
 	}
 }
@@ -192,7 +192,7 @@ func TestMissingNullAndZeroDistinction(t *testing.T) {
 func TestTemplateAndNameIndexesAndResetGenerations(t *testing.T) {
 	revision := mustCompile(t, TemplateSpec{Name: "person", Fields: []FieldSpec{{Name: "name", Kind: ValueString}}})
 	session := mustSession(t, revision, "index-session")
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("expected template person to exist")
 	}
@@ -260,13 +260,27 @@ func TestValueAndSnapshotImmutabilityNested(t *testing.T) {
 	}
 
 	returned := facts[0].Fields()
-	returnedOuter := returned["outer"].data.(map[string]Value)
-	returnInner := returnedOuter["inner"].data.([]Value)
+	outerValue := returned["outer"]
+	returnedOuter, _ := outerValue.AsMap()
+	innerValue := returnedOuter["inner"]
+	returnedOuter["inner"] = mustValue(t, []any{"mutated"})
+	rereadOuter, _ := outerValue.AsMap()
+	if !rereadOuter["inner"].Equal(mustValue(t, []any{1, 2})) {
+		t.Fatalf("AsMap returned aliased storage")
+	}
+	returnInner, _ := innerValue.AsList()
 	returnInner[0] = newStringValue("mutated")
+	rereadInner, _ := innerValue.AsList()
+	if !rereadInner[0].Equal(mustValue(t, 1)) {
+		t.Fatalf("AsList returned aliased storage")
+	}
 
 	facts = mustSnapshot(t, context.Background(), session).Facts()
-	actual := facts[0].Fields()["outer"].data.(map[string]Value)["inner"].data.([]Value)
-	if actual[0].intValue != result.Fact.Fields()["outer"].data.(map[string]Value)["inner"].data.([]Value)[0].intValue {
+	actualOuter, _ := facts[0].Fields()["outer"].AsMap()
+	actual, _ := actualOuter["inner"].AsList()
+	resultOuter, _ := result.Fact.Fields()["outer"].AsMap()
+	resultInner, _ := resultOuter["inner"].AsList()
+	if !actual[0].Equal(resultInner[0]) {
 		t.Fatalf("snapshot mutation leaked into session snapshot")
 	}
 }
@@ -283,8 +297,8 @@ func TestNumericValuesAndUnsupportedTypes(t *testing.T) {
 	if !intValue.Equal(floatValue) {
 		t.Fatalf("numeric equality should match equal int and float values")
 	}
-	if intValue.canonicalKey() != floatValue.canonicalKey() {
-		t.Fatalf("numeric duplicate keys differ: %q vs %q", intValue.canonicalKey(), floatValue.canonicalKey())
+	if intValue.CanonicalKey() != floatValue.CanonicalKey() {
+		t.Fatalf("numeric duplicate keys differ: %q vs %q", intValue.CanonicalKey(), floatValue.CanonicalKey())
 	}
 
 	type customInt int
@@ -323,8 +337,11 @@ func TestScalarValuesUseTypedStorage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewValue: %v", err)
 			}
-			if value.data != nil {
-				t.Fatalf("scalar value data = %#v, want nil", value.data)
+			if _, ok := value.AsList(); ok {
+				t.Fatalf("scalar value exposed list storage")
+			}
+			if _, ok := value.AsMap(); ok {
+				t.Fatalf("scalar value exposed map storage")
 			}
 		})
 	}
@@ -333,10 +350,13 @@ func TestScalarValuesUseTypedStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewValue list: %v", err)
 	}
-	values := list.data.([]Value)
+	values, _ := list.AsList()
 	for i, value := range values {
-		if value.data != nil {
-			t.Fatalf("list scalar value %d data = %#v, want nil", i, value.data)
+		if _, ok := value.AsList(); ok {
+			t.Fatalf("list scalar value %d exposed list storage", i)
+		}
+		if _, ok := value.AsMap(); ok {
+			t.Fatalf("list scalar value %d exposed map storage", i)
 		}
 	}
 }

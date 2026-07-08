@@ -786,31 +786,43 @@ func steadyStateIntField(fact FactSnapshot, field string) (int, error) {
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q", field)
 	}
-	return int(value.intValue), nil
+	return int(valueInt64(value)), nil
 }
 
 func steadyStateBindingInt(ctx ActionContext, binding, field string) (int, error) {
-	value, ok := ctx.bindingScalarValue(binding, field)
+	internalCtx, ok := unwrapActionContext(ctx)
+	if !ok {
+		return 0, fmt.Errorf("missing engine action context")
+	}
+	value, ok := internalCtx.bindingScalarValue(binding, field)
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q on binding %q", field, binding)
 	}
-	return int(value.intValue), nil
+	return int(valueInt64(value)), nil
 }
 
 func steadyStateBindingIntAt(ctx ActionContext, bindingSlot int, field string) (int, error) {
-	value, ok := ctx.bindingScalarValueAt(bindingSlot, field)
+	internalCtx, ok := unwrapActionContext(ctx)
+	if !ok {
+		return 0, fmt.Errorf("missing engine action context")
+	}
+	value, ok := internalCtx.bindingScalarValueAt(bindingSlot, field)
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field %q on binding slot %d", field, bindingSlot)
 	}
-	return int(value.intValue), nil
+	return int(valueInt64(value)), nil
 }
 
 func steadyStateBindingIntAtSlot(ctx ActionContext, bindingSlot, fieldSlot int) (int, error) {
-	value, ok := ctx.bindingScalarValueAtSlot(bindingSlot, fieldSlot)
+	internalCtx, ok := unwrapActionContext(ctx)
+	if !ok {
+		return 0, fmt.Errorf("missing engine action context")
+	}
+	value, ok := internalCtx.bindingScalarValueAtSlot(bindingSlot, fieldSlot)
 	if !ok || value.Kind() != ValueInt {
 		return 0, fmt.Errorf("missing int field slot %d on binding slot %d", fieldSlot, bindingSlot)
 	}
-	return int(value.intValue), nil
+	return int(valueInt64(value)), nil
 }
 
 func steadyStateIntValue(n int) Value {

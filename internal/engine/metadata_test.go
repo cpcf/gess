@@ -11,7 +11,7 @@ func TestFactsDefaultToStatedSupportMetadata(t *testing.T) {
 		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
 	})
 	session := mustSession(t, revision, "support-state-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}

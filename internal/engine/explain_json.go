@@ -156,7 +156,7 @@ func valueToJSON(value Value) any {
 		raw, _ := value.AsString()
 		return raw
 	case ValueList:
-		raw, ok := value.data.([]Value)
+		raw, ok := value.AsList()
 		if !ok {
 			return nil
 		}
@@ -166,7 +166,7 @@ func valueToJSON(value Value) any {
 		}
 		return out
 	case ValueMap:
-		raw, ok := value.data.(map[string]Value)
+		raw, ok := value.AsMap()
 		if !ok {
 			return nil
 		}

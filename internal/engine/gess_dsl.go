@@ -24,10 +24,6 @@ type DSLMissingRegistrations struct {
 	Actions []string
 }
 
-// DSLCallFunc is a host-provided action that receives positional arguments
-// evaluated from a .gess (call name arg...) form.
-type DSLCallFunc func(ActionContext, []Value) error
-
 // GessDocument is a parsed Gess source file.
 type GessDocument struct {
 	name     string
@@ -400,7 +396,7 @@ func (l *gessLoader) loadTemplate(form gessSExpr) error {
 	if err := l.workspace.AddTemplate(spec); err != nil {
 		return l.wrap(form.Span, "add template", err)
 	}
-	key := QualifiedName{Module: normalizeModuleName(module), Name: name}.normalized()
+	key := normalizeQualifiedName(QualifiedName{Module: normalizeModuleName(module), Name: name})
 	l.templates[key] = spec
 	return nil
 }
@@ -1035,7 +1031,7 @@ func (l *gessLoader) buildAssertAction(ruleName string, index int, module Module
 	// Prefer the native template-values fast path (output-only optimization)
 	// when the target is a fixed template and all slots are present.
 	if !logical && templateKey != "" {
-		if templateSpec, ok := l.templates[QualifiedName{Module: normalizeModuleName(mod), Name: name}.normalized()]; ok {
+		if templateSpec, ok := l.templates[normalizeQualifiedName(QualifiedName{Module: normalizeModuleName(mod), Name: name})]; ok {
 			if native, ok := gessNativeAssertTemplateValues(templateKey, templateSpec, fields, values); ok {
 				action.AssertTemplateValues = native
 				return action, nil
@@ -1325,7 +1321,7 @@ func (l *gessLoader) templateKey(module ModuleName, name string) TemplateKey {
 	if l == nil {
 		return ""
 	}
-	spec, ok := l.templates[QualifiedName{Module: normalizeModuleName(module), Name: name}.normalized()]
+	spec, ok := l.templates[normalizeQualifiedName(QualifiedName{Module: normalizeModuleName(module), Name: name})]
 	if !ok {
 		return ""
 	}

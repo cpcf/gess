@@ -371,7 +371,7 @@ func TestListPatternValidationRejectsAmbiguousOrCollidingSegments(t *testing.T) 
 	})
 }
 
-func listPatternValidationWorkspace(t testing.TB) (*Workspace, Template) {
+func listPatternValidationWorkspace(t testing.TB) (*Workspace, compiledTemplate) {
 	t.Helper()
 	workspace := NewWorkspace()
 	event := mustAddTemplate(t, workspace, TemplateSpec{

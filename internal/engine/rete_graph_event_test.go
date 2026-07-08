@@ -9,7 +9,7 @@ import (
 func TestReteGraphPropagationEventCarriesModifyMetadata(t *testing.T) {
 	revision, templateKey := mustModifyFastPathRuleset(t)
 	before := FactSnapshot{
-		id:          FactID{generation: 7, sequence: 1},
+		id:          newFactID(7, 1),
 		name:        "person",
 		templateKey: templateKey,
 		generation:  7,

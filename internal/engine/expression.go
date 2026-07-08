@@ -5,334 +5,77 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-// ExpressionSpec is a deterministic rule predicate expression tree node.
-type ExpressionSpec interface {
-	expressionSpecNode()
-}
+type ExpressionSpec = gessrules.ExpressionSpec
 
-type ExpressionComparisonOperator string
+type ExpressionComparisonOperator = gessrules.ExpressionComparisonOperator
 
 const (
-	ExpressionCompareUnknown        ExpressionComparisonOperator = ""
-	ExpressionCompareEqual          ExpressionComparisonOperator = "eq"
-	ExpressionCompareNotEqual       ExpressionComparisonOperator = "neq"
-	ExpressionCompareLessThan       ExpressionComparisonOperator = "lt"
-	ExpressionCompareLessOrEqual    ExpressionComparisonOperator = "lte"
-	ExpressionCompareGreaterThan    ExpressionComparisonOperator = "gt"
-	ExpressionCompareGreaterOrEqual ExpressionComparisonOperator = "gte"
+	ExpressionCompareUnknown        = gessrules.ExpressionCompareUnknown
+	ExpressionCompareEqual          = gessrules.ExpressionCompareEqual
+	ExpressionCompareNotEqual       = gessrules.ExpressionCompareNotEqual
+	ExpressionCompareLessThan       = gessrules.ExpressionCompareLessThan
+	ExpressionCompareLessOrEqual    = gessrules.ExpressionCompareLessOrEqual
+	ExpressionCompareGreaterThan    = gessrules.ExpressionCompareGreaterThan
+	ExpressionCompareGreaterOrEqual = gessrules.ExpressionCompareGreaterOrEqual
 )
 
-type ExpressionBooleanOperator string
+type ExpressionBooleanOperator = gessrules.ExpressionBooleanOperator
 
 const (
-	ExpressionBoolUnknown ExpressionBooleanOperator = ""
-	ExpressionBoolAnd     ExpressionBooleanOperator = "and"
-	ExpressionBoolOr      ExpressionBooleanOperator = "or"
-	ExpressionBoolNot     ExpressionBooleanOperator = "not"
+	ExpressionBoolUnknown = gessrules.ExpressionBoolUnknown
+	ExpressionBoolAnd     = gessrules.ExpressionBoolAnd
+	ExpressionBoolOr      = gessrules.ExpressionBoolOr
+	ExpressionBoolNot     = gessrules.ExpressionBoolNot
 )
 
-type ConstExpr struct {
-	Value any
-}
-
-func (ConstExpr) expressionSpecNode() {}
-
-func (s ConstExpr) clone() ConstExpr {
-	return ConstExpr{Value: cloneSpecValue(s.Value)}
-}
-
-type CurrentFieldExpr struct {
-	Field string
-	Path  PathSpec
-}
-
-func (CurrentFieldExpr) expressionSpecNode() {}
-
-func (s CurrentFieldExpr) clone() CurrentFieldExpr {
-	s.Field = strings.TrimSpace(s.Field)
-	s.Path = s.Path.clone()
-	return s
-}
-
-type BindingFieldExpr struct {
-	Binding string
-	Field   string
-	Path    PathSpec
-}
-
-func (BindingFieldExpr) expressionSpecNode() {}
-
-func (s BindingFieldExpr) clone() BindingFieldExpr {
-	s.Binding = strings.TrimSpace(s.Binding)
-	s.Field = strings.TrimSpace(s.Field)
-	s.Path = s.Path.clone()
-	return s
-}
-
-type HasPathExpr struct {
-	Path PathSpec
-}
-
-func (HasPathExpr) expressionSpecNode() {}
-
-func (s HasPathExpr) clone() HasPathExpr {
-	s.Path = s.Path.clone()
-	return s
-}
+type ConstExpr = gessrules.ConstExpr
+type CurrentFieldExpr = gessrules.CurrentFieldExpr
+type BindingFieldExpr = gessrules.BindingFieldExpr
+type HasPathExpr = gessrules.HasPathExpr
 
 func CurrentPath(path PathSpec) CurrentFieldExpr {
-	return CurrentFieldExpr{Path: path.clone()}
+	return gessrules.CurrentPath(path)
 }
 
 func BindingPath(binding string, path PathSpec) BindingFieldExpr {
-	return BindingFieldExpr{Binding: binding, Path: path.clone()}
+	return gessrules.BindingPath(binding, path)
 }
 
 func HasPath(path PathSpec) HasPathExpr {
-	return HasPathExpr{Path: path.clone()}
+	return gessrules.HasPath(path)
 }
 
-type BindingValueExpr struct {
-	Binding string
-}
-
-func (BindingValueExpr) expressionSpecNode() {}
-
-func (s BindingValueExpr) clone() BindingValueExpr {
-	s.Binding = strings.TrimSpace(s.Binding)
-	return s
-}
-
-// ParamExpr references a named query parameter. It is valid only inside query
-// predicates and query return expressions.
-type ParamExpr struct {
-	Name string
-}
-
-func (ParamExpr) expressionSpecNode() {}
-
-func (s ParamExpr) clone() ParamExpr {
-	s.Name = strings.TrimSpace(s.Name)
-	return s
-}
-
-// GlobalExpr references a declared session global. Global values are immutable
-// for the lifetime of a session and are supplied through NewSession options.
-type GlobalExpr struct {
-	Name string
-}
-
-func (GlobalExpr) expressionSpecNode() {}
-
-func (s GlobalExpr) clone() GlobalExpr {
-	s.Name = strings.TrimSpace(s.Name)
-	return s
-}
-
-// RHSBindExpr references a right-hand-side local variable created by a bind
-// action earlier in the same rule firing. It is valid only inside action
-// values, never on a rule or query left-hand side.
-type RHSBindExpr struct {
-	Name string
-}
-
-func (RHSBindExpr) expressionSpecNode() {}
-
-func (s RHSBindExpr) clone() RHSBindExpr {
-	s.Name = strings.TrimSpace(s.Name)
-	return s
-}
-
-type CallExpr struct {
-	Name string
-	Args []ExpressionSpec
-}
-
-func (CallExpr) expressionSpecNode() {}
+type BindingValueExpr = gessrules.BindingValueExpr
+type ParamExpr = gessrules.ParamExpr
+type GlobalExpr = gessrules.GlobalExpr
+type RHSBindExpr = gessrules.RHSBindExpr
+type CallExpr = gessrules.CallExpr
 
 func Call(name string, args ...ExpressionSpec) CallExpr {
-	out := CallExpr{Name: strings.TrimSpace(name), Args: make([]ExpressionSpec, len(args))}
-	for i, arg := range args {
-		out.Args[i] = cloneExpressionSpec(arg)
-	}
-	return out
-}
-
-func (s CallExpr) clone() CallExpr {
-	s.Name = strings.TrimSpace(s.Name)
-	args := s.Args
-	s.Args = make([]ExpressionSpec, len(args))
-	for i, arg := range args {
-		s.Args[i] = cloneExpressionSpec(arg)
-	}
-	return s
-}
-
-type CompareExpr struct {
-	Operator ExpressionComparisonOperator
-	Left     ExpressionSpec
-	Right    ExpressionSpec
-}
-
-func (CompareExpr) expressionSpecNode() {}
-
-func (s CompareExpr) clone() CompareExpr {
-	s.Left = cloneExpressionSpec(s.Left)
-	s.Right = cloneExpressionSpec(s.Right)
-	return s
-}
-
-type BooleanExpr struct {
-	Operator ExpressionBooleanOperator
-	Operands []ExpressionSpec
-}
-
-func (BooleanExpr) expressionSpecNode() {}
-
-func (s BooleanExpr) clone() BooleanExpr {
-	operands := s.Operands
-	s.Operands = make([]ExpressionSpec, len(operands))
-	for i, operand := range operands {
-		s.Operands[i] = cloneExpressionSpec(operand)
-	}
-	return s
+	return gessrules.Call(name, args...)
 }
 
 func cloneExpressionSpec(spec ExpressionSpec) ExpressionSpec {
-	switch expression := spec.(type) {
-	case nil:
-		return nil
-	case ConstExpr:
-		return expression.clone()
-	case *ConstExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case CurrentFieldExpr:
-		return expression.clone()
-	case *CurrentFieldExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case BindingFieldExpr:
-		return expression.clone()
-	case *BindingFieldExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case HasPathExpr:
-		return expression.clone()
-	case *HasPathExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case BindingValueExpr:
-		return expression.clone()
-	case *BindingValueExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case ParamExpr:
-		return expression.clone()
-	case *ParamExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case GlobalExpr:
-		return expression.clone()
-	case *GlobalExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case RHSBindExpr:
-		return expression.clone()
-	case *RHSBindExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case CallExpr:
-		return expression.clone()
-	case *CallExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case CompareExpr:
-		return expression.clone()
-	case *CompareExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	case BooleanExpr:
-		return expression.clone()
-	case *BooleanExpr:
-		if expression == nil {
-			return nil
-		}
-		cloned := expression.clone()
-		return &cloned
-	default:
-		return spec
-	}
+	return gessrules.CloneExpressionSpec(spec)
 }
 
-type ExpressionPredicatePlacement string
+type CompareExpr = gessrules.CompareExpr
+type BooleanExpr = gessrules.BooleanExpr
+
+type ExpressionPredicatePlacement = gessrules.ExpressionPredicatePlacement
 
 const (
-	ExpressionPredicatePlacementUnknown      ExpressionPredicatePlacement = ""
-	ExpressionPredicatePlacementAlpha        ExpressionPredicatePlacement = "alpha"
-	ExpressionPredicatePlacementBetaResidual ExpressionPredicatePlacement = "beta-residual"
-	ExpressionPredicatePlacementUnsupported  ExpressionPredicatePlacement = "unsupported"
+	ExpressionPredicatePlacementUnknown      = gessrules.ExpressionPredicatePlacementUnknown
+	ExpressionPredicatePlacementAlpha        = gessrules.ExpressionPredicatePlacementAlpha
+	ExpressionPredicatePlacementBetaResidual = gessrules.ExpressionPredicatePlacementBetaResidual
+	ExpressionPredicatePlacementUnsupported  = gessrules.ExpressionPredicatePlacementUnsupported
 )
 
-type ExpressionPredicate struct {
-	expression ExpressionSpec
-	placement  ExpressionPredicatePlacement
-	order      int
-	source     SourceSpan
-}
-
-func (p ExpressionPredicate) Expression() ExpressionSpec {
-	return cloneExpressionSpec(p.expression)
-}
-
-func (p ExpressionPredicate) Placement() ExpressionPredicatePlacement {
-	return p.placement
-}
-
-func (p ExpressionPredicate) DeclarationOrder() int {
-	return p.order
-}
-
-func (p ExpressionPredicate) Source() SourceSpan {
-	return p.source
-}
-
-func (p ExpressionPredicate) clone() ExpressionPredicate {
-	p.expression = cloneExpressionSpec(p.expression)
-	return p
-}
+type ExpressionPredicate = gessrules.ExpressionPredicate
 
 type expressionNodeKind string
 
@@ -381,11 +124,9 @@ func compileExpressionPredicateSpec(
 	spec ExpressionSpec,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-) (ExpressionPredicate, compiledExpressionPredicate, error) {
+	templatesByKey map[TemplateKey]compiledTemplate) (ExpressionPredicate, compiledExpressionPredicate, error) {
 	return compileExpressionPredicateSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil, nil, nil)
 }
 
@@ -393,11 +134,9 @@ func compileExpressionPredicateSpecWithParams(
 	spec ExpressionSpec,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
@@ -409,11 +148,9 @@ func compileExpressionPredicateSpecWithParamsAndSource(
 	source SourceSpan,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
@@ -443,10 +180,10 @@ func compileExpressionPredicateSpecWithParamsAndSource(
 	}
 	compiled.evalMeta = compiled.buildFunctionEvaluationMeta()
 	return ExpressionPredicate{
-		expression: cloneExpressionSpec(spec),
-		placement:  placement,
-		order:      predicateIndex,
-		source:     source,
+		ExpressionSpec: cloneExpressionSpec(spec),
+		PlacementValue: placement,
+		Order:          predicateIndex,
+		SourceSpan:     source,
 	}, compiled, nil
 }
 
@@ -454,11 +191,9 @@ func compileExpressionSpec(
 	spec ExpressionSpec,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-) (compiledExpression, bool, error) {
+	templatesByKey map[TemplateKey]compiledTemplate) (compiledExpression, bool, error) {
 	return compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, nil, nil, nil)
 }
 
@@ -466,11 +201,9 @@ func compileExpressionSpecWithParams(
 	spec ExpressionSpec,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (compiledExpression, bool, error) {
@@ -569,16 +302,16 @@ func compileConstExpression(spec ConstExpr, ruleName string, conditionIndex, pre
 	}, false, nil
 }
 
-func compileCurrentFieldExpression(spec CurrentFieldExpr, ruleName string, conditionIndex, predicateIndex int, template *Template) (compiledExpression, bool, error) {
+func compileCurrentFieldExpression(spec CurrentFieldExpr, ruleName string, conditionIndex, predicateIndex int, template *compiledTemplate) (compiledExpression, bool, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, strings.TrimSpace(spec.Field), "current field expression cannot set both field and path", ErrInvalidPath)
 	}
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(CurrentFieldExpr)
 	normalized.Path = pathOrField(normalized.Path, normalized.Field)
-	if normalized.Path.isZero() {
+	if pathIsZero(normalized.Path) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "current path expression requires a path", ErrInvalidPath)
 	}
-	normalized.Field = normalized.Path.root()
+	normalized.Field = pathRoot(normalized.Path)
 	access, kind, err := compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, template, normalized.Path)
 	if err != nil {
 		return compiledExpression{}, false, err
@@ -596,20 +329,19 @@ func compileBindingFieldExpression(
 	conditionIndex, predicateIndex int,
 	conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-) (compiledExpression, bool, error) {
+	templatesByKey map[TemplateKey]compiledTemplate) (compiledExpression, bool, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, strings.TrimSpace(spec.Field), "binding field expression cannot set both field and path", ErrInvalidPath)
 	}
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(BindingFieldExpr)
 	normalized.Path = pathOrField(normalized.Path, normalized.Field)
 	if normalized.Binding == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression requires a binding", nil)
 	}
-	if normalized.Path.isZero() {
+	if pathIsZero(normalized.Path) {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding path expression requires a path", ErrInvalidPath)
 	}
-	normalized.Field = normalized.Path.root()
+	normalized.Field = pathRoot(normalized.Path)
 	refSlot, ok := bindingSlots[normalized.Binding]
 	if !ok {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding field expression must refer to an earlier condition", nil)
@@ -619,10 +351,10 @@ func compileBindingFieldExpression(
 	}
 
 	refCondition := conditions[refSlot]
-	access := compiledPathAccess{path: normalized.Path.clone(), root: normalized.Path.root(), rootSlot: -1}
+	access := compiledPathAccess{path: clonePathSpec(normalized.Path), root: pathRoot(normalized.Path), rootSlot: -1}
 	kind := ValueAny
-	if refCondition.templateKey != "" {
-		refTemplate, ok := templatesByKey[refCondition.templateKey]
+	if refCondition.TemplateKeyValue != "" {
+		refTemplate, ok := templatesByKey[refCondition.TemplateKeyValue]
 		if !ok {
 			return compiledExpression{}, false, fmt.Errorf("%w: missing template for expression binding %q", ErrMatcher, normalized.Binding)
 		}
@@ -631,8 +363,8 @@ func compileBindingFieldExpression(
 		if err != nil {
 			return compiledExpression{}, false, err
 		}
-	} else if err := normalized.Path.validate(); err != nil {
-		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, normalized.Path.root(), "invalid path", err)
+	} else if err := validatePathSpec(normalized.Path); err != nil {
+		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, pathRoot(normalized.Path), "invalid path", err)
 	}
 
 	return compiledExpression{
@@ -644,8 +376,8 @@ func compileBindingFieldExpression(
 	}, true, nil
 }
 
-func compileHasPathExpression(spec HasPathExpr, ruleName string, conditionIndex, predicateIndex int, template *Template) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+func compileHasPathExpression(spec HasPathExpr, ruleName string, conditionIndex, predicateIndex int, template *compiledTemplate) (compiledExpression, bool, error) {
+	normalized := cloneExpressionSpec(spec).(HasPathExpr)
 	access, _, err := compileExpressionPathRef(ruleName, conditionIndex, predicateIndex, template, normalized.Path)
 	if err != nil {
 		return compiledExpression{}, false, err
@@ -664,7 +396,7 @@ func compileBindingValueExpression(
 	conditions []RuleCondition,
 	bindingSlots map[string]int,
 ) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(BindingValueExpr)
 	if normalized.Binding == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "binding value expression requires a binding", nil)
 	}
@@ -684,7 +416,7 @@ func compileBindingValueExpression(
 }
 
 func compileParamExpression(spec ParamExpr, ruleName string, conditionIndex, predicateIndex int, params map[string]ValueKind) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(ParamExpr)
 	if normalized.Name == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "query parameter expression requires a name", nil)
 	}
@@ -706,7 +438,7 @@ func compileParamExpression(spec ParamExpr, ruleName string, conditionIndex, pre
 }
 
 func compileGlobalExpression(spec GlobalExpr, ruleName string, conditionIndex, predicateIndex int, globals map[string]compiledGlobal) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(GlobalExpr)
 	if normalized.Name == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "global expression requires a name", nil)
 	}
@@ -732,7 +464,7 @@ func compileGlobalExpression(spec GlobalExpr, ruleName string, conditionIndex, p
 // through the evaluation environment (the params map, which carries RHS binds
 // in action-value context).
 func compileRHSBindExpression(spec RHSBindExpr, ruleName string, conditionIndex, predicateIndex int) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(RHSBindExpr)
 	if normalized.Name == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "rhs bind expression requires a name", nil)
 	}
@@ -747,15 +479,13 @@ func compileCallExpression(
 	spec CallExpr,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (compiledExpression, bool, error) {
-	normalized := spec.clone()
+	normalized := cloneExpressionSpec(spec).(CallExpr)
 	if normalized.Name == "" {
 		return compiledExpression{}, false, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "function call requires a name", ErrFunctionValidation)
 	}
@@ -794,11 +524,9 @@ func compileCompareExpression(
 	spec CompareExpr,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (compiledExpression, bool, error) {
@@ -831,11 +559,9 @@ func compileBooleanExpression(
 	spec BooleanExpr,
 	ruleName string,
 	conditionIndex, predicateIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
-	templatesByKey map[TemplateKey]Template,
-	params map[string]ValueKind,
+	templatesByKey map[TemplateKey]compiledTemplate, params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
 	globals map[string]compiledGlobal,
 ) (compiledExpression, bool, error) {
@@ -874,15 +600,15 @@ func compileBooleanExpression(
 	}, referencesEarlier, nil
 }
 
-func compileExpressionPathRef(ruleName string, conditionIndex, predicateIndex int, template *Template, path PathSpec) (compiledPathAccess, ValueKind, error) {
-	if template != nil && template.closed && path.root() != "" {
-		if _, ok := template.fieldSlot(path.root()); !ok {
-			return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "unknown field", nil)
+func compileExpressionPathRef(ruleName string, conditionIndex, predicateIndex int, template *compiledTemplate, path PathSpec) (compiledPathAccess, ValueKind, error) {
+	if template != nil && template.closed && pathRoot(path) != "" {
+		if _, ok := template.fieldSlot(pathRoot(path)); !ok {
+			return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, pathRoot(path), "unknown field", nil)
 		}
 	}
 	access, kind, err := compilePathAccess(path, template)
 	if err != nil {
-		return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, path.root(), "invalid path", err)
+		return compiledPathAccess{}, valueKindUnknown, expressionValidationError(ruleName, conditionIndex, predicateIndex, pathRoot(path), "invalid path", err)
 	}
 	return access, kind, nil
 }
@@ -1133,7 +859,7 @@ func (p compiledExpressionPredicate) matchesWithContextParamsGlobalsAndCounters(
 	if value.Kind() != ValueBool {
 		return false, nil
 	}
-	return value.boolValue, nil
+	return valueBool(value), nil
 }
 
 func (p compiledExpressionPredicate) matchesWithCounters(fact conditionFactRef, bindings []conditionMatch, span *propagationCounterSpan) (bool, error) {
@@ -1160,7 +886,7 @@ func (p compiledExpressionPredicate) matchesTokenWithContextGlobalsAndCounters(c
 	if value.Kind() != ValueBool {
 		return false, nil
 	}
-	return value.boolValue, nil
+	return valueBool(value), nil
 }
 
 func (p compiledExpressionPredicate) functionEvaluationMeta() *FunctionEvaluationError {
@@ -1531,7 +1257,7 @@ func (e compiledExpression) evaluateCall(ctx context.Context, meta *FunctionEval
 		return Value{}, false, recordFunctionEvaluationError(span, meta, e.function.name, err)
 	}
 	value = cloneValue(value)
-	if value.kind == valueKindUnknown {
+	if value.Kind() == ValueNull {
 		value = NullValue()
 	}
 	if !expressionKindAssignable(e.function.ret, value.Kind()) {
@@ -1639,7 +1365,7 @@ func (e compiledExpression) evaluateBoolean(eval func(compiledExpression) (Value
 		if err != nil || !ok || value.Kind() != ValueBool {
 			return false, err
 		}
-		return value.boolValue, nil
+		return valueBool(value), nil
 	}
 
 	switch e.boolOp {
@@ -1699,14 +1425,7 @@ func expressionValidationError(ruleName string, conditionIndex, predicateIndex i
 }
 
 func cloneExpressionPredicates(in []ExpressionPredicate) []ExpressionPredicate {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]ExpressionPredicate, len(in))
-	for i, predicate := range in {
-		out[i] = predicate.clone()
-	}
-	return out
+	return gessrules.CloneExpressionPredicates(in)
 }
 
 func cloneCompiledExpressionPredicates(in []compiledExpressionPredicate) []compiledExpressionPredicate {
@@ -1769,7 +1488,7 @@ func optimizeCompiledPredicateExpression(expression compiledExpression) compiled
 		return compiledExpression{
 			kind:       expressionNodeConst,
 			resultKind: ValueBool,
-			value:      newBoolValue(!operand.value.boolValue),
+			value:      newBoolValue(!valueBool(operand.value)),
 		}
 	}
 	return expression
@@ -1874,7 +1593,7 @@ func serializeCompiledExpression(expression compiledExpression) string {
 	switch expression.kind {
 	case expressionNodeConst:
 		b.WriteString(",value=")
-		b.WriteString(expression.value.canonicalKey())
+		b.WriteString(expression.value.CanonicalKey())
 	case expressionNodeCurrentField:
 		b.WriteString(",field=")
 		b.WriteString(expression.access.root)

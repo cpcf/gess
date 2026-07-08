@@ -8,7 +8,7 @@ import (
 
 func TestSessionModifyMissingAndStaleFactID(t *testing.T) {
 	session := mustSession(t, mustCompile(t), "modify-missing-session")
-	result, err := session.Modify(context.Background(), FactID{generation: 1, sequence: 99}, FactPatch{})
+	result, err := session.Modify(context.Background(), newFactID(1, 99), FactPatch{})
 	if !errors.Is(err, ErrFactNotFound) {
 		t.Fatalf("expected ErrFactNotFound, got %v", err)
 	}
@@ -397,7 +397,7 @@ func TestSessionModifyTemplateUnsetDefaultAndOptionalBehavior(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "modify-template-unset-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -472,7 +472,7 @@ func TestSessionModifySlotBackedDeclaredTemplateSetUnsetDefaultRequiredAndDuplic
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -595,7 +595,7 @@ func TestSessionModifyTemplateUnsetRequiredFieldFailsAndLeavesWorkingMemory(t *t
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	template, ok := revision.Template("strict")
+	template, ok := revision.compiledTemplate("strict")
 	if !ok {
 		t.Fatal("expected template strict")
 	}
@@ -647,7 +647,7 @@ func TestSessionModifyDuplicateCollisionIsAtomicAndLeavesIndexes(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "modify-collision-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}
@@ -734,7 +734,7 @@ func TestSessionModifyDuplicateIndexUpdatesOnRealKeyChange(t *testing.T) {
 		},
 	})
 	session := mustSession(t, revision, "modify-duplicate-update-session")
-	template, ok := revision.Template("event")
+	template, ok := revision.compiledTemplate("event")
 	if !ok {
 		t.Fatal("expected template event")
 	}

@@ -26,50 +26,50 @@ type (
 	QueryArgs = engine.QueryArgs
 	// FactVersion advances each time a fact is modified; a fact's FactID
 	// stays stable across modifies within a generation.
-	FactVersion = engine.FactVersion
+	FactVersion = rules.FactVersion
 	// Recency is a session-wide counter that advances on every fact
 	// mutation, used to order which pending activation fires first.
-	Recency = engine.Recency
+	Recency = rules.Recency
 	// Generation is the working-memory reset epoch. FactIDs embed a
 	// generation, so IDs from before a Reset are stale afterward.
-	Generation = engine.Generation
+	Generation = rules.Generation
 	// FactID identifies a fact, stable across modifies within a
 	// generation. IDs from an earlier generation are stale after Reset.
-	FactID = engine.FactID
+	FactID = rules.FactID
 	// SessionID identifies a session, set with WithSessionID.
-	SessionID = engine.SessionID
+	SessionID = rules.SessionID
 	// RulesetID identifies one compiled ruleset revision.
 	RulesetID = rules.RulesetID
 	// ModuleName identifies an agenda focus module.
 	ModuleName = rules.ModuleName
 	// RunID is a per-session sequence number for a Run call.
-	RunID = engine.RunID
+	RunID = rules.RunID
 	// SourceSpan is a source location range within a .gess file, carried
 	// into runtime errors and events for rulesets loaded from .gess
 	// source.
-	SourceSpan = engine.SourceSpan
+	SourceSpan = rules.SourceSpan
 	// RuleID identifies a rule across revisions.
 	RuleID = rules.RuleID
 	// RuleRevisionID identifies a concrete compiled revision of a rule.
 	RuleRevisionID = rules.RuleRevisionID
 	// ActivationID identifies one activation: a rule paired with the
 	// specific facts that matched it.
-	ActivationID = engine.ActivationID
+	ActivationID = rules.ActivationID
 	// SupportID identifies one logical support edge.
-	SupportID = engine.SupportID
+	SupportID = rules.SupportID
 	// TemplateKey identifies a compiled template within a ruleset.
-	TemplateKey = engine.TemplateKey
+	TemplateKey = rules.TemplateKey
 	// PathSpec describes a path into a structured value.
 	PathSpec = rules.PathSpec
 	// Fields is a fact's field values, keyed by field name.
-	Fields = engine.Fields
+	Fields = rules.Fields
 	// FieldPresence records whether a template field was defaulted, explicit,
 	// or omitted.
 	FieldPresence = rules.FieldPresence
 	// Value is a typed field or expression value.
-	Value = engine.Value
+	Value = rules.Value
 	// ValueKind is a Value's type tag.
-	ValueKind = engine.ValueKind
+	ValueKind = rules.ValueKind
 	// EventType discriminates the kind of change an [Event] reports.
 	EventType = engine.EventType
 	// EventSeverity is an [Event]'s severity: info or error.
@@ -86,7 +86,7 @@ type (
 	Strategy = engine.Strategy
 	// MutationKind is the kind of change recorded in a [MutationDelta]:
 	// assert, modify, retract, or reset.
-	MutationKind = engine.MutationKind
+	MutationKind = rules.MutationKind
 	// RunStatus is the outcome of a Session.Run call.
 	RunStatus = engine.RunStatus
 	// RunOption configures one Session.Run call, such as
@@ -98,24 +98,23 @@ type (
 	ActionFailureError = engine.ActionFailureError
 	// DuplicateKey is the computed duplicate-detection key for a fact
 	// under its template's duplicate policy.
-	DuplicateKey = engine.DuplicateKey
+	DuplicateKey = rules.DuplicateKey
 	// FactSupportState classifies how a fact is supported: stated,
 	// logical, both, or metadata-only.
-	FactSupportState = engine.FactSupportState
+	FactSupportState = rules.FactSupportState
 	// FactSupportProvenance is a fact's support classification together
-	// with the engine's internal tracking of that support, returned by
-	// [FactSnapshot].Support.
-	FactSupportProvenance = engine.FactSupportProvenance
+	// with [FactSnapshot].Support.
+	FactSupportProvenance = rules.FactSupportProvenance
 	// FactPatch is the argument to Session.Modify: fields to set or
 	// overwrite, and field names to remove.
-	FactPatch = engine.FactPatch
+	FactPatch = rules.FactPatch
 	// AssertStatus is the outcome of a Session.Assert or
 	// AssertTemplateValues call.
-	AssertStatus = engine.AssertStatus
+	AssertStatus = rules.AssertStatus
 	// ModifyStatus is the outcome of a Session.Modify call.
-	ModifyStatus = engine.ModifyStatus
+	ModifyStatus = rules.ModifyStatus
 	// RetractStatus is the outcome of a Session.Retract call.
-	RetractStatus = engine.RetractStatus
+	RetractStatus = rules.RetractStatus
 	// ResetStatus is the outcome of a Session.Reset call.
 	ResetStatus = engine.ResetStatus
 	// ApplyRulesetStatus is the outcome of a Session.ApplyRuleset call.
@@ -127,10 +126,10 @@ type (
 	// [WithExplainLog].
 	ExplainLogOption = engine.ExplainLogOption
 	// WhyNotOutcome is the top-level answer in a [WhyNotReport].
-	WhyNotOutcome = engine.WhyNotOutcome
+	WhyNotOutcome = rules.WhyNotOutcome
 	// WhyNotConditionReason classifies why a condition failed to extend a
 	// partial match.
-	WhyNotConditionReason = engine.WhyNotConditionReason
+	WhyNotConditionReason = rules.WhyNotConditionReason
 	// WhyNotOption configures a Session.WhyNot probe.
 	WhyNotOption = engine.WhyNotOption
 	// WhatIfOption configures a Session.WhatIf run.
@@ -1732,28 +1731,28 @@ func WithWhatIfOutputWriter(w io.Writer) WhatIfOption {
 
 const (
 	// WhyNotActivated means the rule has a pending activation.
-	WhyNotActivated = engine.WhyNotActivated
+	WhyNotActivated = rules.WhyNotActivated
 	// WhyNotAlreadyFired means the rule matched and fired (refraction).
-	WhyNotAlreadyFired = engine.WhyNotAlreadyFired
+	WhyNotAlreadyFired = rules.WhyNotAlreadyFired
 	// WhyNotNeverMatched means no branch produced a complete match.
-	WhyNotNeverMatched = engine.WhyNotNeverMatched
+	WhyNotNeverMatched = rules.WhyNotNeverMatched
 	// WhyNotBlocked means the closest branch failed on a blocked negation.
-	WhyNotBlocked = engine.WhyNotBlocked
+	WhyNotBlocked = rules.WhyNotBlocked
 
 	// WhyNotReasonNone is the zero condition reason.
-	WhyNotReasonNone = engine.WhyNotReasonNone
+	WhyNotReasonNone = rules.WhyNotReasonNone
 	// WhyNotReasonNoAlphaMatches means the condition's pattern matched no
 	// fact.
-	WhyNotReasonNoAlphaMatches = engine.WhyNotReasonNoAlphaMatches
+	WhyNotReasonNoAlphaMatches = rules.WhyNotReasonNoAlphaMatches
 	// WhyNotReasonJoinMismatch means facts exist but their join keys do not
 	// align with the partial match.
-	WhyNotReasonJoinMismatch = engine.WhyNotReasonJoinMismatch
+	WhyNotReasonJoinMismatch = rules.WhyNotReasonJoinMismatch
 	// WhyNotReasonPredicate means a residual predicate or test rejected the
 	// candidate.
-	WhyNotReasonPredicate = engine.WhyNotReasonPredicate
+	WhyNotReasonPredicate = rules.WhyNotReasonPredicate
 	// WhyNotReasonNegationBlocked means a negated condition is blocked by
 	// one or more facts.
-	WhyNotReasonNegationBlocked = engine.WhyNotReasonNegationBlocked
+	WhyNotReasonNegationBlocked = rules.WhyNotReasonNegationBlocked
 
 	// ExplainSchemaVersion is the version of the machine-readable JSON
 	// explain contract emitted by MarshalJSON on Derivation, WhyNotReport,
@@ -1803,10 +1802,10 @@ const (
 	StrategyBreadth = engine.StrategyBreadth
 	// MutationAssert, MutationModify, MutationRetract, and MutationReset
 	// tag a [MutationDelta]'s Kind.
-	MutationAssert  = engine.MutationAssert
-	MutationModify  = engine.MutationModify
-	MutationRetract = engine.MutationRetract
-	MutationReset   = engine.MutationReset
+	MutationAssert  = rules.MutationAssert
+	MutationModify  = rules.MutationModify
+	MutationRetract = rules.MutationRetract
+	MutationReset   = rules.MutationReset
 	// RunCompleted reports that Run emptied the agenda.
 	RunCompleted = engine.RunCompleted
 	// RunHalted reports that an action called Halt; the halting
@@ -1831,85 +1830,85 @@ const (
 	RunFailed = engine.RunFailed
 	// FactSupportStated marks a fact asserted by host code and not
 	// logically supported.
-	FactSupportStated = engine.FactSupportStated
+	FactSupportStated = rules.FactSupportStated
 	// FactSupportLogical marks a fact asserted only through rule-driven
 	// logical support; it is retracted automatically when that support
 	// is removed, and can't be modified or retracted directly.
-	FactSupportLogical = engine.FactSupportLogical
+	FactSupportLogical = rules.FactSupportLogical
 	// FactSupportStatedAndLogical marks a fact that carries both stated
 	// and logical support at once.
-	FactSupportStatedAndLogical = engine.FactSupportStatedAndLogical
+	FactSupportStatedAndLogical = rules.FactSupportStatedAndLogical
 	// FactSupportMetadataOnly marks a fact support classification used
 	// internally for metadata-only support transitions.
-	FactSupportMetadataOnly = engine.FactSupportMetadataOnly
+	FactSupportMetadataOnly = rules.FactSupportMetadataOnly
 	// AssertInserted reports that a new fact entered working memory.
-	AssertInserted = engine.AssertInserted
+	AssertInserted = rules.AssertInserted
 	// AssertExisting reports that the template's duplicate policy
 	// matched an existing fact with identical fields, so no new fact
 	// was inserted.
-	AssertExisting = engine.AssertExisting
+	AssertExisting = rules.AssertExisting
 	// AssertReplaced reports that a unique-key template matched an
 	// existing fact whose non-key fields differed, so the old fact was
 	// retracted and a new fact (with a new fact ID) was inserted in its
 	// place.
-	AssertReplaced = engine.AssertReplaced
+	AssertReplaced = rules.AssertReplaced
 	// AssertValidationFailure reports that the fields failed template
 	// validation; the error wraps [rules.ErrValidation].
-	AssertValidationFailure = engine.AssertValidationFailure
+	AssertValidationFailure = rules.AssertValidationFailure
 	// AssertClosed reports that the session was already closed.
-	AssertClosed = engine.AssertClosed
+	AssertClosed = rules.AssertClosed
 	// AssertConcurrencyMisuse reports concurrent misuse of the session.
-	AssertConcurrencyMisuse = engine.AssertConcurrencyMisuse
+	AssertConcurrencyMisuse = rules.AssertConcurrencyMisuse
 	// ModifyChanged reports that fields changed and propagated through
 	// the Rete network.
-	ModifyChanged = engine.ModifyChanged
+	ModifyChanged = rules.ModifyChanged
 	// ModifyNoOp reports that the patch made no difference to the
 	// fact's fields.
-	ModifyNoOp = engine.ModifyNoOp
+	ModifyNoOp = rules.ModifyNoOp
 	// ModifyMissing reports that no such fact exists in the current
 	// generation.
-	ModifyMissing = engine.ModifyMissing
+	ModifyMissing = rules.ModifyMissing
 	// ModifyStale reports that the fact ID's generation predates the
 	// session's current generation, typically from before a Reset.
-	ModifyStale = engine.ModifyStale
+	ModifyStale = rules.ModifyStale
 	// ModifyValidationFailure reports that the patched fact fails
 	// template validation.
-	ModifyValidationFailure = engine.ModifyValidationFailure
+	ModifyValidationFailure = rules.ModifyValidationFailure
 	// ModifyDuplicate reports that the patch collides with another
 	// existing fact under the template's duplicate policy.
-	ModifyDuplicate = engine.ModifyDuplicate
+	ModifyDuplicate = rules.ModifyDuplicate
 	// ModifyLogicalSupport reports that the fact currently has logical
 	// support and can't be modified directly.
-	ModifyLogicalSupport = engine.ModifyLogicalSupport
+	ModifyLogicalSupport = rules.ModifyLogicalSupport
 	// ModifyClosed reports that the session was already closed.
-	ModifyClosed = engine.ModifyClosed
+	ModifyClosed = rules.ModifyClosed
 	// ModifyConcurrencyMisuse reports concurrent misuse of the session.
-	ModifyConcurrencyMisuse = engine.ModifyConcurrencyMisuse
+	ModifyConcurrencyMisuse = rules.ModifyConcurrencyMisuse
 	// RetractRemoved reports that the fact left working memory; any
 	// logical facts it alone supported cascade away in the same
 	// operation.
-	RetractRemoved = engine.RetractRemoved
+	RetractRemoved = rules.RetractRemoved
 	// RetractStatedSupportRemoved reports that the fact had both stated
 	// and logical support, its stated support was removed, and it
 	// survives as logical-only.
-	RetractStatedSupportRemoved = engine.RetractStatedSupportRemoved
+	RetractStatedSupportRemoved = rules.RetractStatedSupportRemoved
 	// RetractLogicalOnly reports that the fact exists only through
 	// logical support and can't be retracted directly; retract its
 	// supporting facts instead.
-	RetractLogicalOnly = engine.RetractLogicalOnly
+	RetractLogicalOnly = rules.RetractLogicalOnly
 	// RetractMissing reports that no such fact exists in the current
 	// generation.
-	RetractMissing = engine.RetractMissing
+	RetractMissing = rules.RetractMissing
 	// RetractStale reports that the fact ID's generation predates the
 	// session's current generation, typically from before a Reset.
-	RetractStale = engine.RetractStale
+	RetractStale = rules.RetractStale
 	// RetractClosed reports that the session was already closed.
-	RetractClosed = engine.RetractClosed
+	RetractClosed = rules.RetractClosed
 	// RetractValidationFailure reports an internal propagation error
 	// during retraction.
-	RetractValidationFailure = engine.RetractValidationFailure
+	RetractValidationFailure = rules.RetractValidationFailure
 	// RetractConcurrencyMisuse reports concurrent misuse of the session.
-	RetractConcurrencyMisuse = engine.RetractConcurrencyMisuse
+	RetractConcurrencyMisuse = rules.RetractConcurrencyMisuse
 	// ResetApplied reports that the reset succeeded: the generation
 	// advanced, working memory was cleared and reseeded with initial
 	// facts, logical support and backchain demand were cleared, and the
@@ -1944,53 +1943,53 @@ const (
 var (
 	// ErrClosedSession is returned by any session operation called after
 	// Close, paired with the operation's ...Closed status.
-	ErrClosedSession = engine.ErrClosedSession
+	ErrClosedSession = rules.ErrClosedSession
 	// ErrConcurrencyMisuse is returned when an operation can't acquire
 	// the session's single-owner lock: overlapping calls from other
 	// goroutines, or Snapshot/queries attempted while a Run is active.
-	ErrConcurrencyMisuse = engine.ErrConcurrencyMisuse
+	ErrConcurrencyMisuse = rules.ErrConcurrencyMisuse
 	// ErrActionFailed is the sentinel [ActionFailureError].Is matches,
 	// representing a rule action that returned an error during Run.
-	ErrActionFailed = engine.ErrActionFailed
+	ErrActionFailed = rules.ErrActionFailed
 	// ErrFactNotFound is returned by Modify or Retract when the given
 	// FactID doesn't exist in the current generation.
-	ErrFactNotFound = engine.ErrFactNotFound
+	ErrFactNotFound = rules.ErrFactNotFound
 	// ErrStaleFactID is returned by Modify or Retract when the given
 	// FactID's generation predates the session's current generation,
 	// typically because a Reset happened since the ID was obtained.
-	ErrStaleFactID = engine.ErrStaleFactID
+	ErrStaleFactID = rules.ErrStaleFactID
 	// ErrDuplicateFact is returned by Modify when the patched fact
 	// collides with another existing fact under a deduplicating
 	// duplicate policy.
-	ErrDuplicateFact = engine.ErrDuplicateFact
+	ErrDuplicateFact = rules.ErrDuplicateFact
 	// ErrQueryNotFound is returned by Query or QueryAll for an unknown
 	// query name.
-	ErrQueryNotFound = engine.ErrQueryNotFound
+	ErrQueryNotFound = rules.ErrQueryNotFound
 	// ErrQueryArgument is returned when [QueryArgs] names an unknown
 	// parameter, omits a required parameter, or supplies a value whose
 	// kind doesn't match the declared parameter kind.
-	ErrQueryArgument = engine.ErrQueryArgument
+	ErrQueryArgument = rules.ErrQueryArgument
 	// ErrQueryExecution is returned when running a compiled query fails
 	// internally, independent of the caller's arguments.
-	ErrQueryExecution = engine.ErrQueryExecution
+	ErrQueryExecution = rules.ErrQueryExecution
 	// ErrLogicalSupportUnavailable is returned when asserting a logical
 	// fact without a valid activation to support it.
-	ErrLogicalSupportUnavailable = engine.ErrLogicalSupportUnavailable
+	ErrLogicalSupportUnavailable = rules.ErrLogicalSupportUnavailable
 	// ErrLogicalOnlyRetract is returned by Retract when the fact exists
 	// only through logical support; retract its supporting facts
 	// instead.
-	ErrLogicalOnlyRetract = engine.ErrLogicalOnlyRetract
+	ErrLogicalOnlyRetract = rules.ErrLogicalOnlyRetract
 	// ErrLogicalFactModify is returned by Modify when the fact currently
 	// carries logical support, whether logical-only or stated-and-
 	// logical.
-	ErrLogicalFactModify = engine.ErrLogicalFactModify
+	ErrLogicalFactModify = rules.ErrLogicalFactModify
 	// ErrExplainLogUnavailable is returned by Session.Explain when the
 	// session was built without [WithExplainLog]; fall back to
 	// Snapshot.Explain for a support-only derivation.
-	ErrExplainLogUnavailable = engine.ErrExplainLogUnavailable
+	ErrExplainLogUnavailable = rules.ErrExplainLogUnavailable
 	// ErrRuleNotFound is returned by Session.WhyNot when the named rule is
 	// not in the session's ruleset.
-	ErrRuleNotFound = engine.ErrRuleNotFound
+	ErrRuleNotFound = rules.ErrRuleNotFound
 )
 
 // WithSessionID sets the [SessionID] returned later by [Session].ID.
@@ -2135,7 +2134,11 @@ func WithWhyNotMaxProbedRows(n int) WhyNotOption {
 // and computes the initial agenda. It returns an error if revision is nil
 // or the initial facts fail to validate against it.
 func New(revision *rules.Ruleset, opts ...Option) (*Session, error) {
-	rt, err := engine.NewSession(revision, opts...)
+	engineRevision, err := engine.RulesetFromPublic(revision)
+	if err != nil {
+		return nil, err
+	}
+	rt, err := engine.NewSession(engineRevision, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -2214,7 +2217,15 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 // ApplyRuleset swaps in a compatible compiled ruleset while preserving working
 // memory.
 func (s *Session) ApplyRuleset(ctx context.Context, next *rules.Ruleset) (ApplyRulesetResult, error) {
-	result, err := s.engineSession().ApplyRuleset(ctx, next)
+	var engineRevision *engine.Ruleset
+	if next != nil {
+		var err error
+		engineRevision, err = engine.RulesetFromPublic(next)
+		if err != nil {
+			return ApplyRulesetResult{}, err
+		}
+	}
+	result, err := s.engineSession().ApplyRuleset(ctx, engineRevision)
 	return wrapApplyRulesetResult(result), err
 }
 

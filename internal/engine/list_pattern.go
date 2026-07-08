@@ -7,70 +7,50 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	gessrules "github.com/cpcf/gess/rules"
 )
 
-type ListPatternElementKind string
+type ListPatternElementKind = gessrules.ListPatternElementKind
 
 const (
-	ListPatternElementUnknown      ListPatternElementKind = ""
-	ListPatternElementValue        ListPatternElementKind = "value"
-	ListPatternElementWildcard     ListPatternElementKind = "wildcard"
-	ListPatternElementSegment      ListPatternElementKind = "segment"
-	ListPatternElementRestWildcard ListPatternElementKind = "rest-wildcard"
+	ListPatternElementUnknown      = gessrules.ListPatternElementUnknown
+	ListPatternElementValue        = gessrules.ListPatternElementValue
+	ListPatternElementWildcard     = gessrules.ListPatternElementWildcard
+	ListPatternElementSegment      = gessrules.ListPatternElementSegment
+	ListPatternElementRestWildcard = gessrules.ListPatternElementRestWildcard
 )
 
-type ListPatternElementSpec struct {
-	Kind       ListPatternElementKind
-	Expression ExpressionSpec
-	Binding    string
+type ListPatternElementSpec = gessrules.ListPatternElementSpec
+
+func cloneListPatternElementSpec(s ListPatternElementSpec) ListPatternElementSpec {
+	return gessrules.CloneListPatternElementSpec(s)
 }
 
-func (s ListPatternElementSpec) clone() ListPatternElementSpec {
-	s.Binding = strings.TrimSpace(s.Binding)
-	s.Expression = cloneExpressionSpec(s.Expression)
-	return s
-}
+type ListPatternSpec = gessrules.ListPatternSpec
 
-type ListPatternSpec struct {
-	Path     PathSpec
-	Elements []ListPatternElementSpec
-}
-
-func (s ListPatternSpec) clone() ListPatternSpec {
-	out := s
-	out.Path = s.Path.clone()
-	out.Elements = make([]ListPatternElementSpec, len(s.Elements))
-	for i, element := range s.Elements {
-		out.Elements[i] = element.clone()
-	}
-	return out
+func cloneListPatternSpec(s ListPatternSpec) ListPatternSpec {
+	return gessrules.CloneListPatternSpec(s)
 }
 
 func ListPattern(path PathSpec, elements ...ListPatternElementSpec) ListPatternSpec {
-	out := ListPatternSpec{
-		Path:     path.clone(),
-		Elements: make([]ListPatternElementSpec, len(elements)),
-	}
-	for i, element := range elements {
-		out.Elements[i] = element.clone()
-	}
-	return out
+	return gessrules.ListPattern(path, elements...)
 }
 
 func ListElem(expression ExpressionSpec) ListPatternElementSpec {
-	return ListPatternElementSpec{Kind: ListPatternElementValue, Expression: cloneExpressionSpec(expression)}
+	return gessrules.ListElem(expression)
 }
 
 func ListWildcard() ListPatternElementSpec {
-	return ListPatternElementSpec{Kind: ListPatternElementWildcard}
+	return gessrules.ListWildcard()
 }
 
 func ListSegment(binding string) ListPatternElementSpec {
-	return ListPatternElementSpec{Kind: ListPatternElementSegment, Binding: strings.TrimSpace(binding)}
+	return gessrules.ListSegment(binding)
 }
 
 func ListRestWildcard() ListPatternElementSpec {
-	return ListPatternElementSpec{Kind: ListPatternElementRestWildcard}
+	return gessrules.ListRestWildcard()
 }
 
 func listPatternsHaveSegment(patterns []ListPatternSpec) bool {
@@ -84,64 +64,16 @@ func listPatternsHaveSegment(patterns []ListPatternSpec) bool {
 	return false
 }
 
-type ListPatternElement struct {
-	kind       ListPatternElementKind
-	expression ExpressionSpec
-	binding    string
-	order      int
+type ListPatternElement = gessrules.ListPatternElement
+
+func cloneListPatternElement(e ListPatternElement) ListPatternElement {
+	return gessrules.CloneListPatternElement(e)
 }
 
-func (e ListPatternElement) Kind() ListPatternElementKind {
-	return e.kind
-}
+type RuleListPattern = gessrules.RuleListPattern
 
-func (e ListPatternElement) Expression() ExpressionSpec {
-	return cloneExpressionSpec(e.expression)
-}
-
-func (e ListPatternElement) Binding() string {
-	return e.binding
-}
-
-func (e ListPatternElement) DeclarationOrder() int {
-	return e.order
-}
-
-func (e ListPatternElement) clone() ListPatternElement {
-	e.expression = cloneExpressionSpec(e.expression)
-	return e
-}
-
-type RuleListPattern struct {
-	path     PathSpec
-	elements []ListPatternElement
-	order    int
-}
-
-func (p RuleListPattern) Path() PathSpec {
-	return p.path.clone()
-}
-
-func (p RuleListPattern) Elements() []ListPatternElement {
-	out := make([]ListPatternElement, len(p.elements))
-	for i, element := range p.elements {
-		out[i] = element.clone()
-	}
-	return out
-}
-
-func (p RuleListPattern) DeclarationOrder() int {
-	return p.order
-}
-
-func (p RuleListPattern) clone() RuleListPattern {
-	out := p
-	out.path = p.path.clone()
-	out.elements = make([]ListPatternElement, len(p.elements))
-	for i, element := range p.elements {
-		out.elements[i] = element.clone()
-	}
-	return out
+func cloneRuleListPattern(p RuleListPattern) RuleListPattern {
+	return gessrules.CloneRuleListPattern(p)
 }
 
 type compiledListPatternElement struct {
@@ -167,8 +99,7 @@ func compileListPatternSpecs(
 	specs []ListPatternSpec,
 	ruleName string,
 	conditionIndex int,
-	template *Template,
-	conditions []RuleCondition,
+	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
 	params map[string]ValueKind,
 	functions map[string]compiledPureFunction,
@@ -182,8 +113,8 @@ func compileListPatternSpecs(
 	var bindings []RuleCondition
 	seenSegmentBindings := make(map[string]struct{})
 	for patternIndex, spec := range specs {
-		spec = spec.clone()
-		if spec.Path.isZero() {
+		spec = cloneListPatternSpec(spec)
+		if pathIsZero(spec.Path) {
 			return nil, nil, nil, listPatternValidationError(ruleName, conditionIndex, patternIndex, "list pattern requires a path", ErrInvalidPath)
 		}
 		access, kind, err := compileExpressionPathRef(ruleName, conditionIndex, patternIndex, template, spec.Path)
@@ -200,8 +131,13 @@ func compileListPatternSpecs(
 		elements := make([]compiledListPatternElement, 0, len(spec.Elements))
 		publicElements := make([]ListPatternElement, 0, len(spec.Elements))
 		for elementIndex, element := range spec.Elements {
-			element = element.clone()
-			publicElement := ListPatternElement{kind: element.Kind, expression: cloneExpressionSpec(element.Expression), binding: element.Binding, order: elementIndex}
+			element = cloneListPatternElementSpec(element)
+			publicElement := ListPatternElement{
+				KindValue:      element.Kind,
+				ExpressionSpec: cloneExpressionSpec(element.Expression),
+				BindingName:    element.Binding,
+				Order:          elementIndex,
+			}
 			compiledElement := compiledListPatternElement{kind: element.Kind, binding: element.Binding, bindingSlot: -1}
 			switch element.Kind {
 			case ListPatternElementValue:
@@ -234,8 +170,8 @@ func compileListPatternSpecs(
 				seenSegmentBindings[element.Binding] = struct{}{}
 				compiledElement.bindingSlot = len(conditions) + len(bindings)
 				bindings = append(bindings, RuleCondition{
-					binding: element.Binding,
-					order:   compiledElement.bindingSlot,
+					BindingName: element.Binding,
+					Order:       compiledElement.bindingSlot,
 				})
 			case ListPatternElementRestWildcard:
 				variableCount++
@@ -248,9 +184,9 @@ func compileListPatternSpecs(
 			elements = append(elements, compiledElement)
 			publicElements = append(publicElements, publicElement)
 		}
-		publicPattern := RuleListPattern{path: spec.Path.clone(), elements: publicElements, order: patternIndex}
+		publicPattern := RuleListPattern{PathSpec: clonePathSpec(spec.Path), ElementsValue: publicElements, Order: patternIndex}
 		public = append(public, publicPattern)
-		compiled = append(compiled, compiledListPattern{path: access.clone(), elements: elements, raw: publicPattern.clone()})
+		compiled = append(compiled, compiledListPattern{path: access.clone(), elements: elements, raw: cloneRuleListPattern(publicPattern)})
 	}
 	return public, compiled, bindings, nil
 }
@@ -294,7 +230,7 @@ func (p compiledListPattern) matchesFact(fact conditionFactRef, bindings tokenRe
 	if !ok || value.Kind() != ValueList {
 		return nil, false, nil
 	}
-	items := value.data.([]Value)
+	items, _ := value.AsListShared()
 	return p.matchItems(items, fact, bindings)
 }
 
@@ -303,7 +239,7 @@ func (p compiledListPattern) matchesFactOnly(fact conditionFactRef, bindings tok
 	if !ok || value.Kind() != ValueList {
 		return false, nil
 	}
-	items := value.data.([]Value)
+	items, _ := value.AsListShared()
 	return p.matchItemsOnly(items, fact, bindings)
 }
 
@@ -412,7 +348,7 @@ func cloneCompiledListPatterns(in []compiledListPattern) []compiledListPattern {
 		for j := range out[i].elements {
 			out[i].elements[j].expression = out[i].elements[j].expression.clone()
 		}
-		out[i].raw = pattern.raw.clone()
+		out[i].raw = cloneRuleListPattern(pattern.raw)
 	}
 	return out
 }

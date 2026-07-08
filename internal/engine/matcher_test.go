@@ -232,9 +232,9 @@ func TestCollectMatchCandidatesSuppressesDuplicateBindingTuples(t *testing.T) {
 		name:       "rule",
 		conditions: []RuleCondition{
 			{
-				id:      ConditionID("condition"),
-				binding: "fact",
-				order:   0,
+				IDValue:     ConditionID("condition"),
+				BindingName: "fact",
+				Order:       0,
 			},
 		},
 		conditionPlans: []compiledConditionPlan{
@@ -329,8 +329,8 @@ func TestTokenRefCandidatePathTrimsCompiledPathCapacity(t *testing.T) {
 		revisionID:        "partial-rule-revision",
 		identityScopeHash: candidateIdentityScopeHash("partial-rule", "partial-rule-revision"),
 		conditions: []RuleCondition{
-			{id: "first", binding: "first", order: 0},
-			{id: "second", binding: "second", order: 1},
+			{IDValue: "first", BindingName: "first", Order: 0},
+			{IDValue: "second", BindingName: "second", Order: 1},
 		},
 		conditionPlans: []compiledConditionPlan{
 			{id: "first", binding: "first", bindingSlot: 0, path: []int{0, 10}},
@@ -385,9 +385,9 @@ func TestCollectMatchCandidatesObservesCancellation(t *testing.T) {
 		name:       "rule",
 		conditions: []RuleCondition{
 			{
-				id:      ConditionID("condition"),
-				binding: "fact",
-				order:   0,
+				IDValue:     ConditionID("condition"),
+				BindingName: "fact",
+				Order:       0,
 			},
 		},
 		conditionPlans: []compiledConditionPlan{

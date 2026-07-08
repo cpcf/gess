@@ -1,8 +1,11 @@
 package engine
 
-import "github.com/cpcf/gess/internal/gesssexp"
+import (
+	"github.com/cpcf/gess/internal/gesssexp"
+	gessrules "github.com/cpcf/gess/rules"
+)
 
-type SourceSpan = gesssexp.SourceSpan
+type SourceSpan = gessrules.SourceSpan
 
 // GessFileError reports a Gess file parser or lowering error with source location.
 type GessFileError = gesssexp.FileError

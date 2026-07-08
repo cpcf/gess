@@ -54,7 +54,7 @@ func TestWorkspaceCompilesTemplatesIntoImmutableRevision(t *testing.T) {
 		t.Fatalf("Compile: %v", err)
 	}
 
-	template, ok := revision.Template("person")
+	template, ok := revision.compiledTemplate("person")
 	if !ok {
 		t.Fatal("compiled revision did not contain person template")
 	}
@@ -281,7 +281,7 @@ func TestWorkspaceCompilesImplicitMainModule(t *testing.T) {
 		t.Fatalf("compiled modules = %#v, want only MAIN", modules)
 	}
 
-	modules[0].name = "mutated-by-caller"
+	modules[0].NameValue = "mutated-by-caller"
 	modules = revision.Modules()
 	if len(modules) != 1 || modules[0].Name() != MainModule {
 		t.Fatalf("Ruleset.Modules leaked mutable module state: %#v", modules)

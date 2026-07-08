@@ -47,7 +47,7 @@ func newDynamicInitialFact(name string, fields Fields) SessionInitialFact {
 	return SessionInitialFact{name: name, Fields: fields}
 }
 
-func validatePublicTemplateMutation(template Template) error {
+func validatePublicTemplateMutation(template compiledTemplate) error {
 	if !template.backchainDemand {
 		return nil
 	}
@@ -555,12 +555,12 @@ func (s *Session) factRowIndex(id FactID) (int, bool) {
 	if s == nil || id.IsZero() {
 		return 0, false
 	}
-	if id.generation == s.generation && id.sequence > 0 {
-		if id.sequence-1 > uint64(int(^uint(0)>>1)) {
+	if id.Generation() == s.generation && id.Sequence() > 0 {
+		if id.Sequence()-1 > uint64(int(^uint(0)>>1)) {
 			return 0, false
 		}
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 && index < len(s.factsBySequence) {
 			row := s.factsBySequence[index]
 			if row != missingFactRowIndex {
 				return int(row), true
@@ -578,9 +578,9 @@ func (s *Session) setFactRowIndex(id FactID, row int) {
 	if s == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
-	if id.generation == s.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 {
+	if id.Generation() == s.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 {
 			for len(s.factsBySequence) <= index {
 				s.factsBySequence = append(s.factsBySequence, missingFactRowIndex)
 			}
@@ -597,9 +597,9 @@ func (s *Session) deleteFactRowIndex(id FactID) {
 	if s == nil || id.IsZero() {
 		return
 	}
-	if id.generation == s.generation && id.sequence > 0 {
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 && index < len(s.factsBySequence) {
+	if id.Generation() == s.generation && id.Sequence() > 0 {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 && index < len(s.factsBySequence) {
 			s.factsBySequence[index] = missingFactRowIndex
 			return
 		}
@@ -1220,7 +1220,7 @@ func (b *templateValueBatch) insert(templateKey TemplateKey, values []Value) err
 }
 
 type preparedTemplateValueInserter struct {
-	template Template
+	template compiledTemplate
 }
 
 type preparedTemplateValueBatch struct {
@@ -1507,7 +1507,7 @@ func (p preparedTemplateValueInserter) setPreparedSlot(slots []factSlot, index i
 			Reason:       "value not in allowed set",
 		}
 	}
-	if value.kind == ValueList || value.kind == ValueMap {
+	if value.Kind() == ValueList || value.Kind() == ValueMap {
 		value = cloneValue(value)
 	}
 	slots[index].value = value
@@ -1882,19 +1882,19 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	return result, agendaDelta, nil
 }
 
-func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (*workingFact, Template, DuplicateKey, bool, reteAgendaDelta, error) {
+func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey TemplateKey, values []Value, origin mutationOrigin) (*workingFact, compiledTemplate, DuplicateKey, bool, reteAgendaDelta, error) {
 	if s == nil || s.closed {
-		return nil, Template{}, "", false, reteAgendaDelta{}, ErrClosedSession
+		return nil, compiledTemplate{}, "", false, reteAgendaDelta{}, ErrClosedSession
 	}
 	template, ok := s.revision.templateByKey(templateKey)
 	if !ok {
-		return nil, Template{}, "", false, reteAgendaDelta{}, &ValidationError{
+		return nil, compiledTemplate{}, "", false, reteAgendaDelta{}, &ValidationError{
 			TemplateName: string(templateKey),
 			Reason:       "unknown template key",
 		}
 	}
 	if err := validatePublicTemplateMutation(template); err != nil {
-		return nil, Template{}, "", false, reteAgendaDelta{}, err
+		return nil, compiledTemplate{}, "", false, reteAgendaDelta{}, err
 	}
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
@@ -1903,11 +1903,11 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 		compactSlots, err := template.buildValidatedCompactFieldSlotsFromValuesInto(compactSlots, values)
 		if err != nil {
 			state.rollbackGeneratedCompactFactSlots(compactSlotMark)
-			return nil, Template{}, "", false, reteAgendaDelta{}, err
+			return nil, compiledTemplate{}, "", false, reteAgendaDelta{}, err
 		}
 		fact, inserted, agendaDelta, err := s.insertPreparedTemplateCompactSlotsImmediate(ctx, state, template, compactSlots, mark, compactSlotMark, origin)
 		if err != nil {
-			return nil, Template{}, "", false, agendaDelta, err
+			return nil, compiledTemplate{}, "", false, agendaDelta, err
 		}
 		return fact, template, "", inserted, agendaDelta, nil
 	}
@@ -1915,17 +1915,17 @@ func (s *Session) insertTemplateValuesImmediate(ctx context.Context, templateKey
 	fieldSlots, err := template.buildValidatedFieldSlotsFromValuesInto(fieldSlots, values)
 	if err != nil {
 		state.rollbackGeneratedFactSlots(slotMark)
-		return nil, Template{}, "", false, reteAgendaDelta{}, err
+		return nil, compiledTemplate{}, "", false, reteAgendaDelta{}, err
 	}
 
 	fact, duplicateKey, inserted, agendaDelta, err := s.insertPreparedTemplateSlotsImmediate(ctx, state, template, fieldSlots, mark, slotMark, origin)
 	if err != nil {
-		return nil, Template{}, "", false, agendaDelta, err
+		return nil, compiledTemplate{}, "", false, agendaDelta, err
 	}
 	return fact, template, duplicateKey, inserted, agendaDelta, nil
 }
 
-func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template Template, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
+func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, state factWorkspace, template compiledTemplate, fieldSlots []factSlot, mark factWorkspaceInsertMark, slotMark int, origin mutationOrigin) (*workingFact, DuplicateKey, bool, reteAgendaDelta, error) {
 	plan, ok := s.revision.generatedFactInsertPlan(template.Key())
 	if !ok {
 		compiled := newCompiledGeneratedFactInsertPlan(template)
@@ -1934,7 +1934,7 @@ func (s *Session) insertPreparedTemplateSlotsImmediate(ctx context.Context, stat
 	return s.insertPreparedTemplateSlotsWithPlanImmediate(ctx, state, plan, fieldSlots, mark, slotMark, origin)
 }
 
-func (s *Session) insertPreparedTemplateCompactSlotsImmediate(ctx context.Context, state factWorkspace, template Template, compactSlots []compactFactSlot, mark factWorkspaceInsertMark, compactSlotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
+func (s *Session) insertPreparedTemplateCompactSlotsImmediate(ctx context.Context, state factWorkspace, template compiledTemplate, compactSlots []compactFactSlot, mark factWorkspaceInsertMark, compactSlotMark int, origin mutationOrigin) (*workingFact, bool, reteAgendaDelta, error) {
 	plan, ok := s.revision.generatedFactInsertPlan(template.Key())
 	if !ok {
 		compiled := newCompiledGeneratedFactInsertPlan(template)
@@ -3802,11 +3802,11 @@ func rulesetCompatibleWithSession(current, next *Ruleset, snapshot Snapshot, ini
 		if templateKey == "" {
 			continue
 		}
-		currentTemplate, ok := current.TemplateByKey(templateKey)
+		currentTemplate, ok := current.templateByKey(templateKey)
 		if !ok {
 			return ErrIncompatibleRuleset
 		}
-		nextTemplate, ok := next.TemplateByKey(templateKey)
+		nextTemplate, ok := next.templateByKey(templateKey)
 		if !ok {
 			return ErrIncompatibleRuleset
 		}
@@ -3819,7 +3819,7 @@ func rulesetCompatibleWithSession(current, next *Ruleset, snapshot Snapshot, ini
 		if initial.TemplateKey == "" {
 			continue
 		}
-		nextTemplate, ok := next.TemplateByKey(initial.TemplateKey)
+		nextTemplate, ok := next.templateByKey(initial.TemplateKey)
 		if !ok {
 			return ErrIncompatibleRuleset
 		}
@@ -3831,7 +3831,7 @@ func rulesetCompatibleWithSession(current, next *Ruleset, snapshot Snapshot, ini
 	return nil
 }
 
-func templatesCompatible(left, right Template) bool {
+func templatesCompatible(left, right compiledTemplate) bool {
 	leftSpec := left.spec()
 	rightSpec := right.spec()
 	leftSpec.Source = SourceSpan{}
@@ -4199,7 +4199,7 @@ func fieldsAndPresenceEqual(leftFields Fields, leftPresence map[string]FieldPres
 	return true
 }
 
-func (t Template) applyPatchToFieldSlots(current []factSlot, patch FactPatch) ([]factSlot, []FieldChange, bool, error) {
+func (t compiledTemplate) applyPatchToFieldSlots(current []factSlot, patch FactPatch) ([]factSlot, []FieldChange, bool, error) {
 	if !t.closed || len(t.fields) == 0 || len(current) == 0 {
 		return nil, nil, false, ErrInvalidRuleset
 	}
@@ -4236,7 +4236,7 @@ func (t Template) applyPatchToFieldSlots(current []factSlot, patch FactPatch) ([
 	return proposed, changes, len(changes) == 0, nil
 }
 
-func (t Template) clearFieldSlot(slots []factSlot, slot int) error {
+func (t compiledTemplate) clearFieldSlot(slots []factSlot, slot int) error {
 	validation, hasValidation := t.fieldValidationForSlot(slot)
 	field := t.fields[slot]
 	if hasValidation && validation.hasDefault {
@@ -4264,7 +4264,7 @@ func (t Template) clearFieldSlot(slots []factSlot, slot int) error {
 	return nil
 }
 
-func (t Template) setFieldSlot(slots []factSlot, slot int, value Value) error {
+func (t compiledTemplate) setFieldSlot(slots []factSlot, slot int, value Value) error {
 	validation, hasValidation := t.fieldValidationForSlot(slot)
 	field := t.fields[slot]
 	kind := field.Kind
@@ -4292,14 +4292,14 @@ func (t Template) setFieldSlot(slots []factSlot, slot int, value Value) error {
 	return nil
 }
 
-func (t Template) fieldValidationForSlot(slot int) (fieldValidationSpec, bool) {
+func (t compiledTemplate) fieldValidationForSlot(slot int) (fieldValidationSpec, bool) {
 	if slot < 0 || len(t.fieldValidation) != len(t.fields) || slot >= len(t.fieldValidation) {
 		return fieldValidationSpec{}, false
 	}
 	return t.fieldValidation[slot], true
 }
 
-func changedFieldSlots(template Template, beforeSlots, afterSlots []factSlot) []FieldChange {
+func changedFieldSlots(template compiledTemplate, beforeSlots, afterSlots []factSlot) []FieldChange {
 	if len(template.fields) == 0 {
 		return nil
 	}
@@ -4432,7 +4432,7 @@ type factModifySummary struct {
 	duplicateChanged bool
 }
 
-func newFactModifySummary(template Template, changes []FieldChange, duplicateChanged bool) factModifySummary {
+func newFactModifySummary(template compiledTemplate, changes []FieldChange, duplicateChanged bool) factModifySummary {
 	if len(changes) == 0 {
 		return factModifySummary{}
 	}
@@ -4767,7 +4767,7 @@ func (i *duplicateIndexes) reserve(revision *Ruleset, factCapacity int) {
 	}
 }
 
-func duplicateReserveKind(template Template) duplicateIndexKind {
+func duplicateReserveKind(template compiledTemplate) duplicateIndexKind {
 	if template.duplicatePolicy == DuplicateStructural {
 		return duplicateIndexStructural
 	}
@@ -4809,7 +4809,7 @@ func duplicateReserveKind(template Template) duplicateIndexKind {
 	return template.duplicateIndexMode
 }
 
-func duplicateTemplateSlotKind(template Template, slot int) ValueKind {
+func duplicateTemplateSlotKind(template compiledTemplate, slot int) ValueKind {
 	if slot < 0 || slot >= len(template.fields) {
 		return ValueAny
 	}
@@ -6042,9 +6042,9 @@ func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
 	if w == nil || id.IsZero() {
 		return 0, false
 	}
-	if id.generation == w.generation && id.sequence > 0 {
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
+	if id.Generation() == w.generation && id.Sequence() > 0 {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 && index < len(w.factsBySequence) {
 			row := w.factsBySequence[index]
 			if row != missingFactRowIndex {
 				return int(row), true
@@ -6062,9 +6062,9 @@ func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
 	if w == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
-	if id.generation == w.generation && id.sequence > 0 && row <= maxFactRowSequenceIndex {
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 {
+	if id.Generation() == w.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 {
 			if len(w.factsBySequence) <= index {
 				oldLen := len(w.factsBySequence)
 				if cap(w.factsBySequence) <= index {
@@ -6091,9 +6091,9 @@ func (w *factWorkspace) deleteFactRowIndex(id FactID) {
 	if w == nil || id.IsZero() {
 		return
 	}
-	if id.generation == w.generation && id.sequence > 0 {
-		index := int(id.sequence - 1)
-		if uint64(index) == id.sequence-1 && index < len(w.factsBySequence) {
+	if id.Generation() == w.generation && id.Sequence() > 0 {
+		index := int(id.Sequence() - 1)
+		if uint64(index) == id.Sequence()-1 && index < len(w.factsBySequence) {
 			w.factsBySequence[index] = missingFactRowIndex
 			return
 		}
@@ -6103,7 +6103,7 @@ func (w *factWorkspace) deleteFactRowIndex(id FactID) {
 	}
 }
 
-func (w *factWorkspace) structuralDuplicateFact(template Template, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
+func (w *factWorkspace) structuralDuplicateFact(template compiledTemplate, slots []factSlot, key duplicateIndexKey) (*workingFact, bool) {
 	if w == nil || key.kind != duplicateIndexStructural {
 		return nil, false
 	}
@@ -6330,7 +6330,7 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 	return stored, duplicateKey, true, nil
 }
 
-func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, materializeDuplicateKey bool) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation, template compiledTemplate, fieldSlots []factSlot, materializeDuplicateKey bool) (*workingFact, DuplicateKey, bool, error) {
 	name := template.Name()
 	templateKey := template.Key()
 	duplicateIndex := makeDuplicateIndexForValidatedFact(name, template, nil, fieldSlots)
@@ -6401,7 +6401,7 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 	return stored, duplicateKey, true, nil
 }
 
-func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, generation Generation, template compiledTemplate, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
 	if err := validatePublicTemplateMutation(template); err != nil {
 		w.rollbackGeneratedFactSlots(slotMark)
 		return nil, "", false, err
@@ -6414,7 +6414,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlots(revision *Ruleset, gene
 	return w.insertPreparedGeneratedFactSlotsWithPlan(revision, generation, plan, fieldSlots, slotMark)
 }
 
-func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertPreparedEngineGeneratedFactSlots(revision *Ruleset, generation Generation, template compiledTemplate, fieldSlots []factSlot, slotMark int) (*workingFact, DuplicateKey, bool, error) {
 	return w.insertPreparedGeneratedFactSlotsUnchecked(revision, generation, template, fieldSlots, slotMark, factTargetIndexSkip)
 }
 
@@ -6422,7 +6422,7 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlan(revision *Rules
 	return w.insertPreparedGeneratedFactSlotsWithPlanUnchecked(revision, generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
 }
 
-func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template Template, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
+func (w *factWorkspace) insertPreparedGeneratedFactSlotsUnchecked(revision *Ruleset, generation Generation, template compiledTemplate, fieldSlots []factSlot, slotMark int, indexMode factTargetIndexMode) (*workingFact, DuplicateKey, bool, error) {
 	plan, ok := revision.generatedFactInsertPlan(template.Key())
 	if !ok {
 		compiled := newCompiledGeneratedFactInsertPlan(template)

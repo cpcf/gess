@@ -568,14 +568,18 @@ func mustCompileMixedCascadeScalingRuleset(t testing.TB, tc mixedCascadeScalingC
 				if err != nil {
 					return err
 				}
-				priorityValue, ok := ctx.bindingScalarValueAtSlot(2, policyPrioritySlot)
+				internalCtx, ok := unwrapActionContext(ctx)
+				if !ok {
+					return fmt.Errorf("missing engine action context")
+				}
+				priorityValue, ok := internalCtx.bindingScalarValueAtSlot(2, policyPrioritySlot)
 				if !ok || priorityValue.Kind() != ValueString {
 					return fmt.Errorf("missing policy priority")
 				}
 				return ctx.AssertTemplateValues(escalation.Key(),
 					steadyStateIntValue(customer),
 					steadyStateIntValue(n),
-					steadyStateStringValue(mixedCascadeReason(priorityValue.stringValue, n)),
+					steadyStateStringValue(mixedCascadeReason(valueString(priorityValue), n)),
 					steadyStateIntValue(region),
 					steadyStateIntValue(stream),
 				)
@@ -731,7 +735,7 @@ func mixedCascadeTemplate(name string, fields []FieldSpec, duplicateKeys []strin
 	}
 }
 
-func mixedCascadeSlot(t testing.TB, template Template, field string) int {
+func mixedCascadeSlot(t testing.TB, template compiledTemplate, field string) int {
 	t.Helper()
 	slot, ok := template.fieldSlot(field)
 	if !ok {

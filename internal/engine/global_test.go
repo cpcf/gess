@@ -366,7 +366,7 @@ func TestGessGlobalsResolveInRHSAssert(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	defer session.Close()
-	template, ok := revision.Template("order")
+	template, ok := revision.compiledTemplate("order")
 	if !ok {
 		t.Fatal("compiled ruleset missing order template")
 	}
