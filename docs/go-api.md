@@ -1,7 +1,8 @@
 # Go API guide
 
-Gess exposes three public packages. Each re-exports types from the internal
-engine, so import paths stay stable while the implementation evolves:
+Gess exposes three public packages. They are stable public boundaries over the
+internal engine: some types are pure public values in `rules`, while runtime
+handles and behavior are implemented by `internal/engine` behind the facades.
 
 - `github.com/cpcf/gess/rules`: definitions and compilation, covering
   templates, rules, queries, actions, expressions, values, and the compiled
@@ -26,6 +27,12 @@ workspace := rules.NewWorkspace()
 // workspace.AddTemplate, AddRule, AddAction, AddQuery, ...
 ruleset, err := workspace.Compile(ctx)
 ```
+
+Importing either `session` or `dsl` in the same program initializes the
+engine-backed workspace factory used by `rules.NewWorkspace`. Most programs
+do this naturally because they compile-and-run sessions or load `.gess` files;
+rules-only programs should be treated as unsupported until the public API
+inversion is complete.
 
 Workspace methods: `AddModule`, `AddTemplate`, `AddAction` /
 `ReplaceAction` / `RemoveAction`, `AddFunction` / `ReplaceFunction` /
@@ -62,8 +69,8 @@ facts with identical fields, `DuplicateAllow` permits duplicates, and
 `DuplicateUniqueKey` keeps one current fact per key (`DuplicateKeyNames`,
 which must name declared fields). Asserting a `DuplicateUniqueKey` fact
 whose key matches an existing fact but whose non-key fields differ replaces
-the old fact — retract old, assert new, with a new fact ID, reported as
-`AssertReplaced` — while asserting an identical fact is a no-op
+the old fact: retract old, assert new, with a new fact ID, reported as
+`AssertReplaced`, while asserting an identical fact is a no-op
 (`AssertExisting`).
 
 ## Rules

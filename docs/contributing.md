@@ -5,10 +5,11 @@ conventions for tests, benchmarks, and documentation.
 
 ## Repository layout
 
-- `rules/`, `session/`, `dsl/`: the public packages. Each is a thin
-  re-export of `internal/engine` types and constructors, so the public
-  import paths stay stable while the engine evolves. New public surface is
-  added by aliasing it in these files.
+- `rules/`, `session/`, `dsl/`: the public packages. `rules` owns the
+  public rule-definition values and workspace facade, while `session` and
+  `dsl` expose runtime and loader facades backed by `internal/engine`.
+  Keep public import paths stable while the engine evolves, and avoid
+  exposing new engine internals directly.
 - `internal/engine/`: nearly all implementation code, as one flat package
   with tests and benchmarks beside the implementation files.
 - `internal/gesssexp/`: the S-expression lexer, parser, and canonical
