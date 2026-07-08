@@ -1,0 +1,103 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for artifact names; defaults to the ref name."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      RELEASE_VERSION: ${{ inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_VERSION:-snapshot-${GITHUB_SHA:0:12}}"
+          mkdir -p dist
+
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+            "windows amd64"
+            "windows arm64"
+          )
+          commands=(gess gessc gessfmt)
+
+          for target in "${targets[@]}"; do
+            read -r goos goarch <<<"${target}"
+            artifact="gess_${version}_${goos}_${goarch}"
+            staging="dist/${artifact}"
+            mkdir -p "${staging}"
+
+            for command in "${commands[@]}"; do
+              binary="${command}"
+              if [[ "${goos}" == "windows" ]]; then
+                binary="${command}.exe"
+              fi
+
+              GOOS="${goos}" GOARCH="${goarch}" go build \
+                -trimpath \
+                -ldflags="-s -w" \
+                -o "${staging}/${binary}" \
+                "./cmd/${command}"
+            done
+
+            cp README.md LICENSE "${staging}/"
+
+            if [[ "${goos}" == "windows" ]]; then
+              (cd dist && zip -qr "${artifact}.zip" "${artifact}")
+            else
+              tar -C dist -czf "dist/${artifact}.tar.gz" "${artifact}"
+            fi
+
+            rm -rf "${staging}"
+          done
+
+          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gess-release-artifacts
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
