@@ -110,6 +110,9 @@ For an interactive edit-and-run workshop, use `tutorial/README.md` or run
 
 ## Documentation
 
+The published documentation site is available at
+<https://cpcf.github.io/gess/>.
+
 The guides under [`docs/`](docs/README.md) cover the engine in depth:
 
 - [Core concepts](docs/concepts.md): templates, facts, rules, activations,
