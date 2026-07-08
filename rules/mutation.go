@@ -205,3 +205,38 @@ func CloneRetractResult(result RetractResult) RetractResult {
 	out.Delta = CloneMutationDeltaPtr(result.Delta)
 	return out
 }
+
+// RunStatus is the outcome of a Run.
+type RunStatus string
+
+const (
+	RunCompleted         RunStatus = "completed"
+	RunHalted            RunStatus = "halted"
+	RunFireLimit         RunStatus = "fire_limit"
+	RunCanceled          RunStatus = "canceled"
+	RunActionFailed      RunStatus = "action_failed"
+	RunClosed            RunStatus = "closed"
+	RunConcurrencyMisuse RunStatus = "concurrency_misuse"
+	RunFailed            RunStatus = "failed"
+)
+
+// ResetStatus is the outcome of a reset.
+type ResetStatus string
+
+const (
+	ResetApplied           ResetStatus = "applied"
+	ResetValidationFailure ResetStatus = "validation_failure"
+	ResetClosed            ResetStatus = "closed"
+	ResetConcurrencyMisuse ResetStatus = "concurrency_misuse"
+)
+
+// ApplyRulesetStatus is the outcome of applying a ruleset to a session.
+type ApplyRulesetStatus string
+
+const (
+	ApplyRulesetApplied           ApplyRulesetStatus = "applied"
+	ApplyRulesetUnchanged         ApplyRulesetStatus = "unchanged"
+	ApplyRulesetIncompatible      ApplyRulesetStatus = "incompatible"
+	ApplyRulesetClosed            ApplyRulesetStatus = "closed"
+	ApplyRulesetConcurrencyMisuse ApplyRulesetStatus = "concurrency_misuse"
+)

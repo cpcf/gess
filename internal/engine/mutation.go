@@ -15,21 +15,17 @@ const (
 	MutationReset   = gessrules.MutationReset
 )
 
-type RunStatus string
+type RunStatus = gessrules.RunStatus
 
 const (
-	// RunCompleted reports that the agenda drained.
-	RunCompleted RunStatus = "completed"
-	// RunHalted reports that an action requested Halt.
-	RunHalted RunStatus = "halted"
-	// RunFireLimit reports that WithMaxFirings stopped the run while
-	// activations were still pending; a subsequent Run resumes them.
-	RunFireLimit         RunStatus = "fire_limit"
-	RunCanceled          RunStatus = "canceled"
-	RunActionFailed      RunStatus = "action_failed"
-	RunClosed            RunStatus = "closed"
-	RunConcurrencyMisuse RunStatus = "concurrency_misuse"
-	RunFailed            RunStatus = "failed"
+	RunCompleted         = gessrules.RunCompleted
+	RunHalted            = gessrules.RunHalted
+	RunFireLimit         = gessrules.RunFireLimit
+	RunCanceled          = gessrules.RunCanceled
+	RunActionFailed      = gessrules.RunActionFailed
+	RunClosed            = gessrules.RunClosed
+	RunConcurrencyMisuse = gessrules.RunConcurrencyMisuse
+	RunFailed            = gessrules.RunFailed
 )
 
 type RunResult struct {
@@ -256,13 +252,13 @@ func (r RetractResult) Removed() bool {
 	return r.Status == RetractRemoved
 }
 
-type ResetStatus string
+type ResetStatus = gessrules.ResetStatus
 
 const (
-	ResetApplied           ResetStatus = "applied"
-	ResetValidationFailure ResetStatus = "validation_failure"
-	ResetClosed            ResetStatus = "closed"
-	ResetConcurrencyMisuse ResetStatus = "concurrency_misuse"
+	ResetApplied           = gessrules.ResetApplied
+	ResetValidationFailure = gessrules.ResetValidationFailure
+	ResetClosed            = gessrules.ResetClosed
+	ResetConcurrencyMisuse = gessrules.ResetConcurrencyMisuse
 )
 
 type ResetResult struct {
@@ -272,14 +268,14 @@ type ResetResult struct {
 	Delta      MutationDelta
 }
 
-type ApplyRulesetStatus string
+type ApplyRulesetStatus = gessrules.ApplyRulesetStatus
 
 const (
-	ApplyRulesetApplied           ApplyRulesetStatus = "applied"
-	ApplyRulesetUnchanged         ApplyRulesetStatus = "unchanged"
-	ApplyRulesetIncompatible      ApplyRulesetStatus = "incompatible"
-	ApplyRulesetClosed            ApplyRulesetStatus = "closed"
-	ApplyRulesetConcurrencyMisuse ApplyRulesetStatus = "concurrency_misuse"
+	ApplyRulesetApplied           = gessrules.ApplyRulesetApplied
+	ApplyRulesetUnchanged         = gessrules.ApplyRulesetUnchanged
+	ApplyRulesetIncompatible      = gessrules.ApplyRulesetIncompatible
+	ApplyRulesetClosed            = gessrules.ApplyRulesetClosed
+	ApplyRulesetConcurrencyMisuse = gessrules.ApplyRulesetConcurrencyMisuse
 )
 
 type RuleRevisionSummary struct {

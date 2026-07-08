@@ -88,7 +88,7 @@ type (
 	// assert, modify, retract, or reset.
 	MutationKind = rules.MutationKind
 	// RunStatus is the outcome of a Session.Run call.
-	RunStatus = engine.RunStatus
+	RunStatus = rules.RunStatus
 	// RunOption configures one Session.Run call, such as
 	// [WithMaxFirings].
 	RunOption = engine.RunOption
@@ -116,9 +116,9 @@ type (
 	// RetractStatus is the outcome of a Session.Retract call.
 	RetractStatus = rules.RetractStatus
 	// ResetStatus is the outcome of a Session.Reset call.
-	ResetStatus = engine.ResetStatus
+	ResetStatus = rules.ResetStatus
 	// ApplyRulesetStatus is the outcome of a Session.ApplyRuleset call.
-	ApplyRulesetStatus = engine.ApplyRulesetStatus
+	ApplyRulesetStatus = rules.ApplyRulesetStatus
 	// ExplainOption configures an Explain call, bounding derivation depth
 	// and node count.
 	ExplainOption = engine.ExplainOption
@@ -1807,27 +1807,27 @@ const (
 	MutationRetract = rules.MutationRetract
 	MutationReset   = rules.MutationReset
 	// RunCompleted reports that Run emptied the agenda.
-	RunCompleted = engine.RunCompleted
+	RunCompleted = rules.RunCompleted
 	// RunHalted reports that an action called Halt; the halting
 	// activation's remaining actions still ran, and a later Run
 	// continues with the activations left pending.
-	RunHalted = engine.RunHalted
+	RunHalted = rules.RunHalted
 	// RunFireLimit reports that Run stopped at the [WithMaxFirings]
 	// limit with activations still pending; a later Run continues them.
-	RunFireLimit = engine.RunFireLimit
+	RunFireLimit = rules.RunFireLimit
 	// RunCanceled reports that ctx was canceled during the run.
-	RunCanceled = engine.RunCanceled
+	RunCanceled = rules.RunCanceled
 	// RunActionFailed reports that an action returned an error; Run
 	// returns a non-nil error that is an *[ActionFailureError].
-	RunActionFailed = engine.RunActionFailed
+	RunActionFailed = rules.RunActionFailed
 	// RunClosed reports that the session was already closed.
-	RunClosed = engine.RunClosed
+	RunClosed = rules.RunClosed
 	// RunConcurrencyMisuse reports that this Run overlapped another Run
 	// on the same session.
-	RunConcurrencyMisuse = engine.RunConcurrencyMisuse
+	RunConcurrencyMisuse = rules.RunConcurrencyMisuse
 	// RunFailed reports an internal engine failure that prevented the
 	// run from completing.
-	RunFailed = engine.RunFailed
+	RunFailed = rules.RunFailed
 	// FactSupportStated marks a fact asserted by host code and not
 	// logically supported.
 	FactSupportStated = rules.FactSupportStated
@@ -1913,31 +1913,31 @@ const (
 	// advanced, working memory was cleared and reseeded with initial
 	// facts, logical support and backchain demand were cleared, and the
 	// focus stack and agenda were rebuilt.
-	ResetApplied = engine.ResetApplied
+	ResetApplied = rules.ResetApplied
 	// ResetValidationFailure reports that rebuilding initial facts or
 	// the Rete graph for the new generation failed.
-	ResetValidationFailure = engine.ResetValidationFailure
+	ResetValidationFailure = rules.ResetValidationFailure
 	// ResetClosed reports that the session was already closed.
-	ResetClosed = engine.ResetClosed
+	ResetClosed = rules.ResetClosed
 	// ResetConcurrencyMisuse reports concurrent misuse of the session.
-	ResetConcurrencyMisuse = engine.ResetConcurrencyMisuse
+	ResetConcurrencyMisuse = rules.ResetConcurrencyMisuse
 	// ApplyRulesetApplied reports that the new ruleset was swapped in
 	// with working memory kept, and lists which rule revisions were
 	// added, removed, replaced, or unchanged.
-	ApplyRulesetApplied = engine.ApplyRulesetApplied
+	ApplyRulesetApplied = rules.ApplyRulesetApplied
 	// ApplyRulesetUnchanged reports that the target ruleset has the
 	// same RulesetID as the current one, so no work was performed.
-	ApplyRulesetUnchanged = engine.ApplyRulesetUnchanged
+	ApplyRulesetUnchanged = rules.ApplyRulesetUnchanged
 	// ApplyRulesetIncompatible reports that the target ruleset is nil,
 	// doesn't define the templates live facts depend on with an
 	// identical spec, or the configured initial facts no longer
 	// validate against it.
-	ApplyRulesetIncompatible = engine.ApplyRulesetIncompatible
+	ApplyRulesetIncompatible = rules.ApplyRulesetIncompatible
 	// ApplyRulesetClosed reports that the session was already closed.
-	ApplyRulesetClosed = engine.ApplyRulesetClosed
+	ApplyRulesetClosed = rules.ApplyRulesetClosed
 	// ApplyRulesetConcurrencyMisuse reports concurrent misuse of the
 	// session.
-	ApplyRulesetConcurrencyMisuse = engine.ApplyRulesetConcurrencyMisuse
+	ApplyRulesetConcurrencyMisuse = rules.ApplyRulesetConcurrencyMisuse
 )
 
 var (
