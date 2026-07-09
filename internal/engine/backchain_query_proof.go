@@ -9,6 +9,7 @@ type backchainQueryProofContext struct {
 	demandQueue  []backchainDemandID
 	nextSequence uint64
 	nextRecency  Recency
+	demandBudget backchainDemandCascadeBudget
 }
 
 func (s *Session) beginBackchainQueryProof() *backchainQueryProofContext {
@@ -34,6 +35,7 @@ func (p *backchainQueryProofContext) reset(session *Session) {
 	p.session = session
 	p.nextSequence = 0
 	p.nextRecency = session.nextRecency + 1
+	p.demandBudget = newBackchainDemandCascadeBudget(session)
 }
 
 func (p *backchainQueryProofContext) flushDemands(ctx context.Context, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -48,6 +50,9 @@ func (p *backchainQueryProofContext) flushDemands(ctx context.Context, demands [
 	p.demandQueue = append(p.demandQueue, demands...)
 	queue := p.demandQueue
 	for i := 0; i < len(queue); i++ {
+		if err := p.demandBudget.consume(); err != nil {
+			return combined, err
+		}
 		demand, ok := p.session.backchainDemandRequestByID(queue[i])
 		if !ok {
 			combined.supported = false

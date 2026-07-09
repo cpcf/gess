@@ -35,8 +35,31 @@ var (
 	ErrBuiltinArgument             = errors.New("gess: built-in function argument error")
 	ErrExplainLogUnavailable       = errors.New("gess: explain log unavailable")
 	ErrRuleNotFound                = errors.New("gess: rule not found")
+	ErrDemandCascadeLimit          = errors.New("gess: backchain demand cascade limit exceeded")
 	ErrUnsupportedValue            = errors.New("gess: unsupported value")
 )
+
+// DemandCascadeLimitError reports that a session stopped a backward-chaining
+// demand cascade before processing another demand request.
+type DemandCascadeLimitError struct {
+	Limit int
+	Steps int
+}
+
+func (e *DemandCascadeLimitError) Error() string {
+	if e == nil {
+		return ErrDemandCascadeLimit.Error()
+	}
+	return fmt.Sprintf("%s after %d steps (limit %d)", ErrDemandCascadeLimit, e.Steps, e.Limit)
+}
+
+func (e *DemandCascadeLimitError) Unwrap() error {
+	return ErrDemandCascadeLimit
+}
+
+func (e *DemandCascadeLimitError) Is(target error) bool {
+	return target == ErrDemandCascadeLimit
+}
 
 // ValidationError reports a definition that failed structural or compile-time
 // validation.

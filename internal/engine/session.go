@@ -27,6 +27,7 @@ type sessionConfig struct {
 	resetBeforeSnapshot bool
 	output              io.Writer
 	explainLog          *explainLog
+	demandLimit         int
 }
 
 type SessionInitialFact struct {
@@ -138,6 +139,14 @@ func WithOutputWriter(w io.Writer) SessionOption {
 	}
 }
 
+// WithMaxDemandCascadeSteps bounds the number of backward-chaining demand
+// requests processed by one cascade. A value <= 0 leaves cascades unbounded.
+func WithMaxDemandCascadeSteps(n int) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.demandLimit = max(0, n)
+	}
+}
+
 type Session struct {
 	id                   SessionID
 	revision             *Ruleset
@@ -215,6 +224,9 @@ type Session struct {
 	backchainDemandSupportOwners  backchainDemandOwnerSupportIndex
 	backchainDemandByFact         backchainDemandFactSupportTable
 	backchainDemandByDemand       backchainDemandFactSupportTable
+	demandLimit                   int
+	demandCounters                backchainDemandCascadeCounters
+	activeDemandCascade           *backchainDemandCascadeBudget
 	activeBackchainQueryProof     *backchainQueryProofContext
 	backchainQueryProofScratch    backchainQueryProofContext
 	nextEventSequence             uint64
@@ -323,6 +335,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
+		demandLimit:         cfg.demandLimit,
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
@@ -871,6 +884,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
+		demandLimit:         cfg.demandLimit,
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
@@ -894,6 +908,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		logicalSupportBySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
 		logicalSupportByFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
 		logicalSupportCounters: s.logicalSupportCounters,
+		demandCounters:         s.demandCounters,
 		nextEventSequence:      s.nextEventSequence,
 	}
 	if fork.id == "" {
@@ -936,6 +951,7 @@ func (s *Session) forkSessionConfig() sessionConfig {
 		strategy:            s.strategy,
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
 		output:              s.output,
+		demandLimit:         s.demandLimit,
 	}
 }
 
@@ -2340,7 +2356,17 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 	combined := reteAgendaDelta{supported: true}
 	queue := demands
 	queueOwned := false
+	budget := s.activeDemandCascade
+	if budget == nil {
+		local := newBackchainDemandCascadeBudget(s)
+		budget = &local
+		s.activeDemandCascade = budget
+		defer func() { s.activeDemandCascade = nil }()
+	}
 	for i := 0; i < len(queue); i++ {
+		if err := budget.consume(); err != nil {
+			return combined, err
+		}
 		demand, ok := s.backchainDemandRequestByID(queue[i])
 		if !ok {
 			combined.supported = false
@@ -4554,13 +4580,14 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 	}
 
 	snapshot := Snapshot{
-		sessionID:    s.id,
-		rulesetID:    s.revision.ID(),
-		revision:     s.revision,
-		generation:   s.generation,
-		globalValues: cloneGlobalValues(s.globalValues),
-		facts:        facts,
-		support:      s.currentSupportGraph(),
+		sessionID:      s.id,
+		rulesetID:      s.revision.ID(),
+		revision:       s.revision,
+		generation:     s.generation,
+		globalValues:   cloneGlobalValues(s.globalValues),
+		facts:          facts,
+		support:        s.currentSupportGraph(),
+		demandCounters: s.demandCounters,
 	}
 	if includeTargetIndexes {
 		snapshot.byID, snapshot.byName, snapshot.byTemplate = snapshotIndexes(facts)

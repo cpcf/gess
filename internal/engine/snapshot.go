@@ -7,23 +7,34 @@ import (
 
 // Snapshot is an immutable working-memory view.
 type Snapshot struct {
-	sessionID    SessionID
-	rulesetID    RulesetID
-	revision     *Ruleset
-	generation   Generation
-	globalValues []Value
-	facts        []FactSnapshot
-	support      SupportGraph
-	byID         map[FactID]int
-	byName       map[string][]int
-	byTemplate   map[TemplateKey][]int
+	sessionID      SessionID
+	rulesetID      RulesetID
+	revision       *Ruleset
+	generation     Generation
+	globalValues   []Value
+	facts          []FactSnapshot
+	support        SupportGraph
+	byID           map[FactID]int
+	byName         map[string][]int
+	byTemplate     map[TemplateKey][]int
+	demandCounters backchainDemandCascadeCounters
 }
 
 // BackchainDemandDiagnostics summarizes active generated backward-chaining
-// demand facts visible in a snapshot.
+// demand facts and lifetime cascade activity visible in a snapshot.
 type BackchainDemandDiagnostics struct {
-	Active     int
+	// Active is the number of demand facts currently retained.
+	Active int
+	// ByTemplate counts active demand facts by demand template key.
 	ByTemplate map[TemplateKey]int
+	// Cascades is the number of demand cascades that processed at least one step.
+	Cascades int
+	// CascadeSteps is the lifetime number of processed demand requests.
+	CascadeSteps int
+	// CascadeLengthMax is the largest number of steps processed by one cascade.
+	CascadeLengthMax int
+	// CascadeLimitHits is the number of cascades stopped by the configured bound.
+	CascadeLimitHits int
 }
 
 // Count returns the active demand fact count for a demand template key.
@@ -120,9 +131,14 @@ func (s Snapshot) SupportGraph() SupportGraph {
 }
 
 // BackchainDemandDiagnostics returns active generated backward-chaining demand
-// fact counts for the snapshot.
+// fact counts and lifetime cascade counters for the snapshot's session.
 func (s Snapshot) BackchainDemandDiagnostics() BackchainDemandDiagnostics {
-	out := BackchainDemandDiagnostics{}
+	out := BackchainDemandDiagnostics{
+		Cascades:         s.demandCounters.Cascades,
+		CascadeSteps:     s.demandCounters.Steps,
+		CascadeLengthMax: s.demandCounters.LengthMax,
+		CascadeLimitHits: s.demandCounters.LimitHits,
+	}
 	if s.revision == nil || len(s.facts) == 0 {
 		return out
 	}

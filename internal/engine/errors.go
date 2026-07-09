@@ -32,6 +32,8 @@ var (
 	ErrBuiltinArgument             = gessrules.ErrBuiltinArgument
 	ErrExplainLogUnavailable       = gessrules.ErrExplainLogUnavailable
 	ErrRuleNotFound                = gessrules.ErrRuleNotFound
+	ErrDemandCascadeLimit          = gessrules.ErrDemandCascadeLimit
 )
 
 type ValidationError = gessrules.ValidationError
+type DemandCascadeLimitError = gessrules.DemandCascadeLimitError

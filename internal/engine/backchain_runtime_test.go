@@ -778,6 +778,80 @@ func TestBackchainQueryTimeDemandDerivesTransitiveGoal(t *testing.T) {
 	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
 		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
+	diagnostics := snapshot.BackchainDemandDiagnostics()
+	if diagnostics.Cascades != 1 || diagnostics.CascadeSteps < 2 || diagnostics.CascadeLengthMax != diagnostics.CascadeSteps || diagnostics.CascadeLimitHits != 0 {
+		t.Fatalf("successful proof cascade diagnostics = %#v, want one multi-step unbounded cascade", diagnostics)
+	}
+}
+
+func TestBackchainQueryDemandCascadeLimitStopsCumulativeProofSteps(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	session, err := NewSession(revision, WithMaxDemandCascadeSteps(1))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+
+	_, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "internet", "dst": "db"})
+	if err == nil {
+		t.Fatal("QueryAll succeeded, want demand cascade limit error")
+	}
+	if !errors.Is(err, ErrQueryExecution) || !errors.Is(err, ErrDemandCascadeLimit) {
+		t.Fatalf("QueryAll error = %v, want QueryExecution wrapping DemandCascadeLimit", err)
+	}
+	var limitErr *DemandCascadeLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("QueryAll error type = %T, want *DemandCascadeLimitError", err)
+	}
+	if limitErr.Limit != 1 || limitErr.Steps != 1 {
+		t.Fatalf("limit error = %#v, want limit/steps 1/1", limitErr)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	diagnostics := snapshot.BackchainDemandDiagnostics()
+	if diagnostics.Cascades != 1 || diagnostics.CascadeSteps != 1 || diagnostics.CascadeLengthMax != 1 || diagnostics.CascadeLimitHits != 1 {
+		t.Fatalf("limited proof cascade diagnostics = %#v, want cascades/steps/max/hits 1/1/1/1", diagnostics)
+	}
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	if leaked := len(snapshot.FactsByTemplateKey(demandKey)); leaked != 0 {
+		t.Fatalf("transient demand facts leaked after limit error = %d, want 0", leaked)
+	}
+	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+		t.Fatalf("query terminal rows retained after limit error = %d, want 0", got)
+	}
+}
+
+func TestBackchainAssertDemandCascadeLimitRollsBackPersistentCascade(t *testing.T) {
+	ctx := context.Background()
+	revision, edgeKey, reachableKey, requestKey := mustCompileBackchainReachabilityRuleset(t, false)
+	session, err := NewSession(revision, WithMaxDemandCascadeSteps(1))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	seedBackchainReachabilityEdges(t, ctx, session, edgeKey)
+
+	err = session.AssertTemplateValues(ctx, requestKey, newStringValue("db"), newStringValue("internet"))
+	if err == nil || !errors.Is(err, ErrDemandCascadeLimit) {
+		t.Fatalf("AssertTemplateValues error = %v, want DemandCascadeLimit", err)
+	}
+	var limitErr *DemandCascadeLimitError
+	if !errors.As(err, &limitErr) || limitErr.Limit != 1 || limitErr.Steps != 1 {
+		t.Fatalf("limit error = %#v, want limit/steps 1/1", limitErr)
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	if got := len(snapshot.FactsByTemplateKey(requestKey)); got != 0 {
+		t.Fatalf("request facts after rolled-back cascade = %d, want 0", got)
+	}
+	demandKey := mustDemandKey(t, revision, reachableKey)
+	if got := len(snapshot.FactsByTemplateKey(demandKey)); got != 0 {
+		t.Fatalf("persistent demand facts after rolled-back cascade = %d, want 0", got)
+	}
+	diagnostics := snapshot.BackchainDemandDiagnostics()
+	if diagnostics.Cascades != 1 || diagnostics.CascadeSteps != 1 || diagnostics.CascadeLengthMax != 1 || diagnostics.CascadeLimitHits != 1 {
+		t.Fatalf("limited assert cascade diagnostics = %#v, want cascades/steps/max/hits 1/1/1/1", diagnostics)
+	}
 }
 
 func TestBackchainQueryTimeDemandReturnsZeroRowsForUnreachableGoal(t *testing.T) {

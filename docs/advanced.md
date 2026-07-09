@@ -315,7 +315,11 @@ chaining fails with `ErrUnsupportedRuntime`.
 
 Conditions wrapped in `rules.Explicit{...}` and negated conditions never
 generate demand. `Snapshot.BackchainDemandDiagnostics()` reports active
-demand counts per template. Proof runs respect the module focus stack:
+demand counts per template plus lifetime cascade steps, maximum cascade
+length, and limit hits. Sessions are unbounded by default; use
+`session.WithMaxDemandCascadeSteps(n)` to stop a runaway cascade with a typed
+`session.DemandCascadeLimitError`. The bound spans all demands raised during
+one `Run` or query proof. Proof runs respect the module focus stack:
 a proof rule in a module that is never focused does not fire during a
 query's proof run, and the query returns zero rows without an error — keep
 proof rules in `MAIN` or ensure their module is focused. The

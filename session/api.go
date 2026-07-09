@@ -18,8 +18,8 @@ type (
 	// generated .gess code. TemplateKey names the declared template and
 	// Fields supplies its slot values.
 	InitialFact = engine.SessionInitialFact
-	// BackchainDemandDiagnostics summarizes active backward-chaining
-	// demand facts visible in a [Snapshot], in total and per template.
+	// BackchainDemandDiagnostics summarizes active backward-chaining demand
+	// facts plus lifetime cascade-length and limit-hit counters.
 	BackchainDemandDiagnostics = engine.BackchainDemandDiagnostics
 	// QueryArgs maps query parameter names, without the leading '?', to
 	// the Go values passed to Query or QueryAll.
@@ -96,6 +96,9 @@ type (
 	// identifying which activation and action produced it. Unwrap
 	// returns the underlying cause; Is matches [ErrActionFailed].
 	ActionFailureError = engine.ActionFailureError
+	// DemandCascadeLimitError reports the configured cascade limit and the
+	// number of demand steps completed before it stopped the operation.
+	DemandCascadeLimitError = rules.DemandCascadeLimitError
 	// DuplicateKey is the computed duplicate-detection key for a fact
 	// under its template's duplicate policy.
 	DuplicateKey = rules.DuplicateKey
@@ -2006,6 +2009,9 @@ var (
 	// ErrRuleNotFound is returned by Session.WhyNot when the named rule is
 	// not in the session's ruleset.
 	ErrRuleNotFound = rules.ErrRuleNotFound
+	// ErrDemandCascadeLimit is matched by [DemandCascadeLimitError] when a
+	// session reaches the bound configured by [WithMaxDemandCascadeSteps].
+	ErrDemandCascadeLimit = rules.ErrDemandCascadeLimit
 )
 
 // WithSessionID sets the [SessionID] returned later by [Session].ID.
@@ -2086,6 +2092,13 @@ func WithResetBeforeSnapshot(enabled bool) Option {
 // unless it supplies its own.
 func WithOutputWriter(w io.Writer) Option {
 	return engine.WithOutputWriter(w)
+}
+
+// WithMaxDemandCascadeSteps bounds each backward-chaining demand cascade.
+// The limit spans all demands raised during one Run or query proof; n <= 0
+// leaves cascades unbounded.
+func WithMaxDemandCascadeSteps(n int) Option {
+	return engine.WithMaxDemandCascadeSteps(n)
 }
 
 // WithMaxFirings caps one Run call at n activation firings. A run that
