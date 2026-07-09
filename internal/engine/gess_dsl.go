@@ -191,6 +191,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 			}
 		}
 	}
+	var initials []SessionInitialFact
 	for _, form := range l.doc.forms {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -198,11 +199,11 @@ func (l *gessLoader) load(ctx context.Context) error {
 		switch form.Head() {
 		case "defmodule", "defglobal", "deftemplate":
 		case "deffacts":
-			initials, err := l.loadFacts(form)
+			facts, err := l.loadFacts(form)
 			if err != nil {
 				return err
 			}
-			l.doc.initials = append(l.doc.initials, initials...)
+			initials = append(initials, facts...)
 		case "deffunction":
 			if err := l.loadExpressionFunction(form); err != nil {
 				return err
@@ -219,6 +220,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 			return l.err(form.Span, "unsupported top-level form %q", form.Head())
 		}
 	}
+	l.doc.initials = initials
 	return nil
 }
 
@@ -525,7 +527,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 }
 
 func applyRuleDecls(l *gessLoader, rule *RuleSpec, body []gessSExpr) []gessSExpr {
-	out := body[:0]
+	out := make([]gessSExpr, 0, len(body))
 	for _, item := range body {
 		if item.Head() != "declare" {
 			out = append(out, item)
@@ -750,6 +752,9 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 				Right:    GlobalExpr{Name: global},
 			})
 			continue
+		}
+		if value.IsAtom() && !value.String && strings.HasPrefix(value.Text(), "?") {
+			return nil, l.err(value.Span, "%q is not a valid pattern slot value; bind a plain ?variable and compare projections in a test condition", value.Text())
 		}
 		scalar, err := gessAtomValue(value)
 		if err != nil {

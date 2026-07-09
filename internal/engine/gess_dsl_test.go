@@ -257,8 +257,8 @@ func TestGessDSLAndConditionSupportsBindingArrows(t *testing.T) {
   (item (id "I-2") (status "done")))
 
 (defrule flag-new-items
-  (and ?item <- (item (status "new"))
-       (not (flagged (id ?item:id))))
+  (and ?item <- (item (id ?id) (status "new"))
+       (not (flagged (id ?id))))
   =>
   (assert (flagged (id ?item:id))))
 
@@ -404,6 +404,83 @@ func TestGessDSLRejectsMalformedDeffacts(t *testing.T) {
 				t.Fatalf("reason = %q, want %q", gessErr.Reason, tc.reason)
 			}
 		})
+	}
+}
+
+func TestGessDSLRejectsProjectionInPatternSlot(t *testing.T) {
+	ctx := context.Background()
+	source := []byte(`
+(deftemplate item
+  (slot id (type STRING) (required TRUE)))
+
+(deftemplate label
+  (slot id (type STRING) (required TRUE)))
+
+(defrule mirror
+  ?i <- (item (id ?id))
+  (label (id ?i:id))
+  =>
+  (emit "matched"))
+`)
+	doc, err := ParseGess("projection-slot.gess", source)
+	if err != nil {
+		t.Fatalf("ParseGess: %v", err)
+	}
+	err = LoadGess(ctx, NewWorkspace(), doc, DSLRegistry{})
+	if err == nil {
+		t.Fatal("LoadGess succeeded, want a projection-in-pattern-slot error")
+	}
+	var gessErr *GessFileError
+	if !errors.As(err, &gessErr) {
+		t.Fatalf("error = %T, want *GessFileError", err)
+	}
+	if want := `"?i:id" is not a valid pattern slot value; bind a plain ?variable and compare projections in a test condition`; gessErr.Reason != want {
+		t.Fatalf("reason = %q, want %q", gessErr.Reason, want)
+	}
+}
+
+func TestGessDSLLoadTwiceLeavesDocumentReusable(t *testing.T) {
+	ctx := context.Background()
+	source := []byte(`
+(deftemplate item
+  (slot id (type STRING) (required TRUE)))
+
+(deftemplate flagged
+  (slot id (type STRING) (required TRUE)))
+
+(deffacts seed
+  (item (id "I-1")))
+
+(defrule flag
+  (declare (salience 5))
+  (item (id ?id))
+  =>
+  (assert (flagged (id ?id))))
+`)
+	doc, err := ParseGess("reload.gess", source)
+	if err != nil {
+		t.Fatalf("ParseGess: %v", err)
+	}
+	var firstID RulesetID
+	for i := range 2 {
+		workspace := NewWorkspace()
+		if err := LoadGess(ctx, workspace, doc, DSLRegistry{}); err != nil {
+			t.Fatalf("LoadGess load %d: %v", i+1, err)
+		}
+		ruleset, err := workspace.Compile(ctx)
+		if err != nil {
+			t.Fatalf("Compile load %d: %v", i+1, err)
+		}
+		if got := len(doc.InitialFacts()); got != 1 {
+			t.Fatalf("load %d: InitialFacts len = %d, want 1", i+1, got)
+		}
+		if i == 0 {
+			firstID = ruleset.ID()
+			continue
+		}
+		if got := ruleset.ID(); got != firstID {
+			t.Fatalf("load %d ruleset ID = %s, want %s from first load", i+1, got, firstID)
+		}
 	}
 }
 
