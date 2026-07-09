@@ -13,8 +13,10 @@ the Go APIs that load them, see `go-api.md`.
 - A `.gess` file is a sequence of parenthesized lists made of atoms, quoted
   strings, and nested lists.
 - Comments start with `;` and run to the end of the line.
-- Strings use double quotes and support the escapes `\n`, `\r`, `\t`, `\"`,
-  and `\\`.
+- Strings use double quotes with Go escape syntax: `\n`, `\r`, `\t`, `\"`,
+  `\\`, the other single-character escapes (`\a`, `\b`, `\f`, `\v`), and
+  numeric escapes (`\xNN`, `\uNNNN`, `\UNNNNNNNN`). An unrecognized escape
+  is a parse error.
 - Atoms are parsed as values: `TRUE` and `FALSE` (case-insensitive) are
   booleans, `NULL` and `NIL` are null, base-10 integers are integers, and
   atoms containing `.`, `e`, or `E` that parse as numbers are floats. Every

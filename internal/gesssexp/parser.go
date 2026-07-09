@@ -139,24 +139,20 @@ func (l *lexer) stringToken() (token, error) {
 			return token{kind: tokenString, text: b.String(), span: spanWithEnd(start, l.span())}, nil
 		}
 		if r == '\\' {
-			l.advance(r)
-			if l.offset >= len(l.input) {
+			if l.offset+1 >= len(l.input) {
 				break
 			}
-			esc := l.input[l.offset]
-			switch esc {
-			case 'n':
-				b.WriteRune('\n')
-			case 'r':
-				b.WriteRune('\r')
-			case 't':
-				b.WriteRune('\t')
-			case '"', '\\':
-				b.WriteRune(esc)
-			default:
-				b.WriteRune(esc)
+			escSpan := l.span()
+			tail := string(l.input[l.offset:])
+			value, _, rest, err := strconv.UnquoteChar(tail, '"')
+			if err != nil {
+				return token{}, &FileError{Span: escSpan, Reason: "invalid string escape"}
 			}
-			l.advance(esc)
+			consumed := len([]rune(tail)) - len([]rune(rest))
+			for range consumed {
+				l.advance(l.input[l.offset])
+			}
+			b.WriteRune(value)
 			continue
 		}
 		b.WriteRune(r)
@@ -223,7 +219,7 @@ func (p *parser) expr() (Expr, error) {
 		return Expr{Atom: tok.text, String: true, Span: tok.span}, nil
 	case tokenLParen:
 		start := tok.span
-		var list []Expr
+		list := []Expr{}
 		for {
 			next, err := p.next()
 			if err != nil {
