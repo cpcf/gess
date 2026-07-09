@@ -312,7 +312,10 @@ chaining fails with `ErrUnsupportedRuntime`.
 
 Conditions wrapped in `rules.Explicit{...}` and negated conditions never
 generate demand. `Snapshot.BackchainDemandDiagnostics()` reports active
-demand counts per template. The
+demand counts per template. Proof runs respect the module focus stack:
+a proof rule in a module that is never focused does not fire during a
+query's proof run, and the query returns zero rows without an error — keep
+proof rules in `MAIN` or ensure their module is focused. The
 [`examples/backward-chaining`](https://github.com/cpcf/gess/tree/main/examples/backward-chaining)
 examples show the pattern end to end.
 

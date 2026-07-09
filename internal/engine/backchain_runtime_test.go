@@ -1398,3 +1398,100 @@ func TestNestedQueryProofFailsLoudly(t *testing.T) {
 		t.Fatalf("error = %v, want ErrUnsupportedRuntime naming the active proof", err)
 	}
 }
+
+// Characterization (Part VIII item 7 of the round-2 audit): proof rules in a
+// module that is never focused do not fire during query proof runs — the
+// proof quiesces with the demand unproven and the query returns zero rows
+// with no error. WP-14's proof-scoping design must decide whether proofs
+// should bypass the focus stack; until then this pins the actual behavior.
+func TestUnfocusedModuleProofRulesDoNotFireDuringQueryProof(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	mustAddModule := func(name ModuleName) {
+		t.Helper()
+		if err := workspace.AddModule(ModuleSpec{Name: name}); err != nil {
+			t.Fatalf("AddModule(%s): %v", name, err)
+		}
+	}
+	mustAddModule("PROOFS")
+	edge := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "edge",
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	reachable := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "reachable",
+		BackchainReactive: true,
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "assert-direct-reachable",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: reachable.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "dst"},
+				BindingFieldExpr{Binding: "need", Field: "src"},
+			},
+		},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:   "direct-reachability",
+		Module: "PROOFS",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "assert-direct-reachable"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "reachable-paths",
+		Parameters: []QueryParameterSpec{
+			{Name: "src", Kind: ValueString},
+			{Name: "dst", Kind: ValueString},
+		},
+		ConditionTree: Match{
+			Binding: "reachable",
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "src"}, Right: ParamExpr{Name: "src"}},
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dst"}, Right: ParamExpr{Name: "dst"}},
+			},
+			Target: TemplateKeyFact(reachable.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("src", BindingFieldExpr{Binding: "reachable", Field: "src"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision, err := workspace.Compile(ctx)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	if err := session.AssertTemplateValues(ctx, edge.Key(), newStringValue("db"), newStringValue("api")); err != nil {
+		t.Fatalf("Assert edge: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d; unfocused-module proof rules now fire during proofs — update docs and the WP-14 design notes", len(rows))
+	}
+}
