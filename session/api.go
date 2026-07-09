@@ -1067,7 +1067,8 @@ func (s Snapshot) Explain(id FactID, opts ...ExplainOption) (Derivation, bool) {
 // fact, so cost grows with snapshot size; for repeated queries over large
 // working memories prefer session queries. Snapshot queries never generate
 // backchain demand: a query that would need backward chaining fails with
-// ErrUnsupportedRuntime. Row order is unspecified.
+// ErrUnsupportedRuntime. Rows are deterministic for a fixed session history,
+// but otherwise order is unspecified; callers needing an order must sort.
 func (s Snapshot) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
 	it, err := s.value.Query(ctx, name, args)
 	if err != nil {
@@ -1083,7 +1084,8 @@ func (s Snapshot) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 // fact, so cost grows with snapshot size; for repeated queries over large
 // working memories prefer session queries. Snapshot queries never generate
 // backchain demand: a query that would need backward chaining fails with
-// ErrUnsupportedRuntime. Row order is unspecified.
+// ErrUnsupportedRuntime. Rows are deterministic for a fixed session history,
+// but otherwise order is unspecified; callers needing an order must sort.
 func (s Snapshot) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
 	rows, err := s.value.QueryAll(ctx, name, args)
 	return wrapQueryRows(rows), err
@@ -1214,7 +1216,8 @@ func (it *QueryIterator) engineIterator() *engine.QueryIterator {
 }
 
 // QueryRow is one result row from a query, holding fact bindings and computed
-// values under their declared aliases.
+// values under their declared aliases. Its position in a result collection
+// has no semantic meaning because query row order is unspecified.
 type QueryRow struct {
 	value engine.QueryRow
 }
@@ -2316,7 +2319,9 @@ func (s *Session) ClearFocusStack(ctx context.Context) error {
 // runs the agenda to quiescence, exactly like Run: pending activations
 // unrelated to the query may fire with full side effects, and facts derived
 // during the proof persist after the query returns. Queries that generate no
-// demand have no side effects. Row order is unspecified.
+// demand have no side effects. Rows are deterministic for a fixed session
+// history, but otherwise order is unspecified; callers needing an order must
+// sort.
 func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
 	it, err := s.engineSession().Query(ctx, name, args)
 	if err != nil {
@@ -2331,7 +2336,9 @@ func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 // runs the agenda to quiescence, exactly like Run: pending activations
 // unrelated to the query may fire with full side effects, and facts derived
 // during the proof persist after the query returns. Queries that generate no
-// demand have no side effects. Row order is unspecified.
+// demand have no side effects. Rows are deterministic for a fixed session
+// history, but otherwise order is unspecified; callers needing an order must
+// sort.
 func (s *Session) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
 	rows, err := s.engineSession().QueryAll(ctx, name, args)
 	return wrapQueryRows(rows), err

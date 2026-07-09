@@ -203,6 +203,8 @@ for _, row := range rows {
   an unknown query name wraps `ErrQueryNotFound`.
 - Each `QueryRow` exposes `Aliases()`, `Fact(alias)` for fact-binding
   returns, and `Value(alias)` for scalar returns.
+- Rows are deterministic for a fixed session history, but otherwise have no
+  ordering guarantee. Sort them explicitly when callers require an order.
 
 Session queries drive backward chaining: running a query against
 backchain-reactive templates generates demand and then runs the agenda to

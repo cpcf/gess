@@ -217,6 +217,10 @@ A query has parameters (referenced with `rules.ParamExpr`), the same
 condition forms as a rule, and returns built with `rules.ReturnFact` for
 whole facts or `rules.ReturnValue` for scalar expressions.
 Execute queries with `session.Query` or `session.QueryAll`.
+Rows are deterministic for a fixed session history, but their order is
+otherwise unspecified and may change after mutations or runtime-memory
+refactors. Sort explicitly when presentation or downstream processing needs a
+defined order.
 
 ## Expressions
 

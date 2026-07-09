@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 )
 
-func TestSnapshotQueryReturnsDeterministicParameterizedRows(t *testing.T) {
+func TestSnapshotQueryReturnsParameterizedRowsWithoutOrderingContract(t *testing.T) {
 	ctx := context.Background()
 	revision, personKey := mustQueryRevision(t)
 	session, err := NewSession(revision, WithInitialFacts(
@@ -28,14 +29,15 @@ func TestSnapshotQueryReturnsDeterministicParameterizedRows(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want 2", len(rows))
 	}
-	assertQueryRowStringValue(t, rows[0], "id", "p1")
-	assertQueryRowStringValue(t, rows[1], "id", "p4")
-	assertQueryRowStringValue(t, rows[0], "requested_dept", "engineering")
-	if fact, ok := rows[0].Fact("person"); !ok || fact.TemplateKey() != personKey {
-		t.Fatalf("row fact = (%#v, %v), want person fact", fact, ok)
-	}
-	if aliases := rows[0].Aliases(); len(aliases) != 3 || aliases[0] != "person" || aliases[1] != "id" || aliases[2] != "requested_dept" {
-		t.Fatalf("aliases = %#v", aliases)
+	assertQueryRowStringValuesUnordered(t, rows, "id", []string{"p1", "p4"})
+	for _, row := range rows {
+		assertQueryRowStringValue(t, row, "requested_dept", "engineering")
+		if fact, ok := row.Fact("person"); !ok || fact.TemplateKey() != personKey {
+			t.Fatalf("row fact = (%#v, %v), want person fact", fact, ok)
+		}
+		if aliases := row.Aliases(); len(aliases) != 3 || aliases[0] != "person" || aliases[1] != "id" || aliases[2] != "requested_dept" {
+			t.Fatalf("aliases = %#v", aliases)
+		}
 	}
 }
 
@@ -643,8 +645,7 @@ func TestQueryRetainsDuplicateReturnValuesFromDistinctBranchTokens(t *testing.T)
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want duplicate branch rows retained", len(rows))
 	}
-	assertQueryRowStringValue(t, rows[0], "id", "p1")
-	assertQueryRowStringValue(t, rows[1], "id", "p1")
+	assertQueryRowStringValuesUnordered(t, rows, "id", []string{"p1", "p1"})
 }
 
 func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *testing.T) {
@@ -720,8 +721,11 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if _, ok := rows[0].Fact("id"); ok {
 		t.Fatal("value return resolved as fact")
 	}
-	assertQueryRowStringValue(t, rows[0], "id", "p-000")
-	assertQueryRowStringValue(t, rows[149], "id", "p-149")
+	expectedIDs := make([]string, len(initials))
+	for i := range expectedIDs {
+		expectedIDs[i] = fmt.Sprintf("p-%03d", i)
+	}
+	assertQueryRowStringValuesUnordered(t, rows, "id", expectedIDs)
 
 	again, err := session.QueryAll(ctx, "people-values", nil)
 	if err != nil {
@@ -730,8 +734,7 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if got, want := len(again), len(initials); got != want {
 		t.Fatalf("second rows = %d, want %d", got, want)
 	}
-	assertQueryRowStringValue(t, rows[0], "id", "p-000")
-	assertQueryRowStringValue(t, again[0], "id", "p-000")
+	assertQueryRowStringValuesUnordered(t, again, "id", expectedIDs)
 }
 
 func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
@@ -792,8 +795,7 @@ func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
 	if _, ok := rows[0].Fact("id"); ok {
 		t.Fatal("value return resolved as fact")
 	}
-	assertQueryRowStringValue(t, rows[0], "id", "p1")
-	assertQueryRowStringValue(t, rows[1], "id", "p2")
+	assertQueryRowStringValuesUnordered(t, rows, "id", []string{"p1", "p2"})
 
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger)); err != nil {
 		t.Fatalf("remove query trigger: %v", err)
@@ -1414,6 +1416,28 @@ func assertQueryRowStringValue(t testing.TB, row QueryRow, alias, want string) {
 	got, ok := value.AsString()
 	if !ok || got != want {
 		t.Fatalf("row value %q = (%q, %v), want %q", alias, got, ok, want)
+	}
+}
+
+func assertQueryRowStringValuesUnordered(t testing.TB, rows []QueryRow, alias string, want []string) {
+	t.Helper()
+	got := make([]string, len(rows))
+	for i, row := range rows {
+		value, ok := row.Value(alias)
+		if !ok {
+			t.Fatalf("row %d value %q missing", i, alias)
+		}
+		text, ok := value.AsString()
+		if !ok {
+			t.Fatalf("row %d value %q has kind %s, want string", i, alias, value.Kind())
+		}
+		got[i] = text
+	}
+	want = slices.Clone(want)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("row values %q = %#v, want unordered %#v", alias, got, want)
 	}
 }
 
