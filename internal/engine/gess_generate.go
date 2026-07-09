@@ -837,7 +837,7 @@ func renderAnyValue(value any) string {
 	case int64:
 		return fmt.Sprintf("int64(%d)", typed)
 	case float64:
-		return strconv.FormatFloat(typed, 'g', -1, 64)
+		return fmt.Sprintf("float64(%s)", strconv.FormatFloat(typed, 'g', -1, 64))
 	case Value:
 		return renderValue(typed)
 	default:
@@ -857,7 +857,7 @@ func renderValue(value Value) string {
 		return fmt.Sprintf("int64(%d)", v)
 	case ValueFloat:
 		v, _ := value.AsFloat64()
-		return strconv.FormatFloat(v, 'g', -1, 64)
+		return fmt.Sprintf("float64(%s)", strconv.FormatFloat(v, 'g', -1, 64))
 	case ValueString:
 		v, _ := value.AsString()
 		return strconv.Quote(v)
