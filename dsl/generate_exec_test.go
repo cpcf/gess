@@ -3,6 +3,7 @@ package dsl_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,12 +31,17 @@ const generateExecSource = `
   (test (> ?amount 1.5))
   =>
   (assert (routed (lane ?lane))))
+
+(defquery routed-orders
+  ?order <- (order (lane ?lane))
+  (return (lane ?lane)))
 `
 
 const generateExecDriver = `package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 
@@ -50,6 +56,18 @@ func main() {
 	}
 	fmt.Println(ruleset.ID().String())
 	fmt.Println(len(initials))
+	template, _ := ruleset.Template("order")
+	rule, _ := ruleset.Rule("route")
+	query, _ := ruleset.Query("routed-orders")
+	fmt.Println(base64.StdEncoding.EncodeToString([]byte(template.GessSource())))
+	fmt.Println(base64.StdEncoding.EncodeToString([]byte(rule.GessSource())))
+	fmt.Println(base64.StdEncoding.EncodeToString([]byte(query.GessSource())))
+	rendered, err := gessdsl.RenderRuleset(ruleset)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	fmt.Println(base64.StdEncoding.EncodeToString(rendered))
 }
 `
 
@@ -107,13 +125,45 @@ func TestGeneratedBuildExecutesAndMatchesCompile(t *testing.T) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("driver output = %q, want ruleset ID and initial-fact count", stdout.String())
+	if len(lines) != 6 {
+		t.Fatalf("driver output = %q, want ID, initial count, three GessSource values, and rendered ruleset", stdout.String())
 	}
 	if want := compiled.ID().String(); lines[0] != want {
 		t.Fatalf("generated ruleset ID = %s, want %s from in-process Compile", lines[0], want)
 	}
 	if lines[1] != "1" {
 		t.Fatalf("generated initial facts = %s, want 1", lines[1])
+	}
+	template, ok := compiled.Template("order")
+	if !ok {
+		t.Fatal("compiled template order missing")
+	}
+	rule, ok := compiled.Rule("route")
+	if !ok {
+		t.Fatal("compiled rule route missing")
+	}
+	query, ok := compiled.Query("routed-orders")
+	if !ok {
+		t.Fatal("compiled query routed-orders missing")
+	}
+	for i, want := range []string{template.GessSource(), rule.GessSource(), query.GessSource()} {
+		decoded, err := base64.StdEncoding.DecodeString(lines[i+2])
+		if err != nil {
+			t.Fatalf("decode generated GessSource %d: %v", i, err)
+		}
+		if got := string(decoded); got != want {
+			t.Fatalf("generated GessSource %d = %q, want %q", i, got, want)
+		}
+	}
+	generatedRendered, err := base64.StdEncoding.DecodeString(lines[5])
+	if err != nil {
+		t.Fatalf("decode generated rendered ruleset: %v", err)
+	}
+	compiledRendered, err := dsl.RenderRuleset(compiled)
+	if err != nil {
+		t.Fatalf("RenderRuleset(compiled): %v", err)
+	}
+	if !bytes.Equal(generatedRendered, compiledRendered) {
+		t.Fatalf("generated rendered ruleset differs from in-process Compile\ngot:\n%s\nwant:\n%s", generatedRendered, compiledRendered)
 	}
 }

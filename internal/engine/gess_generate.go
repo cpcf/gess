@@ -290,6 +290,9 @@ func renderGlobalSpec(spec GlobalSpec) string {
 func renderTemplateSpec(spec TemplateSpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.TemplateSpec{Name: %s", strconv.Quote(spec.Name))
+	if spec.GessSource != "" {
+		fmt.Fprintf(&b, ", GessSource: %s", strconv.Quote(spec.GessSource))
+	}
 	if !sourceSpanIsZero(spec.Source) {
 		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
 	}
@@ -468,6 +471,9 @@ func renderActionEffectKind(kind ActionEffectKind) string {
 func renderRuleSpec(spec RuleSpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.RuleSpec{Name: %s", strconv.Quote(spec.Name))
+	if spec.GessSource != "" {
+		fmt.Fprintf(&b, ", GessSource: %s", strconv.Quote(spec.GessSource))
+	}
 	if !spec.Module.IsZero() {
 		fmt.Fprintf(&b, ", Module: %s", renderModuleName(spec.Module))
 	}
@@ -499,6 +505,9 @@ func renderRuleSpec(spec RuleSpec) string {
 func renderQuerySpec(spec QuerySpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.QuerySpec{Name: %s", strconv.Quote(spec.Name))
+	if spec.GessSource != "" {
+		fmt.Fprintf(&b, ", GessSource: %s", strconv.Quote(spec.GessSource))
+	}
 	if !sourceSpanIsZero(spec.Source) {
 		fmt.Fprintf(&b, ", Source: %s", renderSourceSpan(spec.Source))
 	}
