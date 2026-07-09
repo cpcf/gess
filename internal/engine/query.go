@@ -173,6 +173,11 @@ func (q compiledQuery) inspectReturns() []QueryReturn {
 }
 
 func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledQuery, error) {
+	compiled, err := compileQuerySpecInternal(spec, templates, functions, globals)
+	return compiled, attachValidationErrorSource(err, spec.Source)
+}
+
+func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledQuery, error) {
 	normalized := cloneQuerySpec(spec)
 	if normalized.Name == "" {
 		return compiledQuery{}, &ValidationError{Reason: "query name is required", Err: ErrQueryValidation}
@@ -184,6 +189,7 @@ func compileQuerySpec(spec QuerySpec, templates templateResolver, functions map[
 	pseudoRule := RuleSpec{
 		Name:          normalized.Name,
 		Module:        normalized.Module,
+		Source:        normalized.Source,
 		Conditions:    normalized.Conditions,
 		ConditionTree: normalized.ConditionTree,
 	}
@@ -319,24 +325,24 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 	for i, spec := range specs {
 		spec = cloneQueryReturnSpec(spec)
 		if spec.Alias == "" {
-			return nil, &ValidationError{RuleName: queryName, Reason: "query return alias is required", Err: ErrQueryValidation}
+			return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "query return alias is required", Err: ErrQueryValidation}
 		}
 		if !isValidBindingName(spec.Alias) {
-			return nil, &ValidationError{RuleName: queryName, Reason: "invalid query return alias", Err: ErrQueryValidation}
+			return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "invalid query return alias", Err: ErrQueryValidation}
 		}
 		if _, exists := aliases[spec.Alias]; exists {
-			return nil, &ValidationError{RuleName: queryName, Reason: "duplicate query return alias", Err: ErrQueryValidation}
+			return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "duplicate query return alias", Err: ErrQueryValidation}
 		}
 		aliases[spec.Alias] = struct{}{}
 		hasBinding := spec.Binding != ""
 		hasExpression := spec.Expression != nil
 		if hasBinding == hasExpression {
-			return nil, &ValidationError{RuleName: queryName, Reason: "query return must declare exactly one binding or expression", Err: ErrQueryValidation}
+			return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "query return must declare exactly one binding or expression", Err: ErrQueryValidation}
 		}
 		if hasBinding {
 			slot, ok := bindingSlots[spec.Binding]
 			if !ok {
-				return nil, &ValidationError{RuleName: queryName, Reason: "query return references unknown binding", Err: ErrQueryValidation}
+				return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "query return references unknown binding", Err: ErrQueryValidation}
 			}
 			returns = append(returns, compiledQueryReturn{
 				alias:       spec.Alias,
@@ -349,11 +355,11 @@ func compileQueryReturns(queryName string, specs []QueryReturnSpec, conditions [
 			continue
 		}
 		if expressionContainsCurrentField(spec.Expression) {
-			return nil, &ValidationError{RuleName: queryName, Reason: "query return value expressions cannot use current field references", Err: ErrQueryValidation}
+			return nil, &ValidationError{RuleName: queryName, Source: spec.Source, Reason: "query return value expressions cannot use current field references", Err: ErrQueryValidation}
 		}
 		expression, _, err := compileExpressionSpecWithParams(spec.Expression, queryName, -1, i, nil, conditions, bindingSlots, templatesByKey, params, functions, globals)
 		if err != nil {
-			return nil, markQueryValidation(err)
+			return nil, attachValidationErrorSource(markQueryValidation(err), spec.Source)
 		}
 		returns = append(returns, compiledQueryReturn{
 			alias:       spec.Alias,

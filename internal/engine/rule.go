@@ -1895,7 +1895,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		}
 
 		if !node.visible && listPatternsHaveSegment(condition.ListPatterns) {
-			return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding is not supported inside non-visible conditions", ErrInvalidListPattern)
+			return compiledRuleConditionSet{}, attachValidationErrorSource(listPatternValidationError(ruleName, i, -1, "list segment binding is not supported inside non-visible conditions", ErrInvalidListPattern), node.source)
 		}
 		listPatterns, compiledListPatterns, listPatternBindings, err := compileListPatternSpecs(condition.ListPatterns, ruleName, i, template, conditions, bindingSlots, params, functions, globals)
 		if err != nil {
@@ -1903,10 +1903,10 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		}
 		for _, result := range listPatternBindings {
 			if result.BindingName == condition.Binding {
-				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with condition binding", ErrInvalidListPattern)
+				return compiledRuleConditionSet{}, attachValidationErrorSource(listPatternValidationError(ruleName, i, -1, "list segment binding collides with condition binding", ErrInvalidListPattern), node.source)
 			}
 			if _, exists := allBindingSlots[result.BindingName]; exists {
-				return compiledRuleConditionSet{}, listPatternValidationError(ruleName, i, -1, "list segment binding collides with an existing binding", ErrInvalidListPattern)
+				return compiledRuleConditionSet{}, attachValidationErrorSource(listPatternValidationError(ruleName, i, -1, "list segment binding collides with an existing binding", ErrInvalidListPattern), node.source)
 			}
 		}
 
@@ -1915,7 +1915,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		for joinIndex, joinConstraint := range condition.JoinConstraints {
 			compiledJoin, planJoin, err := compileJoinConstraintSpecWithSource(joinConstraint, node.source, ruleName, i, joinIndex, template, conditions, bindingSlots, templates.byKey)
 			if err != nil {
-				return compiledRuleConditionSet{}, err
+				return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 			}
 			joinConstraints = append(joinConstraints, compiledJoin)
 			compiledJoins = append(compiledJoins, planJoin)

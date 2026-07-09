@@ -172,6 +172,18 @@ func compileJoinConstraintSpecWithSource(
 	template *compiledTemplate, conditions []RuleCondition,
 	bindingSlots map[string]int,
 	templatesByKey map[TemplateKey]compiledTemplate) (JoinConstraint, compiledJoinConstraint, error) {
+	compiled, plan, err := compileJoinConstraintSpecWithSourceInternal(spec, source, ruleName, conditionIndex, joinIndex, template, conditions, bindingSlots, templatesByKey)
+	return compiled, plan, attachValidationErrorSource(err, source)
+}
+
+func compileJoinConstraintSpecWithSourceInternal(
+	spec JoinConstraintSpec,
+	source SourceSpan,
+	ruleName string,
+	conditionIndex, joinIndex int,
+	template *compiledTemplate, conditions []RuleCondition,
+	bindingSlots map[string]int,
+	templatesByKey map[TemplateKey]compiledTemplate) (JoinConstraint, compiledJoinConstraint, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return JoinConstraint{}, compiledJoinConstraint{}, &ValidationError{
 			RuleName:          ruleName,

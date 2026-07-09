@@ -675,6 +675,11 @@ func (t compiledTemplate) applyDefaultsAndValidate(raw Fields) (Fields, map[stri
 }
 
 func compileTemplateSpec(spec TemplateSpec) (compiledTemplate, error) {
+	compiled, err := compileTemplateSpecInternal(spec)
+	return compiled, attachValidationErrorSource(err, spec.Source)
+}
+
+func compileTemplateSpecInternal(spec TemplateSpec) (compiledTemplate, error) {
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
 		return compiledTemplate{}, &ValidationError{Reason: "template name is required"}

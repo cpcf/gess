@@ -173,6 +173,11 @@ func (f compiledPureFunction) hasImplementation() bool {
 }
 
 func compileExpressionFunctionSpec(spec ExpressionFunctionSpec, order int, functions map[string]compiledPureFunction) (compiledPureFunction, error) {
+	compiled, err := compileExpressionFunctionSpecInternal(spec, order, functions)
+	return compiled, attachValidationErrorSource(err, spec.Source)
+}
+
+func compileExpressionFunctionSpecInternal(spec ExpressionFunctionSpec, order int, functions map[string]compiledPureFunction) (compiledPureFunction, error) {
 	normalized := cloneExpressionFunctionSpec(spec)
 	if normalized.Name == "" {
 		return compiledPureFunction{}, &ValidationError{
