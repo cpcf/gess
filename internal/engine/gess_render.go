@@ -227,6 +227,19 @@ func (r gessRenderer) writeTemplate(b *strings.Builder, template Template) {
 				fmt.Fprintf(b, " (default %s)", renderGessValue(value))
 			}
 		}
+		if len(field.AllowedValues) > 0 {
+			rendered := make([]string, 0, len(field.AllowedValues))
+			for _, allowed := range field.AllowedValues {
+				value, err := NewValue(allowed)
+				if err != nil {
+					continue
+				}
+				rendered = append(rendered, renderGessValue(value))
+			}
+			if len(rendered) > 0 {
+				fmt.Fprintf(b, " (allowed-values %s)", strings.Join(rendered, " "))
+			}
+		}
 		b.WriteByte(')')
 	}
 	b.WriteByte(')')
@@ -239,6 +252,9 @@ func (r gessRenderer) writeRule(b *strings.Builder, rule Rule) error {
 		return nil
 	}
 	fmt.Fprintf(b, "(defrule %s", renderQualifiedName(rule.Module(), rule.Name()))
+	if rule.Description() != "" {
+		fmt.Fprintf(b, " (description %s)", strconv.Quote(rule.Description()))
+	}
 	decls := make([]string, 0, 2)
 	if rule.Salience() != 0 {
 		decls = append(decls, fmt.Sprintf("(salience %d)", rule.Salience()))
@@ -274,6 +290,9 @@ func (r gessRenderer) writeQuery(b *strings.Builder, query Query) error {
 		return nil
 	}
 	fmt.Fprintf(b, "(defquery %s", renderQualifiedName(query.Module(), query.Name()))
+	if query.Description() != "" {
+		fmt.Fprintf(b, " (description %s)", strconv.Quote(query.Description()))
+	}
 	if params := query.Parameters(); len(params) > 0 {
 		b.WriteString(" (declare (variables")
 		for _, param := range params {

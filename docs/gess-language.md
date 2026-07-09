@@ -91,10 +91,13 @@ template are validated against its slots.
   `BOOL`), `LIST`, `MAP`, and `ANY`. Slots without a type accept any value.
 - `(required TRUE|FALSE)`: whether asserts must provide the slot.
 - `(default VALUE)`: a scalar default used when the slot is omitted.
+- `(allowed-values VALUE...)`: restrict the slot to an explicit value set;
+  asserts and rule effects with any other value are rejected.
 
 There is no `multislot` form; use a `LIST`-typed slot instead. Unknown slot
-attributes and unknown items inside `deftemplate` are ignored, so misspelled
-attributes don't fail loading.
+attributes and unknown items inside `deftemplate` are load errors, so
+misspelled attributes fail with a `file:line` position instead of being
+silently dropped.
 
 ### Template declarations
 
@@ -157,6 +160,10 @@ right-hand side of actions.
   first within a module.
 - `(auto-focus TRUE|FALSE)`: when true, an activation of this rule pushes its
   module onto the focus stack.
+
+A rule may also carry a `(description "...")` item (quoted string required)
+anywhere on the left-hand side; it is stored as the rule's description and
+survives render round trips. `defquery` accepts the same item in its body.
 
 ### Patterns
 

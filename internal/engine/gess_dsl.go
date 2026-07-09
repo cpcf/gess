@@ -475,6 +475,17 @@ func (l *gessLoader) parseSlot(form gessSExpr) (FieldSpec, error) {
 			}
 			field.Default = value
 			field.HasDefault = true
+		case "allowed-values":
+			if len(attr.List) < 2 {
+				return FieldSpec{}, l.err(attr.Span, "allowed-values requires at least one value")
+			}
+			for _, item := range attr.List[1:] {
+				value, err := gessAtomValue(item)
+				if err != nil {
+					return FieldSpec{}, err
+				}
+				field.AllowedValues = append(field.AllowedValues, value)
+			}
 		default:
 			if attr.IsAtom() {
 				return FieldSpec{}, l.err(attr.Span, "unsupported slot attribute %q", attr.Text())
@@ -541,6 +552,10 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 func applyRuleDecls(l *gessLoader, rule *RuleSpec, body []gessSExpr) ([]gessSExpr, error) {
 	out := make([]gessSExpr, 0, len(body))
 	for _, item := range body {
+		if item.Head() == "description" && len(item.List) == 2 && item.List[1].IsAtom() && item.List[1].String {
+			rule.Description = item.List[1].Text()
+			continue
+		}
 		if item.Head() != "declare" {
 			out = append(out, item)
 			continue
@@ -597,6 +612,12 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 			}
 		case "return":
 			returns = append(returns, item.List[1:]...)
+		case "description":
+			if len(item.List) == 2 && item.List[1].IsAtom() && item.List[1].String {
+				query.Description = item.List[1].Text()
+				continue
+			}
+			body = append(body, item)
 		default:
 			body = append(body, item)
 		}

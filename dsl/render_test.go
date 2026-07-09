@@ -246,6 +246,118 @@ func TestRenderGoAuthoredRulesetUsesRegistrations(t *testing.T) {
 	}
 }
 
+func TestRenderRulesetPreservesAllowedValuesAndDescriptions(t *testing.T) {
+	ctx := context.Background()
+	workspace := rules.NewWorkspace()
+	if err := workspace.AddTemplate(rules.TemplateSpec{
+		Name: "ticket",
+		Fields: []rules.FieldSpec{
+			{Name: "id", Kind: rules.ValueString, Required: true},
+			{Name: "status", Kind: rules.ValueString, Required: true, AllowedValues: []any{"open", "closed"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.AddAction(rules.ActionSpec{Name: "notify", Fn: func(rules.ActionContext) error { return nil }}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.AddRule(rules.RuleSpec{
+		Name:        "escalate-open",
+		Description: "escalates every open ticket",
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{
+				Binding: "t",
+				Target:  rules.TemplateFact("ticket"),
+				FieldConstraints: []rules.FieldConstraintSpec{
+					{Field: "status", Operator: rules.FieldConstraintEqual, Value: "open"},
+				},
+			},
+		}},
+		Actions: []rules.RuleActionSpec{{Name: "notify"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.AddQuery(rules.QuerySpec{
+		Name:        "tickets-by-status",
+		Description: "lists tickets with the given status",
+		Parameters:  []rules.QueryParameterSpec{{Name: "status", Kind: rules.ValueString}},
+		ConditionTree: rules.And{Conditions: []rules.ConditionSpec{
+			rules.Match{
+				Binding: "t",
+				Target:  rules.TemplateFact("ticket"),
+				Predicates: []rules.ExpressionSpec{rules.CompareExpr{
+					Operator: rules.ExpressionCompareEqual,
+					Left:     rules.CurrentFieldExpr{Field: "status"},
+					Right:    rules.ParamExpr{Name: "status"},
+				}},
+			},
+		}},
+		Returns: []rules.QueryReturnSpec{{Alias: "id", Expression: rules.BindingFieldExpr{Binding: "t", Field: "id"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := rules.Compile(ctx, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rendered, err := dsl.RenderRuleset(compiled)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		`(allowed-values "closed" "open")`,
+		`(description "escalates every open ticket")`,
+		`(description "lists tickets with the given status")`,
+	} {
+		if !strings.Contains(string(rendered), want) {
+			t.Fatalf("rendered ruleset is missing %s:\n%s", want, rendered)
+		}
+	}
+
+	registry := dsl.Registry{Actions: map[string]rules.ActionFunc{"notify": func(rules.ActionContext) error { return nil }}}
+	recompiled, err := dsl.Compile(ctx, "<rendered>", rendered, registry)
+	if err != nil {
+		t.Fatalf("compile rendered: %v\n%s", err, rendered)
+	}
+	template, ok := recompiled.Template("ticket")
+	if !ok {
+		t.Fatal("ticket template missing after round trip")
+	}
+	var status *rules.FieldSpec
+	fields := template.Fields()
+	for i := range fields {
+		if fields[i].Name == "status" {
+			status = &fields[i]
+			break
+		}
+	}
+	if status == nil {
+		t.Fatal("status field missing after round trip")
+	}
+	wantAllowed := []string{"closed", "open"}
+	if len(status.AllowedValues) != len(wantAllowed) {
+		t.Fatalf("allowed values after round trip = %v", status.AllowedValues)
+	}
+	for i, raw := range status.AllowedValues {
+		value, err := rules.NewValue(raw)
+		if err != nil {
+			t.Fatalf("allowed value %d: %v", i, err)
+		}
+		if got, _ := value.AsString(); got != wantAllowed[i] {
+			t.Fatalf("allowed value %d = %v, want %q", i, raw, wantAllowed[i])
+		}
+	}
+	rule, ok := recompiled.Rule("escalate-open")
+	if !ok || rule.Description() != "escalates every open ticket" {
+		t.Fatalf("rule description after round trip = %q (found=%t)", rule.Description(), ok)
+	}
+	query, ok := recompiled.Query("tickets-by-status")
+	if !ok || query.Description() != "lists tickets with the given status" {
+		t.Fatalf("query description after round trip = %q (found=%t)", query.Description(), ok)
+	}
+}
+
 func TestRenderRulesetIsDeterministic(t *testing.T) {
 	path := filepath.Join("..", "examples", "gess-files", "order_routing", "rules.gess")
 	source, err := os.ReadFile(path)
