@@ -1033,7 +1033,7 @@ func (a compiledAction) clone() compiledAction {
 	return a
 }
 
-func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledEffectAction, error) {
+func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpec, conditions []RuleCondition, bindingSlots map[string]int, modules map[ModuleName]Module, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal, rhsBinds map[string]struct{}) (compiledEffectAction, error) {
 	out := compiledEffectAction{
 		kind:        spec.Kind,
 		target:      strings.TrimSpace(spec.Target),
@@ -1042,6 +1042,31 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 		fields:      append([]string(nil), spec.Fields...),
 		unset:       append([]string(nil), spec.Unset...),
 		values:      make([]compiledExpression, len(spec.Values)),
+	}
+	if !validActionEffectKind(out.kind) {
+		return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, "invalid action effect kind")
+	}
+	if len(out.fields) > 0 && out.kind != ActionEffectAssert && out.kind != ActionEffectAssertLogical && out.kind != ActionEffectModify {
+		return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, fmt.Sprintf("action effect kind %d does not support fields", out.kind))
+	}
+	if len(out.unset) > 0 && out.kind != ActionEffectModify {
+		return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, fmt.Sprintf("action effect kind %d does not support unset fields", out.kind))
+	}
+	switch out.kind {
+	case ActionEffectRetract, ActionEffectPushFocus, ActionEffectPopFocus, ActionEffectClearFocus, ActionEffectHalt:
+		if len(out.values) > 0 {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, fmt.Sprintf("action effect kind %d does not support values", out.kind))
+		}
+	}
+	if out.kind == ActionEffectPushFocus {
+		if out.target == "" {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, "focus target module is required")
+		}
+		module := normalizeModuleName(ModuleName(out.target))
+		if _, ok := modules[module]; !ok {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, fmt.Sprintf("focus target %q is not a declared module", module))
+		}
+		out.target = module.String()
 	}
 	// Assert effects require a declared template; reject an undeclared target at
 	// compile time rather than failing mid-firing (dynamic facts are not a
@@ -1061,6 +1086,9 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 		}
 	}
 	for i, valueSpec := range spec.Values {
+		if err := validateActionRHSBindReferences(ruleName, actionIndex, valueSpec, rhsBinds); err != nil {
+			return compiledEffectAction{}, err
+		}
 		if nativeActionExpressionUsesCurrent(valueSpec) {
 			return compiledEffectAction{}, &ValidationError{
 				RuleName:       ruleName,
@@ -1097,6 +1125,15 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 	}
 	switch out.kind {
 	case ActionEffectBind:
+		if out.target == "" {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, "bind target is required")
+		}
+		if !isValidBindingName(out.target) {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, "invalid bind target")
+		}
+		if _, exists := rhsBinds[out.target]; exists {
+			return compiledEffectAction{}, effectValidationError(ruleName, actionIndex, fmt.Sprintf("bind target %q is already defined", out.target))
+		}
 		if len(out.values) != 1 {
 			return compiledEffectAction{}, &ValidationError{
 				RuleName:       ruleName,
@@ -1144,6 +1181,26 @@ func compileEffectAction(ruleName string, actionIndex int, spec *ActionEffectSpe
 		}
 	}
 	return out, nil
+}
+
+func validActionEffectKind(kind ActionEffectKind) bool {
+	switch kind {
+	case ActionEffectAssert, ActionEffectAssertLogical, ActionEffectModify, ActionEffectRetract,
+		ActionEffectEmit, ActionEffectBind, ActionEffectPushFocus, ActionEffectPopFocus,
+		ActionEffectClearFocus, ActionEffectHalt:
+		return true
+	default:
+		return false
+	}
+}
+
+func effectValidationError(ruleName string, actionIndex int, reason string) *ValidationError {
+	return &ValidationError{
+		RuleName:       ruleName,
+		ActionIndex:    actionIndex,
+		HasActionIndex: true,
+		Reason:         reason,
+	}
 }
 
 // factBindingTarget resolves a modify/retract target binding to its fact
@@ -1290,13 +1347,16 @@ func validateEffectTemplateFields(ruleName string, actionIndex int, template com
 	return nil
 }
 
-func compileCallAction(ruleName string, actionIndex int, spec *ActionCallSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledCallAction, error) {
+func compileCallAction(ruleName string, actionIndex int, spec *ActionCallSpec, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal, rhsBinds map[string]struct{}) (compiledCallAction, error) {
 	out := compiledCallAction{
 		name: strings.TrimSpace(spec.Name),
 		fn:   spec.Fn,
 		args: make([]compiledExpression, len(spec.Args)),
 	}
 	for i, argSpec := range spec.Args {
+		if err := validateActionRHSBindReferences(ruleName, actionIndex, argSpec, rhsBinds); err != nil {
+			return compiledCallAction{}, err
+		}
 		if nativeActionExpressionUsesCurrent(argSpec) {
 			return compiledCallAction{}, &ValidationError{
 				RuleName:       ruleName,
@@ -1319,7 +1379,7 @@ func (a compiledCallAction) clone() compiledCallAction {
 	return a
 }
 
-func compileRuleActionExecution(ruleName string, actionIndex int, action compiledAction, conditions []RuleCondition, bindingSlots map[string]int, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRuleAction, error) {
+func compileRuleActionExecution(ruleName string, actionIndex int, action compiledAction, conditions []RuleCondition, bindingSlots map[string]int, modules map[ModuleName]Module, templatesByKey map[TemplateKey]compiledTemplate, functions map[string]compiledPureFunction, globals map[string]compiledGlobal, rhsBinds map[string]struct{}) (compiledRuleAction, error) {
 	out := compiledRuleAction{
 		name:              action.name,
 		order:             actionIndex,
@@ -1336,7 +1396,7 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 		return out, nil
 	}
 	if action.effect != nil {
-		effect, err := compileEffectAction(ruleName, actionIndex, action.effect, conditions, bindingSlots, templatesByKey, functions, globals)
+		effect, err := compileEffectAction(ruleName, actionIndex, action.effect, conditions, bindingSlots, modules, templatesByKey, functions, globals, rhsBinds)
 		if err != nil {
 			return compiledRuleAction{}, err
 		}
@@ -1345,7 +1405,7 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 		return out, nil
 	}
 	if action.call != nil {
-		callAction, err := compileCallAction(ruleName, actionIndex, action.call, conditions, bindingSlots, templatesByKey, functions, globals)
+		callAction, err := compileCallAction(ruleName, actionIndex, action.call, conditions, bindingSlots, templatesByKey, functions, globals, rhsBinds)
 		if err != nil {
 			return compiledRuleAction{}, err
 		}
@@ -1403,6 +1463,9 @@ func compileRuleActionExecution(ruleName string, actionIndex int, action compile
 
 	values := make([]compiledExpression, len(spec.Values))
 	for i, valueSpec := range spec.Values {
+		if err := validateActionRHSBindReferences(ruleName, actionIndex, valueSpec, rhsBinds); err != nil {
+			return compiledRuleAction{}, err
+		}
 		if nativeActionExpressionUsesCurrent(valueSpec) {
 			return compiledRuleAction{}, &ValidationError{
 				RuleName:       ruleName,
@@ -1495,6 +1558,61 @@ func compileStringCall2ConstBindingFieldTokenActionValue(expression compiledExpr
 
 func tokenActionBindingFieldFastPath(expression compiledExpression) bool {
 	return expression.bindingSlot >= 0 && expression.access.rootSlot >= 0 && expression.access.topLevel()
+}
+
+func validateActionRHSBindReferences(ruleName string, actionIndex int, spec ExpressionSpec, available map[string]struct{}) error {
+	switch expression := spec.(type) {
+	case nil:
+		return nil
+	case RHSBindExpr:
+		return validateActionRHSBindReference(ruleName, actionIndex, expression.Name, available)
+	case *RHSBindExpr:
+		if expression == nil {
+			return nil
+		}
+		return validateActionRHSBindReference(ruleName, actionIndex, expression.Name, available)
+	case CallExpr:
+		for _, arg := range expression.Args {
+			if err := validateActionRHSBindReferences(ruleName, actionIndex, arg, available); err != nil {
+				return err
+			}
+		}
+	case *CallExpr:
+		if expression != nil {
+			return validateActionRHSBindReferences(ruleName, actionIndex, CallExpr(*expression), available)
+		}
+	case CompareExpr:
+		if err := validateActionRHSBindReferences(ruleName, actionIndex, expression.Left, available); err != nil {
+			return err
+		}
+		return validateActionRHSBindReferences(ruleName, actionIndex, expression.Right, available)
+	case *CompareExpr:
+		if expression != nil {
+			return validateActionRHSBindReferences(ruleName, actionIndex, CompareExpr(*expression), available)
+		}
+	case BooleanExpr:
+		for _, operand := range expression.Operands {
+			if err := validateActionRHSBindReferences(ruleName, actionIndex, operand, available); err != nil {
+				return err
+			}
+		}
+	case *BooleanExpr:
+		if expression != nil {
+			return validateActionRHSBindReferences(ruleName, actionIndex, BooleanExpr(*expression), available)
+		}
+	}
+	return nil
+}
+
+func validateActionRHSBindReference(ruleName string, actionIndex int, name string, available map[string]struct{}) error {
+	name = strings.TrimSpace(name)
+	if name == "" || !isValidBindingName(name) {
+		return effectValidationError(ruleName, actionIndex, "invalid rhs bind reference")
+	}
+	if _, ok := available[name]; !ok {
+		return effectValidationError(ruleName, actionIndex, fmt.Sprintf("rhs bind %q is not defined by an earlier action", name))
+	}
+	return nil
 }
 
 func nativeActionExpressionUsesCurrent(spec ExpressionSpec) bool {

@@ -103,6 +103,48 @@ func TestCompileRejectsInvalidEffectFields(t *testing.T) {
 			},
 			want: "effect has 2 fields but 1 values",
 		},
+		{
+			name: "assert silently ignores unset",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectAssert, TemplateKey: key, FactName: "ticket", Unset: []string{"count"}, Fields: []string{"id"}, Values: []ExpressionSpec{ConstExpr{Value: "T-1"}}}
+			},
+			want: "does not support unset fields",
+		},
+		{
+			name: "bind target missing",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectBind, Values: []ExpressionSpec{ConstExpr{Value: int64(1)}}}
+			},
+			want: "bind target is required",
+		},
+		{
+			name: "bind target invalid",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectBind, Target: "?x", Values: []ExpressionSpec{ConstExpr{Value: int64(1)}}}
+			},
+			want: "invalid bind target",
+		},
+		{
+			name: "focus target unknown",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectPushFocus, Target: "MISSING"}
+			},
+			want: `focus target "MISSING" is not a declared module`,
+		},
+		{
+			name: "pop focus silently ignores value",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectPopFocus, Values: []ExpressionSpec{ConstExpr{Value: int64(1)}}}
+			},
+			want: "does not support values",
+		},
+		{
+			name: "unknown effect kind",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectKind(255)}
+			},
+			want: "invalid action effect kind",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := NewWorkspace()
@@ -181,6 +223,30 @@ func TestCompileAcceptsValidEffects(t *testing.T) {
 			name: "bind one value",
 			effect: func(key TemplateKey) *ActionEffectSpec {
 				return &ActionEffectSpec{Kind: ActionEffectBind, Target: "x", Values: []ExpressionSpec{ConstExpr{Value: int64(1)}}}
+			},
+		},
+		{
+			name: "push main focus",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectPushFocus, Target: "MAIN"}
+			},
+		},
+		{
+			name: "pop focus",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectPopFocus}
+			},
+		},
+		{
+			name: "clear focus",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectClearFocus}
+			},
+		},
+		{
+			name: "halt",
+			effect: func(key TemplateKey) *ActionEffectSpec {
+				return &ActionEffectSpec{Kind: ActionEffectHalt}
 			},
 		},
 	} {
@@ -371,4 +437,92 @@ func TestCompileAcceptsRequiredAndAllowedEffects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCompileValidatesAPIRHSBindReferencesAndRebinding(t *testing.T) {
+	newWorkspace := func(t *testing.T) (*Workspace, TemplateKey) {
+		t.Helper()
+		workspace := NewWorkspace()
+		key := mustAddTemplate(t, workspace, TemplateSpec{
+			Name: "ticket",
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+			},
+		}).Key()
+		return workspace, key
+	}
+
+	for _, tc := range []struct {
+		name   string
+		action func(TemplateKey) ActionSpec
+	}{
+		{
+			name: "effect value",
+			action: func(TemplateKey) ActionSpec {
+				return ActionSpec{Name: "use", Effect: &ActionEffectSpec{Kind: ActionEffectEmit, Values: []ExpressionSpec{RHSBindExpr{Name: "missing"}}}}
+			},
+		},
+		{
+			name: "call argument",
+			action: func(TemplateKey) ActionSpec {
+				return ActionSpec{Name: "use", Call: &ActionCallSpec{Name: "notify", Fn: func(ActionContext, []Value) error { return nil }, Args: []ExpressionSpec{RHSBindExpr{Name: "missing"}}}}
+			},
+		},
+		{
+			name: "template value",
+			action: func(key TemplateKey) ActionSpec {
+				return ActionSpec{Name: "use", AssertTemplateValues: &AssertTemplateValuesActionSpec{TemplateKey: key, Values: []ExpressionSpec{RHSBindExpr{Name: "missing"}}}}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace, key := newWorkspace(t)
+			mustAddAction(t, workspace, tc.action(key))
+			mustAddRule(t, workspace, RuleSpec{
+				Name:       "invalid-ref",
+				Conditions: []RuleConditionSpec{{Binding: "ticket", Target: TemplateKeyFact(key)}},
+				Actions:    []RuleActionSpec{{Name: "use"}},
+			})
+			_, err := workspace.Compile(context.Background())
+			if err == nil || !strings.Contains(err.Error(), `rhs bind "missing" is not defined by an earlier action`) {
+				t.Fatalf("Compile error = %v, want unknown earlier RHS bind", err)
+			}
+		})
+	}
+
+	t.Run("earlier bind accepted", func(t *testing.T) {
+		workspace, key := newWorkspace(t)
+		mustAddAction(t, workspace, ActionSpec{Name: "bind", Effect: &ActionEffectSpec{
+			Kind: ActionEffectBind, Target: "local", Values: []ExpressionSpec{ConstExpr{Value: "ok"}},
+		}})
+		mustAddAction(t, workspace, ActionSpec{Name: "use", Effect: &ActionEffectSpec{
+			Kind: ActionEffectEmit, Values: []ExpressionSpec{RHSBindExpr{Name: "local"}},
+		}})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "valid-ref",
+			Conditions: []RuleConditionSpec{{Binding: "ticket", Target: TemplateKeyFact(key)}},
+			Actions:    []RuleActionSpec{{Name: "bind"}, {Name: "use"}},
+		})
+		if _, err := workspace.Compile(context.Background()); err != nil {
+			t.Fatalf("Compile with earlier RHS bind: %v", err)
+		}
+	})
+
+	t.Run("rebind rejected", func(t *testing.T) {
+		workspace, key := newWorkspace(t)
+		for _, name := range []string{"bind-first", "bind-again"} {
+			mustAddAction(t, workspace, ActionSpec{Name: name, Effect: &ActionEffectSpec{
+				Kind: ActionEffectBind, Target: "local", Values: []ExpressionSpec{ConstExpr{Value: "ok"}},
+			}})
+		}
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "invalid-rebind",
+			Conditions: []RuleConditionSpec{{Binding: "ticket", Target: TemplateKeyFact(key)}},
+			Actions:    []RuleActionSpec{{Name: "bind-first"}, {Name: "bind-again"}},
+		})
+		_, err := workspace.Compile(context.Background())
+		if err == nil || !strings.Contains(err.Error(), `bind target "local" is already defined`) {
+			t.Fatalf("Compile error = %v, want duplicate RHS bind", err)
+		}
+	})
 }

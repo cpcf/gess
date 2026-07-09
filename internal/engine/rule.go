@@ -1528,6 +1528,7 @@ func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int,
 	actions := make([]RuleAction, 0, len(normalized.Actions))
 	actionExecutions := make([]compiledRuleAction, 0, len(normalized.Actions))
 	actionBindingSlots := bindingSlotsForRuleConditions(conditions)
+	rhsBinds := make(map[string]struct{})
 	allActionsSkipBindingFreeze := true
 	for i, action := range normalized.Actions {
 		if action.Name == "" {
@@ -1552,9 +1553,12 @@ func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int,
 		if !compiledAction.skipBindingFreeze {
 			allActionsSkipBindingFreeze = false
 		}
-		actionExecution, err := compileRuleActionExecution(normalized.Name, i, compiledAction, conditions, actionBindingSlots, templates.byKey, functions, globals)
+		actionExecution, err := compileRuleActionExecution(normalized.Name, i, compiledAction, conditions, actionBindingSlots, modules, templates.byKey, functions, globals, rhsBinds)
 		if err != nil {
 			return compiledRule{}, attachValidationErrorSource(err, action.Source)
+		}
+		if actionExecution.kind == compiledRuleActionEffect && actionExecution.effect.kind == ActionEffectBind {
+			rhsBinds[actionExecution.effect.target] = struct{}{}
 		}
 		actionExecution.source = action.Source
 		actions = append(actions, RuleAction{
