@@ -511,9 +511,17 @@ func (s *Session) clearBackchainDemandSupports() {
 	s.backchainDemandByFact.clear()
 	s.backchainDemandByDemand.clear()
 	s.nextBackchainDemandSupportID = 0
+	clear(s.freeBackchainDemandSupportIDs)
+	s.freeBackchainDemandSupportIDs = s.freeBackchainDemandSupportIDs[:0]
 }
 
 func (s *Session) nextBackchainDemandSupportIDValue() backchainDemandSupportID {
+	if count := len(s.freeBackchainDemandSupportIDs); count > 0 {
+		id := s.freeBackchainDemandSupportIDs[count-1]
+		s.freeBackchainDemandSupportIDs[count-1] = 0
+		s.freeBackchainDemandSupportIDs = s.freeBackchainDemandSupportIDs[:count-1]
+		return id
+	}
 	s.nextBackchainDemandSupportID++
 	if s.nextBackchainDemandSupportID == 0 {
 		s.nextBackchainDemandSupportID++
@@ -601,6 +609,7 @@ func (s *Session) clearBackchainDemandSupportRecord(id backchainDemandSupportID)
 		return
 	}
 	s.backchainDemandSupportRecords[index] = backchainDemandSupportRecord{}
+	s.freeBackchainDemandSupportIDs = append(s.freeBackchainDemandSupportIDs, id)
 }
 
 func (s *Session) storeBackchainDemandOwnerSupportRecord(record backchainDemandOwnerSupportRecord) {
@@ -649,6 +658,7 @@ func (s *Session) clearBackchainDemandOwnerSupportRecord(id backchainDemandSuppo
 		return
 	}
 	s.backchainDemandOwnerRecords[index] = backchainDemandOwnerSupportRecord{}
+	s.freeBackchainDemandSupportIDs = append(s.freeBackchainDemandSupportIDs, id)
 }
 
 func backchainDemandSupportRecordIndex(id backchainDemandSupportID) (int, bool) {

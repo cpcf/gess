@@ -100,12 +100,14 @@ func (s *Session) backchainDemandSupportMemoryOwnerDiagnostics() RuntimeMemoryOw
 	}
 	bytes := uint64(cap(s.backchainDemandSupportRecords)) * uint64(unsafe.Sizeof(backchainDemandSupportRecord{}))
 	bytes += uint64(cap(s.backchainDemandOwnerRecords)) * uint64(unsafe.Sizeof(backchainDemandOwnerSupportRecord{}))
+	bytes += uint64(cap(s.freeBackchainDemandSupportIDs)) * uint64(unsafe.Sizeof(backchainDemandSupportID(0)))
 	if slots == 0 && bytes == 0 {
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
 	return RuntimeMemoryOwnerDiagnostics{
 		Owner:      runtimeMemoryOwnerBackchainDemandSupport,
 		Rows:       uint64(live),
+		Indexes:    uint64(len(s.freeBackchainDemandSupportIDs)),
 		Tombstones: uint64(slots - live),
 		Bytes:      bytes,
 		HighWater:  uint64(slots),

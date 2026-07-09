@@ -207,6 +207,7 @@ type Session struct {
 	logicalSupportByFact          map[FactID]map[SupportID]struct{}
 	logicalSupportCounters        LogicalSupportCounters
 	nextBackchainDemandSupportID  backchainDemandSupportID
+	freeBackchainDemandSupportIDs []backchainDemandSupportID
 	backchainDemandSupports       backchainDemandSupportTable
 	backchainDemandSupportRecords []backchainDemandSupportRecord
 	backchainDemandOwnerRecords   []backchainDemandOwnerSupportRecord

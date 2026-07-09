@@ -73,6 +73,36 @@ func TestBackchainDemandSupportDiagnosticsExposeSlotsAndLiveRecords(t *testing.T
 	if owner.Rows != 0 || owner.HighWater != 1 || owner.Tombstones != 1 {
 		t.Fatalf("cleared diagnostics = %#v, want rows/high-water/tombstones 0/1/1", owner)
 	}
+	if owner.Indexes != 1 {
+		t.Fatalf("free-list entries = %d, want 1", owner.Indexes)
+	}
+}
+
+func TestBackchainDemandSupportRecordSlotsAreReusedUnderChurn(t *testing.T) {
+	session := &Session{}
+	request := backchainDemandRequest{
+		templateKey:  TemplateKey("answer"),
+		supportFacts: []backchainDemandSupportFact{{id: newFactID(1, 2), version: 1}},
+		slots:        []factSlot{{value: newStringValue("a"), ok: true}},
+	}
+
+	for sequence := uint64(1); sequence <= 128; sequence++ {
+		id := session.addBackchainDemandSupport(&workingFact{id: newFactID(1, sequence+10)}, request)
+		if id != 1 {
+			t.Fatalf("iteration %d support id = %d, want reused id 1", sequence, id)
+		}
+		if _, err := session.removeBackchainDemandSupportForRequest(context.Background(), request, mutationOrigin{}); err != nil {
+			t.Fatalf("iteration %d remove support: %v", sequence, err)
+		}
+	}
+
+	if got := len(session.backchainDemandSupportRecords); got != 1 {
+		t.Fatalf("record slots after churn = %d, want 1", got)
+	}
+	owner := session.backchainDemandSupportMemoryOwnerDiagnostics()
+	if owner.Rows != 0 || owner.HighWater != 1 || owner.Tombstones != 1 || owner.Indexes != 1 {
+		t.Fatalf("diagnostics after churn = %#v, want bounded one-slot arena", owner)
+	}
 }
 
 func TestBackchainDemandInlineSupportRemovalUsesPayloadEntry(t *testing.T) {
