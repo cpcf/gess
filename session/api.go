@@ -1059,6 +1059,12 @@ func (s Snapshot) Explain(id FactID, opts ...ExplainOption) (Derivation, bool) {
 
 // Query returns an iterator over rows produced by a compiled query against the
 // snapshot.
+//
+// Each call builds a fresh matching runtime and re-propagates every snapshot
+// fact, so cost grows with snapshot size; for repeated queries over large
+// working memories prefer session queries. Snapshot queries never generate
+// backchain demand: a query that would need backward chaining fails with
+// ErrUnsupportedRuntime. Row order is unspecified.
 func (s Snapshot) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
 	it, err := s.value.Query(ctx, name, args)
 	if err != nil {
@@ -1069,6 +1075,12 @@ func (s Snapshot) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 
 // QueryAll materializes all rows produced by a compiled query against the
 // snapshot.
+//
+// Each call builds a fresh matching runtime and re-propagates every snapshot
+// fact, so cost grows with snapshot size; for repeated queries over large
+// working memories prefer session queries. Snapshot queries never generate
+// backchain demand: a query that would need backward chaining fails with
+// ErrUnsupportedRuntime. Row order is unspecified.
 func (s Snapshot) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
 	rows, err := s.value.QueryAll(ctx, name, args)
 	return wrapQueryRows(rows), err
@@ -2171,6 +2183,11 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 }
 
 // Fork returns an independent session with the same working state as s.
+//
+// The fork inherits the parent's initial facts, globals, agenda strategy, and
+// output writer — rule emits in the fork write to the parent's writer unless
+// the fork is created with WithOutputWriter. Event listeners and the explain
+// log are not inherited.
 func (s *Session) Fork(ctx context.Context, opts ...Option) (*Session, error) {
 	fork, err := s.engineSession().Fork(ctx, opts...)
 	if err != nil {
@@ -2277,6 +2294,12 @@ func (s *Session) ClearFocusStack(ctx context.Context) error {
 }
 
 // Query returns an iterator over rows produced by a compiled query.
+//
+// A query whose conditions need backchain-reactive facts generates demand and
+// runs the agenda to quiescence, exactly like Run: pending activations
+// unrelated to the query may fire with full side effects, and facts derived
+// during the proof persist after the query returns. Queries that generate no
+// demand have no side effects. Row order is unspecified.
 func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
 	it, err := s.engineSession().Query(ctx, name, args)
 	if err != nil {
@@ -2286,6 +2309,12 @@ func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 }
 
 // QueryAll materializes all rows produced by a compiled query.
+//
+// A query whose conditions need backchain-reactive facts generates demand and
+// runs the agenda to quiescence, exactly like Run: pending activations
+// unrelated to the query may fire with full side effects, and facts derived
+// during the proof persist after the query returns. Queries that generate no
+// demand have no side effects. Row order is unspecified.
 func (s *Session) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
 	rows, err := s.engineSession().QueryAll(ctx, name, args)
 	return wrapQueryRows(rows), err

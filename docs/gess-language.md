@@ -176,7 +176,10 @@ readable elsewhere as a projection `?binding:field`, usable in expressions,
 :::caution
 The pattern language intentionally stops there: per-slot predicate
 constraints, connective constraints, and multifield patterns aren't part of
-the language. Use `test` conditions for anything beyond equality.
+the language. Use `test` conditions for anything beyond equality. In
+particular, a projection `?binding:field` is not valid as a pattern field
+value — today it is read as a plain atom and the pattern never matches.
+Bind a variable in the source pattern and compare with `test` instead.
 :::
 
 ### Condition forms
@@ -311,6 +314,25 @@ returns:
 - Function calls: `(name arg...)` for any other head, resolved first against
   the built-in functions below, then against pure functions registered through
   `dsl.Registry.Functions`.
+
+### Missing values and type errors
+
+Today, expression evaluation folds most failures to `false` instead of
+reporting an error:
+
+- A comparison with a missing operand evaluates to `false`.
+- A comparison over non-comparable kinds evaluates to `false` — including
+  `!=`, so `(!= ?x 5)` is `false` (not `true`) when `?x` holds a string.
+- A boolean operand that is not a boolean is treated as `false`.
+- `(not e)` inverts those silent `false` results, so an expression that
+  fails to evaluate inside `not` produces a match. Guard `not` tests
+  against missing or mistyped values.
+- Errors raised by function calls are the exception: they propagate to the
+  `Assert`/`Run`/`Query` caller as errors.
+
+This truth table is transitional: the engine is moving to Jess-aligned
+semantics where evaluation errors always propagate to the caller, in every
+context. Do not build rules that rely on failure-is-false.
 
 ### Built-in functions
 

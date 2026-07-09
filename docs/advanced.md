@@ -299,9 +299,16 @@ Backward chaining makes rules prove facts on demand instead of eagerly.
    work.
 
 Session queries drive demand too: `Query` and `QueryAll` against
-backchain-reactive templates inject the query's constraints as demand,
-run the proof rules, answer from the results, and clean up the proof
-state. Snapshot queries don't generate demand.
+backchain-reactive templates inject the query's constraints as demand and
+run the agenda to quiescence, exactly like `Run` — firing is not scoped to
+proof rules, so any activation pending anywhere in the session may fire
+during the query, with full side effects, and there is no built-in firing
+limit on the proof run. When the run finishes, the query answers from
+working memory and retracts the transient demand facts it created; facts
+asserted by proof rules — and by any other rules that fired — persist.
+Queries that generate no demand have a no-side-effect contract. Snapshot
+queries never generate demand: a snapshot query that would require backward
+chaining fails with `ErrUnsupportedRuntime`.
 
 Conditions wrapped in `rules.Explicit{...}` and negated conditions never
 generate demand. `Snapshot.BackchainDemandDiagnostics()` reports active

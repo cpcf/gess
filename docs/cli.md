@@ -106,6 +106,13 @@ two-space indentation, one blank line between top-level forms, short forms
 kept on one line, and long forms expanded with closing parentheses on their
 own lines.
 
+:::caution
+`gessfmt` currently discards `;` comments: the parser drops them, so
+formatted output contains no comments and `-w` deletes them from the file
+irreversibly. Until comment preservation lands, do not run `gessfmt -w` on
+files whose comments you want to keep.
+:::
+
 Flags:
 
 - No flags with file arguments: print each formatted file to standard
