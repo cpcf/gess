@@ -12,6 +12,7 @@ const runtimeMemoryOwnerFact = "fact"
 const runtimeMemoryOwnerQueryTerminal = "query-terminal"
 const runtimeMemoryOwnerAgenda = "agenda"
 const runtimeMemoryOwnerAggregate = "aggregate"
+const runtimeMemoryOwnerBackchainDemandSupport = "backchain-demand-support"
 
 // RuntimeDiagnostics reports retained runtime memory owners for diagnostics.
 type RuntimeDiagnostics struct {
@@ -55,7 +56,7 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
 		return RuntimeDiagnostics{}
 	}
-	owners := make([]RuntimeMemoryOwnerDiagnostics, 0, 7)
+	owners := make([]RuntimeMemoryOwnerDiagnostics, 0, 8)
 	if owner := factWorkspaceMemoryOwnerDiagnostics(s.activeFactWorkspace()); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
@@ -76,7 +77,39 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	if owner := s.rete.graphBeta.aggregateMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
+	if owner := s.backchainDemandSupportMemoryOwnerDiagnostics(); owner.Owner != "" {
+		owners = append(owners, owner)
+	}
 	return RuntimeDiagnostics{MemoryOwners: owners}
+}
+
+func (s *Session) backchainDemandSupportMemoryOwnerDiagnostics() RuntimeMemoryOwnerDiagnostics {
+	if s == nil {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	slots := max(len(s.backchainDemandSupportRecords), len(s.backchainDemandOwnerRecords))
+	live := 0
+	for i := range slots {
+		if i < len(s.backchainDemandSupportRecords) && s.backchainDemandSupportRecords[i].id != 0 {
+			live++
+			continue
+		}
+		if i < len(s.backchainDemandOwnerRecords) && s.backchainDemandOwnerRecords[i].id != 0 {
+			live++
+		}
+	}
+	bytes := uint64(cap(s.backchainDemandSupportRecords)) * uint64(unsafe.Sizeof(backchainDemandSupportRecord{}))
+	bytes += uint64(cap(s.backchainDemandOwnerRecords)) * uint64(unsafe.Sizeof(backchainDemandOwnerSupportRecord{}))
+	if slots == 0 && bytes == 0 {
+		return RuntimeMemoryOwnerDiagnostics{}
+	}
+	return RuntimeMemoryOwnerDiagnostics{
+		Owner:      runtimeMemoryOwnerBackchainDemandSupport,
+		Rows:       uint64(live),
+		Tombstones: uint64(slots - live),
+		Bytes:      bytes,
+		HighWater:  uint64(slots),
+	}
 }
 
 func factWorkspaceMemoryOwnerDiagnostics(workspace any) RuntimeMemoryOwnerDiagnostics {

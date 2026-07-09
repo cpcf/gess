@@ -50,8 +50,11 @@ salience first, then higher recency (more recently touched facts), then
 earlier declaration order, with stable tie-breaking after that.
 
 `Session.RuntimeDiagnostics(ctx)` reports per-owner memory statistics
-(fact, alpha, beta, query-terminal, agenda, and aggregate owners) with row,
-bucket, index, tombstone, and byte counts for capacity monitoring.
+(fact, alpha, beta, query-terminal, agenda, aggregate, and
+backchain-demand-support owners) with row, bucket, index, tombstone, and byte
+counts for capacity monitoring. For backchain demand supports, rows are live
+records, tombstones are reusable holes, and high water is the retained record
+slot count.
 
 Rule shapes the graph can't represent fail compilation or session
 construction with an error wrapping `rules.ErrUnsupportedRuntime` rather
