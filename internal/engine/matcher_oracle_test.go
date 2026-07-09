@@ -633,8 +633,9 @@ func (p compiledConditionPlan) matchesFactWorking(fact *workingFact) bool {
 
 func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact conditionFactRef) (bool, error) {
 	for _, constraint := range p.constraints {
-		if !constraint.matches(fact) {
-			return false, nil
+		matched, err := constraint.matches(fact)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	return true, nil
@@ -642,8 +643,9 @@ func (p compiledConditionPlan) matchesConstraints(ctx context.Context, fact cond
 
 func (p compiledConditionPlan) matchesConstraintsWorking(ctx context.Context, fact *workingFact) (bool, error) {
 	for _, constraint := range p.constraints {
-		if !constraint.matchesWorking(fact, nil) {
-			return false, nil
+		matched, err := constraint.matchesWorking(fact, nil)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	return true, nil

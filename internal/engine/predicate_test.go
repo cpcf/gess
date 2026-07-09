@@ -339,7 +339,7 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		}
 	})
 
-	t.Run("missing optional field does not match", func(t *testing.T) {
+	t.Run("missing optional field does not satisfy exists", func(t *testing.T) {
 		workspace := NewWorkspace()
 		personTemplate := mustAddTemplate(t, workspace, TemplateSpec{
 			Name: "person",
@@ -365,29 +365,13 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 			},
 			Actions: []RuleActionSpec{{Name: "mark"}},
 		})
-		mustAddRule(t, workspace, RuleSpec{
-			Name: "tag-eq",
-			Conditions: []RuleConditionSpec{
-				{
-					Binding: "p",
-
-					FieldConstraints: []FieldConstraintSpec{
-						{Field: "tag", Operator: FieldConstraintEqual, Value: "blue"},
-					}, Target: TemplateKeyFact(personTemplate.Key()),
-				},
-			},
-			Actions: []RuleActionSpec{{Name: "mark"}},
-		})
-
 		revision, err := workspace.Compile(context.Background())
 		if err != nil {
 			t.Fatalf("Compile: %v", err)
 		}
-		for _, ruleName := range []string{"tag-exists", "tag-eq"} {
-			planConstraint := revision.rules[ruleName].conditionPlans[0].constraints[0]
-			if planConstraint.access.rootSlot < 0 {
-				t.Fatalf("%s field slot = %d, want non-negative", ruleName, planConstraint.access.rootSlot)
-			}
+		planConstraint := revision.rules["tag-exists"].conditionPlans[0].constraints[0]
+		if planConstraint.access.rootSlot < 0 {
+			t.Fatalf("tag-exists field slot = %d, want non-negative", planConstraint.access.rootSlot)
 		}
 
 		session, err := NewSession(revision, WithSessionID("field-optional-session"))
@@ -399,14 +383,12 @@ func TestFieldConstraintSlotResolutionAndMapLookup(t *testing.T) {
 		}
 
 		snapshot := session.indexedSnapshotLocked()
-		for _, ruleName := range []string{"tag-exists", "tag-eq"} {
-			matches, err := revision.rules[ruleName].scanCondition(context.Background(), snapshot, 0)
-			if err != nil {
-				t.Fatalf("scanCondition(%s): %v", ruleName, err)
-			}
-			if len(matches) != 0 {
-				t.Fatalf("%s matched missing optional field: %#v", ruleName, matches)
-			}
+		matches, err := revision.rules["tag-exists"].scanCondition(context.Background(), snapshot, 0)
+		if err != nil {
+			t.Fatalf("scanCondition(tag-exists): %v", err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("tag-exists matched missing optional field: %#v", matches)
 		}
 	})
 }

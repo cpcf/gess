@@ -119,7 +119,7 @@ func BenchmarkConstraintCompareMatches(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				benchmarkCompareResult = constraint.matches(newConditionFactRefFromSnapshot(snapshot))
+				benchmarkCompareResult, _ = constraint.matches(newConditionFactRefFromSnapshot(snapshot))
 			}
 		})
 	}

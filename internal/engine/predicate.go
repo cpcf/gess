@@ -239,64 +239,99 @@ func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionI
 	return access, nil
 }
 
-func (c compiledFieldConstraint) matches(fact conditionFactRef) bool {
+func (c compiledFieldConstraint) matches(fact conditionFactRef) (bool, error) {
 	value, ok := c.valueFromFact(fact)
 	return c.matchesValue(value, ok)
 }
 
-func (c compiledFieldConstraint) matchesWithCounters(fact conditionFactRef, span *propagationCounterSpan) bool {
+func (c compiledFieldConstraint) matchesWithCounters(fact conditionFactRef, span *propagationCounterSpan) (bool, error) {
 	value, ok := c.valueFromFactWithCounters(fact, span)
 	return c.matchesValue(value, ok)
 }
 
-func (c compiledFieldConstraint) matchesValue(value Value, ok bool) bool {
+func (c compiledFieldConstraint) matchesValue(value Value, ok bool) (bool, error) {
 	switch c.operator {
 	case FieldConstraintOpExists:
-		return ok
+		return ok, nil
 	case FieldConstraintOpEqual:
-		return ok && valuesComparableForEquality(value, c.value) && value.Equal(c.value)
+		if err := c.validateComparisonOperands(value, ok); err != nil {
+			return false, err
+		}
+		return value.Equal(c.value), nil
 	case FieldConstraintOpNotEqual:
-		return ok && valuesComparableForEquality(value, c.value) && !value.Equal(c.value)
+		if err := c.validateComparisonOperands(value, ok); err != nil {
+			return false, err
+		}
+		return !value.Equal(c.value), nil
 	case fieldConstraintOpIn:
 		if !ok {
-			return false
+			return false, c.missingOperandError()
 		}
+		comparable := false
 		for _, allowed := range c.values {
-			if valuesComparableForEquality(value, allowed) && value.Equal(allowed) {
-				return true
+			if !valuesComparableForEquality(value, allowed) {
+				continue
+			}
+			comparable = true
+			if value.Equal(allowed) {
+				return true, nil
 			}
 		}
-		return false
+		if len(c.values) > 0 && !comparable {
+			return false, fmt.Errorf("%w: field constraint value of kind %s is not comparable with allowed values", ErrMatcher, value.Kind())
+		}
+		return false, nil
 	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual, FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
 		if !ok {
-			return false
+			return false, c.missingOperandError()
 		}
 		comparison, comparable := compareValues(value, c.value)
 		if !comparable {
-			return false
+			return false, c.nonComparableOperandsError(value)
 		}
 		switch c.operator {
 		case FieldConstraintOpLessThan:
-			return comparison < 0
+			return comparison < 0, nil
 		case FieldConstraintOpLessOrEqual:
-			return comparison <= 0
+			return comparison <= 0, nil
 		case FieldConstraintOpGreaterThan:
-			return comparison > 0
+			return comparison > 0, nil
 		case FieldConstraintOpGreaterOrEqual:
-			return comparison >= 0
+			return comparison >= 0, nil
 		}
 	default:
-		return false
+		return false, fmt.Errorf("%w: unsupported field constraint operator %q", ErrMatcher, c.operator)
 	}
-	return false
+	return false, fmt.Errorf("%w: unsupported field constraint operator %q", ErrMatcher, c.operator)
 }
 
-func (c compiledFieldConstraint) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+func (c compiledFieldConstraint) validateComparisonOperands(value Value, ok bool) error {
+	if !ok {
+		return c.missingOperandError()
+	}
+	if !valuesComparableForEquality(value, c.value) {
+		return c.nonComparableOperandsError(value)
+	}
+	return nil
+}
+
+func (c compiledFieldConstraint) missingOperandError() error {
+	if c.access.root != "" {
+		return fmt.Errorf("%w: field constraint operand %q is missing", ErrMatcher, c.access.root)
+	}
+	return fmt.Errorf("%w: field constraint operand is missing", ErrMatcher)
+}
+
+func (c compiledFieldConstraint) nonComparableOperandsError(value Value) error {
+	return fmt.Errorf("%w: field constraint operands have non-comparable kinds %s and %s", ErrMatcher, value.Kind(), c.value.Kind())
+}
+
+func (c compiledFieldConstraint) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) (bool, error) {
 	value, ok := c.valueFromWorkingFact(fact, compactSlotStore)
 	return c.matchesValue(value, ok)
 }
 
-func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) bool {
+func (c compiledFieldConstraint) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
 	value, ok := c.valueFromWorkingFactWithCounters(fact, compactSlotStore, span)
 	return c.matchesValue(value, ok)
 }

@@ -74,15 +74,18 @@ func TestNestedPathPredicatesMatchDynamicFacts(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
-		Name: "missing-not-equal-does-not-match",
+		Name: "guarded-missing-not-equal-does-not-match",
 		Conditions: []RuleConditionSpec{{
 			Binding: "event",
 
-			Predicates: []ExpressionSpec{CompareExpr{
-				Operator: ExpressionCompareNotEqual,
-				Left:     CurrentPath(Path("payload", MapKey("missing"))),
-				Right:    ConstExpr{Value: "anything"},
-			}}, Target: DynamicFact("event"),
+			Predicates: []ExpressionSpec{
+				HasPath(Path("payload", MapKey("missing"))),
+				CompareExpr{
+					Operator: ExpressionCompareNotEqual,
+					Left:     CurrentPath(Path("payload", MapKey("missing"))),
+					Right:    ConstExpr{Value: "anything"},
+				},
+			}, Target: DynamicFact("event"),
 		}},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})

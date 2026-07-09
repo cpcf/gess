@@ -853,11 +853,14 @@ func (p compiledExpressionPredicate) matchesWithContextParamsAndCounters(ctx con
 
 func (p compiledExpressionPredicate) matchesWithContextParamsGlobalsAndCounters(ctx context.Context, fact conditionFactRef, bindings []conditionMatch, params map[string]Value, globals []Value, span *propagationCounterSpan) (bool, error) {
 	value, ok, err := p.expression.evaluateWithContextParamsGlobalsAndCounters(ctx, fact, bindings, params, globals, p.functionEvaluationMeta(), span)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
 	}
+	if !ok {
+		return false, fmt.Errorf("%w: expression predicate result is missing", ErrMatcher)
+	}
 	if value.Kind() != ValueBool {
-		return false, nil
+		return false, fmt.Errorf("%w: expression predicate result has kind %s, want bool", ErrMatcher, value.Kind())
 	}
 	return valueBool(value), nil
 }
@@ -880,11 +883,14 @@ func (p compiledExpressionPredicate) matchesTokenWithContextAndCounters(ctx cont
 
 func (p compiledExpressionPredicate) matchesTokenWithContextGlobalsAndCounters(ctx context.Context, fact conditionFactRef, bindings tokenRef, globals []Value, span *propagationCounterSpan) (bool, error) {
 	value, ok, err := p.expression.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, bindings, nil, globals, 0, p.functionEvaluationMeta(), span)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
 	}
+	if !ok {
+		return false, fmt.Errorf("%w: expression predicate result is missing", ErrMatcher)
+	}
 	if value.Kind() != ValueBool {
-		return false, nil
+		return false, fmt.Errorf("%w: expression predicate result has kind %s, want bool", ErrMatcher, value.Kind())
 	}
 	return valueBool(value), nil
 }
@@ -1331,27 +1337,31 @@ func (e compiledExpression) evaluateCompare(span *propagationCounterSpan, eval f
 	}
 	if !leftOK || !rightOK {
 		span.recordSilentEvaluationCoercion()
-		return newBoolValue(false), true, nil
+		missing := "left"
+		if leftOK {
+			missing = "right"
+		}
+		return Value{}, false, fmt.Errorf("%w: comparison %s operand is missing", ErrMatcher, missing)
 	}
 	var matched bool
 	switch e.compareOp {
 	case ExpressionCompareEqual:
 		if !valuesComparableForEquality(left, right) {
 			span.recordSilentEvaluationCoercion()
-			return newBoolValue(false), true, nil
+			return Value{}, false, fmt.Errorf("%w: comparison operands have non-comparable kinds %s and %s", ErrMatcher, left.Kind(), right.Kind())
 		}
 		matched = left.Equal(right)
 	case ExpressionCompareNotEqual:
 		if !valuesComparableForEquality(left, right) {
 			span.recordSilentEvaluationCoercion()
-			return newBoolValue(false), true, nil
+			return Value{}, false, fmt.Errorf("%w: comparison operands have non-comparable kinds %s and %s", ErrMatcher, left.Kind(), right.Kind())
 		}
 		matched = !left.Equal(right)
 	case ExpressionCompareLessThan, ExpressionCompareLessOrEqual, ExpressionCompareGreaterThan, ExpressionCompareGreaterOrEqual:
 		comparison, comparable := compareValues(left, right)
 		if !comparable {
 			span.recordSilentEvaluationCoercion()
-			return newBoolValue(false), true, nil
+			return Value{}, false, fmt.Errorf("%w: comparison operands have non-comparable kinds %s and %s", ErrMatcher, left.Kind(), right.Kind())
 		}
 		switch e.compareOp {
 		case ExpressionCompareLessThan:
@@ -1372,11 +1382,16 @@ func (e compiledExpression) evaluateCompare(span *propagationCounterSpan, eval f
 func (e compiledExpression) evaluateBoolean(span *propagationCounterSpan, eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
 	boolValue := func(operand compiledExpression) (bool, error) {
 		value, ok, err := eval(operand)
-		if err != nil || !ok || value.Kind() != ValueBool {
-			if err == nil {
-				span.recordSilentEvaluationCoercion()
-			}
+		if err != nil {
 			return false, err
+		}
+		if !ok {
+			span.recordSilentEvaluationCoercion()
+			return false, fmt.Errorf("%w: boolean operand is missing", ErrMatcher)
+		}
+		if value.Kind() != ValueBool {
+			span.recordSilentEvaluationCoercion()
+			return false, fmt.Errorf("%w: boolean operand has kind %s, want bool", ErrMatcher, value.Kind())
 		}
 		return valueBool(value), nil
 	}

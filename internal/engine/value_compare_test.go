@@ -60,6 +60,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 		constraint compiledFieldConstraint
 		snapshot   FactSnapshot
 		want       bool
+		wantErr    bool
 	}{
 		{
 			name: "int equal",
@@ -122,6 +123,7 @@ func TestConstraintComparisonMatches(t *testing.T) {
 			},
 			snapshot: fact,
 			want:     false,
+			wantErr:  true,
 		},
 		{
 			name: "missing field",
@@ -132,12 +134,17 @@ func TestConstraintComparisonMatches(t *testing.T) {
 			},
 			snapshot: fact,
 			want:     false,
+			wantErr:  true,
 		},
 	}
 
 	for _, tc := range fieldTests {
 		t.Run("field/"+tc.name, func(t *testing.T) {
-			if got := tc.constraint.matches(newConditionFactRefFromSnapshot(tc.snapshot)); got != tc.want {
+			got, err := tc.constraint.matches(newConditionFactRefFromSnapshot(tc.snapshot))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("match error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
 				t.Fatalf("match = %v, want %v", got, tc.want)
 			}
 		})

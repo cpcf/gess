@@ -2022,7 +2022,11 @@ func TestReteGraphAlphaExpressionPredicateErrorsAreCounted(t *testing.T) {
 		name:   "event",
 		fields: Fields{"score": newIntValue(20)},
 	}
-	if node.matchesSnapshotWithCounters(fact, &span) {
+	matched, err := node.matchesSnapshotWithCounters(fact, &span)
+	if err == nil {
+		t.Fatal("matchesSnapshotWithCounters error = nil, want malformed-expression error")
+	}
+	if matched {
 		t.Fatal("matchesSnapshotWithCounters = true, want false for malformed expression")
 	}
 	span.finish()
@@ -2044,7 +2048,6 @@ func TestReteGraphAlphaSilentEvaluationCoercionsAreCounted(t *testing.T) {
 		name       string
 		expression compiledExpression
 		fields     Fields
-		wantMatch  bool
 	}{
 		{
 			name: "missing comparison operand",
@@ -2081,8 +2084,7 @@ func TestReteGraphAlphaSilentEvaluationCoercionsAreCounted(t *testing.T) {
 					kind: expressionNodeCurrentField, resultKind: ValueAny, access: testCompiledPathAccess("value"),
 				}},
 			},
-			fields:    Fields{"value": newStringValue("true")},
-			wantMatch: true,
+			fields: Fields{"value": newStringValue("true")},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2100,8 +2102,12 @@ func TestReteGraphAlphaSilentEvaluationCoercionsAreCounted(t *testing.T) {
 				name:   "event",
 				fields: tc.fields,
 			}
-			if got := node.matchesSnapshotWithCounters(fact, &span); got != tc.wantMatch {
-				t.Fatalf("matchesSnapshotWithCounters = %t, want %t", got, tc.wantMatch)
+			matched, err := node.matchesSnapshotWithCounters(fact, &span)
+			if err == nil {
+				t.Fatal("matchesSnapshotWithCounters error = nil, want evaluation error")
+			}
+			if matched {
+				t.Fatal("matchesSnapshotWithCounters = true, want false")
 			}
 			span.finish()
 

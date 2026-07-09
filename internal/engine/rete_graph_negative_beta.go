@@ -79,9 +79,9 @@ func (m reteGraphNegativeBetaMemory) insertLeft(joinKey betaJoinKey, token token
 	if m.owner == nil || m.node == nil || m.memory == nil || delta == nil || token.isZero() {
 		return false, nil
 	}
-	count, ok := m.blockerCountForLeft(joinKey, token, span)
-	if !ok {
-		return false, nil
+	count, ok, err := m.blockerCountForLeft(joinKey, token, span)
+	if err != nil || !ok {
+		return false, err
 	}
 	row, inserted := m.memory.left.insert(token, joinKey, count)
 	if !inserted {
@@ -256,9 +256,9 @@ func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counte
 	return true
 }
 
-func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool) {
+func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, left tokenRef, span *propagationCounterSpan) (int, bool, error) {
 	if m.owner == nil || m.node == nil || m.memory == nil || left.isZero() {
-		return 0, false
+		return 0, false, nil
 	}
 	depth := m.memory.right.joinRowCount(joinKey)
 	if span != nil {
@@ -266,6 +266,7 @@ func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, le
 	}
 	count := 0
 	supported := true
+	var matchErr error
 	m.memory.right.forEachJoinRow(joinKey, func(_ graphTokenRowID, rightRow *betaTokenRow) bool {
 		if span != nil {
 			span.recordBetaCandidateRowScanned()
@@ -277,7 +278,7 @@ func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, le
 		}
 		matched, err := m.leftRightMatchToken(left, rightRow.token, rightMatch, span)
 		if err != nil {
-			supported = false
+			matchErr = err
 			return false
 		}
 		if matched {
@@ -285,7 +286,7 @@ func (m reteGraphNegativeBetaMemory) blockerCountForLeft(joinKey betaJoinKey, le
 		}
 		return true
 	})
-	return count, supported
+	return count, supported, matchErr
 }
 
 func (m reteGraphNegativeBetaMemory) emitLeftAdd(row *negativeBetaLeftRow, span *propagationCounterSpan, delta *reteAgendaDelta) (bool, error) {

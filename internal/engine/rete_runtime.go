@@ -991,9 +991,8 @@ type alphaFactSource interface {
 	factsForCondition(ConditionID) ([]FactSnapshot, bool)
 }
 
-func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) bool {
-	ok, _ := p.matchesAlphaWithContextAndCounters(context.Background(), fact, nil)
-	return ok
+func (p reteConditionPlan) matchesAlpha(fact FactSnapshot) (bool, error) {
+	return p.matchesAlphaWithContextAndCounters(context.Background(), fact, nil)
 }
 
 func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
@@ -1014,8 +1013,9 @@ func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Contex
 	}
 	ref := newConditionFactRefFromSnapshot(fact)
 	for _, constraint := range p.constraints {
-		if !constraint.matches(ref) {
-			return false, nil
+		matched, err := constraint.matches(ref)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	ok, err := expressionPredicatesMatchWithContextGlobalsAndCounters(ctx, p.alphaPredicates, ref, nil, nil, span)
@@ -1025,9 +1025,8 @@ func (p reteConditionPlan) matchesAlphaWithContextAndCounters(ctx context.Contex
 	return true, nil
 }
 
-func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
-	ok, _ := p.matchesAlphaWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
-	return ok
+func (p reteConditionPlan) matchesAlphaWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) (bool, error) {
+	return p.matchesAlphaWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
 }
 
 func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
@@ -1047,8 +1046,9 @@ func (p reteConditionPlan) matchesAlphaWorkingWithContextAndCounters(ctx context
 		return false, nil
 	}
 	for _, constraint := range p.constraints {
-		if !constraint.matchesWorking(fact, compactSlotStore) {
-			return false, nil
+		matched, err := constraint.matchesWorking(fact, compactSlotStore)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	ref := newConditionFactRefFromWorkingFactForTarget(fact, p.target, compactSlotStore)

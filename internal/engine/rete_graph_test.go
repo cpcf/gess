@@ -1718,7 +1718,11 @@ func TestReteGraphGeneratedAlphaMatchCompilesMultipleEqualities(t *testing.T) {
 	matching.setTemplateIdentity(answer.Key(), answer.id)
 	matching.setName(answer.Name())
 	matching.setFieldSlots(matchingSlots)
-	if !node.generatedMatch.matchesWorking(node.target, matching, nil) {
+	matched, err := node.generatedMatch.matchesWorking(node.target, matching, nil)
+	if err != nil {
+		t.Fatalf("generated match matching fact: %v", err)
+	}
+	if !matched {
 		t.Fatal("generated match rejected matching fact")
 	}
 
@@ -1734,7 +1738,11 @@ func TestReteGraphGeneratedAlphaMatchCompilesMultipleEqualities(t *testing.T) {
 	mismatch.setTemplateIdentity(answer.Key(), answer.id)
 	mismatch.setName(answer.Name())
 	mismatch.setFieldSlots(mismatchSlots)
-	if node.generatedMatch.matchesWorking(node.target, mismatch, nil) {
+	matched, err = node.generatedMatch.matchesWorking(node.target, mismatch, nil)
+	if err != nil {
+		t.Fatalf("generated match mismatching fact: %v", err)
+	}
+	if matched {
 		t.Fatal("generated match accepted fact with mismatched second equality")
 	}
 }

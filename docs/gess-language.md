@@ -326,22 +326,23 @@ returns:
 
 ### Missing values and type errors
 
-Today, expression evaluation folds most failures to `false` instead of
-reporting an error:
+Expression and field-constraint evaluation errors always propagate to the
+`Assert`, `Run`, or `Query` caller. They never become a non-match or a boolean
+value. In particular:
 
-- A comparison with a missing operand evaluates to `false`.
-- A comparison over non-comparable kinds evaluates to `false` — including
-  `!=`, so `(!= ?x 5)` is `false` (not `true`) when `?x` holds a string.
-- A boolean operand that is not a boolean is treated as `false`.
-- `(not e)` inverts those silent `false` results, so an expression that
-  fails to evaluate inside `not` produces a match. Guard `not` tests
-  against missing or mistyped values.
-- Errors raised by function calls are the exception: they propagate to the
-  `Assert`/`Run`/`Query` caller as errors.
+- A comparison with a missing operand is an error.
+- Equality and ordering comparisons over non-comparable kinds are errors.
+  This includes `!=`; comparing a string with an integer does not imply that
+  they are unequal.
+- Every operand of `and`, `or`, and `not` must be a boolean. A missing operand
+  or a value of another kind is an error.
+- `not` only inverts a successfully evaluated boolean. It does not catch or
+  invert evaluation errors.
+- Errors raised by function calls propagate by the same rule.
 
-This truth table is transitional: the engine is moving to Jess-aligned
-semantics where evaluation errors always propagate to the caller, in every
-context. Do not build rules that rely on failure-is-false.
+Use existence tests, type predicates such as `numberp` or `stringp`, and
+short-circuiting boolean guards when a value is legitimately optional or
+dynamically typed.
 
 ### Built-in functions
 

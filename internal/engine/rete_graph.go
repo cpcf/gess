@@ -1744,6 +1744,9 @@ func reteGraphAlphaRouteSelectorForConstraints(template compiledTemplate, constr
 		if !reteGraphAlphaRouteFieldKindMatches(template, constraint.access.rootSlot, value.kind) {
 			continue
 		}
+		if !reteGraphAlphaRouteFieldAlwaysPresent(template, constraint.access.rootSlot) {
+			continue
+		}
 		return reteGraphAlphaRouteSelector{
 			fieldSlot: constraint.access.rootSlot,
 			value:     value,
@@ -1751,6 +1754,22 @@ func reteGraphAlphaRouteSelectorForConstraints(template compiledTemplate, constr
 		}
 	}
 	return reteGraphAlphaRouteSelector{}
+}
+
+func reteGraphAlphaRouteFieldAlwaysPresent(template compiledTemplate, fieldSlot int) bool {
+	if fieldSlot < 0 || fieldSlot >= len(template.fields) {
+		return false
+	}
+	if len(template.fieldValidation) == len(template.fields) {
+		field := template.fieldValidation[fieldSlot]
+		return field.required || field.hasDefault
+	}
+	field := template.fields[fieldSlot]
+	if field.Required {
+		return true
+	}
+	_, hasDefault := template.fieldDefaults[field.Name]
+	return hasDefault
 }
 
 func (n *reteGraphAlphaNode) configureGeneratedMatch(template compiledTemplate, route reteGraphAlphaRouteSelector) {
@@ -1860,14 +1879,12 @@ func reteGraphAlphaRouteValueFromValue(value Value) (reteGraphAlphaRouteValue, b
 	}
 }
 
-func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) bool {
-	ok, _ := n.matchesSnapshotWithContextAndCounters(context.Background(), fact, nil)
-	return ok
+func (n reteGraphAlphaNode) matchesSnapshot(fact FactSnapshot) (bool, error) {
+	return n.matchesSnapshotWithContextAndCounters(context.Background(), fact, nil)
 }
 
-func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span *propagationCounterSpan) bool {
-	ok, _ := n.matchesSnapshotWithContextAndCounters(context.Background(), fact, span)
-	return ok
+func (n reteGraphAlphaNode) matchesSnapshotWithCounters(fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
+	return n.matchesSnapshotWithContextAndCounters(context.Background(), fact, span)
 }
 
 func (n reteGraphAlphaNode) matchesSnapshotWithContextAndCounters(ctx context.Context, fact FactSnapshot, span *propagationCounterSpan) (bool, error) {
@@ -1889,8 +1906,9 @@ func (n reteGraphAlphaNode) matchesSnapshotWithContextGlobalsAndCounters(ctx con
 	}
 	ref := newConditionFactRefFromSnapshot(fact)
 	for _, constraint := range n.constraints {
-		if !constraint.matchesWithCounters(ref, span) {
-			return false, nil
+		matched, err := constraint.matchesWithCounters(ref, span)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	if !n.listPatternsMatch(ref, tokenRef{}) {
@@ -1903,14 +1921,12 @@ func (n reteGraphAlphaNode) matchesSnapshotWithContextGlobalsAndCounters(ctx con
 	return true, nil
 }
 
-func (n reteGraphAlphaNode) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
-	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
-	return ok
+func (n reteGraphAlphaNode) matchesWorking(fact *workingFact, compactSlotStore *factCompactSlotStore) (bool, error) {
+	return n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, nil)
 }
 
-func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) bool {
-	ok, _ := n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, span)
-	return ok
+func (n reteGraphAlphaNode) matchesWorkingWithCounters(fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
+	return n.matchesWorkingWithContextAndCounters(context.Background(), fact, compactSlotStore, span)
 }
 
 func (n reteGraphAlphaNode) matchesWorkingWithContextAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, span *propagationCounterSpan) (bool, error) {
@@ -1934,8 +1950,9 @@ func (n reteGraphAlphaNode) matchesWorkingWithContextGlobalsAndCounters(ctx cont
 		return false, nil
 	}
 	for _, constraint := range n.constraints {
-		if !constraint.matchesWorkingWithCounters(fact, compactSlotStore, span) {
-			return false, nil
+		matched, err := constraint.matchesWorkingWithCounters(fact, compactSlotStore, span)
+		if err != nil || !matched {
+			return false, err
 		}
 	}
 	ref := newConditionFactRefFromWorkingFactForTarget(fact, n.target, compactSlotStore)
@@ -1955,36 +1972,48 @@ func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextAndCounters(ctx co
 
 func (n reteGraphAlphaNode) matchesGeneratedWorkingWithContextGlobalsAndCounters(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, globals []Value, span *propagationCounterSpan) (bool, error) {
 	if n.generatedMatch.kind != reteGraphAlphaGeneratedMatchNone {
-		return n.generatedMatch.matchesWorking(n.target, fact, compactSlotStore), nil
+		return n.generatedMatch.matchesWorking(n.target, fact, compactSlotStore)
 	}
 	return n.matchesWorkingWithContextGlobalsAndCounters(ctx, fact, compactSlotStore, globals, span)
 }
 
-func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact, compactSlotStore *factCompactSlotStore) bool {
+func (m reteGraphAlphaGeneratedMatch) matchesWorking(target conditionTarget, fact *workingFact, compactSlotStore *factCompactSlotStore) (bool, error) {
 	if fact == nil || !target.matchesWorkingFact(fact) {
-		return false
+		return false, nil
 	}
 	switch m.kind {
 	case reteGraphAlphaGeneratedMatchTargetOnly:
-		return true
+		return true, nil
 	case reteGraphAlphaGeneratedMatchSlotEqual:
 		for _, equality := range m.equalities {
 			value, ok := fact.compiledFieldValue("", equality.fieldSlot, compactSlotStore)
-			if !ok || !equality.value.matchesValue(value) {
-				return false
+			if !ok {
+				return false, fmt.Errorf("%w: field constraint operand is missing", ErrMatcher)
+			}
+			if value.Kind() != equality.value.kind {
+				return false, fmt.Errorf("%w: field constraint operands have non-comparable kinds %s and %s", ErrMatcher, value.Kind(), equality.value.kind)
+			}
+			if !equality.value.matchesValue(value) {
+				return false, nil
 			}
 		}
-		return true
+		return true, nil
 	case reteGraphAlphaGeneratedMatchSlotCompare:
 		for _, comparison := range m.comparisons {
 			value, ok := fact.compiledFieldValue("", comparison.fieldSlot, compactSlotStore)
-			if !ok || !comparison.matchesValue(value) {
-				return false
+			if !ok {
+				return false, fmt.Errorf("%w: field constraint operand is missing", ErrMatcher)
+			}
+			if value.Kind() != comparison.value.kind {
+				return false, fmt.Errorf("%w: field constraint operands have non-comparable kinds %s and %s", ErrMatcher, value.Kind(), comparison.value.kind)
+			}
+			if !comparison.matchesValue(value) {
+				return false, nil
 			}
 		}
-		return true
+		return true, nil
 	default:
-		return false
+		return false, fmt.Errorf("%w: unsupported generated alpha matcher", ErrMatcher)
 	}
 }
 

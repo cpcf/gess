@@ -6200,7 +6200,13 @@ func (m *reteGraphBetaMemory) rightPredicatesMatch(node *reteGraphBetaNode, righ
 			return false, err
 		}
 		matched, ok := value.AsBool()
-		if !ok || !matched {
+		if !ok {
+			if span != nil {
+				span.recordExpressionPredicateError()
+			}
+			return false, fmt.Errorf("%w: expression predicate result has kind %s, want bool", ErrMatcher, value.Kind())
+		}
+		if !matched {
 			if span != nil {
 				span.recordExpressionPredicateFailure()
 			}
