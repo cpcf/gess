@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "${unformatted}" ]; then
+            echo "gofmt needed on:" >&2
+            echo "${unformatted}" >&2
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+      - name: go test -race (core packages)
+        run: go test -race ./internal/... ./rules ./session ./dsl
+
+      - name: coverage
+        run: |
+          set -euo pipefail
+          go test -coverpkg=./... -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.out
+          if-no-files-found: error
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: FuzzParse
+        run: go test ./internal/gesssexp -fuzz FuzzParse -fuzztime 30s
+
+      - name: FuzzFormatIdempotent
+        run: go test ./internal/gesssexp -fuzz FuzzFormatIdempotent -fuzztime 30s
+
+      - name: FuzzCompile
+        run: go test ./dsl -fuzz FuzzCompile -fuzztime 30s
