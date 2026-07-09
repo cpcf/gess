@@ -106,13 +106,9 @@ two-space indentation, one blank line between top-level forms, short forms
 kept on one line, and long forms expanded with closing parentheses on their
 own lines.
 
-:::caution
-`gessfmt` currently discards `;` comments: the parser drops them, so
-formatted output contains no comments. To protect against irreversible
-data loss, `gessfmt -w` refuses to rewrite a file that contains comments,
-and formatting a commented file to stdout prints a warning. The restriction
-lifts once comment preservation lands.
-:::
+`gessfmt` preserves `;` comments: comment lines stay above the form they
+precede, same-line comments stay on their line, and comments before a
+closing parenthesis or at end of file keep their position.
 
 Flags:
 

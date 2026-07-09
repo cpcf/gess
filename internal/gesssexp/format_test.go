@@ -135,3 +135,31 @@ func TestFormatKeepsQueryReturnMultiline(t *testing.T) {
 		t.Fatalf("formatted =\n%s\nwant =\n%s", got, want)
 	}
 }
+
+func TestFormatPreservesCommentsByteIdentically(t *testing.T) {
+	const golden = `; file header
+; about the template
+(deftemplate item
+  ; about the id slot
+  (slot id (type STRING) (required TRUE)) ; trailing on slot
+  ; dangling before close
+)
+
+; about the rule
+(defrule flag
+  (item (id ?id)) ; trailing on condition
+  =>
+  (emit "flagged " ?id)
+)
+
+; tail comment one
+; tail comment two
+`
+	got, err := Format("golden.gess", []byte(golden))
+	if err != nil {
+		t.Fatalf("Format: %v", err)
+	}
+	if string(got) != golden {
+		t.Fatalf("golden comment file did not round-trip byte-identically:\ngot:\n%s\nwant:\n%s", got, golden)
+	}
+}

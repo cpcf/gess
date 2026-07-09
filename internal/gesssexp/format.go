@@ -8,37 +8,12 @@ import (
 
 const indentWidth = 2
 
-// SourceHasComments reports whether source contains a ; comment outside a
-// string literal. Format does not yet preserve comments, so callers that
-// rewrite files in place use this to refuse destructive formatting.
-func SourceHasComments(source []byte) bool {
-	inString := false
-	escaped := false
-	for _, r := range string(source) {
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case r == '\\':
-				escaped = true
-			case r == '"':
-				inString = false
-			}
-			continue
-		}
-		switch r {
-		case '"':
-			inString = true
-		case ';':
-			return true
-		}
-	}
-	return false
-}
-
-// Format parses source and emits canonical .gess layout.
+// Format parses source and emits canonical .gess layout, preserving `;`
+// comments: leading comment lines stay above the expression they precede,
+// same-line comments stay on their line, and comments before a closing
+// parenthesis or at end of file keep their position.
 func Format(name string, source []byte) ([]byte, error) {
-	exprs, err := Parse(name, source)
+	exprs, tail, err := parseAll(name, source)
 	if err != nil {
 		return nil, err
 	}
@@ -48,10 +23,27 @@ func Format(name string, source []byte) ([]byte, error) {
 			b.WriteByte('\n')
 			b.WriteByte('\n')
 		}
+		for _, comment := range expr.Leading {
+			b.WriteString(comment)
+			b.WriteByte('\n')
+		}
 		writeExpr(&b, expr, 0, formatExpanded)
+		if expr.Trailing != "" {
+			b.WriteByte(' ')
+			b.WriteString(expr.Trailing)
+		}
 	}
 	if len(exprs) > 0 {
 		b.WriteByte('\n')
+	}
+	if len(tail) > 0 {
+		if len(exprs) > 0 {
+			b.WriteByte('\n')
+		}
+		for _, comment := range tail {
+			b.WriteString(comment)
+			b.WriteByte('\n')
+		}
 	}
 	return b.Bytes(), nil
 }
@@ -79,46 +71,96 @@ func writeExpr(b *bytes.Buffer, expr Expr, indent int, mode formatMode) {
 func writeExpandedList(b *bytes.Buffer, expr Expr, indent int) {
 	b.WriteByte('(')
 	if len(expr.List) == 0 {
-		b.WriteByte(')')
+		if len(expr.Dangling) == 0 {
+			b.WriteByte(')')
+			return
+		}
+		writeDanglingAndClose(b, expr, indent)
 		return
 	}
-	writeExpr(b, expr.List[0], indent+indentWidth, formatInline)
-	next := 1
-	for next < len(expr.List) && expr.List[next].IsAtom() {
-		b.WriteByte(' ')
-		writeExpr(b, expr.List[next], indent+indentWidth, formatInline)
-		next++
-	}
-	if canAttachNestedHead(expr, next) {
-		child := expr.List[next]
-		b.WriteByte(' ')
-		b.WriteByte('(')
-		writeExpr(b, child.List[0], indent+indentWidth, formatInline)
-		for i := 1; i < len(child.List); i++ {
-			b.WriteByte('\n')
-			writeIndent(b, indent+indentWidth)
-			writeExpr(b, child.List[i], indent+indentWidth, formatAuto)
+	next := 0
+	head := expr.List[0]
+	if len(head.Leading) == 0 && head.Trailing == "" {
+		writeExpr(b, head, indent+indentWidth, formatInline)
+		next = 1
+		for next < len(expr.List) && expr.List[next].IsAtom() && exprTriviaFree(expr.List[next]) {
+			b.WriteByte(' ')
+			writeExpr(b, expr.List[next], indent+indentWidth, formatInline)
+			next++
 		}
-		b.WriteByte('\n')
-		writeIndent(b, indent)
-		b.WriteByte(')')
-		next++
+		if canAttachNestedHead(expr, next) && exprTriviaFree(expr.List[next]) && !exprInnerTrivia(expr.List[next]) {
+			child := expr.List[next]
+			b.WriteByte(' ')
+			b.WriteByte('(')
+			writeExpr(b, child.List[0], indent+indentWidth, formatInline)
+			for i := 1; i < len(child.List); i++ {
+				writeChildLine(b, child.List[i], indent+indentWidth)
+			}
+			b.WriteByte('\n')
+			writeIndent(b, indent)
+			b.WriteByte(')')
+			next++
+		}
 	}
 	for ; next < len(expr.List); next++ {
-		if canWriteBindingPattern(expr.List, next) {
+		if canWriteBindingPattern(expr.List, next) &&
+			exprTriviaFree(expr.List[next]) && exprTriviaFree(expr.List[next+1]) &&
+			exprTriviaFree(expr.List[next+2]) {
 			b.WriteByte('\n')
 			writeIndent(b, indent+indentWidth)
 			writeBindingPattern(b, expr.List[next], expr.List[next+2], indent+indentWidth)
 			next += 2
 			continue
 		}
+		writeChildLine(b, expr.List[next], indent+indentWidth)
+	}
+	writeDanglingAndClose(b, expr, indent)
+}
+
+// writeChildLine emits one child on its own line: its leading comments, the
+// child itself, and any same-line trailing comment.
+func writeChildLine(b *bytes.Buffer, child Expr, indent int) {
+	b.WriteByte('\n')
+	for _, comment := range child.Leading {
+		writeIndent(b, indent)
+		b.WriteString(comment)
+		b.WriteByte('\n')
+	}
+	writeIndent(b, indent)
+	writeExpr(b, child, indent, formatAuto)
+	if child.Trailing != "" {
+		b.WriteByte(' ')
+		b.WriteString(child.Trailing)
+	}
+}
+
+func writeDanglingAndClose(b *bytes.Buffer, expr Expr, indent int) {
+	for _, comment := range expr.Dangling {
 		b.WriteByte('\n')
 		writeIndent(b, indent+indentWidth)
-		writeExpr(b, expr.List[next], indent+indentWidth, formatAuto)
+		b.WriteString(comment)
 	}
 	b.WriteByte('\n')
 	writeIndent(b, indent)
 	b.WriteByte(')')
+}
+
+func exprTriviaFree(expr Expr) bool {
+	return len(expr.Leading) == 0 && expr.Trailing == ""
+}
+
+// exprInnerTrivia reports whether formatting expr inline would lose comments
+// attached inside it.
+func exprInnerTrivia(expr Expr) bool {
+	if len(expr.Dangling) > 0 {
+		return true
+	}
+	for _, child := range expr.List {
+		if !exprTriviaFree(child) || exprInnerTrivia(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func canWriteBindingPattern(list []Expr, index int) bool {
@@ -134,16 +176,16 @@ func canWriteBindingPattern(list []Expr, index int) bool {
 func writeBindingPattern(b *bytes.Buffer, binding Expr, pattern Expr, indent int) {
 	writeExpr(b, binding, indent, formatInline)
 	b.WriteString(" <- ")
-	b.WriteByte('(')
-	writeExpr(b, pattern.List[0], indent, formatInline)
-	for i := 1; i < len(pattern.List); i++ {
-		b.WriteByte('\n')
-		writeIndent(b, indent+indentWidth)
-		writeExpr(b, pattern.List[i], indent+indentWidth, formatAuto)
+	if len(pattern.List) > 0 && exprTriviaFree(pattern.List[0]) {
+		b.WriteByte('(')
+		writeExpr(b, pattern.List[0], indent, formatInline)
+		for i := 1; i < len(pattern.List); i++ {
+			writeChildLine(b, pattern.List[i], indent+indentWidth)
+		}
+		writeDanglingAndClose(b, pattern, indent)
+		return
 	}
-	b.WriteByte('\n')
-	writeIndent(b, indent)
-	b.WriteByte(')')
+	writeExpr(b, pattern, indent, formatExpanded)
 }
 
 func canAttachNestedHead(expr Expr, index int) bool {
@@ -168,6 +210,9 @@ func writeInlineList(b *bytes.Buffer, expr Expr) {
 func shouldInline(expr Expr) bool {
 	if expr.IsAtom() {
 		return true
+	}
+	if exprInnerTrivia(expr) {
+		return false
 	}
 	if len(expr.List) == 0 {
 		return true

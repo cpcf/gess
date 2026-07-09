@@ -39,6 +39,12 @@ type Expr struct {
 	List   []Expr
 	String bool
 	Span   SourceSpan
+	// Leading holds ; comment lines from before this expression, Trailing a
+	// same-line comment after it, and Dangling comments between the last
+	// child and the closing parenthesis. All retain the leading ';'.
+	Leading  []string
+	Trailing string
+	Dangling []string
 }
 
 func (e Expr) IsAtom() bool {
@@ -64,6 +70,7 @@ const (
 	tokenRParen
 	tokenAtom
 	tokenString
+	tokenComment
 )
 
 type token struct {
@@ -95,10 +102,14 @@ func (l *lexer) next() (token, error) {
 			continue
 		}
 		if r == ';' {
+			start := l.span()
+			var b strings.Builder
 			for l.offset < len(l.input) && l.input[l.offset] != '\n' {
+				b.WriteRune(l.input[l.offset])
 				l.advance(l.input[l.offset])
 			}
-			continue
+			text := strings.TrimRight(b.String(), " \t\r")
+			return token{kind: tokenComment, text: text, span: spanWithEnd(start, l.span())}, nil
 		}
 		break
 	}
@@ -188,22 +199,41 @@ type parser struct {
 }
 
 func Parse(name string, source []byte) ([]Expr, error) {
+	exprs, _, err := parseAll(name, source)
+	return exprs, err
+}
+
+// parseAll parses source and additionally returns comment lines that follow
+// the last expression, which have no expression to attach to.
+func parseAll(name string, source []byte) ([]Expr, []string, error) {
 	p := &parser{lexer: newLexer(name, source)}
 	var out []Expr
+	var pending []string
 	for {
 		tok, err := p.next()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if tok.kind == tokenEOF {
-			return out, nil
+		switch tok.kind {
+		case tokenEOF:
+			return out, pending, nil
+		case tokenComment:
+			last := len(out) - 1
+			if len(pending) == 0 && last >= 0 && out[last].Trailing == "" && tok.span.StartLine == out[last].Span.EndLine {
+				out[last].Trailing = tok.text
+				continue
+			}
+			pending = append(pending, tok.text)
+		default:
+			p.unread(tok)
+			expr, err := p.expr()
+			if err != nil {
+				return nil, nil, err
+			}
+			expr.Leading = pending
+			pending = nil
+			out = append(out, expr)
 		}
-		p.unread(tok)
-		expr, err := p.expr()
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, expr)
 	}
 }
 
@@ -220,6 +250,7 @@ func (p *parser) expr() (Expr, error) {
 	case tokenLParen:
 		start := tok.span
 		list := []Expr{}
+		var pending []string
 		for {
 			next, err := p.next()
 			if err != nil {
@@ -228,14 +259,23 @@ func (p *parser) expr() (Expr, error) {
 			switch next.kind {
 			case tokenEOF:
 				return Expr{}, &FileError{Span: start, Reason: "unterminated list"}
+			case tokenComment:
+				last := len(list) - 1
+				if len(pending) == 0 && last >= 0 && list[last].Trailing == "" && next.span.StartLine == list[last].Span.EndLine {
+					list[last].Trailing = next.text
+					continue
+				}
+				pending = append(pending, next.text)
 			case tokenRParen:
-				return Expr{List: list, Span: spanWithEnd(start, next.span)}, nil
+				return Expr{List: list, Span: spanWithEnd(start, next.span), Dangling: pending}, nil
 			default:
 				p.unread(next)
 				child, err := p.expr()
 				if err != nil {
 					return Expr{}, err
 				}
+				child.Leading = pending
+				pending = nil
 				list = append(list, child)
 			}
 		}
