@@ -1,6 +1,9 @@
 package engine
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 func sourceSpanIsZero(span SourceSpan) bool {
 	return span.Name == "" && span.StartLine == 0 && span.StartColumn == 0 && span.EndLine == 0 && span.EndColumn == 0
@@ -23,4 +26,15 @@ func firstSourceSpan(spans ...SourceSpan) SourceSpan {
 		}
 	}
 	return SourceSpan{}
+}
+
+func attachValidationErrorSource(err error, source SourceSpan) error {
+	if err == nil || sourceSpanIsZero(source) {
+		return err
+	}
+	var validation *ValidationError
+	if errors.As(err, &validation) && sourceSpanIsZero(validation.Source) {
+		validation.Source = source
+	}
+	return err
 }

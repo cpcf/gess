@@ -155,14 +155,14 @@ func compileExpressionPredicateSpecWithParamsAndSource(
 	globals map[string]compiledGlobal,
 ) (ExpressionPredicate, compiledExpressionPredicate, error) {
 	if spec == nil {
-		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression predicate is required", nil)
+		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationErrorAtSource(source, ruleName, conditionIndex, predicateIndex, "", "expression predicate is required", nil)
 	}
 	expression, referencesEarlierBinding, err := compileExpressionSpecWithParams(spec, ruleName, conditionIndex, predicateIndex, template, conditions, bindingSlots, templatesByKey, params, functions, globals)
 	if err != nil {
-		return ExpressionPredicate{}, compiledExpressionPredicate{}, err
+		return ExpressionPredicate{}, compiledExpressionPredicate{}, attachValidationErrorSource(err, source)
 	}
 	if expression.resultKind != ValueBool {
-		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationError(ruleName, conditionIndex, predicateIndex, "", "expression predicate must produce a bool", nil)
+		return ExpressionPredicate{}, compiledExpressionPredicate{}, expressionValidationErrorAtSource(source, ruleName, conditionIndex, predicateIndex, "", "expression predicate must produce a bool", nil)
 	}
 
 	placement := ExpressionPredicatePlacementAlpha
@@ -1440,8 +1440,13 @@ func (e compiledExpression) evaluateBoolean(span *propagationCounterSpan, eval f
 }
 
 func expressionValidationError(ruleName string, conditionIndex, predicateIndex int, fieldName, reason string, err error) *ValidationError {
+	return expressionValidationErrorAtSource(SourceSpan{}, ruleName, conditionIndex, predicateIndex, fieldName, reason, err)
+}
+
+func expressionValidationErrorAtSource(source SourceSpan, ruleName string, conditionIndex, predicateIndex int, fieldName, reason string, err error) *ValidationError {
 	return &ValidationError{
 		RuleName:          ruleName,
+		Source:            source,
 		FieldName:         fieldName,
 		ConditionIndex:    conditionIndex,
 		HasConditionIndex: true,

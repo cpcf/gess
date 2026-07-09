@@ -67,10 +67,11 @@ func fieldConstraintOperatorValid(o FieldConstraintOperator) bool {
 	}
 }
 
-func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (FieldConstraint, compiledFieldConstraint, error) {
+func compileFieldConstraintSpec(spec FieldConstraintSpec, source SourceSpan, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (FieldConstraint, compiledFieldConstraint, error) {
 	if hasAmbiguousFieldAndPath(spec.Field, spec.Path) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,
@@ -84,6 +85,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 	if pathIsZero(normalized.Path) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,
@@ -95,6 +97,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 	if !fieldConstraintOperatorValid(normalized.Operator) {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,
@@ -107,6 +110,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 		if normalized.Value != nil {
 			return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 				RuleName:           ruleName,
+				Source:             source,
 				ConditionIndex:     conditionIndex,
 				HasConditionIndex:  true,
 				ConstraintIndex:    constraintIndex,
@@ -114,7 +118,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 				Reason:             "exists constraint must not set a value",
 			}
 		}
-		access, err := compileFieldConstraintPathAccess(normalized.Path, ruleName, conditionIndex, constraintIndex, template)
+		access, err := compileFieldConstraintPathAccess(normalized.Path, source, ruleName, conditionIndex, constraintIndex, template)
 		if err != nil {
 			return FieldConstraint{}, compiledFieldConstraint{}, err
 		}
@@ -135,6 +139,7 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 	if err != nil {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,
@@ -143,13 +148,14 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			Err:                err,
 		}
 	}
-	access, err := compileFieldConstraintPathAccess(normalized.Path, ruleName, conditionIndex, constraintIndex, template)
+	access, err := compileFieldConstraintPathAccess(normalized.Path, source, ruleName, conditionIndex, constraintIndex, template)
 	if err != nil {
 		return FieldConstraint{}, compiledFieldConstraint{}, err
 	}
 	if reason, ok := fieldConstraintKindMismatch(normalized, value, template); !ok {
 		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,
 			ConstraintIndex:    constraintIndex,
@@ -204,11 +210,12 @@ func fieldConstraintKindMismatch(spec FieldConstraintSpec, value Value, template
 	}
 }
 
-func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (compiledPathAccess, error) {
+func compileFieldConstraintPathAccess(path PathSpec, source SourceSpan, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (compiledPathAccess, error) {
 	if template != nil && template.closed && pathRoot(path) != "" {
 		if _, ok := template.fieldSlot(pathRoot(path)); !ok {
 			return compiledPathAccess{}, &ValidationError{
 				RuleName:           ruleName,
+				Source:             source,
 				TemplateName:       template.name,
 				FieldName:          pathRoot(path),
 				ConditionIndex:     conditionIndex,
@@ -223,6 +230,7 @@ func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionI
 	if err != nil {
 		validation := &ValidationError{
 			RuleName:           ruleName,
+			Source:             source,
 			FieldName:          pathRoot(path),
 			ConditionIndex:     conditionIndex,
 			HasConditionIndex:  true,

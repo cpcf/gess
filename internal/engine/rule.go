@@ -1443,6 +1443,11 @@ func explicitMatchCondition(ruleName string, spec ConditionSpec, negated bool) (
 }
 
 func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRule, error) {
+	compiled, err := compileRuleSpecInternal(spec, ruleID, declarationOrder, modules, templates, actionsByName, functions, globals)
+	return compiled, attachValidationErrorSource(err, spec.Source)
+}
+
+func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRule, error) {
 	normalized, err := normalizeRuleSpec(spec)
 	if err != nil {
 		return compiledRule{}, err
@@ -1528,6 +1533,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		if action.Name == "" {
 			return compiledRule{}, &ValidationError{
 				RuleName:       normalized.Name,
+				Source:         action.Source,
 				ActionIndex:    i,
 				HasActionIndex: true,
 				Reason:         "action name is required",
@@ -1537,6 +1543,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		if !ok {
 			return compiledRule{}, &ValidationError{
 				RuleName:       normalized.Name,
+				Source:         action.Source,
 				ActionIndex:    i,
 				HasActionIndex: true,
 				Reason:         "unknown action",
@@ -1547,7 +1554,7 @@ func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules
 		}
 		actionExecution, err := compileRuleActionExecution(normalized.Name, i, compiledAction, conditions, actionBindingSlots, templates.byKey, functions, globals)
 		if err != nil {
-			return compiledRule{}, err
+			return compiledRule{}, attachValidationErrorSource(err, action.Source)
 		}
 		actionExecution.source = action.Source
 		actions = append(actions, RuleAction{
@@ -1708,17 +1715,18 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			if node.negated {
 				return compiledRuleConditionSet{}, &ValidationError{
 					RuleName:          ruleName,
+					Source:            node.source,
 					ConditionIndex:    i,
 					HasConditionIndex: true,
 					Reason:            "accumulate condition is not supported under not",
 				}
 			}
 			if err := validateAggregateInputShape(ruleName, i, node.aggregate.Input); err != nil {
-				return compiledRuleConditionSet{}, err
+				return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 			}
 			inputNormalized, _, err := flattenConditionTreeSpec(ruleName, node.aggregate.Input)
 			if err != nil {
-				return compiledRuleConditionSet{}, err
+				return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 			}
 			for _, inputNode := range inputNormalized {
 				if inputNode.spec.Binding == "" {
@@ -1727,6 +1735,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				if _, exists := bindingSlots[inputNode.spec.Binding]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
+						Source:            node.source,
 						ConditionIndex:    i,
 						HasConditionIndex: true,
 						Reason:            "aggregate input binding collides with an outer binding",
@@ -1736,13 +1745,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			inputSet, err := compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName, ruleID, author, inputNormalized, templates, false, conditions, bindingSlots, params, functions, globals)
 			if err != nil {
-				return compiledRuleConditionSet{}, err
+				return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 			}
 			inputOnlyConditions := inputSet.conditions[len(conditions):]
 			for _, inputCondition := range inputOnlyConditions {
 				if _, exists := bindingSlots[inputCondition.BindingName]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
+						Source:            node.source,
 						ConditionIndex:    i,
 						HasConditionIndex: true,
 						Reason:            "aggregate input binding collides with an outer binding",
@@ -1756,12 +1766,13 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			compiledSpecs, resultConditions, err := compileAggregateSpecList(ruleName, i, node.aggregate.Specs, inputSet.conditions, inputBindingSlots, templates.byKey, functions, globals)
 			if err != nil {
-				return compiledRuleConditionSet{}, err
+				return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 			}
 			for _, result := range resultConditions {
 				if _, exists := allBindingSlots[result.BindingName]; exists {
 					return compiledRuleConditionSet{}, &ValidationError{
 						RuleName:          ruleName,
+						Source:            node.source,
 						ConditionIndex:    i,
 						HasConditionIndex: true,
 						Reason:            "aggregate result binding collides with an existing binding",
@@ -1800,14 +1811,15 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		}
 		if node.isTest {
 			if node.test == nil {
-				return compiledRuleConditionSet{}, expressionValidationError(ruleName, i, 0, "", "test condition expression is required", nil)
+				return compiledRuleConditionSet{}, expressionValidationErrorAtSource(node.source, ruleName, i, 0, "", "test condition expression is required", nil)
 			}
 			if expressionSpecReferencesCurrentFact(node.test) {
-				return compiledRuleConditionSet{}, expressionValidationError(ruleName, i, 0, "", "test condition cannot reference the current fact", nil)
+				return compiledRuleConditionSet{}, expressionValidationErrorAtSource(node.source, ruleName, i, 0, "", "test condition cannot reference the current fact", nil)
 			}
 			if len(conditions) == 0 {
 				return compiledRuleConditionSet{}, &ValidationError{
 					RuleName:          ruleName,
+					Source:            node.source,
 					ConditionIndex:    i,
 					HasConditionIndex: true,
 					Reason:            "test condition requires an earlier visible binding",
@@ -1831,6 +1843,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		if condition.Binding == "" {
 			return compiledRuleConditionSet{}, &ValidationError{
 				RuleName:          ruleName,
+				Source:            node.source,
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "condition binding is required",
@@ -1839,6 +1852,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		if !isValidBindingName(condition.Binding) {
 			return compiledRuleConditionSet{}, &ValidationError{
 				RuleName:          ruleName,
+				Source:            node.source,
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "invalid binding name",
@@ -1847,6 +1861,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		if _, exists := allBindingSlots[condition.Binding]; exists && !allowDuplicateBindings {
 			return compiledRuleConditionSet{}, &ValidationError{
 				RuleName:          ruleName,
+				Source:            node.source,
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "duplicate binding",
@@ -1855,6 +1870,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		if node.negated && len(bindingSlots) == 0 {
 			return compiledRuleConditionSet{}, &ValidationError{
 				RuleName:          ruleName,
+				Source:            node.source,
 				ConditionIndex:    i,
 				HasConditionIndex: true,
 				Reason:            "not condition requires an earlier positive condition",
@@ -1863,14 +1879,14 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 
 		target, indexKind, template, conditionName, conditionTemplateKey, err := templates.resolveFactTarget(ruleName, i, author, condition.Target)
 		if err != nil {
-			return compiledRuleConditionSet{}, err
+			return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 		}
 
 		constraintSpecs, returnValuePredicates := lowerReturnValueFieldConstraints(condition.FieldConstraints)
 		fieldConstraints := make([]FieldConstraint, 0, len(constraintSpecs))
 		compiledConstraints := make([]compiledFieldConstraint, 0, len(constraintSpecs))
 		for constraintIndex, constraint := range constraintSpecs {
-			compiledConstraint, planConstraint, err := compileFieldConstraintSpec(constraint, ruleName, i, constraintIndex, template)
+			compiledConstraint, planConstraint, err := compileFieldConstraintSpec(constraint, node.source, ruleName, i, constraintIndex, template)
 			if err != nil {
 				return compiledRuleConditionSet{}, err
 			}
@@ -1883,7 +1899,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 		}
 		listPatterns, compiledListPatterns, listPatternBindings, err := compileListPatternSpecs(condition.ListPatterns, ruleName, i, template, conditions, bindingSlots, params, functions, globals)
 		if err != nil {
-			return compiledRuleConditionSet{}, err
+			return compiledRuleConditionSet{}, attachValidationErrorSource(err, node.source)
 		}
 		for _, result := range listPatternBindings {
 			if result.BindingName == condition.Binding {
