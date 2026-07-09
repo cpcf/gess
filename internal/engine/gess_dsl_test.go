@@ -407,6 +407,65 @@ func TestGessDSLRejectsMalformedDeffacts(t *testing.T) {
 	}
 }
 
+func TestGessDSLRejectsMalformedDeclaresAndTemplateItems(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		source string
+		reason string
+	}{
+		{
+			name:   "non-integer salience",
+			source: `(defrule r (declare (salience high)) (item) => (emit "x"))`,
+			reason: `salience value "high" must be an integer`,
+		},
+		{
+			name:   "misspelled rule declare",
+			source: `(defrule r (declare (saliennce 5)) (item) => (emit "x"))`,
+			reason: `unsupported rule declare "saliennce"`,
+		},
+		{
+			name:   "misspelled slot item",
+			source: `(deftemplate x (slott id (type STRING)))`,
+			reason: `unsupported deftemplate item "slott"`,
+		},
+		{
+			name:   "misspelled slot attribute",
+			source: `(deftemplate x (slot id (typ STRING)))`,
+			reason: `unsupported slot attribute "typ"`,
+		},
+		{
+			name:   "misspelled template declare",
+			source: `(deftemplate x (declare (duplicate-polcy allow)))`,
+			reason: `unsupported deftemplate declare "duplicate-polcy"`,
+		},
+		{
+			name:   "misspelled query declare",
+			source: `(defquery q (declare (variable ?id)) (item (id ?id)) (return (id ?id)))`,
+			reason: `unsupported query declare "variable"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := ParseGess("strict-loader.gess", []byte(tc.source))
+			if err != nil {
+				t.Fatalf("ParseGess: %v", err)
+			}
+			err = LoadGess(ctx, NewWorkspace(), doc, DSLRegistry{})
+			if err == nil {
+				t.Fatal("LoadGess succeeded, want a strict-loader error")
+			}
+			var gessErr *GessFileError
+			if !errors.As(err, &gessErr) {
+				t.Fatalf("error = %T, want *GessFileError", err)
+			}
+			if gessErr.Reason != tc.reason {
+				t.Fatalf("reason = %q, want %q", gessErr.Reason, tc.reason)
+			}
+		})
+	}
+}
+
 func TestGessDSLRejectsProjectionInPatternSlot(t *testing.T) {
 	ctx := context.Background()
 	source := []byte(`

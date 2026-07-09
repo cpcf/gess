@@ -393,6 +393,8 @@ func (l *gessLoader) loadTemplate(form gessSExpr) error {
 			if !item.IsAtom() {
 				return l.err(item.Span, "unsupported deftemplate item")
 			}
+		default:
+			return l.err(item.Span, "unsupported deftemplate item %q", item.Head())
 		}
 	}
 	if err := l.workspace.AddTemplate(spec); err != nil {
@@ -438,6 +440,8 @@ func (l *gessLoader) applyTemplateDecls(spec *TemplateSpec, decls gessSExpr) err
 				return l.err(decl.Span, "key requires one value")
 			}
 			spec.Key = TemplateKey(decl.List[1].Text())
+		default:
+			return l.err(decl.Span, "unsupported deftemplate declare %q", decl.Head())
 		}
 	}
 	return nil
@@ -471,6 +475,11 @@ func (l *gessLoader) parseSlot(form gessSExpr) (FieldSpec, error) {
 			}
 			field.Default = value
 			field.HasDefault = true
+		default:
+			if attr.IsAtom() {
+				return FieldSpec{}, l.err(attr.Span, "unsupported slot attribute %q", attr.Text())
+			}
+			return FieldSpec{}, l.err(attr.Span, "unsupported slot attribute %q", attr.Head())
 		}
 	}
 	return field, nil
@@ -506,7 +515,10 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 	if err != nil {
 		return l.wrap(form.Span, "parse rule body", err)
 	}
-	body = applyRuleDecls(l, &rule, body)
+	body, err = applyRuleDecls(l, &rule, body)
+	if err != nil {
+		return err
+	}
 	scope := newGessScope()
 	condition, err := l.parseConditions(module, body, scope, false)
 	if err != nil {
@@ -526,7 +538,7 @@ func (l *gessLoader) loadRule(form gessSExpr) error {
 	return nil
 }
 
-func applyRuleDecls(l *gessLoader, rule *RuleSpec, body []gessSExpr) []gessSExpr {
+func applyRuleDecls(l *gessLoader, rule *RuleSpec, body []gessSExpr) ([]gessSExpr, error) {
 	out := make([]gessSExpr, 0, len(body))
 	for _, item := range body {
 		if item.Head() != "declare" {
@@ -536,20 +548,26 @@ func applyRuleDecls(l *gessLoader, rule *RuleSpec, body []gessSExpr) []gessSExpr
 		for _, decl := range item.List[1:] {
 			switch decl.Head() {
 			case "salience":
-				if len(decl.List) == 2 {
-					if v, ok := gessInt(decl.List[1]); ok {
-						rule.Salience = int(v)
-					}
+				if len(decl.List) != 2 {
+					return nil, l.err(decl.Span, "salience requires one value")
 				}
+				v, ok := gessInt(decl.List[1])
+				if !ok {
+					return nil, l.err(decl.List[1].Span, "salience value %q must be an integer", decl.List[1].Text())
+				}
+				rule.Salience = int(v)
 			case "auto-focus":
 				value, err := l.boolArg(decl, 1)
-				if err == nil {
-					rule.AutoFocus = &value
+				if err != nil {
+					return nil, err
 				}
+				rule.AutoFocus = &value
+			default:
+				return nil, l.err(decl.Span, "unsupported rule declare %q", decl.Head())
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 func (l *gessLoader) loadQuery(form gessSExpr) error {
@@ -566,7 +584,7 @@ func (l *gessLoader) loadQuery(form gessSExpr) error {
 		case "declare":
 			for _, decl := range item.List[1:] {
 				if decl.Head() != "variables" {
-					continue
+					return l.err(decl.Span, "unsupported query declare %q", decl.Head())
 				}
 				for _, variable := range decl.List[1:] {
 					name, ok := gessVariableName(variable)
