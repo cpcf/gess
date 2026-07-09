@@ -769,13 +769,13 @@ func compareNumericValuesSlow(integer int64, floating float64) int {
 }
 
 func intEqualsFloat(integer int64, floating float64) bool {
-	if integer > maxExactFloatInt || integer < -maxExactFloatInt {
+	if math.IsNaN(floating) || math.IsInf(floating, 0) {
 		return false
 	}
-	if floating > float64(maxExactFloatInt) || floating < float64(-maxExactFloatInt) {
-		return false
+	if integer >= -maxExactFloatInt && integer <= maxExactFloatInt {
+		return math.Trunc(floating) == floating && float64(integer) == floating
 	}
-	return math.Trunc(floating) == floating && float64(integer) == floating
+	return compareNumericValuesSlow(integer, floating) == 0
 }
 
 func numericDuplicateKey(value Value) string {
