@@ -2321,7 +2321,14 @@ func (s *Session) discardGeneratedOutputCompactSlots(state *factWorkspace, compa
 }
 
 func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s != nil && s.activeBackchainQueryProof != nil {
+	// Scaffolding S-06: while a query proof is live, only firing-originated
+	// demands join the transient proof context (the proof seeds its own
+	// demands through proof.flushDemands directly). Externally queued
+	// mutations drained mid-proof carry no activation origin and keep the
+	// plain-assert contract: their demands take the persistent path below.
+	// Removable once WP-14's proof scoping owns exactly the demands the
+	// proof created.
+	if s != nil && s.activeBackchainQueryProof != nil && !origin.ActivationID.IsZero() {
 		return s.activeBackchainQueryProof.flushDemands(ctx, demands, origin)
 	}
 	if s == nil || state == nil || len(demands) == 0 {

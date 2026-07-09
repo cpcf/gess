@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestBackchainDemandGenerationAssertsNeedFactOnJoinMiss(t *testing.T) {
@@ -1065,5 +1066,188 @@ func assertFactStringField(t testing.TB, fact FactSnapshot, field string, want s
 	got, ok := value.AsString()
 	if !ok || got != want {
 		t.Fatalf("field %q = (%v, %t), want %q", field, value, ok, want)
+	}
+}
+
+// An external assert queued during a query proof run must keep the
+// plain-assert contract: the demands it raises take the persistent workspace
+// path instead of dying with the transient proof context (scaffolding S-06).
+func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	edge := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "edge",
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	reachable := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "reachable",
+		BackchainReactive: true,
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	request := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "reachability-request",
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	kicker := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "kicker",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "assert-direct-reachable",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: reachable.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "dst"},
+				BindingFieldExpr{Binding: "need", Field: "src"},
+			},
+		},
+	})
+	mustAddAction(t, workspace, ActionSpec{
+		Name:         "consume-reachable",
+		Fn:           func(ActionContext) error { return nil },
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	var session *Session
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "queue-external-request",
+		Fn: func(ActionContext) error {
+			// An external Assert must come from another goroutine (this one
+			// holds the run guard); it lands in the mutation queue and the
+			// run loop drains it between firings, while the proof is live.
+			// Assert blocks until its queued mutation is applied, so wait
+			// only for the enqueue itself before letting the firing finish.
+			go func() {
+				_, _ = session.Assert(ctx, request.Key(),
+					mustFields(t, map[string]any{"src": "cache", "dst": "db"}))
+			}()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				session.mutationQueueMu.Lock()
+				queued := len(session.mutationQueue)
+				session.mutationQueueMu.Unlock()
+				if queued > 0 {
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return errors.New("external assert never reached the mutation queue")
+				}
+				time.Sleep(time.Millisecond)
+			}
+		},
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "direct-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "assert-direct-reachable"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "consume-request-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "reachable",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(reachable.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "consume-reachable"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "fire-kicker",
+		ConditionTree: Match{
+			Binding: "k",
+			Target:  TemplateKeyFact(kicker.Key()),
+		},
+		Actions: []RuleActionSpec{{Name: "queue-external-request"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "reachable-paths",
+		Parameters: []QueryParameterSpec{
+			{Name: "src", Kind: ValueString},
+			{Name: "dst", Kind: ValueString},
+		},
+		ConditionTree: Match{
+			Binding: "reachable",
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "src"}, Right: ParamExpr{Name: "src"}},
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dst"}, Right: ParamExpr{Name: "dst"}},
+			},
+			Target: TemplateKeyFact(reachable.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("src", BindingFieldExpr{Binding: "reachable", Field: "src"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision, err := workspace.Compile(ctx)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err = NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.AssertTemplateValues(ctx, edge.Key(), newStringValue("db"), newStringValue("api")); err != nil {
+		t.Fatalf("Assert edge: %v", err)
+	}
+	if err := session.AssertTemplateValues(ctx, kicker.Key(), newStringValue("k-1")); err != nil {
+		t.Fatalf("Assert kicker: %v", err)
+	}
+
+	rows, err := session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	foundRequest := false
+	for _, fact := range snapshot.FactsByTemplateKey(request.Key()) {
+		if src, ok := fact.Field("src"); ok && src.Equal(newStringValue("cache")) {
+			foundRequest = true
+		}
+	}
+	if !foundRequest {
+		t.Fatal("queued external reachability-request fact missing after the proof run")
+	}
+	demandKey := mustDemandKey(t, revision, reachable.Key())
+	foundDemand := false
+	for _, fact := range snapshot.FactsByTemplateKey(demandKey) {
+		src, srcOK := fact.Field("src")
+		dst, dstOK := fact.Field("dst")
+		if srcOK && dstOK && src.Equal(newStringValue("cache")) && dst.Equal(newStringValue("db")) {
+			foundDemand = true
+		}
+	}
+	if !foundDemand {
+		t.Fatal("externally raised need-reachable demand was destroyed by proof cleanup")
 	}
 }
