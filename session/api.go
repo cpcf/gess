@@ -1939,6 +1939,10 @@ const (
 	ApplyRulesetApplied = rules.ApplyRulesetApplied
 	// ApplyRulesetUnchanged reports that the target ruleset has the
 	// same RulesetID as the current one, so no work was performed.
+	// RulesetID does not cover Go host function or action
+	// implementations, so a ruleset differing only in its Go closures
+	// reports Unchanged and the session keeps executing the previously
+	// applied closures.
 	ApplyRulesetUnchanged = rules.ApplyRulesetUnchanged
 	// ApplyRulesetIncompatible reports that the target ruleset is nil,
 	// doesn't define the templates live facts depend on with an

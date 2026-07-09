@@ -6,7 +6,11 @@ import (
 	"strings"
 )
 
-// RulesetID identifies one compiled ruleset revision.
+// RulesetID identifies one compiled ruleset revision. It is derived from the
+// ruleset's declared shape: templates, rules, queries, globals, and the
+// declared signatures of Go host functions and actions. Host function and
+// action implementations do not contribute, so two rulesets differing only in
+// their Go closures share the same RulesetID.
 type RulesetID string
 
 func (id RulesetID) String() string {
