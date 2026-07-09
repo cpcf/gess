@@ -1227,12 +1227,18 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, false, nil
 	}
 
+	if s.activeBackchainQueryProof != nil {
+		// The proof context is a single session-owned scratch struct;
+		// beginning a nested proof would silently destroy the outer proof's
+		// state. The run guard makes this unreachable today — fail loudly if
+		// that ever changes.
+		return nil, true, fmt.Errorf("%w: query %q cannot start while another query proof is active", ErrUnsupportedRuntime, query.name)
+	}
 	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
 	proof := s.beginBackchainQueryProof()
-	previousProof := s.activeBackchainQueryProof
 	s.activeBackchainQueryProof = proof
 	defer func() {
-		s.activeBackchainQueryProof = previousProof
+		s.activeBackchainQueryProof = nil
 	}()
 
 	cleanupTrigger := true

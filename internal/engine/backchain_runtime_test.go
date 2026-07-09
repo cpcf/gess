@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1375,5 +1376,25 @@ func TestCancelledQueryProofCleansUpDemandsAndAgenda(t *testing.T) {
 		if activation.RuleName() == "direct-reachability" {
 			t.Fatal("stale proof activation survived the cancelled query")
 		}
+	}
+}
+
+func TestNestedQueryProofFailsLoudly(t *testing.T) {
+	ctx := context.Background()
+	revision, _, _, _ := mustCompileBackchainReachabilityRuleset(t, true)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	session.activeBackchainQueryProof = &session.backchainQueryProofScratch
+	defer func() { session.activeBackchainQueryProof = nil }()
+	_, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"})
+	if err == nil {
+		t.Fatal("QueryAll succeeded with an active proof, want a nested-proof error")
+	}
+	if !errors.Is(err, ErrUnsupportedRuntime) || !strings.Contains(err.Error(), "another query proof is active") {
+		t.Fatalf("error = %v, want ErrUnsupportedRuntime naming the active proof", err)
 	}
 }
