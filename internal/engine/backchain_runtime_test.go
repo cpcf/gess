@@ -1251,3 +1251,129 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 		t.Fatal("externally raised need-reachable demand was destroyed by proof cleanup")
 	}
 }
+
+// A context cancellation landing mid-proof must not leak the query trigger
+// or transient demand facts, and the fallback cleanup's agenda delta must be
+// applied so no stale proof activations survive the failed query.
+func TestCancelledQueryProofCleansUpDemandsAndAgenda(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	edge := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "edge",
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	reachable := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:              "reachable",
+		BackchainReactive: true,
+		Fields: []FieldSpec{
+			{Name: "src", Kind: ValueString, Required: true},
+			{Name: "dst", Kind: ValueString, Required: true},
+		},
+	})
+	kicker := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "kicker",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+	})
+	mustAddInternalAction(t, workspace, ActionSpec{
+		Name: "assert-direct-reachable",
+		AssertTemplateValues: &AssertTemplateValuesActionSpec{
+			TemplateKey: reachable.Key(),
+			Values: []ExpressionSpec{
+				BindingFieldExpr{Binding: "need", Field: "dst"},
+				BindingFieldExpr{Binding: "need", Field: "src"},
+			},
+		},
+	})
+	queryCtx, cancelQuery := context.WithCancel(ctx)
+	defer cancelQuery()
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "cancel-query",
+		Fn: func(ActionContext) error {
+			cancelQuery()
+			return nil
+		},
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:     "cancel-first",
+		Salience: 100,
+		ConditionTree: Match{
+			Binding: "k",
+			Target:  TemplateKeyFact(kicker.Key()),
+		},
+		Actions: []RuleActionSpec{{Name: "cancel-query"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "direct-reachability",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "assert-direct-reachable"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "reachable-paths",
+		Parameters: []QueryParameterSpec{
+			{Name: "src", Kind: ValueString},
+			{Name: "dst", Kind: ValueString},
+		},
+		ConditionTree: Match{
+			Binding: "reachable",
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "src"}, Right: ParamExpr{Name: "src"}},
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "dst"}, Right: ParamExpr{Name: "dst"}},
+			},
+			Target: TemplateKeyFact(reachable.Key()),
+		},
+		Returns: []QueryReturnSpec{
+			ReturnValue("src", BindingFieldExpr{Binding: "reachable", Field: "src"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision, err := workspace.Compile(ctx)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.AssertTemplateValues(ctx, edge.Key(), newStringValue("db"), newStringValue("api")); err != nil {
+		t.Fatalf("Assert edge: %v", err)
+	}
+	if err := session.AssertTemplateValues(ctx, kicker.Key(), newStringValue("k-1")); err != nil {
+		t.Fatalf("Assert kicker: %v", err)
+	}
+
+	if _, err := session.QueryAll(queryCtx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"}); err == nil {
+		t.Fatal("QueryAll succeeded, want the mid-proof cancellation error")
+	}
+
+	snapshot := mustSnapshot(t, ctx, session)
+	demandKey := mustDemandKey(t, revision, reachable.Key())
+	if leaked := len(snapshot.FactsByTemplateKey(demandKey)); leaked != 0 {
+		t.Fatalf("transient demand facts leaked after cancelled proof = %d, want 0", leaked)
+	}
+	agenda, err := session.Agenda(ctx)
+	if err != nil {
+		t.Fatalf("Agenda: %v", err)
+	}
+	for _, activation := range agenda.Activations() {
+		if activation.RuleName() == "direct-reachability" {
+			t.Fatal("stale proof activation survived the cancelled query")
+		}
+	}
+}

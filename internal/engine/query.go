@@ -1239,7 +1239,11 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 	defer func() {
 		if cleanupTrigger {
 			s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
-			_, _ = s.cleanupQueryProofImmediate(context.Background(), trigger, proof)
+			cleanupCtx := context.WithoutCancel(ctx)
+			delta, err := s.cleanupQueryProofImmediate(cleanupCtx, trigger, proof)
+			if err == nil && queryAgendaDeltaHasRuleChanges(delta) {
+				_, _ = s.reconcileAgendaAfterMutation(cleanupCtx, delta)
+			}
 		}
 	}()
 	agendaDelta, needsProof, err := s.insertQueryTriggerForProofImmediate(ctx, trigger, proof)
@@ -1274,14 +1278,18 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 	if err != nil {
 		return nil, true, err
 	}
-	cleanupTrigger = false
 	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
-	cleanupDelta, err := s.cleanupQueryProofImmediate(ctx, trigger, proof)
+	// Cleanup must not be abortable by the caller's context: a cancellation
+	// landing after row materialization would otherwise leak the query
+	// trigger and transient demand facts into graph memory permanently.
+	cleanupCtx := context.WithoutCancel(ctx)
+	cleanupDelta, err := s.cleanupQueryProofImmediate(cleanupCtx, trigger, proof)
 	if err != nil {
 		return nil, true, err
 	}
+	cleanupTrigger = false
 	if queryAgendaDeltaHasRuleChanges(cleanupDelta) {
-		if _, err := s.reconcileAgendaAfterMutation(ctx, cleanupDelta); err != nil {
+		if _, err := s.reconcileAgendaAfterMutation(cleanupCtx, cleanupDelta); err != nil {
 			return nil, true, err
 		}
 	}
