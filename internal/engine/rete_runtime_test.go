@@ -2039,6 +2039,80 @@ func TestReteGraphAlphaExpressionPredicateErrorsAreCounted(t *testing.T) {
 	}
 }
 
+func TestReteGraphAlphaSilentEvaluationCoercionsAreCounted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		expression compiledExpression
+		fields     Fields
+		wantMatch  bool
+	}{
+		{
+			name: "missing comparison operand",
+			expression: compiledExpression{
+				kind:       expressionNodeCompare,
+				resultKind: ValueBool,
+				compareOp:  ExpressionCompareEqual,
+				operands: []compiledExpression{
+					{kind: expressionNodeCurrentField, resultKind: ValueAny, access: testCompiledPathAccess("missing")},
+					{kind: expressionNodeConst, resultKind: ValueInt, value: newIntValue(10)},
+				},
+			},
+		},
+		{
+			name: "incomparable equality operands",
+			expression: compiledExpression{
+				kind:       expressionNodeCompare,
+				resultKind: ValueBool,
+				compareOp:  ExpressionCompareNotEqual,
+				operands: []compiledExpression{
+					{kind: expressionNodeCurrentField, resultKind: ValueAny, access: testCompiledPathAccess("value")},
+					{kind: expressionNodeConst, resultKind: ValueInt, value: newIntValue(10)},
+				},
+			},
+			fields: Fields{"value": newStringValue("ten")},
+		},
+		{
+			name: "non-boolean operand",
+			expression: compiledExpression{
+				kind:       expressionNodeBoolean,
+				resultKind: ValueBool,
+				boolOp:     ExpressionBoolNot,
+				operands: []compiledExpression{{
+					kind: expressionNodeCurrentField, resultKind: ValueAny, access: testCompiledPathAccess("value"),
+				}},
+			},
+			fields:    Fields{"value": newStringValue("true")},
+			wantMatch: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := newPropagationCounterLedger()
+			span := ledger.beginAssert("", mutationOrigin{})
+			node := reteGraphAlphaNode{
+				target: conditionTarget{kind: conditionTargetName, name: "event"},
+				predicates: []compiledExpressionPredicate{{
+					placement:  ExpressionPredicatePlacementAlpha,
+					expression: tc.expression,
+				}},
+			}
+			fact := FactSnapshot{
+				id:     newFactID(1, 1),
+				name:   "event",
+				fields: tc.fields,
+			}
+			if got := node.matchesSnapshotWithCounters(fact, &span); got != tc.wantMatch {
+				t.Fatalf("matchesSnapshotWithCounters = %t, want %t", got, tc.wantMatch)
+			}
+			span.finish()
+
+			snapshot := ledger.snapshot()
+			if got, want := snapshot.Totals.SilentEvaluationCoercions, 1; got != want {
+				t.Fatalf("silent evaluation coercions = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

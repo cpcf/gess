@@ -995,11 +995,11 @@ func (e compiledExpression) evaluateWithContextParamsGlobalsAndCounters(ctx cont
 			return operand.evaluateWithContextParamsGlobalsAndCounters(ctx, fact, bindings, params, globals, meta, span)
 		})
 	case expressionNodeCompare:
-		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
+		return e.evaluateCompare(span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateWithContextParamsGlobalsAndCounters(ctx, fact, bindings, params, globals, meta, span)
 		})
 	case expressionNodeBoolean:
-		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
+		return e.evaluateBoolean(span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateWithContextParamsGlobalsAndCounters(ctx, fact, bindings, params, globals, meta, span)
 		})
 	default:
@@ -1094,11 +1094,11 @@ func (e compiledExpression) evaluateTokenWithContextParamsGlobalsOffsetAndCounte
 			return operand.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, bindings, params, globals, bindingSlotOffset, meta, span)
 		})
 	case expressionNodeCompare:
-		return e.evaluateCompare(func(operand compiledExpression) (Value, bool, error) {
+		return e.evaluateCompare(span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, bindings, params, globals, bindingSlotOffset, meta, span)
 		})
 	case expressionNodeBoolean:
-		return e.evaluateBoolean(func(operand compiledExpression) (Value, bool, error) {
+		return e.evaluateBoolean(span, func(operand compiledExpression) (Value, bool, error) {
 			return operand.evaluateTokenWithContextParamsGlobalsOffsetAndCounters(ctx, fact, bindings, params, globals, bindingSlotOffset, meta, span)
 		})
 	default:
@@ -1317,7 +1317,7 @@ func functionEvaluationError(meta *FunctionEvaluationError, functionName string,
 	return out
 }
 
-func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
+func (e compiledExpression) evaluateCompare(span *propagationCounterSpan, eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
 	if len(e.operands) != 2 {
 		return Value{}, false, fmt.Errorf("%w: malformed comparison expression operand count %d", ErrMatcher, len(e.operands))
 	}
@@ -1330,17 +1330,27 @@ func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value
 		return Value{}, false, err
 	}
 	if !leftOK || !rightOK {
+		span.recordSilentEvaluationCoercion()
 		return newBoolValue(false), true, nil
 	}
 	var matched bool
 	switch e.compareOp {
 	case ExpressionCompareEqual:
-		matched = valuesComparableForEquality(left, right) && left.Equal(right)
+		if !valuesComparableForEquality(left, right) {
+			span.recordSilentEvaluationCoercion()
+			return newBoolValue(false), true, nil
+		}
+		matched = left.Equal(right)
 	case ExpressionCompareNotEqual:
-		matched = valuesComparableForEquality(left, right) && !left.Equal(right)
+		if !valuesComparableForEquality(left, right) {
+			span.recordSilentEvaluationCoercion()
+			return newBoolValue(false), true, nil
+		}
+		matched = !left.Equal(right)
 	case ExpressionCompareLessThan, ExpressionCompareLessOrEqual, ExpressionCompareGreaterThan, ExpressionCompareGreaterOrEqual:
 		comparison, comparable := compareValues(left, right)
 		if !comparable {
+			span.recordSilentEvaluationCoercion()
 			return newBoolValue(false), true, nil
 		}
 		switch e.compareOp {
@@ -1359,10 +1369,13 @@ func (e compiledExpression) evaluateCompare(eval func(compiledExpression) (Value
 	return newBoolValue(matched), true, nil
 }
 
-func (e compiledExpression) evaluateBoolean(eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
+func (e compiledExpression) evaluateBoolean(span *propagationCounterSpan, eval func(compiledExpression) (Value, bool, error)) (Value, bool, error) {
 	boolValue := func(operand compiledExpression) (bool, error) {
 		value, ok, err := eval(operand)
 		if err != nil || !ok || value.Kind() != ValueBool {
+			if err == nil {
+				span.recordSilentEvaluationCoercion()
+			}
 			return false, err
 		}
 		return valueBool(value), nil

@@ -76,6 +76,7 @@ type propagationCounterTotals struct {
 	ExpressionPredicateTests            int
 	ExpressionPredicateFailures         int
 	ExpressionPredicateErrors           int
+	SilentEvaluationCoercions           int
 	FunctionCalls                       int
 	FunctionErrors                      int
 	FunctionCancellations               int
@@ -144,6 +145,7 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.ExpressionPredicateTests += other.ExpressionPredicateTests
 	t.ExpressionPredicateFailures += other.ExpressionPredicateFailures
 	t.ExpressionPredicateErrors += other.ExpressionPredicateErrors
+	t.SilentEvaluationCoercions += other.SilentEvaluationCoercions
 	t.FunctionCalls += other.FunctionCalls
 	t.FunctionErrors += other.FunctionErrors
 	t.FunctionCancellations += other.FunctionCancellations
@@ -464,6 +466,13 @@ func (s *propagationCounterSpan) recordExpressionPredicateError() {
 		return
 	}
 	s.totals.ExpressionPredicateErrors++
+}
+
+func (s *propagationCounterSpan) recordSilentEvaluationCoercion() {
+	if s == nil || s.ledger == nil {
+		return
+	}
+	s.totals.SilentEvaluationCoercions++
 }
 
 func (s *propagationCounterSpan) recordFunctionCall() {
@@ -932,6 +941,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-expression-predicate-tests", float64(s.Totals.ExpressionPredicateTests))
 	report("propagation-expression-predicate-failures", float64(s.Totals.ExpressionPredicateFailures))
 	report("propagation-expression-predicate-errors", float64(s.Totals.ExpressionPredicateErrors))
+	report("propagation-silent-evaluation-coercions", float64(s.Totals.SilentEvaluationCoercions))
 	report("propagation-function-calls", float64(s.Totals.FunctionCalls))
 	report("propagation-function-errors", float64(s.Totals.FunctionErrors))
 	report("propagation-function-cancellations", float64(s.Totals.FunctionCancellations))
@@ -985,6 +995,7 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-expression-predicate-tests/rhs-assert", float64(s.Totals.ExpressionPredicateTests)/rhsAsserts)
 	report("propagation-expression-predicate-failures/rhs-assert", float64(s.Totals.ExpressionPredicateFailures)/rhsAsserts)
 	report("propagation-expression-predicate-errors/rhs-assert", float64(s.Totals.ExpressionPredicateErrors)/rhsAsserts)
+	report("propagation-silent-evaluation-coercions/rhs-assert", float64(s.Totals.SilentEvaluationCoercions)/rhsAsserts)
 	report("propagation-nested-path-evaluations/rhs-assert", float64(s.Totals.NestedPathEvaluations)/rhsAsserts)
 	report("propagation-nested-path-misses/rhs-assert", float64(s.Totals.NestedPathMisses)/rhsAsserts)
 	report("propagation-template-count", float64(len(s.ByTemplate)))
@@ -1082,6 +1093,7 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-expression-predicate-tests=" + strconv.Itoa(s.Totals.ExpressionPredicateTests),
 		"propagation-expression-predicate-failures=" + strconv.Itoa(s.Totals.ExpressionPredicateFailures),
 		"propagation-expression-predicate-errors=" + strconv.Itoa(s.Totals.ExpressionPredicateErrors),
+		"propagation-silent-evaluation-coercions=" + strconv.Itoa(s.Totals.SilentEvaluationCoercions),
 		"propagation-function-calls=" + strconv.Itoa(s.Totals.FunctionCalls),
 		"propagation-function-errors=" + strconv.Itoa(s.Totals.FunctionErrors),
 		"propagation-function-cancellations=" + strconv.Itoa(s.Totals.FunctionCancellations),
