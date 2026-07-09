@@ -362,6 +362,51 @@ func TestGessDSLRejectsDeffactsForUndeclaredTemplate(t *testing.T) {
 	}
 }
 
+func TestGessDSLRejectsMalformedDeffacts(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		source string
+		reason string
+	}{
+		{
+			name:   "bare deffacts",
+			source: "(deffacts)",
+			reason: "deffacts requires a name",
+		},
+		{
+			name: "unnamed deffacts",
+			source: `
+(deftemplate item
+  (slot id (type STRING) (required TRUE)))
+
+(deffacts
+  (item (id "I-1")))
+`,
+			reason: "deffacts requires a name",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, err := ParseGess("malformed-deffacts.gess", []byte(tc.source))
+			if err != nil {
+				t.Fatalf("ParseGess: %v", err)
+			}
+			err = LoadGess(ctx, NewWorkspace(), doc, DSLRegistry{})
+			if err == nil {
+				t.Fatal("LoadGess succeeded, want a malformed-deffacts error")
+			}
+			var gessErr *GessFileError
+			if !errors.As(err, &gessErr) {
+				t.Fatalf("error = %T, want *GessFileError", err)
+			}
+			if gessErr.Reason != tc.reason {
+				t.Fatalf("reason = %q, want %q", gessErr.Reason, tc.reason)
+			}
+		})
+	}
+}
+
 func TestGessDSLCallSupportsRegisteredActionsAndArgumentCalls(t *testing.T) {
 	ctx := context.Background()
 	source := []byte(`

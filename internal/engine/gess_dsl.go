@@ -475,6 +475,9 @@ func (l *gessLoader) parseSlot(form gessSExpr) (FieldSpec, error) {
 }
 
 func (l *gessLoader) loadFacts(form gessSExpr) ([]SessionInitialFact, error) {
+	if len(form.List) < 2 || !form.List[1].IsAtom() {
+		return nil, l.err(form.Span, "deffacts requires a name")
+	}
 	var out []SessionInitialFact
 	for _, fact := range form.List[2:] {
 		name, fields, err := l.parseFactLiteral(fact)
