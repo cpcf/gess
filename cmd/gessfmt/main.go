@@ -54,6 +54,9 @@ func formatReader(name string, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", name, err)
 	}
+	if gesssexp.SourceHasComments(source) {
+		fmt.Fprintf(os.Stderr, "gessfmt: warning: %s contains ';' comments; formatted output omits them\n", name)
+	}
 	formatted, err := gesssexp.Format(name, source)
 	if err != nil {
 		return err
@@ -66,6 +69,14 @@ func formatFile(path string, write bool, quiet bool) (bool, error) {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	if gesssexp.SourceHasComments(source) {
+		if write {
+			return false, fmt.Errorf("%s: refusing -w: the file contains ';' comments and gessfmt does not preserve comments yet; format to stdout instead", path)
+		}
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "gessfmt: warning: %s contains ';' comments; formatted output omits them\n", path)
+		}
 	}
 	formatted, err := gesssexp.Format(path, source)
 	if err != nil {

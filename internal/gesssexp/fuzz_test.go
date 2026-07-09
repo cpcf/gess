@@ -30,6 +30,27 @@ var fuzzSeeds = [][]byte{
 	[]byte("(atom . ?var ?binding:field =)"),
 }
 
+func TestSourceHasComments(t *testing.T) {
+	cases := []struct {
+		source string
+		want   bool
+	}{
+		{"", false},
+		{"(defrule r => (emit \"x\"))", false},
+		{"; leading comment\n(a)", true},
+		{"(a) ; trailing", true},
+		{`(str "; not a comment")`, false},
+		{`(str "escaped \" quote") ; real`, true},
+		{`(str "backslash \\") ; real`, true},
+		{`(unterminated "; still in string`, false},
+	}
+	for _, tc := range cases {
+		if got := SourceHasComments([]byte(tc.source)); got != tc.want {
+			t.Errorf("SourceHasComments(%q) = %t, want %t", tc.source, got, tc.want)
+		}
+	}
+}
+
 func FuzzParse(f *testing.F) {
 	for _, seed := range fuzzSeeds {
 		f.Add(seed)

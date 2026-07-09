@@ -8,6 +8,34 @@ import (
 
 const indentWidth = 2
 
+// SourceHasComments reports whether source contains a ; comment outside a
+// string literal. Format does not yet preserve comments, so callers that
+// rewrite files in place use this to refuse destructive formatting.
+func SourceHasComments(source []byte) bool {
+	inString := false
+	escaped := false
+	for _, r := range string(source) {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\':
+				escaped = true
+			case r == '"':
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case ';':
+			return true
+		}
+	}
+	return false
+}
+
 // Format parses source and emits canonical .gess layout.
 func Format(name string, source []byte) ([]byte, error) {
 	exprs, err := Parse(name, source)

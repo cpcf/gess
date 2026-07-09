@@ -3,8 +3,34 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestFormatFileRefusesWriteOnCommentedSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "commented.gess")
+	source := "; keep this comment\n(deftemplate item\n  (slot id (type STRING)))\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := formatFile(path, true, false); err == nil {
+		t.Fatal("formatFile with -w succeeded on commented source, want refusal")
+	} else if !strings.Contains(err.Error(), "refusing -w") {
+		t.Fatalf("error = %v, want refusing -w", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != source {
+		t.Fatal("refused write still modified the file")
+	}
+
+	if _, err := formatFile(path, false, true); err != nil {
+		t.Fatalf("formatFile list mode on commented source: %v", err)
+	}
+}
 
 func TestFormatFileReportsChangeWithoutWriting(t *testing.T) {
 	dir := t.TempDir()
