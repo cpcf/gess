@@ -943,6 +943,12 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 	}
 }
 
+// maxRuleConditionBranches bounds or-branch expansion: nested or groups
+// multiply branch counts, so an unbounded cross-product makes compile time
+// exponential in the number of or groups. Scaffolding S-05: removable once
+// or-node prefix sharing makes branch counts sub-exponential in the graph.
+const maxRuleConditionBranches = 1024
+
 func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, path []int, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
 	if len(specs) == 0 {
 		return nil, &ValidationError{
@@ -955,6 +961,13 @@ func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, path
 		childBranches, err := expandConditionTreeNodeBranches(ruleName, spec, appendConditionTreePath(path, i), visible, negated)
 		if err != nil {
 			return nil, err
+		}
+		if len(branches)*len(childBranches) > maxRuleConditionBranches {
+			return nil, &ValidationError{
+				RuleName: ruleName,
+				Reason: fmt.Sprintf("or conditions expand to more than %d combined branches; split the rule into smaller rules",
+					maxRuleConditionBranches),
+			}
 		}
 		next := make([]normalizedRuleConditionBranch, 0, len(branches)*len(childBranches))
 		for _, existing := range branches {
@@ -2358,8 +2371,15 @@ func buildRuleConditionTree(shape compiledConditionTreeShape, conditions []RuleC
 }
 
 func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
+	// conditionPlans stays in planned execution order; plan.bindingSlot holds
+	// the public condition order after the remap, so hash lookups must go
+	// through it rather than indexing the slice positionally.
+	plansByPublicOrder := make(map[int]*compiledConditionPlan, len(rule.conditionPlans))
+	for i := range rule.conditionPlans {
+		plansByPublicOrder[rule.conditionPlans[i].bindingSlot] = &rule.conditionPlans[i]
+	}
 	sum := sha256.New()
-	sum.Write([]byte("gess/rule/v1\n"))
+	sum.Write([]byte("gess/rule/v2\n"))
 	sum.Write([]byte("id:"))
 	sum.Write([]byte(rule.id.String()))
 	sum.Write([]byte("\nmodule:"))
@@ -2401,8 +2421,8 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			}
 			sum.Write([]byte(";"))
 		}
-		if condition.Order >= 0 && condition.Order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.Order].listPatterns) > 0 {
-			sum.Write([]byte(serializeCompiledListPatterns(rule.conditionPlans[condition.Order].listPatterns)))
+		if plan, ok := plansByPublicOrder[condition.Order]; ok && len(plan.listPatterns) > 0 {
+			sum.Write([]byte(serializeCompiledListPatterns(plan.listPatterns)))
 		}
 		sum.Write([]byte("|"))
 		for _, join := range condition.JoinConstraintValues {
@@ -2415,9 +2435,9 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte(join.Ref.Field))
 			sum.Write([]byte(","))
 		}
-		if condition.Order >= 0 && condition.Order < len(rule.conditionPlans) && len(rule.conditionPlans[condition.Order].predicates) > 0 {
+		if plan, ok := plansByPublicOrder[condition.Order]; ok && len(plan.predicates) > 0 {
 			sum.Write([]byte("|"))
-			sum.Write([]byte(serializeCompiledExpressionPredicates(rule.conditionPlans[condition.Order].predicates)))
+			sum.Write([]byte(serializeCompiledExpressionPredicates(plan.predicates)))
 		}
 		if condition.ExplicitValue {
 			sum.Write([]byte("|explicit"))

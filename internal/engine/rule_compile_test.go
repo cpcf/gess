@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWorkspaceCompilesRulesIntoImmutableRevision(t *testing.T) {
@@ -2932,5 +2933,159 @@ func conditionTreeCompatibilityConditions(personKey, departmentKey TemplateKey) 
 				{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "person", Field: "dept"}},
 			}, Target: TemplateKeyFact(departmentKey),
 		},
+	}
+}
+
+func TestCompileCapsOrBranchExpansion(t *testing.T) {
+	ctx := context.Background()
+	buildWorkspace := func(orGroups int) *Workspace {
+		workspace := NewWorkspace()
+		var sinkKey TemplateKey
+		for _, name := range []string{"alpha", "beta", "sink"} {
+			key := mustAddTemplate(t, workspace, TemplateSpec{
+				Name:   name,
+				Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+			}).Key()
+			if name == "sink" {
+				sinkKey = key
+			}
+		}
+		conditions := make([]ConditionSpec, 0, orGroups)
+		for i := range orGroups {
+			conditions = append(conditions, Or{Conditions: []ConditionSpec{
+				Match{Binding: fmt.Sprintf("x%d", i), Target: TemplateFact("alpha"), FieldConstraints: []FieldConstraintSpec{{Field: "id", Operator: FieldConstraintEqual, Value: "left"}}},
+				Match{Binding: fmt.Sprintf("x%d", i), Target: TemplateFact("alpha"), FieldConstraints: []FieldConstraintSpec{{Field: "id", Operator: FieldConstraintEqual, Value: "right"}}},
+			}})
+		}
+		if err := workspace.AddRule(RuleSpec{
+			Name:          "wide",
+			ConditionTree: And{Conditions: conditions},
+			Actions:       []RuleActionSpec{{Name: "assert-sink"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := workspace.AddAction(ActionSpec{
+			Name: "assert-sink",
+			Effect: &ActionEffectSpec{
+				Kind:        ActionEffectAssert,
+				TemplateKey: sinkKey,
+				FactName:    "sink",
+				Fields:      []string{"id"},
+				Values:      []ExpressionSpec{ConstExpr{Value: "s"}},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return workspace
+	}
+
+	if _, err := buildWorkspace(3).Compile(ctx); err != nil {
+		t.Fatalf("compile with 8 branches: %v", err)
+	}
+
+	start := time.Now()
+	_, err := buildWorkspace(11).Compile(ctx)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("compile with 2048 branches succeeded, want the branch cap error")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("error = %T, want *ValidationError", err)
+	}
+	if !strings.Contains(validation.Reason, "combined branches") {
+		t.Fatalf("reason = %q, want the combined-branches cap message", validation.Reason)
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("over-cap compile took %v, want fast failure", elapsed)
+	}
+}
+
+// The planner reorders every multi-condition branch and remaps plans back to
+// public condition order. This pins two contracts: each public condition
+// keeps its own compiled plan, and rule-revision identity pairs plan content
+// with the condition that owns it.
+func TestReorderedPlansStayPairedWithPublicConditions(t *testing.T) {
+	ctx := context.Background()
+	build := func(predicateOn int) *Ruleset {
+		t.Helper()
+		workspace := NewWorkspace()
+		orderKey := mustAddTemplate(t, workspace, TemplateSpec{
+			Name: "order",
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "amount", Kind: ValueInt, Required: true},
+			},
+		}).Key()
+		customerKey := mustAddTemplate(t, workspace, TemplateSpec{
+			Name: "customer",
+			Fields: []FieldSpec{
+				{Name: "id", Kind: ValueString, Required: true},
+				{Name: "score", Kind: ValueInt, Required: true},
+			},
+		}).Key()
+		mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+		conditions := []RuleConditionSpec{
+			{Binding: "o", Target: TemplateKeyFact(orderKey)},
+			{
+				Binding: "c",
+				Target:  TemplateKeyFact(customerKey),
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "o", Field: "id"}},
+				},
+			},
+		}
+		field := "amount"
+		if predicateOn == 1 {
+			field = "score"
+		}
+		conditions[predicateOn].Predicates = []ExpressionSpec{CompareExpr{
+			Operator: ExpressionCompareGreaterThan,
+			Left:     CurrentFieldExpr{Field: field},
+			Right:    ConstExpr{Value: int64(10)},
+		}}
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "paired",
+			Conditions: conditions,
+			Actions:    []RuleActionSpec{{Name: "mark"}},
+		})
+		revision, err := workspace.Compile(ctx)
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		return revision
+	}
+
+	planForPublicOrder := func(revision *Ruleset, order int) compiledConditionPlan {
+		t.Helper()
+		for _, plan := range revision.rules["paired"].conditionPlans {
+			if plan.bindingSlot == order {
+				return plan
+			}
+		}
+		t.Fatalf("no condition plan carries public order %d", order)
+		return compiledConditionPlan{}
+	}
+
+	onFirst := build(0)
+	if plans := onFirst.rules["paired"].conditionPlans; len(plans) != 2 {
+		t.Fatalf("condition plans = %d, want 2", len(plans))
+	}
+	if len(planForPublicOrder(onFirst, 0).predicates) == 0 || len(planForPublicOrder(onFirst, 1).predicates) != 0 {
+		t.Fatal("predicate plan not paired with public condition 0")
+	}
+
+	onSecond := build(1)
+	if len(planForPublicOrder(onSecond, 0).predicates) != 0 || len(planForPublicOrder(onSecond, 1).predicates) == 0 {
+		t.Fatal("predicate plan not paired with public condition 1")
+	}
+
+	firstID := onFirst.rules["paired"].revisionID
+	secondID := onSecond.rules["paired"].revisionID
+	if firstID == secondID {
+		t.Fatal("revision IDs match although the predicate sits on a different condition")
+	}
+	if again := build(0).rules["paired"].revisionID; again != firstID {
+		t.Fatalf("revision ID not deterministic: %s vs %s", again, firstID)
 	}
 }
