@@ -100,7 +100,7 @@ Each template has a duplicate policy that decides how a colliding assert
 resolves: `structural` deduplicates facts with identical fields, `allow`
 permits duplicates, and `unique-key` keeps one current fact per key.
 Asserting a `unique-key` fact whose key matches an existing fact but whose
-non-key fields differ replaces the old fact — it behaves like a retract of
+non-key fields differ replaces the old fact. It behaves like a retract of
 the old fact followed by an assert of the new one, so the agenda,
 aggregates, queries, logical support, and any downstream derived facts all
 observe the change; asserting an identical fact is a no-op. Asserting a fact
@@ -164,6 +164,8 @@ and a status:
 - `RunHalted`: an action called `Halt()`. The halting activation's remaining
   actions still run; pending activations stay on the agenda and a later
   `Run` continues from them.
+- `RunFireLimit`: `WithMaxFirings(n)` stopped the run after `n` activations;
+  pending activations remain and a later `Run` continues from them.
 - `RunCanceled`: the context was canceled between actions (`ctx.Err()`).
 - `RunActionFailed`: an action returned an error; the returned error is an
   `ActionFailureError` that unwraps to the cause and matches
@@ -171,8 +173,8 @@ and a status:
 - `RunConcurrencyMisuse`: a `Run` overlapped another `Run`.
 
 :::note
-There is no built-in firing limit; use context cancellation or `Halt()` to
-bound a run. A runaway rule cycle can otherwise run indefinitely.
+Use `WithMaxFirings(n)`, context cancellation, or `Halt()` to bound a run.
+Without one of those controls, a runaway rule cycle can run indefinitely.
 :::
 
 ### Activation order
@@ -222,23 +224,23 @@ logical `SupportGraph()`, backchain demand diagnostics, and snapshot-scoped
 `Query`/`QueryAll`. Snapshots don't change after later mutations.
 
 `DiffSnapshots(before, after)` reports the working-memory difference between
-two snapshots — facts added, retracted, and modified (by field value or
-support state) — in deterministic fact-id order.
+two snapshots: facts added, retracted, and modified by field value or support
+state, in deterministic fact-id order.
 
 ## What-if runs
 
 `Session.WhatIf` answers "what would happen if …?" without touching the base
 session. It forks the session, applies the scenario's hypothetical mutations,
 runs the fork bounded, and returns a structured `WhatIfReport`: the rules that
-fired in order, the working-memory `Diff`, the agenda before and after, and —
-with `WithWhatIfExplain` — a derivation for every added fact.
+fired in order, the working-memory `Diff`, the agenda before and after, and,
+with `WithWhatIfExplain`, a derivation for every added fact.
 
 ```go
 report, err := session.WhatIf(ctx, func(ctx context.Context, fork *session.Session) error {
 	_, err := fork.Assert(ctx, findingKey, exampleutil.Fields("id", "F-200", "severity", "critical"))
 	return err
 }, session.WithWhatIfExplain())
-// report.Firings, report.Diff.Added, report.Derivations — base session unchanged.
+// report.Firings, report.Diff.Added, report.Derivations; base session unchanged.
 ```
 
 The scenario receives the fork and uses the normal
