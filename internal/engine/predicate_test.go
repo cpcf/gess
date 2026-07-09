@@ -524,32 +524,6 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		},
 		Actions: []RuleActionSpec{{Name: "mark"}},
 	})
-	mustAddRule(t, workspace, RuleSpec{
-		Name: "incompatible",
-		Conditions: []RuleConditionSpec{
-			{
-				Binding: "p",
-
-				FieldConstraints: []FieldConstraintSpec{
-					{Field: "age", Operator: FieldConstraintGreaterThan, Value: "18"},
-				}, Target: TemplateKeyFact(personTemplate.Key()),
-			},
-		},
-		Actions: []RuleActionSpec{{Name: "mark"}},
-	})
-	mustAddRule(t, workspace, RuleSpec{
-		Name: "incompatible-neq",
-		Conditions: []RuleConditionSpec{
-			{
-				Binding: "p",
-
-				FieldConstraints: []FieldConstraintSpec{
-					{Field: "age", Operator: FieldConstraintNotEqual, Value: "18"},
-				}, Target: TemplateKeyFact(personTemplate.Key()),
-			},
-		},
-		Actions: []RuleActionSpec{{Name: "mark"}},
-	})
 
 	revision, err := workspace.Compile(context.Background())
 	if err != nil {
@@ -607,8 +581,6 @@ func TestFieldConstraintEvaluation(t *testing.T) {
 		{name: "name-eq", ruleName: "name-eq", want: 1},
 		{name: "name-order", ruleName: "name-order", want: 1},
 		{name: "tag-exists", ruleName: "tag-exists", want: 1},
-		{name: "incompatible", ruleName: "incompatible", want: 0},
-		{name: "incompatible-neq", ruleName: "incompatible-neq", want: 0},
 	}
 
 	for _, tc := range tests {
@@ -674,5 +646,74 @@ func TestFieldConstraintScanCancellation(t *testing.T) {
 	}
 	if matches != nil {
 		t.Fatalf("matches = %#v, want nil after cancellation", matches)
+	}
+}
+
+func TestCompileRejectsKindIncompatibleFieldConstraints(t *testing.T) {
+	cases := []struct {
+		name     string
+		operator FieldConstraintOperator
+		value    any
+		want     string
+	}{
+		{
+			name:     "string ordered against int field",
+			operator: FieldConstraintGreaterThan,
+			value:    "18",
+			want:     `constraint value kind string cannot be ordered against field "age" of kind int`,
+		},
+		{
+			name:     "string inequality against int field",
+			operator: FieldConstraintNotEqual,
+			value:    "18",
+			want:     `constraint value kind string can never equal field "age" of kind int`,
+		},
+		{
+			name:     "bool equality against string field",
+			operator: FieldConstraintEqual,
+			value:    true,
+			want:     `constraint value kind bool can never equal field "name" of kind string`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			template := mustAddTemplate(t, workspace, TemplateSpec{
+				Name: "person",
+				Fields: []FieldSpec{
+					{Name: "name", Kind: ValueString, Required: true},
+					{Name: "age", Kind: ValueInt, Required: true},
+				},
+			})
+			mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+			field := "age"
+			if tc.value == true {
+				field = "name"
+			}
+			mustAddRule(t, workspace, RuleSpec{
+				Name: "broken",
+				Conditions: []RuleConditionSpec{
+					{
+						Binding: "p",
+						FieldConstraints: []FieldConstraintSpec{
+							{Field: field, Operator: tc.operator, Value: tc.value},
+						},
+						Target: TemplateKeyFact(template.Key()),
+					},
+				},
+				Actions: []RuleActionSpec{{Name: "mark"}},
+			})
+			_, err := workspace.Compile(context.Background())
+			if err == nil {
+				t.Fatal("Compile succeeded, want a kind-mismatch error")
+			}
+			var validation *ValidationError
+			if !errors.As(err, &validation) {
+				t.Fatalf("error = %T, want *ValidationError", err)
+			}
+			if validation.Reason != tc.want {
+				t.Fatalf("reason = %q, want %q", validation.Reason, tc.want)
+			}
+		})
 	}
 }

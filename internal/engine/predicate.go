@@ -1,6 +1,10 @@
 package engine
 
-import gessrules "github.com/cpcf/gess/rules"
+import (
+	"fmt"
+
+	gessrules "github.com/cpcf/gess/rules"
+)
 
 type FieldConstraintOperator = gessrules.FieldConstraintOperator
 
@@ -143,6 +147,16 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 	if err != nil {
 		return FieldConstraint{}, compiledFieldConstraint{}, err
 	}
+	if reason, ok := fieldConstraintKindMismatch(normalized, value, template); !ok {
+		return FieldConstraint{}, compiledFieldConstraint{}, &ValidationError{
+			RuleName:           ruleName,
+			ConditionIndex:     conditionIndex,
+			HasConditionIndex:  true,
+			ConstraintIndex:    constraintIndex,
+			HasConstraintIndex: true,
+			Reason:             reason,
+		}
+	}
 
 	return FieldConstraint{
 			Field:    normalized.Field,
@@ -154,6 +168,40 @@ func compileFieldConstraintSpec(spec FieldConstraintSpec, ruleName string, condi
 			value:    value,
 			access:   access,
 		}, nil
+}
+
+// fieldConstraintKindMismatch reports whether a constraint over a declared,
+// simple field can never hold because the constraint value's kind is not
+// comparable with the field's kind. Nested path leaves and ANY-kinded fields
+// are unchecked; a mismatch there stays a runtime non-match.
+func fieldConstraintKindMismatch(spec FieldConstraintSpec, value Value, template *compiledTemplate) (string, bool) {
+	if template == nil || len(spec.Path.Segments) != 1 {
+		return "", true
+	}
+	fieldKind, declared := template.fieldKind(spec.Field)
+	if !declared || fieldKind == ValueAny {
+		return "", true
+	}
+	valueKind := value.Kind()
+	numeric := func(kind ValueKind) bool { return kind == ValueInt || kind == ValueFloat }
+	switch spec.Operator {
+	case FieldConstraintOpEqual, FieldConstraintOpNotEqual:
+		if valueKind == ValueNull || valueKind == fieldKind || (numeric(valueKind) && numeric(fieldKind)) {
+			return "", true
+		}
+		return fmt.Sprintf("constraint value kind %s can never equal field %q of kind %s",
+			valueKind, spec.Field, fieldKind), false
+	case FieldConstraintOpLessThan, FieldConstraintOpLessOrEqual,
+		FieldConstraintOpGreaterThan, FieldConstraintOpGreaterOrEqual:
+		if (numeric(valueKind) && numeric(fieldKind)) ||
+			(valueKind == ValueString && fieldKind == ValueString) {
+			return "", true
+		}
+		return fmt.Sprintf("constraint value kind %s cannot be ordered against field %q of kind %s",
+			valueKind, spec.Field, fieldKind), false
+	default:
+		return "", true
+	}
 }
 
 func compileFieldConstraintPathAccess(path PathSpec, ruleName string, conditionIndex, constraintIndex int, template *compiledTemplate) (compiledPathAccess, error) {
