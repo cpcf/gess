@@ -154,7 +154,7 @@ func TestDuplicateIndexTypedAndCanonicalStringPaths(t *testing.T) {
 			if internal == nil {
 				t.Fatal("missing stored fact")
 			}
-			if got := internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind; got != tc.wantIndex {
+			if got := internal.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind; got != tc.wantIndex {
 				t.Fatalf("duplicate index kind = %v, want %v", got, tc.wantIndex)
 			}
 
@@ -202,7 +202,7 @@ func TestDuplicateIndexFloatNaNFallsBackToPublicStringSemantics(t *testing.T) {
 	if internal == nil {
 		t.Fatal("missing stored fact")
 	}
-	if got := internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind; got != duplicateIndexString {
+	if got := internal.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind; got != duplicateIndexString {
 		t.Fatalf("NaN duplicate index kind = %v, want %v", got, duplicateIndexString)
 	}
 

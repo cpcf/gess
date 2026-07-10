@@ -47,7 +47,7 @@ func (p *backchainQueryProofContext) reset(session *Session) {
 	}
 	p.id = p.nextID
 	p.nextSequence = 0
-	p.nextRecency = session.nextRecency + 1
+	p.nextRecency = session.factStore.nextRecency + 1
 	p.demandBudget = newBackchainDemandCascadeBudget(session)
 }
 
@@ -184,7 +184,7 @@ func (p *backchainQueryProofContext) newDemandFact(plan *compiledGeneratedFactIn
 	recency := p.nextRecency
 	p.nextRecency++
 	fact := workingFact{
-		id:                   newFactID(p.session.generation, sequence),
+		id:                   newFactID(p.session.factStore.generation, sequence),
 		version:              1,
 		recency:              recency,
 		supportState:         factSupportCodeFromState(FactSupportLogical),

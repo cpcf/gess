@@ -1502,7 +1502,7 @@ func TestActionContextAssertTemplateValuesUsesEffectPathAndLazyDuplicateKey(t *t
 	if duplicate.DuplicateKey == "" {
 		t.Fatal("duplicate key was not materialized for public duplicate result")
 	}
-	if got := internal.publicDuplicateKey(session.revision, session.compactSlotStore); got != duplicate.DuplicateKey {
+	if got := internal.publicDuplicateKey(session.revision, session.factStore.compactSlotStore); got != duplicate.DuplicateKey {
 		t.Fatalf("public duplicate key = %q, want %q", got, duplicate.DuplicateKey)
 	}
 }
@@ -1915,10 +1915,10 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyWideSlotsWithoutFactE
 	if events[0].Type != EventFactAsserted || events[1].Type != EventRuleActivated || events[2].Type != EventRuleFired {
 		t.Fatalf("event types = %q, %q, %q; want assert, activate, fired", events[0].Type, events[1].Type, events[2].Type)
 	}
-	if got, want := session.nextFactSequence, uint64(1); got != want {
+	if got, want := session.factStore.nextFactSequence, uint64(1); got != want {
 		t.Fatalf("next fact sequence = %d, want %d", got, want)
 	}
-	if got, want := session.nextRecency, Recency(1); got != want {
+	if got, want := session.factStore.nextRecency, Recency(1); got != want {
 		t.Fatalf("next recency = %d, want %d", got, want)
 	}
 }
@@ -2024,14 +2024,14 @@ func TestNativeAssertTemplateValuesActionDiscardsOutputOnlyDuplicatePreparedSlot
 	}
 
 	session.ensureFactTargetIndexes()
-	generatedIDs := session.factsByTemplate[generated.Key()]
+	generatedIDs := session.factStore.factsByTemplate[generated.Key()]
 	if got := len(generatedIDs); got != 0 {
 		t.Fatalf("generated fact count = %d, want 0", got)
 	}
-	if got, want := session.nextFactSequence, uint64(2); got != want {
+	if got, want := session.factStore.nextFactSequence, uint64(2); got != want {
 		t.Fatalf("next fact sequence = %d, want %d", got, want)
 	}
-	if got, want := session.nextRecency, Recency(2); got != want {
+	if got, want := session.factStore.nextRecency, Recency(2); got != want {
 		t.Fatalf("next recency = %d, want %d", got, want)
 	}
 }
@@ -2159,7 +2159,7 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	}
 
 	session.ensureFactTargetIndexes()
-	generatedIDs := session.factsByTemplate[generated.Key()]
+	generatedIDs := session.factStore.factsByTemplate[generated.Key()]
 	if got := len(generatedIDs); got != 1 {
 		t.Fatalf("generated fact count = %d, want 1", got)
 	}
@@ -2167,19 +2167,19 @@ func TestActionContextAssertTemplateValuesDuplicateRollsBackPreparedSlots(t *tes
 	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
-	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), len(generated.fields); got != want {
+	if got, want := len(generatedFact.compactFieldSlots(session.factStore.compactSlotStore)), len(generated.fields); got != want {
 		t.Fatalf("generated fact compact range slots = %d, want %d", got, want)
 	}
-	if got := len(session.slotStorage); got != 0 {
+	if got := len(session.factStore.slotStorage); got != 0 {
 		t.Fatalf("wide generated slot storage length = %d, want 0", got)
 	}
-	if got, want := session.compactSlotStore.len(), len(generated.fields); got != want {
+	if got, want := session.factStore.compactSlotStore.len(), len(generated.fields); got != want {
 		t.Fatalf("compact generated slot storage length = %d, want %d", got, want)
 	}
-	if got, want := session.nextFactSequence, uint64(3); got != want {
+	if got, want := session.factStore.nextFactSequence, uint64(3); got != want {
 		t.Fatalf("next fact sequence = %d, want %d", got, want)
 	}
-	if got, want := session.nextRecency, Recency(3); got != want {
+	if got, want := session.factStore.nextRecency, Recency(3); got != want {
 		t.Fatalf("next recency = %d, want %d", got, want)
 	}
 }

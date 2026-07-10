@@ -1,8 +1,10 @@
 package engine
 
 import (
+	"context"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -35,7 +37,8 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "forkCount", policy: forkReinitializedTransient, rationale: "the child starts its own descendant numbering"},
 	{name: "propagationCounters", policy: forkRebuiltDerived, rationale: "a child ledger is synchronized from the rebuilt runtime"},
 	{name: "rete", policy: forkRebuiltDerived, rationale: "the graph runtime is rebuilt against the cloned working memory"},
-	{name: "generation", policy: forkCopied, rationale: "fact identity generation continues from the snapshot"},
+	{name: "factStore", policy: forkCloned, rationale: "the child receives an independently owned fact-memory aggregate"},
+	{name: "factStore.generation", policy: forkCopied, rationale: "fact identity generation continues from the snapshot"},
 	{name: "initialFocusStack", policy: forkCloned, rationale: "module names are copied into child-owned slice storage"},
 	{name: "focusStack", policy: forkCloned, rationale: "the current focus stack is copied into child-owned slice storage"},
 	{name: "initials", policy: forkCloned, rationale: "initial facts are deep-cloned and may be replaced by an option"},
@@ -72,22 +75,22 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "mutationQueue", policy: forkReinitializedTransient, rationale: "queued external mutations do not cross the fork boundary"},
 	{name: "mu", policy: forkReinitializedTransient, rationale: "the child owns new mutation and lock semaphores"},
 
-	{name: "nextFactSequence", policy: forkRebuiltDerived, rationale: "the sequence is read from the cloned fact workspace"},
-	{name: "nextRecency", policy: forkRebuiltDerived, rationale: "recency is read from the cloned fact workspace"},
+	{name: "factStore.nextFactSequence", policy: forkRebuiltDerived, rationale: "the sequence is read from the cloned fact workspace"},
+	{name: "factStore.nextRecency", policy: forkRebuiltDerived, rationale: "recency is read from the cloned fact workspace"},
 	{name: "nextRunSequence", policy: forkCopied, rationale: "run sequence continuity is part of the snapshot"},
-	{name: "facts", policy: forkCloned, rationale: "working facts are deep-cloned"},
-	{name: "compactFacts", policy: forkCloned, rationale: "compact fact storage is cloned"},
-	{name: "factsByID", policy: forkCloned, rationale: "the fact identity index is cloned"},
-	{name: "factsBySequence", policy: forkCloned, rationale: "the sequence-to-row index is cloned"},
-	{name: "factsByDuplicate", policy: forkCloned, rationale: "duplicate indexes are cloned"},
-	{name: "factsByTemplate", policy: forkCloned, rationale: "template indexes are cloned"},
-	{name: "factsByName", policy: forkCloned, rationale: "dynamic-name indexes are cloned"},
-	{name: "factFieldEqualIndexes", policy: forkRebuiltDerived, rationale: "the optional equality cache is rebuilt lazily from child facts"},
-	{name: "factTargetIndexesDirty", policy: forkCloned, rationale: "the cloned workspace preserves its target-index state"},
-	{name: "insertionOrder", policy: forkCloned, rationale: "insertion order is copied into child-owned storage"},
-	{name: "slotStorage", policy: forkCloned, rationale: "fact slots are deep-cloned"},
-	{name: "compactSlotStore", policy: forkCloned, rationale: "compact slot storage is cloned"},
-	{name: "resetWorkspace", policy: forkReinitializedTransient, rationale: "the reusable reset buffer starts empty"},
+	{name: "factStore.facts", policy: forkCloned, rationale: "working facts are deep-cloned"},
+	{name: "factStore.compactFacts", policy: forkCloned, rationale: "compact fact storage is cloned"},
+	{name: "factStore.factsByID", policy: forkCloned, rationale: "the fact identity index is cloned"},
+	{name: "factStore.factsBySequence", policy: forkCloned, rationale: "the sequence-to-row index is cloned"},
+	{name: "factStore.factsByDuplicate", policy: forkCloned, rationale: "duplicate indexes are cloned"},
+	{name: "factStore.factsByTemplate", policy: forkCloned, rationale: "template indexes are cloned"},
+	{name: "factStore.factsByName", policy: forkCloned, rationale: "dynamic-name indexes are cloned"},
+	{name: "factStore.factFieldEqualIndexes", policy: forkRebuiltDerived, rationale: "the optional equality cache is rebuilt lazily from child facts"},
+	{name: "factStore.factTargetIndexesDirty", policy: forkCloned, rationale: "the cloned workspace preserves its target-index state"},
+	{name: "factStore.insertionOrder", policy: forkCloned, rationale: "insertion order is copied into child-owned storage"},
+	{name: "factStore.slotStorage", policy: forkCloned, rationale: "fact slots are deep-cloned"},
+	{name: "factStore.compactSlotStore", policy: forkCloned, rationale: "compact slot storage is cloned"},
+	{name: "factStore.resetWorkspace", policy: forkReinitializedTransient, rationale: "the reusable reset buffer starts empty"},
 	{name: "logicalSupportEdges", policy: forkCloned, rationale: "logical support records are deep-cloned"},
 	{name: "logicalSupportBySource", policy: forkCloned, rationale: "the source support index is deep-cloned"},
 	{name: "logicalSupportByFact", policy: forkCloned, rationale: "the fact support index is deep-cloned"},
@@ -138,11 +141,9 @@ func TestSessionForkFieldOwnershipComplete(t *testing.T) {
 		t.Errorf("duplicate Session fork policy entries: %v", duplicates)
 	}
 
-	sessionType := reflect.TypeFor[Session]()
-	fields := make(map[string]struct{}, sessionType.NumField())
+	fields := make(map[string]struct{}, len(decisions))
 	var missing []string
-	for field := range sessionType.Fields() {
-		name := field.Name
+	for _, name := range sessionOwnedFieldPaths(reflect.TypeFor[Session](), "") {
 		fields[name] = struct{}{}
 		if _, exists := decisions[name]; !exists {
 			missing = append(missing, name)
@@ -162,5 +163,45 @@ func TestSessionForkFieldOwnershipComplete(t *testing.T) {
 	slices.Sort(stale)
 	if len(stale) > 0 {
 		t.Errorf("fork policy entries for fields no longer on Session: %v", stale)
+	}
+}
+
+func sessionOwnedFieldPaths(owner reflect.Type, prefix string) []string {
+	var paths []string
+	for field := range owner.Fields() {
+		path := field.Name
+		if prefix != "" {
+			path = prefix + "." + path
+		}
+		paths = append(paths, path)
+		if field.Type.PkgPath() == owner.PkgPath() && strings.HasPrefix(field.Type.Name(), "session") {
+			paths = append(paths, sessionOwnedFieldPaths(field.Type, path)...)
+		}
+	}
+	return paths
+}
+
+func TestSessionForkStartsWithFreshFactStoreCachesAndScratch(t *testing.T) {
+	parent := mustSession(t, mustCompile(t), "fact-store-owner-parent")
+	parent.factStore.factFieldEqualIndexes = map[factFieldEqualKey][]FactSnapshot{
+		{}: nil,
+	}
+	parent.factStore.resetWorkspace.facts = make([]workingFact, 1)
+
+	child, err := parent.Fork(context.Background())
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.factStore.factFieldEqualIndexes != nil {
+		t.Fatalf("child equality cache = %#v, want fresh nil cache", child.factStore.factFieldEqualIndexes)
+	}
+	if child.factStore.resetWorkspace.facts != nil {
+		t.Fatalf("child reset scratch facts = %#v, want fresh nil scratch", child.factStore.resetWorkspace.facts)
+	}
+	if parent.factStore.factFieldEqualIndexes == nil {
+		t.Fatal("Fork cleared the parent equality cache")
+	}
+	if len(parent.factStore.resetWorkspace.facts) != 1 {
+		t.Fatalf("parent reset scratch facts = %d, want 1", len(parent.factStore.resetWorkspace.facts))
 	}
 }

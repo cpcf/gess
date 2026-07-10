@@ -30,8 +30,8 @@ func TestSessionRetractExistingRemovesSnapshotAndIndexes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
-		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
+	if internal := mustWorkingFactByID(t, session, inserted.Fact.ID()); internal.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("retract setup duplicate index kind = %v, want %v", internal.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 	if got, want := len(mustSnapshot(t, context.Background(), session).Facts()), 1; got != want {
 		t.Fatalf("snapshot length = %d, want %d", got, want)
@@ -495,7 +495,7 @@ func TestSessionResetFailureAfterReuseLeavesStateIntact(t *testing.T) {
 	if got, want := session.factCount(), baseline.Len(); got != want {
 		t.Fatalf("working fact len after failed reused reset = %d, want %d", got, want)
 	}
-	if got, want := len(session.insertionOrder), baseline.Len(); got != want {
+	if got, want := len(session.factStore.insertionOrder), baseline.Len(); got != want {
 		t.Fatalf("insertion order len after failed reused reset = %d, want %d", got, want)
 	}
 	if got := len(session.factIDsByTemplate(template.Key())); got != 2 {
@@ -581,7 +581,7 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 	if got, want := session.factCount(), 1; got != want {
 		t.Fatalf("working fact len after shrinking reset = %d, want %d", got, want)
 	}
-	if got, want := len(session.insertionOrder), 1; got != want {
+	if got, want := len(session.factStore.insertionOrder), 1; got != want {
 		t.Fatalf("insertion order len after shrinking reset = %d, want %d", got, want)
 	}
 	if got, want := len(session.factIDsByTemplate(template.Key())), 1; got != want {
@@ -593,7 +593,7 @@ func TestSessionResetShrinkingInitialFactsClearsStaleIndexes(t *testing.T) {
 	if got := len(session.factIDsByName("note")); got != 0 {
 		t.Fatalf("stale dynamic name index len after shrinking reset = %d, want 0", got)
 	}
-	if got, want := session.factsByDuplicate.len(), 1; got != want {
+	if got, want := session.factStore.factsByDuplicate.len(), 1; got != want {
 		t.Fatalf("duplicate index len after shrinking reset = %d, want %d", got, want)
 	}
 	for _, fact := range firstReset.Facts() {
@@ -634,10 +634,10 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 		t.Fatalf("Reset: %v", err)
 	}
 	resetFact := mustOnlyFact(t, session)
-	if got := len(session.facts); got != 0 {
+	if got := len(session.factStore.facts); got != 0 {
 		t.Fatalf("broad fact storage after reset = %d, want zero", got)
 	}
-	if got := session.compactFacts.len(); got != 1 {
+	if got := session.factStore.compactFacts.len(); got != 1 {
 		t.Fatalf("compact fact storage after reset = %d, want 1", got)
 	}
 	resetFields := resetFact.fieldsMap()
@@ -663,7 +663,7 @@ func TestSessionResetContainerInitialFactsDoNotShareCompiledStorage(t *testing.T
 	if got, want := valueString(nextMeta["tier"]), "gold"; got != want {
 		t.Fatalf("compiled map initial aliased reset fact = %q, want %q", got, want)
 	}
-	if got := session.resetWorkspace.compactFacts.len(); got == 0 {
+	if got := session.factStore.resetWorkspace.compactFacts.len(); got == 0 {
 		t.Fatal("reset workspace did not retain previous compact fact storage")
 	}
 
@@ -804,12 +804,12 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 
 	resetFact := func(id string) *workingFact {
 		t.Helper()
-		for _, factID := range session.insertionOrder {
+		for _, factID := range session.factStore.insertionOrder {
 			fact, ok := session.workingFactByID(factID)
 			if !ok {
 				continue
 			}
-			if value, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("id"); ok && valueString(value) == id {
+			if value, ok := fact.snapshotForRevision(session.revision, session.factStore.compactSlotStore).Field("id"); ok && valueString(value) == id {
 				return fact
 			}
 		}
@@ -818,8 +818,8 @@ func TestSessionResetSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *te
 	}
 
 	firstFact := resetFact("settings-1")
-	if firstFact.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind != duplicateIndexSingleScalar {
-		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.duplicateIndexForRevision(session.revision, session.compactSlotStore).kind, duplicateIndexSingleScalar)
+	if firstFact.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind != duplicateIndexSingleScalar {
+		t.Fatalf("reset fact duplicate index kind = %v, want %v", firstFact.duplicateIndexForRevision(session.revision, session.factStore.compactSlotStore).kind, duplicateIndexSingleScalar)
 	}
 	labelsSlot := -1
 	metaSlot := -1
@@ -957,16 +957,16 @@ func TestSessionResetUntargetedDeclaredTemplateUsesCompactInitial(t *testing.T) 
 		t.Fatalf("Reset: %v", err)
 	}
 	fact := mustOnlyFact(t, session)
-	if got := len(session.facts); got != 0 {
+	if got := len(session.factStore.facts); got != 0 {
 		t.Fatalf("untargeted scalar initial retained broad fact rows = %d, want 0", got)
 	}
 	if len(fact.fieldSlotSlice()) != 0 {
 		t.Fatalf("untargeted scalar reset fact retained wide slots: %#v", fact.fieldSlotSlice())
 	}
-	if got, want := len(fact.compactFieldSlots(session.compactSlotStore)), len(template.fields); got != want {
+	if got, want := len(fact.compactFieldSlots(session.factStore.compactSlotStore)), len(template.fields); got != want {
 		t.Fatalf("untargeted scalar reset compact slots = %d, want %d", got, want)
 	}
-	if got, ok := fact.snapshotForRevision(session.revision, session.compactSlotStore).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
+	if got, ok := fact.snapshotForRevision(session.revision, session.factStore.compactSlotStore).Field("status"); !ok || !got.Equal(mustValue(t, "active")) {
 		t.Fatalf("default status = (%v, %v), want active", got, ok)
 	}
 }
@@ -1109,14 +1109,14 @@ func TestSessionResetWithoutInitialFactsDefersDuplicateIndexReserve(t *testing.T
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if got := session.factsByDuplicate.len(); got != 0 {
+	if got := session.factStore.factsByDuplicate.len(); got != 0 {
 		t.Fatalf("duplicate index length = %d, want 0 after empty reset", got)
 	}
 
 	if _, err := session.Assert(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
 		t.Fatalf("Assert first: %v", err)
 	}
-	if got := session.factsByDuplicate.len(); got != 1 {
+	if got := session.factStore.factsByDuplicate.len(); got != 1 {
 		t.Fatalf("duplicate index length = %d, want 1 after first assert", got)
 	}
 	if result, err := session.Assert(ctx, template.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
@@ -1134,7 +1134,7 @@ func mustOnlyFact(t testing.TB, session *Session) *workingFact {
 	if got, want := session.factCount(), 1; got != want {
 		t.Fatalf("working facts = %d, want %d", got, want)
 	}
-	for _, id := range session.insertionOrder {
+	for _, id := range session.factStore.insertionOrder {
 		fact, ok := session.workingFactByID(id)
 		if ok {
 			return fact

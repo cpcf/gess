@@ -569,7 +569,7 @@ func (s *Session) currentSupportGraph() SupportGraph {
 	sort.Slice(edges, func(i, j int) bool { return edges[i].SupportID < edges[j].SupportID })
 	counters := s.logicalSupportCounters
 	counters.CurrentSupportEdges = len(edges)
-	for _, id := range s.insertionOrder {
+	for _, id := range s.factStore.insertionOrder {
 		fact, ok := s.workingFactByID(id)
 		if !ok {
 			continue
@@ -582,7 +582,7 @@ func (s *Session) currentSupportGraph() SupportGraph {
 		}
 	}
 	return SupportGraph{
-		Generation: s.generation,
+		Generation: s.factStore.generation,
 		Edges:      edges,
 		Counters:   counters,
 	}

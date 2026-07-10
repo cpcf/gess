@@ -71,10 +71,10 @@ func assertTemplateValueBatchUsedCompactSlots(t testing.TB, session *Session, te
 	if got := len(generatedFact.fieldSlotSlice()); got != 0 {
 		t.Fatalf("generated fact retained wide slots = %d, want 0", got)
 	}
-	if got := len(session.slotStorage); got != 0 {
+	if got := len(session.factStore.slotStorage); got != 0 {
 		t.Fatalf("generated wide slot storage = %d, want 0", got)
 	}
-	if got, want := len(generatedFact.compactFieldSlots(session.compactSlotStore)), wantSlots; got != want {
+	if got, want := len(generatedFact.compactFieldSlots(session.factStore.compactSlotStore)), wantSlots; got != want {
 		t.Fatalf("generated compact slots = %d, want %d", got, want)
 	}
 }

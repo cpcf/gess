@@ -155,7 +155,7 @@ type Session struct {
 	forkCount            uint64
 	propagationCounters  *propagationCounterLedger
 	rete                 *reteRuntime
-	generation           Generation
+	factStore            sessionFactStore
 	initialFocusStack    []ModuleName
 	focusStack           []ModuleName
 	initials             []SessionInitialFact
@@ -195,22 +195,7 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextFactSequence              uint64
-	nextRecency                   Recency
 	nextRunSequence               uint64
-	facts                         []workingFact
-	compactFacts                  compactFactStore
-	factsByID                     map[FactID]int
-	factsBySequence               []int32
-	factsByDuplicate              duplicateIndexes
-	factsByTemplate               map[TemplateKey][]FactID
-	factsByName                   map[string][]FactID
-	factFieldEqualIndexes         map[factFieldEqualKey][]FactSnapshot
-	factTargetIndexesDirty        bool
-	insertionOrder                []FactID
-	slotStorage                   []factSlot
-	compactSlotStore              *factCompactSlotStore
-	resetWorkspace                factWorkspace
 	logicalSupportEdges           map[SupportID]logicalSupportEdgeRecord
 	logicalSupportBySource        map[logicalSupportSourceKey]map[SupportID]struct{}
 	logicalSupportByFact          map[FactID]map[SupportID]struct{}
@@ -321,7 +306,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		agenda:              agenda,
 		strategy:            cfg.strategy,
 		rete:                rete,
-		generation:          1,
+		factStore:           newSessionFactStore(state),
 		initialFocusStack:   []ModuleName{MainModule},
 		focusStack:          []ModuleName{MainModule},
 		initials:            initials,
@@ -341,20 +326,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		factsByID:              state.factsByID,
-		factsBySequence:        state.factsBySequence,
-		factsByDuplicate:       state.factsByDuplicate,
-		factsByTemplate:        state.factsByTemplate,
-		factsByName:            state.factsByName,
-		factTargetIndexesDirty: state.factTargetIndexesDirty,
-		nextFactSequence:       state.nextFactSequence(),
-		nextRecency:            state.nextRecency(),
-		nextRunSequence:        0,
-		facts:                  state.facts,
-		compactFacts:           state.compactFacts,
-		insertionOrder:         state.factsByInsertionOrder(),
-		slotStorage:            state.slotStorage,
-		compactSlotStore:       state.compactSlotStore,
+		nextRunSequence: 0,
 	}
 	// Removed terminal deltas are already applied to the attached initial
 	// agenda during propagation, so only unsupported deltas, terminal
@@ -402,14 +374,14 @@ func (s *Session) Generation() Generation {
 	if s == nil {
 		return 0
 	}
-	return s.generation
+	return s.factStore.generation
 }
 
 func (s *Session) sourceGeneration() Generation {
 	if s == nil {
 		return 0
 	}
-	return s.generation
+	return s.factStore.generation
 }
 
 func (s *Session) attachPropagationCounters() *propagationCounterLedger {
@@ -472,37 +444,37 @@ func (s *Session) removeStoredFact(id FactID) {
 		return
 	}
 	if row, generated := decodeCompactFactRow(handle); generated {
-		fact, ok := s.compactFacts.fact(row)
+		fact, ok := s.factStore.compactFacts.fact(row)
 		if !ok || fact.id != id {
 			return
 		}
-		moved, ok := s.compactFacts.remove(row)
+		moved, ok := s.factStore.compactFacts.remove(row)
 		s.deleteFactRowIndex(id)
 		if ok {
 			s.setFactRowIndex(moved, encodeCompactFactRow(row))
 		}
 		return
 	}
-	if handle < 0 || handle >= len(s.facts) || s.facts[handle].id != id {
+	if handle < 0 || handle >= len(s.factStore.facts) || s.factStore.facts[handle].id != id {
 		return
 	}
-	last := len(s.facts) - 1
+	last := len(s.factStore.facts) - 1
 	if handle != last {
-		moved := s.facts[last]
-		s.facts[handle] = moved
+		moved := s.factStore.facts[last]
+		s.factStore.facts[handle] = moved
 		s.setFactRowIndex(moved.id, handle)
 	}
 	s.deleteFactRowIndex(id)
-	s.facts[last] = workingFact{}
-	s.facts = s.facts[:last]
+	s.factStore.facts[last] = workingFact{}
+	s.factStore.facts = s.factStore.facts[:last]
 }
 
 func (s *Session) reindexStoredFactRowsFrom(start int) {
 	if s == nil || start < 0 {
 		return
 	}
-	for i := start; i < len(s.facts); i++ {
-		s.setFactRowIndex(s.facts[i].id, i)
+	for i := start; i < len(s.factStore.facts); i++ {
+		s.setFactRowIndex(s.factStore.facts[i].id, i)
 	}
 }
 
@@ -520,16 +492,16 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 		return nil, false
 	}
 	if row, generated := decodeCompactFactRow(index); generated {
-		fact, ok := s.compactFacts.fact(row)
+		fact, ok := s.factStore.compactFacts.fact(row)
 		if !ok || fact.id != id {
 			return nil, false
 		}
 		return fact, true
 	}
-	if index < 0 || index >= len(s.facts) {
+	if index < 0 || index >= len(s.factStore.facts) {
 		return nil, false
 	}
-	fact := &s.facts[index]
+	fact := &s.factStore.facts[index]
 	if fact.id != id {
 		return nil, false
 	}
@@ -545,7 +517,7 @@ func (s *Session) factScalarValueAtSlot(id FactID, version FactVersion, slot int
 			if fact == nil || fact.version != version {
 				return Value{}, false
 			}
-			return fact.compiledFieldValue("", slot, s.compactSlotStore)
+			return fact.compiledFieldValue("", slot, s.factStore.compactSlotStore)
 		}
 	}
 	index, ok := s.factRowIndex(id)
@@ -553,38 +525,38 @@ func (s *Session) factScalarValueAtSlot(id FactID, version FactVersion, slot int
 		return Value{}, false
 	}
 	if row, generated := decodeCompactFactRow(index); generated {
-		return s.compactFacts.scalarValueAtSlot(row, id, version, slot, s.compactSlotStore)
+		return s.factStore.compactFacts.scalarValueAtSlot(row, id, version, slot, s.factStore.compactSlotStore)
 	}
-	if index < 0 || index >= len(s.facts) {
+	if index < 0 || index >= len(s.factStore.facts) {
 		return Value{}, false
 	}
-	fact := &s.facts[index]
+	fact := &s.factStore.facts[index]
 	if fact.id != id || fact.version != version {
 		return Value{}, false
 	}
-	return fact.compiledFieldValue("", slot, s.compactSlotStore)
+	return fact.compiledFieldValue("", slot, s.factStore.compactSlotStore)
 }
 
 func (s *Session) factRowIndex(id FactID) (int, bool) {
 	if s == nil || id.IsZero() {
 		return 0, false
 	}
-	if id.Generation() == s.generation && id.Sequence() > 0 {
+	if id.Generation() == s.factStore.generation && id.Sequence() > 0 {
 		if id.Sequence()-1 > uint64(int(^uint(0)>>1)) {
 			return 0, false
 		}
 		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(s.factsBySequence) {
-			row := s.factsBySequence[index]
+		if uint64(index) == id.Sequence()-1 && index < len(s.factStore.factsBySequence) {
+			row := s.factStore.factsBySequence[index]
 			if row != missingFactRowIndex {
 				return int(row), true
 			}
 		}
 	}
-	if s.factsByID == nil {
+	if s.factStore.factsByID == nil {
 		return 0, false
 	}
-	index, ok := s.factsByID[id]
+	index, ok := s.factStore.factsByID[id]
 	return index, ok
 }
 
@@ -592,18 +564,18 @@ func (s *Session) setFactRowIndex(id FactID, row int) {
 	if s == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
-	if id.Generation() == s.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
+	if id.Generation() == s.factStore.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
 		index := int(id.Sequence() - 1)
 		if uint64(index) == id.Sequence()-1 {
-			for len(s.factsBySequence) <= index {
-				s.factsBySequence = append(s.factsBySequence, missingFactRowIndex)
+			for len(s.factStore.factsBySequence) <= index {
+				s.factStore.factsBySequence = append(s.factStore.factsBySequence, missingFactRowIndex)
 			}
-			s.factsBySequence[index] = int32(row)
+			s.factStore.factsBySequence[index] = int32(row)
 			return
 		}
 	}
-	if s.factsByID != nil {
-		s.factsByID[id] = row
+	if s.factStore.factsByID != nil {
+		s.factStore.factsByID[id] = row
 	}
 }
 
@@ -611,15 +583,15 @@ func (s *Session) deleteFactRowIndex(id FactID) {
 	if s == nil || id.IsZero() {
 		return
 	}
-	if id.Generation() == s.generation && id.Sequence() > 0 {
+	if id.Generation() == s.factStore.generation && id.Sequence() > 0 {
 		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(s.factsBySequence) {
-			s.factsBySequence[index] = missingFactRowIndex
+		if uint64(index) == id.Sequence()-1 && index < len(s.factStore.factsBySequence) {
+			s.factStore.factsBySequence[index] = missingFactRowIndex
 			return
 		}
 	}
-	if s.factsByID != nil {
-		delete(s.factsByID, id)
+	if s.factStore.factsByID != nil {
+		delete(s.factStore.factsByID, id)
 	}
 }
 
@@ -632,7 +604,7 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 	s.ensureFactTargetIndexes()
 	switch target.kind {
 	case conditionTargetName:
-		ids := s.factsByName[target.name]
+		ids := s.factStore.factsByName[target.name]
 		if len(ids) == 0 {
 			return nil, true
 		}
@@ -642,11 +614,11 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 			if !ok {
 				continue
 			}
-			out = append(out, fact.detachedSnapshotForRevision(s.revision, s.compactSlotStore))
+			out = append(out, fact.detachedSnapshotForRevision(s.revision, s.factStore.compactSlotStore))
 		}
 		return out, true
 	case conditionTargetTemplateKey:
-		ids := s.factsByTemplate[target.templateKey]
+		ids := s.factStore.factsByTemplate[target.templateKey]
 		if len(ids) == 0 {
 			return nil, true
 		}
@@ -656,7 +628,7 @@ func (s *Session) factsForTarget(target conditionTarget) ([]FactSnapshot, bool) 
 			if !ok {
 				continue
 			}
-			out = append(out, fact.detachedSnapshotForRevision(s.revision, s.compactSlotStore))
+			out = append(out, fact.detachedSnapshotForRevision(s.revision, s.factStore.compactSlotStore))
 		}
 		return out, true
 	default:
@@ -670,7 +642,7 @@ func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int
 	}
 	s.ensureFactTargetIndexes()
 	key := newFactFieldEqualKey(target, fieldSlot, value)
-	facts, cached := s.factFieldEqualIndexes[key]
+	facts, cached := s.factStore.factFieldEqualIndexes[key]
 	if cached {
 		return facts, true
 	}
@@ -681,15 +653,15 @@ func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int
 	facts = make([]FactSnapshot, 0)
 	for _, id := range targetIDs {
 		fact, ok := s.workingFactByID(id)
-		if !ok || !workingFactMatchesFieldEqualIndex(fact, fieldSlot, value, s.compactSlotStore) {
+		if !ok || !workingFactMatchesFieldEqualIndex(fact, fieldSlot, value, s.factStore.compactSlotStore) {
 			continue
 		}
-		facts = append(facts, fact.detachedSnapshotForRevision(s.revision, s.compactSlotStore))
+		facts = append(facts, fact.detachedSnapshotForRevision(s.revision, s.factStore.compactSlotStore))
 	}
-	if s.factFieldEqualIndexes == nil {
-		s.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
+	if s.factStore.factFieldEqualIndexes == nil {
+		s.factStore.factFieldEqualIndexes = make(map[factFieldEqualKey][]FactSnapshot)
 	}
-	s.factFieldEqualIndexes[key] = facts
+	s.factStore.factFieldEqualIndexes[key] = facts
 	return facts, true
 }
 
@@ -710,16 +682,16 @@ func (s *Session) recordAlphaIndexFallbackScan() {
 func (s *Session) factIDsForTarget(target conditionTarget) ([]FactID, bool) {
 	switch target.kind {
 	case conditionTargetName:
-		return s.factsByName[target.name], true
+		return s.factStore.factsByName[target.name], true
 	case conditionTargetTemplateKey:
-		return s.factsByTemplate[target.templateKey], true
+		return s.factStore.factsByTemplate[target.templateKey], true
 	default:
 		return nil, false
 	}
 }
 
 func (s *Session) ensureFactTargetIndexes() {
-	if s == nil || !s.factTargetIndexesDirty {
+	if s == nil || !s.factStore.factTargetIndexesDirty {
 		return
 	}
 	s.rebuildFactTargetIndexes()
@@ -729,50 +701,50 @@ func (s *Session) rebuildFactTargetIndexes() {
 	if s == nil {
 		return
 	}
-	if s.factsByTemplate == nil {
-		s.factsByTemplate = make(map[TemplateKey][]FactID)
+	if s.factStore.factsByTemplate == nil {
+		s.factStore.factsByTemplate = make(map[TemplateKey][]FactID)
 	} else {
-		clear(s.factsByTemplate)
+		clear(s.factStore.factsByTemplate)
 	}
-	if s.factsByName == nil {
-		s.factsByName = make(map[string][]FactID)
+	if s.factStore.factsByName == nil {
+		s.factStore.factsByName = make(map[string][]FactID)
 	} else {
-		clear(s.factsByName)
+		clear(s.factStore.factsByName)
 	}
-	for _, id := range s.insertionOrder {
+	for _, id := range s.factStore.insertionOrder {
 		fact, ok := s.workingFactByID(id)
 		if !ok || fact.id.IsZero() {
 			continue
 		}
 		if templateKey := fact.templateKeyForRevision(s.revision); templateKey != "" {
-			s.factsByTemplate[templateKey] = append(s.factsByTemplate[templateKey], fact.id)
+			s.factStore.factsByTemplate[templateKey] = append(s.factStore.factsByTemplate[templateKey], fact.id)
 		}
 		if name := fact.nameForRevision(s.revision); name != "" {
-			s.factsByName[name] = append(s.factsByName[name], fact.id)
+			s.factStore.factsByName[name] = append(s.factStore.factsByName[name], fact.id)
 		}
 	}
 	s.clearFactFieldEqualIndexes()
-	s.factTargetIndexesDirty = false
+	s.factStore.factTargetIndexesDirty = false
 }
 
 func (s *Session) clearFactFieldEqualIndexes() {
-	if s == nil || len(s.factFieldEqualIndexes) == 0 {
+	if s == nil || len(s.factStore.factFieldEqualIndexes) == 0 {
 		return
 	}
-	clear(s.factFieldEqualIndexes)
+	clear(s.factStore.factFieldEqualIndexes)
 }
 
 func (s *Session) removeFactTargetIndexes(templateKey TemplateKey, name string, id FactID) {
-	if s == nil || id.IsZero() || s.factTargetIndexesDirty {
+	if s == nil || id.IsZero() || s.factStore.factTargetIndexesDirty {
 		return
 	}
-	s.factsByTemplate[templateKey] = removeFactIDFromSlice(s.factsByTemplate[templateKey], id)
-	if len(s.factsByTemplate[templateKey]) == 0 {
-		delete(s.factsByTemplate, templateKey)
+	s.factStore.factsByTemplate[templateKey] = removeFactIDFromSlice(s.factStore.factsByTemplate[templateKey], id)
+	if len(s.factStore.factsByTemplate[templateKey]) == 0 {
+		delete(s.factStore.factsByTemplate, templateKey)
 	}
-	s.factsByName[name] = removeFactIDFromSlice(s.factsByName[name], id)
-	if len(s.factsByName[name]) == 0 {
-		delete(s.factsByName, name)
+	s.factStore.factsByName[name] = removeFactIDFromSlice(s.factStore.factsByName[name], id)
+	if len(s.factStore.factsByName[name]) == 0 {
+		delete(s.factStore.factsByName, name)
 	}
 }
 
@@ -874,7 +846,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		agenda:              s.agenda.cloneForFork(cfg.strategy),
 		strategy:            cfg.strategy,
 		rete:                rete,
-		generation:          s.generation,
+		factStore:           newSessionFactStore(&state),
 		initialFocusStack:   cloneModuleNames(s.initialFocusStack),
 		focusStack:          cloneModuleNames(s.focusStack),
 		initials:            initials,
@@ -894,20 +866,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		nextFactSequence:       state.nextFactSequence(),
-		nextRecency:            state.nextRecency(),
 		nextRunSequence:        s.nextRunSequence,
-		facts:                  state.facts,
-		compactFacts:           state.compactFacts,
-		factsByID:              state.factsByID,
-		factsBySequence:        state.factsBySequence,
-		factsByDuplicate:       state.factsByDuplicate,
-		factsByTemplate:        state.factsByTemplate,
-		factsByName:            state.factsByName,
-		factTargetIndexesDirty: state.factTargetIndexesDirty,
-		insertionOrder:         state.insertionOrder,
-		slotStorage:            state.slotStorage,
-		compactSlotStore:       state.compactSlotStore,
 		logicalSupportEdges:    cloneLogicalSupportEdges(s.logicalSupportEdges),
 		logicalSupportBySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
 		logicalSupportByFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
@@ -1079,7 +1038,7 @@ func (s *Session) insertLogicalFactWithContextAndOrigin(ctx context.Context, nam
 	if err := ctx.Err(); err != nil {
 		return AssertResult{Status: AssertValidationFailure}, err
 	}
-	if _, ok := logicalSupportSourceFromOrigin(origin, s.generation); !ok {
+	if _, ok := logicalSupportSourceFromOrigin(origin, s.factStore.generation); !ok {
 		return AssertResult{Status: AssertValidationFailure}, ErrLogicalSupportUnavailable
 	}
 	if s.shouldQueueMutationDuringRun(origin) {
@@ -1427,7 +1386,7 @@ func (p preparedTemplateValueInserter) insertPreparedCompactSlots(b *preparedTem
 		compiled := newCompiledGeneratedFactInsertPlan(p.template)
 		plan = &compiled
 	}
-	fact, _, inserted, err := b.state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(session.revision, session.generation, plan, slots, slotMark, factTargetIndexDirty)
+	fact, _, inserted, err := b.state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(session.revision, session.factStore.generation, plan, slots, slotMark, factTargetIndexDirty)
 	if err != nil {
 		b.state.rollbackGeneratedCompactFactSlots(slotMark)
 		return err
@@ -1468,7 +1427,7 @@ func (p preparedTemplateValueInserter) supportsCompactSlots() bool {
 
 func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateValueBatch, slots []factSlot, slotMark int) error {
 	session := b.session
-	fact, _, inserted, err := b.state.insertPreparedGeneratedFactSlots(session.revision, session.generation, p.template, slots, slotMark)
+	fact, _, inserted, err := b.state.insertPreparedGeneratedFactSlots(session.revision, session.factStore.generation, p.template, slots, slotMark)
 	if err != nil {
 		b.state.rollbackGeneratedFactSlots(slotMark)
 		return err
@@ -1583,14 +1542,14 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 	defer s.rollbackUniqueKeyReplace(&replaceUndo)
 
 	state := s.clonedFactWorkspace()
-	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
+	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.factStore.generation, name, templateKey, fields)
 	if err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
 	supportState := s.captureLogicalSupportState()
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
-		sourceGeneration: s.generation,
+		sourceGeneration: s.factStore.generation,
 	}
 	replaced := false
 	var retractDelta reteAgendaDelta
@@ -1616,7 +1575,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 			if before.Support().State != after.Support().State {
 				metadataDelta := MutationDelta{
 					Kind:           MutationAssert,
-					Generation:     s.generation,
+					Generation:     s.factStore.generation,
 					ActivationID:   origin.activationID(),
 					RuleID:         origin.RuleID,
 					RuleRevisionID: origin.RuleRevisionID,
@@ -1654,7 +1613,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		retractDelta = rd
 		replaced = true
 		state = s.clonedFactWorkspace()
-		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.generation, name, templateKey, fields)
+		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.factStore.generation, name, templateKey, fields)
 		if err != nil {
 			return AssertResult{Status: AssertValidationFailure}, retractDelta, err
 		}
@@ -1696,7 +1655,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 	}
 	delta := MutationDelta{
 		Kind:           MutationAssert,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -1722,7 +1681,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactAsserted,
-			Generation:     s.generation,
+			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
@@ -1747,7 +1706,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 
 	state := s.activeFactWorkspace()
 	mark := state.markGeneratedFactInsert()
-	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.generation, name, templateKey, fields)
+	fact, duplicateKey, inserted, err := state.insertFact(s.revision, s.factStore.generation, name, templateKey, fields)
 	if err != nil {
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
@@ -1766,7 +1725,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 				s.commitFactWorkspace(state)
 				delta := MutationDelta{
 					Kind:           MutationAssert,
-					Generation:     s.generation,
+					Generation:     s.factStore.generation,
 					ActivationID:   origin.activationID(),
 					RuleID:         origin.RuleID,
 					RuleRevisionID: origin.RuleRevisionID,
@@ -1808,7 +1767,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		replaced = true
 		state = s.activeFactWorkspace()
 		mark = state.markGeneratedFactInsert()
-		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.generation, name, templateKey, fields)
+		fact, duplicateKey, inserted, err = state.insertFact(s.revision, s.factStore.generation, name, templateKey, fields)
 		if err != nil {
 			return AssertResult{Status: AssertValidationFailure}, retractDelta, err
 		}
@@ -1862,7 +1821,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 	}
 	delta := MutationDelta{
 		Kind:           MutationAssert,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -1888,7 +1847,7 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactAsserted,
-			Generation:     s.generation,
+			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
@@ -1977,7 +1936,7 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 	if plan.duplicatePolicy == DuplicateUniqueKey {
 		proposed = cloneCompactFactSlots(compactSlots)
 	}
-	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
+	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.factStore.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, false, reteAgendaDelta{}, err
@@ -2063,7 +2022,7 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 	if plan.duplicatePolicy == DuplicateUniqueKey {
 		proposed = cloneFactSlots(fieldSlots)
 	}
-	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlan(s.revision, s.generation, plan, fieldSlots, slotMark)
+	fact, duplicateKey, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlan(s.revision, s.factStore.generation, plan, fieldSlots, slotMark)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, "", false, reteAgendaDelta{}, err
@@ -2159,7 +2118,7 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 	if plan.duplicatePolicy == DuplicateUniqueKey {
 		proposed = cloneFactSlots(fieldSlots)
 	}
-	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
+	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.factStore.generation, plan, fieldSlots, slotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
@@ -2252,7 +2211,7 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 	if plan.duplicatePolicy == DuplicateUniqueKey {
 		proposed = cloneCompactFactSlots(compactSlots)
 	}
-	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
+	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.factStore.generation, plan, compactSlots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return false, reteAgendaDelta{}, err
@@ -2384,7 +2343,7 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 		}
 		slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(demand.slots))
 		copy(slots, demand.slots)
-		fact, _, inserted, err := state.insertPreparedEngineGeneratedFactSlots(s.revision, s.generation, template, slots, slotMark)
+		fact, _, inserted, err := state.insertPreparedEngineGeneratedFactSlots(s.revision, s.factStore.generation, template, slots, slotMark)
 		if err != nil {
 			return combined, err
 		}
@@ -2494,11 +2453,11 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 	if !s.hasEventListenersFor(EventFactAsserted) {
 		return
 	}
-	publicSnapshot := fact.snapshotForRevision(s.revision, s.compactSlotStore)
-	duplicateKey := fact.publicDuplicateKey(s.revision, s.compactSlotStore)
+	publicSnapshot := fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
+	duplicateKey := fact.publicDuplicateKey(s.revision, s.factStore.compactSlotStore)
 	delta := MutationDelta{
 		Kind:           MutationAssert,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -2515,7 +2474,7 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 		Sequence:       s.nextEventSequence,
 		Timestamp:      s.eventClock(),
 		Type:           EventFactAsserted,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		Recency:        fact.recency,
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -2599,8 +2558,8 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		return RetractResult{Status: RetractClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
-	if id.Generation() != s.generation {
-		if id.Generation() != 0 && id.Generation() < s.generation {
+	if id.Generation() != s.factStore.generation {
+		if id.Generation() != 0 && id.Generation() < s.factStore.generation {
 			return RetractResult{Status: RetractStale}, reteAgendaDelta{}, ErrStaleFactID
 		}
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
@@ -2611,7 +2570,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	before := fact.snapshotForRevision(s.revision, s.compactSlotStore)
+	before := fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
 	switch fact.resolvedSupportState() {
 	case FactSupportLogical:
 		return RetractResult{Status: RetractLogicalOnly, Fact: before}, reteAgendaDelta{}, ErrLogicalOnlyRetract
@@ -2620,10 +2579,10 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 		state := s.activeFactWorkspace()
 		state.replaceWorkingFact(fact)
 		s.commitFactWorkspace(state)
-		after := fact.snapshotForRevision(s.revision, s.compactSlotStore)
+		after := fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
 		delta := MutationDelta{
 			Kind:           MutationRetract,
-			Generation:     s.generation,
+			Generation:     s.factStore.generation,
 			ActivationID:   origin.activationID(),
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
@@ -2635,8 +2594,8 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 			NewVersion:     fact.version,
 			Before:         &before,
 			After:          &after,
-			OldDuplicate:   fact.publicDuplicateKey(s.revision, s.compactSlotStore),
-			NewDuplicate:   fact.publicDuplicateKey(s.revision, s.compactSlotStore),
+			OldDuplicate:   fact.publicDuplicateKey(s.revision, s.factStore.compactSlotStore),
+			NewDuplicate:   fact.publicDuplicateKey(s.revision, s.factStore.compactSlotStore),
 		}
 		return RetractResult{Status: RetractStatedSupportRemoved, Fact: after, Delta: &delta}, reteAgendaDelta{}, nil
 	}
@@ -2664,7 +2623,7 @@ func (s *Session) retractImmediate(ctx context.Context, id FactID, origin mutati
 	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
-		sourceGeneration: s.generation,
+		sourceGeneration: s.factStore.generation,
 	}
 	cascadeDelta, err := s.removeLogicalSupportsForPropagationEventDelta(ctx, supportEvent, agendaDelta)
 	if err != nil {
@@ -2679,9 +2638,9 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 		return RetractResult{Status: RetractMissing}, reteAgendaDelta{}, ErrFactNotFound
 	}
 
-	before := fact.snapshotForRevision(s.revision, s.compactSlotStore)
+	before := fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
 	oldVersion := fact.version
-	oldDuplicate := fact.publicDuplicateKey(s.revision, s.compactSlotStore)
+	oldDuplicate := fact.publicDuplicateKey(s.revision, s.factStore.compactSlotStore)
 	factID := fact.id
 	factRecency := fact.recency
 	factTemplateKey := fact.templateKeyForRevision(s.revision)
@@ -2694,7 +2653,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	}
 
 	state := s.activeFactWorkspace()
-	if duplicateIndex := fact.duplicateIndexForRevision(s.revision, s.compactSlotStore); !duplicateIndex.isZero() {
+	if duplicateIndex := fact.duplicateIndexForRevision(s.revision, s.factStore.compactSlotStore); !duplicateIndex.isZero() {
 		state.factsByDuplicate.deleteFact(duplicateIndex, id)
 	}
 	if !fact.targetIndexesSkipped {
@@ -2710,7 +2669,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 
 	delta := MutationDelta{
 		Kind:           MutationRetract,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -2735,7 +2694,7 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactRetracted,
-			Generation:     s.generation,
+			Generation:     s.factStore.generation,
 			Recency:        factRecency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
@@ -2791,7 +2750,7 @@ func (s *Session) fullyRetractFactForReplace(ctx context.Context, id FactID, ori
 	}
 	supportEvent := reteGraphPropagationEvent{
 		origin:           origin,
-		sourceGeneration: s.generation,
+		sourceGeneration: s.factStore.generation,
 	}
 	cascadeDelta, err := s.removeLogicalSupportsForPropagationEventDelta(ctx, supportEvent, agendaDelta)
 	if err != nil {
@@ -2869,7 +2828,7 @@ func (s *Session) uniqueKeyReplaceTargetFields(templateKey TemplateKey, existing
 	if err != nil {
 		return false, err
 	}
-	current := existing.snapshotForRevision(s.revision, s.compactSlotStore)
+	current := existing.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
 	keyed := make(map[string]struct{}, len(template.duplicateKeyNames))
 	for _, name := range template.duplicateKeyNames {
 		keyed[name] = struct{}{}
@@ -2905,7 +2864,7 @@ func (s *Session) uniqueKeyReplaceTargetSlots(plan *compiledGeneratedFactInsertP
 	// and compact-stored facts all compare correctly; comparing only the
 	// existing fact's slot slice would treat a map-stored fact as empty and
 	// spuriously report a difference.
-	current := existing.snapshotForRevision(s.revision, s.compactSlotStore)
+	current := existing.snapshotForRevision(s.revision, s.factStore.compactSlotStore)
 	for i, spec := range plan.template.fields {
 		// Key fields are equal by construction of the collision; only the
 		// non-key fields decide whether this is a replacement.
@@ -2948,7 +2907,7 @@ func (s *Session) replaceUniqueKeyGeneratedFactSlots(ctx context.Context, state 
 	mark := state.markGeneratedFactInsert()
 	slots, slotMark := state.reserveGeneratedFactSlots(s.revision, len(snapshot))
 	copy(slots, snapshot)
-	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, slots, slotMark, factTargetIndexDirty)
+	fact, _, inserted, err := state.insertPreparedGeneratedFactSlotsWithPlanUnchecked(s.revision, s.factStore.generation, plan, slots, slotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, mark, retractDelta, err
@@ -2971,7 +2930,7 @@ func (s *Session) replaceUniqueKeyGeneratedCompactFactSlots(ctx context.Context,
 	mark := state.markGeneratedFactInsert()
 	slots, compactSlotMark := state.reserveGeneratedCompactFactSlots(s.revision, len(snapshot))
 	copy(slots, snapshot)
-	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.generation, plan, slots, compactSlotMark, factTargetIndexDirty)
+	fact, _, inserted, err := state.insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked(s.revision, s.factStore.generation, plan, slots, compactSlotMark, factTargetIndexDirty)
 	if err != nil {
 		state.rollbackGeneratedFactInsert(mark, nil, s.revision)
 		return nil, mark, retractDelta, err
@@ -2998,7 +2957,7 @@ func (s *Session) removeBackchainDemandFactImmediate(ctx context.Context, id Fac
 	}
 
 	state := s.activeFactWorkspace()
-	if duplicateIndex := fact.duplicateIndexForRevision(s.revision, s.compactSlotStore); !duplicateIndex.isZero() {
+	if duplicateIndex := fact.duplicateIndexForRevision(s.revision, s.factStore.compactSlotStore); !duplicateIndex.isZero() {
 		state.factsByDuplicate.deleteFact(duplicateIndex, id)
 	}
 	if !fact.targetIndexesSkipped {
@@ -3110,8 +3069,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		before = s.detachedSnapshotLocked()
 	}
 	initialStorage := compiledSessionInitialStorageCounts(compiledInitials)
-	next := &s.resetWorkspace
-	next.reset(s.generation+1, initialStorage.broadFacts)
+	next := &s.factStore.resetWorkspace
+	next.reset(s.factStore.generation+1, initialStorage.broadFacts)
 	next.skipFactTargetIndexes = true
 	next.reserveCompiledInitialFactStorage(initialStorage)
 	next.reserveTemplateIndexes(s.revision)
@@ -3144,7 +3103,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		if s.rete != nil {
 			rollbackState := s.activeFactWorkspace()
-			_, _ = s.rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.generation)
+			_, _ = s.rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.factStore.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
@@ -3155,14 +3114,14 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.propagationCounters.recordGraphRebuild(propagationCounterPhaseInitial)
 	}
 
-	oldGeneration := s.generation
+	oldGeneration := s.factStore.generation
 	s.agendaReady = false
 	s.agendaDirty = false
 	s.resetFocusStack()
 	s.clearLogicalSupports()
 	s.clearBackchainDemandSupports()
 	s.swapFactWorkspace(next)
-	s.generation = next.generation
+	s.factStore.generation = next.generation
 	s.rete = rete
 	s.syncPropagationCounters()
 	if len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
@@ -3208,11 +3167,11 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 
 	result := ResetResult{
 		Status:     ResetApplied,
-		Generation: s.generation,
+		Generation: s.factStore.generation,
 		Before:     before,
 		Delta: MutationDelta{
 			Kind:          MutationReset,
-			Generation:    s.generation,
+			Generation:    s.factStore.generation,
 			OldGeneration: oldGeneration,
 		},
 	}
@@ -3220,7 +3179,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if s.hasEventListenersFor(EventReset) {
 		delta := MutationDelta{
 			Kind:          MutationReset,
-			Generation:    s.generation,
+			Generation:    s.factStore.generation,
 			OldGeneration: oldGeneration,
 		}
 		s.emitEvent(ctx, Event{
@@ -3229,7 +3188,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			Sequence:   s.nextEventSequence,
 			Timestamp:  s.eventClock(),
 			Type:       EventReset,
-			Generation: s.generation,
+			Generation: s.factStore.generation,
 			FactIDs:    nil,
 			Delta:      &delta,
 		})
@@ -3318,7 +3277,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	}
 	phase := propagationCounterPhaseInitial
 	state := s.activeFactWorkspace()
-	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, s.generation); err != nil {
+	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, s.factStore.generation); err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
@@ -3555,7 +3514,7 @@ func (s *Session) restoreReteAfterPropagationFailure() {
 		return
 	}
 	state := s.activeFactWorkspace()
-	_ = s.rebuildReteRuntimeFromWorkspace(context.Background(), s.revision, &state, s.generation)
+	_ = s.rebuildReteRuntimeFromWorkspace(context.Background(), s.revision, &state, s.factStore.generation)
 }
 
 func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact *workingFact, snapshot FactSnapshot, compactSlotStore *factCompactSlotStore, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
@@ -3567,7 +3526,7 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact *workingF
 	}
 	if s.rete == nil {
 		state := s.activeFactWorkspace()
-		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.generation)
+		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.factStore.generation)
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
@@ -3587,7 +3546,7 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	}
 	if s.rete == nil {
 		state := s.activeFactWorkspace()
-		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.generation)
+		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.factStore.generation)
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
@@ -3614,7 +3573,7 @@ func (s *Session) updateReteAlphaAfterRetractWorkingFact(ctx context.Context, fa
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
+			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
 		return s.rete.removeBetaWorkingFact(ctx, fact, origin, s.propagationCounters)
 	}
@@ -3627,7 +3586,7 @@ func (s *Session) updateReteAlphaAfterRetractGeneratedWorkingFact(ctx context.Co
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
+			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
 		return s.rete.removeBetaGeneratedWorkingFact(ctx, fact, origin, s.propagationCounters)
 	}
@@ -3640,7 +3599,7 @@ func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before FactSna
 	}
 	if s.rete.usesGraphBeta() {
 		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.compactSlotStore
+			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
 		return s.rete.updateBetaFact(ctx, before, beforeFact, afterFact, after, changes, duplicateChanged, origin, s.propagationCounters)
 	}
@@ -3651,16 +3610,16 @@ func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
 	if s == nil {
 		return
 	}
-	for i := range s.facts {
-		fact := &s.facts[i]
+	for i := range s.factStore.facts {
+		fact := &s.factStore.facts[i]
 		templateKey := fact.templateKeyForRevision(previous)
 		template, ok := revision.templateByKey(templateKey)
 		if !ok {
 			if fact.fieldsMap() == nil {
-				fact.setFields(materializeFieldsFromSlots(fact.materializeFieldSlots(s.compactSlotStore), fact.fieldSpecsForRevision(previous, s.compactSlotStore)))
+				fact.setFields(materializeFieldsFromSlots(fact.materializeFieldSlots(s.factStore.compactSlotStore), fact.fieldSpecsForRevision(previous, s.factStore.compactSlotStore)))
 			}
 			if fact.fieldPresenceMap() == nil {
-				fact.setFieldPresence(materializePresenceFromSlots(fact.materializeFieldSlots(s.compactSlotStore), fact.fieldSpecsForRevision(previous, s.compactSlotStore)))
+				fact.setFieldPresence(materializePresenceFromSlots(fact.materializeFieldSlots(s.factStore.compactSlotStore), fact.fieldSpecsForRevision(previous, s.factStore.compactSlotStore)))
 			}
 			fact.clearFieldSlots()
 			fact.compactSlots = factCompactSlotRef{}
@@ -3668,11 +3627,11 @@ func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
 		}
 		fields := fact.fieldsMap()
 		if fields == nil {
-			fields = materializeFieldsFromSlots(fact.materializeFieldSlots(s.compactSlotStore), fact.fieldSpecsForRevision(previous, s.compactSlotStore))
+			fields = materializeFieldsFromSlots(fact.materializeFieldSlots(s.factStore.compactSlotStore), fact.fieldSpecsForRevision(previous, s.factStore.compactSlotStore))
 		}
 		presence := fact.fieldPresenceMap()
 		if presence == nil {
-			presence = materializePresenceFromSlots(fact.materializeFieldSlots(s.compactSlotStore), fact.fieldSpecsForRevision(previous, s.compactSlotStore))
+			presence = materializePresenceFromSlots(fact.materializeFieldSlots(s.factStore.compactSlotStore), fact.fieldSpecsForRevision(previous, s.factStore.compactSlotStore))
 		}
 		fieldSlots := revision.buildFieldSlots(template, fields, presence)
 		if len(fieldSlots) > 0 {
@@ -3970,8 +3929,8 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		return ModifyResult{Status: ModifyClosed}, reteAgendaDelta{}, ErrClosedSession
 	}
 
-	if id.Generation() != s.generation {
-		if id.Generation() != 0 && id.Generation() < s.generation {
+	if id.Generation() != s.factStore.generation {
+		if id.Generation() != 0 && id.Generation() < s.factStore.generation {
 			return ModifyResult{Status: ModifyStale}, reteAgendaDelta{}, ErrStaleFactID
 		}
 		return ModifyResult{Status: ModifyMissing}, reteAgendaDelta{}, ErrFactNotFound
@@ -4143,7 +4102,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 	agendaDelta = mergeReteAgendaDeltaIfNeeded(agendaDelta, cascadeDelta)
 	delta := MutationDelta{
 		Kind:           MutationModify,
-		Generation:     s.generation,
+		Generation:     s.factStore.generation,
 		ActivationID:   origin.activationID(),
 		RuleID:         origin.RuleID,
 		RuleRevisionID: origin.RuleRevisionID,
@@ -4172,7 +4131,7 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 			Sequence:       s.nextEventSequence,
 			Timestamp:      s.eventClock(),
 			Type:           EventFactModified,
-			Generation:     s.generation,
+			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
 			RuleID:         origin.RuleID,
 			RuleRevisionID: origin.RuleRevisionID,
@@ -4563,16 +4522,16 @@ func (s *Session) detachedSnapshotLocked() Snapshot {
 }
 
 func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFacts bool) Snapshot {
-	facts := make([]FactSnapshot, 0, len(s.insertionOrder))
-	for _, id := range s.insertionOrder {
+	facts := make([]FactSnapshot, 0, len(s.factStore.insertionOrder))
+	for _, id := range s.factStore.insertionOrder {
 		fact, ok := s.workingFactByID(id)
 		if !ok {
 			continue
 		}
 		if cloneFacts {
-			facts = append(facts, fact.snapshotForRevision(s.revision, s.compactSlotStore))
+			facts = append(facts, fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore))
 		} else {
-			facts = append(facts, fact.detachedSnapshotForRevision(s.revision, s.compactSlotStore))
+			facts = append(facts, fact.detachedSnapshotForRevision(s.revision, s.factStore.compactSlotStore))
 		}
 	}
 
@@ -4580,7 +4539,7 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 		sessionID:      s.id,
 		rulesetID:      s.revision.ID(),
 		revision:       s.revision,
-		generation:     s.generation,
+		generation:     s.factStore.generation,
 		globalValues:   cloneGlobalValues(s.globalValues),
 		facts:          facts,
 		support:        s.currentSupportGraph(),
@@ -7542,19 +7501,19 @@ func (s *Session) factByID(id FactID) (FactSnapshot, bool) {
 	if s == nil {
 		return FactSnapshot{}, false
 	}
-	if id.Generation() != s.generation {
+	if id.Generation() != s.factStore.generation {
 		return FactSnapshot{}, false
 	}
 	fact, ok := s.workingFactByID(id)
 	if !ok {
 		return FactSnapshot{}, false
 	}
-	return fact.snapshotForRevision(s.revision, s.compactSlotStore), true
+	return fact.snapshotForRevision(s.revision, s.factStore.compactSlotStore), true
 }
 
 func (s *Session) factIDsByName(name string) []FactID {
 	s.ensureFactTargetIndexes()
-	ids := s.factsByName[name]
+	ids := s.factStore.factsByName[name]
 	if len(ids) == 0 {
 		return nil
 	}
@@ -7565,7 +7524,7 @@ func (s *Session) factIDsByName(name string) []FactID {
 
 func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
 	s.ensureFactTargetIndexes()
-	ids := s.factsByTemplate[templateKey]
+	ids := s.factStore.factsByTemplate[templateKey]
 	if len(ids) == 0 {
 		return nil
 	}
@@ -7575,12 +7534,12 @@ func (s *Session) factIDsByTemplate(templateKey TemplateKey) []FactID {
 }
 
 func (s *Session) factIDForDuplicateKey(key DuplicateKey) (FactID, bool) {
-	for _, id := range s.insertionOrder {
+	for _, id := range s.factStore.insertionOrder {
 		fact, ok := s.workingFactByID(id)
 		if !ok {
 			continue
 		}
-		if fact.publicDuplicateKey(s.revision, s.compactSlotStore) == key {
+		if fact.publicDuplicateKey(s.revision, s.factStore.compactSlotStore) == key {
 			return fact.id, true
 		}
 	}
@@ -7591,81 +7550,29 @@ func (s *Session) factCount() int {
 	if s == nil {
 		return 0
 	}
-	return len(s.facts) + s.compactFacts.len()
+	return len(s.factStore.facts) + s.factStore.compactFacts.len()
 }
 
 func (s *Session) activeFactWorkspace() factWorkspace {
-	return factWorkspace{
-		generation:             s.generation,
-		sequence:               s.nextFactSequence,
-		recency:                s.nextRecency,
-		facts:                  s.facts,
-		compactFacts:           s.compactFacts,
-		insertionOrder:         s.insertionOrder,
-		factsByID:              s.factsByID,
-		factsBySequence:        s.factsBySequence,
-		factsByDuplicate:       s.factsByDuplicate,
-		factsByTemplate:        s.factsByTemplate,
-		factsByName:            s.factsByName,
-		factTargetIndexesDirty: s.factTargetIndexesDirty,
-		slotStorage:            s.slotStorage,
-		compactSlotStore:       s.compactSlotStore,
-	}
+	return s.factStore.workspace()
 }
 
 func (s *Session) clonedFactWorkspace() factWorkspace {
-	state := s.activeFactWorkspace()
-	state.compactSlotStore = cloneFactCompactSlotStore(state.compactSlotStore)
-	state.facts = cloneWorkingFacts(state.facts)
-	state.compactFacts = cloneCompactFactStore(state.compactFacts)
-	state.insertionOrder = cloneFactIDs(state.insertionOrder)
-	state.factsByID = cloneFactIDIndex(state.factsByID)
-	state.factsBySequence = cloneFactRowSequenceIndex(state.factsBySequence)
-	state.factsByDuplicate = cloneDuplicateIndexes(state.factsByDuplicate)
-	state.factsByTemplate = cloneFactIDSliceMap(state.factsByTemplate)
-	state.factsByName = cloneStringFactIDSliceMap(state.factsByName)
-	state.slotStorage = cloneFactSlots(state.slotStorage)
-	return state
+	return s.factStore.clonedWorkspace()
 }
 
 func (s *Session) commitFactWorkspace(state factWorkspace) {
 	if s == nil {
 		return
 	}
-	s.nextFactSequence = state.sequence
-	s.nextRecency = state.recency
-	s.facts = state.facts
-	s.compactFacts = state.compactFacts
-	s.factsByID = state.factsByID
-	s.factsBySequence = state.factsBySequence
-	s.factsByDuplicate = state.factsByDuplicate
-	s.factsByTemplate = state.factsByTemplate
-	s.factsByName = state.factsByName
-	s.factTargetIndexesDirty = state.factTargetIndexesDirty
-	s.clearFactFieldEqualIndexes()
-	s.insertionOrder = state.insertionOrder
-	s.slotStorage = state.slotStorage
-	s.compactSlotStore = state.compactSlotStore
+	s.factStore.commit(state)
 }
 
 func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 	if s == nil || workspace == nil {
 		return
 	}
-	s.nextFactSequence, workspace.sequence = workspace.sequence, s.nextFactSequence
-	s.nextRecency, workspace.recency = workspace.recency, s.nextRecency
-	s.facts, workspace.facts = workspace.facts, s.facts
-	s.compactFacts, workspace.compactFacts = workspace.compactFacts, s.compactFacts
-	s.factsByID, workspace.factsByID = workspace.factsByID, s.factsByID
-	s.factsBySequence, workspace.factsBySequence = workspace.factsBySequence, s.factsBySequence
-	s.factsByDuplicate, workspace.factsByDuplicate = workspace.factsByDuplicate, s.factsByDuplicate
-	s.factsByTemplate, workspace.factsByTemplate = workspace.factsByTemplate, s.factsByTemplate
-	s.factsByName, workspace.factsByName = workspace.factsByName, s.factsByName
-	s.factTargetIndexesDirty, workspace.factTargetIndexesDirty = workspace.factTargetIndexesDirty, s.factTargetIndexesDirty
-	s.clearFactFieldEqualIndexes()
-	s.insertionOrder, workspace.insertionOrder = workspace.insertionOrder, s.insertionOrder
-	s.slotStorage, workspace.slotStorage = workspace.slotStorage, s.slotStorage
-	s.compactSlotStore, workspace.compactSlotStore = workspace.compactSlotStore, s.compactSlotStore
+	s.factStore.swap(workspace)
 }
 
 func (s *Session) reserveRunGeneratedFactStorage() {
@@ -7701,14 +7608,14 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 	}
 	state := s.activeFactWorkspace()
 	state.reserveGeneratedFactCapacity(s.revision, factCount, slotCount, compactSlotCount)
-	s.facts = state.facts
-	s.compactFacts = state.compactFacts
-	s.insertionOrder = state.insertionOrder
-	s.factsBySequence = state.factsBySequence
-	s.factsByTemplate = state.factsByTemplate
-	s.factsByName = state.factsByName
-	s.slotStorage = state.slotStorage
-	s.compactSlotStore = state.compactSlotStore
+	s.factStore.facts = state.facts
+	s.factStore.compactFacts = state.compactFacts
+	s.factStore.insertionOrder = state.insertionOrder
+	s.factStore.factsBySequence = state.factsBySequence
+	s.factStore.factsByTemplate = state.factsByTemplate
+	s.factStore.factsByName = state.factsByName
+	s.factStore.slotStorage = state.slotStorage
+	s.factStore.compactSlotStore = state.compactSlotStore
 }
 
 func saturatingAddInt(left, right int) int {
@@ -7727,21 +7634,21 @@ func maxIntValue() int {
 }
 
 func (s *Session) resetWorkingMemory() {
-	s.generation++
-	s.nextFactSequence = 0
-	s.nextRecency = 0
-	s.facts = nil
-	s.compactFacts = compactFactStore{}
-	s.factsByID = nil
-	s.factsBySequence = nil
-	s.factsByDuplicate = duplicateIndexes{}
-	s.factsByDuplicate.reset(0)
-	s.factsByTemplate = make(map[TemplateKey][]FactID)
-	s.factsByName = make(map[string][]FactID)
-	s.factTargetIndexesDirty = false
-	s.insertionOrder = nil
-	s.slotStorage = nil
-	s.compactSlotStore = nil
+	s.factStore.generation++
+	s.factStore.nextFactSequence = 0
+	s.factStore.nextRecency = 0
+	s.factStore.facts = nil
+	s.factStore.compactFacts = compactFactStore{}
+	s.factStore.factsByID = nil
+	s.factStore.factsBySequence = nil
+	s.factStore.factsByDuplicate = duplicateIndexes{}
+	s.factStore.factsByDuplicate.reset(0)
+	s.factStore.factsByTemplate = make(map[TemplateKey][]FactID)
+	s.factStore.factsByName = make(map[string][]FactID)
+	s.factStore.factTargetIndexesDirty = false
+	s.factStore.insertionOrder = nil
+	s.factStore.slotStorage = nil
+	s.factStore.compactSlotStore = nil
 }
 
 func cloneWorkingFacts(in []workingFact) []workingFact {

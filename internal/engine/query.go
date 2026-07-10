@@ -1424,7 +1424,7 @@ func (s *Session) queryTriggerFact(query compiledQuery, args *compiledQueryArgs)
 	if s == nil {
 		return FactSnapshot{}
 	}
-	return snapshotQueryTriggerFact(s.generation, query, args).withQueryTriggerRecency(s.nextRecency + 1)
+	return snapshotQueryTriggerFact(s.factStore.generation, query, args).withQueryTriggerRecency(s.factStore.nextRecency + 1)
 }
 
 func snapshotQueryTriggerFact(generation Generation, query compiledQuery, args *compiledQueryArgs) FactSnapshot {

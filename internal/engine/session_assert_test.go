@@ -83,10 +83,10 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	if got, want := session.factCount(), 1; got != want {
 		t.Fatalf("fact count after first assert = %d, want %d", got, want)
 	}
-	if got := len(session.facts); got != 0 {
+	if got := len(session.factStore.facts); got != 0 {
 		t.Fatalf("broad fact rows after first assert = %d, want zero", got)
 	}
-	if got := session.compactFacts.len(); got != 1 {
+	if got := session.factStore.compactFacts.len(); got != 1 {
 		t.Fatalf("compact fact rows after first assert = %d, want 1", got)
 	}
 	firstHandle, ok := session.factRowIndex(first.Fact.ID())
@@ -109,10 +109,10 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	if got, want := session.factCount(), 2; got != want {
 		t.Fatalf("fact count after second assert = %d, want %d", got, want)
 	}
-	if got := len(session.facts); got != 0 {
+	if got := len(session.factStore.facts); got != 0 {
 		t.Fatalf("broad fact rows after second assert = %d, want zero", got)
 	}
-	if got := session.compactFacts.len(); got != 2 {
+	if got := session.factStore.compactFacts.len(); got != 2 {
 		t.Fatalf("compact fact rows after second assert = %d, want 2", got)
 	}
 	if got, ok := session.factRowIndex(first.Fact.ID()); !ok || got != firstHandle {
@@ -141,7 +141,7 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	if _, ok := session.factRowIndex(first.Fact.ID()); ok {
 		t.Fatalf("retracted fact %q was resurrected after slice growth", first.Fact.ID())
 	}
-	for _, id := range session.insertionOrder {
+	for _, id := range session.factStore.insertionOrder {
 		handle, ok := session.factRowIndex(id)
 		if !ok {
 			t.Fatalf("fact %q row missing after growth", id)
@@ -150,7 +150,7 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 		if !compact {
 			t.Fatalf("fact %q row after growth = %d, want compact row", id, handle)
 		}
-		fact, ok := session.compactFacts.fact(row)
+		fact, ok := session.factStore.compactFacts.fact(row)
 		if !ok || fact.id != id {
 			t.Fatalf("compact row %d = %v/%v, want fact %q", row, fact, ok, id)
 		}
