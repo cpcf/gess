@@ -25,22 +25,22 @@ func TestBackchainDemandSupportGenericPathStoresSupport(t *testing.T) {
 
 	session.addBackchainDemandSupport(&workingFact{id: demandFactID}, request)
 
-	if session.nextBackchainDemandSupportID != 1 {
-		t.Fatalf("nextBackchainDemandSupportID = %d, want 1", session.nextBackchainDemandSupportID)
+	if session.backchain.nextDemandSupportID != 1 {
+		t.Fatalf("nextBackchainDemandSupportID = %d, want 1", session.backchain.nextDemandSupportID)
 	}
 	requestKey, ok := backchainDemandSupportKeyForRequest(request)
 	if !ok {
 		t.Fatal("backchainDemandSupportKeyForRequest failed")
 	}
-	supportBucket, _ := session.backchainDemandSupports.get(requestKey.key)
+	supportBucket, _ := session.backchain.demandSupports.get(requestKey.key)
 	if !supportBucket.contains(1) {
 		t.Fatalf("generic support bucket does not contain support id 1: %#v", supportBucket)
 	}
-	factBucket, _ := session.backchainDemandByFact.get(supportFactID)
+	factBucket, _ := session.backchain.demandByFact.get(supportFactID)
 	if !factBucket.contains(1) {
 		t.Fatalf("support fact bucket does not contain support id 1: %#v", factBucket)
 	}
-	demandBucket, _ := session.backchainDemandByDemand.get(demandFactID)
+	demandBucket, _ := session.backchain.demandByDemand.get(demandFactID)
 	if !demandBucket.contains(1) {
 		t.Fatalf("demand fact bucket does not contain support id 1: %#v", demandBucket)
 	}
@@ -96,7 +96,7 @@ func TestBackchainDemandSupportRecordSlotsAreReusedUnderChurn(t *testing.T) {
 		}
 	}
 
-	if got := len(session.backchainDemandSupportRecords); got != 1 {
+	if got := len(session.backchain.demandSupportRecords); got != 1 {
 		t.Fatalf("record slots after churn = %d, want 1", got)
 	}
 	owner := session.backchainDemandSupportMemoryOwnerDiagnostics()
@@ -122,7 +122,7 @@ func TestBackchainDemandInlineSupportRemovalUsesPayloadEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("backchainDemandInlineSupportKeyForRequest failed")
 	}
-	entry, ok := session.backchainDemandInlineSupports.get(inlineKey)
+	entry, ok := session.backchain.inlineSupports.get(inlineKey)
 	if !ok {
 		t.Fatal("inline support entry not stored")
 	}
@@ -137,17 +137,17 @@ func TestBackchainDemandInlineSupportRemovalUsesPayloadEntry(t *testing.T) {
 	if !delta.supported {
 		t.Fatalf("delta.supported = false, want true")
 	}
-	if _, ok := session.backchainDemandInlineSupports.get(inlineKey); ok {
+	if _, ok := session.backchain.inlineSupports.get(inlineKey); ok {
 		t.Fatal("inline support entry still present after removal")
 	}
 	if _, ok := session.backchainDemandSupportRecordByID(entry.id); ok {
 		t.Fatal("support record still present after removal")
 	}
-	factBucket, _ := session.backchainDemandByFact.get(support.id)
+	factBucket, _ := session.backchain.demandByFact.get(support.id)
 	if !factBucket.empty() {
 		t.Fatalf("support fact bucket = %#v, want empty", factBucket)
 	}
-	demandBucket, _ := session.backchainDemandByDemand.get(demandFactID)
+	demandBucket, _ := session.backchain.demandByDemand.get(demandFactID)
 	if !demandBucket.empty() {
 		t.Fatalf("demand fact bucket = %#v, want empty", demandBucket)
 	}
@@ -165,7 +165,7 @@ func TestBackchainDemandSupportRemovalUsesSingleSupportFactBucket(t *testing.T) 
 		},
 	}
 	session.addBackchainDemandSupport(&workingFact{id: demandFactID}, request)
-	session.backchainDemandInlineSupports.clear()
+	session.backchain.inlineSupports.clear()
 	if id, ok := session.singleBackchainDemandSupportIDForRequest(request); !ok || id != 1 {
 		t.Fatalf("single support id = (%d, %t), want (1, true)", id, ok)
 	}
@@ -238,7 +238,7 @@ func TestBackchainDemandSupportRemovalUsesGraphOwnerHandle(t *testing.T) {
 	}
 	if inlineKey, ok := backchainDemandInlineSupportKeyForRequest(first); !ok {
 		t.Fatal("first request should be inline-key compatible")
-	} else if _, exists := session.backchainDemandInlineSupports.get(inlineKey); exists {
+	} else if _, exists := session.backchain.inlineSupports.get(inlineKey); exists {
 		t.Fatal("graph-owned support was stored in inline request-key index")
 	}
 	if id, ok := session.singleBackchainDemandSupportIDForRequest(first); ok {

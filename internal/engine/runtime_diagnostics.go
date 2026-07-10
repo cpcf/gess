@@ -87,27 +87,27 @@ func (s *Session) backchainDemandSupportMemoryOwnerDiagnostics() RuntimeMemoryOw
 	if s == nil {
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
-	slots := max(len(s.backchainDemandSupportRecords), len(s.backchainDemandOwnerRecords))
+	slots := max(len(s.backchain.demandSupportRecords), len(s.backchain.demandOwnerRecords))
 	live := 0
 	for i := range slots {
-		if i < len(s.backchainDemandSupportRecords) && s.backchainDemandSupportRecords[i].id != 0 {
+		if i < len(s.backchain.demandSupportRecords) && s.backchain.demandSupportRecords[i].id != 0 {
 			live++
 			continue
 		}
-		if i < len(s.backchainDemandOwnerRecords) && s.backchainDemandOwnerRecords[i].id != 0 {
+		if i < len(s.backchain.demandOwnerRecords) && s.backchain.demandOwnerRecords[i].id != 0 {
 			live++
 		}
 	}
-	bytes := uint64(cap(s.backchainDemandSupportRecords)) * uint64(unsafe.Sizeof(backchainDemandSupportRecord{}))
-	bytes += uint64(cap(s.backchainDemandOwnerRecords)) * uint64(unsafe.Sizeof(backchainDemandOwnerSupportRecord{}))
-	bytes += uint64(cap(s.freeBackchainDemandSupportIDs)) * uint64(unsafe.Sizeof(backchainDemandSupportID(0)))
+	bytes := uint64(cap(s.backchain.demandSupportRecords)) * uint64(unsafe.Sizeof(backchainDemandSupportRecord{}))
+	bytes += uint64(cap(s.backchain.demandOwnerRecords)) * uint64(unsafe.Sizeof(backchainDemandOwnerSupportRecord{}))
+	bytes += uint64(cap(s.backchain.freeDemandSupportIDs)) * uint64(unsafe.Sizeof(backchainDemandSupportID(0)))
 	if slots == 0 && bytes == 0 {
 		return RuntimeMemoryOwnerDiagnostics{}
 	}
 	return RuntimeMemoryOwnerDiagnostics{
 		Owner:      runtimeMemoryOwnerBackchainDemandSupport,
 		Rows:       uint64(live),
-		Indexes:    uint64(len(s.freeBackchainDemandSupportIDs)),
+		Indexes:    uint64(len(s.backchain.freeDemandSupportIDs)),
 		Tombstones: uint64(slots - live),
 		Bytes:      bytes,
 		HighWater:  uint64(slots),

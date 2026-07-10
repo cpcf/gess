@@ -180,26 +180,10 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextRunSequence               uint64
-	logicalSupportEdges           map[SupportID]logicalSupportEdgeRecord
-	logicalSupportBySource        map[logicalSupportSourceKey]map[SupportID]struct{}
-	logicalSupportByFact          map[FactID]map[SupportID]struct{}
-	logicalSupportCounters        LogicalSupportCounters
-	nextBackchainDemandSupportID  backchainDemandSupportID
-	freeBackchainDemandSupportIDs []backchainDemandSupportID
-	backchainDemandSupports       backchainDemandSupportTable
-	backchainDemandSupportRecords []backchainDemandSupportRecord
-	backchainDemandOwnerRecords   []backchainDemandOwnerSupportRecord
-	backchainDemandInlineSupports backchainDemandInlineSupportIndex
-	backchainDemandSupportOwners  backchainDemandOwnerSupportIndex
-	backchainDemandByFact         backchainDemandFactSupportTable
-	backchainDemandByDemand       backchainDemandFactSupportTable
-	demandLimit                   int
-	demandCounters                backchainDemandCascadeCounters
-	activeDemandCascade           *backchainDemandCascadeBudget
-	activeBackchainQueryProof     *backchainQueryProofContext
-	backchainQueryProofScratch    backchainQueryProofContext
-	nextEventSequence             uint64
+	nextRunSequence   uint64
+	tms               sessionTMSStore
+	backchain         sessionBackchainStore
+	nextEventSequence uint64
 }
 
 type queuedMutation struct {
@@ -303,7 +287,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
-		demandLimit:         cfg.demandLimit,
+		backchain:           newSessionBackchainStore(cfg.demandLimit),
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
@@ -452,8 +436,8 @@ func (s *Session) workingFactByID(id FactID) (*workingFact, bool) {
 	if s == nil {
 		return nil, false
 	}
-	if s.activeBackchainQueryProof != nil {
-		if fact, ok := s.activeBackchainQueryProof.workingFactByID(id); ok {
+	if s.backchain.activeQueryProof != nil {
+		if fact, ok := s.backchain.activeQueryProof.workingFactByID(id); ok {
 			return fact, true
 		}
 	}
@@ -482,8 +466,8 @@ func (s *Session) factScalarValueAtSlot(id FactID, version FactVersion, slot int
 	if s == nil || slot < 0 {
 		return Value{}, false
 	}
-	if s.activeBackchainQueryProof != nil {
-		if fact, ok := s.activeBackchainQueryProof.workingFactByID(id); ok {
+	if s.backchain.activeQueryProof != nil {
+		if fact, ok := s.backchain.activeQueryProof.workingFactByID(id); ok {
 			if fact == nil || fact.version != version {
 				return Value{}, false
 			}
@@ -827,19 +811,15 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		explainLog:          cfg.explainLog,
 		eventClock:          cfg.eventClock,
 		output:              cfg.output,
-		demandLimit:         cfg.demandLimit,
+		backchain:           s.backchain.forkForRebuild(cfg.demandLimit),
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		nextRunSequence:        s.nextRunSequence,
-		logicalSupportEdges:    cloneLogicalSupportEdges(s.logicalSupportEdges),
-		logicalSupportBySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
-		logicalSupportByFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
-		logicalSupportCounters: s.logicalSupportCounters,
-		demandCounters:         s.demandCounters,
-		nextEventSequence:      s.nextEventSequence,
+		nextRunSequence:   s.nextRunSequence,
+		tms:               s.tms.cloneForFork(),
+		nextEventSequence: s.nextEventSequence,
 	}
 	if fork.id == "" {
 		s.forkCount++
@@ -876,7 +856,7 @@ func (s *Session) forkSessionConfig() sessionConfig {
 		strategy:            s.agendaDriver.strategy,
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
 		output:              s.output,
-		demandLimit:         s.demandLimit,
+		demandLimit:         s.backchain.demandLimit,
 	}
 }
 
@@ -1590,7 +1570,7 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		return AssertResult{Status: AssertValidationFailure}, reteAgendaDelta{}, err
 	}
 	state.replaceWorkingFact(fact)
-	s.logicalSupportCounters.LogicalFactsAsserted++
+	s.tms.logicalSupportCounters.LogicalFactsAsserted++
 
 	snapshot := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 	var span *propagationCounterSpan
@@ -2263,8 +2243,8 @@ func (s *Session) discardGeneratedOutputCompactSlots(state *factWorkspace, compa
 }
 
 func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, state *factWorkspace, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s != nil && s.activeBackchainQueryProof != nil && origin.queryProofID == s.activeBackchainQueryProof.id {
-		return s.activeBackchainQueryProof.flushDemands(ctx, demands, origin)
+	if s != nil && s.backchain.activeQueryProof != nil && origin.queryProofID == s.backchain.activeQueryProof.id {
+		return s.backchain.activeQueryProof.flushDemands(ctx, demands, origin)
 	}
 	if s == nil || state == nil || len(demands) == 0 {
 		s.clearBackchainDemandRequestArena()
@@ -2274,12 +2254,12 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 	combined := reteAgendaDelta{supported: true}
 	queue := demands
 	queueOwned := false
-	budget := s.activeDemandCascade
+	budget := s.backchain.activeDemandCascade
 	if budget == nil {
 		local := newBackchainDemandCascadeBudget(s)
 		budget = &local
-		s.activeDemandCascade = budget
-		defer func() { s.activeDemandCascade = nil }()
+		s.backchain.activeDemandCascade = budget
+		defer func() { s.backchain.activeDemandCascade = nil }()
 	}
 	for i := 0; i < len(queue); i++ {
 		if err := budget.consume(); err != nil {
@@ -2365,7 +2345,7 @@ func (s *Session) resolveBackchainDemandRequestsInFactWorkspaceImmediate(ctx con
 
 func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, resolved []backchainDemandID, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s != nil && s.activeBackchainQueryProof != nil {
+	if s != nil && s.backchain.activeQueryProof != nil {
 		return combined, nil
 	}
 	if s == nil || len(resolved) == 0 && len(owners) == 0 {
@@ -2625,8 +2605,8 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 	state.removeStoredFact(id)
 	s.commitFactWorkspace(state)
 	if cascade {
-		s.logicalSupportCounters.LogicalFactsRetracted++
-		s.logicalSupportCounters.CascadeRetractions++
+		s.tms.logicalSupportCounters.LogicalFactsRetracted++
+		s.tms.logicalSupportCounters.CascadeRetractions++
 	}
 
 	delta := MutationDelta{
@@ -4494,7 +4474,7 @@ func (s *Session) snapshotLockedWithOptions(includeTargetIndexes bool, cloneFact
 		globalValues:   cloneGlobalValues(s.globalValues),
 		facts:          facts,
 		support:        s.currentSupportGraph(),
-		demandCounters: s.demandCounters,
+		demandCounters: s.backchain.demandCounters,
 	}
 	if includeTargetIndexes {
 		snapshot.byID, snapshot.byName, snapshot.byTemplate = snapshotIndexes(facts)

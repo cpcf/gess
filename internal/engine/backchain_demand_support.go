@@ -101,7 +101,7 @@ func (s *Session) ensureBackchainDemandSupportTables() {
 	if s == nil {
 		return
 	}
-	s.backchainDemandSupports.reserve(4)
+	s.backchain.demandSupports.reserve(4)
 	s.ensureBackchainDemandReverseSupportTables()
 }
 
@@ -109,8 +109,8 @@ func (s *Session) ensureBackchainDemandReverseSupportTables() {
 	if s == nil {
 		return
 	}
-	s.backchainDemandByFact.reserve(4)
-	s.backchainDemandByDemand.reserve(4)
+	s.backchain.demandByFact.reserve(4)
+	s.backchain.demandByDemand.reserve(4)
 }
 
 func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request backchainDemandRequest) backchainDemandSupportID {
@@ -128,7 +128,7 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 		return 0
 	}
 	s.ensureBackchainDemandSupportTables()
-	bucket, _ := s.backchainDemandSupports.get(requestKey.key)
+	bucket, _ := s.backchain.demandSupports.get(requestKey.key)
 	if id, exists := s.findBackchainDemandSupportID(bucket, requestKey, request); exists {
 		return id
 	}
@@ -137,16 +137,16 @@ func (s *Session) addBackchainDemandSupport(demandFact *workingFact, request bac
 	s.storeBackchainDemandSupportRecord(record)
 	s.storeBackchainDemandOwnerSupport(request.owner, id)
 	bucket.add(id)
-	s.backchainDemandSupports.set(requestKey.key, bucket)
+	s.backchain.demandSupports.set(requestKey.key, bucket)
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
-		factBucket, _ := s.backchainDemandByFact.get(support.id)
+		factBucket, _ := s.backchain.demandByFact.get(support.id)
 		factBucket.add(id)
-		s.backchainDemandByFact.set(support.id, factBucket)
+		s.backchain.demandByFact.set(support.id, factBucket)
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
+	demandBucket, _ := s.backchain.demandByDemand.get(demandFact.id)
 	demandBucket.add(id)
-	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
+	s.backchain.demandByDemand.set(demandFact.id, demandBucket)
 	return id
 }
 
@@ -164,13 +164,13 @@ func (s *Session) addBackchainDemandOwnerSupport(demandFact *workingFact, reques
 	s.storeBackchainDemandOwnerSupport(record.owner, id)
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandOwnerSupportRecordFact(record, i)
-		factBucket, _ := s.backchainDemandByFact.get(support.id)
+		factBucket, _ := s.backchain.demandByFact.get(support.id)
 		factBucket.add(id)
-		s.backchainDemandByFact.set(support.id, factBucket)
+		s.backchain.demandByFact.set(support.id, factBucket)
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
+	demandBucket, _ := s.backchain.demandByDemand.get(demandFact.id)
 	demandBucket.add(id)
-	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
+	s.backchain.demandByDemand.set(demandFact.id, demandBucket)
 	return id
 }
 
@@ -178,7 +178,7 @@ func (s *Session) addBackchainDemandInlineSupport(demandFact *workingFact, reque
 	if s == nil || demandFact == nil || demandFact.id.IsZero() {
 		return 0
 	}
-	if entry, exists := s.backchainDemandInlineSupports.get(inlineKey); exists {
+	if entry, exists := s.backchain.inlineSupports.get(inlineKey); exists {
 		return entry.id
 	}
 	s.ensureBackchainDemandReverseSupportTables()
@@ -188,20 +188,20 @@ func (s *Session) addBackchainDemandInlineSupport(demandFact *workingFact, reque
 	record.inlineKey = inlineKey
 	s.storeBackchainDemandSupportRecord(record)
 	s.storeBackchainDemandOwnerSupport(request.owner, id)
-	s.backchainDemandInlineSupports.set(inlineKey, backchainDemandInlineSupportEntry{
+	s.backchain.inlineSupports.set(inlineKey, backchainDemandInlineSupportEntry{
 		id:           id,
 		demandFactID: demandFact.id,
 		support:      inlineKey.support,
 	})
 	for i := 0; i < record.supportCount; i++ {
 		support := backchainDemandSupportRecordFact(record, i)
-		factBucket, _ := s.backchainDemandByFact.get(support.id)
+		factBucket, _ := s.backchain.demandByFact.get(support.id)
 		factBucket.add(id)
-		s.backchainDemandByFact.set(support.id, factBucket)
+		s.backchain.demandByFact.set(support.id, factBucket)
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(demandFact.id)
+	demandBucket, _ := s.backchain.demandByDemand.get(demandFact.id)
 	demandBucket.add(id)
-	s.backchainDemandByDemand.set(demandFact.id, demandBucket)
+	s.backchain.demandByDemand.set(demandFact.id, demandBucket)
 	return id
 }
 
@@ -219,17 +219,17 @@ func (s *Session) removeBackchainDemandSupportForRequest(ctx context.Context, re
 		return s.removeBackchainDemandSupportID(ctx, id, origin)
 	}
 	if inlineKey, keyOK := backchainDemandInlineSupportKeyForRequest(request); keyOK {
-		if entry, ok := s.backchainDemandInlineSupports.get(inlineKey); ok {
+		if entry, ok := s.backchain.inlineSupports.get(inlineKey); ok {
 			return s.removeBackchainDemandInlineSupportEntry(ctx, inlineKey, entry, origin)
 		}
 	}
 	id, ok := s.findBackchainDemandSupportIDByRequest(request)
 	if !ok {
 		requestKey, keyOK := backchainDemandSupportKeyForRequest(request)
-		if !keyOK || s.backchainDemandSupports.isEmpty() {
+		if !keyOK || s.backchain.demandSupports.isEmpty() {
 			return reteAgendaDelta{supported: true}, nil
 		}
-		bucket, _ := s.backchainDemandSupports.get(requestKey.key)
+		bucket, _ := s.backchain.demandSupports.get(requestKey.key)
 		id, ok = s.findBackchainDemandSupportID(bucket, requestKey, request)
 		if !ok {
 			return reteAgendaDelta{supported: true}, nil
@@ -273,11 +273,11 @@ func (s *Session) removeBackchainDemandOwnerOnlySupportDemandBucket(ctx context.
 	if s == nil || demandFactID.IsZero() || id == 0 {
 		return combined, nil
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(demandFactID)
+	demandBucket, _ := s.backchain.demandByDemand.get(demandFactID)
 	if single, ok := demandBucket.single(); !ok || single != id {
 		return s.removeBackchainDemandSupportDemandBucket(ctx, demandFactID, id, origin)
 	}
-	s.backchainDemandByDemand.delete(demandFactID)
+	s.backchain.demandByDemand.delete(demandFactID)
 	if _, ok := s.workingFactByID(demandFactID); !ok {
 		return combined, nil
 	}
@@ -289,11 +289,11 @@ func (s *Session) removeBackchainDemandOwnerOnlySupportDemandBucket(ctx context.
 }
 
 func (s *Session) singleBackchainDemandSupportIDForRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
-	if s == nil || len(request.supportFacts) != 1 || s.backchainDemandByFact.isEmpty() {
+	if s == nil || len(request.supportFacts) != 1 || s.backchain.demandByFact.isEmpty() {
 		return 0, false
 	}
 	support := request.supportFacts[0]
-	bucket, _ := s.backchainDemandByFact.get(support.id)
+	bucket, _ := s.backchain.demandByFact.get(support.id)
 	id, ok := bucket.single()
 	if !ok {
 		return 0, false
@@ -326,7 +326,7 @@ func (s *Session) removeBackchainDemandInlineSupportEntry(ctx context.Context, k
 		s.removeBackchainDemandOwnerSupport(record.owner, entry.id)
 	}
 	s.clearBackchainDemandSupportRecord(entry.id)
-	s.backchainDemandInlineSupports.delete(key)
+	s.backchain.inlineSupports.delete(key)
 	s.removeBackchainDemandSupportIDFromFactBucket(entry.support.id, entry.id)
 	return s.removeBackchainDemandSupportDemandBucket(ctx, entry.demandFactID, entry.id, origin)
 }
@@ -341,10 +341,10 @@ func (s *Session) removeBackchainDemandSupportsForFactVersion(ctx context.Contex
 
 func (s *Session) removeBackchainDemandSupportsForFactVersionMatch(ctx context.Context, id FactID, version FactVersion, matchVersion bool, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || id.IsZero() || s.backchainDemandByFact.isEmpty() {
+	if s == nil || id.IsZero() || s.backchain.demandByFact.isEmpty() {
 		return combined, nil
 	}
-	bucket, _ := s.backchainDemandByFact.get(id)
+	bucket, _ := s.backchain.demandByFact.get(id)
 	if bucket.empty() {
 		return combined, nil
 	}
@@ -410,7 +410,7 @@ func (s *Session) removeBackchainDemandSupportID(ctx context.Context, id backcha
 	s.removeBackchainDemandOwnerSupport(record.owner, id)
 	s.clearBackchainDemandSupportRecord(id)
 	if record.inline {
-		s.backchainDemandInlineSupports.delete(record.inlineKey)
+		s.backchain.inlineSupports.delete(record.inlineKey)
 	} else {
 		s.removeBackchainDemandSupportIDFromSupportBucket(record.key, id)
 	}
@@ -426,13 +426,13 @@ func (s *Session) removeBackchainDemandSupportDemandBucket(ctx context.Context, 
 	if s == nil || demandFactID.IsZero() || id == 0 {
 		return combined, nil
 	}
-	demandBucket, _ := s.backchainDemandByDemand.get(demandFactID)
+	demandBucket, _ := s.backchain.demandByDemand.get(demandFactID)
 	demandBucket.remove(id)
 	if !demandBucket.empty() {
-		s.backchainDemandByDemand.set(demandFactID, demandBucket)
+		s.backchain.demandByDemand.set(demandFactID, demandBucket)
 		return combined, nil
 	}
-	s.backchainDemandByDemand.delete(demandFactID)
+	s.backchain.demandByDemand.delete(demandFactID)
 	if _, ok := s.workingFactByID(demandFactID); !ok {
 		return combined, nil
 	}
@@ -463,23 +463,23 @@ func (s *Session) removeBackchainDemandFactAndDependentSupportsImmediate(ctx con
 }
 
 func (s *Session) removeBackchainDemandSupportIDFromSupportBucket(key backchainDemandSupportKey, id backchainDemandSupportID) {
-	bucket, _ := s.backchainDemandSupports.get(key)
+	bucket, _ := s.backchain.demandSupports.get(key)
 	bucket.remove(id)
 	if bucket.empty() {
-		s.backchainDemandSupports.delete(key)
+		s.backchain.demandSupports.delete(key)
 		return
 	}
-	s.backchainDemandSupports.set(key, bucket)
+	s.backchain.demandSupports.set(key, bucket)
 }
 
 func (s *Session) removeBackchainDemandSupportIDFromFactBucket(factID FactID, id backchainDemandSupportID) {
-	bucket, _ := s.backchainDemandByFact.get(factID)
+	bucket, _ := s.backchain.demandByFact.get(factID)
 	bucket.remove(id)
 	if bucket.empty() {
-		s.backchainDemandByFact.delete(factID)
+		s.backchain.demandByFact.delete(factID)
 		return
 	}
-	s.backchainDemandByFact.set(factID, bucket)
+	s.backchain.demandByFact.set(factID, bucket)
 }
 
 func normalizeBackchainDemandNoopDelta(delta reteAgendaDelta) reteAgendaDelta {
@@ -497,36 +497,11 @@ func (s *Session) clearBackchainDemandSupports() {
 	if s == nil {
 		return
 	}
-	s.backchainDemandSupports.clear()
-	s.backchainDemandInlineSupports.clear()
-	s.backchainDemandSupportOwners.clear()
-	for i := range s.backchainDemandSupportRecords {
-		s.backchainDemandSupportRecords[i] = backchainDemandSupportRecord{}
-	}
-	s.backchainDemandSupportRecords = s.backchainDemandSupportRecords[:0]
-	for i := range s.backchainDemandOwnerRecords {
-		s.backchainDemandOwnerRecords[i] = backchainDemandOwnerSupportRecord{}
-	}
-	s.backchainDemandOwnerRecords = s.backchainDemandOwnerRecords[:0]
-	s.backchainDemandByFact.clear()
-	s.backchainDemandByDemand.clear()
-	s.nextBackchainDemandSupportID = 0
-	clear(s.freeBackchainDemandSupportIDs)
-	s.freeBackchainDemandSupportIDs = s.freeBackchainDemandSupportIDs[:0]
+	s.backchain.clearPersistent()
 }
 
 func (s *Session) nextBackchainDemandSupportIDValue() backchainDemandSupportID {
-	if count := len(s.freeBackchainDemandSupportIDs); count > 0 {
-		id := s.freeBackchainDemandSupportIDs[count-1]
-		s.freeBackchainDemandSupportIDs[count-1] = 0
-		s.freeBackchainDemandSupportIDs = s.freeBackchainDemandSupportIDs[:count-1]
-		return id
-	}
-	s.nextBackchainDemandSupportID++
-	if s.nextBackchainDemandSupportID == 0 {
-		s.nextBackchainDemandSupportID++
-	}
-	return s.nextBackchainDemandSupportID
+	return s.backchain.nextSupportID()
 }
 
 func (s *Session) findBackchainDemandSupportID(bucket backchainDemandSupportIDBucket, requestKey backchainDemandSupportRequestKey, request backchainDemandRequest) (backchainDemandSupportID, bool) {
@@ -545,10 +520,10 @@ func (s *Session) findBackchainDemandSupportID(bucket backchainDemandSupportIDBu
 }
 
 func (s *Session) findBackchainDemandSupportIDByRequest(request backchainDemandRequest) (backchainDemandSupportID, bool) {
-	if s == nil || s.backchainDemandByFact.isEmpty() || len(request.supportFacts) == 0 {
+	if s == nil || s.backchain.demandByFact.isEmpty() || len(request.supportFacts) == 0 {
 		return 0, false
 	}
-	bucket, _ := s.backchainDemandByFact.get(request.supportFacts[0].id)
+	bucket, _ := s.backchain.demandByFact.get(request.supportFacts[0].id)
 	var found backchainDemandSupportID
 	bucket.forEach(func(id backchainDemandSupportID) {
 		if found != 0 {
@@ -571,10 +546,10 @@ func (s *Session) storeBackchainDemandSupportRecord(record backchainDemandSuppor
 	if !ok {
 		return
 	}
-	for len(s.backchainDemandSupportRecords) <= index {
-		s.backchainDemandSupportRecords = append(s.backchainDemandSupportRecords, backchainDemandSupportRecord{})
+	for len(s.backchain.demandSupportRecords) <= index {
+		s.backchain.demandSupportRecords = append(s.backchain.demandSupportRecords, backchainDemandSupportRecord{})
 	}
-	s.backchainDemandSupportRecords[index] = record
+	s.backchain.demandSupportRecords[index] = record
 }
 
 func (s *Session) backchainDemandSupportRecordByID(id backchainDemandSupportID) (backchainDemandSupportRecord, bool) {
@@ -590,10 +565,10 @@ func (s *Session) backchainDemandSupportRecordPtrByID(id backchainDemandSupportI
 		return nil, false
 	}
 	index, ok := backchainDemandSupportRecordIndex(id)
-	if !ok || index >= len(s.backchainDemandSupportRecords) {
+	if !ok || index >= len(s.backchain.demandSupportRecords) {
 		return nil, false
 	}
-	record := &s.backchainDemandSupportRecords[index]
+	record := &s.backchain.demandSupportRecords[index]
 	if record.id != id {
 		return nil, false
 	}
@@ -605,11 +580,11 @@ func (s *Session) clearBackchainDemandSupportRecord(id backchainDemandSupportID)
 		return
 	}
 	index, ok := backchainDemandSupportRecordIndex(id)
-	if !ok || index >= len(s.backchainDemandSupportRecords) || s.backchainDemandSupportRecords[index].id != id {
+	if !ok || index >= len(s.backchain.demandSupportRecords) || s.backchain.demandSupportRecords[index].id != id {
 		return
 	}
-	s.backchainDemandSupportRecords[index] = backchainDemandSupportRecord{}
-	s.freeBackchainDemandSupportIDs = append(s.freeBackchainDemandSupportIDs, id)
+	s.backchain.demandSupportRecords[index] = backchainDemandSupportRecord{}
+	s.backchain.freeDemandSupportIDs = append(s.backchain.freeDemandSupportIDs, id)
 }
 
 func (s *Session) storeBackchainDemandOwnerSupportRecord(record backchainDemandOwnerSupportRecord) {
@@ -620,10 +595,10 @@ func (s *Session) storeBackchainDemandOwnerSupportRecord(record backchainDemandO
 	if !ok {
 		return
 	}
-	for len(s.backchainDemandOwnerRecords) <= index {
-		s.backchainDemandOwnerRecords = append(s.backchainDemandOwnerRecords, backchainDemandOwnerSupportRecord{})
+	for len(s.backchain.demandOwnerRecords) <= index {
+		s.backchain.demandOwnerRecords = append(s.backchain.demandOwnerRecords, backchainDemandOwnerSupportRecord{})
 	}
-	s.backchainDemandOwnerRecords[index] = record
+	s.backchain.demandOwnerRecords[index] = record
 }
 
 func (s *Session) backchainDemandOwnerSupportRecordByID(id backchainDemandSupportID) (backchainDemandOwnerSupportRecord, bool) {
@@ -639,10 +614,10 @@ func (s *Session) backchainDemandOwnerSupportRecordPtrByID(id backchainDemandSup
 		return nil, false
 	}
 	index, ok := backchainDemandSupportRecordIndex(id)
-	if !ok || index >= len(s.backchainDemandOwnerRecords) {
+	if !ok || index >= len(s.backchain.demandOwnerRecords) {
 		return nil, false
 	}
-	record := &s.backchainDemandOwnerRecords[index]
+	record := &s.backchain.demandOwnerRecords[index]
 	if record.id != id {
 		return nil, false
 	}
@@ -654,11 +629,11 @@ func (s *Session) clearBackchainDemandOwnerSupportRecord(id backchainDemandSuppo
 		return
 	}
 	index, ok := backchainDemandSupportRecordIndex(id)
-	if !ok || index >= len(s.backchainDemandOwnerRecords) || s.backchainDemandOwnerRecords[index].id != id {
+	if !ok || index >= len(s.backchain.demandOwnerRecords) || s.backchain.demandOwnerRecords[index].id != id {
 		return
 	}
-	s.backchainDemandOwnerRecords[index] = backchainDemandOwnerSupportRecord{}
-	s.freeBackchainDemandSupportIDs = append(s.freeBackchainDemandSupportIDs, id)
+	s.backchain.demandOwnerRecords[index] = backchainDemandOwnerSupportRecord{}
+	s.backchain.freeDemandSupportIDs = append(s.backchain.freeDemandSupportIDs, id)
 }
 
 func backchainDemandSupportRecordIndex(id backchainDemandSupportID) (int, bool) {
@@ -719,21 +694,21 @@ func (s *Session) storeBackchainDemandOwnerSupport(key backchainDemandOwnerKey, 
 	if s == nil || key.isZero() || id == 0 {
 		return
 	}
-	s.backchainDemandSupportOwners.set(key, id)
+	s.backchain.supportOwners.set(key, id)
 }
 
 func (s *Session) backchainDemandSupportByOwner(key backchainDemandOwnerKey) (backchainDemandSupportID, bool) {
 	if s == nil || key.isZero() {
 		return 0, false
 	}
-	return s.backchainDemandSupportOwners.get(key)
+	return s.backchain.supportOwners.get(key)
 }
 
 func (s *Session) removeBackchainDemandOwnerSupport(key backchainDemandOwnerKey, id backchainDemandSupportID) {
 	if s == nil || key.isZero() || id == 0 {
 		return
 	}
-	s.backchainDemandSupportOwners.delete(key, id)
+	s.backchain.supportOwners.delete(key, id)
 }
 
 func backchainDemandSupportRecordMatchesRequest(record *backchainDemandSupportRecord, requestKey backchainDemandSupportRequestKey, request backchainDemandRequest) bool {

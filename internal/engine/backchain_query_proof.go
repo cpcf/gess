@@ -21,7 +21,7 @@ type backchainQueryProofContext struct {
 }
 
 func (s *Session) beginBackchainQueryProof() *backchainQueryProofContext {
-	proof := &s.backchainQueryProofScratch
+	proof := &s.backchain.queryProofScratch
 	proof.reset(s)
 	return proof
 }

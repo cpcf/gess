@@ -156,7 +156,7 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 		t.Fatalf("retained consumed activation = %#v, want support source owned by logical support memory", stored)
 	}
 
-	record, ok := session.logicalSupportEdges[edges[0].SupportID]
+	record, ok := session.tms.logicalSupportEdges[edges[0].SupportID]
 	if !ok {
 		t.Fatalf("support edge record %q missing", edges[0].SupportID)
 	}

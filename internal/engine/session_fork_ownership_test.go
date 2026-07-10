@@ -93,24 +93,26 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "factStore.slotStorage", policy: forkCloned, rationale: "fact slots are deep-cloned"},
 	{name: "factStore.compactSlotStore", policy: forkCloned, rationale: "compact slot storage is cloned"},
 	{name: "factStore.resetWorkspace", policy: forkReinitializedTransient, rationale: "the reusable reset buffer starts empty"},
-	{name: "logicalSupportEdges", policy: forkCloned, rationale: "logical support records are deep-cloned"},
-	{name: "logicalSupportBySource", policy: forkCloned, rationale: "the source support index is deep-cloned"},
-	{name: "logicalSupportByFact", policy: forkCloned, rationale: "the fact support index is deep-cloned"},
-	{name: "logicalSupportCounters", policy: forkCopied, rationale: "logical support metrics continue from the snapshot"},
-	{name: "nextBackchainDemandSupportID", policy: forkRebuiltDerived, rationale: "demand support identity is reconstructed with graph demand state"},
-	{name: "freeBackchainDemandSupportIDs", policy: forkRebuiltDerived, rationale: "the free list is reconstructed with graph demand state"},
-	{name: "backchainDemandSupports", policy: forkRebuiltDerived, rationale: "support slots are reconstructed from graph demand state"},
-	{name: "backchainDemandSupportRecords", policy: forkRebuiltDerived, rationale: "support records are reconstructed from graph demand state"},
-	{name: "backchainDemandOwnerRecords", policy: forkRebuiltDerived, rationale: "owner records are reconstructed from graph demand state"},
-	{name: "backchainDemandInlineSupports", policy: forkRebuiltDerived, rationale: "inline support indexes are reconstructed from graph demand state"},
-	{name: "backchainDemandSupportOwners", policy: forkRebuiltDerived, rationale: "support owner indexes are reconstructed from graph demand state"},
-	{name: "backchainDemandByFact", policy: forkRebuiltDerived, rationale: "fact-to-demand indexes are reconstructed from graph demand state"},
-	{name: "backchainDemandByDemand", policy: forkRebuiltDerived, rationale: "demand-to-fact indexes are reconstructed from graph demand state"},
-	{name: "demandLimit", policy: forkCopied, rationale: "the inherited cascade limit is a value unless an option replaces it"},
-	{name: "demandCounters", policy: forkCopied, rationale: "demand observability counters continue from the snapshot"},
-	{name: "activeDemandCascade", policy: forkReinitializedTransient, rationale: "no demand cascade is active while the child is constructed"},
-	{name: "activeBackchainQueryProof", policy: forkReinitializedTransient, rationale: "query proof ownership never crosses the fork boundary"},
-	{name: "backchainQueryProofScratch", policy: forkReinitializedTransient, rationale: "session-owned proof scratch starts empty"},
+	{name: "tms", policy: forkCloned, rationale: "the child receives an independently owned truth-maintenance store"},
+	{name: "tms.logicalSupportEdges", policy: forkCloned, rationale: "logical support records are deep-cloned"},
+	{name: "tms.logicalSupportBySource", policy: forkCloned, rationale: "the source support index is deep-cloned"},
+	{name: "tms.logicalSupportByFact", policy: forkCloned, rationale: "the fact support index is deep-cloned"},
+	{name: "tms.logicalSupportCounters", policy: forkCopied, rationale: "logical support metrics continue from the snapshot"},
+	{name: "backchain", policy: forkRebuiltDerived, rationale: "the child receives a backchain store whose persistent indexes are rebuilt and whose transients are fresh"},
+	{name: "backchain.nextDemandSupportID", policy: forkRebuiltDerived, rationale: "demand support identity is reconstructed with graph demand state"},
+	{name: "backchain.freeDemandSupportIDs", policy: forkRebuiltDerived, rationale: "the free list is reconstructed with graph demand state"},
+	{name: "backchain.demandSupports", policy: forkRebuiltDerived, rationale: "support slots are reconstructed from graph demand state"},
+	{name: "backchain.demandSupportRecords", policy: forkRebuiltDerived, rationale: "support records are reconstructed from graph demand state"},
+	{name: "backchain.demandOwnerRecords", policy: forkRebuiltDerived, rationale: "owner records are reconstructed from graph demand state"},
+	{name: "backchain.inlineSupports", policy: forkRebuiltDerived, rationale: "inline support indexes are reconstructed from graph demand state"},
+	{name: "backchain.supportOwners", policy: forkRebuiltDerived, rationale: "support owner indexes are reconstructed from graph demand state"},
+	{name: "backchain.demandByFact", policy: forkRebuiltDerived, rationale: "fact-to-demand indexes are reconstructed from graph demand state"},
+	{name: "backchain.demandByDemand", policy: forkRebuiltDerived, rationale: "demand-to-fact indexes are reconstructed from graph demand state"},
+	{name: "backchain.demandLimit", policy: forkCopied, rationale: "the inherited cascade limit is a value unless an option replaces it"},
+	{name: "backchain.demandCounters", policy: forkCopied, rationale: "demand observability counters continue from the snapshot"},
+	{name: "backchain.activeDemandCascade", policy: forkReinitializedTransient, rationale: "no demand cascade is active while the child is constructed"},
+	{name: "backchain.activeQueryProof", policy: forkReinitializedTransient, rationale: "query proof ownership never crosses the fork boundary"},
+	{name: "backchain.queryProofScratch", policy: forkReinitializedTransient, rationale: "session-owned proof scratch starts empty"},
 	{name: "nextEventSequence", policy: forkCopied, rationale: "event sequence continuity is part of the snapshot"},
 }
 
@@ -239,5 +241,62 @@ func TestSessionForkStartsWithFreshPropagationOwnership(t *testing.T) {
 	}
 	if len(parent.propagation.runAgendaAdded) != 1 {
 		t.Fatalf("parent added-token scratch = %d, want 1", len(parent.propagation.runAgendaAdded))
+	}
+}
+
+func TestSessionForkOwnsTMSAndRebuildsBackchainStore(t *testing.T) {
+	parent := mustSession(t, mustCompile(t), "store-owner-parent")
+	supportID := SupportID("support-1")
+	source := logicalSupportSourceKey{}
+	factID := newFactID(1, 1)
+	parent.tms.logicalSupportEdges = map[SupportID]logicalSupportEdgeRecord{
+		supportID: {},
+	}
+	parent.tms.logicalSupportBySource = map[logicalSupportSourceKey]map[SupportID]struct{}{
+		source: {supportID: {}},
+	}
+	parent.tms.logicalSupportByFact = map[FactID]map[SupportID]struct{}{
+		factID: {supportID: {}},
+	}
+	parent.tms.logicalSupportCounters.SupportEdgesAdded = 7
+
+	parent.backchain.nextDemandSupportID = 9
+	parent.backchain.freeDemandSupportIDs = []backchainDemandSupportID{3}
+	parent.backchain.demandSupportRecords = []backchainDemandSupportRecord{{id: 1}}
+	parent.backchain.demandLimit = 11
+	parent.backchain.demandCounters = backchainDemandCascadeCounters{Cascades: 2, Steps: 5}
+	parent.backchain.activeDemandCascade = &backchainDemandCascadeBudget{session: parent, started: true}
+	parent.backchain.queryProofScratch.session = parent
+	parent.backchain.queryProofScratch.facts = make([]workingFact, 1)
+	parent.backchain.activeQueryProof = &parent.backchain.queryProofScratch
+
+	child, err := parent.Fork(context.Background())
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.tms.logicalSupportCounters != parent.tms.logicalSupportCounters {
+		t.Fatalf("child TMS counters = %#v, want %#v", child.tms.logicalSupportCounters, parent.tms.logicalSupportCounters)
+	}
+	delete(child.tms.logicalSupportEdges, supportID)
+	delete(child.tms.logicalSupportBySource[source], supportID)
+	delete(child.tms.logicalSupportByFact[factID], supportID)
+	if len(parent.tms.logicalSupportEdges) != 1 || len(parent.tms.logicalSupportBySource[source]) != 1 || len(parent.tms.logicalSupportByFact[factID]) != 1 {
+		t.Fatal("child TMS mutation aliased parent maps")
+	}
+
+	if child.backchain.nextDemandSupportID != 0 || len(child.backchain.freeDemandSupportIDs) != 0 || len(child.backchain.demandSupportRecords) != 0 {
+		t.Fatalf("child persistent backchain state = %#v, want graph-rebuilt empty state", child.backchain)
+	}
+	if child.backchain.demandLimit != 11 || child.backchain.demandCounters != parent.backchain.demandCounters {
+		t.Fatalf("child backchain config/counters = limit %d, counters %#v", child.backchain.demandLimit, child.backchain.demandCounters)
+	}
+	if child.backchain.activeDemandCascade != nil || child.backchain.activeQueryProof != nil {
+		t.Fatal("child inherited active backchain transient state")
+	}
+	if child.backchain.queryProofScratch.session != nil || len(child.backchain.queryProofScratch.facts) != 0 {
+		t.Fatalf("child proof scratch = %#v, want fresh zero state", child.backchain.queryProofScratch)
+	}
+	if parent.backchain.activeDemandCascade == nil || parent.backchain.activeQueryProof == nil || len(parent.backchain.queryProofScratch.facts) != 1 {
+		t.Fatal("Fork mutated parent backchain transient state")
 	}
 }

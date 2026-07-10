@@ -1571,8 +1571,8 @@ func TestNestedQueryProofFailsLoudly(t *testing.T) {
 	}
 	defer session.Close()
 
-	session.activeBackchainQueryProof = &session.backchainQueryProofScratch
-	defer func() { session.activeBackchainQueryProof = nil }()
+	session.backchain.activeQueryProof = &session.backchain.queryProofScratch
+	defer func() { session.backchain.activeQueryProof = nil }()
 	_, err = session.QueryAll(ctx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"})
 	if err == nil {
 		t.Fatal("QueryAll succeeded with an active proof, want a nested-proof error")

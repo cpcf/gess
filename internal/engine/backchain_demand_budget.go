@@ -23,17 +23,17 @@ func (b *backchainDemandCascadeBudget) consume() error {
 	}
 	if !b.started {
 		b.started = true
-		b.session.demandCounters.Cascades++
+		b.session.backchain.demandCounters.Cascades++
 	}
-	limit := b.session.demandLimit
+	limit := b.session.backchain.demandLimit
 	if limit > 0 && b.steps >= limit {
-		b.session.demandCounters.LimitHits++
+		b.session.backchain.demandCounters.LimitHits++
 		return &DemandCascadeLimitError{Limit: limit, Steps: b.steps}
 	}
 	b.steps++
-	b.session.demandCounters.Steps++
-	b.session.demandCounters.LengthMax = max(
-		b.session.demandCounters.LengthMax,
+	b.session.backchain.demandCounters.Steps++
+	b.session.backchain.demandCounters.LengthMax = max(
+		b.session.backchain.demandCounters.LengthMax,
 		b.steps,
 	)
 	return nil

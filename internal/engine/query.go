@@ -1233,7 +1233,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, false, nil
 	}
 
-	if s.activeBackchainQueryProof != nil {
+	if s.backchain.activeQueryProof != nil {
 		// The proof context is a single session-owned scratch struct;
 		// beginning a nested proof would silently destroy the outer proof's
 		// state. The run guard makes this unreachable today — fail loudly if
@@ -1242,9 +1242,9 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 	}
 	s.propagation.runtime.graphBeta.clearQueryTerminalRows(terminalIDs)
 	proof := s.beginBackchainQueryProof()
-	s.activeBackchainQueryProof = proof
+	s.backchain.activeQueryProof = proof
 	defer func() {
-		s.activeBackchainQueryProof = nil
+		s.backchain.activeQueryProof = nil
 	}()
 
 	cleanupTrigger := true

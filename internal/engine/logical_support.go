@@ -121,14 +121,14 @@ func (m logicalSupportMemory) ensure() {
 	if s == nil {
 		return
 	}
-	if s.logicalSupportEdges == nil {
-		s.logicalSupportEdges = make(map[SupportID]logicalSupportEdgeRecord)
+	if s.tms.logicalSupportEdges == nil {
+		s.tms.logicalSupportEdges = make(map[SupportID]logicalSupportEdgeRecord)
 	}
-	if s.logicalSupportBySource == nil {
-		s.logicalSupportBySource = make(map[logicalSupportSourceKey]map[SupportID]struct{})
+	if s.tms.logicalSupportBySource == nil {
+		s.tms.logicalSupportBySource = make(map[logicalSupportSourceKey]map[SupportID]struct{})
 	}
-	if s.logicalSupportByFact == nil {
-		s.logicalSupportByFact = make(map[FactID]map[SupportID]struct{})
+	if s.tms.logicalSupportByFact == nil {
+		s.tms.logicalSupportByFact = make(map[FactID]map[SupportID]struct{})
 	}
 }
 
@@ -138,40 +138,40 @@ func (m logicalSupportMemory) addEdge(source logicalSupportSourceKey, edge Logic
 		return false
 	}
 	m.ensure()
-	if _, exists := s.logicalSupportEdges[edge.SupportID]; exists {
+	if _, exists := s.tms.logicalSupportEdges[edge.SupportID]; exists {
 		return false
 	}
-	s.logicalSupportEdges[edge.SupportID] = logicalSupportEdgeRecord{edge: edge, source: source}
-	sourceEdges := s.logicalSupportBySource[source]
+	s.tms.logicalSupportEdges[edge.SupportID] = logicalSupportEdgeRecord{edge: edge, source: source}
+	sourceEdges := s.tms.logicalSupportBySource[source]
 	if sourceEdges == nil {
 		sourceEdges = make(map[SupportID]struct{})
-		s.logicalSupportBySource[source] = sourceEdges
+		s.tms.logicalSupportBySource[source] = sourceEdges
 	}
 	sourceEdges[edge.SupportID] = struct{}{}
-	factEdges := s.logicalSupportByFact[edge.FactID]
+	factEdges := s.tms.logicalSupportByFact[edge.FactID]
 	if factEdges == nil {
 		factEdges = make(map[SupportID]struct{})
-		s.logicalSupportByFact[edge.FactID] = factEdges
+		s.tms.logicalSupportByFact[edge.FactID] = factEdges
 	}
 	factEdges[edge.SupportID] = struct{}{}
-	s.logicalSupportCounters.SupportEdgesAdded++
+	s.tms.logicalSupportCounters.SupportEdgesAdded++
 	return true
 }
 
 func (m logicalSupportMemory) countForFact(factID FactID) int {
 	s := m.session
-	if s == nil || s.logicalSupportByFact == nil {
+	if s == nil || s.tms.logicalSupportByFact == nil {
 		return 0
 	}
-	return len(s.logicalSupportByFact[factID])
+	return len(s.tms.logicalSupportByFact[factID])
 }
 
 func (m logicalSupportMemory) removeSource(ctx context.Context, source logicalSupportSourceKey) []FactID {
 	s := m.session
-	if s == nil || len(s.logicalSupportBySource) == 0 {
+	if s == nil || len(s.tms.logicalSupportBySource) == 0 {
 		return nil
 	}
-	ids := s.logicalSupportBySource[source]
+	ids := s.tms.logicalSupportBySource[source]
 	if len(ids) == 0 {
 		return nil
 	}
@@ -183,22 +183,22 @@ func (m logicalSupportMemory) removeSource(ctx context.Context, source logicalSu
 
 	affected := make([]FactID, 0, len(supportIDs))
 	for _, supportID := range supportIDs {
-		record, ok := s.logicalSupportEdges[supportID]
+		record, ok := s.tms.logicalSupportEdges[supportID]
 		if !ok {
 			continue
 		}
-		delete(s.logicalSupportEdges, supportID)
-		if byFact := s.logicalSupportByFact[record.edge.FactID]; byFact != nil {
+		delete(s.tms.logicalSupportEdges, supportID)
+		if byFact := s.tms.logicalSupportByFact[record.edge.FactID]; byFact != nil {
 			delete(byFact, supportID)
 			if len(byFact) == 0 {
-				delete(s.logicalSupportByFact, record.edge.FactID)
+				delete(s.tms.logicalSupportByFact, record.edge.FactID)
 			}
 		}
-		s.logicalSupportCounters.SupportEdgesRemoved++
+		s.tms.logicalSupportCounters.SupportEdgesRemoved++
 		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
 		affected = append(affected, record.edge.FactID)
 	}
-	delete(s.logicalSupportBySource, source)
+	delete(s.tms.logicalSupportBySource, source)
 	return affected
 }
 
@@ -258,7 +258,7 @@ func (s *Session) updateFactSupportState(fact *workingFact) {
 		}
 	}
 	if before != fact.resolvedSupportState() {
-		s.logicalSupportCounters.MetadataOnlyTransitions++
+		s.tms.logicalSupportCounters.MetadataOnlyTransitions++
 	}
 }
 
@@ -273,7 +273,7 @@ func (s *Session) addStatedSupportToFact(fact *workingFact) bool {
 		return false
 	}
 	fact.setSupportState(FactSupportStatedAndLogical)
-	s.logicalSupportCounters.MetadataOnlyTransitions++
+	s.tms.logicalSupportCounters.MetadataOnlyTransitions++
 	return true
 }
 
@@ -282,7 +282,7 @@ func (s *Session) removeStatedSupportFromFact(fact *workingFact) bool {
 		return false
 	}
 	fact.setSupportState(FactSupportLogical)
-	s.logicalSupportCounters.MetadataOnlyTransitions++
+	s.tms.logicalSupportCounters.MetadataOnlyTransitions++
 	return true
 }
 
@@ -291,7 +291,7 @@ func (s *Session) factHasLogicalSupport(factID FactID) bool {
 }
 
 func (s *Session) removeLogicalSupportsForPropagationEventDelta(ctx context.Context, event reteGraphPropagationEvent, delta reteAgendaDelta) (reteAgendaDelta, error) {
-	if s == nil || len(delta.removed) == 0 || len(s.logicalSupportBySource) == 0 {
+	if s == nil || len(delta.removed) == 0 || len(s.tms.logicalSupportBySource) == 0 {
 		return reteAgendaDelta{supported: true}, nil
 	}
 	combined := reteAgendaDelta{supported: delta.supported}
@@ -314,11 +314,11 @@ func (s *Session) removeLogicalSupportsForPropagationEventDelta(ctx context.Cont
 }
 
 func (s *Session) removeLogicalSupportsForRuleRevisions(ctx context.Context, revisions map[RuleRevisionID]struct{}, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s == nil || len(revisions) == 0 || len(s.logicalSupportBySource) == 0 {
+	if s == nil || len(revisions) == 0 || len(s.tms.logicalSupportBySource) == 0 {
 		return reteAgendaDelta{}, nil
 	}
 	sources := make([]logicalSupportSourceKey, 0)
-	for source := range s.logicalSupportBySource {
+	for source := range s.tms.logicalSupportBySource {
 		if _, ok := revisions[source.ruleRevisionID]; ok {
 			sources = append(sources, source)
 		}
@@ -346,11 +346,11 @@ func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources [
 	depth := 0
 	for len(sources) > 0 {
 		depth++
-		if depth > s.logicalSupportCounters.CascadeDepthMax {
-			s.logicalSupportCounters.CascadeDepthMax = depth
+		if depth > s.tms.logicalSupportCounters.CascadeDepthMax {
+			s.tms.logicalSupportCounters.CascadeDepthMax = depth
 		}
-		if len(sources) > s.logicalSupportCounters.CascadeBreadthMax {
-			s.logicalSupportCounters.CascadeBreadthMax = len(sources)
+		if len(sources) > s.tms.logicalSupportCounters.CascadeBreadthMax {
+			s.tms.logicalSupportCounters.CascadeBreadthMax = len(sources)
 		}
 		nextSources := make([]logicalSupportSourceKey, 0)
 		unsupportedFacts := make(map[FactID]struct{})
@@ -403,7 +403,7 @@ func (s *Session) removeLogicalSupportsForSources(ctx context.Context, sources [
 				state := s.activeFactWorkspace()
 				state.replaceWorkingFact(fact)
 				s.commitFactWorkspace(state)
-				s.logicalSupportCounters.MetadataOnlyTransitions++
+				s.tms.logicalSupportCounters.MetadataOnlyTransitions++
 			}
 		}
 		sources = nextSources
@@ -420,10 +420,10 @@ func (s *Session) removeLogicalSupportSource(ctx context.Context, source logical
 // (for example a unique-key replacement) so the fact leaves no dangling support
 // edges behind. It is a no-op for stated facts, which receive no support.
 func (s *Session) purgeReceivedLogicalSupport(ctx context.Context, factID FactID) {
-	if s == nil || len(s.logicalSupportByFact) == 0 {
+	if s == nil || len(s.tms.logicalSupportByFact) == 0 {
 		return
 	}
-	edges := s.logicalSupportByFact[factID]
+	edges := s.tms.logicalSupportByFact[factID]
 	if len(edges) == 0 {
 		return
 	}
@@ -433,55 +433,42 @@ func (s *Session) purgeReceivedLogicalSupport(ctx context.Context, factID FactID
 	}
 	slices.Sort(supportIDs)
 	for _, supportID := range supportIDs {
-		record, ok := s.logicalSupportEdges[supportID]
+		record, ok := s.tms.logicalSupportEdges[supportID]
 		if !ok {
 			continue
 		}
-		delete(s.logicalSupportEdges, supportID)
-		if bySource := s.logicalSupportBySource[record.source]; bySource != nil {
+		delete(s.tms.logicalSupportEdges, supportID)
+		if bySource := s.tms.logicalSupportBySource[record.source]; bySource != nil {
 			delete(bySource, supportID)
 			if len(bySource) == 0 {
-				delete(s.logicalSupportBySource, record.source)
+				delete(s.tms.logicalSupportBySource, record.source)
 			}
 		}
-		s.logicalSupportCounters.SupportEdgesRemoved++
+		s.tms.logicalSupportCounters.SupportEdgesRemoved++
 		s.emitLogicalSupportEvent(ctx, EventLogicalSupportRemoved, record.edge)
 	}
-	delete(s.logicalSupportByFact, factID)
+	delete(s.tms.logicalSupportByFact, factID)
 }
 
 func (s *Session) clearLogicalSupports() {
 	if s == nil {
 		return
 	}
-	clear(s.logicalSupportEdges)
-	clear(s.logicalSupportBySource)
-	clear(s.logicalSupportByFact)
-	s.logicalSupportCounters.CurrentLogicalFacts = 0
-	s.logicalSupportCounters.CurrentStatedAndLogicalFacts = 0
-	s.logicalSupportCounters.CurrentSupportEdges = 0
+	s.tms.clear()
 }
 
 func (s *Session) captureLogicalSupportState() logicalSupportState {
 	if s == nil {
 		return logicalSupportState{}
 	}
-	return logicalSupportState{
-		edges:    cloneLogicalSupportEdges(s.logicalSupportEdges),
-		bySource: cloneLogicalSupportSourceIndex(s.logicalSupportBySource),
-		byFact:   cloneLogicalSupportFactIndex(s.logicalSupportByFact),
-		counters: s.logicalSupportCounters,
-	}
+	return s.tms.capture()
 }
 
 func (s *Session) restoreLogicalSupportState(state logicalSupportState) {
 	if s == nil {
 		return
 	}
-	s.logicalSupportEdges = state.edges
-	s.logicalSupportBySource = state.bySource
-	s.logicalSupportByFact = state.byFact
-	s.logicalSupportCounters = state.counters
+	s.tms.restore(state)
 }
 
 func cloneLogicalSupportEdges(in map[SupportID]logicalSupportEdgeRecord) map[SupportID]logicalSupportEdgeRecord {
@@ -562,12 +549,12 @@ func (s *Session) currentSupportGraph() SupportGraph {
 	if s == nil {
 		return SupportGraph{}
 	}
-	edges := make([]LogicalSupportEdge, 0, len(s.logicalSupportEdges))
-	for _, record := range s.logicalSupportEdges {
+	edges := make([]LogicalSupportEdge, 0, len(s.tms.logicalSupportEdges))
+	for _, record := range s.tms.logicalSupportEdges {
 		edges = append(edges, record.edge.clone())
 	}
 	sort.Slice(edges, func(i, j int) bool { return edges[i].SupportID < edges[j].SupportID })
-	counters := s.logicalSupportCounters
+	counters := s.tms.logicalSupportCounters
 	counters.CurrentSupportEdges = len(edges)
 	for _, id := range s.factStore.insertionOrder {
 		fact, ok := s.workingFactByID(id)

@@ -99,11 +99,11 @@ func (s *Session) runAgendaWithMutationReleased(ctx context.Context, config runC
 	if !s.beginRun() {
 		return RunResult{Status: RunConcurrencyMisuse}, true, ErrConcurrencyMisuse
 	}
-	previousDemandCascade := s.activeDemandCascade
+	previousDemandCascade := s.backchain.activeDemandCascade
 	if previousDemandCascade == nil {
 		budget := newBackchainDemandCascadeBudget(s)
-		s.activeDemandCascade = &budget
-		defer func() { s.activeDemandCascade = previousDemandCascade }()
+		s.backchain.activeDemandCascade = &budget
+		defer func() { s.backchain.activeDemandCascade = previousDemandCascade }()
 	}
 
 	s.nextRunSequence++
