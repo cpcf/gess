@@ -357,8 +357,9 @@ Compatibility requires that every template used by live facts exists in the
 next ruleset with an identical spec, and that the configured initial facts
 still validate; otherwise the call fails with an incompatible status. On
 apply, logical support created by removed or replaced rules is purged with
-cascade, the Rete runtime is rebuilt, and the agenda is reconciled. Already
-fired activations of surviving rules don't fire again.
+cascade, the Rete runtime is rebuilt, and graph-emitted terminal lifecycle
+deltas update the agenda. Already fired activations of surviving rules don't
+fire again.
 
 ## Actions and the action context
 

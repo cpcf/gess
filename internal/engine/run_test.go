@@ -136,6 +136,30 @@ func TestSessionRunRejectsDirtyAgendaWithoutWholeTerminalReconcile(t *testing.T)
 	}
 }
 
+func TestSessionRunRejectsMissingLifecycleDeltaWithoutWholeTerminalReconcile(t *testing.T) {
+	revision, templateKey := mustAgendaRevision(t, 10)
+	session, err := NewSession(
+		revision,
+		WithEventListener(&testEventCollector{}),
+		WithInitialFacts(SessionInitialFact{TemplateKey: templateKey, Fields: mustFields(t, map[string]any{"name": "Ada"})}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.propagation.clearPendingLifecycleDelta()
+	session.agendaDriver.markUnready()
+	session.attachPropagationCounters()
+
+	result, err := session.Run(context.Background())
+	if !errors.Is(err, ErrUnsupportedRuntime) || result.Status != RunFailed {
+		t.Fatalf("Run = (%+v, %v), want RunFailed/ErrUnsupportedRuntime", result, err)
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if counters.OracleStyleMatchRequests != 0 || counters.WholeTerminalScans != 0 || counters.FullAgendaReconciles != 0 {
+		t.Fatalf("missing lifecycle delta triggered whole-terminal reconcile: %+v", counters)
+	}
+}
+
 func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
 	workspace := NewWorkspace()
 	if err := workspace.AddTemplate(TemplateSpec{

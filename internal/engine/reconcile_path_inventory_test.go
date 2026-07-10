@@ -5,9 +5,6 @@ import "testing"
 type reconcilePathClass string
 
 const (
-	reconcilePathInitialBuild   reconcilePathClass = "initial agenda build"
-	reconcilePathResetRebuild   reconcilePathClass = "reset rebuild"
-	reconcilePathMigrationDebt  reconcilePathClass = "migration debt"
 	reconcilePathTestOracle     reconcilePathClass = "test oracle"
 	reconcilePathDiagnosticOnly reconcilePathClass = "public diagnostic"
 )
@@ -20,41 +17,15 @@ type reconcilePathInventoryEntry struct {
 	steadyStateOK bool
 }
 
-var productionReconcilePathInventory = []reconcilePathInventoryEntry{
+var productionReconcilePathInventory = []reconcilePathInventoryEntry{}
+
+var retainedReconcilePathInventory = []reconcilePathInventoryEntry{
 	{
-		path:          "Session.reconcileAgenda: snapshot-backed rete.match plus agenda.reconcile",
-		class:         reconcilePathInitialBuild,
-		owner:         "P4 Remove Steady-State Whole-Terminal Reconcile",
-		removalPlan:   "Retain only for initial agenda construction and test parity helpers; steady-state mutation callers must apply terminal deltas or return ErrUnsupportedRuntime.",
-		steadyStateOK: true,
-	},
-	{
-		path:          "Session.Reset: graph boundary materialization after reset rebuild",
-		class:         reconcilePathResetRebuild,
-		owner:         "P1 Add Clear/Reset Propagation",
-		removalPlan:   "Retain only as reset-build boundary materialization; do not reintroduce terminal-token collection.",
-		steadyStateOK: true,
-	},
-	{
-		path:          "Session.ApplyRuleset: rebuilt-runtime boundary match",
-		class:         reconcilePathResetRebuild,
-		owner:         "P1 Add Clear/Reset Propagation",
-		removalPlan:   "Keep as revision rebuild scaffolding until ruleset application is modeled as explicit graph memory lifecycle; terminal-token collection stays removed.",
-		steadyStateOK: true,
-	},
-	{
-		path:          "Session.reconcileAgendaAfterMutation: initial agenda fallback",
-		class:         reconcilePathInitialBuild,
-		owner:         "P1 Introduce Explicit Graph Propagation Events",
-		removalPlan:   "Retain only before agenda readiness; unsupported steady-state mutation deltas return ErrUnsupportedRuntime.",
-		steadyStateOK: true,
-	},
-	{
-		path:          "Run: initial agenda readiness reconcile",
-		class:         reconcilePathInitialBuild,
-		owner:         "P4 Remove Steady-State Whole-Terminal Reconcile",
-		removalPlan:   "Retain only for initial agenda construction until graph reset/build emits terminal state directly.",
-		steadyStateOK: true,
+		path:          "reconcile_test_helper_test.go: Session.reconcileAgenda whole-terminal parity helper",
+		class:         reconcilePathTestOracle,
+		owner:         "test-only parity harness",
+		removalPlan:   "Keep in _test.go only; production lifecycle code must consume graph-emitted terminal deltas.",
+		steadyStateOK: false,
 	},
 	{
 		path:          "matcher_oracle_test.go: naive matcher parity helper",
@@ -66,11 +37,11 @@ var productionReconcilePathInventory = []reconcilePathInventoryEntry{
 }
 
 func TestProductionReconcilePathInventoryIsClassified(t *testing.T) {
-	if len(productionReconcilePathInventory) == 0 {
-		t.Fatal("production reconcile path inventory is empty")
+	if len(productionReconcilePathInventory) != 0 {
+		t.Fatalf("production whole-terminal reconcile paths remain: %#v", productionReconcilePathInventory)
 	}
-	seen := make(map[string]struct{}, len(productionReconcilePathInventory))
-	for _, entry := range productionReconcilePathInventory {
+	seen := make(map[string]struct{}, len(retainedReconcilePathInventory))
+	for _, entry := range retainedReconcilePathInventory {
 		if entry.path == "" {
 			t.Fatalf("inventory entry has empty path: %#v", entry)
 		}
@@ -87,8 +58,8 @@ func TestProductionReconcilePathInventoryIsClassified(t *testing.T) {
 		if entry.removalPlan == "" {
 			t.Fatalf("inventory entry %q has empty removal plan", entry.path)
 		}
-		if entry.class == reconcilePathMigrationDebt && entry.steadyStateOK {
-			t.Fatalf("migration debt entry %q cannot be marked steady-state OK", entry.path)
+		if entry.class != reconcilePathTestOracle && entry.class != reconcilePathDiagnosticOnly {
+			t.Fatalf("retained reconcile entry %q has production class %q", entry.path, entry.class)
 		}
 	}
 }

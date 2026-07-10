@@ -128,9 +128,13 @@ Style expectations:
   correctness tests and as opt-in performance harnesses gated by
   `GESS_*_RUNNER` environment variables, with knobs for iterations, fact
   counts, and profiles.
-- `reconcile_path_inventory_test.go` is a governance test: every
-  whole-terminal reconcile path must be enumerated, which guards against
-  reintroducing steady-state reconciliation.
+- `reconcile_path_inventory_test.go` is a governance test: production has no
+  whole-terminal reconcile path; retained parity helpers must stay in test
+  files and remain explicitly classified.
+- Initial construction, `Reset`, and `ApplyRuleset` build graph memory through
+  propagation events and update the agenda from owned terminal lifecycle
+  deltas. A missing lifecycle delta is `ErrUnsupportedRuntime`, never a signal
+  to rematch all terminals.
 
 Behavior changes come with new or updated tests, preferring contract-style
 and table-driven forms.

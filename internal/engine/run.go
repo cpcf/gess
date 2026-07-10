@@ -153,12 +153,7 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 				return abort(RunFailed, 0, err)
 			}
 		} else {
-			if _, err := s.reconcileAgenda(ctx, s); err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					return abort(RunCanceled, 0, err)
-				}
-				return abort(RunFailed, 0, err)
-			}
+			return abort(RunFailed, 0, fmt.Errorf("%w: agenda has no pending graph lifecycle delta", ErrUnsupportedRuntime))
 		}
 	}
 
