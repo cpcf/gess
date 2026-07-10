@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 )
@@ -57,6 +58,32 @@ func TestWhyNotActivatedAndAlreadyFired(t *testing.T) {
 	}
 	if fired.Outcome != WhyNotAlreadyFired {
 		t.Fatalf("Outcome after run = %q, want %q", fired.Outcome, WhyNotAlreadyFired)
+	}
+	if len(fired.Branches) != 1 {
+		t.Fatalf("branches after run = %d, want 1", len(fired.Branches))
+	}
+	branch := fired.Branches[0]
+	if branch.FirstFailing != -1 || len(branch.Conditions) != 1 || !branch.Conditions[0].Satisfied {
+		t.Fatalf("complete branch after run = %+v, want every condition satisfied with no failure", branch)
+	}
+	encoded, err := json.Marshal(fired)
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	var document struct {
+		Branches []struct {
+			FirstFailing int `json:"firstFailing"`
+			Conditions   []struct {
+				Satisfied bool `json:"satisfied"`
+			} `json:"conditions"`
+		} `json:"branches"`
+	}
+	if err := json.Unmarshal(encoded, &document); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if len(document.Branches) != 1 || document.Branches[0].FirstFailing != -1 ||
+		len(document.Branches[0].Conditions) != 1 || !document.Branches[0].Conditions[0].Satisfied {
+		t.Fatalf("already_fired JSON branch = %s, want satisfied condition with no failure", encoded)
 	}
 }
 

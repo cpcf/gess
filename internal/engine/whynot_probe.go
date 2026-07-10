@@ -153,6 +153,9 @@ func (s *Session) whyNotBranch(rule compiledRule, insp reteGraphBranchInspection
 	}
 	complete, failure := s.classifyChainFrontier(rule, insp, topStage, cfg, report)
 	if complete {
+		for i := range branch.Conditions {
+			branch.Conditions[i].Satisfied = true
+		}
 		return branch, true
 	}
 

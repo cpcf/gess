@@ -80,7 +80,9 @@ type WhyNotCondition struct {
 	Aggregate    bool
 	Source       SourceSpan
 	AlphaMatches int
-	Satisfied    bool
+	// Satisfied is true for every condition before FirstFailing in planned
+	// order, and for every condition in a complete branch.
+	Satisfied bool
 	// Reason, RejectingSpan, Blockers, and BlockerCount are populated only
 	// on the first failing condition.
 	Reason        WhyNotConditionReason

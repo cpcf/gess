@@ -88,7 +88,9 @@ The rule identity, the `outcome` (`activated`, `already_fired`,
 failing one classified. A `truncated:true` report is either bounded by a probe
 cap or explicitly degraded because the runtime could not map a graph frontier
 to a condition safely; consumers must not infer a failure from an unattributed
-branch in that case.
+branch in that case. Within each branch, `satisfied:true` marks the contiguous
+prefix before `firstFailing`; every condition is satisfied when
+`firstFailing` is `-1` for a complete branch.
 
 ```json
 {
