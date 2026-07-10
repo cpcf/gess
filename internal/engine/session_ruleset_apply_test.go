@@ -107,6 +107,58 @@ func TestSessionApplyRulesetAddsRuleCreatesActivationAndKeepsInitialFactsValidFo
 	}
 }
 
+func TestSessionApplyRulesetConsumesPendingInitialLifecycleBeforeTransition(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "pending-apply-person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "existing-person",
+		Conditions: []RuleConditionSpec{{Binding: "person", Target: TemplateKeyFact(person.Key())}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	first := mustCompileWorkspace(t, workspace)
+	collector := &testEventCollector{}
+	session, err := NewSession(
+		first,
+		WithEventListener(collector),
+		WithInitialFacts(SessionInitialFact{TemplateKey: person.Key(), Fields: mustFields(t, map[string]any{"name": "Ada"})}),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if session.agendaDriver.isReady() {
+		t.Fatal("listener-backed initial agenda unexpectedly ready before apply")
+	}
+	session.attachPropagationCounters()
+
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "added-person",
+		Conditions: []RuleConditionSpec{{Binding: "person", Target: TemplateKeyFact(person.Key())}},
+		Actions:    []RuleActionSpec{{Name: "mark"}},
+	})
+	second := mustCompileWorkspace(t, workspace)
+	result, err := session.ApplyRuleset(context.Background(), second)
+	if err != nil {
+		t.Fatalf("ApplyRuleset: %v", err)
+	}
+	if result.Status != ApplyRulesetApplied {
+		t.Fatalf("apply status = %v, want %v", result.Status, ApplyRulesetApplied)
+	}
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
+		t.Fatalf("pending activations after apply = %d, want %d", got, want)
+	}
+	if got, want := len(collector.Events()), 2; got != want {
+		t.Fatalf("activation events after apply = %d, want %d", got, want)
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if counters.OracleStyleMatchRequests != 0 || counters.WholeTerminalScans != 0 || counters.FullAgendaReconciles != 0 {
+		t.Fatalf("ruleset apply used whole-terminal reconcile: %+v", counters)
+	}
+}
+
 func TestSessionApplyRulesetRemovesPendingActivationsWithoutTouchingFacts(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
@@ -785,6 +837,18 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	}
 	if got := afterApplyCounters.SteadyStateWholeTerminalScans - beforeApplyCounters.SteadyStateWholeTerminalScans; got != 0 {
 		t.Fatalf("apply steady-state whole terminal scans = +%d, want 0", got)
+	}
+	if got, want := afterApplyCounters.OracleStyleMatchRequests, beforeApplyCounters.OracleStyleMatchRequests; got != want {
+		t.Fatalf("apply oracle-style match requests = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterApplyCounters.FullAgendaReconciles, beforeApplyCounters.FullAgendaReconciles; got != want {
+		t.Fatalf("apply full agenda reconciles = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterApplyCounters.WholeTerminalScans, beforeApplyCounters.WholeTerminalScans; got != want {
+		t.Fatalf("apply whole terminal scans = %d, want unchanged %d", got, want)
+	}
+	if got, want := afterApplyCounters.AgendaDeltaApplications, beforeApplyCounters.AgendaDeltaApplications+1; got != want {
+		t.Fatalf("apply agenda delta applications = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
 	assertGraphBetaRuntimeParity(t, revision2, session)

@@ -3133,6 +3133,13 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 			CurrentRulesetID:  nextID,
 		}, err
 	}
+	if !s.agendaDriver.isReady() {
+		if _, ok, err := s.reconcileAgendaWithoutSnapshot(ctx); err != nil {
+			return ApplyRulesetResult{}, err
+		} else if !ok {
+			return ApplyRulesetResult{}, fmt.Errorf("%w: ruleset apply requires a graph lifecycle agenda", ErrUnsupportedRuntime)
+		}
+	}
 
 	rollbackFacts := s.clonedFactWorkspace()
 	rollbackSupport := s.captureLogicalSupportState()
@@ -3152,7 +3159,6 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	s.rebuildFieldSlots(s.revision, next)
-	snapshot = s.indexedSnapshotLocked()
 	rete, err := newReteRuntime(next, globalValues)
 	if err != nil {
 		restoreApplyRulesetState()
@@ -3160,7 +3166,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	}
 	phase := propagationCounterPhaseInitial
 	state := s.activeFactWorkspace()
-	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, s.factStore.generation); err != nil {
+	lifecycleDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &state, s.factStore.generation)
+	if err != nil {
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
@@ -3168,34 +3175,22 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		s.propagation.counters.recordGraphRebuild(phase)
 	}
 
-	var results []ruleMatchResult
-	if s.propagation.counters != nil {
-		s.propagation.counters.recordOracleStyleMatchRequest(phase)
-	}
-	results, err = rete.match(ctx, snapshot)
-	if err != nil {
-		restoreApplyRulesetState()
-		return ApplyRulesetResult{}, err
-	}
-	activationRevisions := plan.activationRevisions()
-	results = s.agendaDriver.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
-
 	s.revision = next
 	s.globalValues = globalValues
 	s.propagation.installRuntime(rete)
 	s.agendaDriver.ensureAgenda()
 	s.syncPropagationCounters()
-	s.emitAgendaEvents(ctx, s.agendaDriver.agenda.purgeRuleRevisions(plan.purgeRevisions))
-	changes, err := s.agendaDriver.agenda.reconcile(context.Background(), next, results)
+	lifecycleDelta, err = s.completeBackchainDemandDeltaImmediate(ctx, lifecycleDelta, mutationOrigin{})
 	if err != nil {
 		return ApplyRulesetResult{}, err
 	}
-	if s.propagation.counters != nil {
-		s.propagation.counters.recordFullAgendaReconcile(phase)
+	s.emitAgendaEvents(ctx, s.agendaDriver.agenda.purgeRuleRevisions(plan.purgeRevisions))
+	lifecycleDelta.added = s.agendaDriver.agenda.filterTerminalTokenDeltasForRulesetApply(next, lifecycleDelta.added, plan.activationRevisions())
+	s.propagation.clearPendingLifecycleDelta()
+	s.propagation.setPendingLifecycleDelta(lifecycleDelta)
+	if _, err := s.applyPendingLifecycleAgendaDelta(ctx, s.shouldCollectAgendaChanges()); err != nil {
+		return ApplyRulesetResult{}, err
 	}
-	s.agendaDriver.markReady()
-	s.applyAutoFocus(changes)
-	s.emitAgendaEvents(ctx, changes)
 
 	return ApplyRulesetResult{
 		Status:                 ApplyRulesetApplied,
