@@ -85,7 +85,10 @@ it logically depends on (recursively), and its `history` of mutations. Tier-1
 
 The rule identity, the `outcome` (`activated`, `already_fired`,
 `never_matched`, or `blocked`), and per-branch conditions with the first
-failing one classified.
+failing one classified. A `truncated:true` report is either bounded by a probe
+cap or explicitly degraded because the runtime could not map a graph frontier
+to a condition safely; consumers must not infer a failure from an unattributed
+branch in that case.
 
 ```json
 {

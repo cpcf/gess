@@ -49,8 +49,9 @@ type WhyNotReport struct {
 	// Branches diagnoses every authored branch (an "or" rule has more than
 	// one), in branch-id order.
 	Branches []WhyNotBranch
-	// Truncated is set when a partial-match or probe cap was reached, so the
-	// report is a bounded sample rather than the full picture.
+	// Truncated is set when a partial-match or probe cap was reached or when
+	// internal plan metadata could not be mapped safely, so the report is a
+	// bounded or explicitly degraded view rather than the full picture.
 	Truncated bool
 }
 
