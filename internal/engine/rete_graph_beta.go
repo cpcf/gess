@@ -857,6 +857,32 @@ func (s *reteGraphAlphaFactSet) contains(id FactID) bool {
 	return slices.Contains(s.overflow, id)
 }
 
+func (s *reteGraphAlphaFactSet) forEach(fn func(FactID) bool) {
+	if s == nil || fn == nil {
+		return
+	}
+	for _, id := range s.inline {
+		if !id.IsZero() && !fn(id) {
+			return
+		}
+	}
+	for _, id := range s.overflow {
+		if !id.IsZero() && !fn(id) {
+			return
+		}
+	}
+}
+
+func (s *reteGraphAlphaFactSet) count() int {
+	count := len(s.overflow)
+	for _, id := range s.inline {
+		if !id.IsZero() {
+			count++
+		}
+	}
+	return count
+}
+
 func (s *reteGraphAlphaFactSet) clear() {
 	if s == nil {
 		return

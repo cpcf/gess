@@ -382,8 +382,8 @@ func (s *Session) betaNodeIsFilter(betaID reteGraphBetaNodeID) bool {
 func (s *Session) leafStageHasRows(insp reteGraphBranchInspection, leafStage reteGraphStageRef) bool {
 	switch leafStage.kind {
 	case reteGraphStageAlpha:
-		stamp, ok := s.conditionStampForStage(insp, leafStage)
-		return ok && s.rete.graphBeta.alphaFactCount(stamp.conditionID) > 0
+		_, ok := s.conditionStampForStage(insp, leafStage)
+		return ok && s.alphaStageFactCount(leafStage) > 0
 	case reteGraphStageAggregate:
 		return aggregateHasOutput(s.rete.graphBeta.aggregateMemory(reteGraphAggregateNodeID(leafStage.id)))
 	default:
@@ -397,8 +397,42 @@ func (s *Session) leafMatched(insp reteGraphBranchInspection, leafStage reteGrap
 	if leafStage.kind != reteGraphStageAlpha {
 		return false
 	}
-	stamp, ok := s.conditionStampForStage(insp, leafStage)
-	return ok && s.rete.graphBeta.alphaFactCount(stamp.conditionID) > 0
+	_, ok := s.conditionStampForStage(insp, leafStage)
+	return ok && s.alphaStageFactCount(leafStage) > 0
+}
+
+func (s *Session) alphaStageFactCount(stage reteGraphStageRef) int {
+	if s == nil || s.rete == nil || s.rete.graphBeta == nil || stage.kind != reteGraphStageAlpha {
+		return 0
+	}
+	index := stage.id
+	if index <= 0 || index >= len(s.rete.graphBeta.alpha.facts) {
+		return 0
+	}
+	return s.rete.graphBeta.alpha.facts[index].count()
+}
+
+func (s *Session) alphaMatchesForCondition(insp reteGraphBranchInspection, plannedOrder int) int {
+	if s == nil || s.rete == nil || s.rete.graph == nil || s.rete.graphBeta == nil {
+		return 0
+	}
+	facts := make(map[FactID]struct{})
+	for i := range s.rete.graph.alphaNodes {
+		stage := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(s.rete.graph.alphaNodes[i].id)}
+		stamp, ok := s.conditionStampForStage(insp, stage)
+		if !ok || stamp.plannedOrder != plannedOrder {
+			continue
+		}
+		index := stage.id
+		if index <= 0 || index >= len(s.rete.graphBeta.alpha.facts) {
+			continue
+		}
+		s.rete.graphBeta.alpha.facts[index].forEach(func(id FactID) bool {
+			facts[id] = struct{}{}
+			return true
+		})
+	}
+	return len(facts)
 }
 
 // betaNodeProducesOutput reports whether the node currently emits any output:
@@ -464,7 +498,7 @@ func (s *Session) whyNotConditions(rule compiledRule, insp reteGraphBranchInspec
 			}
 		}
 		if !cond.Test && !cond.Negated && !cond.Aggregate {
-			cond.AlphaMatches = s.rete.graphBeta.alphaFactCount(authored.ConditionID)
+			cond.AlphaMatches = s.alphaMatchesForCondition(insp, cond.PlannedOrder)
 		}
 		conditions = append(conditions, cond)
 	}
