@@ -50,17 +50,48 @@ A map of `internal/engine` by subsystem:
   (aggregates), `rete_graph_terminal_memory.go` (terminal token memory),
   `rete_runtime.go` (revision-to-graph bridge), `fact_field_index.go`
   (alpha field indexes).
-- Session runtime: `session.go` (lifecycle, mutations, queuing),
-  `run.go` (the run driver), `agenda.go` (module queues and conflict
-  resolution), `focus.go` (focus stack and auto-focus), `module.go`,
-  `fact.go` (working-memory facts), `mutation.go` (result types),
-  `snapshot.go`, `event.go`, `action.go` (action contexts),
-  `logical_support.go` (truth maintenance), `backchain_demand_support.go`
-  and `backchain_query_proof.go` (backward chaining),
-  `runtime_diagnostics.go` and `propagation_counter.go`
-  (instrumentation), `value.go`, `errors.go`, `id.go`.
+- Session runtime: `session.go` (lifecycle, mutations, queuing) coordinates
+  named session owners: `session_fact_store.go` (working memory),
+  `session_propagation.go` (Rete runtime and terminal-delta lifecycle),
+  `session_agenda_driver.go` (agenda, strategy, and focus),
+  `session_tms_store.go` and `session_backchain_store.go` (support state),
+  and `session_diagnostics_exporter.go` (events and explain history).
+  `run.go` drives firing; `agenda.go` implements module queues and conflict
+  resolution; `fact.go`, `mutation.go`, `snapshot.go`, `event.go`, and
+  `action.go` provide the runtime values and boundaries. Truth maintenance
+  and backward chaining remain implemented in `logical_support.go`,
+  `backchain_demand_support.go`, and `backchain_query_proof.go`.
+  `runtime_diagnostics.go` and `propagation_counter.go` provide
+  instrumentation; `value.go`, `errors.go`, and `id.go` contain shared
+  primitives.
 - The `.gess` language: `gess_dsl.go` and `gess_dsl_parse.go` (loader and
   parser), `gess_generate.go` (Go code generation for `gessc`).
+
+### Session ownership and graph invariants
+
+Each mutable session subsystem has one named owner. `Fork` shares the
+immutable compiled ruleset, deep-clones fact, agenda, focus, and TMS state,
+rebuilds mutable Rete and backchain ownership, and starts run/proof scratch
+fresh. Event listeners and explain history are configured fresh; event
+sequence continuity and the documented output-writer reference carry over.
+`session_fork_ownership_test.go` recursively inventories `Session` and every
+named `session*` owner. Adding or moving a field requires an explicit fork
+ownership policy and rationale.
+
+Several internal contracts are load-bearing:
+
+- Every `or` branch exposes identical binding names and templates.
+- `conditionPlans` remain in planned execution order. Public condition order
+  is resolved through `bindingSlot`, never by positional indexing with
+  `condition.Order`.
+- Activation identity is the binding tuple, including its fact identities and
+  versions; display paths are not identity.
+- Terminal and agenda deltas have one owner. A delta that does not report
+  owned storage may alias transient Rete arenas and must be applied or cloned
+  before that arena is released.
+
+Keep these contracts explicit when adding graph nodes, changing planning, or
+extending session lifecycle transitions.
 
 ## Development workflow
 
