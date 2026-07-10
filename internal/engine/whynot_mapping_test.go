@@ -64,3 +64,48 @@ func TestWhyNotDegradesWhenFrontierMappingIsInconsistent(t *testing.T) {
 		}
 	}
 }
+
+func TestWhyNotFrontierUsesCompileTimeConditionStamp(t *testing.T) {
+	session, _ := whyNotSession(t, "whynot-compiled-stamps", func(w *Workspace) map[string]TemplateKey {
+		a := mustAddTemplate(t, w, TemplateSpec{Name: "a", Fields: []FieldSpec{{Name: "v", Kind: ValueInt, Required: true}}}).Key()
+		mustAddAction(t, w, noopAction())
+		mustAddRule(t, w, RuleSpec{
+			Name: "r",
+			ConditionTree: And{Conditions: []ConditionSpec{
+				Match{Binding: "a", Target: TemplateKeyFact(a)},
+				Test{Expression: CompareExpr{Operator: ExpressionCompareGreaterThan, Left: BindingFieldExpr{Binding: "a", Field: "v"}, Right: ConstExpr{Value: int64(0)}}},
+				Test{Expression: CompareExpr{Operator: ExpressionCompareGreaterThan, Left: BindingFieldExpr{Binding: "a", Field: "v"}, Right: ConstExpr{Value: int64(100)}}},
+			}},
+			Actions: []RuleActionSpec{{Name: "noop"}},
+		})
+		return nil
+	})
+
+	inspections := session.branchInspectionsForRule(session.revision.rules["r"].revisionID)
+	if len(inspections) != 1 {
+		t.Fatalf("branch inspections = %d, want 1", len(inspections))
+	}
+	inspection := inspections[0]
+	top, ok := session.branchTopStage(inspection.TerminalID, inspection.BranchID)
+	if !ok {
+		t.Fatal("branch top stage not found")
+	}
+	betas, leaf := session.betaChain(top)
+	if len(betas) != 2 {
+		t.Fatalf("beta nodes = %d, want two test filters", len(betas))
+	}
+	for stage, wantOrder := range map[reteGraphStageRef]int{
+		leaf: 0,
+		{kind: reteGraphStageBeta, id: int(betas[0])}: 1,
+		{kind: reteGraphStageBeta, id: int(betas[1])}: 2,
+	} {
+		stamp, ok := session.conditionStampForStage(inspection, stage)
+		if !ok || stamp.plannedOrder != wantOrder {
+			t.Fatalf("stage %+v stamp = %+v, ok=%v, want planned order %d", stage, stamp, ok, wantOrder)
+		}
+	}
+	conditionID, plannedOrder, ok := session.frontierConditionLocator(inspection, betas[1])
+	if !ok || !conditionID.IsZero() || plannedOrder != 2 {
+		t.Fatalf("frontier locator = (%q, %d, %v), want stamped test at planned order 2", conditionID, plannedOrder, ok)
+	}
+}

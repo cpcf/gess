@@ -221,12 +221,12 @@ func (s *Session) classifyChainFrontier(rule compiledRule, insp reteGraphBranchI
 		case s.leafMatched(insp, leafStage):
 			return true, whyNotFailure{}
 		default:
-			return false, s.classifyLeaf(rule, insp)
+			return false, s.classifyLeaf(rule, insp, leafStage, report)
 		}
 	case frontierIdx == len(betas)-1 && s.betaNodeProducesOutput(betas[frontierIdx]):
 		return true, whyNotFailure{}
 	default:
-		failingConditionID, plannedOrder, ok := s.frontierConditionLocator(insp, betas, frontierIdx, leafStage)
+		failingConditionID, plannedOrder, ok := s.frontierConditionLocator(insp, betas[frontierIdx])
 		if !ok {
 			report.Truncated = true
 			return false, whyNotFailure{plannedOrder: -1}
@@ -248,7 +248,7 @@ func (s *Session) classifyAggregateLeaf(rule compiledRule, insp reteGraphBranchI
 	aggID := reteGraphAggregateNodeID(leafStage.id)
 	node := s.rete.graph.aggregateNode(aggID)
 	if node == nil {
-		return false, s.classifyLeaf(rule, insp)
+		return false, s.classifyLeaf(rule, insp, leafStage, report)
 	}
 	mem := s.rete.graphBeta.aggregateMemory(aggID)
 	if aggregateHasOutput(mem) {
@@ -264,7 +264,12 @@ func (s *Session) classifyAggregateLeaf(rule compiledRule, insp reteGraphBranchI
 	// The outer token exists (or the aggregate has no grouping) but the
 	// aggregate produced nothing (e.g. min/max over an empty bucket): the
 	// aggregate condition is the frontier.
-	failure := whyNotFailure{reason: WhyNotReasonNoAlphaMatches, plannedOrder: plannedOrderForConditionID(insp, node.conditionID)}
+	stamp, ok := s.conditionStampForStage(insp, leafStage)
+	if !ok {
+		report.Truncated = true
+		return false, whyNotFailure{plannedOrder: -1}
+	}
+	failure := whyNotFailure{reason: WhyNotReasonNoAlphaMatches, plannedOrder: stamp.plannedOrder}
 	if slot, ok := bindingSlotForCondition(insp, node.conditionID); ok {
 		failure.rejectingSpan = s.conditionSpan(rule, slot)
 	}
@@ -309,13 +314,6 @@ func (s *Session) decodeAggregatePartialMatches(rule compiledRule, mem *reteGrap
 	return matches
 }
 
-func plannedConditionID(insp reteGraphBranchInspection, plannedPos int) ConditionID {
-	if planned, ok := plannedConditionAt(insp, plannedPos); ok {
-		return planned.ConditionID
-	}
-	return ""
-}
-
 func plannedConditionAt(insp reteGraphBranchInspection, plannedPos int) (reteGraphConditionOrderInspection, bool) {
 	var found reteGraphConditionOrderInspection
 	ok := false
@@ -332,98 +330,43 @@ func plannedConditionAt(insp reteGraphBranchInspection, plannedPos int) (reteGra
 	return found, ok
 }
 
-// frontierConditionLocator resolves the failing condition for a frontier beta
-// node: its condition id (empty for a `test` filter or other zero-id node) and
-// its planned order, which uniquely identifies every condition — including
-// `test` and negation conditions that carry no condition id.
-//
-// A frontier that carries its own condition id resolves its planned order
-// directly from that id, which is exact regardless of what lies below it. A
-// zero-id node (a standalone `test` filter, a residual filter, or a negation
-// without an entry) is located by counting the planned slots below it: each
-// beta on the chain's left spine starts a new planned condition EXCEPT a
-// residual filter, which continues the join beneath it. Higher-order conditions
-// place their extra Not nodes on right branches, off this spine, so every
-// left-spine beta except a residual filter is exactly one planned slot. The
-// count is offset by the leaf stage's own planned position — 0 for an alpha
-// leaf, but non-zero when the chain is fed by an aggregate, whose outer
-// conditions are not betas on this spine.
-func (s *Session) frontierConditionLocator(insp reteGraphBranchInspection, betas []reteGraphBetaNodeID, frontierIdx int, leafStage reteGraphStageRef) (ConditionID, int, bool) {
-	if frontierIdx < 0 || frontierIdx >= len(betas) {
-		return "", -1, false
-	}
-	plannedOrder, ok := s.leafStagePlannedBase(insp, leafStage)
+// frontierConditionLocator resolves a beta frontier through the condition
+// identity stamped onto that node while its branch was compiled.
+func (s *Session) frontierConditionLocator(insp reteGraphBranchInspection, betaID reteGraphBetaNodeID) (ConditionID, int, bool) {
+	stamp, ok := s.conditionStampForStage(insp, reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)})
 	if !ok {
 		return "", -1, false
 	}
-	for i := 0; i <= frontierIdx; i++ {
-		node := s.rete.graph.betaNode(betas[i])
+	return stamp.conditionID, stamp.plannedOrder, true
+}
+
+func (s *Session) conditionStampForStage(insp reteGraphBranchInspection, stage reteGraphStageRef) (reteGraphConditionStamp, bool) {
+	stamp, ok := s.rete.graph.conditionStampForStage(stage, insp.RuleRevisionID, insp.BranchID)
+	if !ok {
+		return reteGraphConditionStamp{}, false
+	}
+	planned, ok := plannedConditionAt(insp, stamp.plannedOrder)
+	if !ok || planned.ConditionID != stamp.conditionID {
+		return reteGraphConditionStamp{}, false
+	}
+	switch stage.kind {
+	case reteGraphStageBeta:
+		node := s.rete.graph.betaNode(reteGraphBetaNodeID(stage.id))
 		if node == nil {
-			return "", -1, false
+			return reteGraphConditionStamp{}, false
 		}
-		if node.kind != reteGraphBetaNodeResidualFilter {
-			plannedOrder++
+		if node.kind == reteGraphBetaNodeFilter && !planned.Test && !planned.Aggregate {
+			return reteGraphConditionStamp{}, false
 		}
-		planned, ok := plannedConditionAt(insp, plannedOrder)
-		if !ok || !frontierPlanConsistent(node, planned) {
-			return "", -1, false
+		if node.kind == reteGraphBetaNodeNot && !planned.Negated && !planned.Aggregate {
+			return reteGraphConditionStamp{}, false
 		}
-	}
-	return plannedConditionID(insp, plannedOrder), plannedOrder, true
-}
-
-func frontierPlanConsistent(node *reteGraphBetaNode, planned reteGraphConditionOrderInspection) bool {
-	if node == nil {
-		return false
-	}
-	if conditionID := node.entry.conditionID; !conditionID.IsZero() && conditionID != planned.ConditionID {
-		return false
-	}
-	if !node.entry.conditionID.IsZero() {
-		return true
-	}
-	switch node.kind {
-	case reteGraphBetaNodeFilter:
-		return planned.Test
-	case reteGraphBetaNodeNot:
-		return planned.Negated
-	default:
-		return true
-	}
-}
-
-// leafStagePlannedBase returns the planned position the chain's leaf stage
-// occupies. An alpha leaf is the first planned condition (position 0). An
-// aggregate leaf sits at its own planned order, above the outer conditions that
-// feed it, none of which are betas on the frontier's left spine.
-func (s *Session) leafStagePlannedBase(insp reteGraphBranchInspection, leafStage reteGraphStageRef) (int, bool) {
-	if leafStage.kind != reteGraphStageAggregate {
-		_, ok := plannedConditionAt(insp, 0)
-		return 0, ok
-	}
-	node := s.rete.graph.aggregateNode(reteGraphAggregateNodeID(leafStage.id))
-	if node == nil {
-		return 0, false
-	}
-	if pos := plannedOrderForConditionID(insp, node.conditionID); pos >= 0 {
-		planned, ok := plannedConditionAt(insp, pos)
-		return pos, ok && planned.Aggregate
-	}
-	return 0, false
-}
-
-// plannedOrderForConditionID returns the planned position of the condition with
-// the given id, or -1 when it is not planned (e.g. a zero id).
-func plannedOrderForConditionID(insp reteGraphBranchInspection, conditionID ConditionID) int {
-	if conditionID.IsZero() {
-		return -1
-	}
-	for _, planned := range insp.PlannedOrder {
-		if planned.ConditionID == conditionID {
-			return planned.Order
+	case reteGraphStageAggregate:
+		if !planned.Aggregate {
+			return reteGraphConditionStamp{}, false
 		}
 	}
-	return -1
+	return stamp, true
 }
 
 // betaNodeIsFilter reports whether the node only forwards rows that pass a
@@ -439,7 +382,8 @@ func (s *Session) betaNodeIsFilter(betaID reteGraphBetaNodeID) bool {
 func (s *Session) leafStageHasRows(insp reteGraphBranchInspection, leafStage reteGraphStageRef) bool {
 	switch leafStage.kind {
 	case reteGraphStageAlpha:
-		return s.rete.graphBeta.alphaFactCount(plannedConditionID(insp, 0)) > 0
+		stamp, ok := s.conditionStampForStage(insp, leafStage)
+		return ok && s.rete.graphBeta.alphaFactCount(stamp.conditionID) > 0
 	case reteGraphStageAggregate:
 		return aggregateHasOutput(s.rete.graphBeta.aggregateMemory(reteGraphAggregateNodeID(leafStage.id)))
 	default:
@@ -453,8 +397,8 @@ func (s *Session) leafMatched(insp reteGraphBranchInspection, leafStage reteGrap
 	if leafStage.kind != reteGraphStageAlpha {
 		return false
 	}
-	conditionID := plannedConditionID(insp, 0)
-	return s.rete.graphBeta.alphaFactCount(conditionID) > 0
+	stamp, ok := s.conditionStampForStage(insp, leafStage)
+	return ok && s.rete.graphBeta.alphaFactCount(stamp.conditionID) > 0
 }
 
 // betaNodeProducesOutput reports whether the node currently emits any output:
@@ -553,9 +497,14 @@ func (s *Session) testConditionSource(rule compiledRule, insp reteGraphBranchIns
 	return SourceSpan{}
 }
 
-func (s *Session) classifyLeaf(rule compiledRule, insp reteGraphBranchInspection) whyNotFailure {
-	failure := whyNotFailure{reason: WhyNotReasonNoAlphaMatches, plannedOrder: 0}
-	if slot, ok := bindingSlotForCondition(insp, plannedConditionID(insp, 0)); ok {
+func (s *Session) classifyLeaf(rule compiledRule, insp reteGraphBranchInspection, leafStage reteGraphStageRef, report *WhyNotReport) whyNotFailure {
+	stamp, ok := s.conditionStampForStage(insp, leafStage)
+	if !ok {
+		report.Truncated = true
+		return whyNotFailure{plannedOrder: -1}
+	}
+	failure := whyNotFailure{reason: WhyNotReasonNoAlphaMatches, plannedOrder: stamp.plannedOrder}
+	if slot, ok := bindingSlotForCondition(insp, stamp.conditionID); ok {
 		failure.rejectingSpan = s.conditionSpan(rule, slot)
 	}
 	return failure
