@@ -118,8 +118,11 @@ func (p *backchainQueryProofContext) insertDemand(ctx context.Context, demand ba
 		compiled := newCompiledGeneratedFactInsertPlan(template)
 		plan = &compiled
 	}
+	duplicateIndex := plan.duplicateIndex(demand.slots)
+	if existing := p.findPersistentDemandFact(plan, duplicateIndex, demand.slots); existing != nil {
+		return reteAgendaDelta{supported: true}, nil
+	}
 	slots := p.cloneDemandSlots(demand.slots)
-	duplicateIndex := plan.duplicateIndex(slots)
 	if existing := p.findDemandFact(plan, duplicateIndex, slots); existing != nil {
 		return reteAgendaDelta{supported: true}, nil
 	}
@@ -130,6 +133,23 @@ func (p *backchainQueryProofContext) insertDemand(ctx context.Context, demand ba
 		return reteAgendaDelta{supported: false}, ErrInvalidRuleset
 	}
 	return session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, origin, nil))
+}
+
+func (p *backchainQueryProofContext) findPersistentDemandFact(plan *compiledGeneratedFactInsertPlan, duplicateIndex duplicateIndexKey, slots []factSlot) *workingFact {
+	if p == nil || p.session == nil || plan == nil || plan.duplicatePolicy == DuplicateAllow {
+		return nil
+	}
+	state := p.session.activeFactWorkspace()
+	if duplicateIndex.kind == duplicateIndexStructural {
+		fact, _ := state.structuralDuplicateFactWithPlan(plan, slots, duplicateIndex)
+		return fact
+	}
+	id, ok := state.duplicateFactID(p.session.revision, duplicateIndex)
+	if !ok {
+		return nil
+	}
+	fact, _ := state.workingFactByID(id)
+	return fact
 }
 
 func (p *backchainQueryProofContext) cloneDemandSlots(slots []factSlot) []factSlot {

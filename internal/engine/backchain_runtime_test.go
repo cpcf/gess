@@ -149,6 +149,96 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	assertFactStringField(t, answers[0], "value", "provided")
 }
 
+func TestQueryProofReusesPersistentIdenticalDemand(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	proofFirings := 0
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "observe-proof",
+		Fn: func(ActionContext) error {
+			proofFirings++
+			return nil
+		},
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "consume-answer", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "observe-answer-need",
+		ConditionTree: Match{
+			Binding: "need",
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+			},
+			Target: TemplateKeyFact(TemplateKey("need-answer")),
+		},
+		Actions: []RuleActionSpec{{Name: "observe-proof"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "consume-answer"}},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name:       "hardware-answer",
+		Parameters: []QueryParameterSpec{{Name: "id", Kind: ValueString}},
+		ConditionTree: Match{
+			Binding: "answer",
+			FieldConstraints: []FieldConstraintSpec{
+				{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+			},
+			Predicates: []ExpressionSpec{
+				CompareExpr{Operator: ExpressionCompareEqual, Left: CurrentFieldExpr{Field: "id"}, Right: ParamExpr{Name: "id"}},
+			},
+			Target: TemplateKeyFact(answer.Key()),
+		},
+		Returns: []QueryReturnSpec{ReturnValue("id", BindingFieldExpr{Binding: "answer", Field: "id"})},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	revision := mustCompileWorkspace(t, workspace)
+	session, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	defer session.Close()
+	if _, err := session.Assert(ctx, request.Key(), mustFields(t, map[string]any{"id": "q1"})); err != nil {
+		t.Fatalf("Assert(request): %v", err)
+	}
+	if _, err := session.Run(ctx); err != nil {
+		t.Fatalf("Run persistent demand: %v", err)
+	}
+	if proofFirings != 1 {
+		t.Fatalf("persistent proof firings = %d, want 1", proofFirings)
+	}
+	rows, err := session.QueryAll(ctx, "hardware-answer", QueryArgs{"id": "q1"})
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows = %d, want 0", len(rows))
+	}
+	if proofFirings != 1 {
+		t.Fatalf("proof firings after identical query demand = %d, want 1", proofFirings)
+	}
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	if demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey); len(demands) != 1 {
+		t.Fatalf("persistent demands after query = %d, want 1", len(demands))
+	}
+}
+
 func TestExplicitBackchainConditionDoesNotGenerateDemand(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
