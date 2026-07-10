@@ -3,9 +3,133 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestExplainJSONSchemaGoldens(t *testing.T) {
+	// Changing one of these documents requires an explicit decision about
+	// whether ExplainSchemaVersion must change. The version-derived filenames
+	// also make a version bump fail until a complete new golden set is added.
+	tests := []struct {
+		kind   string
+		report any
+	}{
+		{kind: "derivation", report: goldenDerivationReport()},
+		{kind: "whynot", report: goldenWhyNotReport()},
+		{kind: "whatif", report: goldenWhatIfReport()},
+	}
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			got, err := json.Marshal(test.report)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			got = append(got, '\n')
+			path := filepath.Join("testdata", "explain", fmt.Sprintf("%s-v%d.json", test.kind, ExplainSchemaVersion))
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%s): %v", path, err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("%s schema golden mismatch\ngot:\n%s\nwant:\n%s", test.kind, got, want)
+			}
+		})
+	}
+}
+
+func goldenDerivationReport() Derivation {
+	producer := &Firing{
+		RuleID:          RuleID("rule:advance"),
+		RuleName:        "advance",
+		RuleRevisionID:  RuleRevisionID("rule-revision:advance-v1"),
+		ActivationID:    ActivationID("activation:advance-1"),
+		Generation:      1,
+		Action:          `(modify ?record (set (status "active")))`,
+		Bindings:        []BindingValue{{Name: "record", Value: newStringValue("R-1"), FromFact: newFactID(1, 2)}, {Name: "attempt", Value: newIntValue(2)}},
+		SupportingFacts: []FactID{newFactID(1, 1)},
+	}
+	return Derivation{
+		Fact: FactSnapshot{
+			id:          newFactID(1, 2),
+			name:        "record",
+			templateKey: TemplateKey("record"),
+			version:     3,
+			generation:  1,
+			fields:      Fields{"attempt": newIntValue(2), "status": newStringValue("active")},
+			support:     FactSupportProvenance{State: FactSupportStatedAndLogical},
+		},
+		Support:    FactSupportStatedAndLogical,
+		ProducedBy: producer,
+		DependsOn:  []Derivation{{Fact: renderTestFact(newFactID(1, 1), "trigger", FactSupportStated), Support: FactSupportStated}},
+		History: []MutationRecord{
+			{Kind: MutationAssert, Firing: producer, Sequence: 7},
+			{Kind: MutationModify, Firing: producer, ChangedFields: []FieldChange{{Field: "status", Old: newStringValue("pending"), New: newStringValue("active")}}, Sequence: 8},
+		},
+	}
+}
+
+func goldenWhyNotReport() WhyNotReport {
+	return WhyNotReport{
+		RuleID:         RuleID("rule:escalate"),
+		RuleName:       "escalate",
+		RuleRevisionID: RuleRevisionID("rule-revision:escalate-v1"),
+		Outcome:        WhyNotBlocked,
+		Truncated:      true,
+		Activations: []AgendaActivation{{
+			activationID:   ActivationID("activation:escalate-1"),
+			ruleID:         RuleID("rule:escalate"),
+			ruleRevisionID: RuleRevisionID("rule-revision:escalate-v1"),
+			ruleName:       "escalate",
+			module:         MainModule,
+			salience:       50,
+			factIDs:        []FactID{newFactID(1, 3)},
+		}},
+		Branches: []WhyNotBranch{{
+			BranchID:     2,
+			FirstFailing: 1,
+			Conditions: []WhyNotCondition{
+				{Order: 0, PlannedOrder: 1, Binding: "account", Source: SourceSpan{Name: "rules.gess", StartLine: 4, StartColumn: 3}, AlphaMatches: 2, Satisfied: true},
+				{Order: 1, PlannedOrder: 0, Binding: "alert", Negated: true, Source: SourceSpan{Name: "rules.gess", StartLine: 5, StartColumn: 3}, Reason: WhyNotReasonNegationBlocked, RejectingSpan: SourceSpan{Name: "rules.gess", StartLine: 5, StartColumn: 18}, Blockers: []FactID{newFactID(1, 12)}, BlockerCount: 1},
+			},
+			PartialMatches: []WhyNotPartialMatch{{
+				Facts:          []FactID{newFactID(1, 3)},
+				Bindings:       []BindingValue{{Name: "account", Value: newStringValue("A-1"), FromFact: newFactID(1, 3)}},
+				Satisfied:      1,
+				RejectedBySpan: SourceSpan{Name: "rules.gess", StartLine: 5, StartColumn: 18},
+			}},
+		}},
+	}
+}
+
+func goldenWhatIfReport() WhatIfReport {
+	before := FactSnapshot{id: newFactID(1, 4), name: "ticket", templateKey: TemplateKey("ticket"), version: 1, generation: 1, fields: Fields{"status": newStringValue("open")}, support: FactSupportProvenance{State: FactSupportStated}}
+	after := before
+	after.version = 2
+	after.fields = Fields{"status": newStringValue("closed")}
+	return WhatIfReport{
+		Run: RunResult{RunID: 3, Status: RunCompleted, Fired: 2},
+		Firings: []WhatIfFiring{{
+			RuleID:         RuleID("rule:derive"),
+			RuleName:       "derive",
+			RuleRevisionID: RuleRevisionID("rule-revision:derive-v1"),
+			ActivationID:   ActivationID("activation:derive-1"),
+			FactIDs:        []FactID{newFactID(1, 1)},
+			Sequence:       9,
+		}},
+		Diff: SnapshotDiff{
+			Added:     []FactSnapshot{{id: newFactID(1, 5), name: "derived", templateKey: TemplateKey("derived"), version: 1, generation: 1, fields: Fields{"score": newFloatValue(3.5)}, support: FactSupportProvenance{State: FactSupportLogical}}},
+			Retracted: []FactSnapshot{{id: newFactID(1, 6), name: "obsolete", templateKey: TemplateKey("obsolete"), version: 1, generation: 1, support: FactSupportProvenance{State: FactSupportStated}}},
+			Modified:  []FactModification{{Before: before, After: after, ChangedFields: []FieldChange{{Field: "status", Old: newStringValue("open"), New: newStringValue("closed")}}, SupportBefore: FactSupportStated, SupportAfter: FactSupportStatedAndLogical}},
+		},
+		AgendaBefore: Agenda{activations: []AgendaActivation{{activationID: ActivationID("activation:before")}}},
+		AgendaAfter:  Agenda{activations: []AgendaActivation{{activationID: ActivationID("activation:after-1")}, {activationID: ActivationID("activation:after-2")}}},
+		Derivations:  []Derivation{goldenDerivationReport()},
+	}
+}
 
 func TestDerivationJSONEnvelopeAndStructure(t *testing.T) {
 	raw, err := json.Marshal(sampleDerivation())
