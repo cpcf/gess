@@ -13,7 +13,6 @@ import (
 var replCommands = []string{
 	"agenda",
 	"assert",
-	"diag",
 	"exit",
 	"explain",
 	"facts",

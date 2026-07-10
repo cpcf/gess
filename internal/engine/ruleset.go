@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	gessrules "github.com/cpcf/gess/rules"
 )
 
 type Workspace struct {
@@ -744,15 +742,28 @@ type generatedAssertReserve struct {
 	compactSlots int
 }
 
-type GeneratedFactObservabilityKind = gessrules.GeneratedFactObservabilityKind
+type GeneratedFactObservabilityKind string
 
 const (
-	GeneratedFactReactiveWorkingMemory = gessrules.GeneratedFactReactiveWorkingMemory
-	GeneratedFactQueryVisible          = gessrules.GeneratedFactQueryVisible
-	GeneratedFactOutputOnly            = gessrules.GeneratedFactOutputOnly
+	GeneratedFactReactiveWorkingMemory GeneratedFactObservabilityKind = "reactive-working-memory"
+	GeneratedFactQueryVisible          GeneratedFactObservabilityKind = "query-visible"
+	GeneratedFactOutputOnly            GeneratedFactObservabilityKind = "output-only"
 )
 
-type GeneratedFactObservability = gessrules.GeneratedFactObservability
+type GeneratedFactObservability struct {
+	TemplateKey       TemplateKey
+	TemplateName      string
+	Kind              GeneratedFactObservabilityKind
+	RuleMatchVisible  bool
+	QueryVisible      bool
+	StoresName        bool
+	DiagnosticReasons []string
+}
+
+func cloneGeneratedFactObservability(diagnostic GeneratedFactObservability) GeneratedFactObservability {
+	diagnostic.DiagnosticReasons = append([]string(nil), diagnostic.DiagnosticReasons...)
+	return diagnostic
+}
 
 func (r *Ruleset) hasAutoFocusRules() bool {
 	return r != nil && r.hasEffectiveAutoFocus
@@ -1306,7 +1317,7 @@ func (r *Ruleset) GeneratedFactObservability(templateKey TemplateKey) (Generated
 	if !ok {
 		return GeneratedFactObservability{}, false
 	}
-	return gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()), true
+	return cloneGeneratedFactObservability(plan.generatedFactObservability()), true
 }
 
 // GeneratedFactObservabilityDiagnostics returns compiler visibility proofs for
@@ -1323,7 +1334,7 @@ func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObserva
 		if !ok {
 			continue
 		}
-		out = append(out, gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()))
+		out = append(out, cloneGeneratedFactObservability(plan.generatedFactObservability()))
 		seen[template.Key()] = struct{}{}
 	}
 	if len(seen) == len(r.generatedFactInsertPlans) {
@@ -1345,7 +1356,7 @@ func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObserva
 		if !ok {
 			continue
 		}
-		out = append(out, gessrules.CloneGeneratedFactObservability(plan.generatedFactObservability()))
+		out = append(out, cloneGeneratedFactObservability(plan.generatedFactObservability()))
 	}
 	return out
 }

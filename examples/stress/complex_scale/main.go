@@ -18,7 +18,6 @@ import (
 	"time"
 
 	dsl "github.com/cpcf/gess/dsl"
-	rules "github.com/cpcf/gess/rules"
 	sess "github.com/cpcf/gess/session"
 )
 
@@ -150,7 +149,7 @@ func runShape(ctx context.Context, out io.Writer, cfg config) error {
 	}
 	fmt.Fprintf(out, "parse: duration=%s\n", time.Since(start))
 
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	start = time.Now()
 	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{}); err != nil {
 		return err
@@ -195,9 +194,6 @@ func runShape(ctx context.Context, out io.Writer, cfg config) error {
 	fmt.Fprintf(out, "fire: fired=%d duration=%s\n", result.Fired, fireElapsed)
 	fmt.Fprintf(out, "run: fired=%d duration=%s\n", result.Fired, sessionElapsed+fireElapsed)
 	writeMemory(out, "after-run", &memoryMark)
-	if err := writeRuntimeDiagnostics(ctx, out, session); err != nil {
-		return err
-	}
 	if err := writeHeapProfile(cfg.RunHeapProfile); err != nil {
 		return err
 	}
@@ -1204,27 +1200,6 @@ func writeMemory(w io.Writer, label string, previous *memoryMark) {
 		mallocsDelta,
 		stats.NumGC,
 	)
-}
-
-func writeRuntimeDiagnostics(ctx context.Context, w io.Writer, session *sess.Session) error {
-	diagnostics, err := session.RuntimeDiagnostics(ctx)
-	if err != nil {
-		return err
-	}
-	for _, owner := range diagnostics.MemoryOwners {
-		fmt.Fprintf(
-			w,
-			"rete-memory: owner=%s rows=%d buckets=%d indexes=%d tombstones=%d bytes=%d highWater=%d\n",
-			owner.Owner,
-			owner.Rows,
-			owner.Buckets,
-			owner.Indexes,
-			owner.Tombstones,
-			owner.Bytes,
-			owner.HighWater,
-		)
-	}
-	return nil
 }
 
 func supportingAssetCount(cfg config) int {

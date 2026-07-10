@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	dsl "github.com/cpcf/gess/dsl"
-	rules "github.com/cpcf/gess/rules"
+	sess "github.com/cpcf/gess/session"
 )
 
 func TestGeneratedSourceCompiles(t *testing.T) {
@@ -21,7 +21,7 @@ func TestGeneratedSourceCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	if err := dsl.Load(t.Context(), workspace, doc, dsl.Registry{}); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -40,16 +40,11 @@ func TestRunSmoke(t *testing.T) {
 		"shape: engine=gess rules=6 facts=24 queries=3 buckets=4 run=true",
 		"compile:",
 		"run: fired=",
-		"rete-memory: owner=alpha",
-		"rete-memory: owner=beta",
 		"query: name=inputs-by-bucket-0000000",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("output missing %q:\n%s", want, out.String())
 		}
-	}
-	if strings.Contains(out.String(), "rete-memory: owner=rule-terminal") {
-		t.Fatalf("output retained removed rule-terminal owner:\n%s", out.String())
 	}
 }
 

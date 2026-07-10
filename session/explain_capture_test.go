@@ -27,7 +27,7 @@ func TestExplainJSONThroughFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dsl.Parse: %v", err)
 	}
-	workspace := rules.NewWorkspace()
+	workspace := session.NewWorkspace()
 	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{}); err != nil {
 		t.Fatalf("dsl.Load: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestExplainCapturesComputedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dsl.Parse: %v", err)
 	}
-	workspace := rules.NewWorkspace()
+	workspace := session.NewWorkspace()
 	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{}); err != nil {
 		t.Fatalf("dsl.Load: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestRuntimeFacadeWrapsEventsQueriesAndReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dsl.Parse: %v", err)
 	}
-	workspace := rules.NewWorkspace()
+	workspace := session.NewWorkspace()
 	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{}); err != nil {
 		t.Fatalf("dsl.Load: %v", err)
 	}

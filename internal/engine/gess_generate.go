@@ -207,7 +207,7 @@ func (p generatedGessProgram) goSource(opts GessGoGeneratorOptions) ([]byte, err
 	fmt.Fprintf(&b, "\tgesssession \"github.com/cpcf/gess/session\"\n")
 	fmt.Fprintf(&b, ")\n\n")
 	fmt.Fprintf(&b, "func %s(ctx context.Context, registry gessdsl.Registry) (*gessrules.Ruleset, []gesssession.InitialFact, error) {\n", opts.FunctionName)
-	fmt.Fprintf(&b, "\tworkspace := gessrules.NewWorkspace()\n")
+	fmt.Fprintf(&b, "\tworkspace := gesssession.NewWorkspace()\n")
 	for _, module := range p.modules {
 		fmt.Fprintf(&b, "\tif err := workspace.AddModule(%s); err != nil {\n\t\treturn nil, nil, err\n\t}\n", renderModuleSpec(module))
 	}

@@ -12,6 +12,7 @@ import (
 	dsl "github.com/cpcf/gess/dsl"
 	"github.com/cpcf/gess/internal/gesssexp"
 	rules "github.com/cpcf/gess/rules"
+	"github.com/cpcf/gess/session"
 )
 
 func TestRenderRulesetRoundTripsReferenceCorpora(t *testing.T) {
@@ -179,7 +180,7 @@ func TestRenderIndividualConstructs(t *testing.T) {
 }
 
 func TestRenderGoAuthoredRulesetUsesRegistrations(t *testing.T) {
-	workspace := rules.NewWorkspace()
+	workspace := session.NewWorkspace()
 	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: "item",
 		Fields: []rules.FieldSpec{
@@ -248,7 +249,7 @@ func TestRenderGoAuthoredRulesetUsesRegistrations(t *testing.T) {
 
 func TestRenderRulesetPreservesAllowedValuesAndDescriptions(t *testing.T) {
 	ctx := context.Background()
-	workspace := rules.NewWorkspace()
+	workspace := session.NewWorkspace()
 	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: "ticket",
 		Fields: []rules.FieldSpec{

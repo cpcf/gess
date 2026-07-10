@@ -18,9 +18,6 @@ type (
 	// generated .gess code. TemplateKey names the declared template and
 	// Fields supplies its slot values.
 	InitialFact = engine.SessionInitialFact
-	// BackchainDemandDiagnostics summarizes active backward-chaining demand
-	// facts plus lifetime cascade-length and limit-hit counters.
-	BackchainDemandDiagnostics = engine.BackchainDemandDiagnostics
 	// QueryArgs maps query parameter names, without the leading '?', to
 	// the Go values passed to Query or QueryAll.
 	QueryArgs = engine.QueryArgs
@@ -1032,12 +1029,6 @@ func (s Snapshot) SupportGraph() SupportGraph {
 	return wrapSupportGraph(s.value.SupportGraph())
 }
 
-// BackchainDemandDiagnostics returns active generated backward-chaining demand
-// fact counts for the snapshot.
-func (s Snapshot) BackchainDemandDiagnostics() BackchainDemandDiagnostics {
-	return s.value.BackchainDemandDiagnostics()
-}
-
 // Fact returns the fact with id, if present.
 func (s Snapshot) Fact(id FactID) (FactSnapshot, bool) {
 	fact, ok := s.value.Fact(id)
@@ -1779,15 +1770,6 @@ const (
 	ExplainSchemaVersion = engine.ExplainSchemaVersion
 )
 
-type (
-	// RuntimeDiagnostics is a point-in-time diagnostic of retained
-	// runtime memory, returned by Session.RuntimeDiagnostics.
-	RuntimeDiagnostics = engine.RuntimeDiagnostics
-	// RuntimeMemoryOwnerDiagnostics summarizes one Rete runtime memory
-	// owner's retained rows, indexes, and bytes.
-	RuntimeMemoryOwnerDiagnostics = engine.RuntimeMemoryOwnerDiagnostics
-)
-
 const (
 	// EventFactAsserted, EventFactModified, and EventFactRetracted report
 	// working-memory changes; EventReset reports a session Reset.
@@ -2178,6 +2160,12 @@ func New(revision *rules.Ruleset, opts ...Option) (*Session, error) {
 	return wrapSession(rt), nil
 }
 
+// NewWorkspace returns an empty engine-backed rule workspace ready for Add
+// calls and compilation.
+func NewWorkspace() *rules.Workspace {
+	return engine.PublicWorkspace()
+}
+
 // ID returns the session identifier configured with WithSessionID.
 func (s *Session) ID() SessionID {
 	return s.engineSession().ID()
@@ -2369,10 +2357,4 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 	}
 	report, err := s.engineSession().WhatIf(ctx, engineScenario, opts...)
 	return wrapWhatIfReport(report), err
-}
-
-// RuntimeDiagnostics returns a point-in-time diagnostic of retained runtime
-// memory.
-func (s *Session) RuntimeDiagnostics(ctx context.Context) (RuntimeDiagnostics, error) {
-	return s.engineSession().RuntimeDiagnostics(ctx)
 }

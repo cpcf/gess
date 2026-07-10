@@ -662,7 +662,7 @@ func runTutorialSource(ctx context.Context, source []byte) (string, error) {
 		return "", err
 	}
 	recorded := make([]string, 0, 1)
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	if err := dsl.Load(ctx, workspace, doc, dsl.Registry{
 		Calls: map[string]dsl.CallFunc{
 			"record-emergency": func(_ rules.ActionContext, args []rules.Value) error {

@@ -21,8 +21,6 @@ type RulesetHandle interface {
 	Rules() []Rule
 	Query(string) (Query, bool)
 	Queries() []Query
-	GeneratedFactObservability(TemplateKey) (GeneratedFactObservability, bool)
-	GeneratedFactObservabilityDiagnostics() []GeneratedFactObservability
 }
 
 // Ruleset is an immutable compiled ruleset facade. Its implementation is owned
@@ -206,23 +204,4 @@ func (r *Ruleset) Queries() []Query {
 		out[i] = CloneQuery(query)
 	}
 	return out
-}
-
-// GeneratedFactObservability returns the compiler visibility proof for a
-// generated template.
-func (r *Ruleset) GeneratedFactObservability(templateKey TemplateKey) (GeneratedFactObservability, bool) {
-	if r == nil || r.handle == nil {
-		return GeneratedFactObservability{}, false
-	}
-	diagnostic, ok := r.handle.GeneratedFactObservability(templateKey)
-	return CloneGeneratedFactObservability(diagnostic), ok
-}
-
-// GeneratedFactObservabilityDiagnostics returns compiler visibility proofs for
-// all generated template insert plans.
-func (r *Ruleset) GeneratedFactObservabilityDiagnostics() []GeneratedFactObservability {
-	if r == nil || r.handle == nil {
-		return nil
-	}
-	return CloneGeneratedFactObservabilityDiagnostics(r.handle.GeneratedFactObservabilityDiagnostics())
 }

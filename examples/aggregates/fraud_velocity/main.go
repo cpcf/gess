@@ -65,7 +65,7 @@ func run(out io.Writer) error {
 }
 
 func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	for _, spec := range []rules.TemplateSpec{
 		{Name: string(accountTemplate), Fields: []rules.FieldSpec{{Name: "id", Kind: rules.ValueString, Required: true}}},
 		{Name: string(transactionTemplate), DuplicatePolicy: rules.DuplicateAllow, Fields: []rules.FieldSpec{

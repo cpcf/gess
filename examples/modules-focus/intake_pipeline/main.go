@@ -60,7 +60,7 @@ func run(out io.Writer) error {
 
 func buildRuleset(ctx context.Context, handled *[]string) (*rules.Ruleset, error) {
 	autoFocus := false
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	for _, module := range []rules.ModuleSpec{
 		{Name: intakeModule, AutoFocus: &autoFocus},
 		{Name: responseModule, AutoFocus: &autoFocus},

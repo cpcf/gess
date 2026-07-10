@@ -6,14 +6,13 @@ import (
 	gessrules "github.com/cpcf/gess/rules"
 )
 
-func init() {
-	gessrules.RegisterWorkspaceFactory(func() gessrules.WorkspaceHandle {
-		return workspaceHandle{Workspace: NewWorkspace()}
-	})
-}
-
 type workspaceHandle struct {
 	*Workspace
+}
+
+// PublicWorkspace returns a public facade for a new engine-owned workspace.
+func PublicWorkspace() *gessrules.Workspace {
+	return gessrules.NewWorkspaceWithHandle(workspaceHandle{Workspace: NewWorkspace()})
 }
 
 func (h workspaceHandle) Compile(ctx context.Context) (*gessrules.Ruleset, error) {

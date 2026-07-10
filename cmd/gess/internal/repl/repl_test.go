@@ -28,7 +28,6 @@ func TestScriptedOrderRoutingSession(t *testing.T) {
 		"focus MAIN",
 		"focus pop",
 		"focus clear",
-		"diag",
 		"reset",
 		"facts fulfillment-route",
 		"reload",
@@ -54,7 +53,6 @@ func TestScriptedOrderRoutingSession(t *testing.T) {
 		"order=O-400 warehouse=W-3\n",
 		"focus current=MAIN stack=[MAIN]\n",
 		"focus popped=MAIN current=MAIN\n",
-		"diag memory-owners=",
 		"reset status=applied generation=2\n",
 		"facts count=0\n",
 	}

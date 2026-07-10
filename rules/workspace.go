@@ -26,14 +26,6 @@ type WorkspaceHandle interface {
 	Compile(context.Context) (*Ruleset, error)
 }
 
-var newWorkspaceHandle func() WorkspaceHandle
-
-// RegisterWorkspaceFactory installs the engine-owned Workspace factory used by
-// NewWorkspace.
-func RegisterWorkspaceFactory(factory func() WorkspaceHandle) {
-	newWorkspaceHandle = factory
-}
-
 // Workspace is a mutable collection of module, template, action, function,
 // rule, and query definitions. Definitions are validated as they're added;
 // Compile produces an immutable Ruleset.
@@ -41,15 +33,10 @@ type Workspace struct {
 	handle WorkspaceHandle
 }
 
-// NewWorkspace returns an empty Workspace ready for Add calls.
-func NewWorkspace() *Workspace {
-	if newWorkspaceHandle == nil {
-		return &Workspace{}
-	}
-	return newWorkspaceWithHandle(newWorkspaceHandle())
-}
-
-func newWorkspaceWithHandle(handle WorkspaceHandle) *Workspace {
+// NewWorkspaceWithHandle returns a Workspace backed by handle. Runtime
+// packages use this constructor to make workspace ownership explicit while
+// keeping rules independent of a concrete engine implementation.
+func NewWorkspaceWithHandle(handle WorkspaceHandle) *Workspace {
 	if handle == nil {
 		return &Workspace{}
 	}

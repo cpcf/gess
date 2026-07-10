@@ -6,8 +6,9 @@ conventions for tests, benchmarks, and documentation.
 ## Repository layout
 
 - `rules/`, `session/`, `dsl/`: the public packages. `rules` owns the
-  public rule-definition values and workspace facade, while `session` and
-  `dsl` expose runtime and loader facades backed by `internal/engine`.
+  public rule-definition values, workspace facade, and compiled ruleset
+  facade; `session` explicitly constructs engine-backed workspaces and exposes
+  the runtime facade, while `dsl` exposes the loader facade.
   Keep public import paths stable while the engine evolves, and avoid
   exposing new engine internals directly.
 - `internal/engine/`: nearly all implementation code, as one flat package
@@ -62,8 +63,8 @@ A map of `internal/engine` by subsystem:
   and backward chaining remain implemented in `logical_support.go`,
   `backchain_demand_support.go`, and `backchain_query_proof.go`.
   `runtime_diagnostics.go` and `propagation_counter.go` provide
-  instrumentation; `value.go`, `errors.go`, and `id.go` contain shared
-  primitives.
+  instrumentation. Public values, errors, and identifiers are declared in
+  `rules`; the corresponding engine files retain compiler and runtime helpers.
 - The `.gess` language: `gess_dsl.go` and `gess_dsl_parse.go` (loader and
   parser), `gess_generate.go` (Go code generation for `gessc`).
 

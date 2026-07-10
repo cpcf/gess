@@ -46,6 +46,7 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 	for _, want := range []string{
 		"package rules",
 		"func BuildItems(ctx context.Context, registry gessdsl.Registry)",
+		"workspace := gesssession.NewWorkspace()",
 		"workspace.AddTemplate",
 		"workspace.AddExpressionFunction",
 		"workspace.AddAction",
@@ -56,5 +57,8 @@ func TestGenerateGessGoEmitsBuildableSource(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("generated source missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "gessrules.NewWorkspace()") {
+		t.Fatalf("generated source uses implicit rules workspace construction:\n%s", text)
 	}
 }

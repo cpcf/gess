@@ -136,8 +136,6 @@ func (s *replState) exec(ctx context.Context, line string) (bool, error) {
 		return false, s.focus(ctx, fields[1:])
 	case "reset":
 		return false, s.reset(ctx, fields[1:])
-	case "diag":
-		return false, s.diag(ctx, fields[1:])
 	default:
 		return false, fmt.Errorf("unknown command %q", fields[0])
 	}
@@ -175,7 +173,7 @@ func (s *replState) load(ctx context.Context, path string) error {
 			}
 		}
 	}
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	if err := dsl.Load(ctx, workspace, doc, registry); err != nil {
 		return err
 	}
@@ -596,24 +594,6 @@ func (s *replState) reset(ctx context.Context, args []string) error {
 	return nil
 }
 
-func (s *replState) diag(ctx context.Context, args []string) error {
-	if err := s.requireSession(); err != nil {
-		return err
-	}
-	if len(args) != 0 {
-		return fmt.Errorf("usage: diag")
-	}
-	diagnostics, err := s.session.RuntimeDiagnostics(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(s.out, "diag memory-owners=%d\n", len(diagnostics.MemoryOwners))
-	for _, owner := range diagnostics.MemoryOwners {
-		fmt.Fprintf(s.out, "%s rows=%d buckets=%d indexes=%d tombstones=%d bytes=%d high-water=%d\n", owner.Owner, owner.Rows, owner.Buckets, owner.Indexes, owner.Tombstones, owner.Bytes, owner.HighWater)
-	}
-	return nil
-}
-
 func (s *replState) factID(ctx context.Context, raw string) (sess.FactID, error) {
 	snapshot, err := s.session.Snapshot(ctx)
 	if err != nil {
@@ -807,7 +787,6 @@ func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "  watch on|off [types]")
 	fmt.Fprintln(out, "  focus [module|pop|clear]")
 	fmt.Fprintln(out, "  reset")
-	fmt.Fprintln(out, "  diag")
 	fmt.Fprintln(out, "  help")
 	fmt.Fprintln(out, "  exit")
 	fmt.Fprintln(out, "piped mode exits non-zero if any command reports an error; the loop continues after command errors.")

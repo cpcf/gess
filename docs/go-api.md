@@ -4,11 +4,11 @@ Gess exposes three public packages. They are stable public boundaries over the
 internal engine: some types are pure public values in `rules`, while runtime
 handles and behavior are implemented by `internal/engine` behind the facades.
 
-- `github.com/cpcf/gess/rules`: definitions and compilation, covering
-  templates, rules, queries, actions, expressions, values, and the compiled
-  `Ruleset`.
+- `github.com/cpcf/gess/rules`: rule-definition values and the compiled
+  `Ruleset` facade, covering templates, rules, queries, actions, expressions,
+  and values.
 - `github.com/cpcf/gess/session`: the runtime, covering sessions,
-  mutations, runs, queries, snapshots, and events.
+  workspace construction, mutations, runs, queries, snapshots, and events.
 - `github.com/cpcf/gess/dsl`: `.gess` parsing, loading, code generation, and
   the registry that connects `.gess` files to host Go code.
 
@@ -23,16 +23,15 @@ A `rules.Workspace` collects definitions; `Compile` produces an immutable
 `*rules.Ruleset`:
 
 ```go
-workspace := rules.NewWorkspace()
+workspace := session.NewWorkspace()
 // workspace.AddTemplate, AddRule, AddAction, AddQuery, ...
 ruleset, err := workspace.Compile(ctx)
 ```
 
-Importing either `session` or `dsl` in the same program initializes the
-engine-backed workspace factory used by `rules.NewWorkspace`. Most programs
-do this naturally because they compile-and-run sessions or load `.gess` files;
-rules-only programs should be treated as unsupported until the public API
-inversion is complete.
+Workspace construction is explicit: `session.NewWorkspace` supplies the
+engine-backed implementation behind the public `rules.Workspace` facade.
+Importing `rules` alone is sufficient for authoring values, but compilation
+requires the `session` runtime boundary.
 
 Workspace methods: `AddModule`, `AddTemplate`, `AddAction` /
 `ReplaceAction` / `RemoveAction`, `AddFunction` / `ReplaceFunction` /

@@ -60,7 +60,7 @@ func run(out io.Writer) error {
 }
 
 func buildRuleset(ctx context.Context) (*rules.Ruleset, error) {
-	workspace := rules.NewWorkspace()
+	workspace := sess.NewWorkspace()
 	if err := workspace.AddTemplate(rules.TemplateSpec{
 		Name: string(findingTemplate),
 		Fields: []rules.FieldSpec{
