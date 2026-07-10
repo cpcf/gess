@@ -31,14 +31,14 @@ func TestWhyNotUsesAlphaMemoryWhenCountIndexIsUnavailable(t *testing.T) {
 
 	inspection := session.branchInspectionsForRule(session.revision.rules["r"].revisionID)[0]
 	conditionID := inspection.AuthoredOrder[0].ConditionID
-	if got := session.rete.graphBeta.alphaFactCount(conditionID); got != 1 {
+	if got := session.propagation.runtime.graphBeta.alphaFactCount(conditionID); got != 1 {
 		t.Fatalf("constraint-free alpha count characterization = %d, want 1", got)
 	}
 	if _, err := session.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	delete(session.rete.graphBeta.alpha.factCounts, conditionID)
-	delete(session.rete.graphBeta.alpha.factCounts, session.branchInspectionsForRule(session.revision.rules["single"].revisionID)[0].AuthoredOrder[0].ConditionID)
+	delete(session.propagation.runtime.graphBeta.alpha.factCounts, conditionID)
+	delete(session.propagation.runtime.graphBeta.alpha.factCounts, session.branchInspectionsForRule(session.revision.rules["single"].revisionID)[0].AuthoredOrder[0].ConditionID)
 
 	report, err := session.WhyNot(context.Background(), "r")
 	if err != nil {
@@ -99,7 +99,7 @@ func TestWhyNotAlphaMemoryCharacterization(t *testing.T) {
 		rule := session.revision.rules[ruleName]
 		inspection := session.branchInspectionsForRule(rule.revisionID)[0]
 		conditionID := inspection.AuthoredOrder[0].ConditionID
-		if got := session.rete.graphBeta.alphaFactCount(conditionID); got != want {
+		if got := session.propagation.runtime.graphBeta.alphaFactCount(conditionID); got != want {
 			t.Errorf("%s auxiliary alpha count = %d, want %d", ruleName, got, want)
 		}
 		report, err := session.WhyNot(context.Background(), ruleName)

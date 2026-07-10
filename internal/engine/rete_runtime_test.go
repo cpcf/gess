@@ -113,7 +113,7 @@ func TestSessionRunFailsWhenGraphRuntimeUnsupported(t *testing.T) {
 	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+	injectUnsupportedRuntimePlan(t, session.propagation.runtime, "adult-active")
 	session.agendaReady = false
 	session.agendaDirty = true
 
@@ -205,7 +205,7 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 
 	t.Run("assert", func(t *testing.T) {
 		session := mustSession(t, revision, "unsupported-runtime-assert-session")
-		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		injectUnsupportedRuntimePlan(t, session.propagation.runtime, "adult-active")
 		_, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"age": 20, "status": "active"}))
 		assertUnsupportedRuntimeDetail(t, err)
 	})
@@ -216,7 +216,7 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Assert setup: %v", err)
 		}
-		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		injectUnsupportedRuntimePlan(t, session.propagation.runtime, "adult-active")
 		_, err = session.Retract(ctx, asserted.Fact.ID())
 		assertUnsupportedRuntimeDetail(t, err)
 	})
@@ -227,7 +227,7 @@ func TestProductionMutationsFailWhenGraphRuntimeUnsupported(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Assert setup: %v", err)
 		}
-		injectUnsupportedRuntimePlan(t, session.rete, "adult-active")
+		injectUnsupportedRuntimePlan(t, session.propagation.runtime, "adult-active")
 		_, err = session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "inactive"})})
 		assertUnsupportedRuntimeDetail(t, err)
 	})
@@ -302,10 +302,10 @@ func TestReteRuntimeRoutesSharedDeclaredTemplateAlphaOnce(t *testing.T) {
 
 	ruleA := revision.rules["adult-a"]
 	ruleB := revision.rules["adult-b"]
-	if got, want := session.rete.alphaFactCount(ruleA.conditionPlans[0].id), 1; got != want {
+	if got, want := session.propagation.runtime.alphaFactCount(ruleA.conditionPlans[0].id), 1; got != want {
 		t.Fatalf("alpha fact count for adult-a = %d, want %d", got, want)
 	}
-	if got, want := session.rete.alphaFactCount(ruleB.conditionPlans[0].id), 1; got != want {
+	if got, want := session.propagation.runtime.alphaFactCount(ruleB.conditionPlans[0].id), 1; got != want {
 		t.Fatalf("alpha fact count for adult-b = %d, want %d", got, want)
 	}
 }
@@ -433,14 +433,14 @@ func TestReteRuntimePlansNameTargetsAsGraphRoutes(t *testing.T) {
 func BenchmarkReteRuntimeSupportsIncrementalAgendaPlanFlag(b *testing.B) {
 	revision := mustCompileLargeSteadyStateScalingRuleset(b, largeSteadyStateScalingCase{streams: 16, limit: 256})
 	session := mustSeedLargeSteadyStateScalingSession(b, revision, largeSteadyStateScalingCase{streams: 16, limit: 256})
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
 		b.Fatal("large steady-state runtime does not support incremental agenda")
 	}
 
-	b.ReportMetric(float64(len(session.rete.plan.rules)), "rules")
+	b.ReportMetric(float64(len(session.propagation.runtime.plan.rules)), "rules")
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if !session.rete.supportsIncrementalAgenda() {
+		if !session.propagation.runtime.supportsIncrementalAgenda() {
 			b.Fatal("incremental agenda support changed")
 		}
 	}
@@ -791,7 +791,7 @@ func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
 	if got, want := after.UnsupportedAgendaDeltas-before.UnsupportedAgendaDeltas, 1; got != want {
 		t.Fatalf("unsupported agenda deltas = +%d, want +%d", got, want)
 	}
-	if session.runAgendaPending {
+	if session.propagation.runAgendaPending {
 		t.Fatal("unsupported run delta left pending run agenda state")
 	}
 	if !session.agendaReady || session.agendaDirty {
@@ -850,8 +850,8 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 			t.Fatalf("Assert(%s): %v", fact.TemplateKey, err)
 		}
 	}
-	if session.rete == nil || !session.rete.usesGraphBeta() || session.rete.graphBeta == nil {
-		t.Fatalf("session Rete runtime = %#v, want graph beta mode", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.usesGraphBeta() || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("session Rete runtime = %#v, want graph beta mode", session.propagation.runtime)
 	}
 	snapshot := mustSnapshot(t, ctx, session)
 	if err := runtime.resetGraphBeta(ctx, snapshot.Facts()); err != nil {
@@ -859,7 +859,7 @@ func TestReteRuntimeParityHarnessMatchesLoanUnderwritingOracle(t *testing.T) {
 	}
 
 	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), runtime)
-	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, snapshot, newNaiveMatcher(revision), session.propagation.runtime)
 }
 
 func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) {
@@ -885,25 +885,25 @@ func TestReteRuntimeAlphaMemoryMaintainsAssertModifyRetractParity(t *testing.T) 
 	assertAlphaMemoryFillerFacts(t, session, templateKey, reteMemoryMinimumFacts-3)
 
 	assertAlphaMemoryCount(t, session, "adult-active", 1)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 
 	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"status": "active"})}); err != nil {
 		t.Fatalf("Modify inactive: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 
 	if _, err := session.Modify(ctx, active.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 16})}); err != nil {
 		t.Fatalf("Modify active: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 1)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 
 	if _, err := session.Retract(ctx, inactive.Fact.ID()); err != nil {
 		t.Fatalf("Retract inactive: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 0)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 
 	if _, err := session.Retract(ctx, young.Fact.ID()); err != nil {
 		t.Fatalf("Retract young: %v", err)
@@ -935,19 +935,19 @@ func TestReteRuntimeAlphaMemoryResetRebuildsForInitialFacts(t *testing.T) {
 		t.Fatalf("Assert extra: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 3)
-	graphBetaMemory := session.rete.graphBeta
+	graphBetaMemory := session.propagation.runtime.graphBeta
 	if graphBetaMemory == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.rete)
+		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.propagation.runtime)
 	}
 
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.rete.graphBeta != graphBetaMemory {
-		t.Fatalf("graph beta memory pointer changed across reset: got %p want %p", session.rete.graphBeta, graphBetaMemory)
+	if session.propagation.runtime.graphBeta != graphBetaMemory {
+		t.Fatalf("graph beta memory pointer changed across reset: got %p want %p", session.propagation.runtime.graphBeta, graphBetaMemory)
 	}
 	assertAlphaMemoryCount(t, session, "adult-active", 2)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 }
 
 func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) {
@@ -974,7 +974,7 @@ func TestReteRuntimeAlphaMemoryApplyRulesetRebuildsForNewRevision(t *testing.T) 
 		t.Fatalf("ApplyRuleset: %v", err)
 	}
 	assertAlphaMemoryCount(t, session, "young-active", 1)
-	assertMatcherParity(t, revision2, mustSnapshot(t, ctx, session), newNaiveMatcher(revision2), session.rete)
+	assertMatcherParity(t, revision2, mustSnapshot(t, ctx, session), newNaiveMatcher(revision2), session.propagation.runtime)
 }
 
 func TestReteRuntimeNameTargetPlanExecutesOnGraph(t *testing.T) {
@@ -1056,8 +1056,8 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before left assert = %d, want 0", got)
@@ -1074,7 +1074,7 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 	if got := len(session.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after left assert = %d, want 1", got)
 	}
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 }
 
 func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
@@ -1088,8 +1088,8 @@ func TestReteRuntimeAgendaDeltasMaintainParityAcrossLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
 		t.Fatalf("initial reconcileAgenda: %v", err)
@@ -1128,8 +1128,8 @@ func TestReteRuntimeAgendaDeltasMaintainParityForSmallSupportedSession(t *testin
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
 		t.Fatalf("initial reconcileAgenda: %v", err)
@@ -1164,11 +1164,11 @@ func TestReteRuntimeTerminalTokenDeltasMatchCandidateDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 
-	results, err := session.rete.match(ctx, session.indexedSnapshotLocked())
+	results, err := session.propagation.runtime.match(ctx, session.indexedSnapshotLocked())
 	if err != nil {
 		t.Fatalf("initial Rete match: %v", err)
 	}
@@ -1274,11 +1274,11 @@ func TestReteRuntimeUsesGraphBetaForResidualOnlyNumericJoinPlans(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("expected Rete runtime")
 	}
-	if !session.rete.plan.betaSupported {
-		t.Fatalf("beta plan = %#v, want supported for residual numeric joins", session.rete.plan)
+	if !session.propagation.runtime.plan.betaSupported {
+		t.Fatalf("beta plan = %#v, want supported for residual numeric joins", session.propagation.runtime.plan)
 	}
 	session.attachPropagationCounters()
 	snapshot := session.propagationCounterSnapshot()
@@ -1335,8 +1335,8 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.plan.betaSupported {
-		t.Fatalf("graph beta runtime = %#v, want mixed graph beta support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil || !session.propagation.runtime.plan.betaSupported {
+		t.Fatalf("graph beta runtime = %#v, want mixed graph beta support", session.propagation.runtime)
 	}
 	session.attachPropagationCounters()
 	initialCounters := session.propagationCounterSnapshot()
@@ -1456,8 +1456,8 @@ func TestReteRuntimeUsesGraphBetaForMixedEqualityAndResidualJoins(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewSession reverse: %v", err)
 	}
-	if reverseSession.rete == nil || reverseSession.rete.graphBeta == nil {
-		t.Fatalf("reverse graph beta runtime = %#v, want graph beta support", reverseSession.rete)
+	if reverseSession.propagation.runtime == nil || reverseSession.propagation.runtime.graphBeta == nil {
+		t.Fatalf("reverse graph beta runtime = %#v, want graph beta support", reverseSession.propagation.runtime)
 	}
 	assertGraphBetaRuntimeParity(t, revision, reverseSession)
 }
@@ -1518,8 +1518,8 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
-		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil || !session.propagation.runtime.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.propagation.runtime)
 	}
 	session.attachPropagationCounters()
 
@@ -1607,8 +1607,8 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
-		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil || !session.propagation.runtime.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want expression predicate support", session.propagation.runtime)
 	}
 	session.attachPropagationCounters()
 
@@ -1795,8 +1795,8 @@ func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.supportsGraphBeta() {
-		t.Fatalf("graph beta runtime = %#v, want or branch support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil || !session.propagation.runtime.supportsGraphBeta() {
+		t.Fatalf("graph beta runtime = %#v, want or branch support", session.propagation.runtime)
 	}
 	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1", "active": true, "dept": "engineering"})); err != nil {
 		t.Fatalf("Assert person: %v", err)
@@ -2137,14 +2137,14 @@ func TestReteRuntimeDefaultSessionUsesGraphForSmallNameTargetPlan(t *testing.T) 
 	}
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "small-name-target-graph-session")
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("expected default Rete runtime")
 	}
-	if len(session.rete.plan.unsupported) != 0 {
-		t.Fatalf("unsupported plan reasons = %#v, want none", session.rete.plan.unsupported)
+	if len(session.propagation.runtime.plan.unsupported) != 0 {
+		t.Fatalf("unsupported plan reasons = %#v, want none", session.propagation.runtime.plan.unsupported)
 	}
-	if session.propagationCounters != nil {
-		t.Fatalf("normal session unexpectedly has propagation counters: %#v", session.propagationCounters)
+	if session.propagation.counters != nil {
+		t.Fatalf("normal session unexpectedly has propagation counters: %#v", session.propagation.counters)
 	}
 	session.attachPropagationCounters()
 	snapshot := session.propagationCounterSnapshot()
@@ -2185,11 +2185,11 @@ func TestReteRuntimeTerminalDeltaCandidatesUseIndependentScratchLanes(t *testing
 	if err != nil {
 		t.Fatalf("modifyImmediate: %v", err)
 	}
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("expected Rete runtime")
 	}
 
-	removed, err := session.rete.candidatesForTerminalDeltas(delta.removed, &session.rete.terminalRemovedScratch)
+	removed, err := session.propagation.runtime.candidatesForTerminalDeltas(delta.removed, &session.propagation.runtime.terminalRemovedScratch)
 	if err != nil {
 		t.Fatalf("removed candidates: %v", err)
 	}
@@ -2202,7 +2202,7 @@ func TestReteRuntimeTerminalDeltaCandidatesUseIndependentScratchLanes(t *testing
 	removedPath := append([]int(nil), removed[0].path...)
 	removedVersion := removed[0].factVersions[0]
 
-	added, err := session.rete.candidatesForTerminalDeltas(delta.added, &session.rete.terminalAddedScratch)
+	added, err := session.propagation.runtime.candidatesForTerminalDeltas(delta.added, &session.propagation.runtime.terminalAddedScratch)
 	if err != nil {
 		t.Fatalf("added candidates: %v", err)
 	}
@@ -2288,8 +2288,8 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("graph beta memory after initial reset = %#v, want populated memories", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("graph beta memory after initial reset = %#v, want populated memories", session.propagation.runtime)
 	}
 
 	snapshot := mustSnapshot(t, ctx, session)
@@ -2369,7 +2369,7 @@ func TestReteRuntimeBetaJoinTreatsExactIntegralFloatsAsInts(t *testing.T) {
 		t.Fatalf("Assert right: %v", err)
 	}
 
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 }
 
 func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
@@ -2380,12 +2380,12 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	assertGraphTopologyRemovalShape(t, revision)
-	if !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2393,7 +2393,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
-	results, err := session.rete.match(ctx, mustSnapshot(t, ctx, session))
+	results, err := session.propagation.runtime.match(ctx, mustSnapshot(t, ctx, session))
 	if err != nil {
 		t.Fatalf("initial Rete match: %v", err)
 	}
@@ -2471,12 +2471,12 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	assertGraphTopologyRemovalShape(t, revision)
-	if !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -2484,7 +2484,7 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
-	results, err := session.rete.match(ctx, mustSnapshot(t, ctx, session))
+	results, err := session.propagation.runtime.match(ctx, mustSnapshot(t, ctx, session))
 	if err != nil {
 		t.Fatalf("initial Rete match: %v", err)
 	}
@@ -3249,8 +3249,8 @@ func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 	if got, want := len(delta.added), 1; got != want {
 		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.rete.terminalRemovedScratch)
-	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.rete.terminalAddedScratch)
+	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.propagation.runtime.terminalRemovedScratch)
+	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.propagation.runtime.terminalAddedScratch)
 	removedIndex := candidateFactIndex(t, removed, employee.Fact.ID())
 	addedIndex := candidateFactIndex(t, added, employee.Fact.ID())
 	if removed.factVersions[removedIndex] != employee.Fact.Version() {
@@ -3315,8 +3315,8 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	if got, want := len(delta.added), 1; got != want {
 		t.Fatalf("terminal token additions = %d, want %d", got, want)
 	}
-	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.rete.terminalRemovedScratch)
-	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.rete.terminalAddedScratch)
+	removed := terminalDeltaCandidateForFact(t, session, delta.removed, employee.Fact.ID(), &session.propagation.runtime.terminalRemovedScratch)
+	added := terminalDeltaCandidateForFact(t, session, delta.added, employee.Fact.ID(), &session.propagation.runtime.terminalAddedScratch)
 	if removed.factIDs[1] == added.factIDs[1] {
 		t.Fatalf("modify did not move joined department: removed %#v added %#v", removed.factIDs, added.factIDs)
 	}
@@ -3362,8 +3362,8 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 		return nil
 	})
 	session := mustSession(t, revision, "graph-beta-negation-assert-retract-session")
-	if !session.rete.supportsGraphBeta() {
-		t.Fatalf("runtime does not support graph beta: %#v", session.rete.plan.unsupported)
+	if !session.propagation.runtime.supportsGraphBeta() {
+		t.Fatalf("runtime does not support graph beta: %#v", session.propagation.runtime.plan.unsupported)
 	}
 
 	if _, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-2", "active": true})); err != nil {
@@ -3600,12 +3600,12 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	assertGraphTopologyRemovalShape(t, revision)
-	if !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -3623,7 +3623,7 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if got := len(session.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 	assertGraphBetaAlphaFactCount(t, session, "employee-department-region-a", 1, 0)
 	assertGraphBetaAlphaFactCount(t, session, "employee-department-office", 1, 0)
 
@@ -3634,8 +3634,8 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if resetResult.Status != ResetApplied {
 		t.Fatalf("reset status = %v, want %v", resetResult.Status, ResetApplied)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime after reset = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime after reset = %#v, want graph beta", session.propagation.runtime)
 	}
 	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
@@ -3748,8 +3748,8 @@ func TestReteRuntimeGraphBetaTerminalTokenIdentityIndexesUseFactIdentity(t *test
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("graph beta runtime = %#v, want graph beta support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("graph beta runtime = %#v, want graph beta support", session.propagation.runtime)
 	}
 	session.attachPropagationCounters()
 
@@ -3785,11 +3785,11 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	const retainedPairs = 128
 
 	session := mustGraphRemovalSparseBenchmarkSession(t, revision, employeeKey, departmentKey, retainedPairs)
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
-	if !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -4271,10 +4271,10 @@ func mustSessionFactByTemplateAndField(t *testing.T, session *Session, templateK
 
 func terminalDeltaCandidateForFact(t *testing.T, session *Session, deltas []reteTerminalTokenDelta, factID FactID, scratch *candidateScratch) matchCandidate {
 	t.Helper()
-	if session == nil || session.rete == nil {
+	if session == nil || session.propagation.runtime == nil {
 		t.Fatal("session has no Rete runtime")
 	}
-	candidates, err := session.rete.candidatesForTerminalDeltas(deltas, scratch)
+	candidates, err := session.propagation.runtime.candidatesForTerminalDeltas(deltas, scratch)
 	if err != nil {
 		t.Fatalf("terminal delta candidates: %v", err)
 	}
@@ -4498,7 +4498,7 @@ func injectUnsupportedRuntimePlan(t testing.TB, runtime *reteRuntime, ruleName s
 
 func assertAlphaMemoryCount(t testing.TB, session *Session, ruleName string, want int) {
 	t.Helper()
-	if session == nil || session.rete == nil {
+	if session == nil || session.propagation.runtime == nil {
 		t.Fatal("session has no Rete runtime")
 	}
 	rule, ok := session.revision.rules[ruleName]
@@ -4509,14 +4509,14 @@ func assertAlphaMemoryCount(t testing.TB, session *Session, ruleName string, wan
 		t.Fatalf("rule %q has no conditions", ruleName)
 	}
 	conditionID := rule.conditionPlans[0].id
-	if got := session.rete.alphaFactCount(conditionID); got != want {
+	if got := session.propagation.runtime.alphaFactCount(conditionID); got != want {
 		t.Fatalf("alpha fact count for %s = %d, want %d", ruleName, got, want)
 	}
 }
 
 func assertGraphBetaAlphaFactCount(t testing.TB, session *Session, ruleName string, conditionIndex int, want int) {
 	t.Helper()
-	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
+	if session == nil || session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatal("session has no graph beta memory")
 	}
 	rule, ok := session.revision.rules[ruleName]
@@ -4527,7 +4527,7 @@ func assertGraphBetaAlphaFactCount(t testing.TB, session *Session, ruleName stri
 		t.Fatalf("rule %q condition index %d out of range", ruleName, conditionIndex)
 	}
 	conditionID := rule.conditionPlans[conditionIndex].id
-	if got := session.rete.alphaFactCount(conditionID); got != want {
+	if got := session.propagation.runtime.alphaFactCount(conditionID); got != want {
 		t.Fatalf("graph beta alpha fact count for %s condition %d = %d, want %d", ruleName, conditionIndex, got, want)
 	}
 }
@@ -4639,11 +4639,11 @@ func agendaOrderForResults(t testing.TB, revision *Ruleset, results []ruleMatchR
 
 func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session) {
 	t.Helper()
-	if session == nil || session.rete == nil {
+	if session == nil || session.propagation.runtime == nil {
 		t.Fatal("session has no Rete runtime")
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)
-	results, err := session.rete.match(context.Background(), snapshot)
+	results, err := session.propagation.runtime.match(context.Background(), snapshot)
 	if err != nil {
 		t.Fatalf("Rete match: %v", err)
 	}
@@ -4660,11 +4660,11 @@ func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session)
 
 func assertTerminalTokenDeltaMatchesCandidateDelta(t *testing.T, revision *Ruleset, session *Session, candidateAgenda, directAgenda *agenda, delta reteAgendaDelta) []agendaChange {
 	t.Helper()
-	removed, err := session.rete.candidatesForTerminalDeltas(delta.removed, &session.rete.terminalRemovedScratch)
+	removed, err := session.propagation.runtime.candidatesForTerminalDeltas(delta.removed, &session.propagation.runtime.terminalRemovedScratch)
 	if err != nil {
 		t.Fatalf("removed candidates: %v", err)
 	}
-	added, err := session.rete.candidatesForTerminalDeltas(delta.added, &session.rete.terminalAddedScratch)
+	added, err := session.propagation.runtime.candidatesForTerminalDeltas(delta.added, &session.propagation.runtime.terminalAddedScratch)
 	if err != nil {
 		t.Fatalf("added candidates: %v", err)
 	}
@@ -4707,10 +4707,10 @@ func cloneTerminalTokenDeltas(deltas []reteTerminalTokenDelta) []reteTerminalTok
 
 func assertGraphBetaRuntimeParity(t *testing.T, revision *Ruleset, session *Session) {
 	t.Helper()
-	if session == nil || session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.rete)
+	if session == nil || session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta memory", session.propagation.runtime)
 	}
-	assertMatcherParity(t, revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(revision), session.propagation.runtime)
 }
 
 func cloneRuleMatchResults(results []ruleMatchResult) []ruleMatchResult {

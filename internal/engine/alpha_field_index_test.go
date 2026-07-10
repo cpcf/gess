@@ -59,7 +59,7 @@ func TestGraphBetaAlphaFactRoutesTrackModifyAndRetract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert(hot): %v", err)
 	}
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if memory == nil {
 		t.Fatal("graph beta memory is nil")
 	}
@@ -103,7 +103,7 @@ func TestGraphBetaAlphaFactRoutesClearTouchedKeysOnReset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert(hot): %v", err)
 	}
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if memory == nil {
 		t.Fatal("graph beta memory is nil")
 	}
@@ -173,7 +173,7 @@ func TestGraphBetaAlphaMemoryDiagnosticsIncludeRouteIndexes(t *testing.T) {
 	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"category": "hot", "score": 2})); err != nil {
 		t.Fatalf("Assert(hot): %v", err)
 	}
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if memory == nil {
 		t.Fatal("graph beta memory is nil")
 	}
@@ -331,7 +331,7 @@ func TestGraphBetaAlphaLiteralEqualityIndexRebuildsAfterFactTableSwap(t *testing
 	if err != nil {
 		t.Fatalf("Assert(hot): %v", err)
 	}
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if memory == nil {
 		t.Fatal("graph beta memory is nil")
 	}

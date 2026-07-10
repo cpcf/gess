@@ -333,7 +333,7 @@ func TestConditionTreeExplicitPositiveMatchMetadataAndRuntime(t *testing.T) {
 	if firedName != "Ada" {
 		t.Fatalf("fired name = %q, want Ada", firedName)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatal("explicit match did not use graph beta runtime")
 	}
 }

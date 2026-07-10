@@ -153,8 +153,7 @@ type Session struct {
 	agenda               *agenda
 	strategy             Strategy
 	forkCount            uint64
-	propagationCounters  *propagationCounterLedger
-	rete                 *reteRuntime
+	propagation          sessionPropagationCoordinator
 	factStore            sessionFactStore
 	initialFocusStack    []ModuleName
 	focusStack           []ModuleName
@@ -174,15 +173,6 @@ type Session struct {
 	runActive            atomic.Bool
 	runActivation        atomic.Pointer[activation]
 	runHaltRequested     atomic.Bool
-	runAgendaDelta       reteAgendaDelta
-	runAgendaDeltas      []reteAgendaDelta
-	runAgendaStates      []runAgendaDeltaState
-	runAgendaBuckets     map[candidateIdentity]int
-	runAgendaAdded       []reteTerminalTokenDelta
-	runAgendaRemoved     []reteTerminalTokenDelta
-	runAgendaUpdated     []reteTerminalTokenUpdate
-	runAgendaPending     bool
-	runAgendaDirect      bool
 	agendaReady          bool
 	agendaDirty          bool
 	actionBindingScratch actionContextBindingState
@@ -305,7 +295,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		revision:            revision,
 		agenda:              agenda,
 		strategy:            cfg.strategy,
-		rete:                rete,
+		propagation:         newSessionPropagationCoordinator(rete),
 		factStore:           newSessionFactStore(state),
 		initialFocusStack:   []ModuleName{MainModule},
 		focusStack:          []ModuleName{MainModule},
@@ -388,44 +378,33 @@ func (s *Session) attachPropagationCounters() *propagationCounterLedger {
 	if s == nil {
 		return nil
 	}
-	if s.propagationCounters == nil {
-		s.propagationCounters = newPropagationCounterLedger()
-	}
+	s.propagation.attachCounters()
 	s.syncPropagationCounters()
-	return s.propagationCounters
+	return s.propagation.counters
 }
 
 func (s *Session) propagationCounterSnapshot() propagationCounterSnapshot {
-	if s == nil || s.propagationCounters == nil {
+	if s == nil || s.propagation.counters == nil {
 		return propagationCounterSnapshot{}
 	}
 	s.syncPropagationCounters()
-	if s.rete != nil && s.rete.graphBeta != nil {
-		s.propagationCounters.setGraphBetaMemoryStats(s.rete.graphBeta.memoryStats())
+	if s.propagation.runtime != nil && s.propagation.runtime.graphBeta != nil {
+		s.propagation.counters.setGraphBetaMemoryStats(s.propagation.runtime.graphBeta.memoryStats())
 	} else {
-		s.propagationCounters.setGraphBetaMemoryStats(reteGraphBetaMemoryStats{})
+		s.propagation.counters.setGraphBetaMemoryStats(reteGraphBetaMemoryStats{})
 	}
-	return s.propagationCounters.snapshot()
+	return s.propagation.counters.snapshot()
 }
 
 func (s *Session) syncPropagationCounters() {
 	if s == nil || s.agenda == nil {
 		return
 	}
-	s.agenda.propagationCounters = s.propagationCounters
-	if s.propagationCounters == nil {
+	s.agenda.propagationCounters = s.propagation.counters
+	if s.propagation.counters == nil {
 		return
 	}
-	if s.rete != nil && s.rete.graphBeta != nil {
-		s.propagationCounters.setTerminalRowsRetained(s.rete.graphBeta.terminalRowCount())
-	} else {
-		s.propagationCounters.setTerminalRowsRetained(0)
-	}
-	path, unsupportedReasons := propagationRuntimeUnknown, map[string]int(nil)
-	if s.rete != nil {
-		path, unsupportedReasons = s.rete.propagationDiagnostics()
-	}
-	s.propagationCounters.setRuntimeDiagnostics(path, unsupportedReasons)
+	s.propagation.syncCounters()
 }
 
 func (s *Session) propagationCounterPhase() propagationCounterPhase {
@@ -666,17 +645,17 @@ func (s *Session) factsForTargetFieldEqual(target conditionTarget, fieldSlot int
 }
 
 func (s *Session) recordAlphaIndexProbe(hit bool) {
-	if s == nil || s.propagationCounters == nil {
+	if s == nil || s.propagation.counters == nil {
 		return
 	}
-	s.propagationCounters.recordAlphaIndexProbe(hit)
+	s.propagation.counters.recordAlphaIndexProbe(hit)
 }
 
 func (s *Session) recordAlphaIndexFallbackScan() {
-	if s == nil || s.propagationCounters == nil {
+	if s == nil || s.propagation.counters == nil {
 		return
 	}
-	s.propagationCounters.recordAlphaIndexFallbackScan()
+	s.propagation.counters.recordAlphaIndexFallbackScan()
 }
 
 func (s *Session) factIDsForTarget(target conditionTarget) ([]FactID, bool) {
@@ -845,7 +824,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		revision:            s.revision,
 		agenda:              s.agenda.cloneForFork(cfg.strategy),
 		strategy:            cfg.strategy,
-		rete:                rete,
+		propagation:         forkSessionPropagationCoordinator(rete, &s.propagation),
 		factStore:           newSessionFactStore(&state),
 		initialFocusStack:   cloneModuleNames(s.initialFocusStack),
 		focusStack:          cloneModuleNames(s.focusStack),
@@ -1400,8 +1379,8 @@ func (p preparedTemplateValueInserter) insertPreparedCompactSlots(b *preparedTem
 	}
 
 	var span *propagationCounterSpan
-	if session.propagationCounters != nil {
-		counterSpan := session.propagationCounters.beginAssert(plan.templateKey, mutationOrigin{})
+	if session.propagation.counters != nil {
+		counterSpan := session.propagation.counters.beginAssert(plan.templateKey, mutationOrigin{})
 		span = &counterSpan
 	}
 	agendaDelta, err := session.updateReteAlphaAfterAssertGenerated(b.ctx, fact, b.state.compactSlotStore, mutationOrigin{}, span)
@@ -1441,8 +1420,8 @@ func (p preparedTemplateValueInserter) insertPreparedSlots(b *preparedTemplateVa
 	}
 
 	var span *propagationCounterSpan
-	if session.propagationCounters != nil {
-		counterSpan := session.propagationCounters.beginAssert(p.template.Key(), mutationOrigin{})
+	if session.propagation.counters != nil {
+		counterSpan := session.propagation.counters.beginAssert(p.template.Key(), mutationOrigin{})
 		span = &counterSpan
 	}
 	agendaDelta, err := session.updateReteAlphaAfterAssertGenerated(b.ctx, fact, b.state.compactSlotStore, mutationOrigin{}, span)
@@ -1632,8 +1611,8 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 
 	snapshot := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(snapshot.TemplateKey(), origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, fact, snapshot, state.compactSlotStore, origin, span)
@@ -1778,8 +1757,8 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 
 	snapshot := fact.snapshotForRevision(s.revision, state.compactSlotStore)
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(snapshot.TemplateKey(), origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(snapshot.TemplateKey(), origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssert(ctx, fact, snapshot, state.compactSlotStore, origin, span)
@@ -1963,8 +1942,8 @@ func (s *Session) insertPreparedTemplateCompactSlotsWithPlanImmediate(ctx contex
 	}
 
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(plan.templateKey, origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
@@ -2050,8 +2029,8 @@ func (s *Session) insertPreparedTemplateSlotsWithPlanImmediate(ctx context.Conte
 	}
 
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(plan.templateKey, origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
@@ -2145,8 +2124,8 @@ func (s *Session) insertRuleActionGeneratedFactSlotsImmediate(ctx context.Contex
 	}
 
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(plan.templateKey, origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
@@ -2238,8 +2217,8 @@ func (s *Session) insertRuleActionGeneratedCompactFactSlotsImmediate(ctx context
 	}
 
 	var span *propagationCounterSpan
-	if s.propagationCounters != nil {
-		counterSpan := s.propagationCounters.beginAssert(plan.templateKey, origin)
+	if s.propagation.counters != nil {
+		counterSpan := s.propagation.counters.beginAssert(plan.templateKey, origin)
 		span = &counterSpan
 	}
 	agendaDelta, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
@@ -2354,8 +2333,8 @@ func (s *Session) flushBackchainDemandRequestsImmediate(ctx context.Context, sta
 			continue
 		}
 		var span *propagationCounterSpan
-		if s.propagationCounters != nil {
-			counterSpan := s.propagationCounters.beginAssert(template.Key(), origin)
+		if s.propagation.counters != nil {
+			counterSpan := s.propagation.counters.beginAssert(template.Key(), origin)
 			span = &counterSpan
 		}
 		next, err := s.updateReteAlphaAfterAssertGenerated(ctx, fact, state.compactSlotStore, origin, span)
@@ -2432,17 +2411,17 @@ func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, r
 }
 
 func (s *Session) backchainDemandRequestByID(id backchainDemandID) (backchainDemandRequest, bool) {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return backchainDemandRequest{}, false
 	}
-	return s.rete.graphBeta.backchainDemandRequestByID(id)
+	return s.propagation.runtime.graphBeta.backchainDemandRequestByID(id)
 }
 
 func (s *Session) clearBackchainDemandRequestArena() {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return
 	}
-	s.rete.graphBeta.clearBackchainDemandRequests()
+	s.propagation.runtime.graphBeta.clearBackchainDemandRequests()
 }
 
 func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFact, origin mutationOrigin) {
@@ -3079,7 +3058,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	next.applyCompiledInitialFacts(compiledInitials)
 
-	rete := s.rete
+	rete := s.propagation.runtime
 	if rete == nil {
 		var err error
 		rete, err = newReteRuntime(s.revision, s.globalValues)
@@ -3092,7 +3071,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	var initialAgenda *agenda
 	if resetAgendaWithInitialAgenda {
 		initialAgenda = newAgendaWithStrategy(s.strategy)
-		initialAgenda.propagationCounters = s.propagationCounters
+		initialAgenda.propagationCounters = s.propagation.counters
 	}
 	var resetDemandDelta reteAgendaDelta
 	if resetAgendaWithInitialAgenda {
@@ -3101,17 +3080,17 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		resetDemandDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
 	}
 	if err != nil {
-		if s.rete != nil {
+		if s.propagation.runtime != nil {
 			rollbackState := s.activeFactWorkspace()
-			_, _ = s.rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.factStore.generation)
+			_, _ = s.propagation.runtime.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.factStore.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
 	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
 		resetAgendaWithInitialAgenda = false
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordGraphRebuild(propagationCounterPhaseInitial)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordGraphRebuild(propagationCounterPhaseInitial)
 	}
 
 	oldGeneration := s.factStore.generation
@@ -3122,7 +3101,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.clearBackchainDemandSupports()
 	s.swapFactWorkspace(next)
 	s.factStore.generation = next.generation
-	s.rete = rete
+	s.propagation.installRuntime(rete)
 	s.syncPropagationCounters()
 	if len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
 		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, resetDemandDelta.resolvedOwners, mutationOrigin{}); err != nil {
@@ -3153,7 +3132,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 	if !resetAgendaWithInitialAgenda {
 		s.emitAgendaEvents(ctx, s.agenda.clear())
-		results, err := s.rete.match(ctx, s)
+		results, err := s.propagation.runtime.match(ctx, s)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
@@ -3281,13 +3260,13 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		restoreApplyRulesetState()
 		return ApplyRulesetResult{}, err
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordGraphRebuild(phase)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordGraphRebuild(phase)
 	}
 
 	var results []ruleMatchResult
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordOracleStyleMatchRequest(phase)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordOracleStyleMatchRequest(phase)
 	}
 	results, err = rete.match(ctx, snapshot)
 	if err != nil {
@@ -3299,7 +3278,7 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 
 	s.revision = next
 	s.globalValues = globalValues
-	s.rete = rete
+	s.propagation.installRuntime(rete)
 	if s.agenda == nil {
 		s.agenda = newAgendaWithStrategy(s.strategy)
 	}
@@ -3309,8 +3288,8 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 	if err != nil {
 		return ApplyRulesetResult{}, err
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordFullAgendaReconcile(phase)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordFullAgendaReconcile(phase)
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
@@ -3352,20 +3331,20 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 		return nil, nil
 	}
 
-	if s.rete == nil {
+	if s.propagation.runtime == nil {
 		return nil, ErrUnsupportedRuntime
 	}
 	phase := s.propagationCounterPhase()
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordOracleStyleMatchRequest(phase)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordOracleStyleMatchRequest(phase)
 	}
-	results, err := s.rete.match(ctx, source)
+	results, err := s.propagation.runtime.match(ctx, source)
 	if err != nil {
 		return nil, err
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordWholeTerminalScan(phase)
-		s.propagationCounters.recordFullAgendaReconcile(phase)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordWholeTerminalScan(phase)
+		s.propagation.counters.recordFullAgendaReconcile(phase)
 	}
 	changes, err := s.agenda.reconcile(ctx, s.revision, results)
 	if err != nil {
@@ -3414,7 +3393,7 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if s.agendaReady && !s.agendaDirty {
 		return nil, true, nil
 	}
-	if s.rete == nil {
+	if s.propagation.runtime == nil {
 		return nil, false, nil
 	}
 
@@ -3428,7 +3407,7 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 	if !delta.supported && s.agendaReady && !s.agendaDirty {
 		return nil, fmt.Errorf("%w: unsupported agenda delta after steady-state mutation", ErrUnsupportedRuntime)
 	}
-	if !s.shouldCollectAgendaChanges() && s.rete != nil && !s.rete.supportsIncrementalAgenda() {
+	if !s.shouldCollectAgendaChanges() && s.propagation.runtime != nil && !s.propagation.runtime.supportsIncrementalAgenda() {
 		s.markAgendaDirty()
 		return nil, nil
 	}
@@ -3456,9 +3435,9 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
-	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
-		if s.propagationCounters != nil && !delta.supported {
-			s.propagationCounters.recordUnsupportedAgendaDelta()
+	if !delta.supported || s.propagation.runtime == nil || !s.agendaReady || s.agendaDirty {
+		if s.propagation.counters != nil && !delta.supported {
+			s.propagation.counters.recordUnsupportedAgendaDelta()
 		}
 		return nil, false, nil
 	}
@@ -3477,8 +3456,8 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	} else if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return nil, true, err
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordAgendaDeltaApplication()
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordAgendaDeltaApplication()
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
@@ -3495,15 +3474,15 @@ func (s *Session) rebuildReteRuntimeFromWorkspace(ctx context.Context, revision 
 	}
 	rete, err := newReteRuntime(revision, s.globalValues)
 	if err != nil {
-		s.rete = nil
+		s.propagation.installRuntime(nil)
 		return err
 	}
 	if _, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, facts, generation); err != nil {
 		return err
 	}
-	s.rete = rete
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordGraphRebuild(s.propagationCounterPhase())
+	s.propagation.installRuntime(rete)
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordGraphRebuild(s.propagationCounterPhase())
 	}
 	s.syncPropagationCounters()
 	return nil
@@ -3524,17 +3503,17 @@ func (s *Session) updateReteAlphaAfterAssert(ctx context.Context, fact *workingF
 	if s.revision != nil && !s.revision.factMayAffectReteByTarget(snapshot.name, snapshot.templateKey) {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete == nil {
+	if s.propagation.runtime == nil {
 		state := s.activeFactWorkspace()
 		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.factStore.generation)
 	}
-	if s.rete.usesGraphBeta() {
-		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = compactSlotStore
+	if s.propagation.runtime.usesGraphBeta() {
+		if s.propagation.runtime.graphBeta != nil {
+			s.propagation.runtime.graphBeta.compactSlotStore = compactSlotStore
 		}
-		return s.rete.insertBetaWorkingFactWithOrigin(ctx, fact, snapshot, origin, span)
+		return s.propagation.runtime.insertBetaWorkingFactWithOrigin(ctx, fact, snapshot, origin, span)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact *workingFact, compactSlotStore *factCompactSlotStore, origin mutationOrigin, span *propagationCounterSpan) (reteAgendaDelta, error) {
@@ -3544,66 +3523,66 @@ func (s *Session) updateReteAlphaAfterAssertGenerated(ctx context.Context, fact 
 	if s.revision != nil && !s.revision.factMayAffectReteByTarget(fact.nameForRevision(s.revision), fact.templateKeyForRevision(s.revision)) {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete == nil {
+	if s.propagation.runtime == nil {
 		state := s.activeFactWorkspace()
 		return reteAgendaDelta{}, s.rebuildReteRuntimeFromWorkspace(ctx, s.revision, &state, s.factStore.generation)
 	}
-	if s.rete.usesGraphBeta() {
-		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = compactSlotStore
+	if s.propagation.runtime.usesGraphBeta() {
+		if s.propagation.runtime.graphBeta != nil {
+			s.propagation.runtime.graphBeta.compactSlotStore = compactSlotStore
 		}
-		return s.rete.insertBetaFactGenerated(ctx, fact, origin, span)
+		return s.propagation.runtime.insertBetaFactGenerated(ctx, fact, origin, span)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterRetract(ctx context.Context, fact FactSnapshot, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s == nil || s.rete == nil {
+	if s == nil || s.propagation.runtime == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete.usesGraphBeta() {
-		return s.rete.removeBetaFact(ctx, fact, origin, s.propagationCounters)
+	if s.propagation.runtime.usesGraphBeta() {
+		return s.propagation.runtime.removeBetaFact(ctx, fact, origin, s.propagation.counters)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterRetractWorkingFact(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s == nil || s.rete == nil || fact == nil {
+	if s == nil || s.propagation.runtime == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete.usesGraphBeta() {
-		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
+	if s.propagation.runtime.usesGraphBeta() {
+		if s.propagation.runtime.graphBeta != nil {
+			s.propagation.runtime.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
-		return s.rete.removeBetaWorkingFact(ctx, fact, origin, s.propagationCounters)
+		return s.propagation.runtime.removeBetaWorkingFact(ctx, fact, origin, s.propagation.counters)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterRetractGeneratedWorkingFact(ctx context.Context, fact *workingFact, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s == nil || s.rete == nil || fact == nil {
+	if s == nil || s.propagation.runtime == nil || fact == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete.usesGraphBeta() {
-		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
+	if s.propagation.runtime.usesGraphBeta() {
+		if s.propagation.runtime.graphBeta != nil {
+			s.propagation.runtime.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
-		return s.rete.removeBetaGeneratedWorkingFact(ctx, fact, origin, s.propagationCounters)
+		return s.propagation.runtime.removeBetaGeneratedWorkingFact(ctx, fact, origin, s.propagation.counters)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) updateReteAlphaAfterModify(ctx context.Context, before FactSnapshot, beforeFact *workingFact, afterFact *workingFact, after FactSnapshot, changes []FieldChange, duplicateChanged bool, origin mutationOrigin) (reteAgendaDelta, error) {
-	if s == nil || s.rete == nil {
+	if s == nil || s.propagation.runtime == nil {
 		return reteAgendaDelta{}, nil
 	}
-	if s.rete.usesGraphBeta() {
-		if s.rete.graphBeta != nil {
-			s.rete.graphBeta.compactSlotStore = s.factStore.compactSlotStore
+	if s.propagation.runtime.usesGraphBeta() {
+		if s.propagation.runtime.graphBeta != nil {
+			s.propagation.runtime.graphBeta.compactSlotStore = s.factStore.compactSlotStore
 		}
-		return s.rete.updateBetaFact(ctx, before, beforeFact, afterFact, after, changes, duplicateChanged, origin, s.propagationCounters)
+		return s.propagation.runtime.updateBetaFact(ctx, before, beforeFact, afterFact, after, changes, duplicateChanged, origin, s.propagation.counters)
 	}
-	return reteAgendaDelta{}, s.rete.unsupportedRuntimeError()
+	return reteAgendaDelta{}, s.propagation.runtime.unsupportedRuntimeError()
 }
 
 func (s *Session) rebuildFieldSlots(previous, revision *Ruleset) {
@@ -6944,8 +6923,8 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 		return nil
 	}
 	if !delta.supported {
-		if s.propagationCounters != nil {
-			s.propagationCounters.recordUnsupportedAgendaDelta()
+		if s.propagation.counters != nil {
+			s.propagation.counters.recordUnsupportedAgendaDelta()
 		}
 		return fmt.Errorf("%w: unsupported agenda delta during run", ErrUnsupportedRuntime)
 	}
@@ -6956,20 +6935,20 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 		return s.applyRunAgendaDeltaDirect(delta)
 	}
 	total := len(delta.added) + len(delta.removed) + len(delta.updated)
-	if !s.runAgendaPending {
-		s.runAgendaDeltas = s.runAgendaDeltas[:0]
-		if s.runAgendaBuckets == nil {
-			s.runAgendaBuckets = make(map[candidateIdentity]int, total)
+	if !s.propagation.runAgendaPending {
+		s.propagation.runAgendaDeltas = s.propagation.runAgendaDeltas[:0]
+		if s.propagation.runAgendaBuckets == nil {
+			s.propagation.runAgendaBuckets = make(map[candidateIdentity]int, total)
 		} else {
-			clear(s.runAgendaBuckets)
+			clear(s.propagation.runAgendaBuckets)
 		}
-		for i := range s.runAgendaStates {
-			s.runAgendaStates[i] = runAgendaDeltaState{}
+		for i := range s.propagation.runAgendaStates {
+			s.propagation.runAgendaStates[i] = runAgendaDeltaState{}
 		}
-		s.runAgendaStates = slices.Grow(s.runAgendaStates[:0], total)
-		s.runAgendaPending = true
-	} else if s.runAgendaBuckets == nil {
-		s.runAgendaBuckets = make(map[candidateIdentity]int, total)
+		s.propagation.runAgendaStates = slices.Grow(s.propagation.runAgendaStates[:0], total)
+		s.propagation.runAgendaPending = true
+	} else if s.propagation.runAgendaBuckets == nil {
+		s.propagation.runAgendaBuckets = make(map[candidateIdentity]int, total)
 	}
 	if err := s.recordRunAgendaDeltaTokens(delta); err != nil {
 		s.markAgendaDirty()
@@ -6985,7 +6964,7 @@ func (s *Session) canApplyRunAgendaDeltaDirect(delta reteAgendaDelta) bool {
 	if s.revision == nil || s.revision.hasAutoFocusRules() || s.hasAgendaEventListeners() {
 		return false
 	}
-	if s.runAgendaPending && !s.runAgendaDirect {
+	if s.propagation.runAgendaPending && !s.propagation.runAgendaDirect {
 		return false
 	}
 	return true
@@ -7001,8 +6980,8 @@ func (s *Session) applyRunAgendaDeltaDirect(delta reteAgendaDelta) error {
 	} else if !ok {
 		return fmt.Errorf("%w: unsupported direct agenda delta during run", ErrUnsupportedRuntime)
 	}
-	s.runAgendaPending = true
-	s.runAgendaDirect = true
+	s.propagation.runAgendaPending = true
+	s.propagation.runAgendaDirect = true
 	return nil
 }
 
@@ -7020,9 +6999,9 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if err := ctx.Err(); err != nil {
 		return true, err
 	}
-	if !delta.supported || s.rete == nil || !s.agendaReady || s.agendaDirty {
-		if s.propagationCounters != nil && !delta.supported {
-			s.propagationCounters.recordUnsupportedAgendaDelta()
+	if !delta.supported || s.propagation.runtime == nil || !s.agendaReady || s.agendaDirty {
+		if s.propagation.counters != nil && !delta.supported {
+			s.propagation.counters.recordUnsupportedAgendaDelta()
 		}
 		return false, nil
 	}
@@ -7034,8 +7013,8 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return true, err
 	}
-	if s.propagationCounters != nil {
-		s.propagationCounters.recordAgendaDeltaApplication()
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordAgendaDeltaApplication()
 	}
 	s.agendaReady = true
 	s.agendaDirty = false
@@ -7105,8 +7084,8 @@ func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUp
 	if identity.isZero() {
 		identity = candidateIdentityForTerminalToken(rule, update.before)
 	}
-	for index := s.runAgendaBuckets[identity]; index != 0; {
-		state := &s.runAgendaStates[index-1]
+	for index := s.propagation.runAgendaBuckets[identity]; index != 0; {
+		state := &s.propagation.runAgendaStates[index-1]
 		if terminalTokenDeltasEqual(s.revision, state.token, reteTerminalTokenDelta{
 			ruleRevisionID: update.ruleRevisionID,
 			token:          update.before,
@@ -7138,19 +7117,19 @@ func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUp
 				token:          update.after,
 				identity:       identity,
 			},
-			next: s.runAgendaBuckets[identity],
+			next: s.propagation.runAgendaBuckets[identity],
 		}
-		s.runAgendaStates = append(s.runAgendaStates, state)
-		s.runAgendaBuckets[identity] = len(s.runAgendaStates)
+		s.propagation.runAgendaStates = append(s.propagation.runAgendaStates, state)
+		s.propagation.runAgendaBuckets[identity] = len(s.propagation.runAgendaStates)
 	}
 	return nil
 }
 
 func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
-	if s == nil || !s.runAgendaPending {
+	if s == nil || !s.propagation.runAgendaPending {
 		return nil
 	}
-	if s.runAgendaDirect {
+	if s.propagation.runAgendaDirect {
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -7182,55 +7161,24 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 // releaseTransientAgendaDeltas recycles graph-beta delta arena storage between
 // fire iterations, after the pending run delta has been fully applied.
 func (s *Session) releaseTransientAgendaDeltas() {
-	if s == nil || s.rete == nil {
+	if s == nil {
 		return
 	}
-	s.rete.graphBeta.releaseTransientTerminalDeltas()
+	s.propagation.releaseTransientAgendaDeltas()
 }
 
 func (s *Session) abandonRunAgendaDelta() {
-	if s == nil || !s.runAgendaPending {
+	if s == nil || !s.propagation.runAgendaPending {
 		return
 	}
 	s.markAgendaDirty()
 }
 
 func (s *Session) clearRunAgendaDelta() {
-	if s == nil || !s.runAgendaPending {
+	if s == nil {
 		return
 	}
-	clear(s.runAgendaDelta.added)
-	clear(s.runAgendaDelta.removed)
-	clear(s.runAgendaDelta.updated)
-	s.runAgendaDelta.added = s.runAgendaDelta.added[:0]
-	s.runAgendaDelta.removed = s.runAgendaDelta.removed[:0]
-	s.runAgendaDelta.updated = s.runAgendaDelta.updated[:0]
-	s.runAgendaDelta.supported = false
-	for i := range s.runAgendaDeltas {
-		clear(s.runAgendaDeltas[i].added)
-		clear(s.runAgendaDeltas[i].removed)
-		clear(s.runAgendaDeltas[i].updated)
-		s.runAgendaDeltas[i].added = s.runAgendaDeltas[i].added[:0]
-		s.runAgendaDeltas[i].removed = s.runAgendaDeltas[i].removed[:0]
-		s.runAgendaDeltas[i].updated = s.runAgendaDeltas[i].updated[:0]
-		s.runAgendaDeltas[i].supported = false
-	}
-	s.runAgendaDeltas = s.runAgendaDeltas[:0]
-	for i := range s.runAgendaStates {
-		s.runAgendaStates[i] = runAgendaDeltaState{}
-	}
-	s.runAgendaStates = s.runAgendaStates[:0]
-	if s.runAgendaBuckets != nil {
-		clear(s.runAgendaBuckets)
-	}
-	clear(s.runAgendaAdded)
-	clear(s.runAgendaRemoved)
-	clear(s.runAgendaUpdated)
-	s.runAgendaAdded = s.runAgendaAdded[:0]
-	s.runAgendaRemoved = s.runAgendaRemoved[:0]
-	s.runAgendaUpdated = s.runAgendaUpdated[:0]
-	s.runAgendaPending = false
-	s.runAgendaDirect = false
+	s.propagation.clearRunAgendaDelta()
 }
 
 type runAgendaDeltaState struct {
@@ -7243,19 +7191,19 @@ type runAgendaDeltaState struct {
 }
 
 func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
-	if s == nil || !s.runAgendaPending {
+	if s == nil || !s.propagation.runAgendaPending {
 		return reteAgendaDelta{}, nil
 	}
 	if s.revision == nil {
 		return reteAgendaDelta{}, ErrInvalidRuleset
 	}
 
-	total := len(s.runAgendaStates)
-	added := slices.Grow(s.runAgendaAdded[:0], total)
-	removed := slices.Grow(s.runAgendaRemoved[:0], total)
-	updated := slices.Grow(s.runAgendaUpdated[:0], total)
-	for i := range s.runAgendaStates {
-		state := &s.runAgendaStates[i]
+	total := len(s.propagation.runAgendaStates)
+	added := slices.Grow(s.propagation.runAgendaAdded[:0], total)
+	removed := slices.Grow(s.propagation.runAgendaRemoved[:0], total)
+	updated := slices.Grow(s.propagation.runAgendaUpdated[:0], total)
+	for i := range s.propagation.runAgendaStates {
+		state := &s.propagation.runAgendaStates[i]
 		if state.present == state.initial {
 			if state.present && state.updated && !state.updateBefore.isZero() && !state.token.token.isZero() && state.updateBefore != state.token.token {
 				updated = append(updated, reteTerminalTokenUpdate{
@@ -7273,9 +7221,9 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 		}
 		removed = append(removed, state.token)
 	}
-	s.runAgendaAdded = added
-	s.runAgendaRemoved = removed
-	s.runAgendaUpdated = updated
+	s.propagation.runAgendaAdded = added
+	s.propagation.runAgendaRemoved = removed
+	s.propagation.runAgendaUpdated = updated
 	return reteAgendaDelta{
 		supported: true,
 		added:     added,
@@ -7293,8 +7241,8 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 		return fmt.Errorf("%w: unknown rule revision %q", ErrMatcher, token.ruleRevisionID)
 	}
 	identity := candidateIdentityForTerminalTokenDelta(s.revision, token)
-	for index := s.runAgendaBuckets[identity]; index != 0; {
-		state := &s.runAgendaStates[index-1]
+	for index := s.propagation.runAgendaBuckets[identity]; index != 0; {
+		state := &s.propagation.runAgendaStates[index-1]
 		if terminalTokenDeltasEqual(s.revision, state.token, token) {
 			state.present = present
 			state.token = token
@@ -7307,11 +7255,11 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 		initial: ok && existing.status == activationStatusPending,
 		present: ok && existing.status == activationStatusPending,
 		token:   token,
-		next:    s.runAgendaBuckets[identity],
+		next:    s.propagation.runAgendaBuckets[identity],
 	}
 	state.present = present
-	s.runAgendaStates = append(s.runAgendaStates, state)
-	s.runAgendaBuckets[identity] = len(s.runAgendaStates)
+	s.propagation.runAgendaStates = append(s.propagation.runAgendaStates, state)
+	s.propagation.runAgendaBuckets[identity] = len(s.propagation.runAgendaStates)
 	return nil
 }
 

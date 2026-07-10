@@ -28,8 +28,8 @@ func TestWhyNotDegradesWhenFrontierMappingIsInconsistent(t *testing.T) {
 	}
 
 	found := false
-	for i := range session.rete.graph.branchInspections {
-		inspection := &session.rete.graph.branchInspections[i]
+	for i := range session.propagation.runtime.graph.branchInspections {
+		inspection := &session.propagation.runtime.graph.branchInspections[i]
 		if inspection.RuleName != "r" {
 			continue
 		}

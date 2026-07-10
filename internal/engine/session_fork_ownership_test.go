@@ -35,8 +35,18 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "agenda", policy: forkCloned, rationale: "pending activations are copied into an independent agenda"},
 	{name: "strategy", policy: forkCopied, rationale: "the inherited strategy is a value unless an option replaces it"},
 	{name: "forkCount", policy: forkReinitializedTransient, rationale: "the child starts its own descendant numbering"},
-	{name: "propagationCounters", policy: forkRebuiltDerived, rationale: "a child ledger is synchronized from the rebuilt runtime"},
-	{name: "rete", policy: forkRebuiltDerived, rationale: "the graph runtime is rebuilt against the cloned working memory"},
+	{name: "propagation", policy: forkRebuiltDerived, rationale: "the child receives a coordinator initialized around its rebuilt runtime"},
+	{name: "propagation.runtime", policy: forkRebuiltDerived, rationale: "the graph runtime is rebuilt against the cloned working memory"},
+	{name: "propagation.counters", policy: forkReinitializedTransient, rationale: "the child starts with a fresh ledger synchronized from its rebuilt runtime"},
+	{name: "propagation.runAgendaDelta", policy: forkReinitializedTransient, rationale: "run-local delta scratch starts empty"},
+	{name: "propagation.runAgendaDeltas", policy: forkReinitializedTransient, rationale: "run-local nested delta scratch starts empty"},
+	{name: "propagation.runAgendaStates", policy: forkReinitializedTransient, rationale: "run-local reconciliation state starts empty"},
+	{name: "propagation.runAgendaBuckets", policy: forkReinitializedTransient, rationale: "run-local candidate buckets start empty"},
+	{name: "propagation.runAgendaAdded", policy: forkReinitializedTransient, rationale: "run-local added-token scratch starts empty"},
+	{name: "propagation.runAgendaRemoved", policy: forkReinitializedTransient, rationale: "run-local removed-token scratch starts empty"},
+	{name: "propagation.runAgendaUpdated", policy: forkReinitializedTransient, rationale: "run-local updated-token scratch starts empty"},
+	{name: "propagation.runAgendaPending", policy: forkReinitializedTransient, rationale: "the child has no pending run-local reconciliation"},
+	{name: "propagation.runAgendaDirect", policy: forkReinitializedTransient, rationale: "the child is not in direct agenda mode"},
 	{name: "factStore", policy: forkCloned, rationale: "the child receives an independently owned fact-memory aggregate"},
 	{name: "factStore.generation", policy: forkCopied, rationale: "fact identity generation continues from the snapshot"},
 	{name: "initialFocusStack", policy: forkCloned, rationale: "module names are copied into child-owned slice storage"},
@@ -57,15 +67,6 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "runActive", policy: forkReinitializedTransient, rationale: "no run is active while the child is constructed"},
 	{name: "runActivation", policy: forkReinitializedTransient, rationale: "no activation is executing in the child"},
 	{name: "runHaltRequested", policy: forkReinitializedTransient, rationale: "halt requests do not cross the fork boundary"},
-	{name: "runAgendaDelta", policy: forkReinitializedTransient, rationale: "run-local delta scratch starts empty"},
-	{name: "runAgendaDeltas", policy: forkReinitializedTransient, rationale: "run-local nested delta scratch starts empty"},
-	{name: "runAgendaStates", policy: forkReinitializedTransient, rationale: "run-local reconciliation state starts empty"},
-	{name: "runAgendaBuckets", policy: forkReinitializedTransient, rationale: "run-local candidate buckets start empty"},
-	{name: "runAgendaAdded", policy: forkReinitializedTransient, rationale: "run-local added-token scratch starts empty"},
-	{name: "runAgendaRemoved", policy: forkReinitializedTransient, rationale: "run-local removed-token scratch starts empty"},
-	{name: "runAgendaUpdated", policy: forkReinitializedTransient, rationale: "run-local updated-token scratch starts empty"},
-	{name: "runAgendaPending", policy: forkReinitializedTransient, rationale: "the child has no pending run-local reconciliation"},
-	{name: "runAgendaDirect", policy: forkReinitializedTransient, rationale: "the child is not in direct agenda mode"},
 	{name: "agendaReady", policy: forkRebuiltDerived, rationale: "readiness is decided after graph reconstruction and demand resolution"},
 	{name: "agendaDirty", policy: forkRebuiltDerived, rationale: "dirtiness is decided after graph reconstruction and demand resolution"},
 	{name: "actionBindingScratch", policy: forkReinitializedTransient, rationale: "action evaluation scratch is never shared across sessions"},
@@ -203,5 +204,39 @@ func TestSessionForkStartsWithFreshFactStoreCachesAndScratch(t *testing.T) {
 	}
 	if len(parent.factStore.resetWorkspace.facts) != 1 {
 		t.Fatalf("parent reset scratch facts = %d, want 1", len(parent.factStore.resetWorkspace.facts))
+	}
+}
+
+func TestSessionForkStartsWithFreshPropagationOwnership(t *testing.T) {
+	parent := mustSession(t, mustCompile(t), "propagation-owner-parent")
+	parentCounters := parent.attachPropagationCounters()
+	parentCounters.recordAgendaDeltaApplication()
+	parent.propagation.runAgendaAdded = make([]reteTerminalTokenDelta, 1)
+
+	child, err := parent.Fork(context.Background())
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.propagation.runtime == parent.propagation.runtime {
+		t.Fatal("fork shares the parent Rete runtime")
+	}
+	childCounters := child.propagation.counters
+	if childCounters == nil {
+		t.Fatal("fork did not preserve attached counter observability with a fresh ledger")
+	}
+	if childCounters == parentCounters {
+		t.Fatal("fork shares the parent propagation counter ledger")
+	}
+	if got := child.propagationCounterSnapshot().Totals.AgendaDeltaApplications; got != 0 {
+		t.Fatalf("fork agenda delta applications = %d, want 0", got)
+	}
+	if len(child.propagation.runAgendaAdded) != 0 || child.propagation.runAgendaPending || child.propagation.runAgendaDirect {
+		t.Fatalf("fork run delta scratch = %#v, want empty and inactive", child.propagation)
+	}
+	if got := parent.propagationCounterSnapshot().Totals.AgendaDeltaApplications; got != 1 {
+		t.Fatalf("parent agenda delta applications = %d, want 1", got)
+	}
+	if len(parent.propagation.runAgendaAdded) != 1 {
+		t.Fatalf("parent added-token scratch = %d, want 1", len(parent.propagation.runAgendaAdded))
 	}
 }

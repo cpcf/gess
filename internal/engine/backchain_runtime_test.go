@@ -127,7 +127,7 @@ func TestBackchainDemandGenerationFeedsAnswerRuleAndOriginalGoal(t *testing.T) {
 	if len(demands) != 1 {
 		t.Fatalf("demands before run = %d, want 1", len(demands))
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatal("session runtime is not graph beta-backed")
 	}
 
@@ -865,7 +865,7 @@ func TestBackchainQueryTimeDemandDerivesTransitiveGoal(t *testing.T) {
 	assertBackchainDemandAbsent(t, snapshot, demandKey, "api", "db")
 	assertBackchainDemandAbsent(t, snapshot, demandKey, "web", "db")
 	assertBackchainDemandAbsent(t, snapshot, demandKey, "internet", "db")
-	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+	if got := queryTerminalRowsRetained(session.propagation.runtime.graphBeta, "reachable-paths"); got != 0 {
 		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
 	diagnostics := snapshot.BackchainDemandDiagnostics()
@@ -907,7 +907,7 @@ func TestBackchainQueryDemandCascadeLimitStopsCumulativeProofSteps(t *testing.T)
 	if leaked := len(snapshot.FactsByTemplateKey(demandKey)); leaked != 0 {
 		t.Fatalf("transient demand facts leaked after limit error = %d, want 0", leaked)
 	}
-	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+	if got := queryTerminalRowsRetained(session.propagation.runtime.graphBeta, "reachable-paths"); got != 0 {
 		t.Fatalf("query terminal rows retained after limit error = %d, want 0", got)
 	}
 }
@@ -963,7 +963,7 @@ func TestBackchainQueryTimeDemandReturnsZeroRowsForUnreachableGoal(t *testing.T)
 	snapshot := mustSnapshot(t, ctx, session)
 	demandKey := mustDemandKey(t, revision, reachableKey)
 	assertBackchainDemandAbsent(t, snapshot, demandKey, "cache", "db")
-	if got := queryTerminalRowsRetained(session.rete.graphBeta, "reachable-paths"); got != 0 {
+	if got := queryTerminalRowsRetained(session.propagation.runtime.graphBeta, "reachable-paths"); got != 0 {
 		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
 }

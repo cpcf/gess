@@ -628,7 +628,7 @@ func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewSession: %v", err)
 			}
-			if session.rete == nil || session.rete.graphBeta == nil {
+			if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 				t.Fatal("session has no graph beta runtime")
 			}
 
@@ -1239,7 +1239,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("single supported assert cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("single supported assert did not record run delta")
 				}
 				auditRule := session.revision.rules["audit-rule"]
@@ -1316,7 +1316,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if got, want := actionsSeen, []string{"assert-audit", "record"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
 		if session.agendaDirty || !session.agendaReady {
@@ -1368,7 +1368,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("single supported modify cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("single supported modify did not record run delta")
 				}
 				return nil
@@ -1470,7 +1470,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if got, want := actionsSeen, []string{"close-task", "record-done"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
 		if session.agendaDirty || !session.agendaReady {
@@ -1605,7 +1605,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if result.Fired != 1 {
 			t.Fatalf("run fired = %d, want 1", result.Fired)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after action failure")
 		}
 		if !session.agendaDirty || session.agendaReady {
@@ -1728,7 +1728,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if result.Fired != 1 {
 			t.Fatalf("run fired = %d, want 1", result.Fired)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after cancellation")
 		}
 		if !session.agendaDirty || session.agendaReady {
@@ -1792,7 +1792,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported route-scoped modify cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported route-scoped modify did not record run delta")
 				}
 				snapshot := session.propagationCounterSnapshot()
@@ -1851,7 +1851,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if got, want := actionsSeen, []string{"refresh-person", "record-person"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 			t.Fatalf("action order = %#v, want %#v", got, want)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after route-scoped modify run")
 		}
 		if session.agendaDirty || !session.agendaReady {
@@ -1915,7 +1915,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported assert cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported assert did not record run delta")
 				}
 				return err
@@ -1942,7 +1942,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported modify cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported modify did not record run delta")
 				}
 				return err
@@ -1967,7 +1967,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported retract cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported retract did not record run delta")
 				}
 				return err
@@ -2190,7 +2190,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported assert cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported assert did not record run delta")
 				}
 				return nil
@@ -2218,7 +2218,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if !session.agendaReady {
 					return errors.New("supported retract cleared agenda readiness")
 				}
-				if !session.runAgendaPending {
+				if !session.propagation.runAgendaPending {
 					return errors.New("supported retract did not record run delta")
 				}
 				return nil
@@ -2287,7 +2287,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if tempFired || tempFireSeen != 0 {
 			t.Fatalf("temp rule fired unexpectedly: fired=%v count=%d", tempFired, tempFireSeen)
 		}
-		if session.runAgendaPending {
+		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
 		if session.agendaDirty || !session.agendaReady {
@@ -2345,8 +2345,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
-		if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-			t.Fatalf("session Rete runtime = %#v, want supported incremental agenda", session.rete)
+		if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+			t.Fatalf("session Rete runtime = %#v, want supported incremental agenda", session.propagation.runtime)
 		}
 		if _, err := session.assertByName(context.Background(), "seed", mustFields(t, map[string]any{"kind": "seed"})); err != nil {
 			t.Fatalf("Assert(seed): %v", err)
@@ -3067,10 +3067,10 @@ func TestSessionRunQueuesExternalMutationsBetweenActivations(t *testing.T) {
 	if got := counters.AgendaDeltaApplications; got == 0 {
 		t.Fatal("agenda delta applications after queued mutations = 0, want queued mutations to apply incrementally")
 	}
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
-	assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.rete)
+	assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.propagation.runtime)
 	if got, want := actionsSeen, []string{"pause", "done", "audit"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("action order = %#v, want %#v", got, want)
 	}

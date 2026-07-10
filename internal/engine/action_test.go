@@ -400,8 +400,8 @@ func TestActionContextUsesTokenBackedBindingsForGraphActivations(t *testing.T) {
 
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "action-token-backed-session")
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("session graph beta = %#v, want token-backed graph runtime", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("session graph beta = %#v, want token-backed graph runtime", session.propagation.runtime)
 	}
 	if _, err := session.Assert(context.Background(), TemplateKey("person"), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
 		t.Fatalf("Assert(person): %v", err)

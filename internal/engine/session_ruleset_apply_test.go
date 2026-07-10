@@ -460,12 +460,12 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	assertGraphTopologyRemovalShape(t, revision1)
-	if !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
@@ -530,8 +530,8 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if session.RulesetID() != revision2.ID() {
 		t.Fatalf("session ruleset id = %q, want %q", session.RulesetID(), revision2.ID())
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		t.Fatalf("Rete runtime after apply = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		t.Fatalf("Rete runtime after apply = %#v, want graph beta", session.propagation.runtime)
 	}
 	if got := session.agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after apply = %#v, want none", got)

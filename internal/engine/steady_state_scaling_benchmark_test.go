@@ -371,7 +371,7 @@ func mustSeedSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc stead
 	t.Helper()
 
 	session := mustSession(t, revision, SessionID(fmt.Sprintf("steady-state-scaling-%d-%d", tc.streams, tc.limit)))
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
 	seedSteadyStateScalingSession(t, session, tc)
@@ -424,9 +424,9 @@ func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
 		t.Fatalf("second fired trace length = %d, want %d", got, expectedFired)
 	}
 	assertSteadyStateFactMix(t, sessionA, tc)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.propagation.runtime)
 	assertSteadyStateFactMix(t, sessionB, tc)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionB), newNaiveMatcher(revision), sessionB.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionB), newNaiveMatcher(revision), sessionB.propagation.runtime)
 
 	second, err := sessionA.Run(ctx)
 	if err != nil {
@@ -436,7 +436,7 @@ func TestSteadyStateScalingRunOnlyPreservesTerminalTokenOrdering(t *testing.T) {
 		t.Fatalf("second run result = (%v, %d), want (%v, 0)", second.Status, second.Fired, RunCompleted)
 	}
 	assertSteadyStateFactMix(t, sessionA, tc)
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, sessionA), newNaiveMatcher(revision), sessionA.propagation.runtime)
 }
 
 func TestSteadyStateScalingPropagationCountersScale(t *testing.T) {
@@ -513,7 +513,7 @@ func TestSteadyStateScalingResetRunReusesTerminalTokenLifetimeAcrossCycles(t *te
 			t.Fatalf("cycle %d final fact count = %d, want %d", cycle, got, expectedFacts)
 		}
 		assertSteadyStateFactMix(t, session, tc)
-		assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+		assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 	}
 }
 
@@ -523,7 +523,7 @@ func runSteadyStateScalingWithPropagationCounters(t testing.TB, tc steadyStateSc
 	ctx := context.Background()
 	revision := mustCompileSteadyStateScalingRuleset(t, tc)
 	session := mustSession(t, revision, SessionID(fmt.Sprintf("steady-state-scaling-counters-%d-%d", tc.streams, tc.limit)))
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
 	session.attachPropagationCounters()
@@ -749,7 +749,7 @@ func runSteadyStateScalingSessionWithTrace(t testing.TB, revision *Ruleset, tc s
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
 	seedSteadyStateScalingSession(t, session, tc)

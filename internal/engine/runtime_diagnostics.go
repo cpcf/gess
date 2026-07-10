@@ -53,20 +53,20 @@ func (s *Session) RuntimeDiagnostics(ctx context.Context) (RuntimeDiagnostics, e
 }
 
 func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return RuntimeDiagnostics{}
 	}
 	owners := make([]RuntimeMemoryOwnerDiagnostics, 0, 8)
 	if owner := factWorkspaceMemoryOwnerDiagnostics(s.activeFactWorkspace()); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
-	if owner := s.rete.graphBeta.alphaMemoryOwnerDiagnostics(); owner.Owner != "" {
+	if owner := s.propagation.runtime.graphBeta.alphaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
-	if owner := s.rete.graphBeta.betaMemoryOwnerDiagnostics(); owner.Owner != "" {
+	if owner := s.propagation.runtime.graphBeta.betaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
-	for _, owner := range s.rete.graphBeta.terminalMemoryOwnerDiagnostics() {
+	for _, owner := range s.propagation.runtime.graphBeta.terminalMemoryOwnerDiagnostics() {
 		if owner.Owner != "" {
 			owners = append(owners, owner)
 		}
@@ -74,7 +74,7 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 	if owner := s.agenda.agendaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
-	if owner := s.rete.graphBeta.aggregateMemoryOwnerDiagnostics(); owner.Owner != "" {
+	if owner := s.propagation.runtime.graphBeta.aggregateMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
 	if owner := s.backchainDemandSupportMemoryOwnerDiagnostics(); owner.Owner != "" {

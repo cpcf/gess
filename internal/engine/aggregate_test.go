@@ -185,8 +185,8 @@ func TestAccumulateCountAndSumUseIncrementalAgendaDeltas(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-incremental-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.propagation.runtime)
 	}
 
 	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
@@ -255,8 +255,8 @@ func TestAccumulateGraphMatchMaterializesFromSourceBoundary(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-terminal-match-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental aggregate agenda support", session.propagation.runtime)
 	}
 
 	if _, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3})); err != nil {
@@ -266,7 +266,7 @@ func TestAccumulateGraphMatchMaterializesFromSourceBoundary(t *testing.T) {
 		t.Fatalf("assert second: %v", err)
 	}
 
-	results, err := session.rete.graphBeta.match(ctx, mustSnapshot(t, ctx, session))
+	results, err := session.propagation.runtime.graphBeta.match(ctx, mustSnapshot(t, ctx, session))
 	if err != nil {
 		t.Fatalf("graph beta match: %v", err)
 	}
@@ -479,8 +479,8 @@ func TestAccumulateMinAndMaxUseIncrementalAgendaDeltas(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-extrema-incremental-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want incremental min/max aggregate agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental min/max aggregate agenda support", session.propagation.runtime)
 	}
 
 	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
@@ -584,8 +584,8 @@ func TestAccumulateCollectUsesIncrementalAgendaDeltas(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-collect-incremental-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want incremental collect aggregate agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want incremental collect aggregate agenda support", session.propagation.runtime)
 	}
 
 	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
@@ -709,8 +709,8 @@ func TestAccumulateAfterOuterBindingUsesBucketedIncrementalAgenda(t *testing.T) 
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "bucketed-aggregate-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.propagation.runtime)
 	}
 
 	if _, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
@@ -824,8 +824,8 @@ func TestAccumulateBucketReuseClearsNumericState(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "bucketed-aggregate-reuse-numeric-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want bucketed aggregate incremental agenda support", session.propagation.runtime)
 	}
 
 	firstGroup, err := session.Assert(context.Background(), group.Key(), mustFields(t, map[string]any{"id": "a"}))
@@ -1254,8 +1254,8 @@ func TestAccumulateResultFeedsDownstreamJoinIncrementally(t *testing.T) {
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-downstream-join-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want downstream aggregate incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want downstream aggregate incremental agenda support", session.propagation.runtime)
 	}
 
 	if _, err := session.Assert(context.Background(), gate.Key(), mustFields(t, map[string]any{"expected": 2})); err != nil {
@@ -1336,8 +1336,8 @@ func TestAccumulateSharedInputRulesUseIncrementalAgendaDeltas(t *testing.T) {
 	}
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-shared-input-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want shared aggregate incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want shared aggregate incremental agenda support", session.propagation.runtime)
 	}
 
 	if _, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a"})); err != nil {
@@ -1389,8 +1389,8 @@ func TestAccumulateSumHandlesDuplicateFactsAndNumericTransitionsIncrementally(t 
 	})
 	revision := mustCompileWorkspace(t, workspace)
 	session := mustSession(t, revision, "aggregate-numeric-transition-session")
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		t.Fatalf("rete runtime = %#v, want numeric aggregate incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		t.Fatalf("rete runtime = %#v, want numeric aggregate incremental agenda support", session.propagation.runtime)
 	}
 
 	first, err := session.Assert(context.Background(), item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 2}))

@@ -210,14 +210,14 @@ func BenchmarkClaimsTriageGessReteMatchOnly(b *testing.B) {
 	}
 	snapshot := session.indexedSnapshotLocked()
 	expectedCandidates := claimsTriageFiredCount(claimsTriageBenchmarkFactCount)
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		b.Fatal("session Rete runtime is nil")
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		results, err := session.rete.match(context.Background(), snapshot)
+		results, err := session.propagation.runtime.match(context.Background(), snapshot)
 		if err != nil {
 			b.Fatalf("match: %v", err)
 		}

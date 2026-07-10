@@ -1207,7 +1207,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if err != nil {
 		return nil, true, err
 	}
-	if s.rete == nil || s.rete.graphBeta == nil || len(query.graphConditionBranches) == 0 {
+	if s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil || len(query.graphConditionBranches) == 0 {
 		return nil, false, nil
 	}
 	trigger := s.queryTriggerFact(query, &compiledArgs)
@@ -1225,10 +1225,10 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 }
 
 func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compiledQuery, args *compiledQueryArgs, trigger FactSnapshot, mutationHeld *bool) ([]QueryRow, bool, error) {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return nil, false, nil
 	}
-	terminalIDs := s.rete.graphBeta.graph.queryTerminalIDs[query.name]
+	terminalIDs := s.propagation.runtime.graphBeta.graph.queryTerminalIDs[query.name]
 	if len(terminalIDs) == 0 {
 		return nil, false, nil
 	}
@@ -1240,7 +1240,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		// that ever changes.
 		return nil, true, fmt.Errorf("%w: query %q cannot start while another query proof is active", ErrUnsupportedRuntime, query.name)
 	}
-	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
+	s.propagation.runtime.graphBeta.clearQueryTerminalRows(terminalIDs)
 	proof := s.beginBackchainQueryProof()
 	s.activeBackchainQueryProof = proof
 	defer func() {
@@ -1250,7 +1250,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 	cleanupTrigger := true
 	defer func() {
 		if cleanupTrigger {
-			s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
+			s.propagation.runtime.graphBeta.clearQueryTerminalRows(terminalIDs)
 			cleanupCtx := context.WithoutCancel(ctx)
 			delta, err := s.cleanupQueryProofImmediate(cleanupCtx, trigger, proof)
 			if err == nil && queryAgendaDeltaHasRuleChanges(delta) {
@@ -1286,11 +1286,11 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		return nil, true, ErrConcurrencyMisuse
 	}
 
-	rows, err := s.rete.graphBeta.materializeQueryTerminalRows(ctx, query, args, Snapshot{revision: s.revision}, terminalIDs)
+	rows, err := s.propagation.runtime.graphBeta.materializeQueryTerminalRows(ctx, query, args, Snapshot{revision: s.revision}, terminalIDs)
 	if err != nil {
 		return nil, true, err
 	}
-	s.rete.graphBeta.clearQueryTerminalRows(terminalIDs)
+	s.propagation.runtime.graphBeta.clearQueryTerminalRows(terminalIDs)
 	// Cleanup must not be abortable by the caller's context: a cancellation
 	// landing after row materialization would otherwise leak the query
 	// trigger and transient demand facts into graph memory permanently.
@@ -1310,11 +1310,11 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 
 func (s *Session) insertQueryTriggerForProofImmediate(ctx context.Context, trigger FactSnapshot, proof *backchainQueryProofContext) (reteAgendaDelta, bool, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return combined, false, ErrInvalidRuleset
 	}
-	_, _ = s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
-	delta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
+	_, _ = s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	delta, err := s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
 	if err != nil {
 		return combined, false, err
 	}
@@ -1332,7 +1332,7 @@ func (s *Session) insertQueryTriggerForProofImmediate(ctx context.Context, trigg
 
 func (s *Session) cleanupQueryProofImmediate(ctx context.Context, trigger FactSnapshot, proof *backchainQueryProofContext) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return combined, nil
 	}
 	proofDelta, err := proof.cleanup(ctx)
@@ -1340,7 +1340,7 @@ func (s *Session) cleanupQueryProofImmediate(ctx context.Context, trigger FactSn
 		return combined, err
 	}
 	combined = mergeReteAgendaDelta(combined, proofDelta)
-	graphDelta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	graphDelta, err := s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
 	if err != nil {
 		return combined, err
 	}
@@ -1354,11 +1354,11 @@ func (s *Session) cleanupQueryProofImmediate(ctx context.Context, trigger FactSn
 
 func (s *Session) insertQueryTriggerImmediate(ctx context.Context, trigger FactSnapshot) (reteAgendaDelta, bool, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return combined, false, ErrInvalidRuleset
 	}
-	_, _ = s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
-	delta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
+	_, _ = s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	delta, err := s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger))
 	if err != nil {
 		return combined, false, err
 	}
@@ -1376,7 +1376,7 @@ func (s *Session) insertQueryTriggerImmediate(ctx context.Context, trigger FactS
 
 func (s *Session) cleanupQueryTriggerImmediate(ctx context.Context, trigger FactSnapshot) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil {
 		return combined, nil
 	}
 	supportDelta, err := s.removeBackchainDemandSupportsForFact(ctx, trigger.ID(), mutationOrigin{})
@@ -1384,7 +1384,7 @@ func (s *Session) cleanupQueryTriggerImmediate(ctx context.Context, trigger Fact
 		return combined, err
 	}
 	combined = mergeReteAgendaDelta(combined, supportDelta)
-	graphDelta, err := s.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
+	graphDelta, err := s.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerRemoveEvent(trigger))
 	if err != nil {
 		return combined, err
 	}

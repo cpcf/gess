@@ -170,7 +170,7 @@ func TestForallRequirementMatchUsesAbsenceCounterexamples(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-requirement-match-session")
-	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+	if got := len(session.propagation.runtime.graph.aggregateNodes); got != 0 {
 		t.Fatalf("aggregate node count = %d, want requirement match lowered to negatives", got)
 	}
 
@@ -262,7 +262,7 @@ func TestForallRequirementMatchAndTestUsesQualifiedAbsence(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-requirement-match-test-session")
-	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+	if got := len(session.propagation.runtime.graph.aggregateNodes); got != 0 {
 		t.Fatalf("aggregate node count = %d, want qualified requirement lowered to negatives", got)
 	}
 
@@ -378,7 +378,7 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "scoped-exists-prefix-session")
-	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+	if got := len(session.propagation.runtime.graph.aggregateNodes); got != 0 {
 		t.Fatalf("aggregate node count = %d, want scoped exists lowered to negatives", got)
 	}
 
@@ -456,7 +456,7 @@ func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "scoped-forall-prefix-session")
-	if got := len(session.rete.graph.aggregateNodes); got != 0 {
+	if got := len(session.propagation.runtime.graph.aggregateNodes); got != 0 {
 		t.Fatalf("aggregate node count = %d, want scoped forall lowered to negatives", got)
 	}
 
@@ -573,7 +573,7 @@ func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "root-higher-order-session")
-	summary := session.rete.graph.debugSummary()
+	summary := session.propagation.runtime.graph.debugSummary()
 	if got := len(summary.Plan.AggregateNodes); got != 0 {
 		t.Fatalf("aggregate node count = %d, want root higher-order lowered without aggregate nodes", got)
 	}

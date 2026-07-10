@@ -128,11 +128,11 @@ func activationRefracted(act *activation, rev RuleRevisionID) bool {
 }
 
 func (s *Session) branchInspectionsForRule(rev RuleRevisionID) []reteGraphBranchInspection {
-	if s.rete == nil || s.rete.graph == nil {
+	if s.propagation.runtime == nil || s.propagation.runtime.graph == nil {
 		return nil
 	}
 	var out []reteGraphBranchInspection
-	for _, insp := range s.rete.graph.branchInspections {
+	for _, insp := range s.propagation.runtime.graph.branchInspections {
 		if insp.OwnerKind == reteGraphBranchOwnerRule && insp.RuleRevisionID == rev {
 			out = append(out, insp)
 		}
@@ -246,11 +246,11 @@ func (s *Session) classifyChainFrontier(rule compiledRule, insp reteGraphBranchI
 // bucket, else the aggregate condition itself.
 func (s *Session) classifyAggregateLeaf(rule compiledRule, insp reteGraphBranchInspection, leafStage reteGraphStageRef, cfg whyNotConfig, report *WhyNotReport) (bool, whyNotFailure) {
 	aggID := reteGraphAggregateNodeID(leafStage.id)
-	node := s.rete.graph.aggregateNode(aggID)
+	node := s.propagation.runtime.graph.aggregateNode(aggID)
 	if node == nil {
 		return false, s.classifyLeaf(rule, insp, leafStage, report)
 	}
-	mem := s.rete.graphBeta.aggregateMemory(aggID)
+	mem := s.propagation.runtime.graphBeta.aggregateMemory(aggID)
 	if aggregateHasOutput(mem) {
 		return true, whyNotFailure{}
 	}
@@ -341,7 +341,7 @@ func (s *Session) frontierConditionLocator(insp reteGraphBranchInspection, betaI
 }
 
 func (s *Session) conditionStampForStage(insp reteGraphBranchInspection, stage reteGraphStageRef) (reteGraphConditionStamp, bool) {
-	stamp, ok := s.rete.graph.conditionStampForStage(stage, insp.RuleRevisionID, insp.BranchID)
+	stamp, ok := s.propagation.runtime.graph.conditionStampForStage(stage, insp.RuleRevisionID, insp.BranchID)
 	if !ok {
 		return reteGraphConditionStamp{}, false
 	}
@@ -351,7 +351,7 @@ func (s *Session) conditionStampForStage(insp reteGraphBranchInspection, stage r
 	}
 	switch stage.kind {
 	case reteGraphStageBeta:
-		node := s.rete.graph.betaNode(reteGraphBetaNodeID(stage.id))
+		node := s.propagation.runtime.graph.betaNode(reteGraphBetaNodeID(stage.id))
 		if node == nil {
 			return reteGraphConditionStamp{}, false
 		}
@@ -373,7 +373,7 @@ func (s *Session) conditionStampForStage(insp reteGraphBranchInspection, stage r
 // predicate (a `test` filter or a residual filter), so its left memory holds
 // output, not input.
 func (s *Session) betaNodeIsFilter(betaID reteGraphBetaNodeID) bool {
-	node := s.rete.graph.betaNode(betaID)
+	node := s.propagation.runtime.graph.betaNode(betaID)
 	return node != nil && (node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter)
 }
 
@@ -385,7 +385,7 @@ func (s *Session) leafStageHasRows(insp reteGraphBranchInspection, leafStage ret
 		_, ok := s.conditionStampForStage(insp, leafStage)
 		return ok && s.alphaStageFactCount(leafStage) > 0
 	case reteGraphStageAggregate:
-		return aggregateHasOutput(s.rete.graphBeta.aggregateMemory(reteGraphAggregateNodeID(leafStage.id)))
+		return aggregateHasOutput(s.propagation.runtime.graphBeta.aggregateMemory(reteGraphAggregateNodeID(leafStage.id)))
 	default:
 		return false
 	}
@@ -402,32 +402,32 @@ func (s *Session) leafMatched(insp reteGraphBranchInspection, leafStage reteGrap
 }
 
 func (s *Session) alphaStageFactCount(stage reteGraphStageRef) int {
-	if s == nil || s.rete == nil || s.rete.graphBeta == nil || stage.kind != reteGraphStageAlpha {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil || stage.kind != reteGraphStageAlpha {
 		return 0
 	}
 	index := stage.id
-	if index <= 0 || index >= len(s.rete.graphBeta.alpha.facts) {
+	if index <= 0 || index >= len(s.propagation.runtime.graphBeta.alpha.facts) {
 		return 0
 	}
-	return s.rete.graphBeta.alpha.facts[index].count()
+	return s.propagation.runtime.graphBeta.alpha.facts[index].count()
 }
 
 func (s *Session) alphaMatchesForCondition(insp reteGraphBranchInspection, plannedOrder int) int {
-	if s == nil || s.rete == nil || s.rete.graph == nil || s.rete.graphBeta == nil {
+	if s == nil || s.propagation.runtime == nil || s.propagation.runtime.graph == nil || s.propagation.runtime.graphBeta == nil {
 		return 0
 	}
 	facts := make(map[FactID]struct{})
-	for i := range s.rete.graph.alphaNodes {
-		stage := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(s.rete.graph.alphaNodes[i].id)}
+	for i := range s.propagation.runtime.graph.alphaNodes {
+		stage := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(s.propagation.runtime.graph.alphaNodes[i].id)}
 		stamp, ok := s.conditionStampForStage(insp, stage)
 		if !ok || stamp.plannedOrder != plannedOrder {
 			continue
 		}
 		index := stage.id
-		if index <= 0 || index >= len(s.rete.graphBeta.alpha.facts) {
+		if index <= 0 || index >= len(s.propagation.runtime.graphBeta.alpha.facts) {
 			continue
 		}
-		s.rete.graphBeta.alpha.facts[index].forEach(func(id FactID) bool {
+		s.propagation.runtime.graphBeta.alpha.facts[index].forEach(func(id FactID) bool {
 			facts[id] = struct{}{}
 			return true
 		})
@@ -439,8 +439,8 @@ func (s *Session) alphaMatchesForCondition(insp reteGraphBranchInspection, plann
 // for a positive join a left row with a non-empty join-output chain, for a
 // negation a left row with no blockers.
 func (s *Session) betaNodeProducesOutput(betaID reteGraphBetaNodeID) bool {
-	node := s.rete.graph.betaNode(betaID)
-	mem := s.rete.graphBeta.betaNodeMemoryAt(betaID)
+	node := s.propagation.runtime.graph.betaNode(betaID)
+	mem := s.propagation.runtime.graphBeta.betaNodeMemoryAt(betaID)
 	if node == nil || mem == nil {
 		return false
 	}
@@ -548,7 +548,7 @@ func (s *Session) classifyLeaf(rule compiledRule, insp reteGraphBranchInspection
 }
 
 func (s *Session) classifyFrontier(rule compiledRule, insp reteGraphBranchInspection, betaID reteGraphBetaNodeID, conditionID ConditionID, cfg whyNotConfig, report *WhyNotReport) whyNotFailure {
-	node := s.rete.graph.betaNode(betaID)
+	node := s.propagation.runtime.graph.betaNode(betaID)
 	if node == nil {
 		return whyNotFailure{}
 	}
@@ -557,7 +557,7 @@ func (s *Session) classifyFrontier(rule compiledRule, insp reteGraphBranchInspec
 	if node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 		return whyNotFailure{reason: WhyNotReasonPredicate, rejectingSpan: firstPredicateSpan(node)}
 	}
-	mem := s.rete.graphBeta.betaNodeMemoryAt(betaID)
+	mem := s.propagation.runtime.graphBeta.betaNodeMemoryAt(betaID)
 	if mem == nil {
 		return whyNotFailure{}
 	}

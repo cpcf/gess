@@ -76,11 +76,11 @@ func TestSessionRuntimeDiagnosticsSplitsRuleAndQueryTerminalOwners(t *testing.T)
 		t.Fatalf("compileArgs: %v", err)
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
-	if _, err := session.rete.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
+	if _, err := session.propagation.runtime.graphBeta.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
 	defer func() {
-		_, _ = session.rete.graphBeta.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
+		_, _ = session.propagation.runtime.graphBeta.propagateEvent(context.Background(), newReteGraphQueryTriggerRemoveEvent(trigger))
 	}()
 
 	diagnostics, err := session.RuntimeDiagnostics(ctx)
@@ -132,7 +132,7 @@ func TestSessionRuntimeDiagnosticsCountsClearedQueryTerminalCapacity(t *testing.
 	} else if got, want := len(rows), 2; got != want {
 		t.Fatalf("query rows = %d, want %d", got, want)
 	}
-	if got := queryTerminalRowsRetained(session.rete.graphBeta, "adults-by-dept"); got != 0 {
+	if got := queryTerminalRowsRetained(session.propagation.runtime.graphBeta, "adults-by-dept"); got != 0 {
 		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
 

@@ -3,10 +3,10 @@ package engine
 import "sort"
 
 func (s *Session) branchTopStage(terminalID reteGraphTerminalNodeID, branchID int) (reteGraphStageRef, bool) {
-	if s.rete == nil || s.rete.graph == nil {
+	if s.propagation.runtime == nil || s.propagation.runtime.graph == nil {
 		return reteGraphStageRef{}, false
 	}
-	for stage, routes := range s.rete.graph.terminalsByStage {
+	for stage, routes := range s.propagation.runtime.graph.terminalsByStage {
 		for _, route := range routes {
 			if route.terminalID == terminalID && route.branchID == branchID {
 				return stage, true
@@ -22,7 +22,7 @@ func (s *Session) betaChain(topStage reteGraphStageRef) ([]reteGraphBetaNodeID, 
 	var betas []reteGraphBetaNodeID
 	stage := topStage
 	for i := 0; stage.kind == reteGraphStageBeta && i < 4096; i++ {
-		node := s.rete.graph.betaNode(reteGraphBetaNodeID(stage.id))
+		node := s.propagation.runtime.graph.betaNode(reteGraphBetaNodeID(stage.id))
 		if node == nil {
 			break
 		}
@@ -36,8 +36,8 @@ func (s *Session) betaChain(topStage reteGraphStageRef) ([]reteGraphBetaNodeID, 
 }
 
 func (s *Session) betaNodeLeftHasRows(betaID reteGraphBetaNodeID) bool {
-	node := s.rete.graph.betaNode(betaID)
-	mem := s.rete.graphBeta.betaNodeMemoryAt(betaID)
+	node := s.propagation.runtime.graph.betaNode(betaID)
+	mem := s.propagation.runtime.graphBeta.betaNodeMemoryAt(betaID)
 	if node == nil || mem == nil {
 		return false
 	}
@@ -103,7 +103,7 @@ func (s *Session) frontierBucketsAllEmpty(node *reteGraphBetaNode, mem *reteGrap
 }
 
 func (s *Session) collectBlockers(node *reteGraphBetaNode, betaID reteGraphBetaNodeID, cfg whyNotConfig, report *WhyNotReport) ([]FactID, int) {
-	negMem := s.rete.graphBeta.negativeBetaMemory(betaID, node)
+	negMem := s.propagation.runtime.graphBeta.negativeBetaMemory(betaID, node)
 	if negMem.memory == nil {
 		return nil, 0
 	}
@@ -164,7 +164,7 @@ func (s *Session) decodePartialMatches(rule compiledRule, node *reteGraphBetaNod
 		return true
 	}
 	if node.kind == reteGraphBetaNodeNot {
-		negMem := s.rete.graphBeta.negativeBetaMemory(betaID, node)
+		negMem := s.propagation.runtime.graphBeta.negativeBetaMemory(betaID, node)
 		if negMem.memory != nil {
 			negMem.memory.left.forEachRow(func(left *negativeBetaLeftRow) bool {
 				if left == nil {

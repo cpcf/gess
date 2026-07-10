@@ -129,10 +129,10 @@ func (p *backchainQueryProofContext) insertDemand(ctx context.Context, demand ba
 	factValue := p.newDemandFact(plan, slots)
 	p.facts = append(p.facts, factValue)
 	fact := &p.facts[len(p.facts)-1]
-	if session.rete == nil || session.rete.graphBeta == nil {
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		return reteAgendaDelta{supported: false}, ErrInvalidRuleset
 	}
-	return session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, origin, nil))
+	return session.propagation.runtime.propagateBetaEvent(ctx, newReteGraphGeneratedAssertEvent(fact, origin, nil))
 }
 
 func (p *backchainQueryProofContext) findPersistentDemandFact(plan *compiledGeneratedFactInsertPlan, duplicateIndex duplicateIndexKey, slots []factSlot) *workingFact {
@@ -213,12 +213,12 @@ func (p *backchainQueryProofContext) workingFactByID(id FactID) (*workingFact, b
 
 func (p *backchainQueryProofContext) cleanup(ctx context.Context) (reteAgendaDelta, error) {
 	combined := reteAgendaDelta{supported: true}
-	if p == nil || p.session == nil || p.session.rete == nil || p.session.rete.graphBeta == nil {
+	if p == nil || p.session == nil || p.session.propagation.runtime == nil || p.session.propagation.runtime.graphBeta == nil {
 		return combined, nil
 	}
 	for i := len(p.facts) - 1; i >= 0; i-- {
 		fact := &p.facts[i]
-		delta, err := p.session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, p.origin(), p.session.propagationCounters))
+		delta, err := p.session.propagation.runtime.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, p.origin(), p.session.propagation.counters))
 		if err != nil {
 			return combined, err
 		}

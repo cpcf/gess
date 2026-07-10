@@ -164,8 +164,8 @@ func BenchmarkRunActionOriginMultiDelta(b *testing.B) {
 		if result.Status != RunCompleted || result.Fired != 3 {
 			b.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
 		}
-		if session.agendaDirty || !session.agendaReady || session.runAgendaPending {
-			b.Fatalf("agenda state = dirty %v ready %v pending %v, want clean ready no pending", session.agendaDirty, session.agendaReady, session.runAgendaPending)
+		if session.agendaDirty || !session.agendaReady || session.propagation.runAgendaPending {
+			b.Fatalf("agenda state = dirty %v ready %v pending %v, want clean ready no pending", session.agendaDirty, session.agendaReady, session.propagation.runAgendaPending)
 		}
 		benchmarkRunResult = result
 	}
@@ -908,8 +908,8 @@ func mustGraphRemovalSparseBenchmarkSession(tb testing.TB, revision *Ruleset, em
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	snapshot, err := session.Snapshot(context.Background())
 	if err != nil {
@@ -1042,8 +1042,8 @@ func mustReteAgendaDeltaBenchmarkSession(tb testing.TB, revision *Ruleset, facts
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || !session.rete.supportsIncrementalAgenda() {
-		tb.Fatalf("Rete runtime = %#v, want incremental agenda support", session.rete)
+	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
+		tb.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
 	snapshot, err := session.Snapshot(context.Background())
 	if err != nil {
@@ -1113,8 +1113,8 @@ func mustGraphRemovalBenchmarkSession(tb testing.TB, revision *Ruleset, employee
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	snapshot, err := session.Snapshot(context.Background())
 	if err != nil {
@@ -1293,8 +1293,8 @@ func mustGraphNegativePropagationBenchmarkSession(tb testing.TB, revision *Rules
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	snapshot, err := session.Snapshot(context.Background())
 	if err != nil {
@@ -1526,8 +1526,8 @@ func mustGraphResidualJoinBenchmarkSession(tb testing.TB, revision *Ruleset, thr
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
-		tb.Fatalf("Rete runtime = %#v, want graph beta", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
+		tb.Fatalf("Rete runtime = %#v, want graph beta", session.propagation.runtime)
 	}
 	return session
 }
@@ -1713,8 +1713,8 @@ func mustPureResidualJoinBenchmarkSession(tb testing.TB, revision *Ruleset, thre
 	if err != nil {
 		tb.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil || !session.rete.plan.betaSupported {
-		tb.Fatalf("Rete runtime = %#v, want graph-beta residual support", session.rete)
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil || !session.propagation.runtime.plan.betaSupported {
+		tb.Fatalf("Rete runtime = %#v, want graph-beta residual support", session.propagation.runtime)
 	}
 	return session
 }
@@ -1844,11 +1844,11 @@ func mustLoanUnderwritingReteResults(tb testing.TB) (*Ruleset, []ruleMatchResult
 func mustBenchmarkReteResults(tb testing.TB, session *Session) []ruleMatchResult {
 	tb.Helper()
 
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		tb.Fatal("session Rete runtime is nil")
 	}
 
-	results, err := session.rete.match(context.Background(), session.indexedSnapshotLocked())
+	results, err := session.propagation.runtime.match(context.Background(), session.indexedSnapshotLocked())
 	if err != nil {
 		tb.Fatalf("match: %v", err)
 	}

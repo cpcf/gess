@@ -71,7 +71,7 @@ func TestLargeSteadyStateScalingSmokeValidatesFacts(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	validateLargeSteadyStateHarnessSession(t, session, result, tc, "smoke")
-	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.rete)
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 
 	second, err := session.Run(ctx)
 	if err != nil {
@@ -642,7 +642,7 @@ func mustSeedLargeSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc 
 	t.Helper()
 
 	session := mustSession(t, revision, SessionID(fmt.Sprintf("large-steady-state-scaling-%d-%d", tc.streams, tc.limit)))
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
 	seedLargeSteadyStateScalingSession(t, session, tc)

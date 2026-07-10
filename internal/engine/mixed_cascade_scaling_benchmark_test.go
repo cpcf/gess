@@ -748,7 +748,7 @@ func mustSeedMixedCascadeScalingSession(t testing.TB, revision *Ruleset, tc mixe
 	t.Helper()
 
 	session := mustSession(t, revision, SessionID(fmt.Sprintf("mixed-cascade-scaling-%d-%d", tc.streams, tc.limit)))
-	if session.rete == nil {
+	if session.propagation.runtime == nil {
 		t.Fatal("session Rete runtime is nil")
 	}
 	seedMixedCascadeScalingSession(t, session, tc)

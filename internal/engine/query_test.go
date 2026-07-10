@@ -158,7 +158,7 @@ func TestSessionQueryInitializesGraphTerminalMemoryForQueryOnlyRuleset(t *testin
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatal("query-only session did not initialize graph beta memory")
 	}
 	if got := len(revision.graph.queryTerminalIDs["adults-by-dept"]); got == 0 {
@@ -192,7 +192,7 @@ func TestSessionQueryTriggerUsesTerminalMemoryLifecycle(t *testing.T) {
 		t.Fatalf("compileArgs: %v", err)
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if got := queryTerminalRowsRetained(memory, query.name); got != 0 {
 		t.Fatalf("query terminal rows before trigger = %d, want 0", got)
 	}
@@ -246,7 +246,7 @@ func TestQueryTerminalMaterializationUsesActiveQueryRows(t *testing.T) {
 		t.Fatalf("compileArgs engineering: %v", err)
 	}
 	engineeringTrigger := session.queryTriggerFact(query, &engineeringArgs)
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(engineeringTrigger)); err != nil {
 		t.Fatalf("insert engineering query trigger: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
+	if ruleRows, queryRows := terminalRowsByKind(session.propagation.runtime.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
 		t.Fatalf("terminal rows before query = rule %d query %d, want rule 0 query 0", ruleRows, queryRows)
 	}
 
@@ -341,7 +341,7 @@ func TestRuleAndQueryTerminalsShareMemoryWithDifferentSideEffects(t *testing.T) 
 		t.Fatalf("query rows = %d, want 1", len(rows))
 	}
 	assertQueryRowStringValue(t, rows[0], "id", "p1")
-	if ruleRows, queryRows := terminalRowsByKind(session.rete.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
+	if ruleRows, queryRows := terminalRowsByKind(session.propagation.runtime.graphBeta, "adult-query"); ruleRows != 0 || queryRows != 0 {
 		t.Fatalf("terminal rows after query cleanup = rule %d query %d, want rule 0 query 0", ruleRows, queryRows)
 	}
 
@@ -389,7 +389,7 @@ func TestSessionJoinedQueryModifyUnobservedSlotRefreshesGraphMemory(t *testing.T
 		t.Fatalf("compile query args: %v", err)
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
@@ -706,13 +706,13 @@ func TestSessionQueryValueOnlyRowsUseProjectedValueStorageAndRemainStable(t *tes
 	if got, want := len(rows), len(initials); got != want {
 		t.Fatalf("rows = %d, want %d", got, want)
 	}
-	if session.rete == nil || session.rete.graphBeta == nil {
+	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatal("query did not use graph beta terminal memory")
 	}
 	if got := len(revision.graph.queryTerminalIDs["people-values"]); got == 0 {
 		t.Fatal("query graph terminal was not compiled")
 	}
-	if got := queryTerminalRowsRetained(session.rete.graphBeta, "people-values"); got != 0 {
+	if got := queryTerminalRowsRetained(session.propagation.runtime.graphBeta, "people-values"); got != 0 {
 		t.Fatalf("query terminal rows retained after QueryAll cleanup = %d, want 0", got)
 	}
 	if len(rows[0].items) != 0 || len(rows[0].valueItems) != 3 {
@@ -778,7 +778,7 @@ func TestQueryTerminalMaterializationUsesValueOnlyStorage(t *testing.T) {
 		t.Fatalf("compileArgs: %v", err)
 	}
 	trigger := session.queryTriggerFact(query, &compiledArgs)
-	memory := session.rete.graphBeta
+	memory := session.propagation.runtime.graphBeta
 	if _, err := memory.propagateEvent(ctx, newReteGraphQueryTriggerEvent(trigger)); err != nil {
 		t.Fatalf("insert query trigger: %v", err)
 	}
