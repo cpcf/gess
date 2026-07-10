@@ -119,7 +119,9 @@ prefix before `firstFailing`; every condition is satisfied when
 The bounded `run` result, the ordered `firings`, the working-memory `diff`
 (the base and fork snapshots are represented by their difference, not in full),
 the agenda counts before and after, and — with `WithWhatIfExplain` —
-`derivations` for the added facts.
+`derivations` for the added facts. Pass `WithExplainLogMaxEntries` to
+`WithWhatIfExplain` when a scenario needs more than the default 4096 retained
+history entries.
 
 ```json
 {

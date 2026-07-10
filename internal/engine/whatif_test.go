@@ -56,6 +56,26 @@ func TestWhatIfAssertScenario(t *testing.T) {
 	}
 }
 
+func TestWhatIfExplainForwardsLogOptions(t *testing.T) {
+	session, _ := whatIfBaseSession(t)
+	report, err := session.WhatIf(context.Background(), func(context.Context, *Session) error {
+		return nil
+	}, WithWhatIfExplain(WithExplainLogMaxEntries(17)), WithWhatIfRetainFork())
+	if err != nil {
+		t.Fatalf("WhatIf: %v", err)
+	}
+	if report.ForkSession == nil {
+		t.Fatal("ForkSession nil, want retained fork")
+	}
+	defer report.ForkSession.Close()
+	if report.ForkSession.explainLog == nil {
+		t.Fatal("fork explain log is nil")
+	}
+	if got := report.ForkSession.explainLog.maxEntries; got != 17 {
+		t.Fatalf("explain log max entries = %d, want forwarded value 17", got)
+	}
+}
+
 func TestWhatIfRetractScenario(t *testing.T) {
 	session, _ := whatIfBaseSession(t)
 	ctx := context.Background()

@@ -250,6 +250,10 @@ report, err := session.WhatIf(ctx, func(ctx context.Context, fork *session.Sessi
 // report.Firings, report.Diff.Added, report.Derivations; base session unchanged.
 ```
 
+`WithWhatIfExplain` accepts the same bounded-log options as `WithExplainLog`.
+For a large scenario, raise the retained history explicitly with, for example,
+`session.WithWhatIfExplain(session.WithExplainLogMaxEntries(20000))`.
+
 The scenario receives the fork and uses the normal
 `Assert`/`Modify`/`Retract`/`Focus` API, so it can express anything the engine
 supports. The base session is untouched in every path, including scenario

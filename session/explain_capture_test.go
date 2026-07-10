@@ -11,6 +11,12 @@ import (
 	"github.com/cpcf/gess/session"
 )
 
+func TestWithWhatIfExplainAcceptsLogOptions(t *testing.T) {
+	if option := session.WithWhatIfExplain(session.WithExplainLogMaxEntries(17)); option == nil {
+		t.Fatal("WithWhatIfExplain returned nil")
+	}
+}
+
 func TestExplainJSONThroughFacade(t *testing.T) {
 	ctx := context.Background()
 	source, err := os.ReadFile("../examples/gess-files/order_lifecycle/rules.gess")

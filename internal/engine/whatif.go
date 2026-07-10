@@ -48,10 +48,11 @@ type WhatIfFiring struct {
 }
 
 type whatIfConfig struct {
-	maxFirings int
-	explain    bool
-	retainFork bool
-	output     io.Writer
+	maxFirings        int
+	explain           bool
+	explainLogOptions []ExplainLogOption
+	retainFork        bool
+	output            io.Writer
 }
 
 // WhatIfOption configures a Session.WhatIf run.
@@ -74,9 +75,14 @@ func WithWhatIfMaxFirings(n int) WhatIfOption {
 }
 
 // WithWhatIfExplain attaches an explain log to the fork so the report includes
-// a derivation for every added fact.
-func WithWhatIfExplain() WhatIfOption {
-	return func(cfg *whatIfConfig) { cfg.explain = true }
+// a derivation for every added fact. The optional log options configure its
+// history bound.
+func WithWhatIfExplain(opts ...ExplainLogOption) WhatIfOption {
+	explainLogOptions := append([]ExplainLogOption(nil), opts...)
+	return func(cfg *whatIfConfig) {
+		cfg.explain = true
+		cfg.explainLogOptions = explainLogOptions
+	}
 }
 
 // WithWhatIfRetainFork keeps the fork open and returns it in the report for
@@ -136,7 +142,7 @@ func (s *Session) WhatIf(ctx context.Context, scenario func(ctx context.Context,
 		WithOutputWriter(output),
 	}
 	if cfg.explain {
-		forkOpts = append(forkOpts, WithExplainLog())
+		forkOpts = append(forkOpts, WithExplainLog(cfg.explainLogOptions...))
 	}
 	fork, err := s.Fork(ctx, forkOpts...)
 	if err != nil {

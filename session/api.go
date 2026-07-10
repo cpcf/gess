@@ -1729,9 +1729,10 @@ func WithWhatIfMaxFirings(n int) WhatIfOption {
 }
 
 // WithWhatIfExplain attaches an explain log to the what-if fork so the report
-// includes a derivation for every added fact.
-func WithWhatIfExplain() WhatIfOption {
-	return engine.WithWhatIfExplain()
+// includes a derivation for every added fact. The optional log options
+// configure its history bound.
+func WithWhatIfExplain(opts ...ExplainLogOption) WhatIfOption {
+	return engine.WithWhatIfExplain(opts...)
 }
 
 // WithWhatIfRetainFork keeps the what-if fork open and returns it in the
