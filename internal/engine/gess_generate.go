@@ -564,6 +564,9 @@ func renderConditions(conditions []ConditionSpec) string {
 func renderMatch(spec RuleConditionSpec) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "gessrules.Match{Binding: %s", strconv.Quote(spec.Binding))
+	if spec.SyntheticBinding {
+		b.WriteString(", SyntheticBinding: true")
+	}
 	fmt.Fprintf(&b, ", Target: %s", renderFactTarget(spec.Target))
 	if len(spec.FieldConstraints) > 0 {
 		fmt.Fprintf(&b, ", FieldConstraints: []gessrules.FieldConstraintSpec{%s}", renderFieldConstraints(spec.FieldConstraints))

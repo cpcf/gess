@@ -497,6 +497,9 @@ func (s *Session) whyNotConditions(rule compiledRule, insp reteGraphBranchInspec
 				break
 			}
 		}
+		if plan, ok := rule.conditionPlanAtOrder(insp.BranchID, cond.PlannedOrder); ok && plan.syntheticBinding {
+			cond.Binding = ""
+		}
 		if !cond.Test && !cond.Negated && !cond.Aggregate {
 			cond.AlphaMatches = s.alphaMatchesForCondition(insp, cond.PlannedOrder)
 		}

@@ -745,7 +745,8 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 	if form.IsAtom() || len(form.List) == 0 || !form.List[0].IsAtom() {
 		return nil, l.err(form.Span, "expected fact pattern")
 	}
-	if binding == "" {
+	syntheticBinding := binding == ""
+	if syntheticBinding {
 		scope.generated++
 		binding = fmt.Sprintf("__gess%d", scope.generated)
 	}
@@ -753,7 +754,7 @@ func (l *gessLoader) parsePattern(module ModuleName, form gessSExpr, binding str
 	if mod.IsZero() {
 		mod = module
 	}
-	spec := RuleConditionSpec{Binding: binding, Target: TemplateFactIn(mod, name), Source: form.Span}
+	spec := RuleConditionSpec{Binding: binding, SyntheticBinding: syntheticBinding, Target: TemplateFactIn(mod, name), Source: form.Span}
 	if binding != "" {
 		scope.bindings[binding] = struct{}{}
 	}

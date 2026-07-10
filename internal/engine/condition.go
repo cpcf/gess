@@ -30,23 +30,24 @@ type conditionTarget struct {
 }
 
 type compiledConditionPlan struct {
-	id             ConditionID
-	binding        string
-	bindingSlot    int
-	path           []int
-	source         SourceSpan
-	negated        bool
-	explicit       bool
-	aggregate      *compiledAggregatePlan
-	isTest         bool
-	target         conditionTarget
-	constraints    []compiledFieldConstraint
-	listPatterns   []compiledListPattern
-	joins          []compiledJoinConstraint
-	predicates     []compiledExpressionPredicate
-	testPredicates []compiledExpressionPredicate
-	indexable      bool
-	indexKind      conditionIndexKind
+	id               ConditionID
+	binding          string
+	syntheticBinding bool
+	bindingSlot      int
+	path             []int
+	source           SourceSpan
+	negated          bool
+	explicit         bool
+	aggregate        *compiledAggregatePlan
+	isTest           bool
+	target           conditionTarget
+	constraints      []compiledFieldConstraint
+	listPatterns     []compiledListPattern
+	joins            []compiledJoinConstraint
+	predicates       []compiledExpressionPredicate
+	testPredicates   []compiledExpressionPredicate
+	indexable        bool
+	indexKind        conditionIndexKind
 }
 
 type conditionMatch struct {
