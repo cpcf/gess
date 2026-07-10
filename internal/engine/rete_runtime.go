@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -165,6 +166,135 @@ func newReteRuntime(revision *Ruleset, globals ...[]Value) (*reteRuntime, error)
 	}
 	runtime.mode = runtime.determineMode()
 	return runtime, nil
+}
+
+type reteRuntimeRevisionRebind struct {
+	revision *Ruleset
+	graph    *reteGraph
+	plan     reteNetworkPlan
+	mode     reteRuntimeMode
+}
+
+func (r *reteRuntime) prepareRevisionRebind(revision *Ruleset) (reteRuntimeRevisionRebind, error) {
+	if r == nil || r.revision == nil || revision == nil {
+		return reteRuntimeRevisionRebind{}, ErrInvalidRuleset
+	}
+	if !reteGraphMemoryLayoutCompatible(r.graph, revision.graph) {
+		return reteRuntimeRevisionRebind{}, fmt.Errorf("%w: unchanged ruleset has incompatible graph memory layout", ErrIncompatibleRuleset)
+	}
+	prepared := reteRuntimeRevisionRebind{
+		revision: revision,
+		graph:    revision.graph,
+		plan:     planReteNetwork(revision),
+	}
+	probe := &reteRuntime{revision: prepared.revision, graph: prepared.graph, plan: prepared.plan}
+	prepared.mode = probe.determineMode()
+	probe.mode = prepared.mode
+	if err := probe.validateExecutableGraphBetaRuntime(); err != nil {
+		return reteRuntimeRevisionRebind{}, err
+	}
+	return prepared, nil
+}
+
+func (r *reteRuntime) applyRevisionRebind(prepared reteRuntimeRevisionRebind) {
+	if r == nil {
+		return
+	}
+	r.revision = prepared.revision
+	r.graph = prepared.graph
+	r.plan = prepared.plan
+	r.mode = prepared.mode
+	if r.graphBeta != nil {
+		r.graphBeta.rebindRevision(prepared.revision, prepared.graph)
+	}
+}
+
+func reteGraphMemoryLayoutCompatible(left, right *reteGraph) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	if len(left.alphaNodes) != len(right.alphaNodes) ||
+		len(left.betaNodes) != len(right.betaNodes) ||
+		len(left.aggregateNodes) != len(right.aggregateNodes) ||
+		len(left.terminalNodes) != len(right.terminalNodes) {
+		return false
+	}
+	for i := range left.alphaNodes {
+		leftNode, rightNode := left.alphaNodes[i], right.alphaNodes[i]
+		if serializeCompiledFieldConstraints(leftNode.constraints) != serializeCompiledFieldConstraints(rightNode.constraints) ||
+			serializeCompiledListPatterns(leftNode.listPatterns) != serializeCompiledListPatterns(rightNode.listPatterns) ||
+			serializeCompiledExpressionPredicates(leftNode.predicates) != serializeCompiledExpressionPredicates(rightNode.predicates) {
+			return false
+		}
+		leftNode.constraints, rightNode.constraints = nil, nil
+		leftNode.listPatterns, rightNode.listPatterns = nil, nil
+		leftNode.predicates, rightNode.predicates = nil, nil
+		if !reflect.DeepEqual(leftNode, rightNode) {
+			return false
+		}
+	}
+	for i := range left.betaNodes {
+		leftNode, rightNode := left.betaNodes[i], right.betaNodes[i]
+		if serializeCompiledJoinConstraints(leftNode.joins) != serializeCompiledJoinConstraints(rightNode.joins) ||
+			serializeCompiledJoinConstraints(leftNode.hashJoins) != serializeCompiledJoinConstraints(rightNode.hashJoins) ||
+			serializeCompiledJoinConstraints(leftNode.residualJoins) != serializeCompiledJoinConstraints(rightNode.residualJoins) ||
+			serializeCompiledExpressionPredicates(leftNode.predicates) != serializeCompiledExpressionPredicates(rightNode.predicates) ||
+			serializeCompiledExpressionPredicates(leftNode.rightPredicates) != serializeCompiledExpressionPredicates(rightNode.rightPredicates) ||
+			!reteGraphBackchainDemandLayoutsEqual(leftNode.backchainDemands, rightNode.backchainDemands) {
+			return false
+		}
+		leftNode.joins, rightNode.joins = nil, nil
+		leftNode.hashJoins, rightNode.hashJoins = nil, nil
+		leftNode.residualJoins, rightNode.residualJoins = nil, nil
+		leftNode.predicates, rightNode.predicates = nil, nil
+		leftNode.rightPredicates, rightNode.rightPredicates = nil, nil
+		leftNode.backchainDemands, rightNode.backchainDemands = nil, nil
+		if !reflect.DeepEqual(leftNode, rightNode) {
+			return false
+		}
+	}
+	for i := range left.aggregateNodes {
+		leftNode, rightNode := left.aggregateNodes[i], right.aggregateNodes[i]
+		if serializeCompiledAggregateSpecs(leftNode.specs) != serializeCompiledAggregateSpecs(rightNode.specs) {
+			return false
+		}
+		leftNode.specs, rightNode.specs = nil, nil
+		if !reflect.DeepEqual(leftNode, rightNode) {
+			return false
+		}
+	}
+	return reflect.DeepEqual(left.terminalNodes, right.terminalNodes) &&
+		reflect.DeepEqual(left.ruleBranchPlans, right.ruleBranchPlans) &&
+		reflect.DeepEqual(left.branchInspections, right.branchInspections) &&
+		reflect.DeepEqual(left.queryTerminalIDs, right.queryTerminalIDs) &&
+		reflect.DeepEqual(left.routesByTemplateKey, right.routesByTemplateKey) &&
+		reflect.DeepEqual(left.routesByTemplateID, right.routesByTemplateID) &&
+		reflect.DeepEqual(left.routesByName, right.routesByName) &&
+		reflect.DeepEqual(left.alphaRouteTables, right.alphaRouteTables) &&
+		reflect.DeepEqual(left.alphaRouteIDTables, right.alphaRouteIDTables) &&
+		reflect.DeepEqual(left.successorsByStage, right.successorsByStage) &&
+		reflect.DeepEqual(left.aggregatesByStage, right.aggregatesByStage) &&
+		reflect.DeepEqual(left.aggregateOuters, right.aggregateOuters) &&
+		reflect.DeepEqual(left.terminalsByStage, right.terminalsByStage)
+}
+
+func reteGraphBackchainDemandLayoutsEqual(left, right []reteGraphBackchainDemandPlan) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		leftPlan, rightPlan := left[i], right[i]
+		if serializeCompiledFieldConstraints(leftPlan.constraints) != serializeCompiledFieldConstraints(rightPlan.constraints) ||
+			serializeCompiledJoinConstraints(leftPlan.joins) != serializeCompiledJoinConstraints(rightPlan.joins) {
+			return false
+		}
+		leftPlan.constraints, rightPlan.constraints = nil, nil
+		leftPlan.joins, rightPlan.joins = nil, nil
+		if !reflect.DeepEqual(leftPlan, rightPlan) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *reteRuntime) validateExecutableGraphBetaRuntime() error {

@@ -130,6 +130,28 @@ type reteGraphTerminalMemory struct {
 	singleBranchID        int
 }
 
+func (m *reteGraphBetaMemory) rebindRevision(revision *Ruleset, graph *reteGraph) {
+	if m == nil {
+		return
+	}
+	m.revision = revision
+	m.graph = graph
+	for id, terminal := range m.terminals {
+		if terminal == nil {
+			continue
+		}
+		terminal.kind = 0
+		terminal.ruleRevisionID = ""
+		terminal.rule = compiledRule{}
+		terminal.ruleOK = false
+		terminal.ruleConditionCount = 0
+		terminal.ruleIdentityScopeHash = 0
+		terminal.branchCount = 0
+		terminal.singleBranchID = 0
+		m.initializeTerminalMemory(reteGraphTerminalNodeID(id), terminal)
+	}
+}
+
 func (m *reteGraphTerminalMemory) singleBranch() bool {
 	return m != nil && m.branchCount == 1
 }

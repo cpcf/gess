@@ -3133,6 +3133,13 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 
 	nextID := next.ID()
 	if nextID == previousID {
+		if err := s.rebindUnchangedRuleset(next); err != nil {
+			return ApplyRulesetResult{
+				Status:            ApplyRulesetIncompatible,
+				PreviousRulesetID: previousID,
+				CurrentRulesetID:  nextID,
+			}, err
+		}
 		return ApplyRulesetResult{
 			Status:            ApplyRulesetUnchanged,
 			PreviousRulesetID: previousID,
@@ -3237,6 +3244,25 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		ReplacedRuleRevisions:  plan.Replaced,
 		UnchangedRuleRevisions: plan.Unchanged,
 	}, nil
+}
+
+func (s *Session) rebindUnchangedRuleset(next *Ruleset) error {
+	if s == nil || s.revision == nil || next == nil || s.propagation.runtime == nil {
+		return ErrInvalidRuleset
+	}
+	prepared, err := s.propagation.runtime.prepareRevisionRebind(next)
+	if err != nil {
+		return err
+	}
+
+	// Preparation above is the only fallible phase. Retarget every owner that
+	// retains compiled revision data together so no session operation can see
+	// a mixture of old and new host closures.
+	s.propagation.runtime.applyRevisionRebind(prepared)
+	s.agendaDriver.ensureAgenda()
+	s.agendaDriver.agenda.rebindRevision(next)
+	s.revision = next
+	return nil
 }
 
 func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]agendaChange, error) {

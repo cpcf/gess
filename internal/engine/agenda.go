@@ -730,6 +730,12 @@ type agenda struct {
 	payloadPool         []*activationPayload
 }
 
+func (a *agenda) rebindRevision(revision *Ruleset) {
+	if a != nil {
+		a.revision = revision
+	}
+}
+
 const activationPayloadPoolCap = 4096
 
 func (a *agenda) takeActivationPayload() *activationPayload {

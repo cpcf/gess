@@ -346,8 +346,12 @@ result, err := session.ApplyRuleset(ctx, nextRuleset)
 
 `ApplyRuleset` swaps in a newly compiled ruleset while keeping working
 memory. Statuses: `ApplyRulesetApplied`, `ApplyRulesetUnchanged` (same
-ruleset, no work), and `ApplyRulesetIncompatible`. The result lists added,
-removed, replaced, and unchanged rule revisions.
+declared ruleset shape, so no graph or agenda rebuild), and
+`ApplyRulesetIncompatible`. An unchanged apply still rebinds Go host action
+and pure-function implementations from the supplied ruleset, allowing a host
+fix with the same declaration to take effect without disturbing pending or
+already-fired activations. The result lists added, removed, replaced, and
+unchanged rule revisions.
 
 Compatibility requires that every template used by live facts exists in the
 next ruleset with an identical spec, and that the configured initial facts

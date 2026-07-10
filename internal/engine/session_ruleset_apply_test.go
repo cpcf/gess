@@ -342,6 +342,243 @@ func TestSessionApplyRulesetUnchangedPreservesAgendaStateAndEvents(t *testing.T)
 	}
 }
 
+func TestSessionApplyRulesetUnchangedRebindsPendingActionClosure(t *testing.T) {
+	build := func(record func(string)) (*Ruleset, TemplateKey) {
+		workspace := NewWorkspace()
+		template := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:            "action-rebind-item",
+			DuplicatePolicy: DuplicateAllow,
+			Fields:          []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "record",
+			Fn: func(ActionContext) error {
+				record("fired")
+				return nil
+			},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "record-item",
+			Conditions: []RuleConditionSpec{{Binding: "item", Target: TemplateKeyFact(template.Key())}},
+			Actions:    []RuleActionSpec{{Name: "record"}},
+		})
+		return mustCompileWorkspace(t, workspace), template.Key()
+	}
+
+	var calls []string
+	oldRevision, templateKey := build(func(string) { calls = append(calls, "old") })
+	newRevision, _ := build(func(string) { calls = append(calls, "new") })
+	if oldRevision.ID() != newRevision.ID() {
+		t.Fatalf("closure-only revision IDs differ: old=%q new=%q", oldRevision.ID(), newRevision.ID())
+	}
+	collector := &testEventCollector{}
+	session, err := NewSession(oldRevision, WithEventListener(collector))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	for _, id := range []string{"one", "two"} {
+		if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{"id": id})); err != nil {
+			t.Fatalf("Assert(%s): %v", id, err)
+		}
+	}
+	if result, err := session.Run(context.Background(), WithMaxFirings(1)); err != nil || result.Fired != 1 {
+		t.Fatalf("first Run = (%#v, %v), want one firing", result, err)
+	}
+	if !reflect.DeepEqual(calls, []string{"old"}) {
+		t.Fatalf("calls before apply = %v, want [old]", calls)
+	}
+	pendingBefore := session.agendaDriver.agenda.pendingActivations()
+	if len(pendingBefore) != 1 {
+		t.Fatalf("pending before apply = %d, want 1", len(pendingBefore))
+	}
+	graphMemory := session.propagation.runtime.graphBeta
+	agenda := session.agendaDriver.agenda
+	focusBefore := append([]ModuleName(nil), session.agendaDriver.focusStack...)
+	countersBefore := session.propagationCounterSnapshot()
+	eventsBefore := len(collector.Events())
+
+	result, err := session.ApplyRuleset(context.Background(), newRevision)
+	if err != nil || result.Status != ApplyRulesetUnchanged {
+		t.Fatalf("ApplyRuleset = (%#v, %v), want unchanged", result, err)
+	}
+	if session.propagation.runtime.graphBeta != graphMemory || session.agendaDriver.agenda != agenda {
+		t.Fatal("unchanged rebind replaced graph memory or agenda ownership")
+	}
+	if !reflect.DeepEqual(session.propagationCounterSnapshot(), countersBefore) {
+		t.Fatal("unchanged rebind changed propagation counters")
+	}
+	if !reflect.DeepEqual(session.agendaDriver.focusStack, focusBefore) {
+		t.Fatalf("focus after apply = %v, want %v", session.agendaDriver.focusStack, focusBefore)
+	}
+	if got := len(collector.Events()); got != eventsBefore {
+		t.Fatalf("events after apply = %d, want %d", got, eventsBefore)
+	}
+	pendingAfter := session.agendaDriver.agenda.pendingActivations()
+	if len(pendingAfter) != 1 || pendingAfter[0].activationID() != pendingBefore[0].activationID() {
+		t.Fatalf("pending activation after apply = %#v, want identity %q", pendingAfter, pendingBefore[0].activationID())
+	}
+
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 {
+		t.Fatalf("second Run = (%#v, %v), want one firing", result, err)
+	}
+	if !reflect.DeepEqual(calls, []string{"old", "new"}) {
+		t.Fatalf("calls after apply = %v, want [old new]", calls)
+	}
+}
+
+func TestSessionApplyRulesetUnchangedRebindsActionCallClosure(t *testing.T) {
+	build := func(call DSLCallFunc) (*Ruleset, TemplateKey) {
+		workspace := NewWorkspace()
+		template := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "call-rebind-item",
+			Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+		})
+		mustAddAction(t, workspace, ActionSpec{
+			Name: "notify",
+			Call: &ActionCallSpec{Name: "notify", Fn: call},
+		})
+		mustAddRule(t, workspace, RuleSpec{
+			Name:       "notify-item",
+			Conditions: []RuleConditionSpec{{Binding: "item", Target: TemplateKeyFact(template.Key())}},
+			Actions:    []RuleActionSpec{{Name: "notify"}},
+		})
+		return mustCompileWorkspace(t, workspace), template.Key()
+	}
+
+	var calls []string
+	oldRevision, templateKey := build(func(ActionContext, []Value) error { calls = append(calls, "old"); return nil })
+	newRevision, _ := build(func(ActionContext, []Value) error { calls = append(calls, "new"); return nil })
+	session := mustSession(t, oldRevision, "action-call-rebind")
+	if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{"id": "one"})); err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	if result, err := session.ApplyRuleset(context.Background(), newRevision); err != nil || result.Status != ApplyRulesetUnchanged {
+		t.Fatalf("ApplyRuleset = (%#v, %v), want unchanged", result, err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !reflect.DeepEqual(calls, []string{"new"}) {
+		t.Fatalf("call closures invoked = %v, want [new]", calls)
+	}
+}
+
+func TestSessionApplyRulesetUnchangedRebindsPureFunctionPerSession(t *testing.T) {
+	build := func(value bool) (*Ruleset, TemplateKey) {
+		workspace := NewWorkspace()
+		template := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:            "function-rebind-item",
+			DuplicatePolicy: DuplicateAllow,
+			Fields:          []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
+		})
+		mustAddPureFunction(t, workspace, PureFunctionSpec{
+			Name:   "enabled",
+			Return: ValueBool,
+			Func0: func(context.Context) (Value, error) {
+				return newBoolValue(value), nil
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "enabled-item",
+			Conditions: []RuleConditionSpec{{
+				Binding:    "item",
+				Target:     TemplateKeyFact(template.Key()),
+				Predicates: []ExpressionSpec{Call("enabled")},
+			}},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+		return mustCompileWorkspace(t, workspace), template.Key()
+	}
+
+	oldRevision, templateKey := build(false)
+	newRevision, _ := build(true)
+	if oldRevision.ID() != newRevision.ID() {
+		t.Fatalf("closure-only revision IDs differ: old=%q new=%q", oldRevision.ID(), newRevision.ID())
+	}
+	rebound := mustSession(t, oldRevision, "pure-function-rebound")
+	untouched := mustSession(t, oldRevision, "pure-function-untouched")
+	graphMemory := rebound.propagation.runtime.graphBeta
+	if result, err := rebound.ApplyRuleset(context.Background(), newRevision); err != nil || result.Status != ApplyRulesetUnchanged {
+		t.Fatalf("ApplyRuleset = (%#v, %v), want unchanged", result, err)
+	}
+	if rebound.propagation.runtime.graphBeta != graphMemory {
+		t.Fatal("pure-function rebind replaced graph memory")
+	}
+	for _, session := range []*Session{rebound, untouched} {
+		if _, err := session.Assert(context.Background(), templateKey, mustFields(t, map[string]any{"id": session.ID().String()})); err != nil {
+			t.Fatalf("Assert(%s): %v", session.ID(), err)
+		}
+	}
+	if got := len(rebound.agendaDriver.agenda.pendingActivations()); got != 1 {
+		t.Fatalf("rebound pending activations = %d, want 1", got)
+	}
+	if got := len(untouched.agendaDriver.agenda.pendingActivations()); got != 0 {
+		t.Fatalf("untouched pending activations = %d, want 0", got)
+	}
+}
+
+func TestSessionApplyRulesetUnchangedRejectsIncompatibleGraphLayout(t *testing.T) {
+	build := func(equalityComparator bool) *Ruleset {
+		workspace := NewWorkspace()
+		left := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "layout-left",
+			Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+		})
+		right := mustAddTemplate(t, workspace, TemplateSpec{
+			Name:   "layout-right",
+			Fields: []FieldSpec{{Name: "group", Kind: ValueString, Required: true}},
+		})
+		mustAddPureFunction(t, workspace, PureFunctionSpec{
+			Name:               "same-group",
+			Args:               []ValueKind{ValueString, ValueString},
+			Return:             ValueBool,
+			EqualityComparator: equalityComparator,
+			Func: func(_ context.Context, args []Value) (Value, error) {
+				leftValue, _ := args[0].AsString()
+				rightValue, _ := args[1].AsString()
+				return newBoolValue(leftValue == rightValue), nil
+			},
+		})
+		mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+		mustAddRule(t, workspace, RuleSpec{
+			Name: "layout-rule",
+			Conditions: []RuleConditionSpec{
+				{Binding: "left", Target: TemplateKeyFact(left.Key())},
+				{
+					Binding: "right",
+					Target:  TemplateKeyFact(right.Key()),
+					Predicates: []ExpressionSpec{Call("same-group",
+						CurrentFieldExpr{Field: "group"},
+						BindingFieldExpr{Binding: "left", Field: "group"},
+					)},
+				},
+			},
+			Actions: []RuleActionSpec{{Name: "mark"}},
+		})
+		return mustCompileWorkspace(t, workspace)
+	}
+
+	oldRevision := build(false)
+	unsafeRevision := build(true)
+	if oldRevision.ID() != unsafeRevision.ID() {
+		t.Fatalf("optimizer-only revision IDs differ: old=%q new=%q", oldRevision.ID(), unsafeRevision.ID())
+	}
+	session := mustSession(t, oldRevision, "layout-rebind")
+	runtime := session.propagation.runtime
+	graphMemory := runtime.graphBeta
+	agenda := session.agendaDriver.agenda
+
+	result, err := session.ApplyRuleset(context.Background(), unsafeRevision)
+	if !errors.Is(err, ErrIncompatibleRuleset) || result.Status != ApplyRulesetIncompatible {
+		t.Fatalf("ApplyRuleset = (%#v, %v), want incompatible graph layout", result, err)
+	}
+	if session.revision != oldRevision || session.propagation.runtime != runtime || runtime.graphBeta != graphMemory || session.agendaDriver.agenda != agenda {
+		t.Fatal("failed graph-layout preflight partially mutated session owners")
+	}
+}
+
 func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChange(t *testing.T) {
 	workspace := NewWorkspace()
 	template := mustAddTemplate(t, workspace, TemplateSpec{
