@@ -8,6 +8,9 @@ type sessionPropagationCoordinator struct {
 	runtime  *reteRuntime
 	counters *propagationCounterLedger
 
+	pendingLifecycleDelta reteAgendaDelta
+	pendingLifecycle      bool
+
 	runAgendaDelta   reteAgendaDelta
 	runAgendaDeltas  []reteAgendaDelta
 	runAgendaStates  []runAgendaDeltaState
@@ -17,6 +20,28 @@ type sessionPropagationCoordinator struct {
 	runAgendaUpdated []reteTerminalTokenUpdate
 	runAgendaPending bool
 	runAgendaDirect  bool
+}
+
+func (p *sessionPropagationCoordinator) setPendingLifecycleDelta(delta reteAgendaDelta) {
+	if p == nil {
+		return
+	}
+	if !delta.owned {
+		delta = cloneRetainedReteAgendaDelta(delta)
+	}
+	p.pendingLifecycleDelta = delta
+	p.pendingLifecycle = true
+}
+
+func (p *sessionPropagationCoordinator) hasPendingLifecycleDelta() bool {
+	return p != nil && p.pendingLifecycle
+}
+
+func (p *sessionPropagationCoordinator) clearPendingLifecycleDelta() {
+	if p != nil {
+		p.pendingLifecycleDelta = reteAgendaDelta{}
+		p.pendingLifecycle = false
+	}
 }
 
 func newSessionPropagationCoordinator(runtime *reteRuntime) sessionPropagationCoordinator {

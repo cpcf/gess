@@ -779,11 +779,18 @@ func TestBackchainDemandResetGeneratesDemandForInitialFact(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 
+	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
+	if len(demands) != 1 {
+		t.Fatalf("demands after initial graph build = %d, want 1", len(demands))
+	}
+	assertFactStringField(t, demands[0], "id", "q1")
+	assertFactStringField(t, demands[0], "kind", "hardware")
+
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
 
-	demands := mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
+	demands = mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)
 	if len(demands) != 1 {
 		t.Fatalf("demands after reset = %d, want 1", len(demands))
 	}

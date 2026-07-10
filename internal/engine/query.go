@@ -1401,6 +1401,10 @@ func queryAgendaDeltaHasRuleChanges(delta reteAgendaDelta) bool {
 }
 
 func (s *Session) completeBackchainQueryDeltaImmediate(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
+	return s.completeBackchainDemandDeltaImmediate(ctx, delta, origin)
+}
+
+func (s *Session) completeBackchainDemandDeltaImmediate(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := normalizeBackchainDemandNoopDelta(delta)
 	resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, combined.resolvedDemands, combined.resolvedOwners, origin)
 	if err != nil {

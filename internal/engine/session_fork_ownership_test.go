@@ -44,6 +44,8 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "propagation", policy: forkRebuiltDerived, rationale: "the child receives a coordinator initialized around its rebuilt runtime"},
 	{name: "propagation.runtime", policy: forkRebuiltDerived, rationale: "the graph runtime is rebuilt against the cloned working memory"},
 	{name: "propagation.counters", policy: forkReinitializedTransient, rationale: "the child starts with a fresh ledger synchronized from its rebuilt runtime"},
+	{name: "propagation.pendingLifecycleDelta", policy: forkReinitializedTransient, rationale: "the child clones an already materialized agenda and has no deferred initial-build delta"},
+	{name: "propagation.pendingLifecycle", policy: forkReinitializedTransient, rationale: "the child has no deferred initial-build lifecycle state"},
 	{name: "propagation.runAgendaDelta", policy: forkReinitializedTransient, rationale: "run-local delta scratch starts empty"},
 	{name: "propagation.runAgendaDeltas", policy: forkReinitializedTransient, rationale: "run-local nested delta scratch starts empty"},
 	{name: "propagation.runAgendaStates", policy: forkReinitializedTransient, rationale: "run-local reconciliation state starts empty"},

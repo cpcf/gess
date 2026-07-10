@@ -2085,9 +2085,10 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	revision, templateKey := mustAgendaRevision(t, 10)
+	collector := &testEventCollector{}
 	session, err := NewSession(
 		revision,
-		WithEventListener(&testEventCollector{}),
+		WithEventListener(collector),
 		WithInitialFacts(SessionInitialFact{
 			TemplateKey: templateKey,
 			Fields:      mustFields(t, map[string]any{"name": "Ada"}),
@@ -2102,6 +2103,7 @@ func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T)
 	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("initial pending activations = %d, want 0 before boundary materialization", got)
 	}
+	session.attachPropagationCounters()
 
 	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"name": "Bea"})); err != nil {
 		t.Fatalf("Assert: %v", err)
@@ -2111,6 +2113,38 @@ func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T)
 	}
 	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after mutation = %d, want %d", got, want)
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if counters.OracleStyleMatchRequests != 0 || counters.WholeTerminalScans != 0 || counters.FullAgendaReconciles != 0 {
+		t.Fatalf("initial boundary used whole-terminal reconcile: %+v", counters)
+	}
+	if got, want := len(collector.Events()), 3; got != want {
+		t.Fatalf("events after initial boundary mutation = %d, want %d", got, want)
+	}
+}
+
+func TestSessionAggregateInitialAgendaUsesGraphLifecycleDelta(t *testing.T) {
+	revision, initials := buildAggregateLifecycleRuleset(t)
+	collector := &testEventCollector{}
+	session, err := NewSession(revision, WithEventListener(collector), WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+
+	agenda, err := session.Agenda(context.Background())
+	if err != nil {
+		t.Fatalf("Agenda: %v", err)
+	}
+	if got, want := len(agenda.Activations()), 1; got != want {
+		t.Fatalf("aggregate activations = %d, want %d", got, want)
+	}
+	counters := session.propagationCounterSnapshot().Totals
+	if counters.OracleStyleMatchRequests != 0 || counters.WholeTerminalScans != 0 || counters.FullAgendaReconciles != 0 {
+		t.Fatalf("aggregate initial agenda used whole-terminal reconcile: %+v", counters)
+	}
+	if got, want := len(collector.Events()), 1; got != want || collector.Events()[0].Type != EventRuleActivated {
+		t.Fatalf("aggregate activation events = %#v, want one activation", collector.Events())
 	}
 }
 

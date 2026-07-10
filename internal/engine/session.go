@@ -251,7 +251,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 	agendaDriver := newSessionAgendaDriver(cfg.strategy)
 	agenda := agendaDriver.agenda
-	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(diagnostics.listeners) && rete.supportsInitialAgendaReset()
+	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(diagnostics.listeners) && !rete.mayEmitBackchainDemandDeltas() && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
 		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(context.Background(), state, state.generation, agenda)
@@ -282,11 +282,17 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
 		nextRunSequence: 0,
 	}
-	// Removed terminal deltas are already applied to the attached initial
-	// agenda during propagation, so only unsupported deltas, terminal
-	// updates, and backchain demand work force the full rematch fallback.
+	// The narrow listener-free path attaches activations during propagation.
+	// Other shapes retain the owned lifecycle delta until the first agenda
+	// boundary, preserving deferred activation-event timing without a rematch.
 	if useInitialAgenda && initialDelta.supported && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
 		session.agendaDriver.installInitialAgenda(session.agendaDriver.agenda)
+	} else {
+		initialDelta, err = session.completeBackchainDemandDeltaImmediate(context.Background(), initialDelta, mutationOrigin{})
+		if err != nil {
+			return nil, err
+		}
+		session.propagation.setPendingLifecycleDelta(initialDelta)
 	}
 	session.syncPropagationCounters()
 	return session, nil
@@ -3353,11 +3359,20 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if s.propagation.runtime == nil {
 		return nil, false, nil
 	}
+	if s.propagation.hasPendingLifecycleDelta() {
+		changes, err := s.applyPendingLifecycleAgendaDelta(ctx, collectChanges)
+		return changes, true, err
+	}
 
 	return nil, false, nil
 }
 
 func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, error) {
+	if s.propagation.hasPendingLifecycleDelta() {
+		combined := mergeReteAgendaDelta(s.propagation.pendingLifecycleDelta, delta)
+		s.propagation.setPendingLifecycleDelta(coalesceReteAgendaDelta(s.revision, combined))
+		return s.applyPendingLifecycleAgendaDelta(ctx, s.shouldCollectAgendaChanges())
+	}
 	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); ok || err != nil {
 		return changes, err
 	}
@@ -3369,6 +3384,58 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 		return nil, nil
 	}
 	return s.reconcileAgendaInternal(ctx)
+}
+
+func (s *Session) applyPendingLifecycleAgendaDelta(ctx context.Context, collectChanges bool) ([]agendaChange, error) {
+	if s == nil || s.closed {
+		return nil, ErrClosedSession
+	}
+	if s.revision == nil || s.propagation.runtime == nil {
+		return nil, ErrInvalidRuleset
+	}
+	if !s.propagation.hasPendingLifecycleDelta() {
+		return nil, nil
+	}
+	if s.agendaDriver.dirty {
+		return nil, fmt.Errorf("%w: dirty agenda cannot apply graph lifecycle delta", ErrUnsupportedRuntime)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	delta := s.propagation.pendingLifecycleDelta
+	if !delta.supported {
+		return nil, fmt.Errorf("%w: unsupported graph lifecycle agenda delta", ErrUnsupportedRuntime)
+	}
+	s.agendaDriver.ensureAgenda()
+	s.syncPropagationCounters()
+	if len(delta.updated) != 0 {
+		if err := s.agendaDriver.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
+			return nil, err
+		}
+	}
+	var changes []agendaChange
+	if collectChanges {
+		var err error
+		changes, err = s.agendaDriver.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
+		if err != nil {
+			return nil, err
+		}
+	} else if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
+		return nil, err
+	}
+	if s.propagation.counters != nil {
+		s.propagation.counters.recordAgendaDeltaApplication()
+	}
+	s.agendaDriver.markReady()
+	s.propagation.clearPendingLifecycleDelta()
+	if collectChanges {
+		s.applyAutoFocus(changes)
+		s.emitAgendaEvents(ctx, changes)
+	}
+	return changes, nil
 }
 
 func (s *Session) applyReteAgendaDelta(ctx context.Context, delta reteAgendaDelta) ([]agendaChange, bool, error) {
