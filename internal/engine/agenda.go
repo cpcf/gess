@@ -152,6 +152,7 @@ type activation struct {
 	supportCount     uint32
 	status           activationStatus
 	payload          *activationPayload
+	queryProofID     backchainQueryProofID
 }
 
 type activationPayload struct {
@@ -167,6 +168,7 @@ func (a activation) mutationOrigin() mutationOrigin {
 		RuleRevisionID:        a.ruleRevisionID,
 		activationIdentityKey: a.identityKey,
 		activationOrdinal:     a.key.ordinal,
+		queryProofID:          a.queryProofID,
 	}
 }
 
@@ -1109,6 +1111,7 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 		return nil, err
 	}
 	created.supportCount = 1
+	created.queryProofID = delta.queryProofID
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
 	a.linkTokenActivation(delta.token, created)
@@ -1188,6 +1191,7 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return nil, err
 	}
 	created.supportCount = 1
+	created.queryProofID = delta.queryProofID
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
 	a.linkTokenActivation(delta.token, created)
@@ -1292,6 +1296,7 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 			return nil, err
 		}
 		created.supportCount = 1
+		created.queryProofID = delta.queryProofID
 		a.storePreparedActivation(created)
 		a.enqueueActivation(created)
 		a.linkTokenActivation(delta.token, created)
@@ -1352,6 +1357,9 @@ func (a *agenda) applyTerminalTokenUpdates(ctx context.Context, revision *Rulese
 		existing.token = update.after
 		existing.maxRecency = update.after.maxRecency()
 		existing.totalRecency = update.after.totalRecency()
+		if !update.queryProofID.isZero() {
+			existing.queryProofID = update.queryProofID
+		}
 		if existing.status == activationStatusPending {
 			a.fixActivationOrder(existing)
 			continue
@@ -1496,6 +1504,10 @@ func (a *agenda) nextInternalPtrForModule(module ModuleName) (*activation, activ
 	return a.nextActivationPtrForModule(module)
 }
 
+func (a *agenda) nextInternalPtrForQueryProof(proofID backchainQueryProofID) (*activation, activation, bool) {
+	return a.nextActivationPtrForQueryProof(proofID)
+}
+
 func (a *agenda) hasPendingActivation() bool {
 	_, ok := a.peekActivationPtr()
 	return ok
@@ -1504,6 +1516,18 @@ func (a *agenda) hasPendingActivation() bool {
 func (a *agenda) hasPendingActivationForModule(module ModuleName) bool {
 	_, ok := a.peekActivationPtrForModule(module)
 	return ok
+}
+
+func (a *agenda) hasPendingActivationForQueryProof(proofID backchainQueryProofID) bool {
+	if a == nil || proofID.isZero() {
+		return false
+	}
+	for _, current := range a.activations {
+		if current != nil && current.status == activationStatusPending && current.queryProofID == proofID {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *agenda) peekActivationPtr() (*activation, bool) {
@@ -1579,6 +1603,28 @@ func (a *agenda) nextActivationPtrForModule(module ModuleName) (*activation, act
 		return current, selected, true
 	}
 	return nil, activation{}, false
+}
+
+func (a *agenda) nextActivationPtrForQueryProof(proofID backchainQueryProofID) (*activation, activation, bool) {
+	if a == nil || proofID.isZero() {
+		return nil, activation{}, false
+	}
+	var best *activation
+	for _, current := range a.activations {
+		if current == nil || current.status != activationStatusPending || current.queryProofID != proofID {
+			continue
+		}
+		if best == nil || a.activationLess(current, best) {
+			best = current
+		}
+	}
+	if best == nil || !a.dequeueActivation(best) {
+		return nil, activation{}, false
+	}
+	best.status = activationStatusConsumed
+	selected := a.activationRunSnapshot(best)
+	a.compactConsumedTokenActivation(best)
+	return best, selected, true
 }
 
 func (a *agenda) nextQueue() (*agendaModuleQueue, bool) {
@@ -1761,6 +1807,7 @@ func activationRunSnapshot(current *activation) activation {
 		maxRecency:       current.maxRecency,
 		totalRecency:     current.totalRecency,
 		status:           current.status,
+		queryProofID:     current.queryProofID,
 	}
 }
 

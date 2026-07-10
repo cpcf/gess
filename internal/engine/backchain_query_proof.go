@@ -2,6 +2,12 @@ package engine
 
 import "context"
 
+type backchainQueryProofID uint64
+
+func (id backchainQueryProofID) isZero() bool {
+	return id == 0
+}
+
 type backchainQueryProofContext struct {
 	session      *Session
 	facts        []workingFact
@@ -10,6 +16,8 @@ type backchainQueryProofContext struct {
 	nextSequence uint64
 	nextRecency  Recency
 	demandBudget backchainDemandCascadeBudget
+	id           backchainQueryProofID
+	nextID       backchainQueryProofID
 }
 
 func (s *Session) beginBackchainQueryProof() *backchainQueryProofContext {
@@ -33,9 +41,21 @@ func (p *backchainQueryProofContext) reset(session *Session) {
 	clear(p.demandQueue)
 	p.demandQueue = p.demandQueue[:0]
 	p.session = session
+	p.nextID++
+	if p.nextID.isZero() {
+		p.nextID++
+	}
+	p.id = p.nextID
 	p.nextSequence = 0
 	p.nextRecency = session.nextRecency + 1
 	p.demandBudget = newBackchainDemandCascadeBudget(session)
+}
+
+func (p *backchainQueryProofContext) origin() mutationOrigin {
+	if p == nil {
+		return mutationOrigin{}
+	}
+	return mutationOrigin{queryProofID: p.id}
 }
 
 func (p *backchainQueryProofContext) flushDemands(ctx context.Context, demands []backchainDemandID, origin mutationOrigin) (reteAgendaDelta, error) {
@@ -178,7 +198,7 @@ func (p *backchainQueryProofContext) cleanup(ctx context.Context) (reteAgendaDel
 	}
 	for i := len(p.facts) - 1; i >= 0; i-- {
 		fact := &p.facts[i]
-		delta, err := p.session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, mutationOrigin{}, p.session.propagationCounters))
+		delta, err := p.session.rete.propagateBetaEvent(ctx, newReteGraphGeneratedRetractEvent(fact, p.origin(), p.session.propagationCounters))
 		if err != nil {
 			return combined, err
 		}

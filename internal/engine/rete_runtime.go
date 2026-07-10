@@ -504,6 +504,12 @@ func (r *reteRuntime) propagateBetaEvent(ctx context.Context, event reteGraphPro
 	incrementalAgendaSupported := r.supportsIncrementalAgenda()
 	if r.usesGraphBeta() && r.graphBeta != nil {
 		delta, err := r.graphBeta.propagateEvent(ctx, event)
+		for i := range delta.added {
+			delta.added[i].queryProofID = event.origin.queryProofID
+		}
+		for i := range delta.updated {
+			delta.updated[i].queryProofID = event.origin.queryProofID
+		}
 		if err != nil {
 			return delta, err
 		}

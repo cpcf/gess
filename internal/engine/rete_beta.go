@@ -715,6 +715,7 @@ type reteTerminalTokenDelta struct {
 	terminalRow    graphTokenRowHandle
 	factIDs        []FactID
 	factVersions   []FactVersion
+	queryProofID   backchainQueryProofID
 }
 
 type reteTerminalTokenUpdate struct {
@@ -722,6 +723,7 @@ type reteTerminalTokenUpdate struct {
 	before         tokenRef
 	after          tokenRef
 	identity       candidateIdentity
+	queryProofID   backchainQueryProofID
 }
 
 type betaJoinKeyKind uint8

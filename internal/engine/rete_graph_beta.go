@@ -4908,6 +4908,7 @@ func appendCoalescedTokenUpdate(updates []reteTerminalTokenUpdate, remove, add r
 		before:         remove.token,
 		after:          add.token,
 		identity:       add.identity,
+		queryProofID:   add.queryProofID,
 	})
 }
 

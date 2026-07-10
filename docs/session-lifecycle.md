@@ -207,14 +207,15 @@ for _, row := range rows {
   ordering guarantee. Sort them explicitly when callers require an order.
 
 Session queries drive backward chaining: running a query against
-backchain-reactive templates generates demand and then runs the agenda to
-quiescence — the same unbounded loop as `Run`, not a loop scoped to proof
-rules — so any pending activation may fire during the query, with full side
-effects. Facts derived during the proof persist in working memory after the
-query returns; only the transient demand facts the query created are cleaned
-up. Queries that generate no demand have no side effects. Snapshot queries
-never generate demand: a snapshot query that would need backward chaining
-fails with `ErrUnsupportedRuntime`. See `advanced.md`.
+backchain-reactive templates generates demand and then fires only activations
+descended from that query's transient demand. Proof selection uses normal
+salience and recency ordering but does not depend on the focus stack;
+unrelated activations stay pending for a later `Run`. Facts derived during
+the proof persist in working memory after the query returns; only the
+transient demand facts the query created are cleaned up. Queries that generate
+no demand have no side effects. Snapshot queries never generate demand: a
+snapshot query that would need backward chaining fails with
+`ErrUnsupportedRuntime`. See `advanced.md`.
 
 ## Snapshots
 

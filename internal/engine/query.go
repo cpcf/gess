@@ -1271,7 +1271,7 @@ func (s *Session) queryGraphRowsWithBackchain(ctx context.Context, query compile
 		needsProof = false
 	}
 	if needsProof {
-		result, held, err := s.runAgendaWithMutationReleased(ctx, runConfig{})
+		result, held, err := s.runAgendaWithMutationReleased(ctx, runConfig{queryProofID: proof.id})
 		if mutationHeld != nil {
 			*mutationHeld = held
 		}
@@ -1319,7 +1319,7 @@ func (s *Session) insertQueryTriggerForProofImmediate(ctx context.Context, trigg
 		return combined, false, err
 	}
 	combined = mergeReteAgendaDelta(combined, normalizeBackchainDemandNoopDelta(delta))
-	demandDelta, err := proof.flushDemands(ctx, combined.demands, mutationOrigin{})
+	demandDelta, err := proof.flushDemands(ctx, combined.demands, proof.origin())
 	if err != nil {
 		return mergeReteAgendaDelta(combined, demandDelta), false, err
 	}

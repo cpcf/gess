@@ -1146,7 +1146,8 @@ func assertFactStringField(t testing.TB, fact FactSnapshot, field string, want s
 
 // An external assert queued during a query proof run must keep the
 // plain-assert contract: the demands it raises take the persistent workspace
-// path instead of dying with the transient proof context (scaffolding S-06).
+// path instead of dying with the transient proof context. Unrelated pending
+// activations must remain untouched until an ordinary Run.
 func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
@@ -1191,6 +1192,15 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 		Fn:           func(ActionContext) error { return nil },
 		BindingReads: &ActionBindingReadSetSpec{},
 	})
+	unrelatedFired := 0
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "record-unrelated",
+		Fn: func(ActionContext) error {
+			unrelatedFired++
+			return nil
+		},
+		BindingReads: &ActionBindingReadSetSpec{},
+	})
 	var session *Session
 	mustAddAction(t, workspace, ActionSpec{
 		Name: "queue-external-request",
@@ -1233,7 +1243,7 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 				Target: TemplateKeyFact(edge.Key()),
 			},
 		}},
-		Actions: []RuleActionSpec{{Name: "assert-direct-reachable"}},
+		Actions: []RuleActionSpec{{Name: "queue-external-request"}, {Name: "assert-direct-reachable"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "consume-request-reachability",
@@ -1256,7 +1266,7 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 			Binding: "k",
 			Target:  TemplateKeyFact(kicker.Key()),
 		},
-		Actions: []RuleActionSpec{{Name: "queue-external-request"}},
+		Actions: []RuleActionSpec{{Name: "record-unrelated"}},
 	})
 	if err := workspace.AddQuery(QuerySpec{
 		Name: "reachable-paths",
@@ -1302,6 +1312,9 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
+	if unrelatedFired != 0 {
+		t.Fatalf("unrelated action fired during proof = %d, want 0", unrelatedFired)
+	}
 
 	snapshot := mustSnapshot(t, ctx, session)
 	foundRequest := false
@@ -1324,6 +1337,13 @@ func TestExternalAssertQueuedDuringQueryProofKeepsPersistentDemand(t *testing.T)
 	}
 	if !foundDemand {
 		t.Fatal("externally raised need-reachable demand was destroyed by proof cleanup")
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run unrelated activation: %v", err)
+	}
+	if result.Fired == 0 || unrelatedFired != 1 {
+		t.Fatalf("ordinary Run fired/action count = %d/%d, want at least 1/1", result.Fired, unrelatedFired)
 	}
 }
 
@@ -1348,10 +1368,6 @@ func TestCancelledQueryProofCleansUpDemandsAndAgenda(t *testing.T) {
 			{Name: "dst", Kind: ValueString, Required: true},
 		},
 	})
-	kicker := mustAddTemplate(t, workspace, TemplateSpec{
-		Name:   "kicker",
-		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}},
-	})
 	mustAddInternalAction(t, workspace, ActionSpec{
 		Name: "assert-direct-reachable",
 		AssertTemplateValues: &AssertTemplateValuesActionSpec{
@@ -1375,10 +1391,17 @@ func TestCancelledQueryProofCleansUpDemandsAndAgenda(t *testing.T) {
 	mustAddRule(t, workspace, RuleSpec{
 		Name:     "cancel-first",
 		Salience: 100,
-		ConditionTree: Match{
-			Binding: "k",
-			Target:  TemplateKeyFact(kicker.Key()),
-		},
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "need", Target: TemplateKeyFact(TemplateKey("need-reachable"))},
+			Match{
+				Binding: "edge",
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "src", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "src"}},
+					{Field: "dst", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "need", Field: "dst"}},
+				},
+				Target: TemplateKeyFact(edge.Key()),
+			},
+		}},
 		Actions: []RuleActionSpec{{Name: "cancel-query"}},
 	})
 	mustAddRule(t, workspace, RuleSpec{
@@ -1429,10 +1452,6 @@ func TestCancelledQueryProofCleansUpDemandsAndAgenda(t *testing.T) {
 	if err := session.AssertTemplateValues(ctx, edge.Key(), newStringValue("db"), newStringValue("api")); err != nil {
 		t.Fatalf("Assert edge: %v", err)
 	}
-	if err := session.AssertTemplateValues(ctx, kicker.Key(), newStringValue("k-1")); err != nil {
-		t.Fatalf("Assert kicker: %v", err)
-	}
-
 	if _, err := session.QueryAll(queryCtx, "reachable-paths", QueryArgs{"src": "api", "dst": "db"}); err == nil {
 		t.Fatal("QueryAll succeeded, want the mid-proof cancellation error")
 	}
@@ -1473,12 +1492,9 @@ func TestNestedQueryProofFailsLoudly(t *testing.T) {
 	}
 }
 
-// Characterization (Part VIII item 7 of the round-2 audit): proof rules in a
-// module that is never focused do not fire during query proof runs — the
-// proof quiesces with the demand unproven and the query returns zero rows
-// with no error. WP-14's proof-scoping design must decide whether proofs
-// should bypass the focus stack; until then this pins the actual behavior.
-func TestUnfocusedModuleProofRulesDoNotFireDuringQueryProof(t *testing.T) {
+// Query proofs select only proof-origin activations, independent of the
+// ordinary focus stack, so a proof rule can live in an unfocused module.
+func TestUnfocusedModuleProofRulesFireDuringQueryProof(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()
 	mustAddModule := func(name ModuleName) {
@@ -1565,7 +1581,7 @@ func TestUnfocusedModuleProofRulesDoNotFireDuringQueryProof(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryAll: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("rows = %d; unfocused-module proof rules now fire during proofs — update docs and the WP-14 design notes", len(rows))
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1 from the unfocused proof module", len(rows))
 	}
 }

@@ -117,6 +117,7 @@ type mutationOrigin struct {
 
 	activationIdentityKey candidateIdentityKey
 	activationOrdinal     uint64
+	queryProofID          backchainQueryProofID
 }
 
 func (o mutationOrigin) isZero() bool {

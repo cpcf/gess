@@ -23,6 +23,7 @@ func (f runOptionFunc) applyRunOption(config *runConfig) error {
 type runConfig struct {
 	maxFirings    int
 	hasMaxFirings bool
+	queryProofID  backchainQueryProofID
 }
 
 // WithMaxFirings bounds the run to at most n activation firings; n must be
@@ -190,12 +191,14 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 			return RunResult{RunID: runID, Status: RunHalted, Fired: fired}, nil
 		}
 		if config.hasMaxFirings && fired >= config.maxFirings {
-			hasMore := s.hasFocusedActivation()
+			hasMore := s.hasRunActivation(config)
 			if !hasMore {
 				// No pending activation remains, so this cannot consume one;
 				// it only pops exhausted focus frames, keeping focus state
 				// identical to the drained RunCompleted path below.
-				s.nextFocusedActivation()
+				if config.queryProofID.isZero() {
+					s.nextFocusedActivation()
+				}
 				s.mutationQueueMu.Unlock()
 				if s.agenda != nil {
 					s.agenda.compactConsumedActivationRows()
@@ -205,7 +208,7 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 			s.mutationQueueMu.Unlock()
 			return RunResult{RunID: runID, Status: RunFireLimit, Fired: fired}, nil
 		}
-		currentActivation, activation, ok := s.nextFocusedActivation()
+		currentActivation, activation, ok := s.nextRunActivation(config)
 		if !ok {
 			s.mutationQueueMu.Unlock()
 			if s.agenda != nil {
@@ -248,6 +251,23 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}
 	}
+}
+
+func (s *Session) hasRunActivation(config runConfig) bool {
+	if !config.queryProofID.isZero() {
+		return s != nil && s.agenda != nil && s.agenda.hasPendingActivationForQueryProof(config.queryProofID)
+	}
+	return s.hasFocusedActivation()
+}
+
+func (s *Session) nextRunActivation(config runConfig) (*activation, activation, bool) {
+	if !config.queryProofID.isZero() {
+		if s == nil || s.agenda == nil {
+			return nil, activation{}, false
+		}
+		return s.agenda.nextInternalPtrForQueryProof(config.queryProofID)
+	}
+	return s.nextFocusedActivation()
 }
 
 func (s *Session) requestRunHalt() {

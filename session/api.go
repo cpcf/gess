@@ -2319,12 +2319,12 @@ func (s *Session) ClearFocusStack(ctx context.Context) error {
 // Query returns an iterator over rows produced by a compiled query.
 //
 // A query whose conditions need backchain-reactive facts generates demand and
-// runs the agenda to quiescence, exactly like Run: pending activations
-// unrelated to the query may fire with full side effects, and facts derived
-// during the proof persist after the query returns. Queries that generate no
-// demand have no side effects. Rows are deterministic for a fixed session
-// history, but otherwise order is unspecified; callers needing an order must
-// sort.
+// fires only activations descended from that query's transient demand.
+// Proof selection preserves agenda priority but is independent of the focus
+// stack; unrelated activations remain pending. Facts derived during the proof
+// persist after the query returns. Queries that generate no demand have no
+// side effects. Rows are deterministic for a fixed session history, but
+// otherwise order is unspecified; callers needing an order must sort.
 func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*QueryIterator, error) {
 	it, err := s.engineSession().Query(ctx, name, args)
 	if err != nil {
@@ -2336,12 +2336,12 @@ func (s *Session) Query(ctx context.Context, name string, args QueryArgs) (*Quer
 // QueryAll materializes all rows produced by a compiled query.
 //
 // A query whose conditions need backchain-reactive facts generates demand and
-// runs the agenda to quiescence, exactly like Run: pending activations
-// unrelated to the query may fire with full side effects, and facts derived
-// during the proof persist after the query returns. Queries that generate no
-// demand have no side effects. Rows are deterministic for a fixed session
-// history, but otherwise order is unspecified; callers needing an order must
-// sort.
+// fires only activations descended from that query's transient demand.
+// Proof selection preserves agenda priority but is independent of the focus
+// stack; unrelated activations remain pending. Facts derived during the proof
+// persist after the query returns. Queries that generate no demand have no
+// side effects. Rows are deterministic for a fixed session history, but
+// otherwise order is unspecified; callers needing an order must sort.
 func (s *Session) QueryAll(ctx context.Context, name string, args QueryArgs) ([]QueryRow, error) {
 	rows, err := s.engineSession().QueryAll(ctx, name, args)
 	return wrapQueryRows(rows), err
