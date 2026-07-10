@@ -3013,28 +3013,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
 	}
-	mayEmitBackchainDemandDeltas := rete != nil && rete.mayEmitBackchainDemandDeltas()
-	resetAgendaWithInitialAgenda := !s.shouldCollectAgendaChanges() && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
-	var initialAgenda *agenda
-	if resetAgendaWithInitialAgenda {
-		initialAgenda = newAgendaWithStrategy(s.agendaDriver.strategy)
-		initialAgenda.propagationCounters = s.propagation.counters
-	}
-	var resetDemandDelta reteAgendaDelta
-	if resetAgendaWithInitialAgenda {
-		resetDemandDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(ctx, next, next.generation, initialAgenda)
-	} else {
-		resetDemandDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
-	}
+	resetDemandDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, next, next.generation)
 	if err != nil {
 		if s.propagation.runtime != nil {
 			rollbackState := s.activeFactWorkspace()
 			_, _ = s.propagation.runtime.resetGraphBetaFromWorkspaceForGenerationWithDelta(context.Background(), &rollbackState, s.factStore.generation)
 		}
 		return ResetResult{Status: ResetValidationFailure, Before: before}, err
-	}
-	if len(resetDemandDelta.demands) > 0 || len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
-		resetAgendaWithInitialAgenda = false
 	}
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordGraphRebuild(propagationCounterPhaseInitial)
@@ -3049,41 +3034,13 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.factStore.generation = next.generation
 	s.propagation.installRuntime(rete)
 	s.syncPropagationCounters()
-	if len(resetDemandDelta.resolvedDemands) > 0 || len(resetDemandDelta.resolvedOwners) > 0 {
-		if _, err := s.resolveBackchainDemandRequestsImmediate(ctx, resetDemandDelta.resolvedDemands, resetDemandDelta.resolvedOwners, mutationOrigin{}); err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		resetDemandDelta.resolvedDemands = nil
-		resetDemandDelta.resolvedOwners = nil
+	resetDemandDelta, err = s.completeBackchainDemandDeltaImmediate(ctx, resetDemandDelta, mutationOrigin{})
+	if err != nil {
+		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
-	if len(resetDemandDelta.demands) > 0 {
-		demandState := s.activeFactWorkspace()
-		demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &demandState, resetDemandDelta.demands, mutationOrigin{})
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		s.commitFactWorkspace(demandState)
-		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
-			s.agendaDriver.markUnready()
-		}
-	}
-	var resetActivations []agendaChange
-	if resetAgendaWithInitialAgenda {
-		s.agendaDriver.installInitialAgenda(initialAgenda)
-		s.syncPropagationCounters()
-	}
-	if !resetAgendaWithInitialAgenda {
-		s.emitAgendaEvents(ctx, s.agendaDriver.agenda.clear())
-		results, err := s.propagation.runtime.match(ctx, s)
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		resetActivations, err = s.agendaDriver.agenda.reconcile(context.Background(), s.revision, results)
-		if err != nil {
-			return ResetResult{Status: ResetValidationFailure, Before: before}, err
-		}
-		s.agendaDriver.markReady()
-	}
+	s.propagation.clearPendingLifecycleDelta()
+	s.emitAgendaEvents(ctx, s.agendaDriver.agenda.clear())
+	s.propagation.setPendingLifecycleDelta(resetDemandDelta)
 
 	result := ResetResult{
 		Status:     ResetApplied,
@@ -3113,9 +3070,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			Delta:      &delta,
 		})
 	}
-	if !resetAgendaWithInitialAgenda {
-		s.applyAutoFocus(resetActivations)
-		s.emitAgendaEvents(ctx, resetActivations)
+	if _, err := s.applyPendingLifecycleAgendaDeltaWithEventContext(context.Background(), ctx, s.shouldCollectAgendaChanges()); err != nil {
+		return ResetResult{Status: ResetValidationFailure, Before: before}, err
 	}
 
 	return result, nil
@@ -3387,6 +3343,10 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 }
 
 func (s *Session) applyPendingLifecycleAgendaDelta(ctx context.Context, collectChanges bool) ([]agendaChange, error) {
+	return s.applyPendingLifecycleAgendaDeltaWithEventContext(ctx, ctx, collectChanges)
+}
+
+func (s *Session) applyPendingLifecycleAgendaDeltaWithEventContext(ctx, eventCtx context.Context, collectChanges bool) ([]agendaChange, error) {
 	if s == nil || s.closed {
 		return nil, ErrClosedSession
 	}
@@ -3433,7 +3393,7 @@ func (s *Session) applyPendingLifecycleAgendaDelta(ctx context.Context, collectC
 	s.propagation.clearPendingLifecycleDelta()
 	if collectChanges {
 		s.applyAutoFocus(changes)
-		s.emitAgendaEvents(ctx, changes)
+		s.emitAgendaEvents(eventCtx, changes)
 	}
 	return changes, nil
 }
