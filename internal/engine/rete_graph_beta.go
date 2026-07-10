@@ -39,7 +39,6 @@ type reteGraphBetaMemory struct {
 	deferAggregateOutputs    bool
 	deferredAggregateOutputs map[deferredAggregateOutputKey]struct{}
 	deferredAggregateOrder   []deferredAggregateOutputKey
-	suppressTerminalDeltas   bool
 	rightPredicateScratch    []conditionMatch
 	modifyRouteScope         reteModifyRouteScope
 }
@@ -1109,14 +1108,12 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 	}
 	m.sourceGenerationValue = generation
 	m.deferAggregateOutputs = true
-	m.suppressTerminalDeltas = true
 	defer func() {
 		m.deferAggregateOutputs = false
-		m.suppressTerminalDeltas = false
 		m.clearDeferredAggregateOutputs()
 	}()
 	m.initializeAggregateOutputs()
-	if err := m.initializeRootStage(nil); err != nil {
+	if err := m.initializeRootStage(nil, &combined); err != nil {
 		return combined, err
 	}
 	for _, fact := range facts {
@@ -1132,7 +1129,7 @@ func (m *reteGraphBetaMemory) resetFactsForGenerationWithDelta(ctx context.Conte
 	if err := m.finalizeDeferredAggregateOutputs(nil, &combined); err != nil {
 		return combined, err
 	}
-	return combined, nil
+	return m.finalizeGraphLifecycleDelta(combined), nil
 }
 
 func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx context.Context, facts *factWorkspace, generation Generation) (reteAgendaDelta, error) {
@@ -1160,14 +1157,12 @@ func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx conte
 	}
 	m.sourceGenerationValue = generation
 	m.deferAggregateOutputs = true
-	m.suppressTerminalDeltas = true
 	defer func() {
 		m.deferAggregateOutputs = false
-		m.suppressTerminalDeltas = false
 		m.clearDeferredAggregateOutputs()
 	}()
 	m.initializeAggregateOutputs()
-	if err := m.initializeRootStage(nil); err != nil {
+	if err := m.initializeRootStage(nil, &combined); err != nil {
 		return combined, err
 	}
 	if facts != nil {
@@ -1190,7 +1185,7 @@ func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithDelta(ctx conte
 	if err := m.finalizeDeferredAggregateOutputs(nil, &combined); err != nil {
 		return combined, err
 	}
-	return combined, nil
+	return m.finalizeGraphLifecycleDelta(combined), nil
 }
 
 func (m *reteGraphBetaMemory) resetFactsForGenerationWithInitialAgenda(ctx context.Context, facts []FactSnapshot, generation Generation, agenda *agenda) (reteAgendaDelta, error) {
@@ -1235,7 +1230,7 @@ func (m *reteGraphBetaMemory) resetFactWorkspaceForGenerationWithInitialAgenda(c
 	return delta, nil
 }
 
-func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) error {
+func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan, delta *reteAgendaDelta) error {
 	if m == nil || m.graph == nil {
 		return nil
 	}
@@ -1248,8 +1243,17 @@ func (m *reteGraphBetaMemory) initializeRootStage(span *propagationCounterSpan) 
 	if m.rootToken.isZero() {
 		return nil
 	}
-	delta := &reteAgendaDelta{supported: true}
 	return m.propagateFromStage(root, m.rootToken, span, delta)
+}
+
+// finalizeGraphLifecycleDelta coalesces transient terminal churn emitted by
+// bulk propagation and gives the caller ownership of the lifecycle payload.
+func (m *reteGraphBetaMemory) finalizeGraphLifecycleDelta(delta reteAgendaDelta) reteAgendaDelta {
+	if m == nil || !delta.supported {
+		return reteAgendaDelta{}
+	}
+	delta = coalesceReteAgendaDelta(m.revision, delta)
+	return cloneRetainedReteAgendaDelta(delta)
 }
 
 func (m *reteGraphBetaMemory) clearMemories() {
@@ -5057,7 +5061,7 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			span.recordTerminalRowInsertedForBranch(branchKey)
 		}
 	}
-	if span != nil && ruleTerminal && !m.suppressTerminalDeltas {
+	if span != nil && ruleTerminal {
 		span.recordTerminalDeltaEmitted()
 		if haveBranchKey {
 			span.recordTerminalDeltaEmittedForBranch(branchKey)
@@ -5075,9 +5079,6 @@ func (m *reteGraphBetaMemory) insertTerminalToken(terminalID reteGraphTerminalNo
 			m.initialAgendaErr = err
 			delta.supported = false
 		}
-	}
-	if m.suppressTerminalDeltas {
-		return graphTokenRowHandle{}, true
 	}
 	delta.added = append(delta.added, added)
 	return graphTokenRowHandle{}, true
