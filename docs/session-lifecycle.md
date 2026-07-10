@@ -234,6 +234,18 @@ logical `SupportGraph()`, backchain demand diagnostics, and snapshot-scoped
 two snapshots: facts added, retracted, and modified by field value or support
 state, in deterministic fact-id order.
 
+## Forked sessions
+
+`Session.Fork` creates an independent mutable session with the parent's current
+working state. Direct forks inherit the parent's output writer, so an `emit`
+from either session writes to the same sink. If parent and fork may run
+concurrently, use a concurrency-safe shared writer or pass
+`session.WithOutputWriter` when creating the fork to provide a separate sink.
+Event listeners and explain logs are not inherited.
+
+`Session.WhatIf` deliberately differs: hypothetical output is discarded by
+default and is exposed only when `WithWhatIfOutputWriter` is supplied.
+
 ## What-if runs
 
 `Session.WhatIf` answers "what would happen if …?" without touching the base

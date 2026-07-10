@@ -806,7 +806,11 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 // value bindings), focus stack, strategy, logical support, and global values
 // carry over; listeners do not — pass WithEventListener in opts to observe
 // the fork, and WithStrategy to give the fork a different conflict-resolution
-// strategy (pending activations are reordered under the new strategy).
+// strategy (pending activations are reordered under the new strategy). The
+// output writer is inherited: rule emits in the fork use the same sink as the
+// parent unless opts includes WithOutputWriter. Callers running parent and fork
+// concurrently must provide a concurrency-safe shared writer or separate
+// writers. WhatIf differs by discarding fork output unless explicitly captured.
 // Rete join memories are rebuilt by re-propagating the copied facts
 // rather than deep-copied, so fork cost scales with working-memory size and
 // internal memory diagnostics (RuntimeDiagnostics) may differ from the parent

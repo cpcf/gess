@@ -2207,8 +2207,10 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 //
 // The fork inherits the parent's initial facts, globals, agenda strategy, and
 // output writer — rule emits in the fork write to the parent's writer unless
-// the fork is created with WithOutputWriter. Event listeners and the explain
-// log are not inherited.
+// the fork is created with WithOutputWriter. Callers running parent and fork
+// concurrently must use a concurrency-safe shared writer or separate writers.
+// WhatIf instead discards fork output unless explicitly captured. Event
+// listeners and the explain log are not inherited.
 func (s *Session) Fork(ctx context.Context, opts ...Option) (*Session, error) {
 	fork, err := s.engineSession().Fork(ctx, opts...)
 	if err != nil {
