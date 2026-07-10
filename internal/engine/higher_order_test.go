@@ -385,7 +385,7 @@ func TestScopedExistsLoweringTracksContributorsPerOuterToken(t *testing.T) {
 	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
 	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
 	first := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "status": mustValue(t, "open")})
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after first c1 order = %d, want %d", got, want)
 	}
 	result, err := session.Run(context.Background())
@@ -462,39 +462,39 @@ func TestScopedForallLoweringTracksCounterexamplesPerOuterToken(t *testing.T) {
 
 	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c1")})
 	mustAssert(t, session, customer.Key(), Fields{"id": mustValue(t, "c2")})
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations with vacuous truth = %d, want %d", got, want)
 	}
 	bad := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 3)})
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after c1 counterexample = %d, want %d", got, want)
 	}
 	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 12)}}); err != nil {
 		t.Fatalf("Modify counterexample passing: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after c1 counterexample repaired = %d, want %d", got, want)
 	}
 	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"amount": mustValue(t, 5)}}); err != nil {
 		t.Fatalf("Modify counterexample failing: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after c1 counterexample returns = %d, want %d", got, want)
 	}
 	secondBad := mustAssert(t, session, order.Key(), Fields{"customer-id": mustValue(t, "c1"), "amount": mustValue(t, 4)})
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after second c1 counterexample = %d, want %d", got, want)
 	}
 	if _, err := session.Retract(context.Background(), bad.Fact.ID()); err != nil {
 		t.Fatalf("Retract first counterexample: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after first counterexample retract = %d, want %d", got, want)
 	}
 	if _, err := session.Retract(context.Background(), secondBad.Fact.ID()); err != nil {
 		t.Fatalf("Retract second counterexample: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after last counterexample retract = %d, want %d", got, want)
 	}
 }

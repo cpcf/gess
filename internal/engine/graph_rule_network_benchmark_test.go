@@ -141,8 +141,8 @@ func TestGraphRuleNetworkTemplateValueBatchSeedRuns(t *testing.T) {
 	if got, want := session.factCount(), authoredOrderInitialFacts(tc.items); got != want {
 		t.Fatalf("facts retained = %d, want %d", got, want)
 	}
-	if session.agendaDirty || !session.agendaReady {
-		t.Fatalf("agenda state after batch seed = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	if session.agendaDriver.dirty || !session.agendaDriver.ready {
+		t.Fatalf("agenda state after batch seed = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 	}
 
 	result, err := session.Run(ctx)
@@ -176,8 +176,8 @@ func TestGraphRuleNetworkPreparedTemplateValueSeedRuns(t *testing.T) {
 	if session.factStore.factTargetIndexesDirty {
 		t.Fatal("fact target indexes remained dirty after fact id lookup")
 	}
-	if session.agendaDirty || !session.agendaReady {
-		t.Fatalf("agenda state after prepared seed = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	if session.agendaDriver.dirty || !session.agendaDriver.ready {
+		t.Fatalf("agenda state after prepared seed = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 	}
 
 	result, err := session.Run(ctx)

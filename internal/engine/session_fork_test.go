@@ -68,6 +68,48 @@ func TestSessionForkPreservesPendingAgendaRefractionAndFactIDs(t *testing.T) {
 	}
 }
 
+func TestSessionForkClonesAgendaDriverOwnership(t *testing.T) {
+	ctx := context.Background()
+	revision, taskKey := mustForkTaskRevision(t)
+	parent, err := NewSession(revision)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := parent.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+
+	fork, err := parent.Fork(ctx, WithStrategy(StrategyBreadth))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if parent.agendaDriver.agenda == fork.agendaDriver.agenda {
+		t.Fatal("fork shares agenda pointer with parent")
+	}
+	if got, want := len(fork.agendaDriver.agenda.pendingActivations()), len(parent.agendaDriver.agenda.pendingActivations()); got != want {
+		t.Fatalf("fork pending activations = %d, want %d", got, want)
+	}
+	if fork.agendaDriver.strategy != StrategyBreadth {
+		t.Fatalf("fork strategy = %v, want %v", fork.agendaDriver.strategy, StrategyBreadth)
+	}
+	if !parent.agendaDriver.isReady() || !fork.agendaDriver.isReady() {
+		t.Fatalf("ready state = parent %v fork %v, want both ready", parent.agendaDriver.isReady(), fork.agendaDriver.isReady())
+	}
+
+	fork.agendaDriver.focusStack[0] = ModuleName("fork-focus")
+	fork.agendaDriver.initialFocusStack[0] = ModuleName("fork-initial")
+	if parent.agendaDriver.focusStack[0] != MainModule {
+		t.Fatalf("parent focus changed through fork: %q", parent.agendaDriver.focusStack[0])
+	}
+	if parent.agendaDriver.initialFocusStack[0] != MainModule {
+		t.Fatalf("parent initial focus changed through fork: %q", parent.agendaDriver.initialFocusStack[0])
+	}
+	fork.agendaDriver.markDirty()
+	if !parent.agendaDriver.isReady() {
+		t.Fatal("fork dirty transition changed parent readiness")
+	}
+}
+
 func TestSessionForkDoesNotInheritListeners(t *testing.T) {
 	ctx := context.Background()
 	revision, taskKey := mustForkTaskRevision(t)

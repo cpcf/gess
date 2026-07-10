@@ -136,7 +136,7 @@ func TestSessionStrategyBreadthComposesWithHaltFireLimitAndRefraction(t *testing
 		if want := []string{"task:1"}; !reflect.DeepEqual(*trace, want) {
 			t.Fatalf("trace = %#v, want %#v", *trace, want)
 		}
-		if got := len(session.agenda.pendingActivations()); got != 1 {
+		if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 			t.Fatalf("pending activations = %d, want 1", got)
 		}
 	})

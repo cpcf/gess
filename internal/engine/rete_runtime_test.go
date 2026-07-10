@@ -114,8 +114,8 @@ func TestSessionRunFailsWhenGraphRuntimeUnsupported(t *testing.T) {
 		t.Fatalf("Assert: %v", err)
 	}
 	injectUnsupportedRuntimePlan(t, session.propagation.runtime, "adult-active")
-	session.agendaReady = false
-	session.agendaDirty = true
+	session.agendaDriver.ready = false
+	session.agendaDriver.dirty = true
 
 	result, err := session.Run(ctx)
 	if !errors.Is(err, ErrUnsupportedRuntime) {
@@ -745,8 +745,8 @@ func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testin
 	session.attachPropagationCounters()
 
 	before := session.propagationCounterSnapshot().Totals
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state before unsupported delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	if !session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("agenda state before unsupported delta = ready %v dirty %v, want clean ready", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
 
 	if _, err := session.reconcileAgendaAfterMutation(ctx, reteAgendaDelta{}); !errors.Is(err, ErrUnsupportedRuntime) {
@@ -762,8 +762,8 @@ func TestSessionSteadyStateUnsupportedAgendaDeltaFailsWithoutReconcile(t *testin
 	if got, want := after.WholeTerminalScans, before.WholeTerminalScans; got != want {
 		t.Fatalf("whole terminal scans = %d, want unchanged %d", got, want)
 	}
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state after unsupported delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	if !session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("agenda state after unsupported delta = ready %v dirty %v, want clean ready", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
 }
 
@@ -794,8 +794,8 @@ func TestSessionRunUnsupportedAgendaDeltaFailsWithoutDirtyAgenda(t *testing.T) {
 	if session.propagation.runAgendaPending {
 		t.Fatal("unsupported run delta left pending run agenda state")
 	}
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state after unsupported run delta = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	if !session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("agenda state after unsupported run delta = ready %v dirty %v, want clean ready", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
 }
 
@@ -1059,7 +1059,7 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 	if session.propagation.runtime == nil || !session.propagation.runtime.supportsIncrementalAgenda() {
 		t.Fatalf("Rete runtime = %#v, want incremental agenda support", session.propagation.runtime)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before left assert = %d, want 0", got)
 	}
 
@@ -1071,7 +1071,7 @@ func TestReteRuntimeBetaNoJoinSuccessorUsesLiveConditionRows(t *testing.T) {
 		t.Fatalf("left assert status = %v, want %v", inserted.Status, AssertInserted)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after left assert = %d, want 1", got)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
@@ -1527,7 +1527,7 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert young: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after young assert = %d, want 0", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1535,7 +1535,7 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	if _, err := session.Modify(ctx, young.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 19})}); err != nil {
 		t.Fatalf("Modify young to adult: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after adult modify = %d, want 1", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1543,7 +1543,7 @@ func TestReteRuntimeExecutesAlphaExpressionPredicates(t *testing.T) {
 	if _, err := session.Modify(ctx, young.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 16})}); err != nil {
 		t.Fatalf("Modify adult to young: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after failing modify = %d, want 0", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1623,7 +1623,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert low finding: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before passing finding = %d, want 0", got)
 	}
 
@@ -1631,7 +1631,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert passing finding: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after passing finding = %d, want 1", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1639,7 +1639,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if _, err := session.Modify(ctx, lowRisk.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"risk": 91})}); err != nil {
 		t.Fatalf("Modify low finding: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 2 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 2 {
 		t.Fatalf("pending activations after risk modify = %d, want 2", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1647,7 +1647,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if _, err := session.Modify(ctx, passing.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"system-id": "sys-2"})}); err != nil {
 		t.Fatalf("Modify passing finding away: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after system modify = %d, want 1", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1655,7 +1655,7 @@ func TestReteRuntimeExecutesBetaResidualExpressionPredicates(t *testing.T) {
 	if _, err := session.Retract(ctx, systemFact.Fact.ID()); err != nil {
 		t.Fatalf("Retract system: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after system retract = %d, want 0", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1801,7 +1801,7 @@ func TestReteRuntimeOrBranchesDeduplicateEquivalentActivations(t *testing.T) {
 	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1", "active": true, "dept": "engineering"})); err != nil {
 		t.Fatalf("Assert person: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations = %d, want 1", got)
 	}
 	assertGraphBetaRuntimeParity(t, revision, session)
@@ -1856,7 +1856,7 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	if _, err := session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"id": "p-1"})); err != nil {
 		t.Fatalf("Assert person: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got := len(pending); got != 1 {
 		t.Fatalf("pending activations after person = %d, want 1", got)
 	}
@@ -1864,7 +1864,7 @@ func TestReteRuntimeOrBranchSupportKeepsActivationWhileEquivalentBranchRemains(t
 	if _, err := session.Assert(ctx, block.Key(), mustFields(t, map[string]any{"person_id": "p-1"})); err != nil {
 		t.Fatalf("Assert block: %v", err)
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got := len(pending); got != 1 {
 		t.Fatalf("pending activations after block = %d, want 1", got)
 	}
@@ -2296,7 +2296,7 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	if _, err := session.reconcileAgenda(ctx, snapshot); err != nil {
 		t.Fatalf("initial reconcileAgenda: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if len(pending) == 0 {
 		t.Fatal("expected pending activation after initial reconcile")
 	}
@@ -2312,7 +2312,7 @@ func TestReteRuntimeAgendaActivationsDoNotAliasCandidateScratch(t *testing.T) {
 	if _, err := session.reconcileAgenda(ctx, mustSnapshot(t, ctx, session)); err != nil {
 		t.Fatalf("second reconcileAgenda: %v", err)
 	}
-	after, ok := session.agenda.activationByKey(before.key)
+	after, ok := session.agendaDriver.agenda.activationByKey(before.key)
 	if !ok {
 		t.Fatalf("activation %v disappeared after second reconcile", before.key)
 	}
@@ -2390,7 +2390,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
 	results, err := session.propagation.runtime.match(ctx, mustSnapshot(t, ctx, session))
@@ -2425,7 +2425,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSharedTopology(t *testing.T) {
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -2481,7 +2481,7 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 	results, err := session.propagation.runtime.match(ctx, mustSnapshot(t, ctx, session))
@@ -2521,7 +2521,7 @@ func TestReteRuntimeGraphBetaRemovalModifySharedTopology(t *testing.T) {
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after modify = %d, want 1", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -2560,7 +2560,7 @@ func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -2585,7 +2585,7 @@ func TestReteRuntimeGraphBetaModifyStopsMatchingAlphaCondition(t *testing.T) {
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after modify = %d, want 0", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -2630,7 +2630,7 @@ func TestReteRuntimeGraphBetaModifyUnmatchedIrrelevantSlotSkipsPropagation(t *te
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before modify = %d, want 0", got)
 	}
 	assertGraphBetaAlphaFactCount(t, session, "active-person", 0, 0)
@@ -2690,7 +2690,7 @@ func TestReteRuntimeGraphBetaModifyMatchedIrrelevantSlotUsesRouteScopedEvents(t 
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -2744,7 +2744,7 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotReplacesActivati
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -2773,7 +2773,7 @@ func TestReteRuntimeGraphBetaModifyMatchedDeclaredUnobservedSlotReplacesActivati
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
@@ -2850,7 +2850,7 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotReplacesActivatio
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -2879,7 +2879,7 @@ func TestReteRuntimeGraphBetaModifyAlphaPredicateUnobservedSlotReplacesActivatio
 	} else if !ok {
 		t.Fatal("apply note delta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}
@@ -2932,7 +2932,7 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotReplacesActivatio
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -2961,7 +2961,7 @@ func TestReteRuntimeGraphBetaModifyJoinedDeclaredUnobservedSlotReplacesActivatio
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
@@ -3012,7 +3012,7 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotReplacesActivatio
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -3041,7 +3041,7 @@ func TestReteRuntimeGraphBetaModifyFilterDeclaredUnobservedSlotReplacesActivatio
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
@@ -3091,7 +3091,7 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotReplacesAct
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -3120,7 +3120,7 @@ func TestReteRuntimeGraphBetaModifyNegationLeftDeclaredUnobservedSlotReplacesAct
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
@@ -3152,7 +3152,7 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	if err != nil {
 		t.Fatalf("Assert block: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations before modify = %d, want 0", got)
 	}
 
@@ -3175,7 +3175,7 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	if got := len(delta.updated); got != 0 {
 		t.Fatalf("terminal token updates = %d, want 0", got)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after blocker metadata modify = %d, want 0", got)
 	}
 
@@ -3204,7 +3204,7 @@ func TestReteRuntimeGraphBetaModifyNegationRightDeclaredUnobservedSlotRefreshesB
 	} else if !ok {
 		t.Fatal("apply predicate delta unexpectedly skipped")
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after blocker predicate modify = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3229,7 +3229,7 @@ func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -3267,7 +3267,7 @@ func TestReteRuntimeGraphBetaModifyReplacesJoinedTokenVersion(t *testing.T) {
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3295,7 +3295,7 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -3325,7 +3325,7 @@ func TestReteRuntimeGraphBetaModifyMovesBetweenJoinBuckets(t *testing.T) {
 	} else if !ok {
 		t.Fatal("applyReteAgendaDelta unexpectedly skipped")
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after modify = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3369,27 +3369,27 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 	if _, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-2", "active": true})); err != nil {
 		t.Fatalf("Assert(unrelated block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with only right facts = %d, want 0", got)
 	}
 	customer, err := session.Assert(ctx, customerKey, mustFields(t, map[string]any{"id": "c-1"}))
 	if err != nil {
 		t.Fatalf("Assert(customer): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after customer = %d, want %d", got, want)
 	}
 	block, err := session.Assert(ctx, blockKey, mustFields(t, map[string]any{"customer_id": "c-1", "active": true}))
 	if err != nil {
 		t.Fatalf("Assert(block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after blocking fact = %d, want 0", got)
 	}
 	if _, err := session.Retract(ctx, block.Fact.ID()); err != nil {
 		t.Fatalf("Retract(block): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after block retract = %d, want %d", got, want)
 	}
 	if _, err := session.Run(ctx); err != nil {
@@ -3405,13 +3405,13 @@ func TestReteRuntimeGraphBetaNegationAssertRetract(t *testing.T) {
 	if _, err := session.Retract(ctx, blockAgain.Fact.ID()); err != nil {
 		t.Fatalf("Retract(block after run): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after consumed negative activation unblocked = %d, want %d", got, want)
 	}
 	if _, err := session.Retract(ctx, customer.Fact.ID()); err != nil {
 		t.Fatalf("Retract(customer): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after customer retract = %d, want 0", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3428,25 +3428,25 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert(inactive block): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations with inactive block = %d, want %d", got, want)
 	}
 	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"active": true})}); err != nil {
 		t.Fatalf("Modify block active=true: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with active block = %d, want 0", got)
 	}
 	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"code": "still-blocking"})}); err != nil {
 		t.Fatalf("Modify active block code: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after still-blocking modify = %d, want 0", got)
 	}
 	if _, err := session.Modify(ctx, inactive.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"active": false})}); err != nil {
 		t.Fatalf("Modify block active=false: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after inactive modify = %d, want %d", got, want)
 	}
 
@@ -3459,19 +3459,19 @@ func TestReteRuntimeGraphBetaNegationModifyAndMultipleBlockers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert(second active block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
 	}
 	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
 		t.Fatalf("Retract(first block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with one remaining active block = %d, want 0", got)
 	}
 	if _, err := session.Retract(ctx, second.Fact.ID()); err != nil {
 		t.Fatalf("Retract(second block): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after last block retract = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3501,7 +3501,7 @@ func TestReteRuntimeGraphBetaNegationRetractBlockedLeftWithMultipleBlockers(t *t
 	if err != nil {
 		t.Fatalf("Assert(second active block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations with two active blocks = %d, want 0", got)
 	}
 
@@ -3515,7 +3515,7 @@ func TestReteRuntimeGraphBetaNegationRetractBlockedLeftWithMultipleBlockers(t *t
 	if _, err := session.Retract(ctx, second.Fact.ID()); err != nil {
 		t.Fatalf("Retract(second block): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after blocked customer and blockers retract = %d, want 0", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3548,20 +3548,20 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before consume = %d, want %d", got, want)
 	}
 
-	consumed, ok := session.agenda.next()
+	consumed, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda next returned no activation")
 	}
-	storedConsumed, ok := session.agenda.activationByKey(consumed.key)
+	storedConsumed, ok := session.agendaDriver.agenda.activationByKey(consumed.key)
 	if !ok {
 		t.Fatalf("consumed activation %v missing after next", consumed.key)
 	}
 	consumedFactIDs := cloneFactIDs(storedConsumed.factIDs())
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after consume = %d, want %d", got, want)
 	}
@@ -3573,10 +3573,10 @@ func TestReteRuntimeGraphBetaModifyDoesNotRequeueConsumedActivation(t *testing.T
 	}); err != nil {
 		t.Fatalf("Modify pending employee: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after modify = %d, want 0", got)
 	}
-	stored, ok := session.agenda.activationByKey(consumed.key)
+	stored, ok := session.agendaDriver.agenda.activationByKey(consumed.key)
 	if !ok {
 		t.Fatalf("consumed activation %v disappeared", consumed.key)
 	}
@@ -3610,7 +3610,7 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
 	assertGraphBetaAlphaFactCount(t, session, "employee-department-region-a", 1, 1)
@@ -3620,7 +3620,7 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if _, err := session.Retract(ctx, department.ID()); err != nil {
 		t.Fatalf("Retract(Engineering department): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
 	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
@@ -3637,7 +3637,7 @@ func TestReteRuntimeGraphBetaRemovalResetSharedTopology(t *testing.T) {
 	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatalf("Rete runtime after reset = %#v, want graph beta", session.propagation.runtime)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -3684,7 +3684,7 @@ func TestReteRuntimeGraphBetaRetractedReassertedFactGetsNewTokenIdentity(t *test
 	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
 		t.Fatalf("Retract first: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending after retract = %d, want 0", got)
 	}
 
@@ -3794,7 +3794,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), retainedPairs+2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), retainedPairs+2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
 
@@ -3804,7 +3804,7 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	keptFacts := []FactID{salesEmployee.ID(), salesDepartment.ID()}
 	var keptActivationKey activationKey
 	var keptActivationFound bool
-	for _, activation := range session.agenda.pendingActivations() {
+	for _, activation := range session.agendaDriver.agenda.pendingActivations() {
 		if reflect.DeepEqual(cloneActivationFactIDs(&activation), keptFacts) {
 			keptActivationKey = activation.key
 			keptActivationFound = true
@@ -3819,10 +3819,10 @@ func TestReteRuntimeGraphBetaRemovalRetractSparseTopology(t *testing.T) {
 	if _, err := session.Retract(ctx, targetDepartment.ID()); err != nil {
 		t.Fatalf("Retract(Engineering department): %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), retainedPairs+1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), retainedPairs+1; got != want {
 		t.Fatalf("pending activations after retract = %d, want %d", got, want)
 	}
-	keptActivation, ok := session.agenda.activationByKey(keptActivationKey)
+	keptActivation, ok := session.agendaDriver.agenda.activationByKey(keptActivationKey)
 	if !ok {
 		t.Fatalf("kept activation %v disappeared after sparse retract", keptActivationKey)
 	}
@@ -4651,7 +4651,7 @@ func assertSessionAgendaMatchesFullReteReconcile(t *testing.T, session *Session)
 	if _, err := oracle.reconcile(context.Background(), session.revision, results); err != nil {
 		t.Fatalf("oracle reconcile: %v", err)
 	}
-	got := activationParityRecordsFromActivations(session.agenda.pendingActivations())
+	got := activationParityRecordsFromActivations(session.agendaDriver.agenda.pendingActivations())
 	want := activationParityRecordsFromActivations(oracle.pendingActivations())
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("incremental agenda differs from full reconcile:\nincremental=%#v\nfull=%#v", got, want)
@@ -4689,7 +4689,7 @@ func assertTerminalTokenDeltaMatchesCandidateDelta(t *testing.T, revision *Rules
 
 func singlePendingActivation(t *testing.T, session *Session) activation {
 	t.Helper()
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations = %d, want %d", got, want)
 	}

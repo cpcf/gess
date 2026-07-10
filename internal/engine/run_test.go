@@ -107,8 +107,8 @@ func TestSessionRunRejectsDirtyAgendaWithoutWholeTerminalReconcile(t *testing.T)
 	if result.Status != RunCompleted {
 		t.Fatalf("initial run status = %v, want %v", result.Status, RunCompleted)
 	}
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state after initial run = ready %v dirty %v, want ready clean", session.agendaReady, session.agendaDirty)
+	if !session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("agenda state after initial run = ready %v dirty %v, want ready clean", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
 	beforeCounters := session.propagationCounterSnapshot().Totals
 	_ = beforeCounters
@@ -242,7 +242,7 @@ func TestSessionRunHaltStopsAfterCurrentActivation(t *testing.T) {
 			t.Fatalf("actions[%d] = %q, want %q in %#v", i, actions[i], want, actions)
 		}
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after halted run = %d, want %d", got, want)
 	}
 	snapshot := mustSnapshot(t, context.Background(), session)
@@ -380,7 +380,7 @@ func TestSessionRunWithMaxFiringsBoundaryStatus(t *testing.T) {
 	if result.Status != RunCompleted || result.Fired != 3 {
 		t.Fatalf("exact limit run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
 	}
-	if got := len(completed.agenda.pendingActivations()); got != 0 {
+	if got := len(completed.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after exact limit = %d, want 0", got)
 	}
 
@@ -639,13 +639,13 @@ func TestSessionRunDoesNotFireInvalidatedGraphTokenActivations(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Assert: %v", err)
 			}
-			if got := len(session.agenda.pendingActivations()); got != 1 {
+			if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 				t.Fatalf("pending activations after assert = %d, want 1", got)
 			}
 			if err := tt.invalidate(ctx, session, asserted.Fact.ID()); err != nil {
 				t.Fatalf("invalidate: %v", err)
 			}
-			if got := len(session.agenda.pendingActivations()); got != 0 {
+			if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 				t.Fatalf("pending activations after %s = %d, want 0", tt.name, got)
 			}
 			result, err := session.Run(ctx)
@@ -861,7 +861,7 @@ func TestSessionRunKeepsRepeatedActionAssertFactsDistinct(t *testing.T) {
 	if recorded[0] == recorded[1] {
 		t.Fatalf("recorded duplicate child fact ID %q twice", recorded[0])
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after run = %d, want 0", got)
 	}
 }
@@ -1233,10 +1233,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if result.Status != gessrules.AssertInserted {
 					return errors.New("audit was not inserted")
 				}
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("single supported assert dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("single supported assert cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -1244,7 +1244,7 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				}
 				auditRule := session.revision.rules["audit-rule"]
 				var found *activation
-				session.agenda.forEachPendingActivation(func(act *activation) bool {
+				session.agendaDriver.agenda.forEachPendingActivation(func(act *activation) bool {
 					if act.ruleRevisionID == auditRule.revisionID {
 						found = act
 						return false
@@ -1319,8 +1319,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
-		if session.agendaDirty || !session.agendaReady {
-			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		if session.agendaDriver.dirty || !session.agendaDriver.ready {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 	})
 
@@ -1362,10 +1362,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if result.Status != gessrules.ModifyChanged {
 					return errors.New("task was not modified")
 				}
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("single supported modify dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("single supported modify cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -1473,8 +1473,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
-		if session.agendaDirty || !session.agendaReady {
-			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		if session.agendaDriver.dirty || !session.agendaDriver.ready {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 
 		events := collector.Events()[runEventOffset:]
@@ -1608,8 +1608,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after action failure")
 		}
-		if !session.agendaDirty || session.agendaReady {
-			t.Fatalf("agenda state after action failure = dirty %v ready %v, want dirty not ready", session.agendaDirty, session.agendaReady)
+		if !session.agendaDriver.dirty || session.agendaDriver.ready {
+			t.Fatalf("agenda state after action failure = dirty %v ready %v, want dirty not ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 		session.attachPropagationCounters()
 		beforeCounters := session.propagationCounterSnapshot().Totals
@@ -1731,8 +1731,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after cancellation")
 		}
-		if !session.agendaDirty || session.agendaReady {
-			t.Fatalf("agenda state after cancellation = dirty %v ready %v, want dirty not ready", session.agendaDirty, session.agendaReady)
+		if !session.agendaDriver.dirty || session.agendaDriver.ready {
+			t.Fatalf("agenda state after cancellation = dirty %v ready %v, want dirty not ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 
 		result, err = session.Run(context.Background())
@@ -1786,10 +1786,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if result.Status != gessrules.ModifyChanged {
 					return errors.New("person was not modified")
 				}
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported route-scoped modify dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported route-scoped modify cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -1854,8 +1854,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after route-scoped modify run")
 		}
-		if session.agendaDirty || !session.agendaReady {
-			t.Fatalf("agenda state after route-scoped modify run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		if session.agendaDriver.dirty || !session.agendaDriver.ready {
+			t.Fatalf("agenda state after route-scoped modify run = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 	})
 
@@ -1909,10 +1909,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if err == nil {
 					auditID = result.Fact.ID()
 				}
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported assert dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported assert cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -1936,10 +1936,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 					Set: mustFields(t, map[string]any{"status": "done"}),
 				})
 				modifyResult = result
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported modify dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported modify cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -1961,10 +1961,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				obsoleteID = binding.ID()
 				result, err := ctx.Retract(binding.ID())
 				retractResult = result
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported retract dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported retract cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -2184,10 +2184,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 					return errors.New("temp was not inserted")
 				}
 				tempID = result.Fact.ID()
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported assert dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported assert cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -2212,10 +2212,10 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 				if result.Status != gessrules.RetractRemoved {
 					return errors.New("temp was not retracted")
 				}
-				if session.agendaDirty {
+				if session.agendaDriver.dirty {
 					return errors.New("supported retract dirtied agenda")
 				}
-				if !session.agendaReady {
+				if !session.agendaDriver.ready {
 					return errors.New("supported retract cleared agenda readiness")
 				}
 				if !session.propagation.runAgendaPending {
@@ -2290,8 +2290,8 @@ func TestSessionRunAppliesActionOriginAgendaDeltas(t *testing.T) {
 		if session.propagation.runAgendaPending {
 			t.Fatal("run delta remained pending after successful run")
 		}
-		if session.agendaDirty || !session.agendaReady {
-			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+		if session.agendaDriver.dirty || !session.agendaDriver.ready {
+			t.Fatalf("agenda state after run = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 		}
 		after := mustSnapshot(t, context.Background(), session)
 		if _, ok := after.Fact(tempID); ok {
@@ -2643,7 +2643,7 @@ func TestSessionRunCancellationBeforeSelectionDoesNotConsumeActivation(t *testin
 	if result.RunID.IsZero() {
 		t.Fatal("run ID is zero")
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if len(pending) != 1 {
 		t.Fatalf("pending activations = %d, want 1", len(pending))
 	}

@@ -110,7 +110,7 @@ func TestSessionExecuteActivationActionsUsesDetachedBindingSnapshots(t *testing.
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -168,7 +168,7 @@ func TestActionContextLazilyMaterializesBindingSnapshots(t *testing.T) {
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -328,7 +328,7 @@ func TestActionContextBindingScalarValueUsesDeclaredTemplateSlotsWithoutMaterial
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -483,7 +483,7 @@ func TestActionContextBindingScalarValueSurvivesAssertWithoutMaterializingSnapsh
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -535,7 +535,7 @@ func TestActionContextBindingScalarValueRejectsStaleLiveFact(t *testing.T) {
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -666,7 +666,7 @@ func TestActionContextBindingScalarValuePreservesFrozenSnapshotAfterMutation(t *
 			if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 				t.Fatalf("reconcileAgenda: %v", err)
 			}
-			selected, ok := session.agenda.next()
+			selected, ok := session.agendaDriver.agenda.next()
 			if !ok {
 				t.Fatal("agenda.next returned no activation")
 			}
@@ -771,7 +771,7 @@ func TestSessionExecuteActivationActionsFreezesLazyBindingsBeforeMutation(t *tes
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -843,7 +843,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContext(t *testing.T
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -934,7 +934,7 @@ func TestSessionExecuteActivationActionsCanSkipFreezeForNonEscapingActions(t *te
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -1026,7 +1026,7 @@ func TestSessionExecuteActivationActionsFreezesEscapedUnreadContextOnCancel(t *t
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -1195,7 +1195,7 @@ func TestSessionExecuteActivationActionsKeepsBindingsStableAndRunsInOrder(t *tes
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -1382,7 +1382,7 @@ func TestSessionExecuteActivationActionsAssertUsesSlotBackedInsertion(t *testing
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -2312,7 +2312,7 @@ func TestSessionExecuteActivationActionsSupportsActionMutationsAndStopsOnError(t
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}
@@ -2447,7 +2447,7 @@ func TestSessionExecuteActivationActionsRejectsStaleBindings(t *testing.T) {
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("agenda.next returned no activation")
 	}

@@ -141,10 +141,10 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 		}
 		return abort(RunFailed, 0, err)
 	}
-	if s.agendaDirty {
+	if s.agendaDriver.dirty {
 		return abort(RunFailed, 0, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 	}
-	if !s.agendaReady {
+	if !s.agendaDriver.ready {
 		if ok, err := s.reconcileAgendaWithoutSnapshotAndChanges(ctx); ok || err != nil {
 			if err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -200,8 +200,8 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 					s.nextFocusedActivation()
 				}
 				s.mutationQueueMu.Unlock()
-				if s.agenda != nil {
-					s.agenda.compactConsumedActivationRows()
+				if s.agendaDriver.agenda != nil {
+					s.agendaDriver.agenda.compactConsumedActivationRows()
 				}
 				return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 			}
@@ -211,8 +211,8 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 		currentActivation, activation, ok := s.nextRunActivation(config)
 		if !ok {
 			s.mutationQueueMu.Unlock()
-			if s.agenda != nil {
-				s.agenda.compactConsumedActivationRows()
+			if s.agendaDriver.agenda != nil {
+				s.agendaDriver.agenda.compactConsumedActivationRows()
 			}
 			return RunResult{RunID: runID, Status: RunCompleted, Fired: fired}, nil
 		}
@@ -244,10 +244,10 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 			return abort(RunFailed, fired, err)
 		}
 		s.releaseTransientAgendaDeltas()
-		if s.agenda != nil {
-			s.agenda.maybeCompactActivationStorage()
+		if s.agendaDriver.agenda != nil {
+			s.agendaDriver.agenda.maybeCompactActivationStorage()
 		}
-		if s.agendaDirty {
+		if s.agendaDriver.dirty {
 			return abort(RunFailed, fired, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime))
 		}
 	}
@@ -255,17 +255,17 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 
 func (s *Session) hasRunActivation(config runConfig) bool {
 	if !config.queryProofID.isZero() {
-		return s != nil && s.agenda != nil && s.agenda.hasPendingActivationForQueryProof(config.queryProofID)
+		return s != nil && s.agendaDriver.agenda != nil && s.agendaDriver.agenda.hasPendingActivationForQueryProof(config.queryProofID)
 	}
 	return s.hasFocusedActivation()
 }
 
 func (s *Session) nextRunActivation(config runConfig) (*activation, activation, bool) {
 	if !config.queryProofID.isZero() {
-		if s == nil || s.agenda == nil {
+		if s == nil || s.agendaDriver.agenda == nil {
 			return nil, activation{}, false
 		}
-		return s.agenda.nextInternalPtrForQueryProof(config.queryProofID)
+		return s.agendaDriver.agenda.nextInternalPtrForQueryProof(config.queryProofID)
 	}
 	return s.nextFocusedActivation()
 }

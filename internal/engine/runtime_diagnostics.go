@@ -71,7 +71,7 @@ func (s *Session) runtimeDiagnosticsLocked() RuntimeDiagnostics {
 			owners = append(owners, owner)
 		}
 	}
-	if owner := s.agenda.agendaMemoryOwnerDiagnostics(); owner.Owner != "" {
+	if owner := s.agendaDriver.agenda.agendaMemoryOwnerDiagnostics(); owner.Owner != "" {
 		owners = append(owners, owner)
 	}
 	if owner := s.propagation.runtime.graphBeta.aggregateMemoryOwnerDiagnostics(); owner.Owner != "" {

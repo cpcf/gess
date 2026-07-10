@@ -35,7 +35,7 @@ func TestCoverageActionTokenFallbackHelpers(t *testing.T) {
 		t.Fatal("reconcileAgendaWithoutSnapshot unavailable")
 	}
 	var actPtr *activation
-	session.agenda.forEachPendingActivation(func(act *activation) bool {
+	session.agendaDriver.agenda.forEachPendingActivation(func(act *activation) bool {
 		actPtr = act
 		return false
 	})

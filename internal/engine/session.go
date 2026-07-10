@@ -150,13 +150,10 @@ func WithMaxDemandCascadeSteps(n int) SessionOption {
 type Session struct {
 	id                   SessionID
 	revision             *Ruleset
-	agenda               *agenda
-	strategy             Strategy
+	agendaDriver         sessionAgendaDriver
 	forkCount            uint64
 	propagation          sessionPropagationCoordinator
 	factStore            sessionFactStore
-	initialFocusStack    []ModuleName
-	focusStack           []ModuleName
 	initials             []SessionInitialFact
 	globalValues         []Value
 	initialCount         int
@@ -173,8 +170,6 @@ type Session struct {
 	runActive            atomic.Bool
 	runActivation        atomic.Pointer[activation]
 	runHaltRequested     atomic.Bool
-	agendaReady          bool
-	agendaDirty          bool
 	actionBindingScratch actionContextBindingState
 	actionValueScratch   []Value
 	actionMatchScratch   []conditionMatch
@@ -279,7 +274,8 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	agenda := newAgendaWithStrategy(cfg.strategy)
+	agendaDriver := newSessionAgendaDriver(cfg.strategy)
+	agenda := agendaDriver.agenda
 	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(listeners) && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
@@ -293,12 +289,9 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	session := &Session{
 		id:                  cfg.id,
 		revision:            revision,
-		agenda:              agenda,
-		strategy:            cfg.strategy,
+		agendaDriver:        agendaDriver,
 		propagation:         newSessionPropagationCoordinator(rete),
 		factStore:           newSessionFactStore(state),
-		initialFocusStack:   []ModuleName{MainModule},
-		focusStack:          []ModuleName{MainModule},
 		initials:            initials,
 		globalValues:        globalValues,
 		initialCount:        len(initials),
@@ -322,9 +315,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	// agenda during propagation, so only unsupported deltas, terminal
 	// updates, and backchain demand work force the full rematch fallback.
 	if useInitialAgenda && initialDelta.supported && len(initialDelta.updated) == 0 && len(initialDelta.demands) == 0 && len(initialDelta.resolvedDemands) == 0 && len(initialDelta.resolvedOwners) == 0 {
-		session.agenda.finishInitialTerminalActivations()
-		session.agendaReady = true
-		session.agendaDirty = false
+		session.agendaDriver.installInitialAgenda(session.agendaDriver.agenda)
 	}
 	session.syncPropagationCounters()
 	return session, nil
@@ -397,10 +388,10 @@ func (s *Session) propagationCounterSnapshot() propagationCounterSnapshot {
 }
 
 func (s *Session) syncPropagationCounters() {
-	if s == nil || s.agenda == nil {
+	if s == nil || s.agendaDriver.agenda == nil {
 		return
 	}
-	s.agenda.propagationCounters = s.propagation.counters
+	s.agendaDriver.agenda.propagationCounters = s.propagation.counters
 	if s.propagation.counters == nil {
 		return
 	}
@@ -408,7 +399,7 @@ func (s *Session) syncPropagationCounters() {
 }
 
 func (s *Session) propagationCounterPhase() propagationCounterPhase {
-	if s != nil && s.agendaReady && !s.agendaDirty {
+	if s != nil && s.agendaDriver.isReady() {
 		return propagationCounterPhaseSteadyState
 	}
 	return propagationCounterPhaseInitial
@@ -822,12 +813,9 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 	fork := &Session{
 		id:                  cfg.id,
 		revision:            s.revision,
-		agenda:              s.agenda.cloneForFork(cfg.strategy),
-		strategy:            cfg.strategy,
+		agendaDriver:        s.agendaDriver.cloneForFork(cfg.strategy),
 		propagation:         forkSessionPropagationCoordinator(rete, &s.propagation),
 		factStore:           newSessionFactStore(&state),
-		initialFocusStack:   cloneModuleNames(s.initialFocusStack),
-		focusStack:          cloneModuleNames(s.focusStack),
 		initials:            initials,
 		globalValues:        globalValues,
 		initialCount:        len(initials),
@@ -862,8 +850,6 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		}
 	}
 	fork.syncPropagationCounters()
-	forkAgendaReady := s.agendaReady && !s.agendaDirty
-	forkAgendaDirty := s.agendaDirty
 	if len(initialDelta.resolvedDemands) > 0 || len(initialDelta.resolvedOwners) > 0 {
 		if _, err := fork.resolveBackchainDemandRequestsImmediate(ctx, initialDelta.resolvedDemands, initialDelta.resolvedOwners, mutationOrigin{}); err != nil {
 			return nil, err
@@ -877,12 +863,9 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		}
 		fork.commitFactWorkspace(forkState)
 		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
-			forkAgendaReady = false
-			forkAgendaDirty = false
+			fork.agendaDriver.markUnready()
 		}
 	}
-	fork.agendaReady = forkAgendaReady
-	fork.agendaDirty = forkAgendaDirty
 	return fork, nil
 }
 
@@ -890,7 +873,7 @@ func (s *Session) forkSessionConfig() sessionConfig {
 	return sessionConfig{
 		initials:            cloneSessionInitialFacts(s.initials),
 		globals:             s.sessionGlobalValueMap(),
-		strategy:            s.strategy,
+		strategy:            s.agendaDriver.strategy,
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
 		output:              s.output,
 		demandLimit:         s.demandLimit,
@@ -2971,7 +2954,7 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if s.agendaReady && !s.agendaDirty {
+	if s.agendaDriver.isReady() {
 		return result, nil
 	}
 	if !s.shouldCollectAgendaChanges() {
@@ -3070,7 +3053,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	resetAgendaWithInitialAgenda := !s.shouldCollectAgendaChanges() && !mayEmitBackchainDemandDeltas && rete.supportsInitialAgendaReset()
 	var initialAgenda *agenda
 	if resetAgendaWithInitialAgenda {
-		initialAgenda = newAgendaWithStrategy(s.strategy)
+		initialAgenda = newAgendaWithStrategy(s.agendaDriver.strategy)
 		initialAgenda.propagationCounters = s.propagation.counters
 	}
 	var resetDemandDelta reteAgendaDelta
@@ -3094,8 +3077,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	}
 
 	oldGeneration := s.factStore.generation
-	s.agendaReady = false
-	s.agendaDirty = false
+	s.agendaDriver.markUnready()
 	s.resetFocusStack()
 	s.clearLogicalSupports()
 	s.clearBackchainDemandSupports()
@@ -3118,30 +3100,25 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		}
 		s.commitFactWorkspace(demandState)
 		if len(demandDelta.added) > 0 || len(demandDelta.removed) > 0 || len(demandDelta.updated) > 0 {
-			s.agendaReady = false
-			s.agendaDirty = false
+			s.agendaDriver.markUnready()
 		}
 	}
 	var resetActivations []agendaChange
 	if resetAgendaWithInitialAgenda {
-		s.agenda = initialAgenda
-		s.agenda.finishInitialTerminalActivations()
-		s.agendaReady = true
-		s.agendaDirty = false
+		s.agendaDriver.installInitialAgenda(initialAgenda)
 		s.syncPropagationCounters()
 	}
 	if !resetAgendaWithInitialAgenda {
-		s.emitAgendaEvents(ctx, s.agenda.clear())
+		s.emitAgendaEvents(ctx, s.agendaDriver.agenda.clear())
 		results, err := s.propagation.runtime.match(ctx, s)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
-		resetActivations, err = s.agenda.reconcile(context.Background(), s.revision, results)
+		resetActivations, err = s.agendaDriver.agenda.reconcile(context.Background(), s.revision, results)
 		if err != nil {
 			return ResetResult{Status: ResetValidationFailure, Before: before}, err
 		}
-		s.agendaReady = true
-		s.agendaDirty = false
+		s.agendaDriver.markReady()
 	}
 
 	result := ResetResult{
@@ -3274,25 +3251,22 @@ func (s *Session) applyRulesetImmediate(ctx context.Context, next *Ruleset) (App
 		return ApplyRulesetResult{}, err
 	}
 	activationRevisions := plan.activationRevisions()
-	results = s.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
+	results = s.agendaDriver.agenda.filterRuleMatchResultsForRulesetApply(results, activationRevisions)
 
 	s.revision = next
 	s.globalValues = globalValues
 	s.propagation.installRuntime(rete)
-	if s.agenda == nil {
-		s.agenda = newAgendaWithStrategy(s.strategy)
-	}
+	s.agendaDriver.ensureAgenda()
 	s.syncPropagationCounters()
-	s.emitAgendaEvents(ctx, s.agenda.purgeRuleRevisions(plan.purgeRevisions))
-	changes, err := s.agenda.reconcile(context.Background(), next, results)
+	s.emitAgendaEvents(ctx, s.agendaDriver.agenda.purgeRuleRevisions(plan.purgeRevisions))
+	changes, err := s.agendaDriver.agenda.reconcile(context.Background(), next, results)
 	if err != nil {
 		return ApplyRulesetResult{}, err
 	}
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordFullAgendaReconcile(phase)
 	}
-	s.agendaReady = true
-	s.agendaDirty = false
+	s.agendaDriver.markReady()
 	s.applyAutoFocus(changes)
 	s.emitAgendaEvents(ctx, changes)
 
@@ -3317,8 +3291,8 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	if source == nil {
 		return nil, ErrInvalidRuleset
 	}
-	if s.agenda == nil {
-		s.agenda = newAgendaWithStrategy(s.strategy)
+	if s.agendaDriver.agenda == nil {
+		s.agendaDriver.ensureAgenda()
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -3327,7 +3301,7 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if s.agendaReady && !s.agendaDirty {
+	if s.agendaDriver.isReady() {
 		return nil, nil
 	}
 
@@ -3346,12 +3320,11 @@ func (s *Session) reconcileAgenda(ctx context.Context, source factSource) ([]age
 		s.propagation.counters.recordWholeTerminalScan(phase)
 		s.propagation.counters.recordFullAgendaReconcile(phase)
 	}
-	changes, err := s.agenda.reconcile(ctx, s.revision, results)
+	changes, err := s.agendaDriver.agenda.reconcile(ctx, s.revision, results)
 	if err != nil {
 		return nil, err
 	}
-	s.agendaReady = true
-	s.agendaDirty = false
+	s.agendaDriver.markReady()
 	s.applyAutoFocus(changes)
 	s.emitAgendaEvents(ctx, changes)
 	return changes, nil
@@ -3380,8 +3353,8 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if s.revision == nil {
 		return nil, true, ErrInvalidRuleset
 	}
-	if s.agenda == nil {
-		s.agenda = newAgendaWithStrategy(s.strategy)
+	if s.agendaDriver.agenda == nil {
+		s.agendaDriver.ensureAgenda()
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -3390,7 +3363,7 @@ func (s *Session) reconcileAgendaWithoutSnapshotInternal(ctx context.Context, co
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
-	if s.agendaReady && !s.agendaDirty {
+	if s.agendaDriver.isReady() {
 		return nil, true, nil
 	}
 	if s.propagation.runtime == nil {
@@ -3404,7 +3377,7 @@ func (s *Session) reconcileAgendaAfterMutation(ctx context.Context, delta reteAg
 	if changes, ok, err := s.applyReteAgendaDeltaInternal(ctx, delta, s.shouldCollectAgendaChanges()); ok || err != nil {
 		return changes, err
 	}
-	if !delta.supported && s.agendaReady && !s.agendaDirty {
+	if !delta.supported && s.agendaDriver.isReady() {
 		return nil, fmt.Errorf("%w: unsupported agenda delta after steady-state mutation", ErrUnsupportedRuntime)
 	}
 	if !s.shouldCollectAgendaChanges() && s.propagation.runtime != nil && !s.propagation.runtime.supportsIncrementalAgenda() {
@@ -3425,8 +3398,8 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if s.revision == nil {
 		return nil, true, ErrInvalidRuleset
 	}
-	if s.agenda == nil {
-		s.agenda = newAgendaWithStrategy(s.strategy)
+	if s.agendaDriver.agenda == nil {
+		s.agendaDriver.ensureAgenda()
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -3435,21 +3408,21 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if err := ctx.Err(); err != nil {
 		return nil, true, err
 	}
-	if !delta.supported || s.propagation.runtime == nil || !s.agendaReady || s.agendaDirty {
+	if !delta.supported || s.propagation.runtime == nil || !s.agendaDriver.ready || s.agendaDriver.dirty {
 		if s.propagation.counters != nil && !delta.supported {
 			s.propagation.counters.recordUnsupportedAgendaDelta()
 		}
 		return nil, false, nil
 	}
 	if len(delta.updated) != 0 {
-		if err := s.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
+		if err := s.agendaDriver.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
 			return nil, true, err
 		}
 	}
 	var changes []agendaChange
 	if collectChanges {
 		var err error
-		changes, err = s.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
+		changes, err = s.agendaDriver.agenda.applyTerminalTokenDeltas(ctx, s.revision, delta.removed, delta.added)
 		if err != nil {
 			return nil, true, err
 		}
@@ -3459,8 +3432,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordAgendaDeltaApplication()
 	}
-	s.agendaReady = true
-	s.agendaDirty = false
+	s.agendaDriver.markReady()
 	if collectChanges {
 		s.applyAutoFocus(changes)
 		s.emitAgendaEvents(ctx, changes)
@@ -6913,8 +6885,7 @@ func (s *Session) failQueuedMutations(err error) {
 func (s *Session) markAgendaDirty() {
 	if s != nil {
 		s.clearRunAgendaDelta()
-		s.agendaDirty = true
-		s.agendaReady = false
+		s.agendaDriver.markDirty()
 	}
 }
 
@@ -6928,7 +6899,7 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 		}
 		return fmt.Errorf("%w: unsupported agenda delta during run", ErrUnsupportedRuntime)
 	}
-	if s.agendaDirty {
+	if s.agendaDriver.dirty {
 		return fmt.Errorf("%w: cannot record run agenda delta while agenda is dirty", ErrUnsupportedRuntime)
 	}
 	if s.canApplyRunAgendaDeltaDirect(delta) {
@@ -6958,7 +6929,7 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 }
 
 func (s *Session) canApplyRunAgendaDeltaDirect(delta reteAgendaDelta) bool {
-	if s == nil || !delta.supported || s.agendaDirty || !s.agendaReady {
+	if s == nil || !delta.supported || s.agendaDriver.dirty || !s.agendaDriver.ready {
 		return false
 	}
 	if s.revision == nil || s.revision.hasAutoFocusRules() || s.hasAgendaEventListeners() {
@@ -6989,8 +6960,8 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if s == nil || s.revision == nil {
 		return true, ErrInvalidRuleset
 	}
-	if s.agenda == nil {
-		s.agenda = newAgendaWithStrategy(s.strategy)
+	if s.agendaDriver.agenda == nil {
+		s.agendaDriver.ensureAgenda()
 		s.syncPropagationCounters()
 	}
 	if ctx == nil {
@@ -6999,14 +6970,14 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if err := ctx.Err(); err != nil {
 		return true, err
 	}
-	if !delta.supported || s.propagation.runtime == nil || !s.agendaReady || s.agendaDirty {
+	if !delta.supported || s.propagation.runtime == nil || !s.agendaDriver.ready || s.agendaDriver.dirty {
 		if s.propagation.counters != nil && !delta.supported {
 			s.propagation.counters.recordUnsupportedAgendaDelta()
 		}
 		return false, nil
 	}
 	if len(delta.updated) != 0 {
-		if err := s.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
+		if err := s.agendaDriver.agenda.applyTerminalTokenUpdates(ctx, s.revision, delta.updated); err != nil {
 			return true, err
 		}
 	}
@@ -7016,17 +6987,16 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordAgendaDeltaApplication()
 	}
-	s.agendaReady = true
-	s.agendaDirty = false
+	s.agendaDriver.markReady()
 	return true, nil
 }
 
 func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Context, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) error {
-	if s == nil || s.agenda == nil || s.revision == nil {
+	if s == nil || s.agendaDriver.agenda == nil || s.revision == nil {
 		return ErrInvalidRuleset
 	}
 	if len(removed) <= 1 && len(added) <= 1 {
-		act, err := s.agenda.applySingleTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
+		act, err := s.agendaDriver.agenda.applySingleTerminalTokenDeltasWithoutChanges(ctx, s.revision, removed, added)
 		if err != nil {
 			return err
 		}
@@ -7035,7 +7005,7 @@ func (s *Session) applyTerminalTokenDeltasWithoutChangesAndAttach(ctx context.Co
 		}
 		return nil
 	}
-	_, err := s.agenda.applyTerminalTokenDeltasInternal(ctx, s.revision, removed, added, false, s.applyAutoFocusForActivation)
+	_, err := s.agendaDriver.agenda.applyTerminalTokenDeltasInternal(ctx, s.revision, removed, added, false, s.applyAutoFocusForActivation)
 	return err
 }
 
@@ -7106,7 +7076,7 @@ func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUp
 		}
 		index = state.next
 	}
-	if existing, _, ok := s.agenda.activationForTerminalTokenIdentity(rule, update.before, identity); ok && existing.status == activationStatusPending {
+	if existing, _, ok := s.agendaDriver.agenda.activationForTerminalTokenIdentity(rule, update.before, identity); ok && existing.status == activationStatusPending {
 		state := runAgendaDeltaState{
 			initial:      true,
 			present:      true,
@@ -7250,7 +7220,7 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 		}
 		index = state.next
 	}
-	existing, _, ok := s.agenda.activationForTerminalTokenIdentity(rule, token.token, identity)
+	existing, _, ok := s.agendaDriver.agenda.activationForTerminalTokenIdentity(rule, token.token, identity)
 	state := runAgendaDeltaState{
 		initial: ok && existing.status == activationStatusPending,
 		present: ok && existing.status == activationStatusPending,
@@ -7524,7 +7494,7 @@ func (s *Session) swapFactWorkspace(workspace *factWorkspace) {
 }
 
 func (s *Session) reserveRunGeneratedFactStorage() {
-	if s == nil || s.revision == nil || s.agenda == nil {
+	if s == nil || s.revision == nil || s.agendaDriver.agenda == nil {
 		return
 	}
 	stats := s.revision.generatedAssertReserveByRuleRevision()
@@ -7532,7 +7502,7 @@ func (s *Session) reserveRunGeneratedFactStorage() {
 		return
 	}
 	var factCount, slotCount, compactSlotCount int
-	s.agenda.forEachPendingActivation(func(current *activation) bool {
+	s.agendaDriver.agenda.forEachPendingActivation(func(current *activation) bool {
 		if current == nil {
 			return true
 		}

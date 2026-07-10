@@ -69,7 +69,7 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 		t.Fatalf("Assert miss: %v", err)
 	}
 
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if len(pending) != 2 {
 		t.Fatalf("pending activations = %d, want 2", len(pending))
 	}
@@ -80,7 +80,7 @@ func TestListPatternBindsSegmentsForActionsAndActivationIdentity(t *testing.T) {
 	})}); err != nil {
 		t.Fatalf("Modify first tags: %v", err)
 	}
-	afterPending := session.agenda.pendingActivations()
+	afterPending := session.agendaDriver.agenda.pendingActivations()
 	after := activationForFactID(t, afterPending, first.Fact.ID()).activationID()
 	if before == after {
 		t.Fatalf("activation ID did not change after segment binding value changed: %q", before)
@@ -152,7 +152,7 @@ func TestListPatternModifyUnobservedSlotReplacesActivation(t *testing.T) {
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
@@ -181,7 +181,7 @@ func TestListPatternModifyUnobservedSlotReplacesActivation(t *testing.T) {
 	} else if !ok {
 		t.Fatal("apply note delta unexpectedly skipped")
 	}
-	pending = session.agenda.pendingActivations()
+	pending = session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}

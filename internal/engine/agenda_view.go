@@ -50,10 +50,10 @@ func (s *Session) Agenda(ctx context.Context) (Agenda, error) {
 	}
 	defer s.unlock()
 
-	if s.agendaDirty {
+	if s.agendaDriver.dirty {
 		return Agenda{}, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime)
 	}
-	if !s.agendaReady {
+	if !s.agendaDriver.ready {
 		if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 			return Agenda{}, err
 		}
@@ -125,14 +125,14 @@ func (a AgendaActivation) FactIDs() []FactID {
 
 func (s *Session) agendaLocked() Agenda {
 	out := Agenda{
-		focusStack: cloneModuleNames(s.focusStack),
+		focusStack: cloneModuleNames(s.agendaDriver.focusStack),
 		byModule:   make(map[ModuleName][]AgendaActivation),
 	}
-	if s == nil || s.agenda == nil {
+	if s == nil || s.agendaDriver.agenda == nil {
 		out.activations = []AgendaActivation{}
 		return out
 	}
-	pending := s.agenda.pendingByModule()
+	pending := s.agendaDriver.agenda.pendingByModule()
 	if len(pending) == 0 {
 		out.activations = []AgendaActivation{}
 		return out
@@ -144,7 +144,7 @@ func (s *Session) agendaLocked() Agenda {
 		}
 		out.byModule[module] = view
 	}
-	ordered := s.agenda.activationsInFocusOrder(pending, s.focusStack)
+	ordered := s.agendaDriver.agenda.activationsInFocusOrder(pending, s.agendaDriver.focusStack)
 	out.activations = make([]AgendaActivation, len(ordered))
 	for i, act := range ordered {
 		out.activations[i] = s.agendaActivationView(act)
@@ -156,7 +156,7 @@ func (s *Session) agendaActivationView(act *activation) AgendaActivation {
 	if act == nil {
 		return AgendaActivation{}
 	}
-	public := s.agenda.publicActivation(act)
+	public := s.agendaDriver.agenda.publicActivation(act)
 	view := AgendaActivation{
 		activationID:   public.activationID(),
 		ruleRevisionID: public.ruleRevisionID,

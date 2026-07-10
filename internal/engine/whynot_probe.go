@@ -86,11 +86,11 @@ func branchSatisfiedCount(branch WhyNotBranch) int {
 }
 
 func (s *Session) pendingActivationsForRule(rev RuleRevisionID) []AgendaActivation {
-	if s.agenda == nil {
+	if s.agendaDriver.agenda == nil {
 		return nil
 	}
 	var out []AgendaActivation
-	for _, activations := range s.agenda.pendingByModule() {
+	for _, activations := range s.agendaDriver.agenda.pendingByModule() {
 		for _, act := range activations {
 			if act != nil && act.ruleRevisionID == rev {
 				out = append(out, s.agendaActivationView(act))
@@ -107,10 +107,10 @@ func (s *Session) pendingActivationsForRule(rev RuleRevisionID) []AgendaActivati
 // already fired and remains matched (refraction). Firing consumes the terminal
 // row but retains the activation with a consumed status in the agenda lookup.
 func (s *Session) ruleHasRefractedActivation(rev RuleRevisionID) bool {
-	if s.agenda == nil {
+	if s.agendaDriver.agenda == nil {
 		return false
 	}
-	for _, bucket := range s.agenda.activationLookup {
+	for _, bucket := range s.agendaDriver.agenda.activationLookup {
 		if activationRefracted(bucket.first, rev) {
 			return true
 		}

@@ -195,7 +195,7 @@ func TestRunLeavesUnfocusedNonMainActivationsPending(t *testing.T) {
 	if result.Fired != 0 || fired != 0 {
 		t.Fatalf("run fired = (%d result, %d action), want 0", result.Fired, fired)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations = %d, want 1", got)
 	}
 }

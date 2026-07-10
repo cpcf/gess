@@ -2094,7 +2094,7 @@ func TestExpressionPredicatesAreExecutableByGraphRuntime(t *testing.T) {
 	if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{"age": 20})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 1 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations = %d, want 1", got)
 	}
 }

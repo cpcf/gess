@@ -364,7 +364,7 @@ func TestSessionResetRebuildsAgendaForInitialFacts(t *testing.T) {
 		t.Fatalf("generation after reset = %d, want %d", got, want)
 	}
 
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}

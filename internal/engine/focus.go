@@ -18,10 +18,10 @@ func (s *Session) CurrentFocus() ModuleName {
 
 // FocusStack returns a copy of the session-local focus stack from bottom to top.
 func (s *Session) FocusStack() []ModuleName {
-	if s == nil || len(s.focusStack) == 0 {
+	if s == nil || len(s.agendaDriver.focusStack) == 0 {
 		return nil
 	}
-	return append([]ModuleName(nil), s.focusStack...)
+	return append([]ModuleName(nil), s.agendaDriver.focusStack...)
 }
 
 // PushFocus places module on top of the session focus stack unless it is
@@ -267,74 +267,54 @@ func (s *Session) validateFocusModule(module ModuleName) (ModuleName, error) {
 }
 
 func (s *Session) currentFocusInternal() ModuleName {
-	if s == nil || len(s.focusStack) == 0 {
+	if s == nil {
 		return MainModule
 	}
-	module := s.focusStack[len(s.focusStack)-1]
-	if module.IsZero() {
-		return MainModule
-	}
-	return module
+	return s.agendaDriver.currentFocus()
 }
 
 func (s *Session) pushFocusInternal(module ModuleName) {
 	if s == nil {
 		return
 	}
-	module = normalizeModuleName(module)
-	if s.currentFocusInternal() == module {
-		return
-	}
-	s.focusStack = append(s.focusStack, module)
+	s.agendaDriver.pushFocus(module)
 }
 
 func (s *Session) popFocusInternal() ModuleName {
-	if s == nil || len(s.focusStack) == 0 {
+	if s == nil {
 		return MainModule
 	}
-	top := s.focusStack[len(s.focusStack)-1]
-	if top.IsZero() {
-		top = MainModule
-	}
-	s.focusStack[len(s.focusStack)-1] = ""
-	s.focusStack = s.focusStack[:len(s.focusStack)-1]
-	return top
+	return s.agendaDriver.popFocus()
 }
 
 func (s *Session) clearFocusStackInternal() {
 	if s == nil {
 		return
 	}
-	for i := range s.focusStack {
-		s.focusStack[i] = ""
-	}
-	s.focusStack = s.focusStack[:0]
+	s.agendaDriver.clearFocusStack()
 }
 
 func (s *Session) resetFocusStack() {
 	if s == nil {
 		return
 	}
-	s.focusStack = append(s.focusStack[:0], s.initialFocusStack...)
-	if len(s.focusStack) == 0 {
-		s.focusStack = append(s.focusStack, MainModule)
-	}
+	s.agendaDriver.resetFocusStack()
 }
 
 func (s *Session) nextFocusedActivation() (*activation, activation, bool) {
-	if s == nil || s.agenda == nil {
+	if s == nil || s.agendaDriver.agenda == nil {
 		return nil, activation{}, false
 	}
 	for {
 		module := s.currentFocusInternal()
 		if module == MainModule && s.revision != nil && s.revision.allRulesInMainModule {
-			return s.agenda.nextInternalPtr()
+			return s.agendaDriver.agenda.nextInternalPtr()
 		}
-		current, selected, ok := s.agenda.nextInternalPtrForModule(module)
+		current, selected, ok := s.agendaDriver.agenda.nextInternalPtrForModule(module)
 		if ok {
 			return current, selected, true
 		}
-		if len(s.focusStack) == 0 {
+		if len(s.agendaDriver.focusStack) == 0 {
 			return nil, activation{}, false
 		}
 		s.popFocusInternal()
@@ -342,22 +322,22 @@ func (s *Session) nextFocusedActivation() (*activation, activation, bool) {
 }
 
 func (s *Session) hasFocusedActivation() bool {
-	if s == nil || s.agenda == nil {
+	if s == nil || s.agendaDriver.agenda == nil {
 		return false
 	}
-	depth := len(s.focusStack)
+	depth := len(s.agendaDriver.focusStack)
 	for {
 		module := MainModule
 		if depth > 0 {
-			module = s.focusStack[depth-1]
+			module = s.agendaDriver.focusStack[depth-1]
 			if module.IsZero() {
 				module = MainModule
 			}
 		}
 		if module == MainModule && s.revision != nil && s.revision.allRulesInMainModule {
-			return s.agenda.hasPendingActivation()
+			return s.agendaDriver.agenda.hasPendingActivation()
 		}
-		if s.agenda.hasPendingActivationForModule(module) {
+		if s.agendaDriver.agenda.hasPendingActivationForModule(module) {
 			return true
 		}
 		if depth == 0 {

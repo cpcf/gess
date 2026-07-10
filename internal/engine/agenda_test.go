@@ -385,10 +385,10 @@ func TestSessionDoesNotReserveAgendaRowsFromRuleCount(t *testing.T) {
 	}
 
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "agenda-no-broad-reserve-session")
-	if got := len(session.agenda.activationRows.chunks); got != 0 {
+	if got := len(session.agendaDriver.agenda.activationRows.chunks); got != 0 {
 		t.Fatalf("activation row chunks after NewSession = %d, want 0", got)
 	}
-	if got := session.agenda.activationRows.count; got != 0 {
+	if got := session.agendaDriver.agenda.activationRows.count; got != 0 {
 		t.Fatalf("activation row count after NewSession = %d, want 0", got)
 	}
 
@@ -399,10 +399,10 @@ func TestSessionDoesNotReserveAgendaRowsFromRuleCount(t *testing.T) {
 	if result.Status != ResetApplied {
 		t.Fatalf("reset status = %v, want %v", result.Status, ResetApplied)
 	}
-	if got := len(session.agenda.activationRows.chunks); got != 0 {
+	if got := len(session.agendaDriver.agenda.activationRows.chunks); got != 0 {
 		t.Fatalf("activation row chunks after Reset = %d, want 0", got)
 	}
-	if got := session.agenda.activationRows.count; got != 0 {
+	if got := session.agendaDriver.agenda.activationRows.count; got != 0 {
 		t.Fatalf("activation row count after Reset = %d, want 0", got)
 	}
 }
@@ -616,11 +616,11 @@ func TestAgendaTerminalTokenGraphPathsDoNotUseActivationRows(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	if got := session.agenda.activationRows.count; got != 0 {
+	if got := session.agendaDriver.agenda.activationRows.count; got != 0 {
 		t.Fatalf("session terminal delta activationRows.count = %d, want 0", got)
 	}
 	var pending []*activation
-	session.agenda.forEachPendingActivation(func(stored *activation) bool {
+	session.agendaDriver.agenda.forEachPendingActivation(func(stored *activation) bool {
 		pending = append(pending, stored)
 		return true
 	})
@@ -794,7 +794,7 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 			t.Fatalf("Assert: %v", err)
 		}
 		var pending []*activation
-		session.agenda.forEachPendingActivation(func(stored *activation) bool {
+		session.agendaDriver.agenda.forEachPendingActivation(func(stored *activation) bool {
 			pending = append(pending, stored)
 			return true
 		})
@@ -816,10 +816,10 @@ func TestAgendaTerminalTokenIdentityDeactivatesOnRetractAndModify(t *testing.T) 
 	}
 	assertDeactivated := func(t *testing.T, state terminalActivationState) {
 		t.Helper()
-		if got := state.session.agenda.pendingActivations(); len(got) != 0 {
+		if got := state.session.agendaDriver.agenda.pendingActivations(); len(got) != 0 {
 			t.Fatalf("pending activations after mutation = %#v, want none", got)
 		}
-		stored, ok := state.session.agenda.activationByKeyPtr(state.key)
+		stored, ok := state.session.agendaDriver.agenda.activationByKeyPtr(state.key)
 		if !ok {
 			t.Fatal("stored activation missing after mutation")
 		}
@@ -953,7 +953,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 			t.Fatalf("Assert(%s): %v", bucket, err)
 		}
 	}
-	session.agenda.forEachPendingActivation(func(stored *activation) bool {
+	session.agendaDriver.agenda.forEachPendingActivation(func(stored *activation) bool {
 		if stored.payload != nil {
 			t.Fatalf("stored graph activation kept public fields: %#v", stored)
 		}
@@ -963,7 +963,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 		return true
 	})
 
-	if _, selected, ok := session.agenda.nextInternalPtrForModule("ask"); !ok {
+	if _, selected, ok := session.agendaDriver.agenda.nextInternalPtrForModule("ask"); !ok {
 		t.Fatal("nextInternalPtrForModule(ask) returned no activation")
 	} else if got := compactGraphActivationRuleName(t, revision, selected); got != "ask" {
 		t.Fatalf("focused activation = %q, want ask", got)
@@ -973,7 +973,7 @@ func TestCompactGraphActivationsPreserveOrderingAndFocusSelection(t *testing.T) 
 
 	var got []string
 	for {
-		_, selected, ok := session.agenda.nextInternalPtr()
+		_, selected, ok := session.agendaDriver.agenda.nextInternalPtr()
 		if !ok {
 			break
 		}
@@ -1670,10 +1670,10 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	}
 
 	results := mustAgendaMatchResults(t, revision, session)
-	if _, err := session.agenda.reconcile(context.Background(), revision, results); err != nil {
+	if _, err := session.agendaDriver.agenda.reconcile(context.Background(), revision, results); err != nil {
 		t.Fatalf("initial reconcile: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("next returned no activation")
 	}
@@ -1681,7 +1681,7 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
@@ -1691,7 +1691,7 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	if pending[0].Generation() != 2 {
 		t.Fatalf("reset activation generation = %d, want 2", pending[0].Generation())
 	}
-	byRevision := session.agenda.activationsByRuleRevisionID(selected.ruleRevisionID)
+	byRevision := session.agendaDriver.agenda.activationsByRuleRevisionID(selected.ruleRevisionID)
 	if got, want := len(byRevision), 1; got != want {
 		t.Fatalf("activations by revision after reset = %d, want %d", got, want)
 	}
@@ -1700,14 +1700,14 @@ func TestAgendaResetClearsStateAndAllowsNewGenerationMatches(t *testing.T) {
 	}
 
 	results = mustAgendaMatchResults(t, revision, session)
-	changes, err := session.agenda.reconcile(context.Background(), revision, results)
+	changes, err := session.agendaDriver.agenda.reconcile(context.Background(), revision, results)
 	if err != nil {
 		t.Fatalf("post-reset reconcile: %v", err)
 	}
 	if got := len(changes); got != 0 {
 		t.Fatalf("post-reset reconcile changes = %d, want none", got)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 1 || got[0].activationID() == selected.activationID() {
+	if got := session.agendaDriver.agenda.pendingActivations(); len(got) != 1 || got[0].activationID() == selected.activationID() {
 		t.Fatalf("post-reset pending activations = %#v, want new activation ID", got)
 	}
 }
@@ -1954,7 +1954,7 @@ func TestSessionReconcileAgendaEmitsActivationEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after assert = %d, want %d", got, want)
 	}
@@ -2047,7 +2047,7 @@ func TestSessionResetEmitsPendingActivationDeactivationAndClearsRefraction(t *te
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
@@ -2096,20 +2096,20 @@ func TestSessionInitialFactsWithListenerBuildsAgendaBeforeMutation(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	if session.agendaReady || session.agendaDirty {
-		t.Fatalf("initial agenda state = ready %v dirty %v, want unready clean", session.agendaReady, session.agendaDirty)
+	if session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("initial agenda state = ready %v dirty %v, want unready clean", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("initial pending activations = %d, want 0 before boundary materialization", got)
 	}
 
 	if _, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{"name": "Bea"})); err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	if !session.agendaReady || session.agendaDirty {
-		t.Fatalf("agenda state after mutation = ready %v dirty %v, want clean ready", session.agendaReady, session.agendaDirty)
+	if !session.agendaDriver.ready || session.agendaDriver.dirty {
+		t.Fatalf("agenda state after mutation = ready %v dirty %v, want clean ready", session.agendaDriver.ready, session.agendaDriver.dirty)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after mutation = %d, want %d", got, want)
 	}
 }
@@ -2150,7 +2150,7 @@ func TestSessionGraphResetAppliesAgendaDeltasWithoutReconcile(t *testing.T) {
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
@@ -2204,10 +2204,10 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	}
 	session.attachPropagationCounters()
 
-	if session.agendaDirty || !session.agendaReady {
-		t.Fatalf("initial agenda state = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	if session.agendaDriver.dirty || !session.agendaDriver.ready {
+		t.Fatalf("initial agenda state = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("initial pending activations = %d, want %d", got, want)
 	}
 	beforeCounters := session.propagationCounterSnapshot().Totals
@@ -2215,10 +2215,10 @@ func TestSessionGraphResetWithoutListenersKeepsAgendaReadyWithoutReconcile(t *te
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.agendaDirty || !session.agendaReady {
-		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	if session.agendaDriver.dirty || !session.agendaDriver.ready {
+		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
 
@@ -2269,7 +2269,7 @@ func TestSessionGraphResetAppliesJoinedTerminalRemovalsWithStableFacts(t *testin
 	if _, err := session.Reset(ctx); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
@@ -2345,10 +2345,10 @@ func TestSessionGraphResetAgendaSurvivesResetListenerCancellation(t *testing.T) 
 	if ctx.Err() == nil {
 		t.Fatal("reset listener did not cancel context")
 	}
-	if session.agendaDirty || !session.agendaReady {
-		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDirty, session.agendaReady)
+	if session.agendaDriver.dirty || !session.agendaDriver.ready {
+		t.Fatalf("agenda state after reset = dirty %v ready %v, want clean ready", session.agendaDriver.dirty, session.agendaDriver.ready)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations after reset = %d, want %d", got, want)
 	}
 

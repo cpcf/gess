@@ -152,7 +152,7 @@ func TestLogicalSupportSourceIdentitySurvivesConsumedCompactActivation(t *testin
 	if !ok {
 		t.Fatal("derive rule missing")
 	}
-	if stored := consumedActivationForRuleRevision(session.agenda, rule.RevisionID()); stored != nil {
+	if stored := consumedActivationForRuleRevision(session.agendaDriver.agenda, rule.RevisionID()); stored != nil {
 		t.Fatalf("retained consumed activation = %#v, want support source owned by logical support memory", stored)
 	}
 

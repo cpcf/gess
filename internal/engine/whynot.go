@@ -190,10 +190,10 @@ func (s *Session) WhyNot(ctx context.Context, ruleName string, opts ...WhyNotOpt
 	}
 	defer s.unlock()
 
-	if s.agendaDirty {
+	if s.agendaDriver.dirty {
 		return WhyNotReport{}, fmt.Errorf("%w: dirty agenda cannot be reconciled during run", ErrUnsupportedRuntime)
 	}
-	if !s.agendaReady {
+	if !s.agendaDriver.ready {
 		if _, err := s.reconcileAgendaInternal(ctx); err != nil {
 			return WhyNotReport{}, err
 		}

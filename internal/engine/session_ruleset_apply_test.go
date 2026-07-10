@@ -77,7 +77,7 @@ func TestSessionApplyRulesetAddsRuleCreatesActivationAndKeepsInitialFactsValidFo
 	if snapshot := mustSnapshot(t, context.Background(), session); snapshot.RulesetID() != revision2.ID() {
 		t.Fatalf("snapshot ruleset id = %q, want %q", snapshot.RulesetID(), revision2.ID())
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations = %d, want %d", got, want)
 	}
@@ -138,7 +138,7 @@ func TestSessionApplyRulesetRemovesPendingActivationsWithoutTouchingFacts(t *tes
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 1 {
+	if got := session.agendaDriver.agenda.pendingActivations(); len(got) != 1 {
 		t.Fatalf("pending activations before apply = %d, want 1", len(got))
 	}
 
@@ -166,10 +166,10 @@ func TestSessionApplyRulesetRemovesPendingActivationsWithoutTouchingFacts(t *tes
 	if len(result.AddedRuleRevisions) != 0 || len(result.ReplacedRuleRevisions) != 0 || len(result.UnchangedRuleRevisions) != 0 {
 		t.Fatalf("unexpected apply metadata: added=%#v replaced=%#v unchanged=%#v", result.AddedRuleRevisions, result.ReplacedRuleRevisions, result.UnchangedRuleRevisions)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 0 {
+	if got := session.agendaDriver.agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after remove = %#v, want none", got)
 	}
-	if got := session.agenda.activationsByRuleRevisionID(rule1.RevisionID()); len(got) != 0 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(rule1.RevisionID()); len(got) != 0 {
 		t.Fatalf("old revision activations still indexed after remove: %#v", got)
 	}
 	if snapshot := mustSnapshot(t, context.Background(), session); snapshot.Len() != 1 {
@@ -216,7 +216,7 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	oldActivation, ok := session.agenda.next()
+	oldActivation, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("expected pending activation")
 	}
@@ -254,13 +254,13 @@ func TestSessionApplyRulesetReplacesRulePurgesOldActivationStateAndCreatesReplac
 	if len(result.AddedRuleRevisions) != 0 || len(result.RemovedRuleRevisions) != 0 || len(result.UnchangedRuleRevisions) != 0 {
 		t.Fatalf("unexpected apply metadata: added=%#v removed=%#v unchanged=%#v", result.AddedRuleRevisions, result.RemovedRuleRevisions, result.UnchangedRuleRevisions)
 	}
-	if got := session.agenda.activationsByRuleRevisionID(oldActivation.ruleRevisionID); len(got) != 0 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(oldActivation.ruleRevisionID); len(got) != 0 {
 		t.Fatalf("old revision activations still indexed after replace: %#v", got)
 	}
-	if _, ok := session.agenda.activationByKey(oldActivation.key); ok {
+	if _, ok := session.agendaDriver.agenda.activationByKey(oldActivation.key); ok {
 		t.Fatalf("old activation key %#v still present after replace", oldActivation.key)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if got, want := len(pending), 1; got != want {
 		t.Fatalf("pending activations after replace = %d, want %d", got, want)
 	}
@@ -306,12 +306,12 @@ func TestSessionApplyRulesetUnchangedPreservesAgendaStateAndEvents(t *testing.T)
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	selected, ok := session.agenda.next()
+	selected, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("expected a pending activation to consume")
 	}
 	beforeEvents := len(collector.Events())
-	beforePending := session.agenda.pendingActivations()
+	beforePending := session.agendaDriver.agenda.pendingActivations()
 
 	unchanged, err := session.ApplyRuleset(context.Background(), revision)
 	if err != nil {
@@ -326,18 +326,18 @@ func TestSessionApplyRulesetUnchangedPreservesAgendaStateAndEvents(t *testing.T)
 	if got := len(collector.Events()); got != beforeEvents {
 		t.Fatalf("events after unchanged apply = %d, want %d", got, beforeEvents)
 	}
-	afterPending := session.agenda.pendingActivations()
+	afterPending := session.agendaDriver.agenda.pendingActivations()
 	if len(afterPending) != len(beforePending) {
 		t.Fatalf("pending activations changed after unchanged apply: before=%#v after=%#v", beforePending, afterPending)
 	}
-	if got, ok := session.agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
+	if got, ok := session.agendaDriver.agenda.activationByKey(selected.key); !ok || got.status != activationStatusConsumed {
 		t.Fatalf("consumed activation after unchanged apply = %#v, ok=%v", got, ok)
 	}
 	rule, ok := revision.Rule("match-person")
 	if !ok {
 		t.Fatal("expected rule in compiled revision")
 	}
-	if got := session.agenda.activationsByRuleRevisionID(rule.RevisionID()); len(got) != 2 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(rule.RevisionID()); len(got) != 2 {
 		t.Fatalf("revision activations after unchanged apply = %d, want 2", len(got))
 	}
 }
@@ -390,7 +390,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if _, err := session.reconcileAgenda(context.Background(), mustSnapshot(t, context.Background(), session)); err != nil {
 		t.Fatalf("reconcileAgenda: %v", err)
 	}
-	kept, ok := session.agenda.next()
+	kept, ok := session.agendaDriver.agenda.next()
 	if !ok {
 		t.Fatal("expected a pending activation to consume")
 	}
@@ -424,7 +424,7 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if len(result.ReplacedRuleRevisions) != 1 || result.ReplacedRuleRevisions[0].RuleID != change2.ID() || result.ReplacedRuleRevisions[0].NewRevisionID != change2.RevisionID() {
 		t.Fatalf("replaced revisions = %#v, want replacement for %q/%q", result.ReplacedRuleRevisions, change2.ID(), change2.RevisionID())
 	}
-	keptAfterApply, ok := session.agenda.activationByKey(kept.key)
+	keptAfterApply, ok := session.agendaDriver.agenda.activationByKey(kept.key)
 	if !ok || keptAfterApply.status != activationStatusConsumed {
 		t.Fatalf("unchanged consumed activation after unrelated change = %#v, ok=%v", keptAfterApply, ok)
 	}
@@ -440,10 +440,10 @@ func TestSessionApplyRulesetKeepsUnchangedRefractionStateAcrossUnrelatedRuleChan
 	if got := keptAfterApply.bindings(); len(got) != 1 || got[0].binding != "person" || got[0].factID != inserted.Fact.ID() || got[0].conditionPath[0] != 0 {
 		t.Fatalf("unchanged activation binding after unrelated change = %#v", got)
 	}
-	if got := session.agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(kept.ruleRevisionID); len(got) != 1 {
 		t.Fatalf("unchanged revision activations after unrelated change = %d, want 1", len(got))
 	}
-	if got := session.agenda.activationsByRuleRevisionID(change2.RevisionID()); len(got) != 1 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(change2.RevisionID()); len(got) != 1 {
 		t.Fatalf("replacement revision activations after unrelated change = %d, want 1", len(got))
 	}
 }
@@ -470,7 +470,7 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before retract = %d, want %d", got, want)
 	}
 
@@ -478,7 +478,7 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if _, err := session.Retract(ctx, department.ID()); err != nil {
 		t.Fatalf("Retract(Engineering department): %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != 0 {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after retract = %d, want 0", got)
 	}
 	assertSessionAgendaMatchesFullReteReconcile(t, session)
@@ -533,7 +533,7 @@ func TestSessionApplyRulesetGraphBetaRemovalStaysEmptyAcrossReplacement(t *testi
 	if session.propagation.runtime == nil || session.propagation.runtime.graphBeta == nil {
 		t.Fatalf("Rete runtime after apply = %#v, want graph beta", session.propagation.runtime)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != 0 {
+	if got := session.agendaDriver.agenda.pendingActivations(); len(got) != 0 {
 		t.Fatalf("pending activations after apply = %#v, want none", got)
 	}
 	afterApplyCounters := session.propagationCounterSnapshot().Totals
@@ -586,7 +586,7 @@ func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSes
 	}
 	beforeSnapshot := mustSnapshot(t, context.Background(), session)
 	beforeEvents := len(collector.Events())
-	beforePending := session.agenda.pendingActivations()
+	beforePending := session.agendaDriver.agenda.pendingActivations()
 
 	workspace2 := NewWorkspace()
 	mustAddTemplate(t, workspace2, TemplateSpec{
@@ -629,14 +629,14 @@ func TestSessionApplyRulesetRejectsIncompatibleTemplateChangesWithoutMutatingSes
 	if got := len(collector.Events()); got != beforeEvents {
 		t.Fatalf("events after incompatible apply = %d, want %d", got, beforeEvents)
 	}
-	if got := session.agenda.pendingActivations(); len(got) != len(beforePending) {
+	if got := session.agendaDriver.agenda.pendingActivations(); len(got) != len(beforePending) {
 		t.Fatalf("pending activations after incompatible apply = %#v, want %#v", got, beforePending)
 	}
 	rule1, ok := revision1.Rule("match-person")
 	if !ok {
 		t.Fatal("expected rule in compiled revision")
 	}
-	if got := session.agenda.activationsByRuleRevisionID(rule1.RevisionID()); len(got) != 1 {
+	if got := session.agendaDriver.agenda.activationsByRuleRevisionID(rule1.RevisionID()); len(got) != 1 {
 		t.Fatalf("existing activation index after incompatible apply = %d, want 1", len(got))
 	}
 	if got := inserted.Fact.ID(); got.IsZero() {

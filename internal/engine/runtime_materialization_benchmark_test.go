@@ -164,8 +164,8 @@ func BenchmarkRunActionOriginMultiDelta(b *testing.B) {
 		if result.Status != RunCompleted || result.Fired != 3 {
 			b.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
 		}
-		if session.agendaDirty || !session.agendaReady || session.propagation.runAgendaPending {
-			b.Fatalf("agenda state = dirty %v ready %v pending %v, want clean ready no pending", session.agendaDirty, session.agendaReady, session.propagation.runAgendaPending)
+		if session.agendaDriver.dirty || !session.agendaDriver.ready || session.propagation.runAgendaPending {
+			b.Fatalf("agenda state = dirty %v ready %v pending %v, want clean ready no pending", session.agendaDriver.dirty, session.agendaDriver.ready, session.propagation.runAgendaPending)
 		}
 		benchmarkRunResult = result
 	}
@@ -200,7 +200,7 @@ func mustActionContextFunctionFiringActivation(tb testing.TB) (*Session, activat
 	if _, err := session.Assert(context.Background(), event.Key(), mustFields(tb, map[string]any{"id": "e-1"})); err != nil {
 		tb.Fatalf("Assert: %v", err)
 	}
-	pending := session.agenda.pendingActivations()
+	pending := session.agendaDriver.agenda.pendingActivations()
 	if len(pending) != 1 {
 		tb.Fatalf("pending activations = %d, want 1", len(pending))
 	}
@@ -791,7 +791,7 @@ func BenchmarkReteGraphPureResidualJoin(b *testing.B) {
 		if result.Status != AssertInserted {
 			b.Fatalf("assert status = %v, want %v", result.Status, AssertInserted)
 		}
-		if got := len(session.agenda.pendingActivations()); got != thresholds {
+		if got := len(session.agendaDriver.agenda.pendingActivations()); got != thresholds {
 			b.Fatalf("pending activations = %d, want %d", got, thresholds)
 		}
 		benchmarkAssertResult = result
@@ -918,7 +918,7 @@ func mustGraphRemovalSparseBenchmarkSession(tb testing.TB, revision *Ruleset, em
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		tb.Fatalf("initial reconcileAgenda: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), retainedPairs+2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), retainedPairs+2; got != want {
 		tb.Fatalf("pending activations = %d, want %d", got, want)
 	}
 	return session
@@ -1123,7 +1123,7 @@ func mustGraphRemovalBenchmarkSession(tb testing.TB, revision *Ruleset, employee
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		tb.Fatalf("initial reconcileAgenda: %v", err)
 	}
-	if got := len(session.agenda.pendingActivations()); got != employees {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != employees {
 		tb.Fatalf("pending activations = %d, want %d", got, employees)
 	}
 	return session
@@ -1303,7 +1303,7 @@ func mustGraphNegativePropagationBenchmarkSession(tb testing.TB, revision *Rules
 	if _, err := session.reconcileAgenda(context.Background(), snapshot); err != nil {
 		tb.Fatalf("initial reconcileAgenda: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), tc.initialTerminalRows(); got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), tc.initialTerminalRows(); got != want {
 		tb.Fatalf("pending activations = %d, want %d", got, want)
 	}
 	return session
@@ -1737,7 +1737,7 @@ func reportPureResidualJoinBenchmarkCounters(tb testing.TB, revision *Ruleset, t
 	if result.Status != AssertInserted {
 		tb.Fatalf("diagnostic assert status = %v, want %v", result.Status, AssertInserted)
 	}
-	if got := len(session.agenda.pendingActivations()); got != thresholds {
+	if got := len(session.agendaDriver.agenda.pendingActivations()); got != thresholds {
 		tb.Fatalf("diagnostic pending activations = %d, want %d", got, thresholds)
 	}
 	snapshot := session.propagationCounterSnapshot()

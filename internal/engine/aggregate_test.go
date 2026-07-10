@@ -371,7 +371,7 @@ func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing
 	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 1; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 1; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -970,7 +970,7 @@ func TestAccumulateBucketedModifyUnobservedMemberSlotRefreshesAggregateMemory(t 
 	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -1127,7 +1127,7 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	if _, err := session.reconcileAgendaInternal(context.Background()); err != nil {
 		t.Fatalf("reconcileAgendaInternal: %v", err)
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations before modify = %d, want %d", got, want)
 	}
 
@@ -1155,7 +1155,7 @@ func TestAccumulateBucketedModifyUnobservedOuterSlotRefreshesAggregateMemory(t *
 	} else if !ok {
 		t.Fatal("apply note delta unexpectedly skipped")
 	}
-	if got, want := len(session.agenda.pendingActivations()), 2; got != want {
+	if got, want := len(session.agendaDriver.agenda.pendingActivations()), 2; got != want {
 		t.Fatalf("pending activations after note modify = %d, want %d", got, want)
 	}
 	snapshot := session.propagationCounterSnapshot()
