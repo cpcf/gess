@@ -303,7 +303,7 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 	if s == nil {
 		return
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if !s.hasEventListenersFor(EventRuleFired) {
 		return
 	}
@@ -323,8 +323,8 @@ func (s *Session) emitRuleFiredEvent(ctx context.Context, runID RunID, activatio
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
 		RunID:          runID,
-		Sequence:       s.nextEventSequence,
-		Timestamp:      s.eventClock(),
+		Sequence:       s.diagnostics.nextEventSequence,
+		Timestamp:      s.diagnostics.now(),
 		Type:           EventRuleFired,
 		Severity:       EventSeverityInfo,
 		Generation:     activation.Generation(),
@@ -341,7 +341,7 @@ func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activa
 	if s == nil {
 		return
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if !s.hasEventListenersFor(EventActionFailed) {
 		return
 	}
@@ -353,8 +353,8 @@ func (s *Session) emitActionFailedEvent(ctx context.Context, runID RunID, activa
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
 		RunID:          runID,
-		Sequence:       s.nextEventSequence,
-		Timestamp:      s.eventClock(),
+		Sequence:       s.diagnostics.nextEventSequence,
+		Timestamp:      s.diagnostics.now(),
 		Type:           EventActionFailed,
 		Severity:       EventSeverityError,
 		Generation:     activation.Generation(),

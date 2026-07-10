@@ -208,7 +208,7 @@ func (s *Session) Explain(ctx context.Context, id FactID, opts ...ExplainOption)
 	if s == nil || s.closed {
 		return Derivation{}, ErrClosedSession
 	}
-	if s.explainLog == nil {
+	if !s.diagnostics.hasExplainLog() {
 		return Derivation{}, ErrExplainLogUnavailable
 	}
 	snapshot, err := s.Snapshot(ctx)
@@ -223,7 +223,7 @@ func (s *Session) Explain(ctx context.Context, id FactID, opts ...ExplainOption)
 	// fresh read of the live s.revision field: Snapshot has released the lock,
 	// and ApplyRuleset may replace s.revision concurrently. Using the captured
 	// revision keeps enrichment race-free and consistent with the derivation.
-	s.explainLog.enrich(&derivation, snapshot.revision)
+	s.diagnostics.enrich(&derivation, snapshot.revision)
 	return derivation, nil
 }
 

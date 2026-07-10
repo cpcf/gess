@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 type sessionForkFieldPolicy uint8
@@ -59,11 +60,13 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "initialCount", policy: forkRebuiltDerived, rationale: "the count is derived from the child's initial facts"},
 	{name: "compiledInitials", policy: forkRebuiltDerived, rationale: "compiled initial facts are rebuilt for the child configuration"},
 	{name: "resetBeforeSnapshot", policy: forkCopied, rationale: "the inherited option is a value"},
-	{name: "listeners", policy: forkConfiguredFresh, rationale: "listeners are not inherited implicitly and come from child options"},
-	{name: "allEventListeners", policy: forkRebuiltDerived, rationale: "the aggregate is counted from the child's listeners"},
-	{name: "eventListenerCounts", policy: forkRebuiltDerived, rationale: "subscription counts are rebuilt from the child's listeners"},
-	{name: "explainLog", policy: forkConfiguredFresh, rationale: "explain capture is independently configured for the child"},
-	{name: "eventClock", policy: forkConfiguredFresh, rationale: "the child receives an option-provided clock or a fresh default"},
+	{name: "diagnostics", policy: forkConfiguredFresh, rationale: "the child receives a named diagnostics owner built from child options with copied sequence continuity"},
+	{name: "diagnostics.listeners", policy: forkConfiguredFresh, rationale: "listeners are not inherited implicitly and come from child options"},
+	{name: "diagnostics.allEventListeners", policy: forkRebuiltDerived, rationale: "the aggregate is counted from the child's listeners"},
+	{name: "diagnostics.eventListenerCounts", policy: forkRebuiltDerived, rationale: "subscription counts are rebuilt from the child's listeners"},
+	{name: "diagnostics.explainLog", policy: forkConfiguredFresh, rationale: "explain capture is independently configured for the child"},
+	{name: "diagnostics.eventClock", policy: forkConfiguredFresh, rationale: "the child receives an option-provided clock or a fresh default"},
+	{name: "diagnostics.nextEventSequence", policy: forkCopied, rationale: "event sequence continuity is part of the snapshot"},
 	{name: "output", policy: forkCopied, rationale: "the writer is inherited by interface value unless an option replaces it"},
 	{name: "closed", policy: forkReinitializedTransient, rationale: "a successfully created child starts open"},
 	{name: "runGuard", policy: forkReinitializedTransient, rationale: "the child owns a new run semaphore"},
@@ -113,7 +116,6 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "backchain.activeDemandCascade", policy: forkReinitializedTransient, rationale: "no demand cascade is active while the child is constructed"},
 	{name: "backchain.activeQueryProof", policy: forkReinitializedTransient, rationale: "query proof ownership never crosses the fork boundary"},
 	{name: "backchain.queryProofScratch", policy: forkReinitializedTransient, rationale: "session-owned proof scratch starts empty"},
-	{name: "nextEventSequence", policy: forkCopied, rationale: "event sequence continuity is part of the snapshot"},
 }
 
 func TestSessionForkFieldOwnershipComplete(t *testing.T) {
@@ -167,6 +169,68 @@ func TestSessionForkFieldOwnershipComplete(t *testing.T) {
 	slices.Sort(stale)
 	if len(stale) > 0 {
 		t.Errorf("fork policy entries for fields no longer on Session: %v", stale)
+	}
+}
+
+func TestSessionForkOwnsFreshDiagnosticsExporter(t *testing.T) {
+	ctx := context.Background()
+	parentEvents := &testEventCollector{}
+	parentTime := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	parent, err := NewSession(
+		mustCompile(t),
+		WithEventListener(parentEvents),
+		WithExplainLog(),
+		WithEventClock(func() time.Time { return parentTime }),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := parent.assertByName(ctx, "diagnostic", mustFields(t, map[string]any{"owner": "parent"})); err != nil {
+		t.Fatalf("parent assert: %v", err)
+	}
+
+	childEvents := &testEventCollector{}
+	childTime := parentTime.Add(time.Hour)
+	child, err := parent.Fork(
+		ctx,
+		WithEventListener(childEvents),
+		WithExplainLog(),
+		WithEventClock(func() time.Time { return childTime }),
+	)
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if child.diagnostics.explainLog == parent.diagnostics.explainLog {
+		t.Fatal("fork shares the parent explain log")
+	}
+	if child.diagnostics.explainLog.total != 0 {
+		t.Fatalf("fork explain history entries = %d, want 0", child.diagnostics.explainLog.total)
+	}
+	if child.diagnostics.nextEventSequence != parent.diagnostics.nextEventSequence {
+		t.Fatalf("fork next event sequence = %d, want parent sequence %d", child.diagnostics.nextEventSequence, parent.diagnostics.nextEventSequence)
+	}
+
+	if _, err := child.assertByName(ctx, "diagnostic", mustFields(t, map[string]any{"owner": "child"})); err != nil {
+		t.Fatalf("child assert: %v", err)
+	}
+	if got := len(parentEvents.Events()); got != 1 {
+		t.Fatalf("parent listener events after child assert = %d, want 1", got)
+	}
+	childRecorded := childEvents.Events()
+	if len(childRecorded) != 1 {
+		t.Fatalf("child listener events = %d, want 1", len(childRecorded))
+	}
+	if got, want := childRecorded[0].Sequence, uint64(2); got != want {
+		t.Fatalf("child event sequence = %d, want %d", got, want)
+	}
+	if got := childRecorded[0].Timestamp; got != childTime {
+		t.Fatalf("child event timestamp = %v, want configured child clock %v", got, childTime)
+	}
+	if got := parent.diagnostics.explainLog.total; got != 1 {
+		t.Fatalf("parent explain history entries after child assert = %d, want 1", got)
+	}
+	if got := child.diagnostics.explainLog.total; got != 1 {
+		t.Fatalf("child explain history entries = %d, want 1", got)
 	}
 }
 

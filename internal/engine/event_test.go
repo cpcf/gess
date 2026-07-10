@@ -265,8 +265,8 @@ func TestSessionEventMaskSkipsFactEventConstruction(t *testing.T) {
 	if clockCalls != 0 {
 		t.Fatalf("event clock calls = %d, want 0 masked fact event envelopes", clockCalls)
 	}
-	if session.nextEventSequence != 3 {
-		t.Fatalf("next event sequence = %d, want 3: masked events skip construction but still advance the global sequence", session.nextEventSequence)
+	if session.diagnostics.nextEventSequence != 3 {
+		t.Fatalf("next event sequence = %d, want 3: masked events skip construction but still advance the global sequence", session.diagnostics.nextEventSequence)
 	}
 }
 

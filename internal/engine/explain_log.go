@@ -340,7 +340,7 @@ func (e explainLogEntry) firing(revision *Ruleset) *Firing {
 // is attached and is a read of already-computed state: it does not change
 // firing semantics, ordering, or refraction.
 func (s *Session) captureFiringBindings(rule compiledRule, activation activation, actionCtx *actionContext) {
-	if s.explainLog == nil {
+	if !s.diagnostics.hasExplainLog() {
 		return
 	}
 	entries := activation.bindings()
@@ -368,7 +368,7 @@ func (s *Session) captureFiringBindings(rule compiledRule, activation activation
 			bindings = append(bindings, BindingValue{Name: "?" + name, Value: cloneValue(actionCtx.rhsBinds.values[name])})
 		}
 	}
-	s.explainLog.captureBindings(activation.activationID(), bindings)
+	s.diagnostics.captureBindings(activation.activationID(), bindings)
 }
 
 func mutatedFactID(event Event) FactID {

@@ -2029,7 +2029,7 @@ func (s *Session) executeActivationActionsInternal(ctx context.Context, runID Ru
 		}
 	}
 
-	if s.explainLog != nil {
+	if s.diagnostics.hasExplainLog() {
 		var ctxPtr *actionContext
 		if actionCtxReady {
 			ctxPtr = &actionCtx

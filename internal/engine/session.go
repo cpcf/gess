@@ -159,11 +159,7 @@ type Session struct {
 	initialCount         int
 	compiledInitials     []compiledSessionInitialFact
 	resetBeforeSnapshot  bool
-	listeners            []eventListenerRegistration
-	allEventListeners    int
-	eventListenerCounts  map[EventType]int
-	explainLog           *explainLog
-	eventClock           func() time.Time
+	diagnostics          sessionDiagnosticsExporter
 	output               io.Writer
 	closed               bool
 	runGuard             chan struct{}
@@ -180,10 +176,9 @@ type Session struct {
 		lock   chan struct{}
 	}
 
-	nextRunSequence   uint64
-	tms               sessionTMSStore
-	backchain         sessionBackchainStore
-	nextEventSequence uint64
+	nextRunSequence uint64
+	tms             sessionTMSStore
+	backchain       sessionBackchainStore
 }
 
 type queuedMutation struct {
@@ -227,15 +222,11 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 			opt(&cfg)
 		}
 	}
-	if cfg.eventClock == nil {
-		cfg.eventClock = time.Now
-	}
 	if !cfg.strategy.valid() {
 		return nil, &ValidationError{Reason: "invalid agenda strategy"}
 	}
 
-	listeners := cloneEventListenerRegistrations(cfg.listeners)
-	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
+	diagnostics := newSessionDiagnosticsExporter(cfg, 0)
 	initials := cloneSessionInitialFacts(cfg.initials)
 	globalValues, err := compileSessionGlobals(revision, cfg.globals)
 	if err != nil {
@@ -260,7 +251,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	}
 	agendaDriver := newSessionAgendaDriver(cfg.strategy)
 	agenda := agendaDriver.agenda
-	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(listeners) && rete.supportsInitialAgendaReset()
+	useInitialAgenda := !eventListenerRegistrationsHaveAnySubscriptions(diagnostics.listeners) && rete.supportsInitialAgendaReset()
 	var initialDelta reteAgendaDelta
 	if useInitialAgenda {
 		initialDelta, err = rete.resetGraphBetaFromWorkspaceForGenerationWithInitialAgenda(context.Background(), state, state.generation, agenda)
@@ -281,11 +272,7 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 		initialCount:        len(initials),
 		compiledInitials:    compiledInitials,
 		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
-		listeners:           listeners,
-		allEventListeners:   allEventListeners,
-		eventListenerCounts: eventListenerCounts,
-		explainLog:          cfg.explainLog,
-		eventClock:          cfg.eventClock,
+		diagnostics:         diagnostics,
 		output:              cfg.output,
 		backchain:           newSessionBackchainStore(cfg.demandLimit),
 		runGuard:            make(chan struct{}, 1),
@@ -765,15 +752,11 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 			opt(&cfg)
 		}
 	}
-	if cfg.eventClock == nil {
-		cfg.eventClock = time.Now
-	}
 	if !cfg.strategy.valid() {
 		return nil, &ValidationError{Reason: "invalid agenda strategy"}
 	}
 
-	listeners := cloneEventListenerRegistrations(cfg.listeners)
-	allEventListeners, eventListenerCounts := countEventListenerSubscriptions(listeners)
+	diagnostics := newSessionDiagnosticsExporter(cfg, s.diagnostics.nextEventSequence)
 	initials := cloneSessionInitialFacts(cfg.initials)
 	globalValues, err := compileSessionGlobals(s.revision, cfg.globals)
 	if err != nil {
@@ -805,11 +788,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 		initialCount:        len(initials),
 		compiledInitials:    compiledInitials,
 		resetBeforeSnapshot: cfg.resetBeforeSnapshot,
-		listeners:           listeners,
-		allEventListeners:   allEventListeners,
-		eventListenerCounts: eventListenerCounts,
-		explainLog:          cfg.explainLog,
-		eventClock:          cfg.eventClock,
+		diagnostics:         diagnostics,
 		output:              cfg.output,
 		backchain:           s.backchain.forkForRebuild(cfg.demandLimit),
 		runGuard:            make(chan struct{}, 1),
@@ -817,9 +796,8 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 			mutate chan struct{}
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
-		nextRunSequence:   s.nextRunSequence,
-		tms:               s.tms.cloneForFork(),
-		nextEventSequence: s.nextEventSequence,
+		nextRunSequence: s.nextRunSequence,
+		tms:             s.tms.cloneForFork(),
 	}
 	if fork.id == "" {
 		s.forkCount++
@@ -1615,13 +1593,13 @@ func (s *Session) insertLogicalFactImmediate(ctx context.Context, name string, t
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence,
-			Timestamp:      s.eventClock(),
+			Sequence:       s.diagnostics.nextEventSequence,
+			Timestamp:      s.diagnostics.now(),
 			Type:           EventFactAsserted,
 			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
@@ -1781,13 +1759,13 @@ func (s *Session) insertFactImmediate(ctx context.Context, name string, template
 		DuplicateKey: duplicateKey,
 		Delta:        &delta,
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if s.hasEventListenersFor(EventFactAsserted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence,
-			Timestamp:      s.eventClock(),
+			Sequence:       s.diagnostics.nextEventSequence,
+			Timestamp:      s.diagnostics.now(),
 			Type:           EventFactAsserted,
 			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
@@ -2391,7 +2369,7 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 	if s == nil || fact == nil {
 		return
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if !s.hasEventListenersFor(EventFactAsserted) {
 		return
 	}
@@ -2413,8 +2391,8 @@ func (s *Session) emitGeneratedAssertEvent(ctx context.Context, fact *workingFac
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      s.revision.ID(),
-		Sequence:       s.nextEventSequence,
-		Timestamp:      s.eventClock(),
+		Sequence:       s.diagnostics.nextEventSequence,
+		Timestamp:      s.diagnostics.now(),
 		Type:           EventFactAsserted,
 		Generation:     s.factStore.generation,
 		Recency:        fact.recency,
@@ -2628,13 +2606,13 @@ func (s *Session) removeFactImmediate(ctx context.Context, id FactID, origin mut
 		Fact:   before,
 		Delta:  &delta,
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if s.hasEventListenersFor(EventFactRetracted) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence,
-			Timestamp:      s.eventClock(),
+			Sequence:       s.diagnostics.nextEventSequence,
+			Timestamp:      s.diagnostics.now(),
 			Type:           EventFactRetracted,
 			Generation:     s.factStore.generation,
 			Recency:        factRecency,
@@ -3111,7 +3089,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 			OldGeneration: oldGeneration,
 		},
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if s.hasEventListenersFor(EventReset) {
 		delta := MutationDelta{
 			Kind:          MutationReset,
@@ -3121,8 +3099,8 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 		s.emitEvent(ctx, Event{
 			SessionID:  s.id,
 			RulesetID:  s.revision.ID(),
-			Sequence:   s.nextEventSequence,
-			Timestamp:  s.eventClock(),
+			Sequence:   s.diagnostics.nextEventSequence,
+			Timestamp:  s.diagnostics.now(),
 			Type:       EventReset,
 			Generation: s.factStore.generation,
 			FactIDs:    nil,
@@ -3773,7 +3751,7 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 		if change.kind == agendaChangeDeactivated {
 			eventType = EventRuleDeactivated
 		}
-		s.nextEventSequence++
+		s.diagnostics.nextSequence()
 		if !s.hasEventListenersFor(eventType) {
 			continue
 		}
@@ -3785,7 +3763,7 @@ func (s *Session) emitAgendaEvents(ctx context.Context, changes []agendaChange) 
 				source = rule.source
 			}
 		}
-		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, source, s.nextEventSequence, s.eventClock()))
+		s.emitEvent(ctx, change.eventWithRuleID(s.id, rulesetID, ruleID, source, s.diagnostics.nextEventSequence, s.diagnostics.now()))
 	}
 }
 
@@ -4054,13 +4032,13 @@ func (s *Session) modifyImmediate(ctx context.Context, id FactID, patch FactPatc
 		Fact:   after,
 		Delta:  &delta,
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if s.hasEventListenersFor(EventFactModified) {
 		s.emitEvent(ctx, Event{
 			SessionID:      s.id,
 			RulesetID:      s.revision.ID(),
-			Sequence:       s.nextEventSequence,
-			Timestamp:      s.eventClock(),
+			Sequence:       s.diagnostics.nextEventSequence,
+			Timestamp:      s.diagnostics.now(),
 			Type:           EventFactModified,
 			Generation:     s.factStore.generation,
 			Recency:        fact.recency,
@@ -7370,25 +7348,17 @@ func (s *Session) unlock() {
 }
 
 func (s *Session) emitEvent(ctx context.Context, event Event) {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil {
 		return
 	}
-	for _, registration := range s.listeners {
-		if !registration.subscribesTo(event.Type) {
-			continue
-		}
-		_ = registration.listener.HandleEvent(ctx, event.clone())
-	}
+	s.diagnostics.emit(ctx, event)
 }
 
 func (s *Session) hasEventListenersFor(eventType EventType) bool {
-	if s == nil || len(s.listeners) == 0 {
+	if s == nil {
 		return false
 	}
-	if s.allEventListeners > 0 {
-		return true
-	}
-	return s.eventListenerCounts[eventType] > 0
+	return s.diagnostics.hasListenersFor(eventType)
 }
 
 func (s *Session) hasAgendaEventListeners() bool {

@@ -220,9 +220,7 @@ func whatIfDerivations(fork *Session, snapshot Snapshot, added []FactSnapshot) (
 		if !ok {
 			return nil, fmt.Errorf("gess: what-if explain failed for fact %s: %w", fact.ID(), ErrFactNotFound)
 		}
-		if fork.explainLog != nil {
-			fork.explainLog.enrich(&derivation, snapshot.revision)
-		}
+		fork.diagnostics.enrich(&derivation, snapshot.revision)
 		derivations = append(derivations, derivation)
 	}
 	return derivations, nil

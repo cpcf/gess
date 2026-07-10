@@ -520,7 +520,7 @@ func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventTy
 	if s == nil {
 		return
 	}
-	s.nextEventSequence++
+	s.diagnostics.nextSequence()
 	if !s.hasEventListenersFor(eventType) {
 		return
 	}
@@ -532,8 +532,8 @@ func (s *Session) emitLogicalSupportEvent(ctx context.Context, eventType EventTy
 	s.emitEvent(ctx, Event{
 		SessionID:      s.id,
 		RulesetID:      rulesetID,
-		Sequence:       s.nextEventSequence,
-		Timestamp:      s.eventClock(),
+		Sequence:       s.diagnostics.nextEventSequence,
+		Timestamp:      s.diagnostics.now(),
 		Type:           eventType,
 		Severity:       EventSeverityInfo,
 		Generation:     edge.Generation,

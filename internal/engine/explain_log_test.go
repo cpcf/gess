@@ -210,7 +210,7 @@ func TestExplainLogRecordsRetractLineage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	log := session.explainLog
+	log := session.diagnostics.explainLog
 
 	if _, err := session.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-1"})); err != nil {
 		t.Fatalf("Assert: %v", err)
@@ -281,14 +281,14 @@ func TestSessionExplainResetEmptiesLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
-	if entries, _ := session.explainLog.historyForFact(record.Fact.ID()); len(entries) == 0 {
+	if entries, _ := session.diagnostics.explainLog.historyForFact(record.Fact.ID()); len(entries) == 0 {
 		t.Fatalf("log did not record the assert")
 	}
 	if _, err := session.Reset(context.Background()); err != nil {
 		t.Fatalf("Reset: %v", err)
 	}
-	if session.explainLog.total != 0 {
-		t.Fatalf("log total after reset = %d, want 0", session.explainLog.total)
+	if session.diagnostics.explainLog.total != 0 {
+		t.Fatalf("log total after reset = %d, want 0", session.diagnostics.explainLog.total)
 	}
 }
 
@@ -305,7 +305,7 @@ func TestSessionExplainForkRequiresReoptIn(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	var parentMaxSeq uint64
-	for _, entries := range session.explainLog.byFact {
+	for _, entries := range session.diagnostics.explainLog.byFact {
 		for _, entry := range entries {
 			if entry.sequence > parentMaxSeq {
 				parentMaxSeq = entry.sequence
@@ -329,14 +329,14 @@ func TestSessionExplainForkRequiresReoptIn(t *testing.T) {
 		t.Fatalf("Fork(WithExplainLog): %v", err)
 	}
 	defer loggedFork.Close()
-	if loggedFork.explainLog.total != 0 {
-		t.Fatalf("re-opted fork log total = %d, want 0 (fresh)", loggedFork.explainLog.total)
+	if loggedFork.diagnostics.explainLog.total != 0 {
+		t.Fatalf("re-opted fork log total = %d, want 0 (fresh)", loggedFork.diagnostics.explainLog.total)
 	}
 	if _, err := loggedFork.Assert(context.Background(), triggerKey, mustFields(t, map[string]any{"id": "t-2"})); err != nil {
 		t.Fatalf("fork Assert: %v", err)
 	}
 	var forkMinSeq uint64
-	for _, entries := range loggedFork.explainLog.byFact {
+	for _, entries := range loggedFork.diagnostics.explainLog.byFact {
 		for _, entry := range entries {
 			if forkMinSeq == 0 || entry.sequence < forkMinSeq {
 				forkMinSeq = entry.sequence

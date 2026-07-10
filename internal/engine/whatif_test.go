@@ -68,10 +68,10 @@ func TestWhatIfExplainForwardsLogOptions(t *testing.T) {
 		t.Fatal("ForkSession nil, want retained fork")
 	}
 	defer report.ForkSession.Close()
-	if report.ForkSession.explainLog == nil {
+	if report.ForkSession.diagnostics.explainLog == nil {
 		t.Fatal("fork explain log is nil")
 	}
-	if got := report.ForkSession.explainLog.maxEntries; got != 17 {
+	if got := report.ForkSession.diagnostics.explainLog.maxEntries; got != 17 {
 		t.Fatalf("explain log max entries = %d, want forwarded value 17", got)
 	}
 }
