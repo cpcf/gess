@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -278,7 +277,9 @@ func TestAccumulateGraphMatchMaterializesFromSourceBoundary(t *testing.T) {
 	}
 }
 
-func TestAccumulateUnsupportedGraphShapeReturnsRuntimeError(t *testing.T) {
+func TestAccumulateMultipleStagesUpdateAcrossMutations(t *testing.T) {
+	ctx := context.Background()
+	var observed []Fields
 	workspace := NewWorkspace()
 	item := mustAddTemplate(t, workspace, TemplateSpec{
 		Name:            "item",
@@ -288,7 +289,18 @@ func TestAccumulateUnsupportedGraphShapeReturnsRuntimeError(t *testing.T) {
 			{Name: "amount", Kind: ValueInt, Required: true},
 		},
 	})
-	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ActionContext) error { return nil }})
+	mustAddAction(t, workspace, ActionSpec{Name: "record", Fn: func(ctx ActionContext) error {
+		count, ok := ctx.BindingValue("left_count")
+		if !ok {
+			return errors.New("missing left_count binding")
+		}
+		total, ok := ctx.BindingValue("right_total")
+		if !ok {
+			return errors.New("missing right_total binding")
+		}
+		observed = append(observed, Fields{"count": count, "total": total})
+		return nil
+	}})
 	mustAddRule(t, workspace, RuleSpec{
 		Name: "two-aggregates",
 		ConditionTree: And{Conditions: []ConditionSpec{
@@ -303,23 +315,40 @@ func TestAccumulateUnsupportedGraphShapeReturnsRuntimeError(t *testing.T) {
 		}},
 		Actions: []RuleActionSpec{{Name: "record"}},
 	})
-	revision := mustCompileWorkspace(t, workspace)
-	runtime, err := newReteRuntime(revision)
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "multiple-aggregate-stages-session")
+	if !session.propagation.runtime.supportsGraphBeta() {
+		t.Fatalf("runtime does not support multiple aggregate stages: %#v", session.propagation.runtime.plan.unsupported)
+	}
+	first, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "a", "amount": 3}))
 	if err != nil {
-		t.Fatalf("newReteRuntime: %v", err)
+		t.Fatalf("assert first: %v", err)
 	}
-	if runtime.supportsGraphBeta() {
-		t.Fatal("runtime supports graph beta for unsupported aggregate shape")
+	second, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{"id": "b", "amount": 5}))
+	if err != nil {
+		t.Fatalf("assert second: %v", err)
 	}
-	err = runtime.validateExecutableGraphBetaRuntime()
-	if !errors.Is(err, ErrUnsupportedRuntime) {
-		t.Fatalf("validateExecutableGraphBetaRuntime error = %v, want ErrUnsupportedRuntime", err)
-	}
-	for _, want := range []string{"aggregate", `rule="two-aggregates"`, "multiple aggregate conditions"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("unsupported runtime error %q does not contain %q", err.Error(), want)
+	assertRun := func(wantCount, wantTotal int) {
+		t.Helper()
+		assertSessionAgendaMatchesFullReteReconcile(t, session)
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
 		}
+		if result.Fired == 1 && len(observed) == 1 && observed[0]["count"].Equal(mustValue(t, wantCount)) && observed[0]["total"].Equal(mustValue(t, wantTotal)) {
+			observed = nil
+			return
+		}
+		t.Fatalf("fired/observed = %d/%v, missing count=%d total=%d", result.Fired, observed, wantCount, wantTotal)
 	}
+	assertRun(2, 8)
+	if _, err := session.Modify(ctx, second.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"amount": 2})}); err != nil {
+		t.Fatalf("modify second: %v", err)
+	}
+	assertRun(2, 5)
+	if _, err := session.Retract(ctx, first.Fact.ID()); err != nil {
+		t.Fatalf("retract first: %v", err)
+	}
+	assertRun(1, 2)
 }
 
 func TestAccumulateModifyUnobservedMemberSlotRefreshesAggregateMemory(t *testing.T) {

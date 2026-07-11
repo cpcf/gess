@@ -896,6 +896,47 @@ func TestQueryAggregateReturnsParameterizedValuesAndTracksUpdates(t *testing.T) 
 	assertQueryRowIntValue(t, rows[0], "total", 8)
 }
 
+func TestQueryMultipleAggregateStages(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "item",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueString, Required: true},
+			{Name: "amount", Kind: ValueInt, Required: true},
+		},
+	})
+	if err := workspace.AddQuery(QuerySpec{
+		Name: "multi-aggregate",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Accumulate(Match{Binding: "counted", Target: TemplateKeyFact(item.Key())}, Count().As("count")),
+			Accumulate(Match{Binding: "summed", Target: TemplateKeyFact(item.Key())}, Sum(BindingPath("summed", Path("amount"))).As("total")),
+		}},
+		Returns: []QueryReturnSpec{
+			ReturnValue("count", BindingValueExpr{Binding: "count"}),
+			ReturnValue("total", BindingValueExpr{Binding: "total"}),
+		},
+	}); err != nil {
+		t.Fatalf("AddQuery: %v", err)
+	}
+	session, err := NewSession(mustCompileWorkspace(t, workspace), WithInitialFacts(
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "a", "amount": 3})},
+		SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"id": "b", "amount": 5})},
+	))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	rows, err := session.QueryAll(ctx, "multi-aggregate", nil)
+	if err != nil {
+		t.Fatalf("QueryAll: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	assertQueryRowIntValue(t, rows[0], "count", 2)
+	assertQueryRowIntValue(t, rows[0], "total", 8)
+}
+
 func TestQueryAggregateCountReturnsEmptyParameterizedBucket(t *testing.T) {
 	ctx := context.Background()
 	workspace := NewWorkspace()

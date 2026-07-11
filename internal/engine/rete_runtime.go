@@ -919,38 +919,21 @@ func ruleAggregateUnsupportedReasons(rule compiledRule) []reteUnsupportedReason 
 	hasAggregate := false
 	var unsupported []reteUnsupportedReason
 	for _, branch := range rule.executionConditionBranches() {
-		aggregateIndex := -1
 		for i, plan := range branch.plans {
 			if plan.aggregate == nil {
 				continue
 			}
 			hasAggregate = true
-			if aggregateIndex >= 0 {
+			if !reteGraphSupportsAggregateCondition(plan, i > 0) {
 				unsupported = append(unsupported, reteUnsupportedReason{
 					ruleID:         rule.id,
 					ruleRevisionID: rule.revisionID,
 					conditionID:    plan.id,
 					binding:        plan.binding,
 					kind:           reteUnsupportedAggregate,
-					detail:         "multiple aggregate conditions in one branch are not graph-supported",
+					detail:         "aggregate condition shape is not graph-supported",
 				})
-				continue
 			}
-			aggregateIndex = i
-		}
-		if aggregateIndex < 0 {
-			continue
-		}
-		if !reteGraphSupportsAggregateCondition(branch.plans[aggregateIndex], aggregateIndex > 0) {
-			plan := branch.plans[aggregateIndex]
-			unsupported = append(unsupported, reteUnsupportedReason{
-				ruleID:         rule.id,
-				ruleRevisionID: rule.revisionID,
-				conditionID:    plan.id,
-				binding:        plan.binding,
-				kind:           reteUnsupportedAggregate,
-				detail:         "aggregate condition shape is not graph-supported",
-			})
 		}
 	}
 	if !hasAggregate {

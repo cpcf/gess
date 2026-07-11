@@ -1527,6 +1527,34 @@ func (m *reteGraphAggregateBucket) clear() {
 }
 
 func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {
+	if m == nil {
+		return reteAgendaDelta{}, nil
+	}
+	wasDeferring := m.deferAggregateOutputs
+	if !wasDeferring {
+		m.deferAggregateOutputs = true
+	}
+	delta, err := m.propagateEventImmediate(ctx, event)
+	if wasDeferring {
+		return delta, err
+	}
+	m.deferAggregateOutputs = false
+	if err != nil {
+		m.clearDeferredAggregateOutputs()
+		return delta, err
+	}
+	if err := m.finalizeDeferredAggregateOutputs(event.span, &delta); err != nil {
+		m.clearDeferredAggregateOutputs()
+		return delta, err
+	}
+	added, removed, updates := coalesceTerminalTokenDeltas(m.revision, delta.added, delta.removed)
+	delta.added = added
+	delta.removed = removed
+	delta.updated = append(delta.updated, updates...)
+	return delta, nil
+}
+
+func (m *reteGraphBetaMemory) propagateEventImmediate(ctx context.Context, event reteGraphPropagationEvent) (reteAgendaDelta, error) {
 	switch event.tag {
 	case reteGraphPropagationAdd:
 		if event.workingFact != nil {
@@ -2743,51 +2771,53 @@ func (m *reteGraphBetaMemory) clearDeferredAggregateOutputs() {
 }
 
 func (m *reteGraphBetaMemory) finalizeDeferredAggregateOutputs(span *propagationCounterSpan, delta *reteAgendaDelta) error {
-	if m == nil || len(m.deferredAggregateOrder) == 0 {
+	if m == nil {
 		return nil
 	}
-	if delta == nil {
-		return ErrUnsupportedRuntime
-	}
-	order := make([]deferredAggregateOutputKey, 0, len(m.deferredAggregateOrder))
-	for _, key := range m.deferredAggregateOrder {
-		if _, ok := m.deferredAggregateOutputs[key]; ok {
-			order = append(order, key)
+	for len(m.deferredAggregateOrder) != 0 {
+		if delta == nil {
+			return ErrUnsupportedRuntime
 		}
-	}
-	clear(m.deferredAggregateOutputs)
-	m.deferredAggregateOrder = m.deferredAggregateOrder[:0]
-	slices.SortFunc(order, func(left, right deferredAggregateOutputKey) int {
-		if left.id != right.id {
-			return int(left.id - right.id)
+		order := make([]deferredAggregateOutputKey, 0, len(m.deferredAggregateOrder))
+		for _, key := range m.deferredAggregateOrder {
+			if _, ok := m.deferredAggregateOutputs[key]; ok {
+				order = append(order, key)
+			}
 		}
-		if left.parent.size != right.parent.size {
-			return left.parent.size - right.parent.size
-		}
-		if left.parent.generation != right.parent.generation {
-			if left.parent.generation < right.parent.generation {
+		clear(m.deferredAggregateOutputs)
+		m.deferredAggregateOrder = m.deferredAggregateOrder[:0]
+		slices.SortFunc(order, func(left, right deferredAggregateOutputKey) int {
+			if left.id != right.id {
+				return int(left.id - right.id)
+			}
+			if left.parent.size != right.parent.size {
+				return left.parent.size - right.parent.size
+			}
+			if left.parent.generation != right.parent.generation {
+				if left.parent.generation < right.parent.generation {
+					return -1
+				}
+				return 1
+			}
+			if left.parent.identityState < right.parent.identityState {
 				return -1
 			}
-			return 1
+			if left.parent.identityState > right.parent.identityState {
+				return 1
+			}
+			return 0
+		})
+		for _, key := range order {
+			memory := m.aggregateMemory(key.id)
+			var bucket *reteGraphAggregateBucket
+			if memory != nil {
+				bucket, _ = memory.bucketByKey(key.parent)
+			}
+			if bucket == nil {
+				continue
+			}
+			m.refreshAggregateOutputInternalForce(key.id, bucket, span, nil, delta, true)
 		}
-		if left.parent.identityState < right.parent.identityState {
-			return -1
-		}
-		if left.parent.identityState > right.parent.identityState {
-			return 1
-		}
-		return 0
-	})
-	for _, key := range order {
-		memory := m.aggregateMemory(key.id)
-		var bucket *reteGraphAggregateBucket
-		if memory != nil {
-			bucket, _ = memory.bucketByKey(key.parent)
-		}
-		if bucket == nil {
-			continue
-		}
-		m.refreshAggregateOutputInternal(key.id, bucket, span, nil, delta)
 	}
 	if !delta.supported {
 		return ErrUnsupportedRuntime
@@ -2849,6 +2879,10 @@ func tokenPublicSize(token tokenRef) int {
 }
 
 func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggregateNodeID, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	m.refreshAggregateOutputInternalForce(id, bucket, span, counters, delta, false)
+}
+
+func (m *reteGraphBetaMemory) refreshAggregateOutputInternalForce(id reteGraphAggregateNodeID, bucket *reteGraphAggregateBucket, span *propagationCounterSpan, counters *propagationCounterLedger, delta *reteAgendaDelta, force bool) {
 	if m == nil || delta == nil {
 		return
 	}
@@ -2864,7 +2898,7 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	}
 	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(id)}
 	values, ok := memory.bucketResults(m.context(), node, bucket, m.globalValues)
-	if ok && len(values) == len(node.entries) && bucket.hasValue && aggregateOutputTokenValuesEqual(bucket.token, node, values) {
+	if !force && ok && len(values) == len(node.entries) && bucket.hasValue && aggregateOutputTokenValuesEqual(bucket.token, node, values) {
 		return
 	}
 	if !bucket.token.isZero() {
@@ -2897,8 +2931,18 @@ func (m *reteGraphBetaMemory) refreshAggregateOutputInternal(id reteGraphAggrega
 	// rows that are never stored in any node memory.
 	bucket.token = token
 	bucket.hasValue = true
+	wasDeferring := m.deferAggregateOutputs
+	if !wasDeferring {
+		m.deferAggregateOutputs = true
+	}
 	if err := m.propagateFromStage(stage, token, span, delta); err != nil {
 		delta.supported = false
+	}
+	if !wasDeferring {
+		m.deferAggregateOutputs = false
+		if err := m.finalizeDeferredAggregateOutputs(span, delta); err != nil {
+			delta.supported = false
+		}
 	}
 }
 

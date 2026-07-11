@@ -1022,82 +1022,48 @@ func (g *reteGraph) compileAggregateBranchStages(owner RuleRevisionID, branch co
 	if g == nil || len(branch.plans) == 0 {
 		return reteGraphStageRef{}, false
 	}
-	aggregateIndex := -1
-	for i, plan := range branch.plans {
-		if plan.aggregate == nil {
-			continue
-		}
-		if aggregateIndex >= 0 {
-			return reteGraphStageRef{}, false
-		}
-		aggregateIndex = i
-	}
-	if aggregateIndex < 0 {
-		return reteGraphStageRef{}, false
-	}
-	condition := branch.plans[aggregateIndex]
-	if condition.aggregate.higherOrder != conditionHigherOrderUnknown {
-		return reteGraphStageRef{}, false
-	}
-	if !reteGraphSupportsAggregateCondition(condition, aggregateIndex > 0) {
-		return reteGraphStageRef{}, false
-	}
-
 	var current reteGraphStageRef
+	var currentEntry bindingTupleEntry
 	haveStage := false
-	for conditionIndex := 0; conditionIndex < aggregateIndex; conditionIndex++ {
-		outer := branch.plans[conditionIndex]
-		if outer.aggregate != nil {
-			return reteGraphStageRef{}, false
-		}
-		alphaID := g.compileConditionAlphaForOwner(owner, outer, conditionIndex, alphaIndex, templatesByKey, true)
-		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
-		g.stampStageCondition(alphaRef, owner, branch.id, conditionIndex, outer.id)
-		if alphaID == 0 {
-			return reteGraphStageRef{}, false
-		}
-		if !haveStage {
-			current = alphaRef
-			haveStage = true
+	segmentStart := 0
+	foundAggregate := false
+	for conditionIndex, condition := range branch.plans {
+		if condition.aggregate == nil {
 			continue
 		}
-		betaKind := reteGraphBetaNodeJoin
-		if outer.negated {
-			betaKind = reteGraphBetaNodeNot
+		foundAggregate = true
+		var ok bool
+		current, currentEntry, ok = g.compilePlanSequence(owner, branch.id, branch.plans[segmentStart:conditionIndex], current, currentEntry, haveStage, segmentStart, -1, "", alphaIndex, betaIndex, templatesByKey, true)
+		if !ok && (haveStage || conditionIndex != segmentStart) {
+			return reteGraphStageRef{}, false
 		}
-		outerEntry := graphTokenEntryForCondition(outer)
-		var betaID reteGraphBetaNodeID
-		outputStage := reteGraphStageRef{}
-		if betaKind == reteGraphBetaNodeJoin {
-			betaID, outputStage = g.internJoinWithResidualFilter(betaIndex, current, alphaRef, outer.joins, betaResidualExpressionPredicates(outer.predicates), outerEntry)
-		} else {
-			betaID, _ = g.internBetaNode(betaIndex, betaKind, current, alphaRef, outer.joins, betaResidualExpressionPredicates(outer.predicates))
-			outputStage = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+		haveStage = ok || haveStage
+		entries := graphTokenEntriesForAggregateBranch(branch, condition)
+		if aggregateEntries != nil {
+			entries = aggregateEntries(condition)
 		}
-		g.stampStageCondition(reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}, owner, branch.id, conditionIndex, outer.id)
-		g.stampStageCondition(outputStage, owner, branch.id, conditionIndex, outer.id)
-		leftEntry := bindingTupleEntry{}
-		if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
-			leftEntry = graphTokenEntryForCondition(branch.plans[conditionIndex-1])
+		current, ok = g.compileAggregateStage(owner, branch.id, conditionIndex, condition, current, currentEntry, haveStage, entries, alphaIndex, betaIndex, templatesByKey)
+		if !ok {
+			return reteGraphStageRef{}, false
 		}
-		g.appendStageSuccessor(current, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputLeft,
-			entry:      leftEntry,
-		})
-		g.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputRight,
-			entry:      outerEntry,
-		})
-		current = outputStage
+		currentEntry = bindingTupleEntry{}
+		haveStage = true
+		segmentStart = conditionIndex + 1
 	}
+	if !foundAggregate {
+		return reteGraphStageRef{}, false
+	}
+	current, _, ok := g.compilePlanSequence(owner, branch.id, branch.plans[segmentStart:], current, currentEntry, haveStage, segmentStart, -1, "", alphaIndex, betaIndex, templatesByKey, true)
+	return current, ok
+}
 
-	outerStage := reteGraphStageRef{}
-	if haveStage {
-		outerStage = current
+func (g *reteGraph) compileAggregateStage(owner RuleRevisionID, branchID, conditionIndex int, condition compiledConditionPlan, outer reteGraphStageRef, outerEntry bindingTupleEntry, haveOuter bool, entries []bindingTupleEntry, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
+	if condition.aggregate == nil || condition.aggregate.higherOrder != conditionHigherOrderUnknown || !reteGraphSupportsAggregateCondition(condition, haveOuter) {
+		return reteGraphStageRef{}, false
 	}
-	aggregateInput := reteGraphStageRef{}
+	current := outer
+	currentEntry := outerEntry
+	haveStage := haveOuter
 	inputEntry := bindingTupleEntry{}
 	for inputIndex, input := range condition.aggregate.inputPlans {
 		if input.isTest {
@@ -1105,115 +1071,52 @@ func (g *reteGraph) compileAggregateBranchStages(owner RuleRevisionID, branch co
 				return reteGraphStageRef{}, false
 			}
 			betaID, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeFilter, current, reteGraphStageRef{}, nil, input.testPredicates)
-			g.appendStageSuccessor(current, reteGraphStageSuccessor{
-				betaNodeID: betaID,
-				side:       reteGraphBetaInputLeft,
-			})
+			g.appendStageSuccessor(current, reteGraphStageSuccessor{betaNodeID: betaID, side: reteGraphBetaInputLeft, entry: currentEntry})
 			current = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
-			g.stampStageCondition(current, owner, branch.id, aggregateIndex, condition.id)
-			aggregateInput = current
+			currentEntry = bindingTupleEntry{}
+			g.stampStageCondition(current, owner, branchID, conditionIndex, condition.id)
 			continue
 		}
-		inputAlphaID := g.compileConditionAlphaForOwner(owner, input, aggregateIndex+inputIndex, alphaIndex, templatesByKey, false)
-		inputAlphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(inputAlphaID)}
-		g.stampStageCondition(inputAlphaRef, owner, branch.id, aggregateIndex, condition.id)
-		if inputAlphaID == 0 {
-			return reteGraphStageRef{}, false
-		}
-		inputEntry = graphTokenEntryForCondition(input)
-		if !haveStage {
-			current = inputAlphaRef
-			aggregateInput = inputAlphaRef
-			haveStage = true
-			continue
-		}
-		inputEntry := graphTokenEntryForCondition(input)
-		betaID, outputStage := g.internJoinWithResidualFilter(betaIndex, current, inputAlphaRef, input.joins, betaResidualExpressionPredicates(input.predicates), inputEntry)
-		g.stampStageCondition(reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}, owner, branch.id, aggregateIndex, condition.id)
-		g.stampStageCondition(outputStage, owner, branch.id, aggregateIndex, condition.id)
-		leftEntry := bindingTupleEntry{}
-		if current.kind == reteGraphStageAlpha {
-			if inputIndex == 0 && aggregateIndex > 0 {
-				leftEntry = graphTokenEntryForCondition(branch.plans[aggregateIndex-1])
-			} else if inputIndex > 0 {
-				leftEntry = graphTokenEntryForCondition(condition.aggregate.inputPlans[inputIndex-1])
-			}
-		}
-		g.appendStageSuccessor(current, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputLeft,
-			entry:      leftEntry,
-		})
-		g.appendStageSuccessor(inputAlphaRef, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputRight,
-			entry:      inputEntry,
-		})
-		current = outputStage
-		aggregateInput = current
-	}
-	if aggregateInput.kind == reteGraphStageUnknown || inputEntry.conditionID == "" {
-		return reteGraphStageRef{}, false
-	}
-
-	outer := reteGraphStageRef{}
-	if aggregateIndex > 0 {
-		outer = outerStage
-	}
-	entries := graphTokenEntriesForAggregateBranch(branch, condition)
-	if aggregateEntries != nil {
-		entries = aggregateEntries(condition)
-	}
-	aggregateID := g.appendAggregate(aggregateInput, outer, inputEntry, condition.id, condition.bindingSlot, condition.aggregate.specs, entries)
-	aggregateRef := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}
-	g.stampStageCondition(aggregateRef, owner, branch.id, aggregateIndex, condition.id)
-	current = aggregateRef
-	haveStage = true
-
-	for conditionIndex := aggregateIndex + 1; conditionIndex < len(branch.plans); conditionIndex++ {
-		later := branch.plans[conditionIndex]
-		if later.aggregate != nil {
-			return reteGraphStageRef{}, false
-		}
-		alphaID := g.compileConditionAlphaForOwner(owner, later, conditionIndex, alphaIndex, templatesByKey, true)
-		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
-		g.stampStageCondition(alphaRef, owner, branch.id, conditionIndex, later.id)
+		alphaID := g.compileConditionAlphaForOwner(owner, input, conditionIndex+inputIndex, alphaIndex, templatesByKey, false)
 		if alphaID == 0 {
 			return reteGraphStageRef{}, false
 		}
-		betaKind := reteGraphBetaNodeJoin
-		if later.negated {
-			betaKind = reteGraphBetaNodeNot
+		alphaRef := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+		g.stampStageCondition(alphaRef, owner, branchID, conditionIndex, condition.id)
+		inputEntry = graphTokenEntryForCondition(input)
+		if !haveStage {
+			current = alphaRef
+			currentEntry = inputEntry
+			haveStage = true
+			continue
 		}
-		laterEntry := graphTokenEntryForCondition(later)
-		var betaID reteGraphBetaNodeID
-		outputStage := reteGraphStageRef{}
-		if betaKind == reteGraphBetaNodeJoin {
-			betaID, outputStage = g.internJoinWithResidualFilter(betaIndex, current, alphaRef, later.joins, betaResidualExpressionPredicates(later.predicates), laterEntry)
-		} else {
-			betaID, _ = g.internBetaNode(betaIndex, betaKind, current, alphaRef, later.joins, betaResidualExpressionPredicates(later.predicates))
-			outputStage = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
-		}
-		g.stampStageCondition(reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}, owner, branch.id, conditionIndex, later.id)
-		g.stampStageCondition(outputStage, owner, branch.id, conditionIndex, later.id)
+		betaID, outputStage := g.internJoinWithResidualFilter(betaIndex, current, alphaRef, input.joins, betaResidualExpressionPredicates(input.predicates), inputEntry)
+		betaRef := reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+		g.stampStageCondition(betaRef, owner, branchID, conditionIndex, condition.id)
+		g.stampStageCondition(outputStage, owner, branchID, conditionIndex, condition.id)
 		leftEntry := bindingTupleEntry{}
-		if current.kind == reteGraphStageAlpha && conditionIndex > 0 {
-			leftEntry = graphTokenEntryForCondition(branch.plans[conditionIndex-1])
+		if current.kind == reteGraphStageAlpha {
+			leftEntry = currentEntry
 		}
-		g.appendStageSuccessor(current, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputLeft,
-			entry:      leftEntry,
-		})
-		g.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{
-			betaNodeID: betaID,
-			side:       reteGraphBetaInputRight,
-			entry:      laterEntry,
-		})
+		g.appendStageSuccessor(current, reteGraphStageSuccessor{betaNodeID: betaID, side: reteGraphBetaInputLeft, entry: leftEntry})
+		g.appendStageSuccessor(alphaRef, reteGraphStageSuccessor{betaNodeID: betaID, side: reteGraphBetaInputRight, entry: inputEntry})
 		current = outputStage
+		currentEntry = bindingTupleEntry{}
 	}
-
-	return current, haveStage
+	if !haveStage || inputEntry.conditionID == "" {
+		return reteGraphStageRef{}, false
+	}
+	outerStage := reteGraphStageRef{}
+	if haveOuter {
+		outerStage = outer
+	}
+	aggregateID := g.appendAggregate(current, outerStage, inputEntry, condition.id, condition.bindingSlot, condition.aggregate.specs, entries)
+	if aggregateID == 0 {
+		return reteGraphStageRef{}, false
+	}
+	aggregateRef := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(aggregateID)}
+	g.stampStageCondition(aggregateRef, owner, branchID, conditionIndex, condition.id)
+	return aggregateRef, true
 }
 
 func (g *reteGraph) compileAggregateBranch(rule compiledRule, branch compiledConditionBranch, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, terminalID *reteGraphTerminalNodeID, templatesByKey map[TemplateKey]compiledTemplate) bool {
