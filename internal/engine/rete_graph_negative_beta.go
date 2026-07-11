@@ -90,6 +90,9 @@ func (m reteGraphNegativeBetaMemory) insertLeft(joinKey betaJoinKey, token token
 	if span != nil {
 		span.recordBetaInputInsert(reteGraphBetaInputLeft)
 	}
+	if m.owner.propagationCounters != nil {
+		m.owner.propagationCounters.recordNegativeBlockersInitialized(count)
+	}
 	if count != 0 {
 		return true, nil
 	}
@@ -129,7 +132,11 @@ func (m reteGraphNegativeBetaMemory) insertRight(joinKey betaJoinKey, token toke
 		if !matched {
 			return true
 		}
+		wasZero := leftRow.blockerCount == 0
 		leftRow.blockerCount++
+		if m.owner.propagationCounters != nil {
+			m.owner.propagationCounters.recordNegativeBlockerIncrement(wasZero)
+		}
 		if leftRow.blockerCount == 1 && !leftRow.output.isZero() {
 			m.owner.propagateRemoveFromStage(source, leftRow.output, nil, delta)
 			leftRow.output = tokenRef{}
@@ -152,6 +159,7 @@ func (m reteGraphNegativeBetaMemory) removeLeftToken(token tokenRef, counters *p
 	}
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
+		counters.recordNegativeBetaRowRemoved()
 	}
 	if removedRow.output.isZero() {
 		return true
@@ -171,11 +179,12 @@ func (m reteGraphNegativeBetaMemory) removeRightToken(token tokenRef, counters *
 	}
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
+		counters.recordNegativeBetaRowRemoved()
 	}
-	return m.unblockLeftRows(removedRow.joinKey, removedRow.token, delta)
+	return m.unblockLeftRows(removedRow.joinKey, removedRow.token, counters, delta)
 }
 
-func (m reteGraphNegativeBetaMemory) unblockLeftRows(joinKey betaJoinKey, right tokenRef, delta *reteAgendaDelta) bool {
+func (m reteGraphNegativeBetaMemory) unblockLeftRows(joinKey betaJoinKey, right tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) bool {
 	currentMatch, ok := m.rightLastMatch(right)
 	if !ok {
 		return false
@@ -193,7 +202,11 @@ func (m reteGraphNegativeBetaMemory) unblockLeftRows(joinKey betaJoinKey, right 
 			delta.supported = false
 			return true
 		}
+		wasOne := leftRow.blockerCount == 1
 		leftRow.blockerCount--
+		if counters != nil {
+			counters.recordNegativeBlockerDecrement(wasOne)
+		}
 		if leftRow.blockerCount == 0 {
 			if ok, err := m.emitLeftAdd(leftRow, nil, delta); err != nil {
 				delta.supported = false
@@ -230,6 +243,9 @@ func (m reteGraphNegativeBetaMemory) removeLeftContainingFact(id FactID, counter
 	}
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}
 	m.memory.left.removeTokensContainingFact(id, counters, func(row negativeBetaLeftRow) {
+		if counters != nil {
+			counters.recordNegativeBetaRowRemoved()
+		}
 		if !row.output.isZero() {
 			m.owner.propagateRemoveFromStage(source, row.output, counters, delta)
 		}
@@ -248,8 +264,9 @@ func (m reteGraphNegativeBetaMemory) removeRightContainingFact(id FactID, counte
 	for _, row := range removedRows {
 		if counters != nil {
 			counters.recordNegativeRowRemoved()
+			counters.recordNegativeBetaRowRemoved()
 		}
-		if !m.unblockLeftRows(row.joinKey, row.token, delta) {
+		if !m.unblockLeftRows(row.joinKey, row.token, counters, delta) {
 			return false
 		}
 	}

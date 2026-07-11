@@ -84,6 +84,23 @@ type propagationCounterTotals struct {
 	NestedPathMisses                    int
 	ModifyFastPathSkips                 int
 	ModifyFastPathFallbacks             int
+	ModifyCascades                      int
+	ModifyRawTerminalAdds               int
+	ModifyRawTerminalRemoves            int
+	ModifyKeptTerminalAdds              int
+	ModifyKeptTerminalRemoves           int
+	ModifyCoalescedPairs                int
+	ModifyDistinctTokenUpdates          int
+	ModifySameTokenCancellations        int
+	CoalescerIdentityIndexProbes        int
+	CoalescerIdentityIndexCandidates    int
+	TokenRowsAllocated                  int
+	BetaRowsRemoved                     int
+	NegativeBetaRowsRemoved             int
+	NegativeBlockerIncrements           int
+	NegativeBlockerDecrements           int
+	NegativeBlockerZeroToOne            int
+	NegativeBlockerOneToZero            int
 	FullAgendaReconciles                int
 	InitialAgendaReconciles             int
 	SteadyStateAgendaReconciles         int
@@ -153,6 +170,23 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.NestedPathMisses += other.NestedPathMisses
 	t.ModifyFastPathSkips += other.ModifyFastPathSkips
 	t.ModifyFastPathFallbacks += other.ModifyFastPathFallbacks
+	t.ModifyCascades += other.ModifyCascades
+	t.ModifyRawTerminalAdds += other.ModifyRawTerminalAdds
+	t.ModifyRawTerminalRemoves += other.ModifyRawTerminalRemoves
+	t.ModifyKeptTerminalAdds += other.ModifyKeptTerminalAdds
+	t.ModifyKeptTerminalRemoves += other.ModifyKeptTerminalRemoves
+	t.ModifyCoalescedPairs += other.ModifyCoalescedPairs
+	t.ModifyDistinctTokenUpdates += other.ModifyDistinctTokenUpdates
+	t.ModifySameTokenCancellations += other.ModifySameTokenCancellations
+	t.CoalescerIdentityIndexProbes += other.CoalescerIdentityIndexProbes
+	t.CoalescerIdentityIndexCandidates += other.CoalescerIdentityIndexCandidates
+	t.TokenRowsAllocated += other.TokenRowsAllocated
+	t.BetaRowsRemoved += other.BetaRowsRemoved
+	t.NegativeBetaRowsRemoved += other.NegativeBetaRowsRemoved
+	t.NegativeBlockerIncrements += other.NegativeBlockerIncrements
+	t.NegativeBlockerDecrements += other.NegativeBlockerDecrements
+	t.NegativeBlockerZeroToOne += other.NegativeBlockerZeroToOne
+	t.NegativeBlockerOneToZero += other.NegativeBlockerOneToZero
 	t.FullAgendaReconciles += other.FullAgendaReconciles
 	t.InitialAgendaReconciles += other.InitialAgendaReconciles
 	t.SteadyStateAgendaReconciles += other.SteadyStateAgendaReconciles
@@ -615,6 +649,83 @@ func (l *propagationCounterLedger) recordModifyFastPathFallback() {
 	l.totals.ModifyFastPathFallbacks++
 }
 
+func (l *propagationCounterLedger) recordModifyCascade(rawAdds, rawRemoves, keptAdds, keptRemoves int) {
+	if l == nil {
+		return
+	}
+	l.totals.ModifyCascades++
+	l.totals.ModifyRawTerminalAdds += rawAdds
+	l.totals.ModifyRawTerminalRemoves += rawRemoves
+	l.totals.ModifyKeptTerminalAdds += keptAdds
+	l.totals.ModifyKeptTerminalRemoves += keptRemoves
+}
+
+func (l *propagationCounterLedger) recordModifyCoalescedPair(distinctTokens bool) {
+	if l == nil {
+		return
+	}
+	l.totals.ModifyCoalescedPairs++
+	if distinctTokens {
+		l.totals.ModifyDistinctTokenUpdates++
+	} else {
+		l.totals.ModifySameTokenCancellations++
+	}
+}
+
+func (l *propagationCounterLedger) recordCoalescerIdentityIndexProbe(candidates int) {
+	if l == nil {
+		return
+	}
+	l.totals.CoalescerIdentityIndexProbes++
+	l.totals.CoalescerIdentityIndexCandidates += candidates
+}
+
+func (l *propagationCounterLedger) recordTokenRowAllocated() {
+	if l != nil {
+		l.totals.TokenRowsAllocated++
+	}
+}
+
+func (l *propagationCounterLedger) recordBetaRowRemoved() {
+	if l != nil {
+		l.totals.BetaRowsRemoved++
+	}
+}
+
+func (l *propagationCounterLedger) recordNegativeBetaRowRemoved() {
+	if l != nil {
+		l.totals.NegativeBetaRowsRemoved++
+	}
+}
+
+func (l *propagationCounterLedger) recordNegativeBlockerIncrement(wasZero bool) {
+	if l == nil {
+		return
+	}
+	l.totals.NegativeBlockerIncrements++
+	if wasZero {
+		l.totals.NegativeBlockerZeroToOne++
+	}
+}
+
+func (l *propagationCounterLedger) recordNegativeBlockersInitialized(count int) {
+	if l == nil || count <= 0 {
+		return
+	}
+	l.totals.NegativeBlockerIncrements += count
+	l.totals.NegativeBlockerZeroToOne++
+}
+
+func (l *propagationCounterLedger) recordNegativeBlockerDecrement(wasOne bool) {
+	if l == nil {
+		return
+	}
+	l.totals.NegativeBlockerDecrements++
+	if wasOne {
+		l.totals.NegativeBlockerOneToZero++
+	}
+}
+
 func (l *propagationCounterLedger) recordFullAgendaReconcile(phase propagationCounterPhase) {
 	if l == nil {
 		return
@@ -949,6 +1060,23 @@ func (s propagationCounterSnapshot) reportMetrics(report func(name string, value
 	report("propagation-nested-path-misses", float64(s.Totals.NestedPathMisses))
 	report("propagation-modify-fast-path-skips", float64(s.Totals.ModifyFastPathSkips))
 	report("propagation-modify-fast-path-fallbacks", float64(s.Totals.ModifyFastPathFallbacks))
+	report("propagation-modify-cascades", float64(s.Totals.ModifyCascades))
+	report("propagation-modify-raw-terminal-adds", float64(s.Totals.ModifyRawTerminalAdds))
+	report("propagation-modify-raw-terminal-removes", float64(s.Totals.ModifyRawTerminalRemoves))
+	report("propagation-modify-kept-terminal-adds", float64(s.Totals.ModifyKeptTerminalAdds))
+	report("propagation-modify-kept-terminal-removes", float64(s.Totals.ModifyKeptTerminalRemoves))
+	report("propagation-modify-coalesced-pairs", float64(s.Totals.ModifyCoalescedPairs))
+	report("propagation-modify-distinct-token-updates", float64(s.Totals.ModifyDistinctTokenUpdates))
+	report("propagation-modify-same-token-cancellations", float64(s.Totals.ModifySameTokenCancellations))
+	report("propagation-coalescer-identity-index-probes", float64(s.Totals.CoalescerIdentityIndexProbes))
+	report("propagation-coalescer-identity-index-candidates", float64(s.Totals.CoalescerIdentityIndexCandidates))
+	report("propagation-token-rows-allocated", float64(s.Totals.TokenRowsAllocated))
+	report("propagation-beta-rows-removed", float64(s.Totals.BetaRowsRemoved))
+	report("propagation-negative-beta-rows-removed", float64(s.Totals.NegativeBetaRowsRemoved))
+	report("propagation-negative-blocker-increments", float64(s.Totals.NegativeBlockerIncrements))
+	report("propagation-negative-blocker-decrements", float64(s.Totals.NegativeBlockerDecrements))
+	report("propagation-negative-blocker-zero-to-one", float64(s.Totals.NegativeBlockerZeroToOne))
+	report("propagation-negative-blocker-one-to-zero", float64(s.Totals.NegativeBlockerOneToZero))
 	report("propagation-full-agenda-reconciles", float64(s.Totals.FullAgendaReconciles))
 	report("propagation-initial-agenda-reconciles", float64(s.Totals.InitialAgendaReconciles))
 	report("propagation-steady-state-agenda-reconciles", float64(s.Totals.SteadyStateAgendaReconciles))
@@ -1057,6 +1185,23 @@ func (s propagationCounterSnapshot) runnerFields() []string {
 		"propagation-activations-stored=" + strconv.Itoa(s.Totals.ActivationsStored),
 		"propagation-modify-fast-path-skips=" + strconv.Itoa(s.Totals.ModifyFastPathSkips),
 		"propagation-modify-fast-path-fallbacks=" + strconv.Itoa(s.Totals.ModifyFastPathFallbacks),
+		"propagation-modify-cascades=" + strconv.Itoa(s.Totals.ModifyCascades),
+		"propagation-modify-raw-terminal-adds=" + strconv.Itoa(s.Totals.ModifyRawTerminalAdds),
+		"propagation-modify-raw-terminal-removes=" + strconv.Itoa(s.Totals.ModifyRawTerminalRemoves),
+		"propagation-modify-kept-terminal-adds=" + strconv.Itoa(s.Totals.ModifyKeptTerminalAdds),
+		"propagation-modify-kept-terminal-removes=" + strconv.Itoa(s.Totals.ModifyKeptTerminalRemoves),
+		"propagation-modify-coalesced-pairs=" + strconv.Itoa(s.Totals.ModifyCoalescedPairs),
+		"propagation-modify-distinct-token-updates=" + strconv.Itoa(s.Totals.ModifyDistinctTokenUpdates),
+		"propagation-modify-same-token-cancellations=" + strconv.Itoa(s.Totals.ModifySameTokenCancellations),
+		"propagation-coalescer-identity-index-probes=" + strconv.Itoa(s.Totals.CoalescerIdentityIndexProbes),
+		"propagation-coalescer-identity-index-candidates=" + strconv.Itoa(s.Totals.CoalescerIdentityIndexCandidates),
+		"propagation-token-rows-allocated=" + strconv.Itoa(s.Totals.TokenRowsAllocated),
+		"propagation-beta-rows-removed=" + strconv.Itoa(s.Totals.BetaRowsRemoved),
+		"propagation-negative-beta-rows-removed=" + strconv.Itoa(s.Totals.NegativeBetaRowsRemoved),
+		"propagation-negative-blocker-increments=" + strconv.Itoa(s.Totals.NegativeBlockerIncrements),
+		"propagation-negative-blocker-decrements=" + strconv.Itoa(s.Totals.NegativeBlockerDecrements),
+		"propagation-negative-blocker-zero-to-one=" + strconv.Itoa(s.Totals.NegativeBlockerZeroToOne),
+		"propagation-negative-blocker-one-to-zero=" + strconv.Itoa(s.Totals.NegativeBlockerOneToZero),
 		"propagation-full-agenda-reconciles=" + strconv.Itoa(s.Totals.FullAgendaReconciles),
 		"propagation-initial-agenda-reconciles=" + strconv.Itoa(s.Totals.InitialAgendaReconciles),
 		"propagation-steady-state-agenda-reconciles=" + strconv.Itoa(s.Totals.SteadyStateAgendaReconciles),

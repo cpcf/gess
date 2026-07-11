@@ -177,6 +177,7 @@ func clearTokenHolder(token tokenRef, tableID uint32, ref int32) {
 type tokenIdentityKey = graphTokenIdentityKey
 
 type tokenArena struct {
+	counters     *propagationCounterLedger
 	factRefs     []conditionFactRef
 	factRefIndex map[tokenFactRefKey]int
 	spare        []tokenRow
@@ -263,6 +264,9 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 // a long-lived row can pin.
 func (a *tokenArena) allocRow() *tokenRow {
 	a.count++
+	if a.counters != nil {
+		a.counters.recordTokenRowAllocated()
+	}
 	if len(a.spare) == 0 {
 		a.spare = make([]tokenRow, tokenRowAllocBatch)
 	}

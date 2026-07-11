@@ -42,6 +42,7 @@ type reteGraphBetaMemory struct {
 	deferredAggregateOrder   []deferredAggregateOutputKey
 	rightPredicateScratch    []conditionMatch
 	modifyRouteScope         reteModifyRouteScope
+	propagationCounters      *propagationCounterLedger
 }
 
 type reteModifyRouteScope struct {
@@ -1546,6 +1547,21 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	if m == nil {
 		return reteAgendaDelta{}, nil
 	}
+	counters := event.counters
+	if counters == nil && event.span != nil {
+		counters = event.span.ledger
+	}
+	previousCounters := m.propagationCounters
+	m.propagationCounters = counters
+	if m.arena != nil {
+		m.arena.counters = counters
+	}
+	defer func() {
+		m.propagationCounters = previousCounters
+		if m.arena != nil {
+			m.arena.counters = previousCounters
+		}
+	}()
 	wasDeferring := m.deferAggregateOutputs
 	if !wasDeferring {
 		m.deferAggregateOutputs = true
@@ -4381,6 +4397,7 @@ func (m *reteGraphBetaMemory) removeBetaInputToken(nodeID reteGraphBetaNodeID, s
 	}
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
+		counters.recordBetaRowRemoved()
 	}
 	m.propagateStoredJoinedRemovals(nodeID, side, node, nodeMemory, removedRow, counters, delta)
 	return true
@@ -4400,6 +4417,7 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputToken(nodeID reteGraphBetaNod
 	}
 	if counters != nil {
 		counters.recordNegativeRowRemoved()
+		counters.recordBetaRowRemoved()
 	}
 	m.propagateRemoveFromStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}, removedRow.token, counters, delta)
 	return true
@@ -4467,6 +4485,9 @@ func (m *reteGraphBetaMemory) removeBetaInputContainingFact(nodeID reteGraphBeta
 	}
 	nodeMemory := m.nodeMemory(nodeID)
 	removeToken := func(row betaTokenRow) {
+		if counters != nil {
+			counters.recordBetaRowRemoved()
+		}
 		m.propagateStoredJoinedRemovals(nodeID, side, node, nodeMemory, row, counters, delta)
 	}
 	switch side {
@@ -4490,6 +4511,9 @@ func (m *reteGraphBetaMemory) removeFilterBetaInputContainingFact(nodeID reteGra
 	nodeMemory := m.nodeMemory(nodeID)
 	source := reteGraphStageRef{kind: reteGraphStageBeta, id: int(nodeID)}
 	nodeMemory.left.removeTokensContainingFact(id, counters, func(row betaTokenRow) {
+		if counters != nil {
+			counters.recordBetaRowRemoved()
+		}
 		m.propagateRemoveFromStage(source, row.token, counters, delta)
 	})
 	return true
@@ -4819,7 +4843,12 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 		return added, true, err
 	}
 	m.sourceGenerationValue = after.Generation()
-	addedTokens, removedTokens, coalescedUpdates := coalesceTerminalTokenDeltas(m.revision, append(removed.added, added.added...), append(removed.removed, added.removed...))
+	rawAdded := append(removed.added, added.added...)
+	rawRemoved := append(removed.removed, added.removed...)
+	addedTokens, removedTokens, coalescedUpdates := coalesceTerminalTokenDeltasWithCounters(m.revision, rawAdded, rawRemoved, event.counters)
+	if event.counters != nil {
+		event.counters.recordModifyCascade(len(rawAdded), len(rawRemoved), len(addedTokens), len(removedTokens))
+	}
 	updatedTokens := append(removed.updated, added.updated...)
 	if len(coalescedUpdates) != 0 {
 		updatedTokens = append(updatedTokens, coalescedUpdates...)
@@ -5030,6 +5059,10 @@ func expressionMayObserveModify(expressionBindingSlot, modifiedBindingSlot int, 
 // agenda activations move to the surviving token instead of holding a token
 // whose arena rows are about to be recycled.
 func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
+	return coalesceTerminalTokenDeltasWithCounters(revision, added, removed, nil)
+}
+
+func coalesceTerminalTokenDeltasWithCounters(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
 	if len(added) == 0 || len(removed) == 0 {
 		return added, removed, nil
 	}
@@ -5055,6 +5088,11 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 				keptAdded = append(keptAdded, add)
 				continue
 			}
+			if counters != nil {
+				remove := removed[match]
+				distinctTokens := remove.token != add.token && !remove.token.isZero() && !add.token.isZero()
+				counters.recordModifyCoalescedPair(distinctTokens)
+			}
 			updates = appendCoalescedTokenUpdate(updates, removed[match], add)
 			copy(removed[match:], removed[match+1:])
 			removed[len(removed)-1] = reteTerminalTokenDelta{}
@@ -5062,7 +5100,7 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 		}
 		return keptAdded, removed, updates
 	}
-	return coalesceTerminalTokenDeltasIndexed(revision, added, removed)
+	return coalesceTerminalTokenDeltasIndexedWithCounters(revision, added, removed, counters)
 }
 
 func appendCoalescedTokenUpdate(updates []reteTerminalTokenUpdate, remove, add reteTerminalTokenDelta) []reteTerminalTokenUpdate {
@@ -5084,6 +5122,10 @@ func appendCoalescedTokenUpdate(updates []reteTerminalTokenUpdate, remove, add r
 // (rule revision, identity key) preserves the first-match semantics of the
 // quadratic loop while touching only same-key pairs.
 func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []reteTerminalTokenDelta) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
+	return coalesceTerminalTokenDeltasIndexedWithCounters(revision, added, removed, nil)
+}
+
+func coalesceTerminalTokenDeltasIndexedWithCounters(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
 	type coalesceKey struct {
 		ruleRevisionID RuleRevisionID
 		identity       candidateIdentityKey
@@ -5106,15 +5148,25 @@ func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []rete
 		}
 		bucket := buckets[key]
 		match := -1
+		candidates := 0
 		for bucketIndex, removedIndex := range bucket {
+			candidates++
 			if terminalTokenDeltasCoalesceEqual(revision, add, removed[removedIndex]) {
 				match = bucketIndex
 				break
 			}
 		}
+		if counters != nil {
+			counters.recordCoalescerIdentityIndexProbe(candidates)
+		}
 		if match < 0 {
 			keptAdded = append(keptAdded, add)
 			continue
+		}
+		if counters != nil {
+			remove := removed[bucket[match]]
+			distinctTokens := remove.token != add.token && !remove.token.isZero() && !add.token.isZero()
+			counters.recordModifyCoalescedPair(distinctTokens)
 		}
 		updates = appendCoalescedTokenUpdate(updates, removed[bucket[match]], add)
 		consumed[bucket[match]] = true
