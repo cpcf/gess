@@ -1,0 +1,130 @@
+{
+  "gessDiagnosticsSchema": 1,
+  "session": {
+    "sessionId": "diagnostics-golden",
+    "rulesetId": "sha256:dee515da8f984fa3dcea9d8d55cd6be26003128cd086314e1746423a67a8825e",
+    "generation": 1,
+    "factCount": 1
+  },
+  "graph": {
+    "runtime": "rete",
+    "alphaNodes": 3,
+    "betaNodes": 1,
+    "unionNodes": 0,
+    "aggregateNodes": 0,
+    "ruleTerminals": 1,
+    "queryTerminals": 1,
+    "ruleBranches": 1,
+    "queryBranches": 1
+  },
+  "memory": [
+    {
+      "owner": "fact",
+      "rows": 0,
+      "buckets": 0,
+      "indexes": 0,
+      "tombstones": 0,
+      "bytes": 0,
+      "highWater": 0
+    },
+    {
+      "owner": "alpha",
+      "rows": 0,
+      "buckets": 0,
+      "indexes": 0,
+      "tombstones": 0,
+      "bytes": 0,
+      "highWater": 0
+    },
+    {
+      "owner": "beta",
+      "rows": 0,
+      "buckets": 0,
+      "indexes": 0,
+      "tombstones": 0,
+      "bytes": 0,
+      "highWater": 0
+    },
+    {
+      "owner": "agenda",
+      "rows": 0,
+      "buckets": 0,
+      "indexes": 0,
+      "tombstones": 0,
+      "bytes": 0,
+      "highWater": 0
+    }
+  ],
+  "agenda": {
+    "pending": 1,
+    "ready": true,
+    "dirty": false,
+    "strategy": "depth",
+    "currentFocus": "MAIN",
+    "focusStack": [
+      "MAIN"
+    ]
+  },
+  "terminals": {
+    "ruleNodes": 1,
+    "queryNodes": 1,
+    "queryRows": 0,
+    "maxQueryRows": 0
+  },
+  "aggregates": {
+    "nodes": 0,
+    "rows": 0,
+    "buckets": 0,
+    "indexes": 0,
+    "bytes": 0,
+    "highWater": 0
+  },
+  "queries": {
+    "definitions": 1,
+    "activeProof": false,
+    "terminalRows": 0
+  },
+  "truthMaintenance": {
+    "logicalFacts": 0,
+    "statedAndLogicalFacts": 0,
+    "supportEdges": 0,
+    "supportEdgesAdded": 0,
+    "supportEdgesRemoved": 0,
+    "cascadeRetractions": 0
+  },
+  "backchain": {
+    "activeDemands": 0,
+    "demandsByTemplate": {},
+    "supportRows": 0,
+    "cascadeLimit": 0,
+    "cascades": 0,
+    "cascadeSteps": 0,
+    "cascadeLengthMax": 0,
+    "cascadeLimitHits": 0
+  },
+  "facts": [
+    {
+      "id": "fact:g1:1",
+      "name": "person",
+      "templateKey": "person",
+      "version": 1,
+      "recency": 1,
+      "generation": 1,
+      "support": "stated",
+      "fields": {
+        "age": 42,
+        "dept": "engineering",
+        "id": "ada",
+        "note": "ready",
+        "status": "active"
+      },
+      "fieldPresence": {
+        "age": "explicit",
+        "dept": "explicit",
+        "id": "explicit",
+        "note": "explicit",
+        "status": "explicit"
+      }
+    }
+  ]
+}
