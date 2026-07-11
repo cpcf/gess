@@ -15,9 +15,34 @@ const (
 
 type branchPlanningIR struct {
 	id      int
+	ruleID  RuleID
 	nodes   []branchPlanningNode
 	joins   []branchPlanningJoin
 	reorder bool
+	profile *branchPlanningProfile
+}
+
+type branchPlanningProfile struct {
+	byRule map[RuleID]map[string]float64
+}
+
+func (p *branchPlanningProfile) fanout(ruleID RuleID, node branchPlanningNode) (float64, bool) {
+	if p == nil || len(p.byRule) == 0 {
+		return 0, false
+	}
+	byBinding, ok := p.byRule[ruleID]
+	if !ok || len(byBinding) == 0 {
+		return 0, false
+	}
+	binding := strings.TrimSpace(branchPlanningConditionBinding(node.condition))
+	if binding == "" {
+		return 0, false
+	}
+	fanout, ok := byBinding[binding]
+	if !ok || fanout < 0 || fanout != fanout {
+		return 0, false
+	}
+	return fanout, true
 }
 
 type branchPlanningNode struct {
@@ -52,7 +77,13 @@ func newBranchPlanningIR(branchID int, conditions []normalizedRuleCondition) bra
 }
 
 func newReorderedBranchPlanningIR(branchID int, conditions []normalizedRuleCondition) branchPlanningIR {
+	return newProfiledReorderedBranchPlanningIR("", branchID, conditions, nil)
+}
+
+func newProfiledReorderedBranchPlanningIR(ruleID RuleID, branchID int, conditions []normalizedRuleCondition, profile *branchPlanningProfile) branchPlanningIR {
 	ir := newBranchPlanningIR(branchID, conditions)
+	ir.ruleID = ruleID
+	ir.profile = profile
 	ir.reorder = true
 	for i := range ir.nodes {
 		ir.joins = append(ir.joins, extractBranchPlanningJoins(&ir.nodes[i])...)
@@ -355,34 +386,85 @@ func (ir branchPlanningIR) planBranchPlanningSegment(segment []branchPlanningNod
 }
 
 func (ir branchPlanningIR) selectNextBranchPlanningNode(nodes []branchPlanningNode, defined map[string]struct{}) int {
-	best := -1
-	bestJoinStrength := 0
+	ready := make([]int, 0, len(nodes))
 	for i, node := range nodes {
-		if !branchPlanningNodeReady(node, nodes, defined) {
-			continue
+		if branchPlanningNodeReady(node, nodes, defined) {
+			ready = append(ready, i)
 		}
+	}
+	if len(ready) == 0 {
+		return 0
+	}
+
+	useProfile := ir.profile != nil
+	if useProfile {
+		profileReady := make([]int, 0, len(ready))
+		for _, index := range ready {
+			if _, ok := ir.profile.fanout(ir.ruleID, nodes[index]); !ok {
+				useProfile = false
+				break
+			}
+			if branchPlanningProfileNodeReady(nodes[index], ir.joins, defined) {
+				profileReady = append(profileReady, index)
+			}
+		}
+		if useProfile && len(profileReady) > 0 {
+			ready = profileReady
+		} else if useProfile {
+			useProfile = false
+		}
+	}
+
+	best := ready[0]
+	bestJoinStrength := branchPlanningNodeJoinStrengthToDefined(nodes[best], ir.joins, defined)
+	bestProfileFanout, _ := ir.profile.fanout(ir.ruleID, nodes[best])
+	for _, i := range ready[1:] {
+		node := nodes[i]
 		joinStrength := branchPlanningNodeJoinStrengthToDefined(node, ir.joins, defined)
-		if best < 0 {
-			best = i
-			bestJoinStrength = joinStrength
-			continue
-		}
 		if joinStrength != bestJoinStrength {
 			if joinStrength > bestJoinStrength {
 				best = i
 				bestJoinStrength = joinStrength
+				if useProfile {
+					bestProfileFanout, _ = ir.profile.fanout(ir.ruleID, node)
+				}
 			}
 			continue
+		}
+		if useProfile {
+			profileFanout, _ := ir.profile.fanout(ir.ruleID, node)
+			if branchPlanningSelectivityScore(node) == branchPlanningSelectivityScore(nodes[best]) && profileFanout != bestProfileFanout {
+				if profileFanout < bestProfileFanout {
+					best = i
+					bestJoinStrength = joinStrength
+					bestProfileFanout = profileFanout
+				}
+				continue
+			}
 		}
 		if branchPlanningNodeLess(node, nodes[best]) {
 			best = i
 			bestJoinStrength = joinStrength
+			if useProfile {
+				bestProfileFanout, _ = ir.profile.fanout(ir.ruleID, node)
+			}
 		}
 	}
-	if best >= 0 {
-		return best
+	return best
+}
+
+func branchPlanningProfileNodeReady(node branchPlanningNode, joins []branchPlanningJoin, defined map[string]struct{}) bool {
+	for _, binding := range node.defines {
+		for _, join := range joins {
+			if join.leftBinding != binding {
+				continue
+			}
+			if _, ok := defined[join.rightBinding]; !ok {
+				return false
+			}
+		}
 	}
-	return 0
+	return true
 }
 
 func branchPlanningNodeReady(node branchPlanningNode, remaining []branchPlanningNode, defined map[string]struct{}) bool {

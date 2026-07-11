@@ -402,6 +402,14 @@ func (w *Workspace) RemoveQuery(name string) error {
 }
 
 func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
+	return w.compile(ctx, nil)
+}
+
+func (w *Workspace) compileWithBranchPlanningProfile(ctx context.Context, profile *branchPlanningProfile) (*Ruleset, error) {
+	return w.compile(ctx, profile)
+}
+
+func (w *Workspace) compile(ctx context.Context, branchProfile *branchPlanningProfile) (*Ruleset, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -607,7 +615,12 @@ func (w *Workspace) Compile(ctx context.Context) (*Ruleset, error) {
 		if ruleID.IsZero() {
 			ruleID = RuleID(strings.TrimSpace(spec.Name))
 		}
-		rule, err := compileRuleSpec(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName, globalsByName)
+		var rule compiledRule
+		if branchProfile == nil {
+			rule, err = compileRuleSpec(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName, globalsByName)
+		} else {
+			rule, err = compileRuleSpecWithBranchPlanningProfile(spec, ruleID, i, modules, templateResolver, actionsByName, functionsByName, globalsByName, branchProfile)
+		}
 		if err != nil {
 			return nil, err
 		}

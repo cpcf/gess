@@ -46,6 +46,10 @@ func mannersGuests(count int) []mannersGuest {
 }
 
 func mustCompileMannersRuleset(t testing.TB) *Ruleset {
+	return mustCompileMannersRulesetWithProfile(t, nil)
+}
+
+func mustCompileMannersRulesetWithProfile(t testing.TB, profile *branchPlanningProfile) *Ruleset {
 	t.Helper()
 
 	workspace := NewWorkspace()
@@ -416,7 +420,7 @@ func mustCompileMannersRuleset(t testing.TB) *Ruleset {
 		Actions: []RuleActionSpec{{Name: "manners-continue"}},
 	})
 
-	return mustCompileWorkspace(t, workspace)
+	return mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
 }
 
 func mannersInitialFacts(guests []mannersGuest) []SessionInitialFact {

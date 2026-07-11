@@ -1662,11 +1662,16 @@ func explicitMatchCondition(ruleName string, spec ConditionSpec, negated bool) (
 }
 
 func compileRuleSpec(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRule, error) {
-	compiled, err := compileRuleSpecInternal(spec, ruleID, declarationOrder, modules, templates, actionsByName, functions, globals)
+	compiled, err := compileRuleSpecInternal(spec, ruleID, declarationOrder, modules, templates, actionsByName, functions, globals, nil)
 	return compiled, attachValidationErrorSource(err, spec.Source)
 }
 
-func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal) (compiledRule, error) {
+func compileRuleSpecWithBranchPlanningProfile(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal, profile *branchPlanningProfile) (compiledRule, error) {
+	compiled, err := compileRuleSpecInternal(spec, ruleID, declarationOrder, modules, templates, actionsByName, functions, globals, profile)
+	return compiled, attachValidationErrorSource(err, spec.Source)
+}
+
+func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int, modules map[ModuleName]Module, templates templateResolver, actionsByName map[string]compiledAction, functions map[string]compiledPureFunction, globals map[string]compiledGlobal, profile *branchPlanningProfile) (compiledRule, error) {
 	normalized, err := normalizeRuleSpec(spec)
 	if err != nil {
 		return compiledRule{}, err
@@ -1733,7 +1738,7 @@ func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int,
 	compiledBranches := make([]compiledConditionBranch, 0, len(executionBranches))
 	for branchIndex, executionBranch := range executionBranches {
 		publicBranch := publicBranches[executionBranch.source]
-		plannedBranchIR := newReorderedBranchPlanningIR(branchIndex, executionBranch.branch.conditions)
+		plannedBranchIR := newProfiledReorderedBranchPlanningIR(ruleID, branchIndex, executionBranch.branch.conditions, profile)
 		plannedBranch, err := compileBranchPlanningIR(normalized.Name, ruleID, normalized.Module, plannedBranchIR, templates, false, nil, functions, globals)
 		if err != nil {
 			return compiledRule{}, err
@@ -2775,7 +2780,7 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 		sum.Write([]byte("\ncondition-tree:"))
 		writeCompiledConditionTreeShapeHash(sum, rule.conditionTreeShape)
 		sum.Write([]byte("\ntree-conditions:"))
-		for _, plan := range rule.conditionPlans {
+		for _, plan := range canonicalConditionPlansForIdentity(rule.conditionPlans) {
 			if plan.isTest {
 				sum.Write([]byte("test:"))
 				sum.Write([]byte(serializeCompiledExpressionPredicates(plan.testPredicates)))
@@ -2797,7 +2802,7 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 				sum.Write([]byte(";"))
 				continue
 			}
-			condition, ok := ruleTreeConditionByOrder(rule.treeConditions, plan.path)
+			condition, ok := ruleTreeConditionForIdentity(rule.treeConditions, plan)
 			if !ok {
 				continue
 			}
@@ -2855,7 +2860,7 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 			sum.Write([]byte("\ncondition-branches:"))
 			for branchIndex, branch := range rule.conditionBranches {
 				sum.Write(fmt.Appendf(nil, "%d:", branchIndex))
-				for _, plan := range branch.plans {
+				for _, plan := range canonicalConditionPlansForIdentity(branch.plans) {
 					if plan.isTest {
 						sum.Write([]byte("test:"))
 						sum.Write([]byte(serializeCompiledExpressionPredicates(plan.testPredicates)))
@@ -2908,6 +2913,56 @@ func ruleRevisionIDFor(rule compiledRule) RuleRevisionID {
 		sum.Write([]byte(";"))
 	}
 	return RuleRevisionID("sha256:" + hex.EncodeToString(sum.Sum(nil)))
+}
+
+func canonicalConditionPlansForIdentity(plans []compiledConditionPlan) []compiledConditionPlan {
+	if len(plans) < 2 {
+		return plans
+	}
+	out := append([]compiledConditionPlan(nil), plans...)
+	slices.SortStableFunc(out, func(left, right compiledConditionPlan) int {
+		if left.bindingSlot < right.bindingSlot {
+			return -1
+		}
+		if left.bindingSlot > right.bindingSlot {
+			return 1
+		}
+		if left.isTest != right.isTest {
+			if left.isTest {
+				return -1
+			}
+			return 1
+		}
+		if pathOrder := compareIntPaths(left.path, right.path); pathOrder != 0 {
+			return pathOrder
+		}
+		if left.id < right.id {
+			return -1
+		}
+		if left.id > right.id {
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+func compareIntPaths(left, right []int) int {
+	for i := 0; i < len(left) && i < len(right); i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	if len(left) < len(right) {
+		return -1
+	}
+	if len(left) > len(right) {
+		return 1
+	}
+	return 0
 }
 
 func ruleUsesConditionTreeIdentity(rule compiledRule) bool {
@@ -2963,4 +3018,15 @@ func ruleTreeConditionByOrder(conditions []RuleCondition, path []int) (RuleCondi
 		}
 	}
 	return RuleCondition{}, false
+}
+
+func ruleTreeConditionForIdentity(conditions []RuleCondition, plan compiledConditionPlan) (RuleCondition, bool) {
+	if plan.bindingSlot >= 0 {
+		for _, condition := range conditions {
+			if condition.Order == plan.bindingSlot {
+				return condition, true
+			}
+		}
+	}
+	return ruleTreeConditionByOrder(conditions, plan.path)
 }

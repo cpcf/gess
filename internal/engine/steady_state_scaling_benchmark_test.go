@@ -64,6 +64,10 @@ func BenchmarkGessSteadyStateRuleCreatedFacts(b *testing.B) {
 }
 
 func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCase) *Ruleset {
+	return mustCompileSteadyStateScalingRulesetWithProfile(t, tc, nil)
+}
+
+func mustCompileSteadyStateScalingRulesetWithProfile(t testing.TB, tc steadyStateScalingCase, profile *branchPlanningProfile) *Ruleset {
 	t.Helper()
 
 	workspace := NewWorkspace()
@@ -364,7 +368,7 @@ func mustCompileSteadyStateScalingRuleset(t testing.TB, tc steadyStateScalingCas
 		})
 	}
 
-	return mustCompileWorkspace(t, workspace)
+	return mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
 }
 
 func mustSeedSteadyStateScalingSession(t testing.TB, revision *Ruleset, tc steadyStateScalingCase) *Session {
