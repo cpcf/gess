@@ -129,8 +129,10 @@ func CloneRuleConditions(conditions []RuleCondition) []RuleCondition {
 }
 
 // RuleConditionBranch is one compiled branch in a condition tree. Flat rules
-// and tree rules without disjunction expose one branch; disjunctive trees expose
-// one branch for each expanded alternative in source order.
+// and tree rules without disjunction expose one branch. Disjunctive trees expose
+// expanded alternatives in source order, bounded for structurally compiled
+// programs; Rule.ConditionBranchesTruncated and Query.ConditionBranchesTruncated
+// report whether the returned inspection is incomplete.
 type RuleConditionBranch struct {
 	IDValue         int
 	ConditionValues []RuleConditionBranchCondition

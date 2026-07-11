@@ -13,6 +13,7 @@ import (
 type reteGraph struct {
 	alphaNodes          []reteGraphAlphaNode
 	betaNodes           []reteGraphBetaNode
+	unionNodes          []reteGraphUnionNode
 	aggregateNodes      []reteGraphAggregateNode
 	terminalNodes       []reteGraphTerminalNode
 	ruleBranchPlans     []reteGraphRuleBranchPlan
@@ -32,6 +33,7 @@ type reteGraph struct {
 type reteGraphAlphaNodeID int
 type reteGraphBetaNodeID int
 type reteGraphAggregateNodeID int
+type reteGraphUnionNodeID int
 type reteGraphTerminalNodeID int
 
 type reteGraphStageKind uint8
@@ -42,6 +44,7 @@ const (
 	reteGraphStageAlpha
 	reteGraphStageBeta
 	reteGraphStageAggregate
+	reteGraphStageUnion
 )
 
 type reteGraphBetaNodeKind uint8
@@ -181,6 +184,16 @@ type reteGraphAggregateNode struct {
 	conditionStamps []reteGraphConditionStamp
 }
 
+// reteGraphUnionNode merges structurally alternative condition paths. Its
+// session-owned memory propagates the first support for a token identity and
+// retracts only when the last alternative support disappears.
+type reteGraphUnionNode struct {
+	id              reteGraphUnionNodeID
+	width           int
+	edges           reteGraphStageEdges
+	conditionStamps []reteGraphConditionStamp
+}
+
 type reteGraphConditionStamp struct {
 	owner        RuleRevisionID
 	branchID     int
@@ -190,6 +203,7 @@ type reteGraphConditionStamp struct {
 
 type reteGraphStageEdges struct {
 	successors      []reteGraphStageSuccessor
+	unions          []reteGraphUnionNodeID
 	aggregateInputs []reteGraphAggregateNodeID
 	aggregateOuters []reteGraphAggregateNodeID
 	terminals       []reteGraphTerminalRoute
@@ -433,6 +447,10 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 	betaIndex := make(map[reteGraphBetaKey]reteGraphBetaNodeID, len(compiledRules))
 
 	for _, rule := range compiledRules {
+		if rule.structuralConditionProgram {
+			graph.compileStructuralRule(rule, alphaIndex, betaIndex, templatesByKey)
+			continue
+		}
 		var terminalID reteGraphTerminalNodeID
 		for _, branch := range rule.executionConditionBranches() {
 			if branchContainsAggregate(branch) {
@@ -574,6 +592,128 @@ func compileReteGraph(compiledRules []compiledRule, compiledQueries []compiledQu
 	return graph
 }
 
+func (g *reteGraph) compileStructuralRule(rule compiledRule, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) {
+	current, ok := g.compileStructuralConditionShape(rule.revisionID, rule.conditionTreeShape, rule.structuralConditionPlans, reteGraphStageRef{}, alphaIndex, betaIndex, templatesByKey)
+	if !ok {
+		return
+	}
+	terminalID := reteGraphTerminalNodeID(len(g.terminalNodes) + 1)
+	g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{
+		id: terminalID, kind: reteGraphTerminalRule, ruleRevisionID: rule.revisionID, input: current,
+	})
+	g.appendTerminal(current, reteGraphTerminalRoute{terminalID: terminalID, branchID: 0})
+	// Public inspection remains deliberately bounded. The structural stages use
+	// branch -1 stamps so WhyNot cannot mistake a flattened leaf for one of the
+	// bounded Cartesian inspection branches.
+	if len(rule.conditionBranches) > 0 {
+		branch := rule.conditionBranches[0]
+		g.ruleBranchPlans = append(g.ruleBranchPlans, reteGraphRuleBranchPlan{ruleRevisionID: rule.revisionID, branchID: branch.id, conditions: cloneRuleConditionBranchConditions(branch.conditions)})
+		g.branchInspections = append(g.branchInspections, inspectReteGraphRuleBranch(rule, branch, terminalID))
+	}
+}
+
+func (g *reteGraph) compileStructuralConditionShape(owner RuleRevisionID, shape compiledConditionTreeShape, plans []compiledConditionPlan, current reteGraphStageRef, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
+	switch shape.kind {
+	case ConditionTreeKindAnd:
+		ok := current.kind != reteGraphStageUnknown
+		for _, child := range shape.children {
+			var childOK bool
+			current, childOK = g.compileStructuralConditionShape(owner, child, plans, current, alphaIndex, betaIndex, templatesByKey)
+			if !childOK {
+				return reteGraphStageRef{}, false
+			}
+			ok = true
+		}
+		return current, ok
+	case ConditionTreeKindOr:
+		outputs := make([]reteGraphStageRef, 0, len(shape.children))
+		for _, child := range shape.children {
+			output, ok := g.compileStructuralConditionShape(owner, child, plans, current, alphaIndex, betaIndex, templatesByKey)
+			if !ok {
+				return reteGraphStageRef{}, false
+			}
+			if output.kind == reteGraphStageAlpha {
+				filterID, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeFilter, output, reteGraphStageRef{}, nil, nil)
+				entry := g.alphaNodeEntry(output)
+				if index := structuralShapeLastConditionIndex(child); index >= 0 && index < len(plans) {
+					entry = graphTokenEntryForCondition(plans[index])
+				}
+				g.appendStageSuccessor(output, reteGraphStageSuccessor{betaNodeID: filterID, side: reteGraphBetaInputLeft, entry: entry})
+				output = reteGraphStageRef{kind: reteGraphStageBeta, id: int(filterID)}
+			}
+			outputs = append(outputs, output)
+		}
+		unionID := reteGraphUnionNodeID(len(g.unionNodes) + 1)
+		g.unionNodes = append(g.unionNodes, reteGraphUnionNode{id: unionID, width: g.stageTokenWidth(outputs[0])})
+		for _, output := range outputs {
+			g.appendStageUnion(output, unionID)
+		}
+		return reteGraphStageRef{kind: reteGraphStageUnion, id: int(unionID)}, true
+	case ConditionTreeKindNot:
+		if len(shape.children) != 1 {
+			return reteGraphStageRef{}, false
+		}
+		return g.compileStructuralConditionShape(owner, shape.children[0], plans, current, alphaIndex, betaIndex, templatesByKey)
+	default:
+		if shape.conditionIndex < 0 || shape.conditionIndex >= len(plans) {
+			return reteGraphStageRef{}, false
+		}
+		return g.compileStructuralCondition(owner, shape.conditionIndex, plans[shape.conditionIndex], current, alphaIndex, betaIndex, templatesByKey)
+	}
+}
+
+func structuralShapeLastConditionIndex(shape compiledConditionTreeShape) int {
+	if shape.kind != ConditionTreeKindAnd {
+		return shape.conditionIndex
+	}
+	if len(shape.children) == 0 {
+		return -1
+	}
+	return structuralShapeLastConditionIndex(shape.children[len(shape.children)-1])
+}
+
+func (g *reteGraph) compileStructuralCondition(owner RuleRevisionID, order int, condition compiledConditionPlan, current reteGraphStageRef, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) (reteGraphStageRef, bool) {
+	if condition.aggregate != nil {
+		return reteGraphStageRef{}, false
+	}
+	if condition.isTest {
+		if current.kind == reteGraphStageUnknown {
+			return reteGraphStageRef{}, false
+		}
+		id, _ := g.internBetaNode(betaIndex, reteGraphBetaNodeFilter, current, reteGraphStageRef{}, nil, condition.testPredicates)
+		g.appendStageSuccessor(current, reteGraphStageSuccessor{betaNodeID: id, side: reteGraphBetaInputLeft})
+		out := reteGraphStageRef{kind: reteGraphStageBeta, id: int(id)}
+		g.stampStageCondition(out, owner, -1, order, condition.id)
+		return out, true
+	}
+	alphaID := g.compileConditionAlphaForOwner(owner, condition, order, alphaIndex, templatesByKey, true)
+	if alphaID == 0 {
+		return reteGraphStageRef{}, false
+	}
+	alpha := reteGraphStageRef{kind: reteGraphStageAlpha, id: int(alphaID)}
+	g.stampStageCondition(alpha, owner, -1, order, condition.id)
+	if current.kind == reteGraphStageUnknown {
+		return alpha, true
+	}
+	kind := reteGraphBetaNodeJoin
+	if condition.negated {
+		kind = reteGraphBetaNodeNot
+	}
+	entry := graphTokenEntryForCondition(condition)
+	var betaID reteGraphBetaNodeID
+	var output reteGraphStageRef
+	if kind == reteGraphBetaNodeJoin {
+		betaID, output = g.internJoinWithResidualFilter(betaIndex, current, alpha, condition.joins, betaResidualExpressionPredicates(condition.predicates), entry)
+	} else {
+		betaID, _ = g.internBetaNode(betaIndex, kind, current, alpha, condition.joins, betaResidualExpressionPredicates(condition.predicates))
+		output = reteGraphStageRef{kind: reteGraphStageBeta, id: int(betaID)}
+	}
+	g.appendStageSuccessor(current, reteGraphStageSuccessor{betaNodeID: betaID, side: reteGraphBetaInputLeft})
+	g.appendStageSuccessor(alpha, reteGraphStageSuccessor{betaNodeID: betaID, side: reteGraphBetaInputRight, entry: entry})
+	g.stampStageCondition(output, owner, -1, order, condition.id)
+	return output, true
+}
+
 func (g *reteGraph) compileGeneratedAlphaOps() {
 	if g == nil {
 		return
@@ -650,6 +790,10 @@ func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alpha
 		return
 	}
 	for _, query := range compiledQueries {
+		if query.structuralProgram {
+			g.compileStructuralQuery(query, alphaIndex, betaIndex, templatesByKey)
+			continue
+		}
 		for _, branch := range query.graphConditionBranches {
 			if branchContainsAggregate(branch) {
 				g.compileQueryAggregateBranch(query, branch, alphaIndex, betaIndex, templatesByKey)
@@ -673,6 +817,21 @@ func (g *reteGraph) compileQueryTerminals(compiledQueries []compiledQuery, alpha
 			})
 			g.branchInspections = append(g.branchInspections, inspectReteGraphQueryBranch(query, branch, terminalID))
 		}
+	}
+}
+
+func (g *reteGraph) compileStructuralQuery(query compiledQuery, alphaIndex map[reteGraphAlphaKey]reteGraphAlphaNodeID, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID, templatesByKey map[TemplateKey]compiledTemplate) {
+	owner := RuleRevisionID("query:" + query.name)
+	current, ok := g.compileStructuralConditionShape(owner, query.conditionTreeShape, query.structuralPlans, reteGraphStageRef{}, alphaIndex, betaIndex, templatesByKey)
+	if !ok {
+		return
+	}
+	terminalID := reteGraphTerminalNodeID(len(g.terminalNodes) + 1)
+	g.terminalNodes = append(g.terminalNodes, reteGraphTerminalNode{id: terminalID, kind: reteGraphTerminalQuery, queryName: query.name, input: current})
+	g.queryTerminalIDs[query.name] = append(g.queryTerminalIDs[query.name], terminalID)
+	g.appendTerminal(current, reteGraphTerminalRoute{terminalID: terminalID, branchID: 0})
+	if len(query.conditionBranches) > 0 {
+		g.branchInspections = append(g.branchInspections, inspectReteGraphQueryBranch(query, query.conditionBranches[0], terminalID))
 	}
 }
 
@@ -1352,6 +1511,13 @@ func (g *reteGraph) aggregateNode(id reteGraphAggregateNodeID) *reteGraphAggrega
 	return &g.aggregateNodes[index]
 }
 
+func (g *reteGraph) unionNode(id reteGraphUnionNodeID) *reteGraphUnionNode {
+	if g == nil || id <= 0 || int(id) > len(g.unionNodes) {
+		return nil
+	}
+	return &g.unionNodes[int(id)-1]
+}
+
 func (g *reteGraph) stampStageCondition(stage reteGraphStageRef, owner RuleRevisionID, branchID, plannedOrder int, conditionID ConditionID) {
 	if g == nil || stage.kind == reteGraphStageUnknown || stage.kind == reteGraphStageRoot {
 		return
@@ -1373,6 +1539,10 @@ func (g *reteGraph) stampStageCondition(stage reteGraphStageRef, owner RuleRevis
 		}
 	case reteGraphStageAggregate:
 		if node := g.aggregateNode(reteGraphAggregateNodeID(stage.id)); node != nil {
+			node.conditionStamps = appendReteGraphConditionStamp(node.conditionStamps, stamp)
+		}
+	case reteGraphStageUnion:
+		if node := g.unionNode(reteGraphUnionNodeID(stage.id)); node != nil {
 			node.conditionStamps = appendReteGraphConditionStamp(node.conditionStamps, stamp)
 		}
 	}
@@ -1401,6 +1571,10 @@ func (g *reteGraph) conditionStampForStage(stage reteGraphStageRef, owner RuleRe
 		}
 	case reteGraphStageAggregate:
 		if node := g.aggregateNode(reteGraphAggregateNodeID(stage.id)); node != nil {
+			stamps = node.conditionStamps
+		}
+	case reteGraphStageUnion:
+		if node := g.unionNode(reteGraphUnionNodeID(stage.id)); node != nil {
 			stamps = node.conditionStamps
 		}
 	}
@@ -1450,6 +1624,12 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 			return g.stageTokenWidth(node.outer) + len(node.specs)
 		}
 		return len(node.specs)
+	case reteGraphStageUnion:
+		node := g.unionNode(reteGraphUnionNodeID(stage.id))
+		if node == nil {
+			return 0
+		}
+		return node.width
 	default:
 		return 0
 	}
@@ -1491,6 +1671,17 @@ func (g *reteGraph) appendStageSuccessor(source reteGraphStageRef, successor ret
 	if edges != nil {
 		edges.successors = append(edges.successors, successor)
 	}
+}
+
+func (g *reteGraph) appendStageUnion(source reteGraphStageRef, id reteGraphUnionNodeID) {
+	if g == nil || source.kind == reteGraphStageUnknown || id <= 0 {
+		return
+	}
+	edges := g.stageEdges(source)
+	if edges == nil || slices.Contains(edges.unions, id) {
+		return
+	}
+	edges.unions = append(edges.unions, id)
 }
 
 func (g *reteGraph) stageHasSuccessor(source reteGraphStageRef, successor reteGraphStageSuccessor) bool {
@@ -1589,9 +1780,22 @@ func (g *reteGraph) stageEdges(source reteGraphStageRef) *reteGraphStageEdges {
 			return nil
 		}
 		return &node.edges
+	case reteGraphStageUnion:
+		node := g.unionNode(reteGraphUnionNodeID(source.id))
+		if node == nil {
+			return nil
+		}
+		return &node.edges
 	default:
 		return nil
 	}
+}
+
+func (g *reteGraph) stageUnions(source reteGraphStageRef) []reteGraphUnionNodeID {
+	if edges := g.stageEdges(source); edges != nil {
+		return edges.unions
+	}
+	return nil
 }
 
 func (g *reteGraph) stageSuccessors(source reteGraphStageRef) []reteGraphStageSuccessor {

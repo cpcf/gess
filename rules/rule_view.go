@@ -2,23 +2,24 @@ package rules
 
 // Rule is the compiled, inspectable form of a RuleSpec.
 type Rule struct {
-	IDValue                RuleID
-	RevisionIDValue        RuleRevisionID
-	NameValue              string
-	ModuleValue            ModuleName
-	DescriptionText        string
-	TagValues              []string
-	SalienceValue          int
-	AutoFocusValue         bool
-	HasAutoFocus           bool
-	EffectiveAutoFocusFlag bool
-	Order                  int
-	SourceSpan             SourceSpan
-	GessSourceText         string
-	ConditionValues        []RuleCondition
-	ConditionTreeValue     RuleConditionTree
-	ConditionBranchValues  []RuleConditionBranch
-	ActionValues           []RuleAction
+	IDValue                        RuleID
+	RevisionIDValue                RuleRevisionID
+	NameValue                      string
+	ModuleValue                    ModuleName
+	DescriptionText                string
+	TagValues                      []string
+	SalienceValue                  int
+	AutoFocusValue                 bool
+	HasAutoFocus                   bool
+	EffectiveAutoFocusFlag         bool
+	Order                          int
+	SourceSpan                     SourceSpan
+	GessSourceText                 string
+	ConditionValues                []RuleCondition
+	ConditionTreeValue             RuleConditionTree
+	ConditionBranchValues          []RuleConditionBranch
+	ConditionBranchesTruncatedFlag bool
+	ActionValues                   []RuleAction
 }
 
 func (r Rule) ID() RuleID {
@@ -81,6 +82,12 @@ func (r Rule) ConditionTree() RuleConditionTree {
 
 func (r Rule) ConditionBranches() []RuleConditionBranch {
 	return CloneRuleConditionBranches(r.ConditionBranchValues)
+}
+
+// ConditionBranchesTruncated reports whether ConditionBranches is a bounded
+// inspection prefix rather than the complete Cartesian expansion.
+func (r Rule) ConditionBranchesTruncated() bool {
+	return r.ConditionBranchesTruncatedFlag
 }
 
 func (r Rule) Actions() []RuleAction {

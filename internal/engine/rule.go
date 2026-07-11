@@ -221,6 +221,8 @@ type compiledRule struct {
 	treeConditions              []RuleCondition
 	conditionTree               RuleConditionTree
 	conditionTreeShape          compiledConditionTreeShape
+	structuralConditionPlans    []compiledConditionPlan
+	structuralConditionProgram  bool
 	conditionPlans              []compiledConditionPlan
 	conditionBranches           []compiledConditionBranch
 	conditionBranchPlans        []RuleConditionBranch
@@ -231,23 +233,24 @@ type compiledRule struct {
 
 func (r compiledRule) inspect() Rule {
 	return Rule{
-		IDValue:                r.id,
-		RevisionIDValue:        r.revisionID,
-		NameValue:              r.name,
-		ModuleValue:            r.module,
-		DescriptionText:        r.description,
-		TagValues:              append([]string(nil), r.tags...),
-		SalienceValue:          r.salience,
-		AutoFocusValue:         r.autoFocus,
-		HasAutoFocus:           r.hasAutoFocus,
-		EffectiveAutoFocusFlag: r.effectiveAutoFocus,
-		Order:                  r.declarationOrder,
-		SourceSpan:             r.source,
-		GessSourceText:         r.gessSource,
-		ConditionValues:        cloneRuleConditions(r.conditions),
-		ConditionTreeValue:     cloneRuleConditionTree(r.conditionTree),
-		ConditionBranchValues:  cloneRuleConditionBranches(r.conditionBranchPlans),
-		ActionValues:           append([]RuleAction(nil), r.actions...),
+		IDValue:                        r.id,
+		RevisionIDValue:                r.revisionID,
+		NameValue:                      r.name,
+		ModuleValue:                    r.module,
+		DescriptionText:                r.description,
+		TagValues:                      append([]string(nil), r.tags...),
+		SalienceValue:                  r.salience,
+		AutoFocusValue:                 r.autoFocus,
+		HasAutoFocus:                   r.hasAutoFocus,
+		EffectiveAutoFocusFlag:         r.effectiveAutoFocus,
+		Order:                          r.declarationOrder,
+		SourceSpan:                     r.source,
+		GessSourceText:                 r.gessSource,
+		ConditionValues:                cloneRuleConditions(r.conditions),
+		ConditionTreeValue:             cloneRuleConditionTree(r.conditionTree),
+		ConditionBranchValues:          cloneRuleConditionBranches(r.conditionBranchPlans),
+		ConditionBranchesTruncatedFlag: r.structuralConditionProgram,
+		ActionValues:                   append([]RuleAction(nil), r.actions...),
 	}
 }
 
@@ -350,6 +353,82 @@ func (s compiledConditionTreeShape) clone() compiledConditionTreeShape {
 	}
 	out.test = cloneExpressionSpec(s.test)
 	out.aggregate = cloneAccumulateCondition(s.aggregate)
+	return out
+}
+
+func conditionTreeExpansionExceedsLimit(shape compiledConditionTreeShape, limit int) bool {
+	return conditionTreeExpansionCount(shape, limit+1) > limit
+}
+
+func validateStructuralConditionProgram(ruleName string, spec ConditionSpec) error {
+	if conditionTreeContainsHigherOrder(spec) {
+		return higherOrderValidationError(ruleName, -1, "higher-order conditions are not supported in oversized structural or programs")
+	}
+	if conditionTreeContainsAggregate(spec) {
+		return &ValidationError{
+			RuleName: ruleName,
+			Reason:   "accumulate conditions are not supported in oversized structural or programs",
+			Err:      ErrAggregateValidation,
+		}
+	}
+	return nil
+}
+
+func conditionTreeExpansionCount(shape compiledConditionTreeShape, saturation int) int {
+	if saturation <= 1 {
+		return saturation
+	}
+	switch shape.kind {
+	case ConditionTreeKindOr:
+		total := 0
+		for _, child := range shape.children {
+			total += conditionTreeExpansionCount(child, saturation)
+			if total >= saturation {
+				return saturation
+			}
+		}
+		return total
+	case ConditionTreeKindAnd:
+		total := 1
+		for _, child := range shape.children {
+			count := conditionTreeExpansionCount(child, saturation)
+			if count == 0 || total > (saturation-1)/count {
+				return saturation
+			}
+			total *= count
+			if total >= saturation {
+				return saturation
+			}
+		}
+		return total
+	default:
+		return 1
+	}
+}
+
+func shiftConditionTreeShapeIndexes(shape compiledConditionTreeShape, delta int) compiledConditionTreeShape {
+	out := shape.clone()
+	var shift func(*compiledConditionTreeShape)
+	shift = func(node *compiledConditionTreeShape) {
+		if len(node.children) == 0 {
+			node.conditionIndex += delta
+		}
+		for i := range node.children {
+			shift(&node.children[i])
+		}
+	}
+	shift(&out)
+	return out
+}
+
+func cloneCompiledConditionPlans(in []compiledConditionPlan) []compiledConditionPlan {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]compiledConditionPlan, len(in))
+	for i, plan := range in {
+		out[i] = cloneCompiledConditionPlan(plan)
+	}
 	return out
 }
 
@@ -943,11 +1022,10 @@ func expandConditionTreeNodeBranches(ruleName string, spec ConditionSpec, path [
 	}
 }
 
-// maxRuleConditionBranches bounds or-branch expansion: nested or groups
-// multiply branch counts, so an unbounded cross-product makes compile time
-// exponential in the number of or groups. Scaffolding S-05: removable once
-// or-node prefix sharing makes branch counts sub-exponential in the graph.
-const maxRuleConditionBranches = 1024
+// maxInspectedConditionBranches bounds only the public Cartesian branch
+// inspection. Execution switches to the structural graph program before this
+// limit would reject a rule.
+const maxInspectedConditionBranches = 1024
 
 func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, path []int, visible bool, negated bool) ([]normalizedRuleConditionBranch, error) {
 	if len(specs) == 0 {
@@ -962,22 +1040,22 @@ func expandAndConditionTreeBranches(ruleName string, specs []ConditionSpec, path
 		if err != nil {
 			return nil, err
 		}
-		if len(branches)*len(childBranches) > maxRuleConditionBranches {
-			return nil, &ValidationError{
-				RuleName: ruleName,
-				Reason: fmt.Sprintf("or conditions expand to more than %d combined branches; split the rule into smaller rules",
-					maxRuleConditionBranches),
-			}
-		}
-		next := make([]normalizedRuleConditionBranch, 0, len(branches)*len(childBranches))
+		capacity := min(len(branches)*len(childBranches), maxInspectedConditionBranches)
+		next := make([]normalizedRuleConditionBranch, 0, capacity)
 		for _, existing := range branches {
 			for _, child := range childBranches {
+				if len(next) == maxInspectedConditionBranches {
+					break
+				}
 				combined := normalizedRuleConditionBranch{
 					conditions: make([]normalizedRuleCondition, 0, len(existing.conditions)+len(child.conditions)),
 				}
 				combined.conditions = append(combined.conditions, existing.conditions...)
 				combined.conditions = append(combined.conditions, child.conditions...)
 				next = append(next, combined)
+			}
+			if len(next) == maxInspectedConditionBranches {
+				break
 			}
 		}
 		branches = next
@@ -1460,6 +1538,11 @@ func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int,
 	if err != nil {
 		return compiledRule{}, err
 	}
+	if normalized.ConditionTree != nil && conditionTreeExpansionExceedsLimit(conditionTreeShape, maxInspectedConditionBranches) {
+		if err := validateStructuralConditionProgram(normalized.Name, normalized.ConditionTree); err != nil {
+			return compiledRule{}, err
+		}
+	}
 	normalizedBranches, err := normalizeRuleConditionBranches(normalized)
 	if err != nil {
 		return compiledRule{}, err
@@ -1586,6 +1669,8 @@ func compileRuleSpecInternal(spec RuleSpec, ruleID RuleID, declarationOrder int,
 		treeConditions:              treeConditions,
 		conditionTree:               conditionTree,
 		conditionTreeShape:          conditionTreeShape.clone(),
+		structuralConditionPlans:    cloneCompiledConditionPlans(inspectionSet.conditionPlans),
+		structuralConditionProgram:  conditionTreeExpansionExceedsLimit(conditionTreeShape, maxInspectedConditionBranches),
 		conditionPlans:              conditionPlans,
 		conditionBranches:           compiledBranches,
 		conditionBranchPlans:        conditionBranches,

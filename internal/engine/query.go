@@ -74,6 +74,9 @@ type compiledQuery struct {
 	conditions              []RuleCondition
 	treeConditions          []RuleCondition
 	conditionTree           RuleConditionTree
+	conditionTreeShape      compiledConditionTreeShape
+	structuralPlans         []compiledConditionPlan
+	structuralProgram       bool
 	conditionBranches       []compiledConditionBranch
 	graphConditionBranches  []compiledConditionBranch
 	conditionBranchPlans    []RuleConditionBranch
@@ -144,16 +147,17 @@ type compiledQueryReturnProjection struct {
 
 func (q compiledQuery) inspect() Query {
 	return Query{
-		NameValue:             q.name,
-		ModuleValue:           q.module,
-		DescriptionText:       q.description,
-		SourceSpan:            q.source,
-		GessSourceText:        q.gessSource,
-		ParameterValues:       cloneQueryParameters(q.parameters),
-		ConditionValues:       cloneRuleConditions(q.conditions),
-		ConditionTreeValue:    cloneRuleConditionTree(q.conditionTree),
-		ConditionBranchValues: cloneRuleConditionBranches(q.conditionBranchPlans),
-		ReturnValues:          q.inspectReturns(),
+		NameValue:                      q.name,
+		ModuleValue:                    q.module,
+		DescriptionText:                q.description,
+		SourceSpan:                     q.source,
+		GessSourceText:                 q.gessSource,
+		ParameterValues:                cloneQueryParameters(q.parameters),
+		ConditionValues:                cloneRuleConditions(q.conditions),
+		ConditionTreeValue:             cloneRuleConditionTree(q.conditionTree),
+		ConditionBranchValues:          cloneRuleConditionBranches(q.conditionBranchPlans),
+		ConditionBranchesTruncatedFlag: q.structuralProgram,
+		ReturnValues:                   q.inspectReturns(),
 	}
 }
 
@@ -197,6 +201,11 @@ func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functi
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
 	}
+	if normalized.ConditionTree != nil && conditionTreeExpansionExceedsLimit(conditionTreeShape, maxInspectedConditionBranches) {
+		if err := validateStructuralConditionProgram(normalized.Name, normalized.ConditionTree); err != nil {
+			return compiledQuery{}, markQueryValidation(err)
+		}
+	}
 	normalizedBranches, err := normalizeRuleConditionBranches(pseudoRule)
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
@@ -213,6 +222,27 @@ func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functi
 	if err != nil {
 		return compiledQuery{}, markQueryValidation(err)
 	}
+	structuralProgram := conditionTreeExpansionExceedsLimit(conditionTreeShape, maxInspectedConditionBranches)
+	var structuralPlans []compiledConditionPlan
+	var structuralShape compiledConditionTreeShape
+	if structuralProgram {
+		lowered := make([]normalizedRuleCondition, 0, len(normalizedConditions)+1)
+		lowered = append(lowered, normalizedRuleCondition{spec: RuleConditionSpec{Binding: internalQueryTriggerBinding, Target: DynamicFact(internalQueryTriggerName(normalized.Name))}, visible: true})
+		for _, condition := range normalizedConditions {
+			next := cloneNormalizedRuleCondition(condition)
+			next.spec = lowerQueryConditionParams(next.spec, paramTypes)
+			if next.isAggregate {
+				next.aggregate = lowerQueryAggregateConditionParams(next.aggregate, paramTypes)
+			}
+			lowered = append(lowered, next)
+		}
+		set, compileErr := compileNormalizedRuleConditionBranchWithParams(normalized.Name, queryRuleID, normalized.Module, lowered, templates, true, nil, functions, globals)
+		if compileErr != nil {
+			return compiledQuery{}, markQueryValidation(compileErr)
+		}
+		structuralPlans = set.conditionPlans
+		structuralShape = compiledConditionTreeShape{kind: ConditionTreeKindAnd, children: []compiledConditionTreeShape{{kind: ConditionTreeKindMatch, conditionIndex: 0}, shiftConditionTreeShapeIndexes(conditionTreeShape, 1)}}
+	}
 	compiledBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	graphBranches := make([]compiledConditionBranch, 0, len(normalizedBranches))
 	var representative compiledRuleConditionSet
@@ -228,6 +258,9 @@ func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functi
 			return compiledQuery{}, markQueryValidation(err)
 		}
 		compiledBranches = append(compiledBranches, compiledConditionBranchFromPlanningIR(branchIR, compiledBranch))
+		if structuralProgram {
+			continue
+		}
 		graphBranch, ok, err := compileQueryGraphBranch(normalized.Name, queryRuleID, normalized.Module, branchIndex, branch.conditions, templates, paramTypes, functions, globals)
 		if err != nil {
 			return compiledQuery{}, markQueryValidation(err)
@@ -236,7 +269,7 @@ func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functi
 			graphBranches = append(graphBranches, graphBranch)
 		}
 	}
-	if len(graphBranches) != len(normalizedBranches) {
+	if !structuralProgram && len(graphBranches) != len(normalizedBranches) {
 		return compiledQuery{}, &ValidationError{
 			RuleName: normalized.Name,
 			Reason:   "query cannot be compiled to graph terminal memory",
@@ -275,6 +308,9 @@ func compileQuerySpecInternal(spec QuerySpec, templates templateResolver, functi
 		conditions:              representative.conditions,
 		treeConditions:          inspectionSet.treeConditions,
 		conditionTree:           buildRuleConditionTree(conditionTreeShape, inspectionSet.treeConditions),
+		conditionTreeShape:      structuralShape,
+		structuralPlans:         structuralPlans,
+		structuralProgram:       structuralProgram,
 		conditionBranches:       compiledBranches,
 		graphConditionBranches:  graphBranches,
 		conditionBranchPlans:    conditionBranches,
@@ -1125,7 +1161,7 @@ func (s Snapshot) queryRows(ctx context.Context, name string, args QueryArgs) ([
 	if err != nil {
 		return nil, err
 	}
-	if len(query.graphConditionBranches) == 0 {
+	if len(query.graphConditionBranches) == 0 && !query.structuralProgram {
 		return nil, fmt.Errorf("%w: query %q has no graph terminal plan", ErrUnsupportedRuntime, query.name)
 	}
 	runtime, err := newReteRuntime(s.revision, s.globalValues)
@@ -1207,7 +1243,7 @@ func (s *Session) queryGraphRows(ctx context.Context, name string, args QueryArg
 	if err != nil {
 		return nil, true, err
 	}
-	if s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil || len(query.graphConditionBranches) == 0 {
+	if s.propagation.runtime == nil || s.propagation.runtime.graphBeta == nil || (len(query.graphConditionBranches) == 0 && !query.structuralProgram) {
 		return nil, false, nil
 	}
 	trigger := s.queryTriggerFact(query, &compiledArgs)

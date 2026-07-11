@@ -215,6 +215,7 @@ func reteGraphMemoryLayoutCompatible(left, right *reteGraph) bool {
 	}
 	if len(left.alphaNodes) != len(right.alphaNodes) ||
 		len(left.betaNodes) != len(right.betaNodes) ||
+		len(left.unionNodes) != len(right.unionNodes) ||
 		len(left.aggregateNodes) != len(right.aggregateNodes) ||
 		len(left.terminalNodes) != len(right.terminalNodes) {
 		return false
@@ -262,6 +263,9 @@ func reteGraphMemoryLayoutCompatible(left, right *reteGraph) bool {
 		if !reflect.DeepEqual(leftNode, rightNode) {
 			return false
 		}
+	}
+	if !reflect.DeepEqual(left.unionNodes, right.unionNodes) {
+		return false
 	}
 	return reflect.DeepEqual(left.terminalNodes, right.terminalNodes) &&
 		reflect.DeepEqual(left.ruleBranchPlans, right.ruleBranchPlans) &&

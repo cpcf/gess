@@ -15,6 +15,7 @@ type reteGraphBetaMemory struct {
 	evalCtx                  context.Context
 	globalValues             []Value
 	nodes                    []*reteGraphBetaNodeMemory
+	unions                   []reteGraphUnionMemory
 	aggregates               []*reteGraphAggregateNodeMemory
 	terminals                []*reteGraphTerminalMemory
 	terminalsByRule          map[RuleRevisionID][]*reteGraphTerminalMemory
@@ -56,6 +57,16 @@ type reteGraphBetaNodeMemory struct {
 	right    betaSideMemory
 	outputs  joinOutputTable
 	negative reteGraphNegativeBetaNodeMemory
+}
+
+type reteGraphUnionMemory struct {
+	rows map[graphTokenIdentityKey][]*reteGraphUnionRow
+}
+
+type reteGraphUnionRow struct {
+	token    tokenRef
+	supports map[tokenRef]int
+	count    int
 }
 
 type reteGraphAlphaMemory struct {
@@ -641,6 +652,7 @@ func newEmptyReteGraphBetaMemory(revision *Ruleset, graph *reteGraph, factCount 
 		graph:        graph,
 		globalValues: cloneGlobalValues(globals),
 		nodes:        make([]*reteGraphBetaNodeMemory, len(graph.betaNodes)+1),
+		unions:       make([]reteGraphUnionMemory, len(graph.unionNodes)+1),
 		aggregates:   make([]*reteGraphAggregateNodeMemory, len(graph.aggregateNodes)+1),
 		terminals:    make([]*reteGraphTerminalMemory, len(graph.terminalNodes)+1),
 		arena:        newTokenArena(),
@@ -1267,6 +1279,10 @@ func (m *reteGraphBetaMemory) clearMemories() {
 			node.outputs.clear()
 			node.negative.clear()
 		}
+	}
+	for i := range m.unions {
+		clear(m.unions[i].rows)
+		m.unions[i].rows = nil
 	}
 	for _, terminal := range m.terminals {
 		if terminal != nil {
@@ -3644,6 +3660,11 @@ func (m *reteGraphBetaMemory) propagateFromStage(source reteGraphStageRef, token
 	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.insertAggregateToken(aggregateID, token, span, delta)
 	}
+	for _, unionID := range m.graph.stageUnions(source) {
+		if err := m.insertUnionSupport(unionID, token, span, delta); err != nil {
+			return err
+		}
+	}
 	for _, successor := range m.graph.stageSuccessors(source) {
 		node := m.graph.betaNode(successor.betaNodeID)
 		if node == nil {
@@ -3674,6 +3695,11 @@ func (m *reteGraphBetaMemory) propagateFromBetaNode(node *reteGraphBetaNode, tok
 	}
 	for _, aggregateID := range edges.aggregateInputs {
 		m.insertAggregateToken(aggregateID, token, span, delta)
+	}
+	for _, unionID := range edges.unions {
+		if err := m.insertUnionSupport(unionID, token, span, delta); err != nil {
+			return err
+		}
 	}
 	for _, successor := range edges.successors {
 		next := m.graph.betaNode(successor.betaNodeID)
@@ -3708,11 +3734,78 @@ func (m *reteGraphBetaMemory) propagateRemoveFromStage(source reteGraphStageRef,
 	for _, aggregateID := range m.graph.stageAggregateInputs(source) {
 		m.removeAggregateToken(aggregateID, token, counters, delta)
 	}
+	for _, unionID := range m.graph.stageUnions(source) {
+		m.removeUnionSupport(unionID, token, counters, delta)
+	}
 	for _, successor := range m.graph.stageSuccessors(source) {
 		if !m.removeBetaInputToken(successor.betaNodeID, successor.side, token, counters, delta) {
 			delta.supported = false
 		}
 	}
+}
+
+func (m *reteGraphBetaMemory) insertUnionSupport(id reteGraphUnionNodeID, token tokenRef, span *propagationCounterSpan, delta *reteAgendaDelta) error {
+	if m == nil || id <= 0 || int(id) >= len(m.unions) || token.isZero() {
+		return nil
+	}
+	memory := &m.unions[int(id)]
+	if memory.rows == nil {
+		memory.rows = make(map[graphTokenIdentityKey][]*reteGraphUnionRow)
+	}
+	key := tokenRefKey(token)
+	bucket := memory.rows[key]
+	var row *reteGraphUnionRow
+	for _, candidate := range bucket {
+		if candidate != nil && tokenRefEqual(candidate.token, token) {
+			row = candidate
+			break
+		}
+	}
+	if row == nil {
+		row = &reteGraphUnionRow{token: token, supports: make(map[tokenRef]int)}
+		memory.rows[key] = append(bucket, row)
+	}
+	row.supports[token]++
+	row.count++
+	if row.count != 1 {
+		return nil
+	}
+	return m.propagateFromStage(reteGraphStageRef{kind: reteGraphStageUnion, id: int(id)}, row.token, span, delta)
+}
+
+func (m *reteGraphBetaMemory) removeUnionSupport(id reteGraphUnionNodeID, token tokenRef, counters *propagationCounterLedger, delta *reteAgendaDelta) {
+	if m == nil || id <= 0 || int(id) >= len(m.unions) || token.isZero() {
+		return
+	}
+	memory := &m.unions[int(id)]
+	key := tokenRefKey(token)
+	bucket := memory.rows[key]
+	rowIndex := -1
+	var row *reteGraphUnionRow
+	for i, candidate := range bucket {
+		if candidate != nil && tokenRefEqual(candidate.token, token) {
+			row, rowIndex = candidate, i
+			break
+		}
+	}
+	if row == nil || row.supports[token] == 0 {
+		return
+	}
+	row.supports[token]--
+	row.count--
+	if row.supports[token] == 0 {
+		delete(row.supports, token)
+	}
+	if row.count > 0 {
+		return
+	}
+	bucket = append(bucket[:rowIndex], bucket[rowIndex+1:]...)
+	if len(bucket) == 0 {
+		delete(memory.rows, key)
+	} else {
+		memory.rows[key] = bucket
+	}
+	m.propagateRemoveFromStage(reteGraphStageRef{kind: reteGraphStageUnion, id: int(id)}, row.token, counters, delta)
 }
 
 func (m *reteGraphBetaMemory) propagateRemoveFactFromStage(source reteGraphStageRef, id FactID, counters *propagationCounterLedger, delta *reteAgendaDelta) {
@@ -4843,6 +4936,9 @@ func (m *reteGraphBetaMemory) modifyRouteScopeForAlphaRoutes(nodeIDs []reteGraph
 		for _, successor := range m.graph.stageSuccessors(stage) {
 			scope.appendBeta(successor.betaNodeID)
 			scope.appendStage(reteGraphStageRef{kind: reteGraphStageBeta, id: int(successor.betaNodeID)})
+		}
+		for _, unionID := range m.graph.stageUnions(stage) {
+			scope.appendStage(reteGraphStageRef{kind: reteGraphStageUnion, id: int(unionID)})
 		}
 		for _, aggregateID := range m.graph.stageAggregateOuters(stage) {
 			scope.appendAggregate(aggregateID)

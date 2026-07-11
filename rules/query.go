@@ -121,16 +121,17 @@ func CloneQueryReturns(returns []QueryReturn) []QueryReturn {
 
 // Query is the compiled, inspectable form of a QuerySpec.
 type Query struct {
-	NameValue             string
-	ModuleValue           ModuleName
-	DescriptionText       string
-	SourceSpan            SourceSpan
-	GessSourceText        string
-	ParameterValues       []QueryParameter
-	ConditionValues       []RuleCondition
-	ConditionTreeValue    RuleConditionTree
-	ConditionBranchValues []RuleConditionBranch
-	ReturnValues          []QueryReturn
+	NameValue                      string
+	ModuleValue                    ModuleName
+	DescriptionText                string
+	SourceSpan                     SourceSpan
+	GessSourceText                 string
+	ParameterValues                []QueryParameter
+	ConditionValues                []RuleCondition
+	ConditionTreeValue             RuleConditionTree
+	ConditionBranchValues          []RuleConditionBranch
+	ConditionBranchesTruncatedFlag bool
+	ReturnValues                   []QueryReturn
 }
 
 func (q Query) Name() string {
@@ -167,6 +168,12 @@ func (q Query) ConditionTree() RuleConditionTree {
 
 func (q Query) ConditionBranches() []RuleConditionBranch {
 	return CloneRuleConditionBranches(q.ConditionBranchValues)
+}
+
+// ConditionBranchesTruncated reports whether ConditionBranches is a bounded
+// inspection prefix rather than the complete Cartesian expansion.
+func (q Query) ConditionBranchesTruncated() bool {
+	return q.ConditionBranchesTruncatedFlag
 }
 
 func (q Query) Returns() []QueryReturn {

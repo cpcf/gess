@@ -2984,20 +2984,20 @@ func TestCompileCapsOrBranchExpansion(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := buildWorkspace(11).Compile(ctx)
+	revision, err := buildWorkspace(11).Compile(ctx)
 	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatal("compile with 2048 branches succeeded, want the branch cap error")
+	if err != nil {
+		t.Fatalf("compile with structural Or execution: %v", err)
 	}
-	var validation *ValidationError
-	if !errors.As(err, &validation) {
-		t.Fatalf("error = %T, want *ValidationError", err)
+	rule := revision.rules["wide"]
+	if !rule.structuralConditionProgram {
+		t.Fatal("over-cap rule did not use structural condition execution")
 	}
-	if !strings.Contains(validation.Reason, "combined branches") {
-		t.Fatalf("reason = %q, want the combined-branches cap message", validation.Reason)
+	if got := len(rule.conditionBranchPlans); got != maxInspectedConditionBranches {
+		t.Fatalf("public condition branches = %d, want bounded %d", got, maxInspectedConditionBranches)
 	}
 	if elapsed > 5*time.Second {
-		t.Fatalf("over-cap compile took %v, want fast failure", elapsed)
+		t.Fatalf("structural compile took %v, want bounded compilation", elapsed)
 	}
 }
 
