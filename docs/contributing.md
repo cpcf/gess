@@ -82,6 +82,8 @@ ownership policy and rationale.
 Several internal contracts are load-bearing:
 
 - Every `or` branch exposes identical binding names and templates.
+- Large Cartesian `or` products compile to support-counted union stages; the
+  bounded public branch list is inspection data, never an execution path.
 - `conditionPlans` remain in planned execution order. Public condition order
   is resolved through `bindingSlot`, never by positional indexing with
   `condition.Order`.

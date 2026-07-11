@@ -111,6 +111,10 @@ and rebuilds the bucket where it isn't (minimum and maximum when the
 departing value ties the current extreme, float sums, and `collect`). A bucket
 only re-emits downstream when its value actually changes.
 
+Branches may contain multiple `accumulate` conditions. Each result becomes
+part of the partial match consumed by later aggregate and join stages; chained
+changes settle before terminal agenda deltas are emitted.
+
 `collect` results are deterministically ordered, but not in insertion
 order. Aggregates aren't allowed under `not`, and a standalone `test` over
 an aggregate result isn't supported; compare aggregate results in actions
@@ -131,10 +135,12 @@ or downstream facts instead.
 
 :::caution
 Limits, enforced at compile time with errors wrapping
-`rules.ErrInvalidHigherOrderCondition`: `exists` and `forall` can't appear
-under `not` or as an `or` branch; the domain must be a positive
-conjunction of matches; a `forall` requirement is at most one positive
-match plus tests. Bindings inside `exists` and `forall` don't escape.
+`rules.ErrInvalidHigherOrderCondition`: disjunction and negation may be nested
+inside `exists` and `forall`, and higher-order conditions may be nested under
+`not`. A top-level `or` branch containing a higher-order condition and sibling
+sequential higher-order conditions in one `and` are not yet supported.
+Aggregates inside higher-order scopes are rejected. Bindings inside `not`,
+`exists`, and `forall` don't escape.
 :::
 
 ## Logical support and truth maintenance

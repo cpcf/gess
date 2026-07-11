@@ -118,6 +118,12 @@ err := workspace.AddRule(rules.RuleSpec{
 - `rules.Explicit{Condition: ...}`: opt a condition out of backward-chaining
   demand generation.
 
+Large disjunctive trees execute as structural graph unions instead of an
+eager Cartesian branch expansion. `Rule.ConditionBranches` and
+`Query.ConditionBranches` remain bounded inspection views;
+`ConditionBranchesTruncated()` reports when the returned branch list is only
+a prefix.
+
 `RuleSpec` also accepts a flat `Conditions []RuleConditionSpec` slice as a
 shorthand for a top-level `And` of matches.
 
