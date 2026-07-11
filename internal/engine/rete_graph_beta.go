@@ -42,6 +42,7 @@ type reteGraphBetaMemory struct {
 	deferredAggregateOrder   []deferredAggregateOutputKey
 	rightPredicateScratch    []conditionMatch
 	modifyRouteScope         reteModifyRouteScope
+	terminalDeltaCoalescer   terminalDeltaCoalescerScratch
 	propagationCounters      *propagationCounterLedger
 }
 
@@ -4845,7 +4846,7 @@ func (m *reteGraphBetaMemory) refreshRouteScopedModifyByEvents(ctx context.Conte
 	m.sourceGenerationValue = after.Generation()
 	rawAdded := append(removed.added, added.added...)
 	rawRemoved := append(removed.removed, added.removed...)
-	addedTokens, removedTokens, coalescedUpdates := coalesceTerminalTokenDeltasWithCounters(m.revision, rawAdded, rawRemoved, event.counters)
+	addedTokens, removedTokens, coalescedUpdates := coalesceTerminalTokenDeltasWithScratch(m.revision, rawAdded, rawRemoved, event.counters, &m.terminalDeltaCoalescer)
 	if event.counters != nil {
 		event.counters.recordModifyCascade(len(rawAdded), len(rawRemoved), len(addedTokens), len(removedTokens))
 	}
@@ -5063,6 +5064,10 @@ func coalesceTerminalTokenDeltas(revision *Ruleset, added, removed []reteTermina
 }
 
 func coalesceTerminalTokenDeltasWithCounters(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
+	return coalesceTerminalTokenDeltasWithScratch(revision, added, removed, counters, nil)
+}
+
+func coalesceTerminalTokenDeltasWithScratch(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger, scratch *terminalDeltaCoalescerScratch) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
 	if len(added) == 0 || len(removed) == 0 {
 		return added, removed, nil
 	}
@@ -5100,7 +5105,10 @@ func coalesceTerminalTokenDeltasWithCounters(revision *Ruleset, added, removed [
 		}
 		return keptAdded, removed, updates
 	}
-	return coalesceTerminalTokenDeltasIndexedWithCounters(revision, added, removed, counters)
+	if scratch == nil {
+		scratch = &terminalDeltaCoalescerScratch{}
+	}
+	return scratch.coalesce(revision, added, removed, counters)
 }
 
 func appendCoalescedTokenUpdate(updates []reteTerminalTokenUpdate, remove, add reteTerminalTokenDelta) []reteTerminalTokenUpdate {
@@ -5126,35 +5134,60 @@ func coalesceTerminalTokenDeltasIndexed(revision *Ruleset, added, removed []rete
 }
 
 func coalesceTerminalTokenDeltasIndexedWithCounters(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
-	type coalesceKey struct {
-		ruleRevisionID RuleRevisionID
-		identity       candidateIdentityKey
-	}
-	buckets := make(map[coalesceKey][]int, len(removed))
-	for i, remove := range removed {
-		key := coalesceKey{
+	var scratch terminalDeltaCoalescerScratch
+	return scratch.coalesce(revision, added, removed, counters)
+}
+
+type terminalDeltaCoalesceKey struct {
+	ruleRevisionID RuleRevisionID
+	identity       candidateIdentityKey
+}
+
+type terminalDeltaCoalescerScratch struct {
+	heads    map[terminalDeltaCoalesceKey]int
+	next     []int
+	consumed []bool
+}
+
+func (s *terminalDeltaCoalescerScratch) coalesce(revision *Ruleset, added, removed []reteTerminalTokenDelta, counters *propagationCounterLedger) ([]reteTerminalTokenDelta, []reteTerminalTokenDelta, []reteTerminalTokenUpdate) {
+	s.prepare(len(removed))
+	defer s.release()
+
+	for i := len(removed) - 1; i >= 0; i-- {
+		remove := removed[i]
+		key := terminalDeltaCoalesceKey{
 			ruleRevisionID: remove.ruleRevisionID,
 			identity:       candidateIdentityForTerminalTokenDelta(revision, remove).key,
 		}
-		buckets[key] = append(buckets[key], i)
+		head, ok := s.heads[key]
+		if !ok {
+			head = -1
+		}
+		s.next[i] = head
+		s.heads[key] = i
 	}
 	var updates []reteTerminalTokenUpdate
-	consumed := make([]bool, len(removed))
 	keptAdded := added[:0]
 	for _, add := range added {
-		key := coalesceKey{
+		key := terminalDeltaCoalesceKey{
 			ruleRevisionID: add.ruleRevisionID,
 			identity:       candidateIdentityForTerminalTokenDelta(revision, add).key,
 		}
-		bucket := buckets[key]
+		removedIndex, ok := s.heads[key]
+		if !ok {
+			removedIndex = -1
+		}
+		previous := -1
 		match := -1
 		candidates := 0
-		for bucketIndex, removedIndex := range bucket {
+		for removedIndex >= 0 {
 			candidates++
 			if terminalTokenDeltasCoalesceEqual(revision, add, removed[removedIndex]) {
-				match = bucketIndex
+				match = removedIndex
 				break
 			}
+			previous = removedIndex
+			removedIndex = s.next[removedIndex]
 		}
 		if counters != nil {
 			counters.recordCoalescerIdentityIndexProbe(candidates)
@@ -5164,17 +5197,26 @@ func coalesceTerminalTokenDeltasIndexedWithCounters(revision *Ruleset, added, re
 			continue
 		}
 		if counters != nil {
-			remove := removed[bucket[match]]
+			remove := removed[match]
 			distinctTokens := remove.token != add.token && !remove.token.isZero() && !add.token.isZero()
 			counters.recordModifyCoalescedPair(distinctTokens)
 		}
-		updates = appendCoalescedTokenUpdate(updates, removed[bucket[match]], add)
-		consumed[bucket[match]] = true
-		buckets[key] = append(bucket[:match], bucket[match+1:]...)
+		updates = appendCoalescedTokenUpdate(updates, removed[match], add)
+		s.consumed[match] = true
+		if previous < 0 {
+			next := s.next[match]
+			if next < 0 {
+				delete(s.heads, key)
+			} else {
+				s.heads[key] = next
+			}
+		} else {
+			s.next[previous] = s.next[match]
+		}
 	}
 	keptRemoved := removed[:0]
 	for i := range removed {
-		if !consumed[i] {
+		if !s.consumed[i] {
 			keptRemoved = append(keptRemoved, removed[i])
 		}
 	}
@@ -5182,6 +5224,31 @@ func coalesceTerminalTokenDeltasIndexedWithCounters(revision *Ruleset, added, re
 		removed[i] = reteTerminalTokenDelta{}
 	}
 	return keptAdded, keptRemoved, updates
+}
+
+func (s *terminalDeltaCoalescerScratch) prepare(removedCount int) {
+	if s.heads == nil {
+		s.heads = make(map[terminalDeltaCoalesceKey]int, removedCount)
+	} else if len(s.heads) != 0 {
+		clear(s.heads)
+	}
+	if cap(s.next) < removedCount {
+		s.next = make([]int, removedCount)
+	} else {
+		s.next = s.next[:removedCount]
+	}
+	if cap(s.consumed) < removedCount {
+		s.consumed = make([]bool, removedCount)
+	} else {
+		s.consumed = s.consumed[:removedCount]
+		clear(s.consumed)
+	}
+}
+
+func (s *terminalDeltaCoalescerScratch) release() {
+	clear(s.heads)
+	clear(s.next)
+	clear(s.consumed)
 }
 
 func terminalTokenDeltasCoalesceEqual(revision *Ruleset, left, right reteTerminalTokenDelta) bool {
