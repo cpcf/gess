@@ -211,6 +211,17 @@ func decodeCompactFactRow(handle int) (int, bool) {
 	return -handle - 2, true
 }
 
+func factRowSequenceIndex(id FactID, generation Generation) (int, bool) {
+	if id.IsZero() || id.Generation() != generation || id.Sequence() == 0 {
+		return 0, false
+	}
+	maxInt := int(^uint(0) >> 1)
+	if id.Sequence() > uint64(maxInt) {
+		return 0, false
+	}
+	return int(id.Sequence() - 1), true
+}
+
 func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if revision == nil {
 		return nil, ErrInvalidRuleset
@@ -488,16 +499,10 @@ func (s *Session) factRowIndex(id FactID) (int, bool) {
 	if s == nil || id.IsZero() {
 		return 0, false
 	}
-	if id.Generation() == s.factStore.generation && id.Sequence() > 0 {
-		if id.Sequence()-1 > uint64(int(^uint(0)>>1)) {
-			return 0, false
-		}
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(s.factStore.factsBySequence) {
-			row := s.factStore.factsBySequence[index]
-			if row != missingFactRowIndex {
-				return int(row), true
-			}
+	if index, ok := factRowSequenceIndex(id, s.factStore.generation); ok && index < len(s.factStore.factsBySequence) {
+		row := s.factStore.factsBySequence[index]
+		if row != missingFactRowIndex {
+			return int(row), true
 		}
 	}
 	if s.factStore.factsByID == nil {
@@ -511,11 +516,10 @@ func (s *Session) setFactRowIndex(id FactID, row int) {
 	if s == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
-	if id.Generation() == s.factStore.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 {
-			for len(s.factStore.factsBySequence) <= index {
-				s.factStore.factsBySequence = append(s.factStore.factsBySequence, missingFactRowIndex)
+	if row <= maxFactRowSequenceIndex {
+		if index, ok := factRowSequenceIndex(id, s.factStore.generation); ok {
+			if len(s.factStore.factsBySequence) <= index {
+				s.factStore.factsBySequence = growFactRowSequenceIndex(s.factStore.factsBySequence, index+1)
 			}
 			s.factStore.factsBySequence[index] = int32(row)
 			return
@@ -530,12 +534,9 @@ func (s *Session) deleteFactRowIndex(id FactID) {
 	if s == nil || id.IsZero() {
 		return
 	}
-	if id.Generation() == s.factStore.generation && id.Sequence() > 0 {
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(s.factStore.factsBySequence) {
-			s.factStore.factsBySequence[index] = missingFactRowIndex
-			return
-		}
+	if index, ok := factRowSequenceIndex(id, s.factStore.generation); ok && index < len(s.factStore.factsBySequence) {
+		s.factStore.factsBySequence[index] = missingFactRowIndex
+		return
 	}
 	if s.factStore.factsByID != nil {
 		delete(s.factStore.factsByID, id)
@@ -5685,17 +5686,37 @@ func (w *factWorkspace) reserveFactRowSequenceRows(factCount int) {
 	if !ok || target <= len(w.factsBySequence) {
 		return
 	}
-	oldLen := len(w.factsBySequence)
-	if cap(w.factsBySequence) < target {
-		next := make([]int32, target, max(target, 2*cap(w.factsBySequence)))
-		copy(next, w.factsBySequence)
-		w.factsBySequence = next
+	w.factsBySequence = growFactRowSequenceIndex(w.factsBySequence, target)
+}
+
+func growFactRowSequenceIndex(index []int32, length int) []int32 {
+	if length <= len(index) || length < 0 {
+		return index
+	}
+	oldLen := len(index)
+	if cap(index) < length {
+		maxInt := int(^uint(0) >> 1)
+		nextCapacity := cap(index)
+		if nextCapacity == 0 {
+			nextCapacity = 8
+		} else if nextCapacity <= maxInt/2 {
+			nextCapacity *= 2
+		} else {
+			nextCapacity = maxInt
+		}
+		if nextCapacity < length {
+			nextCapacity = length
+		}
+		next := make([]int32, length, nextCapacity)
+		copy(next, index)
+		index = next
 	} else {
-		w.factsBySequence = w.factsBySequence[:target]
+		index = index[:length]
 	}
-	for i := oldLen; i < target; i++ {
-		w.factsBySequence[i] = missingFactRowIndex
+	for i := oldLen; i < length; i++ {
+		index[i] = missingFactRowIndex
 	}
+	return index
 }
 
 func factRowSequenceReserveTarget(sequence uint64, factCount int) (int, bool) {
@@ -5941,13 +5962,10 @@ func (w *factWorkspace) factRowIndex(id FactID) (int, bool) {
 	if w == nil || id.IsZero() {
 		return 0, false
 	}
-	if id.Generation() == w.generation && id.Sequence() > 0 {
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(w.factsBySequence) {
-			row := w.factsBySequence[index]
-			if row != missingFactRowIndex {
-				return int(row), true
-			}
+	if index, ok := factRowSequenceIndex(id, w.generation); ok && index < len(w.factsBySequence) {
+		row := w.factsBySequence[index]
+		if row != missingFactRowIndex {
+			return int(row), true
 		}
 	}
 	if w.factsByID == nil {
@@ -5961,21 +5979,10 @@ func (w *factWorkspace) setFactRowIndex(id FactID, row int) {
 	if w == nil || id.IsZero() || row == int(missingFactRowIndex) {
 		return
 	}
-	if id.Generation() == w.generation && id.Sequence() > 0 && row <= maxFactRowSequenceIndex {
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 {
+	if row <= maxFactRowSequenceIndex {
+		if index, ok := factRowSequenceIndex(id, w.generation); ok {
 			if len(w.factsBySequence) <= index {
-				oldLen := len(w.factsBySequence)
-				if cap(w.factsBySequence) <= index {
-					next := make([]int32, index+1)
-					copy(next, w.factsBySequence)
-					w.factsBySequence = next
-				} else {
-					w.factsBySequence = w.factsBySequence[:index+1]
-				}
-				for i := oldLen; i <= index; i++ {
-					w.factsBySequence[i] = missingFactRowIndex
-				}
+				w.factsBySequence = growFactRowSequenceIndex(w.factsBySequence, index+1)
 			}
 			w.factsBySequence[index] = int32(row)
 			return
@@ -5990,12 +5997,9 @@ func (w *factWorkspace) deleteFactRowIndex(id FactID) {
 	if w == nil || id.IsZero() {
 		return
 	}
-	if id.Generation() == w.generation && id.Sequence() > 0 {
-		index := int(id.Sequence() - 1)
-		if uint64(index) == id.Sequence()-1 && index < len(w.factsBySequence) {
-			w.factsBySequence[index] = missingFactRowIndex
-			return
-		}
+	if index, ok := factRowSequenceIndex(id, w.generation); ok && index < len(w.factsBySequence) {
+		w.factsBySequence[index] = missingFactRowIndex
+		return
 	}
 	if w.factsByID != nil {
 		delete(w.factsByID, id)

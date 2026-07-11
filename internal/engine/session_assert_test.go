@@ -157,6 +157,63 @@ func TestSessionAssertStoresPayloadFactsInCompactSideStorage(t *testing.T) {
 	}
 }
 
+func TestFactWorkspaceSequenceIndexGrowsAmortizedAndPreservesRows(t *testing.T) {
+	workspace := factWorkspace{
+		generation: 1,
+		factsByID:  make(map[FactID]int),
+	}
+
+	workspace.setFactRowIndex(newFactID(1, 4), 3)
+	if got := len(workspace.factsBySequence); got != 4 {
+		t.Fatalf("sequence index length = %d, want 4", got)
+	}
+	for sequence := uint64(1); sequence < 4; sequence++ {
+		if _, ok := workspace.factRowIndex(newFactID(1, sequence)); ok {
+			t.Fatalf("unassigned sequence %d unexpectedly resolved", sequence)
+		}
+	}
+
+	capacityChanges := 0
+	previousCapacity := cap(workspace.factsBySequence)
+	for sequence := uint64(1); sequence <= 1024; sequence++ {
+		workspace.setFactRowIndex(newFactID(1, sequence), int(sequence-1))
+		if currentCapacity := cap(workspace.factsBySequence); currentCapacity != previousCapacity {
+			capacityChanges++
+			previousCapacity = currentCapacity
+		}
+	}
+	if capacityChanges >= 32 {
+		t.Fatalf("sequence index capacity changed %d times for 1024 rows, want amortized growth", capacityChanges)
+	}
+	for sequence := uint64(1); sequence <= 1024; sequence++ {
+		if got, ok := workspace.factRowIndex(newFactID(1, sequence)); !ok || got != int(sequence-1) {
+			t.Fatalf("sequence %d row = %d/%v, want %d/true", sequence, got, ok, sequence-1)
+		}
+	}
+
+	compactID := newFactID(1, 1025)
+	compactRow := encodeCompactFactRow(7)
+	workspace.setFactRowIndex(compactID, compactRow)
+	if got, ok := workspace.factRowIndex(compactID); !ok || got != compactRow {
+		t.Fatalf("compact row = %d/%v, want %d/true", got, ok, compactRow)
+	}
+	workspace.deleteFactRowIndex(compactID)
+	if _, ok := workspace.factRowIndex(compactID); ok {
+		t.Fatal("deleted compact row remained indexed")
+	}
+
+	largeID := newFactID(1, ^uint64(0))
+	lengthBefore := len(workspace.factsBySequence)
+	capacityBefore := cap(workspace.factsBySequence)
+	workspace.setFactRowIndex(largeID, 9)
+	if len(workspace.factsBySequence) != lengthBefore || cap(workspace.factsBySequence) != capacityBefore {
+		t.Fatal("overflowing sequence changed dense index storage")
+	}
+	if got, ok := workspace.factRowIndex(largeID); !ok || got != 9 {
+		t.Fatalf("overflowing sequence fallback row = %d/%v, want 9/true", got, ok)
+	}
+}
+
 func TestSessionAssertSlotBackedDeclaredTemplateUsesSlotsAndPublicAccessors(t *testing.T) {
 	workspace := NewWorkspace()
 	targeted := mustAddTemplate(t, workspace, TemplateSpec{
