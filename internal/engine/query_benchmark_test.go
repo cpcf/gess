@@ -49,6 +49,43 @@ func BenchmarkGraphTerminalQueryScaling(b *testing.B) {
 	}
 }
 
+func BenchmarkSnapshotQueryAllScaling(b *testing.B) {
+	for _, factCount := range []int{10_000, 100_000} {
+		b.Run(fmt.Sprintf("facts=%d", factCount), func(b *testing.B) {
+			ctx := context.Background()
+			compiled := benchmarkQueryRevision(b, queryBenchmarkSimple)
+			initials := benchmarkQueryFacts(b, compiled, factCount)
+			session, err := NewSession(compiled.revision, WithInitialFacts(initials...))
+			if err != nil {
+				b.Fatalf("NewSession: %v", err)
+			}
+			b.Cleanup(func() { _ = session.Close() })
+
+			snapshot, err := session.Snapshot(ctx)
+			if err != nil {
+				b.Fatalf("Snapshot: %v", err)
+			}
+			queryName, args := benchmarkQueryInvocation(queryBenchmarkSimple)
+			expectedRows := benchmarkQueryExpectedRows(queryBenchmarkSimple, factCount)
+
+			b.ReportAllocs()
+			b.ReportMetric(float64(factCount), "facts")
+			b.ReportMetric(float64(expectedRows), "rows/query")
+			b.ResetTimer()
+			for b.Loop() {
+				rows, err := snapshot.QueryAll(ctx, queryName, args)
+				if err != nil {
+					b.Fatalf("Snapshot.QueryAll: %v", err)
+				}
+				if len(rows) != expectedRows {
+					b.Fatalf("rows = %d, want %d", len(rows), expectedRows)
+				}
+				benchmarkQueryRows = rows
+			}
+		})
+	}
+}
+
 func BenchmarkRuntimeMaterializationQueryProjection(b *testing.B) {
 	ctx := context.Background()
 	workspace, personKey, departmentKey, blockKey := benchmarkQueryWorkspace(b)
