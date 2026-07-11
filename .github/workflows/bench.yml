@@ -7,6 +7,7 @@ on:
       - "go.mod"
       - "go.sum"
       - ".github/workflows/bench.yml"
+      - ".github/scripts/**"
   workflow_dispatch:
     inputs:
       base:
@@ -18,9 +19,10 @@ permissions:
   contents: read
 
 env:
-  BENCH_PATTERN: "BenchmarkSessionExplainLogRecording|BenchmarkSessionAssertNoExplainLog|BenchmarkGessSteadyStateRuleCreatedFacts$|BenchmarkGessNegationScalingSeedRun|BenchmarkClaimsTriageGessSessionCycle"
   BENCH_COUNT: "6"
-  REGRESSION_THRESHOLD_PERCENT: "15"
+  BENCH_TIME: "1s"
+  TIME_REGRESSION_THRESHOLD_PERCENT: "15"
+  MEMORY_REGRESSION_THRESHOLD_PERCENT: "10"
 
 jobs:
   compare:
@@ -35,7 +37,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260409210113-8e83ce0f7b1c
 
       - name: Resolve base commit
         id: base
@@ -50,36 +52,21 @@ jobs:
           echo "sha=${base}" >> "$GITHUB_OUTPUT"
 
       - name: Benchmark head
-        run: go test ./internal/engine -run '^$' -bench "${BENCH_PATTERN}" -benchtime 1s -count "${BENCH_COUNT}" | tee head.txt
+        env:
+          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: bash .github/scripts/run-benchmarks.sh . | tee head.txt
 
       - name: Benchmark base
         shell: bash
+        env:
+          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: |
           set -euo pipefail
           git worktree add ../base-checkout "${{ steps.base.outputs.sha }}"
-          cd ../base-checkout
-          go test ./internal/engine -run '^$' -bench "${BENCH_PATTERN}" -benchtime 1s -count "${BENCH_COUNT}" | tee "${GITHUB_WORKSPACE}/base.txt"
+          bash .github/scripts/run-benchmarks.sh ../base-checkout | tee base.txt
 
       - name: Compare against threshold
-        shell: bash
-        run: |
-          set -euo pipefail
-          benchstat -filter ".unit:sec/op" base.txt head.txt | tee comparison.txt
-          awk -v threshold="${REGRESSION_THRESHOLD_PERCENT}" '
-            /%/ {
-              for (i = 1; i <= NF; i++) {
-                if ($i ~ /^\+[0-9.]+%$/) {
-                  v = $i
-                  gsub(/[+%]/, "", v)
-                  if (v + 0 > threshold) {
-                    bad = 1
-                    print "regression over " threshold "%: " $0
-                  }
-                }
-              }
-            }
-            END { exit bad }
-          ' comparison.txt
+        run: bash .github/scripts/check-benchmarks.sh base.txt head.txt comparison.txt
 
       - name: Upload benchmark results
         if: always()
@@ -89,5 +76,5 @@ jobs:
           path: |
             base.txt
             head.txt
-            comparison.txt
+            comparison*.txt
           if-no-files-found: error
