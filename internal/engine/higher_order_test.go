@@ -696,20 +696,26 @@ func TestRecursiveExistsSupportsChoice(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-choice-session")
+	parity := func() {
+		assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.propagation.runtime)
+	}
 	if !session.revision.rules["exists-choice"].structuralConditionProgram {
 		t.Fatal("exists choice did not use structural condition program")
 	}
 	left := mustAssert(t, session, item.Key(), Fields{"kind": mustValue(t, "left")})
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
 		t.Fatalf("left Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}
 	mustAssert(t, session, item.Key(), Fields{"kind": mustValue(t, "right")})
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
 		t.Fatalf("second contributor Run = (%+v, %v), want no churn", result, err)
 	}
 	if _, err := session.Retract(context.Background(), left.Fact.ID()); err != nil {
 		t.Fatalf("Retract left: %v", err)
 	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
 		t.Fatalf("replacement contributor Run = (%+v, %v), want no churn", result, err)
 	}
@@ -737,17 +743,23 @@ func TestRecursiveExistsSupportsNestedNot(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-nested-not-session")
+	parity := func() {
+		assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.propagation.runtime)
+	}
 	candidate := mustAssert(t, session, item.Key(), Fields{"id": mustValue(t, "one"), "kind": mustValue(t, "candidate")})
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
 		t.Fatalf("candidate Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}
 	blocker := mustAssert(t, session, item.Key(), Fields{"id": mustValue(t, "one"), "kind": mustValue(t, "blocker")})
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
 		t.Fatalf("blocked Run = (%+v, %v), want no activation", result, err)
 	}
 	if _, err := session.Retract(context.Background(), blocker.Fact.ID()); err != nil {
 		t.Fatalf("Retract blocker: %v", err)
 	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 2 {
 		t.Fatalf("unblocked Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}
@@ -799,28 +811,36 @@ func TestRecursiveForallSupportsChoiceRequirement(t *testing.T) {
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
 	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-choice-session")
+	parity := func() {
+		assertMatcherParity(t, session.revision, mustSnapshot(t, context.Background(), session), newNaiveMatcher(session.revision), session.propagation.runtime)
+	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
 		t.Fatalf("vacuous Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}
 	bad := mustAssert(t, session, item.Key(), Fields{"score": mustValue(t, int64(3))})
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
 		t.Fatalf("counterexample Run = (%+v, %v), want no activation", result, err)
 	}
 	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"score": mustValue(t, int64(5))}}); err != nil {
 		t.Fatalf("Modify counterexample to satisfying value: %v", err)
 	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 2 {
 		t.Fatalf("repaired Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}
 	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"score": mustValue(t, int64(3))}}); err != nil {
 		t.Fatalf("Modify satisfying value to counterexample: %v", err)
 	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
 		t.Fatalf("regressed Run = (%+v, %v), want no activation", result, err)
 	}
 	if _, err := session.Retract(context.Background(), bad.Fact.ID()); err != nil {
 		t.Fatalf("Retract counterexample: %v", err)
 	}
+	parity()
 	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 3 {
 		t.Fatalf("restored Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
 	}

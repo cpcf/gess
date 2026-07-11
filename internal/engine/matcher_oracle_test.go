@@ -764,6 +764,9 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 	if len(r.conditionPlans) == 0 {
 		return nil, nil
 	}
+	if r.structuralConditionProgram {
+		return r.matchStructuralCandidates(ctx, source, alphaSource)
+	}
 
 	candidates := make([]matchCandidate, 0)
 	seen := newCandidateSeenSet(0)
@@ -846,6 +849,203 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 	}
 	sortMatchCandidates(nil, candidates)
 	return candidates, nil
+}
+
+// matchStructuralCandidates is the oracle interpreter for condition programs
+// that cannot be represented by the bounded branch expansion. It intentionally
+// operates on the compiled tree rather than any lowered Rete nodes.
+func (r compiledRule) matchStructuralCandidates(ctx context.Context, source factSource, alphaSource alphaFactSource) ([]matchCandidate, error) {
+	selected, err := r.matchStructuralShape(ctx, source, alphaSource, r.conditionTreeShape, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]matchCandidate, 0, len(selected))
+	seen := newCandidateSeenSet(len(selected))
+	for _, matches := range selected {
+		matches = compactSelectedConditionMatches(matches)
+		candidate, err := r.structuralCandidate(source.sourceGeneration(), matches)
+		if err != nil {
+			return nil, err
+		}
+		if !seen.seen(candidates, candidate) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	sortMatchCandidates(nil, candidates)
+	return candidates, nil
+}
+
+func (r compiledRule) structuralCandidate(generation Generation, matches []conditionMatch) (matchCandidate, error) {
+	if len(matches) != 0 {
+		return buildMatchCandidateFromMatches(r, generation, matches)
+	}
+	// Higher-order programs may succeed without exporting a fact binding. The
+	// graph terminal hashes that zero-width tuple directly from the generation.
+	var entries []bindingTupleEntry
+	return matchCandidate{
+		ruleID:         r.id,
+		ruleRevisionID: r.revisionID,
+		identity:       candidateIdentityFor(r.id, r.revisionID, r.identityScopeHash, generation, entries),
+		bindingTuple:   entries,
+		generation:     generation,
+	}, nil
+}
+
+func (r compiledRule) matchStructuralShape(ctx context.Context, source factSource, alphaSource alphaFactSource, shape compiledConditionTreeShape, selected []conditionMatch, ignoreLeafNegation bool) ([][]conditionMatch, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	switch shape.kind {
+	case ConditionTreeKindAnd:
+		states := [][]conditionMatch{selected}
+		for _, child := range shape.children {
+			next := make([][]conditionMatch, 0)
+			for _, state := range states {
+				matches, err := r.matchStructuralShape(ctx, source, alphaSource, child, state, ignoreLeafNegation)
+				if err != nil {
+					return nil, err
+				}
+				next = append(next, matches...)
+			}
+			states = next
+			if len(states) == 0 {
+				break
+			}
+		}
+		return states, nil
+	case ConditionTreeKindOr:
+		var states [][]conditionMatch
+		for _, child := range shape.children {
+			matches, err := r.matchStructuralShape(ctx, source, alphaSource, child, selected, ignoreLeafNegation)
+			if err != nil {
+				return nil, err
+			}
+			states = append(states, matches...)
+		}
+		return dedupeStructuralMatches(states), nil
+	case ConditionTreeKindNot:
+		if len(shape.children) != 1 {
+			return nil, fmt.Errorf("%w: malformed structural not in rule %q", ErrMatcher, r.name)
+		}
+		matches, err := r.matchStructuralShape(ctx, source, alphaSource, shape.children[0], selected, true)
+		if err != nil || len(matches) != 0 {
+			return nil, err
+		}
+		return [][]conditionMatch{selected}, nil
+	case ConditionTreeKindExists:
+		if len(shape.children) != 1 {
+			return nil, fmt.Errorf("%w: malformed structural exists in rule %q", ErrMatcher, r.name)
+		}
+		matches, err := r.matchStructuralShape(ctx, source, alphaSource, shape.children[0], selected, false)
+		if err != nil || len(matches) == 0 {
+			return nil, err
+		}
+		return [][]conditionMatch{selected}, nil
+	case ConditionTreeKindForall:
+		if len(shape.children) != 2 {
+			return nil, fmt.Errorf("%w: malformed structural forall in rule %q", ErrMatcher, r.name)
+		}
+		domain, err := r.matchStructuralShape(ctx, source, alphaSource, shape.children[0], selected, false)
+		if err != nil {
+			return nil, err
+		}
+		for _, lexical := range domain {
+			requirement, err := r.matchStructuralShape(ctx, source, alphaSource, shape.children[1], lexical, false)
+			if err != nil {
+				return nil, err
+			}
+			if len(requirement) == 0 {
+				return nil, nil
+			}
+		}
+		return [][]conditionMatch{selected}, nil
+	default:
+		if shape.conditionIndex < 0 || shape.conditionIndex >= len(r.structuralConditionPlans) {
+			return nil, fmt.Errorf("%w: malformed structural leaf in rule %q", ErrMatcher, r.name)
+		}
+		plan := r.structuralConditionPlans[shape.conditionIndex]
+		if plan.negated && !ignoreLeafNegation {
+			positive := plan
+			positive.negated = false
+			matches, err := r.matchStructuralLeaf(ctx, source, alphaSource, positive, selected)
+			if err != nil || len(matches) != 0 {
+				return nil, err
+			}
+			return [][]conditionMatch{selected}, nil
+		}
+		return r.matchStructuralLeaf(ctx, source, alphaSource, plan, selected)
+	}
+}
+
+func dedupeStructuralMatches(states [][]conditionMatch) [][]conditionMatch {
+	out := make([][]conditionMatch, 0, len(states))
+	for _, state := range states {
+		duplicate := false
+		for _, existing := range out {
+			if structuralMatchesEqual(existing, state) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
+func structuralMatchesEqual(left, right []conditionMatch) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].conditionID != right[i].conditionID || left[i].bindingSlot != right[i].bindingSlot || left[i].hasValue != right[i].hasValue {
+			return false
+		}
+		if left[i].hasValue {
+			if !left[i].value.Equal(right[i].value) {
+				return false
+			}
+		} else if left[i].fact.ID() != right[i].fact.ID() || left[i].fact.Version() != right[i].fact.Version() {
+			return false
+		}
+	}
+	return true
+}
+
+func (r compiledRule) matchStructuralLeaf(ctx context.Context, source factSource, alphaSource alphaFactSource, plan compiledConditionPlan, selected []conditionMatch) ([][]conditionMatch, error) {
+	if plan.isTest {
+		ok, err := plan.matchesTestBindings(ctx, selected)
+		if err != nil || !ok {
+			return nil, err
+		}
+		return [][]conditionMatch{selected}, nil
+	}
+	if plan.aggregate != nil {
+		return nil, fmt.Errorf("%w: aggregate leaf in structural oracle for rule %q", ErrMatcher, r.name)
+	}
+	states := make([][]conditionMatch, 0)
+	yield := func(match conditionMatch) error {
+		next := selectedConditionMatchesWithMatch(selected, match)
+		captures, ok, err := plan.listPatternCaptureMatches(match.fact)
+		if err != nil || !ok {
+			return err
+		}
+		for _, capture := range captures {
+			next = selectedConditionMatchesWithMatch(next, capture)
+		}
+		states = append(states, next)
+		return nil
+	}
+	var err error
+	if alphaSource != nil {
+		if facts, ok := alphaSource.factsForCondition(plan.id); ok {
+			err = plan.forEachAlphaMatchWithBindings(ctx, facts, selected, yield)
+			return states, err
+		}
+	}
+	err = plan.forEachMatchWithBindings(ctx, source, selected, yield)
+	return states, err
 }
 
 func selectedConditionMatchesWithMatch(selected []conditionMatch, match conditionMatch) []conditionMatch {

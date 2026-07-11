@@ -162,18 +162,21 @@ func TestStructuralOrCompilesAndMaintainsUnionSupport(t *testing.T) {
 			first = result.Fact.ID()
 		}
 	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations with overlapping arm support = %d, want 1", got)
 	}
 	if _, err := session.Modify(ctx, first, FactPatch{Set: mustFields(t, map[string]any{"active": false})}); err != nil {
 		t.Fatalf("Modify retaining second support: %v", err)
 	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 1 {
 		t.Fatalf("pending activations after first support removed = %d, want 1", got)
 	}
 	if _, err := session.Modify(ctx, first, FactPatch{Set: mustFields(t, map[string]any{"dept": "sales"})}); err != nil {
 		t.Fatalf("Modify removing last support: %v", err)
 	}
+	assertMatcherParity(t, revision, mustSnapshot(t, ctx, session), newNaiveMatcher(revision), session.propagation.runtime)
 	if got := len(session.agendaDriver.agenda.pendingActivations()); got != 0 {
 		t.Fatalf("pending activations after last support removed = %d, want 0", got)
 	}
