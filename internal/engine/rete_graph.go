@@ -653,7 +653,43 @@ func (g *reteGraph) compileStructuralConditionShape(owner RuleRevisionID, shape 
 		if len(shape.children) != 1 {
 			return reteGraphStageRef{}, false
 		}
-		return g.compileStructuralConditionShape(owner, shape.children[0], plans, current, alphaIndex, betaIndex, templatesByKey)
+		outer := structuralOuterStage(current)
+		childPlans := plans
+		if index := structuralShapeLastConditionIndex(shape.children[0]); index >= 0 && index < len(plans) && plans[index].negated {
+			childPlans = cloneCompiledConditionPlans(plans)
+			childPlans[index].negated = false
+		}
+		child, ok := g.compileStructuralConditionShape(owner, shape.children[0], childPlans, structuralChildStart(outer), alphaIndex, betaIndex, templatesByKey)
+		if !ok {
+			return reteGraphStageRef{}, false
+		}
+		return g.compileStructuralAbsence(owner, shape, plans, outer, child, betaIndex), true
+	case ConditionTreeKindExists:
+		if len(shape.children) != 1 {
+			return reteGraphStageRef{}, false
+		}
+		outer := structuralOuterStage(current)
+		contributors, ok := g.compileStructuralConditionShape(owner, shape.children[0], plans, structuralChildStart(outer), alphaIndex, betaIndex, templatesByKey)
+		if !ok {
+			return reteGraphStageRef{}, false
+		}
+		missing := g.compileStructuralAbsence(owner, shape, plans, outer, contributors, betaIndex)
+		return g.compileStructuralAbsence(owner, shape, plans, outer, missing, betaIndex), true
+	case ConditionTreeKindForall:
+		if len(shape.children) != 2 {
+			return reteGraphStageRef{}, false
+		}
+		outer := structuralOuterStage(current)
+		domain, ok := g.compileStructuralConditionShape(owner, shape.children[0], plans, structuralChildStart(outer), alphaIndex, betaIndex, templatesByKey)
+		if !ok {
+			return reteGraphStageRef{}, false
+		}
+		requirement, ok := g.compileStructuralConditionShape(owner, shape.children[1], plans, domain, alphaIndex, betaIndex, templatesByKey)
+		if !ok {
+			return reteGraphStageRef{}, false
+		}
+		counterexamples := g.compileStructuralAbsence(owner, shape.children[1], plans, domain, requirement, betaIndex)
+		return g.compileStructuralAbsence(owner, shape, plans, outer, counterexamples, betaIndex), true
 	default:
 		if shape.conditionIndex < 0 || shape.conditionIndex >= len(plans) {
 			return reteGraphStageRef{}, false
@@ -662,12 +698,37 @@ func (g *reteGraph) compileStructuralConditionShape(owner RuleRevisionID, shape 
 	}
 }
 
-func structuralShapeLastConditionIndex(shape compiledConditionTreeShape) int {
-	if shape.kind != ConditionTreeKindAnd {
-		return shape.conditionIndex
+func structuralOuterStage(stage reteGraphStageRef) reteGraphStageRef {
+	if stage.kind == reteGraphStageUnknown {
+		return reteGraphStageRef{kind: reteGraphStageRoot}
 	}
+	return stage
+}
+
+func structuralChildStart(outer reteGraphStageRef) reteGraphStageRef {
+	return outer
+}
+
+func (g *reteGraph) compileStructuralAbsence(owner RuleRevisionID, shape compiledConditionTreeShape, plans []compiledConditionPlan, outer, blockers reteGraphStageRef, betaIndex map[reteGraphBetaKey]reteGraphBetaNodeID) reteGraphStageRef {
+	id, _ := g.internBetaNodeWithRightPrefix(betaIndex, reteGraphBetaNodeNot, outer, blockers, nil, nil)
+	out := reteGraphStageRef{kind: reteGraphStageBeta, id: int(id)}
+	if index := structuralShapeLastConditionIndex(shape); index >= 0 && index < len(plans) {
+		g.stampStageCondition(out, owner, -1, index, plans[index].id)
+	}
+	g.appendStageSuccessor(outer, reteGraphStageSuccessor{betaNodeID: id, side: reteGraphBetaInputLeft})
+	blockerEntry := bindingTupleEntry{}
+	if blockers.kind == reteGraphStageAlpha {
+		if index := structuralShapeLastConditionIndex(shape); index >= 0 && index < len(plans) {
+			blockerEntry = graphTokenEntryForCondition(plans[index])
+		}
+	}
+	g.appendStageSuccessor(blockers, reteGraphStageSuccessor{betaNodeID: id, side: reteGraphBetaInputRight, entry: blockerEntry})
+	return out
+}
+
+func structuralShapeLastConditionIndex(shape compiledConditionTreeShape) int {
 	if len(shape.children) == 0 {
-		return -1
+		return shape.conditionIndex
 	}
 	return structuralShapeLastConditionIndex(shape.children[len(shape.children)-1])
 }
@@ -1608,9 +1669,6 @@ func (g *reteGraph) stageTokenWidth(stage reteGraphStageRef) int {
 			return 0
 		}
 		leftWidth := g.stageTokenWidth(node.left)
-		if leftWidth <= 0 {
-			return 0
-		}
 		if node.kind == reteGraphBetaNodeNot || node.kind == reteGraphBetaNodeFilter || node.kind == reteGraphBetaNodeResidualFilter {
 			return leftWidth
 		}

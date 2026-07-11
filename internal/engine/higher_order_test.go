@@ -645,20 +645,188 @@ func TestHigherOrderGraphLowersRootConditionsToNegativeNodes(t *testing.T) {
 }
 
 func TestHigherOrderRejectsUnsupportedShapes(t *testing.T) {
-	workspace := NewWorkspace()
-	item := mustAddTemplate(t, workspace, TemplateSpec{Name: "item"})
-	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
-	mustAddRule(t, workspace, RuleSpec{
-		Name: "bad-exists",
-		ConditionTree: Or{Conditions: []ConditionSpec{
-			Exists(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())})),
-			Match(RuleConditionSpec{Binding: "other", Target: TemplateKeyFact(item.Key())}),
+	tests := []struct {
+		name string
+		tree func(TemplateKey) ConditionSpec
+	}{
+		{name: "higher order inside top-level or", tree: func(key TemplateKey) ConditionSpec {
+			return Or{Conditions: []ConditionSpec{
+				Exists(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(key)})),
+				Match(RuleConditionSpec{Binding: "other", Target: TemplateKeyFact(key)}),
+			}}
 		}},
+		{name: "sequential higher order", tree: func(key TemplateKey) ConditionSpec {
+			return And{Conditions: []ConditionSpec{
+				Exists(Match(RuleConditionSpec{Binding: "left", Target: TemplateKeyFact(key)})),
+				Exists(Match(RuleConditionSpec{Binding: "right", Target: TemplateKeyFact(key)})),
+			}}
+		}},
+		{name: "aggregate inside higher order", tree: func(key TemplateKey) ConditionSpec {
+			return Exists(Accumulate(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(key)}), Count().As("count")))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := NewWorkspace()
+			item := mustAddTemplate(t, workspace, TemplateSpec{Name: "item"})
+			mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { return nil }})
+			mustAddRule(t, workspace, RuleSpec{Name: "unsupported", ConditionTree: tt.tree(item.Key()), Actions: []RuleActionSpec{{Name: "hit"}}})
+			_, err := workspace.Compile(context.Background())
+			if !errors.Is(err, ErrInvalidHigherOrderCondition) {
+				t.Fatalf("Compile error = %v, want ErrInvalidHigherOrderCondition", err)
+			}
+		})
+	}
+}
+
+func TestRecursiveExistsSupportsChoice(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "choice-item",
+		Fields: []FieldSpec{{Name: "kind", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { fired++; return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "exists-choice",
+		ConditionTree: Exists(Or{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "left", Target: TemplateKeyFact(item.Key()), FieldConstraints: []FieldConstraintSpec{{Field: "kind", Operator: FieldConstraintEqual, Value: "left"}}}),
+			Match(RuleConditionSpec{Binding: "right", Target: TemplateKeyFact(item.Key()), FieldConstraints: []FieldConstraintSpec{{Field: "kind", Operator: FieldConstraintEqual, Value: "right"}}}),
+		}}),
 		Actions: []RuleActionSpec{{Name: "hit"}},
 	})
-	_, err := workspace.Compile(context.Background())
-	if !errors.Is(err, ErrInvalidHigherOrderCondition) {
-		t.Fatalf("Compile error = %v, want ErrInvalidHigherOrderCondition", err)
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-choice-session")
+	if !session.revision.rules["exists-choice"].structuralConditionProgram {
+		t.Fatal("exists choice did not use structural condition program")
+	}
+	left := mustAssert(t, session, item.Key(), Fields{"kind": mustValue(t, "left")})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
+		t.Fatalf("left Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	mustAssert(t, session, item.Key(), Fields{"kind": mustValue(t, "right")})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("second contributor Run = (%+v, %v), want no churn", result, err)
+	}
+	if _, err := session.Retract(context.Background(), left.Fact.ID()); err != nil {
+		t.Fatalf("Retract left: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("replacement contributor Run = (%+v, %v), want no churn", result, err)
+	}
+}
+
+func TestRecursiveExistsSupportsNestedNot(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "nested-item",
+		Fields: []FieldSpec{{Name: "id", Kind: ValueString, Required: true}, {Name: "kind", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { fired++; return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "exists-unblocked",
+		ConditionTree: Exists(And{Conditions: []ConditionSpec{
+			Match(RuleConditionSpec{Binding: "candidate", Target: TemplateKeyFact(item.Key()), FieldConstraints: []FieldConstraintSpec{{Field: "kind", Operator: FieldConstraintEqual, Value: "candidate"}}}),
+			Not{Condition: Match(RuleConditionSpec{
+				Binding:          "blocker",
+				Target:           TemplateKeyFact(item.Key()),
+				FieldConstraints: []FieldConstraintSpec{{Field: "kind", Operator: FieldConstraintEqual, Value: "blocker"}},
+				JoinConstraints:  []JoinConstraintSpec{{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "candidate", Field: "id"}}},
+			})},
+		}}),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "exists-nested-not-session")
+	candidate := mustAssert(t, session, item.Key(), Fields{"id": mustValue(t, "one"), "kind": mustValue(t, "candidate")})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
+		t.Fatalf("candidate Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	blocker := mustAssert(t, session, item.Key(), Fields{"id": mustValue(t, "one"), "kind": mustValue(t, "blocker")})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("blocked Run = (%+v, %v), want no activation", result, err)
+	}
+	if _, err := session.Retract(context.Background(), blocker.Fact.ID()); err != nil {
+		t.Fatalf("Retract blocker: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 2 {
+		t.Fatalf("unblocked Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	if _, err := session.Retract(context.Background(), candidate.Fact.ID()); err != nil {
+		t.Fatalf("Retract candidate: %v", err)
+	}
+}
+
+func TestRecursiveNotExistsTransitions(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{Name: "not-exists-item"})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { fired++; return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:          "not-exists",
+		ConditionTree: Not{Condition: Exists(Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())}))},
+		Actions:       []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "not-exists-session")
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
+		t.Fatalf("empty Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	asserted := mustAssert(t, session, item.Key(), nil)
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("present Run = (%+v, %v), want no activation", result, err)
+	}
+	if _, err := session.Retract(context.Background(), asserted.Fact.ID()); err != nil {
+		t.Fatalf("Retract item: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 2 {
+		t.Fatalf("restored Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+}
+
+func TestRecursiveForallSupportsChoiceRequirement(t *testing.T) {
+	var fired int
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{Name: "forall-choice-item", Fields: []FieldSpec{{Name: "score", Kind: ValueInt, Required: true}}})
+	mustAddAction(t, workspace, ActionSpec{Name: "hit", Fn: func(ActionContext) error { fired++; return nil }})
+	scoreTest := func(operator ExpressionComparisonOperator, value int64) ConditionSpec {
+		return Test{Expression: CompareExpr{Operator: operator, Left: BindingFieldExpr{Binding: "item", Field: "score"}, Right: ConstExpr{Value: value}}}
+	}
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "forall-choice",
+		ConditionTree: Forall(
+			Match(RuleConditionSpec{Binding: "item", Target: TemplateKeyFact(item.Key())}),
+			Or{Conditions: []ConditionSpec{scoreTest(ExpressionCompareGreaterOrEqual, 10), scoreTest(ExpressionCompareEqual, 5)}},
+		),
+		Actions: []RuleActionSpec{{Name: "hit"}},
+	})
+	session := mustSession(t, mustCompileWorkspace(t, workspace), "forall-choice-session")
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 1 {
+		t.Fatalf("vacuous Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	bad := mustAssert(t, session, item.Key(), Fields{"score": mustValue(t, int64(3))})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("counterexample Run = (%+v, %v), want no activation", result, err)
+	}
+	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"score": mustValue(t, int64(5))}}); err != nil {
+		t.Fatalf("Modify counterexample to satisfying value: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 2 {
+		t.Fatalf("repaired Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	if _, err := session.Modify(context.Background(), bad.Fact.ID(), FactPatch{Set: Fields{"score": mustValue(t, int64(3))}}); err != nil {
+		t.Fatalf("Modify satisfying value to counterexample: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("regressed Run = (%+v, %v), want no activation", result, err)
+	}
+	if _, err := session.Retract(context.Background(), bad.Fact.ID()); err != nil {
+		t.Fatalf("Retract counterexample: %v", err)
+	}
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 1 || fired != 3 {
+		t.Fatalf("restored Run = (%+v, %v), action count %d; want fired 1", result, err, fired)
+	}
+	mustAssert(t, session, item.Key(), Fields{"score": mustValue(t, int64(5))})
+	if result, err := session.Run(context.Background()); err != nil || result.Fired != 0 {
+		t.Fatalf("choice-satisfied Run = (%+v, %v), want no truth churn", result, err)
 	}
 }
 

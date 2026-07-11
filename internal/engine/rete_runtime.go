@@ -825,22 +825,29 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 			continue
 		}
 
+		runtimePlans := rule.conditionPlans
+		if rule.structuralConditionProgram {
+			runtimePlans = rule.structuralConditionPlans
+		}
 		rulePlan := reteRulePlan{
 			ruleID:           rule.id,
 			ruleRevisionID:   rule.revisionID,
 			salience:         rule.salience,
 			declarationOrder: rule.declarationOrder,
-			conditions:       make([]reteConditionPlan, 0, len(rule.conditionPlans)),
+			conditions:       make([]reteConditionPlan, 0, len(runtimePlans)),
 			terminal: reteTerminalPlan{
 				id:             reteTerminalNodeID(rule.revisionID),
 				ruleID:         rule.id,
 				ruleRevisionID: rule.revisionID,
-				conditions:     len(rule.conditionPlans),
+				conditions:     len(runtimePlans),
 			},
 			supported:     true,
 			betaSupported: true,
 		}
-		aggregateUnsupported := ruleAggregateUnsupportedReasons(rule)
+		var aggregateUnsupported []reteUnsupportedReason
+		if !rule.structuralConditionProgram {
+			aggregateUnsupported = ruleAggregateUnsupportedReasons(rule)
+		}
 		if len(aggregateUnsupported) != 0 {
 			rulePlan.supported = false
 			rulePlan.betaSupported = false
@@ -850,7 +857,7 @@ func planReteNetwork(revision *Ruleset) reteNetworkPlan {
 		ruleRouteKeys := make(map[TemplateKey]struct{})
 
 		aggregateIncrementalSupported := ruleAggregatesIncrementalAgendaSupported(rule)
-		for _, condition := range rule.conditionPlans {
+		for _, condition := range runtimePlans {
 			if condition.aggregate != nil && aggregateIncrementalSupported {
 				continue
 			}
