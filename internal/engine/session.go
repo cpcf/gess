@@ -6854,6 +6854,7 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 	if s == nil {
 		return nil
 	}
+	delta = s.assignRunAgendaBirthEpochs(delta)
 	if !delta.supported {
 		if s.propagation.counters != nil {
 			s.propagation.counters.recordUnsupportedAgendaDelta()
@@ -6887,6 +6888,30 @@ func (s *Session) recordRunAgendaDelta(delta reteAgendaDelta) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Session) assignRunAgendaBirthEpochs(delta reteAgendaDelta) reteAgendaDelta {
+	if s == nil || s.agendaDriver.strategy != StrategyBreadth || len(delta.added) == 0 {
+		return delta
+	}
+	needsEpoch := false
+	for i := range delta.added {
+		if delta.added[i].birthEpoch == 0 {
+			needsEpoch = true
+			break
+		}
+	}
+	if !needsEpoch {
+		return delta
+	}
+	agenda := s.agendaDriver.ensureAgenda()
+	epoch := agenda.reserveBirthEpoch()
+	for i := range delta.added {
+		if delta.added[i].birthEpoch == 0 {
+			delta.added[i].birthEpoch = epoch
+		}
+	}
+	return delta
 }
 
 func (s *Session) canApplyRunAgendaDeltaDirect(delta reteAgendaDelta) bool {
@@ -7023,6 +7048,7 @@ func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUp
 			identity:       identity,
 		}) {
 			if state.present {
+				birthEpoch := state.token.birthEpoch
 				if state.initial && !state.updated {
 					state.updateBefore = state.token.token
 					state.updated = true
@@ -7031,6 +7057,7 @@ func (s *Session) recordCoalescedRunAgendaTokenUpdate(update reteTerminalTokenUp
 					ruleRevisionID: update.ruleRevisionID,
 					token:          update.after,
 					identity:       identity,
+					birthEpoch:     birthEpoch,
 				}
 			}
 			return nil
@@ -7116,7 +7143,9 @@ type runAgendaDeltaState struct {
 	initial      bool
 	present      bool
 	updated      bool
+	reactivated  bool
 	token        reteTerminalTokenDelta
+	removedToken reteTerminalTokenDelta
 	updateBefore tokenRef
 	next         int
 }
@@ -7136,6 +7165,15 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 	for i := range s.propagation.runAgendaStates {
 		state := &s.propagation.runAgendaStates[i]
 		if state.present == state.initial {
+			if s.agendaDriver.strategy == StrategyBreadth && state.present && state.reactivated {
+				if !state.removedToken.token.isZero() {
+					removed = append(removed, state.removedToken)
+				}
+				if !state.token.token.isZero() {
+					added = append(added, state.token)
+				}
+				continue
+			}
 			if state.present && state.updated && !state.updateBefore.isZero() && !state.token.token.isZero() && state.updateBefore != state.token.token {
 				updated = append(updated, reteTerminalTokenUpdate{
 					ruleRevisionID: state.token.ruleRevisionID,
@@ -7148,6 +7186,10 @@ func (s *Session) coalesceRunAgendaDeltas() (reteAgendaDelta, error) {
 		}
 		if state.present {
 			added = append(added, state.token)
+			continue
+		}
+		if !state.removedToken.token.isZero() {
+			removed = append(removed, state.removedToken)
 			continue
 		}
 		removed = append(removed, state.token)
@@ -7175,8 +7217,18 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 	for index := s.propagation.runAgendaBuckets[identity]; index != 0; {
 		state := &s.propagation.runAgendaStates[index-1]
 		if terminalTokenDeltasEqual(s.revision, state.token, token) {
+			wasPresent := state.present
+			if s.agendaDriver.strategy == StrategyBreadth && !present && wasPresent {
+				state.removedToken = state.token
+			}
+			if s.agendaDriver.strategy == StrategyBreadth && present && !wasPresent && (state.initial || !state.removedToken.token.isZero()) {
+				state.reactivated = true
+			}
 			state.present = present
 			state.token = token
+			if s.agendaDriver.strategy == StrategyBreadth && !present && state.removedToken.token.isZero() {
+				state.removedToken = token
+			}
 			return nil
 		}
 		index = state.next
@@ -7189,6 +7241,9 @@ func (s *Session) recordCoalescedRunAgendaToken(token reteTerminalTokenDelta, pr
 		next:    s.propagation.runAgendaBuckets[identity],
 	}
 	state.present = present
+	if s.agendaDriver.strategy == StrategyBreadth && !present {
+		state.removedToken = token
+	}
 	s.propagation.runAgendaStates = append(s.propagation.runAgendaStates, state)
 	s.propagation.runAgendaBuckets[identity] = len(s.propagation.runAgendaStates)
 	return nil

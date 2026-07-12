@@ -741,6 +741,7 @@ type reteTerminalTokenDelta struct {
 	ruleRevisionID RuleRevisionID
 	token          tokenRef
 	identity       candidateIdentity
+	birthEpoch     uint64
 	terminalID     reteGraphTerminalNodeID
 	terminalRow    graphTokenRowHandle
 	factIDs        []FactID

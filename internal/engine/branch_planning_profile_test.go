@@ -256,7 +256,6 @@ func TestMannersFindSeatingLateContextSpike(t *testing.T) {
 	productionDepthTrace := traceMannersBranchOrderWithStrategy(t, production, initials, guests, StrategyDepth)
 	lateContextDepthTrace := traceMannersBranchOrderWithStrategy(t, lateContext, initials, guests, StrategyDepth)
 	depthTraceSame := reflect.DeepEqual(lateContextDepthTrace.firedTrace, productionDepthTrace.firedTrace)
-	depthRuleOrderSame := reflect.DeepEqual(ruleOrderFromFiredTrace(lateContextDepthTrace.firedTrace), ruleOrderFromFiredTrace(productionDepthTrace.firedTrace))
 	if !depthTraceSame {
 		index, productionEntry, lateContextEntry := firstFiredTraceDifference(productionDepthTrace.firedTrace, lateContextDepthTrace.firedTrace)
 		t.Logf("depth rule-fired activation trace differs at %d: production=%q late-context=%q", index, productionEntry, lateContextEntry)
@@ -275,19 +274,19 @@ func TestMannersFindSeatingLateContextSpike(t *testing.T) {
 	breadthInitials := mannersInitialFacts(breadthGuests)
 	productionBreadth := traceMannersBranchOrderWithStrategy(t, production, breadthInitials, breadthGuests, StrategyBreadth)
 	lateContextBreadth := traceMannersBranchOrderWithStrategy(t, lateContext, breadthInitials, breadthGuests, StrategyBreadth)
-	breadthResultSame := productionBreadth.result == lateContextBreadth.result
-	breadthFactsSame := productionBreadth.finalFacts == lateContextBreadth.finalFacts
-	breadthTraceSame := reflect.DeepEqual(lateContextBreadth.firedTrace, productionBreadth.firedTrace)
-	breadthRuleOrderSame := reflect.DeepEqual(ruleOrderFromFiredTrace(lateContextBreadth.firedTrace), ruleOrderFromFiredTrace(productionBreadth.firedTrace))
-	if !breadthTraceSame {
-		index, productionEntry, lateContextEntry := firstFiredTraceDifference(productionBreadth.firedTrace, lateContextBreadth.firedTrace)
-		t.Logf("breadth rule-fired activation trace differs at %d: production=%q late-context=%q", index, productionEntry, lateContextEntry)
+	if productionBreadth.result != lateContextBreadth.result {
+		t.Fatalf("breadth run result = (%+v, %+v), want identical", productionBreadth.result, lateContextBreadth.result)
 	}
-	t.Logf(
-		"rule-fired trace comparison: depth firings=%d exact=%v rule-order=%v; breadth production/late firings=%d/%d result=%v facts=%v exact=%v rule-order=%v",
-		len(productionDepthTrace.firedTrace), depthTraceSame, depthRuleOrderSame,
-		len(productionBreadth.firedTrace), len(lateContextBreadth.firedTrace), breadthResultSame, breadthFactsSame, breadthTraceSame, breadthRuleOrderSame,
-	)
+	if productionBreadth.result.Fired != 2051 {
+		t.Fatalf("breadth fired = %d, want 2051", productionBreadth.result.Fired)
+	}
+	if productionBreadth.finalFacts != lateContextBreadth.finalFacts {
+		t.Fatal("breadth final fact multiset differs between production and late-context")
+	}
+	if got, want := ruleOrderFromFiredTrace(lateContextBreadth.firedTrace), ruleOrderFromFiredTrace(productionBreadth.firedTrace); !reflect.DeepEqual(got, want) {
+		index, productionEntry, lateContextEntry := firstFiredTraceDifference(productionBreadth.firedTrace, lateContextBreadth.firedTrace)
+		t.Fatalf("breadth rule-fired order differs at %d: production=%q late-context=%q", index, productionEntry, lateContextEntry)
+	}
 }
 
 func BenchmarkMannersFindSeatingLateContextBranchOrdering(b *testing.B) {

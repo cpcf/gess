@@ -21,8 +21,9 @@ const (
 	// StrategyDepth is the default: equal-salience activations fire most
 	// recent first (LIFO), with deterministic declaration-order tie-breaks.
 	StrategyDepth Strategy = iota
-	// StrategyBreadth fires equal-salience activations in creation order
-	// (FIFO), suiting interview and queue-style rule programs.
+	// StrategyBreadth fires equal-salience activations in birth order (FIFO).
+	// Activations born in one propagation epoch use their canonical authored
+	// binding tuple as the deterministic peer order.
 	StrategyBreadth
 )
 
@@ -143,6 +144,8 @@ type activation struct {
 	ruleRevisionID   RuleRevisionID
 	identityKey      candidateIdentityKey
 	token            tokenRef
+	birthEpoch       uint64
+	birthRank        uint64
 	module           ModuleName
 	heapIndex        int
 	salience         int
@@ -710,6 +713,8 @@ type agenda struct {
 	lessActivation      func(*activation, *activation) bool
 	strategy            Strategy
 	nextOrdinal         uint64
+	nextBirthEpoch      uint64
+	initialBirthEpoch   uint64
 	handleGeneration    uint32
 	revision            *Ruleset
 	propagationCounters *propagationCounterLedger
@@ -724,6 +729,11 @@ type agenda struct {
 	purgeChanges []agendaChange
 
 	pendingScratch []*activation
+
+	birthActivationScratch []*activation
+	birthRecordScratch     []activationBirthRankRecord
+	birthEntryScratch      []activationBirthSortEntry
+	birthSeenScratch       []uint64
 
 	activationRowsSpare activationRows
 	activationsSpare    []*activation
@@ -786,6 +796,8 @@ func (a *agenda) cloneForFork(strategy Strategy) *agenda {
 	}
 	out := newAgendaWithStrategy(strategy)
 	out.nextOrdinal = a.nextOrdinal
+	out.nextBirthEpoch = a.nextBirthEpoch
+	out.initialBirthEpoch = a.initialBirthEpoch
 	out.handleGeneration = a.handleGeneration
 	out.revision = a.revision
 	if out.handleGeneration == 0 {
@@ -916,6 +928,9 @@ func (a *agenda) reset() {
 	a.activationRows.reset()
 	a.terminalActivations.reset()
 	a.nextOrdinal = 0
+	a.nextBirthEpoch = 0
+	a.initialBirthEpoch = 0
+	a.clearBirthRankScratch()
 	a.advanceHandleGeneration()
 }
 
@@ -939,6 +954,16 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 	}
 	changes := a.reconcileChanges[:0]
 	activated := a.reconcileActivated[:0]
+	breadth := a.strategy == StrategyBreadth
+	birthEpoch := uint64(0)
+	var birthActivations []*activation
+	if breadth {
+		birthActivations = a.birthActivationScratch[:0]
+		defer func() {
+			clear(birthActivations)
+			a.birthActivationScratch = birthActivations[:0]
+		}()
+	}
 
 	for _, result := range results {
 		if err := ctx.Err(); err != nil {
@@ -963,12 +988,18 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 					seen[key] = struct{}{}
 				} else if existing.status == activationStatusDeactivated {
 					existing.status = activationStatusPending
+					if breadth {
+						a.setActivationBirth(existing, a.defaultBirthEpoch(&birthEpoch), 0)
+						birthActivations = append(birthActivations, existing)
+					}
 					a.enqueueActivation(existing)
 					seen[key] = struct{}{}
-					activated = append(activated, agendaChange{
-						kind:       agendaChangeActivated,
-						activation: a.compactChangeActivation(existing),
-					})
+					if !breadth {
+						activated = append(activated, agendaChange{
+							kind:       agendaChangeActivated,
+							activation: a.compactChangeActivation(existing),
+						})
+					}
 				}
 				continue
 			}
@@ -976,13 +1007,19 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 			created := a.activationRows.addEmpty()
 			fillActivationFromCandidate(created, rule, candidate)
 			key = a.storePreparedActivation(created)
+			if breadth {
+				a.setActivationBirth(created, a.defaultBirthEpoch(&birthEpoch), 0)
+				birthActivations = append(birthActivations, created)
+			}
 			a.enqueueActivation(created)
 
 			seen[key] = struct{}{}
-			activated = append(activated, agendaChange{
-				kind:       agendaChangeActivated,
-				activation: a.compactChangeActivation(created),
-			})
+			if !breadth {
+				activated = append(activated, agendaChange{
+					kind:       agendaChangeActivated,
+					activation: a.compactChangeActivation(created),
+				})
+			}
 		}
 	}
 
@@ -1000,6 +1037,17 @@ func (a *agenda) reconcile(ctx context.Context, revision *Ruleset, results []rul
 		return true
 	})
 
+	if breadth {
+		a.assignCanonicalBirthRanks(birthEpoch, birthActivations)
+		slices.SortStableFunc(birthActivations, activationBirthCompare)
+		slices.SortStableFunc(changes, agendaChangeBirthCompare)
+		for _, current := range birthActivations {
+			activated = append(activated, agendaChange{
+				kind:       agendaChangeActivated,
+				activation: a.compactChangeActivation(current),
+			})
+		}
+	}
 	changes = append(changes, activated...)
 
 	a.reconcileSeen = seen
@@ -1038,6 +1086,16 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 	}
 
 	activated := a.deltaActivated[:0]
+	breadth := a.strategy == StrategyBreadth
+	birthEpoch := uint64(0)
+	var birthActivations []*activation
+	if breadth {
+		birthActivations = a.birthActivationScratch[:0]
+		defer func() {
+			clear(birthActivations)
+			a.birthActivationScratch = birthActivations[:0]
+		}()
+	}
 	sortMatchCandidates(revision, added)
 	for _, candidate := range added {
 		if err := ctx.Err(); err != nil {
@@ -1057,11 +1115,28 @@ func (a *agenda) applyCandidateDeltas(ctx context.Context, revision *Ruleset, re
 		created := a.activationRows.addEmpty()
 		fillActivationFromCandidate(created, rule, candidate)
 		a.storePreparedActivation(created)
+		if breadth {
+			a.setActivationBirth(created, a.defaultBirthEpoch(&birthEpoch), 0)
+			birthActivations = append(birthActivations, created)
+		}
 		a.enqueueActivation(created)
-		activated = append(activated, agendaChange{
-			kind:       agendaChangeActivated,
-			activation: a.compactChangeActivation(created),
-		})
+		if !breadth {
+			activated = append(activated, agendaChange{
+				kind:       agendaChangeActivated,
+				activation: a.compactChangeActivation(created),
+			})
+		}
+	}
+	if breadth {
+		a.assignCanonicalBirthRanks(birthEpoch, birthActivations)
+		slices.SortStableFunc(birthActivations, activationBirthCompare)
+		slices.SortStableFunc(changes, agendaChangeBirthCompare)
+		for _, current := range birthActivations {
+			activated = append(activated, agendaChange{
+				kind:       agendaChangeActivated,
+				activation: a.compactChangeActivation(current),
+			})
+		}
 	}
 	changes = append(changes, activated...)
 
@@ -1108,6 +1183,9 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 		if existing.status == activationStatusDeactivated {
 			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
+			if a.strategy == StrategyBreadth {
+				a.setActivationBirth(existing, a.ensureInitialBirthEpoch(), 0)
+			}
 			a.enqueueActivation(existing)
 		}
 		return existing, nil
@@ -1119,6 +1197,9 @@ func (a *agenda) addInitialTerminalActivation(ctx context.Context, revision *Rul
 	created.supportCount = 1
 	created.queryProofID = delta.queryProofID
 	a.storePreparedActivation(created)
+	if a.strategy == StrategyBreadth {
+		a.setActivationBirth(created, a.ensureInitialBirthEpoch(), 0)
+	}
 	a.enqueueActivation(created)
 	a.linkTokenActivation(delta.token, created)
 	return created, nil
@@ -1128,6 +1209,21 @@ func (a *agenda) finishInitialTerminalActivations() {
 	if a == nil {
 		return
 	}
+	if a.strategy != StrategyBreadth || a.initialBirthEpoch == 0 {
+		return
+	}
+	epoch := a.initialBirthEpoch
+	initial := a.birthActivationScratch[:0]
+	a.forEachPendingActivation(func(current *activation) bool {
+		if current != nil && current.birthEpoch == epoch {
+			initial = append(initial, current)
+		}
+		return true
+	})
+	a.assignCanonicalBirthRanks(epoch, initial)
+	a.initialBirthEpoch = 0
+	clear(initial)
+	a.birthActivationScratch = initial[:0]
 }
 
 func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Context, revision *Ruleset, removed []reteTerminalTokenDelta, added []reteTerminalTokenDelta) (*activation, error) {
@@ -1141,6 +1237,8 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 		return nil, err
 	}
 	a.revision = revision
+	breadth := a.strategy == StrategyBreadth
+	defaultBirthEpoch := uint64(0)
 
 	if len(removed) == 1 {
 		delta := removed[0]
@@ -1189,6 +1287,14 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 			rearmActivationToken(existing, delta.token)
 			existing.status = activationStatusPending
 			a.enqueueActivation(existing)
+			if breadth {
+				epoch := delta.birthEpoch
+				if epoch == 0 {
+					epoch = a.defaultBirthEpoch(&defaultBirthEpoch)
+				}
+				a.setActivationBirth(existing, epoch, 0)
+				a.assignCanonicalBirthRanks(epoch, []*activation{existing})
+			}
 		}
 		return existing, nil
 	}
@@ -1200,6 +1306,14 @@ func (a *agenda) applySingleTerminalTokenDeltasWithoutChanges(ctx context.Contex
 	created.queryProofID = delta.queryProofID
 	a.storePreparedActivation(created)
 	a.enqueueActivation(created)
+	if breadth {
+		epoch := delta.birthEpoch
+		if epoch == 0 {
+			epoch = a.defaultBirthEpoch(&defaultBirthEpoch)
+		}
+		a.setActivationBirth(created, epoch, 0)
+		a.assignCanonicalBirthRanks(epoch, []*activation{created})
+	}
 	a.linkTokenActivation(delta.token, created)
 	return created, nil
 }
@@ -1219,6 +1333,16 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 	var changes []agendaChange
 	if collectChanges {
 		changes = a.deltaChanges[:0]
+	}
+	breadth := a.strategy == StrategyBreadth
+	defaultBirthEpoch := uint64(0)
+	var breadthActivated []*activation
+	if breadth {
+		breadthActivated = a.birthActivationScratch[:0]
+		defer func() {
+			clear(breadthActivated)
+			a.birthActivationScratch = breadthActivated[:0]
+		}()
 	}
 	for _, delta := range removed {
 		if err := ctx.Err(); err != nil {
@@ -1260,6 +1384,9 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		})
 		a.compactDeactivatedTokenActivation(existing)
 	}
+	if breadth && collectChanges {
+		slices.SortStableFunc(changes, agendaChangeBirthCompare)
+	}
 
 	var activated []agendaChange
 	if collectChanges {
@@ -1284,14 +1411,23 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 				rearmActivationToken(existing, delta.token)
 				existing.status = activationStatusPending
 				a.enqueueActivation(existing)
-				if collectChanges {
-					activated = append(activated, agendaChange{
-						kind:       agendaChangeActivated,
-						activation: a.compactChangeActivation(existing),
-					})
+				if breadth {
+					epoch := delta.birthEpoch
+					if epoch == 0 {
+						epoch = a.defaultBirthEpoch(&defaultBirthEpoch)
+					}
+					a.setActivationBirth(existing, epoch, 0)
+					breadthActivated = append(breadthActivated, existing)
+				} else {
+					if collectChanges {
+						activated = append(activated, agendaChange{
+							kind:       agendaChangeActivated,
+							activation: a.compactChangeActivation(existing),
+						})
+					}
 				}
 			}
-			if observeActivation != nil {
+			if !breadth && observeActivation != nil {
 				observeActivation(existing)
 			}
 			continue
@@ -1305,15 +1441,42 @@ func (a *agenda) applyTerminalTokenDeltasInternal(ctx context.Context, revision 
 		created.queryProofID = delta.queryProofID
 		a.storePreparedActivation(created)
 		a.enqueueActivation(created)
-		a.linkTokenActivation(delta.token, created)
-		if observeActivation != nil {
-			observeActivation(created)
+		if breadth {
+			epoch := delta.birthEpoch
+			if epoch == 0 {
+				epoch = a.defaultBirthEpoch(&defaultBirthEpoch)
+			}
+			a.setActivationBirth(created, epoch, 0)
+			breadthActivated = append(breadthActivated, created)
+		} else {
+			if observeActivation != nil {
+				observeActivation(created)
+			}
+			if collectChanges {
+				activated = append(activated, agendaChange{
+					kind:       agendaChangeActivated,
+					activation: a.compactChangeActivation(created),
+				})
+			}
 		}
-		if collectChanges {
-			activated = append(activated, agendaChange{
-				kind:       agendaChangeActivated,
-				activation: a.compactChangeActivation(created),
-			})
+		a.linkTokenActivation(delta.token, created)
+	}
+	if breadth {
+		a.assignCanonicalBirthRanksByEpoch(breadthActivated)
+		slices.SortStableFunc(breadthActivated, activationBirthCompare)
+		for _, current := range breadthActivated {
+			if current == nil {
+				continue
+			}
+			if observeActivation != nil {
+				observeActivation(current)
+			}
+			if collectChanges {
+				activated = append(activated, agendaChange{
+					kind:       agendaChangeActivated,
+					activation: a.compactChangeActivation(current),
+				})
+			}
 		}
 	}
 	if collectChanges {
@@ -2035,6 +2198,12 @@ func (a *agenda) activationBreadthLess(left, right *activation) bool {
 	if left.salience != right.salience {
 		return left.salience > right.salience
 	}
+	if left.birthEpoch != right.birthEpoch {
+		return left.birthEpoch < right.birthEpoch
+	}
+	if left.birthRank != right.birthRank {
+		return left.birthRank < right.birthRank
+	}
 	if left.key.ordinal < right.key.ordinal {
 		return true
 	}
@@ -2042,6 +2211,370 @@ func (a *agenda) activationBreadthLess(left, right *activation) bool {
 		return false
 	}
 	return false
+}
+
+func activationBirthLess(left, right *activation) bool {
+	if left == nil || right == nil {
+		return right != nil
+	}
+	if left.birthEpoch != right.birthEpoch {
+		return left.birthEpoch < right.birthEpoch
+	}
+	if left.birthRank != right.birthRank {
+		return left.birthRank < right.birthRank
+	}
+	return left.key.ordinal < right.key.ordinal
+}
+
+func activationBirthCompare(left, right *activation) int {
+	return compareLess(activationBirthLess(left, right), activationBirthLess(right, left))
+}
+
+func agendaChangeBirthCompare(left, right agendaChange) int {
+	return activationBirthCompare(&left.activation, &right.activation)
+}
+
+func (a *agenda) reserveBirthEpoch() uint64 {
+	if a == nil {
+		return 0
+	}
+	a.nextBirthEpoch++
+	if a.nextBirthEpoch == 0 {
+		a.nextBirthEpoch = 1
+	}
+	return a.nextBirthEpoch
+}
+
+func (a *agenda) ensureInitialBirthEpoch() uint64 {
+	if a == nil {
+		return 0
+	}
+	if a.initialBirthEpoch == 0 {
+		a.initialBirthEpoch = a.reserveBirthEpoch()
+	}
+	return a.initialBirthEpoch
+}
+
+func (a *agenda) defaultBirthEpoch(epoch *uint64) uint64 {
+	if epoch == nil {
+		return 0
+	}
+	if *epoch == 0 {
+		*epoch = a.reserveBirthEpoch()
+	}
+	return *epoch
+}
+
+func (a *agenda) setActivationBirth(act *activation, epoch, rank uint64) {
+	if act == nil {
+		return
+	}
+	act.birthEpoch = epoch
+	act.birthRank = rank
+}
+
+type activationBirthRankRecord struct {
+	act       *activation
+	entryBase int
+	entryLen  int
+}
+
+type activationBirthSortEntry struct {
+	entry             bindingTupleEntry
+	canonicalValueKey string
+}
+
+func activationBirthEntryLess(left, right activationBirthSortEntry) bool {
+	if left.entry.conditionOrder != right.entry.conditionOrder {
+		return left.entry.conditionOrder < right.entry.conditionOrder
+	}
+	if left.entry.bindingSlot != right.entry.bindingSlot {
+		return left.entry.bindingSlot < right.entry.bindingSlot
+	}
+	if left.entry.binding != right.entry.binding {
+		return left.entry.binding < right.entry.binding
+	}
+	if left.entry.conditionID != right.entry.conditionID {
+		return left.entry.conditionID < right.entry.conditionID
+	}
+	if left.entry.factID != right.entry.factID {
+		return factIDLess(left.entry.factID, right.entry.factID)
+	}
+	if left.entry.factVersion != right.entry.factVersion {
+		return left.entry.factVersion < right.entry.factVersion
+	}
+	if left.entry.hasValue != right.entry.hasValue {
+		return !left.entry.hasValue
+	}
+	return left.canonicalValueKey < right.canonicalValueKey
+}
+
+func (a *agenda) prepareActivationBirthRankRecords(activations []*activation) []activationBirthRankRecord {
+	if a == nil || a.revision == nil || len(activations) == 0 {
+		return nil
+	}
+	totalEntries := 0
+	for _, act := range activations {
+		if act == nil {
+			continue
+		}
+		if rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]; ok {
+			totalEntries += len(rule.conditions)
+		}
+	}
+	records := slices.Grow(a.birthRecordScratch[:0], len(activations))
+	entries := a.birthEntryScratch
+	if cap(entries) < totalEntries {
+		entries = make([]activationBirthSortEntry, totalEntries)
+	} else {
+		entries = entries[:totalEntries]
+		clear(entries)
+	}
+	nextEntry := 0
+	for _, act := range activations {
+		if act == nil {
+			continue
+		}
+		rule, ok := a.revision.rulesByRevisionID[act.ruleRevisionID]
+		if !ok {
+			records = append(records, activationBirthRankRecord{act: act})
+			continue
+		}
+		entryLen := len(rule.conditions)
+		record := activationBirthRankRecord{act: act, entryBase: nextEntry, entryLen: entryLen}
+		if !a.fillActivationBirthEntries(rule, act, entries[nextEntry:nextEntry+entryLen]) {
+			record.entryLen = 0
+		}
+		nextEntry += entryLen
+		records = append(records, record)
+	}
+	a.birthRecordScratch = records
+	a.birthEntryScratch = entries
+	return records
+}
+
+func (a *agenda) fillActivationBirthEntries(rule compiledRule, act *activation, dst []activationBirthSortEntry) bool {
+	if a == nil || act == nil || len(dst) != len(rule.conditions) {
+		return false
+	}
+	words := (len(dst) + 63) / 64
+	if cap(a.birthSeenScratch) < words {
+		a.birthSeenScratch = make([]uint64, words)
+	} else {
+		a.birthSeenScratch = a.birthSeenScratch[:words]
+		clear(a.birthSeenScratch)
+	}
+	seenCount := 0
+	put := func(match conditionMatch) bool {
+		slot := match.bindingSlot
+		if slot < 0 {
+			return true
+		}
+		if slot >= len(dst) {
+			return false
+		}
+		word, mask := slot/64, uint64(1)<<uint(slot%64)
+		if a.birthSeenScratch[word]&mask != 0 {
+			return false
+		}
+		condition := rule.conditions[slot]
+		entry := bindingTupleEntry{
+			binding:        condition.BindingName,
+			bindingSlot:    slot,
+			conditionOrder: condition.Order,
+			conditionID:    condition.IDValue,
+			value:          match.value,
+			hasValue:       match.hasValue,
+		}
+		valueKey := ""
+		if match.hasValue {
+			valueKey = match.value.CanonicalKey()
+		} else {
+			entry.factID = match.fact.ID()
+			entry.factVersion = match.fact.Version()
+		}
+		dst[slot] = activationBirthSortEntry{entry: entry, canonicalValueKey: valueKey}
+		a.birthSeenScratch[word] |= mask
+		seenCount++
+		return true
+	}
+	if !act.token.isZero() {
+		for current := act.token; !current.isZero(); current = current.parent() {
+			row, ok := current.resolve()
+			if !ok {
+				return false
+			}
+			match, ok := row.conditionMatch()
+			if !ok || !put(match) {
+				return false
+			}
+		}
+		return seenCount == len(dst)
+	}
+	bindings := act.bindings()
+	if len(bindings) > 0 {
+		for _, entry := range bindings {
+			slot := entry.bindingSlot
+			if slot < 0 || slot >= len(dst) {
+				return false
+			}
+			word, mask := slot/64, uint64(1)<<uint(slot%64)
+			if a.birthSeenScratch[word]&mask != 0 {
+				return false
+			}
+			valueKey := ""
+			if entry.hasValue {
+				valueKey = entry.value.CanonicalKey()
+			}
+			dst[slot] = activationBirthSortEntry{entry: entry, canonicalValueKey: valueKey}
+			a.birthSeenScratch[word] |= mask
+			seenCount++
+		}
+		return seenCount == len(dst)
+	}
+	factIDs, factVersions := act.factIDs(), act.factVersions()
+	if len(factIDs) != len(dst) || len(factVersions) != len(dst) {
+		return false
+	}
+	for slot := range dst {
+		condition := rule.conditions[slot]
+		dst[slot].entry = bindingTupleEntry{
+			binding:        condition.BindingName,
+			bindingSlot:    slot,
+			conditionOrder: condition.Order,
+			conditionID:    condition.IDValue,
+			factID:         factIDs[slot],
+			factVersion:    factVersions[slot],
+		}
+	}
+	return true
+}
+
+// Same-epoch breadth births are logically simultaneous. Canonical birth ranks
+// provide a deterministic authored-tuple order for those peers rather than
+// preserving physical insertion order.
+func (a *agenda) activationBirthRecordLess(left, right activationBirthRankRecord) bool {
+	if left.act == nil || right.act == nil {
+		return right.act != nil
+	}
+	if left.act.declarationOrder != right.act.declarationOrder {
+		return left.act.declarationOrder < right.act.declarationOrder
+	}
+	leftEntries := a.birthEntryScratch[left.entryBase : left.entryBase+left.entryLen]
+	rightEntries := a.birthEntryScratch[right.entryBase : right.entryBase+right.entryLen]
+	for i := 0; i < len(leftEntries) && i < len(rightEntries); i++ {
+		if activationBirthEntryLess(leftEntries[i], rightEntries[i]) {
+			return true
+		}
+		if activationBirthEntryLess(rightEntries[i], leftEntries[i]) {
+			return false
+		}
+	}
+	if len(leftEntries) != len(rightEntries) {
+		return len(leftEntries) < len(rightEntries)
+	}
+	if left.act.identityKey.scopeHash != right.act.identityKey.scopeHash {
+		return left.act.identityKey.scopeHash < right.act.identityKey.scopeHash
+	}
+	if left.act.identityKey.hash != right.act.identityKey.hash {
+		return left.act.identityKey.hash < right.act.identityKey.hash
+	}
+	if left.act.ruleRevisionID != right.act.ruleRevisionID {
+		return left.act.ruleRevisionID < right.act.ruleRevisionID
+	}
+	return left.act.key.ordinal < right.act.key.ordinal
+}
+
+func (a *agenda) clearBirthRankRecords() {
+	if a == nil {
+		return
+	}
+	clear(a.birthRecordScratch)
+	a.birthRecordScratch = a.birthRecordScratch[:0]
+	clear(a.birthEntryScratch)
+	a.birthEntryScratch = a.birthEntryScratch[:0]
+	clear(a.birthSeenScratch)
+	a.birthSeenScratch = a.birthSeenScratch[:0]
+}
+
+func (a *agenda) clearBirthRankScratch() {
+	if a == nil {
+		return
+	}
+	clear(a.birthActivationScratch)
+	a.birthActivationScratch = a.birthActivationScratch[:0]
+	a.clearBirthRankRecords()
+}
+
+func (a *agenda) assignCanonicalBirthRanks(epoch uint64, activations []*activation) {
+	if a == nil || epoch == 0 || len(activations) == 0 {
+		return
+	}
+	if len(activations) == 1 {
+		act := activations[0]
+		a.setActivationBirth(act, epoch, 1)
+		if act != nil && act.status == activationStatusPending {
+			a.fixActivationOrder(act)
+		}
+		return
+	}
+	records := a.prepareActivationBirthRankRecords(activations)
+	defer a.clearBirthRankRecords()
+	slices.SortStableFunc(records, func(left, right activationBirthRankRecord) int {
+		return compareLess(
+			a.activationBirthRecordLess(left, right),
+			a.activationBirthRecordLess(right, left),
+		)
+	})
+	for i, record := range records {
+		act := record.act
+		activations[i] = act
+		a.setActivationBirth(act, epoch, uint64(i+1))
+		if act.status == activationStatusPending {
+			a.fixActivationOrder(act)
+		}
+	}
+}
+
+func (a *agenda) assignCanonicalBirthRanksByEpoch(activations []*activation) {
+	if a == nil || len(activations) == 0 {
+		return
+	}
+	if len(activations) == 1 {
+		act := activations[0]
+		if act != nil && act.birthEpoch != 0 {
+			a.setActivationBirth(act, act.birthEpoch, 1)
+			if act.status == activationStatusPending {
+				a.fixActivationOrder(act)
+			}
+		}
+		return
+	}
+	slices.SortStableFunc(activations, func(left, right *activation) int {
+		if left == nil || right == nil {
+			return compareLess(left == nil, right == nil)
+		}
+		return compareLess(left.birthEpoch < right.birthEpoch, right.birthEpoch < left.birthEpoch)
+	})
+	start := 0
+	for start < len(activations) {
+		current := activations[start]
+		if current == nil || current.birthEpoch == 0 {
+			start++
+			continue
+		}
+		epoch := current.birthEpoch
+		end := start + 1
+		for end < len(activations) {
+			next := activations[end]
+			if next == nil || next.birthEpoch != epoch {
+				break
+			}
+			end++
+		}
+		a.assignCanonicalBirthRanks(epoch, activations[start:end])
+		start = end
+	}
 }
 
 func (a *agenda) activationForCandidate(candidate matchCandidate) (*activation, activationKey, bool) {
@@ -2383,6 +2916,10 @@ func (a *agenda) releaseCompletedRunStorage() {
 	a.deltaActivated = nil
 	a.purgeChanges = nil
 	a.pendingScratch = nil
+	a.birthActivationScratch = nil
+	a.birthRecordScratch = nil
+	a.birthEntryScratch = nil
+	a.birthSeenScratch = nil
 }
 
 func (a *agenda) forEachActivationLookup(key activationLookupKey, fn func(*activation) bool) {

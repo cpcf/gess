@@ -34,6 +34,127 @@ func TestSessionStrategyBreadthOrdersEqualSalienceByCreation(t *testing.T) {
 	}
 }
 
+func TestSessionStrategyBreadthActivationEventsCanonicalAcrossPlanOrders(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	left := mustAddTemplate(t, workspace, TemplateSpec{
+		Name: "left",
+		Fields: []FieldSpec{
+			{Name: "id", Kind: ValueInt, Required: true},
+			{Name: "tag", Kind: ValueString, Required: true},
+		},
+	})
+	right := mustAddTemplate(t, workspace, TemplateSpec{Name: "right"})
+	mustAddAction(t, workspace, ActionSpec{Name: "noop", Fn: func(ActionContext) error { return nil }})
+	const ruleName = "pair"
+	mustAddRule(t, workspace, RuleSpec{
+		Name: ruleName,
+		Conditions: []RuleConditionSpec{
+			{Binding: "left", Target: TemplateKeyFact(left.Key())},
+			{Binding: "right", Target: TemplateKeyFact(right.Key())},
+		},
+		Actions: []RuleActionSpec{{Name: "noop"}},
+	})
+
+	production, err := workspace.Compile(ctx)
+	if err != nil {
+		t.Fatalf("production Compile: %v", err)
+	}
+	profiled, err := workspace.compileWithBranchPlanningProfile(ctx, &branchPlanningProfile{
+		byRule: map[RuleID]map[string]float64{
+			RuleID(ruleName): {"left": 10, "right": 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("profiled Compile: %v", err)
+	}
+	productionOrder := conditionPlanBindings(production.rules[ruleName].executionConditionBranches()[0].plans)
+	profiledOrder := conditionPlanBindings(profiled.rules[ruleName].executionConditionBranches()[0].plans)
+	if reflect.DeepEqual(productionOrder, profiledOrder) {
+		t.Fatalf("planned bindings matched unexpectedly: production=%#v profiled=%#v", productionOrder, profiledOrder)
+	}
+
+	observe := func(t *testing.T, revision *Ruleset, id SessionID) ([]string, []string, []string) {
+		t.Helper()
+		leftTagByID := make(map[FactID]string, 2)
+		activatedTags := make([]string, 0, 2)
+		deactivatedTags := make([]string, 0, 2)
+		listener := EventFunc(func(_ context.Context, event Event) error {
+			if len(event.FactIDs) == 0 {
+				return nil
+			}
+			switch event.Type {
+			case EventRuleActivated:
+				activatedTags = append(activatedTags, leftTagByID[event.FactIDs[0]])
+			case EventRuleDeactivated:
+				deactivatedTags = append(deactivatedTags, leftTagByID[event.FactIDs[0]])
+			}
+			return nil
+		})
+		session, err := NewSession(revision, WithSessionID(id), WithStrategy(StrategyBreadth), WithEventListener(listener, ForEventTypes(EventRuleActivated, EventRuleDeactivated)))
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		for _, leftFact := range []struct {
+			tag string
+		}{
+			{tag: "b"},
+			{tag: "a"},
+		} {
+			result, err := session.Assert(ctx, left.Key(), Fields{
+				"id":  newIntValue(1),
+				"tag": newStringValue(leftFact.tag),
+			})
+			if err != nil {
+				t.Fatalf("Assert(left %q): %v", leftFact.tag, err)
+			}
+			leftTagByID[result.Fact.ID()] = leftFact.tag
+		}
+		rightFact, err := session.Assert(ctx, right.Key(), Fields{})
+		if err != nil {
+			t.Fatalf("Assert(right): %v", err)
+		}
+		agenda, err := session.Agenda(ctx)
+		if err != nil {
+			t.Fatalf("Agenda: %v", err)
+		}
+		pending := agenda.Activations()
+		pendingTags := make([]string, 0, len(pending))
+		for _, act := range pending {
+			factIDs := act.FactIDs()
+			if len(factIDs) == 0 {
+				t.Fatalf("pending activation missing fact IDs: %#v", act)
+			}
+			pendingTags = append(pendingTags, leftTagByID[factIDs[0]])
+		}
+		if _, err := session.Retract(ctx, rightFact.Fact.ID()); err != nil {
+			t.Fatalf("Retract(right): %v", err)
+		}
+		return activatedTags, deactivatedTags, pendingTags
+	}
+
+	productionActivated, productionDeactivated, productionPending := observe(t, production, "breadth-event-production")
+	profiledActivated, profiledDeactivated, profiledPending := observe(t, profiled, "breadth-event-profiled")
+	if !reflect.DeepEqual(profiledActivated, productionActivated) {
+		t.Fatalf("activated tag order = %#v, want %#v", profiledActivated, productionActivated)
+	}
+	if !reflect.DeepEqual(profiledDeactivated, productionDeactivated) {
+		t.Fatalf("deactivated tag order = %#v, want %#v", profiledDeactivated, productionDeactivated)
+	}
+	if !reflect.DeepEqual(profiledPending, productionPending) {
+		t.Fatalf("pending tag order = %#v, want %#v", profiledPending, productionPending)
+	}
+	if want := []string{"b", "a"}; !reflect.DeepEqual(productionActivated, want) {
+		t.Fatalf("production activated tag order = %#v, want %#v", productionActivated, want)
+	}
+	if want := []string{"b", "a"}; !reflect.DeepEqual(productionDeactivated, want) {
+		t.Fatalf("production deactivated tag order = %#v, want %#v", productionDeactivated, want)
+	}
+	if want := []string{"b", "a"}; !reflect.DeepEqual(productionPending, want) {
+		t.Fatalf("production pending tag order = %#v, want %#v", productionPending, want)
+	}
+}
+
 func TestSessionStrategyOrderingIsDeterministic(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -111,6 +232,58 @@ func TestSessionStrategyBreadthComposesWithFocusAndAutoFocus(t *testing.T) {
 	}
 	want := []string{"ask:1", "ask:2", "main:1", "main:2"}
 	if !reflect.DeepEqual(trace, want) {
+		t.Fatalf("trace = %#v, want %#v", trace, want)
+	}
+}
+
+func TestSessionStrategyBreadthAutoFocusUsesCanonicalBirthOrder(t *testing.T) {
+	ctx := context.Background()
+	autoFocus := true
+	workspace := NewWorkspace()
+	mustAddModule(t, workspace, ModuleSpec{Name: "low", AutoFocus: &autoFocus})
+	mustAddModule(t, workspace, ModuleSpec{Name: "high", AutoFocus: &autoFocus})
+	event := mustAddTemplate(t, workspace, TemplateSpec{Name: "event"})
+
+	trace := make([]string, 0, 2)
+	mustAddAction(t, workspace, ActionSpec{Name: "low", Fn: func(ActionContext) error {
+		trace = append(trace, "low")
+		return nil
+	}})
+	mustAddAction(t, workspace, ActionSpec{Name: "high", Fn: func(ActionContext) error {
+		trace = append(trace, "high")
+		return nil
+	}})
+	// Declaration order is the canonical peer-birth order: low is born first,
+	// then high. Salience controls each module's agenda, not auto-focus pushes.
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "low-rule",
+		Module:     "low",
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+		Actions:    []RuleActionSpec{{Name: "low"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "high-rule",
+		Module:     "high",
+		Salience:   10,
+		Conditions: []RuleConditionSpec{{Binding: "event", Target: TemplateKeyFact(event.Key())}},
+		Actions:    []RuleActionSpec{{Name: "high"}},
+	})
+
+	session := mustStrategySession(t, mustCompileWorkspace(t, workspace), "breadth-autofocus-birth", WithStrategy(StrategyBreadth))
+	if _, err := session.Assert(ctx, event.Key(), Fields{}); err != nil {
+		t.Fatalf("Assert(event): %v", err)
+	}
+	if got, want := session.CurrentFocus(), ModuleName("high"); got != want {
+		t.Fatalf("current focus = %q, want %q", got, want)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 2 {
+		t.Fatalf("run result = (%v, %d), want (%v, 2)", result.Status, result.Fired, RunCompleted)
+	}
+	if want := []string{"high", "low"}; !reflect.DeepEqual(trace, want) {
 		t.Fatalf("trace = %#v, want %#v", trace, want)
 	}
 }
@@ -464,5 +637,223 @@ func TestSessionForkWithStrategyOverridesOrdering(t *testing.T) {
 	depthWant := []string{"task:3", "task:2", "task:1"}
 	if got := runAndTrace(session); !reflect.DeepEqual(got, depthWant) {
 		t.Fatalf("parent trace = %#v, want %#v", got, depthWant)
+	}
+}
+
+func TestSessionStrategyBreadthPreservesSequentialMutationEpochsAcrossDirectAndCoalescedRunPaths(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	start := mustAddTemplate(t, workspace, TemplateSpec{Name: "start"})
+	task := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "task",
+		Fields: []FieldSpec{{Name: "seq", Kind: ValueInt, Required: true}},
+	})
+
+	trace := make([]string, 0, 2)
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "seed",
+		Fn: func(ctx ActionContext) error {
+			if err := ctx.AssertTemplateValues(task.Key(), newIntValue(2)); err != nil {
+				return err
+			}
+			return ctx.AssertTemplateValues(task.Key(), newIntValue(1))
+		},
+	})
+	mustAddAction(t, workspace, strategyTraceAction("task", "item", "seq", &trace))
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "seed",
+		Conditions: []RuleConditionSpec{{Binding: "start", Target: TemplateKeyFact(start.Key())}},
+		Actions:    []RuleActionSpec{{Name: "seed"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "task",
+		Conditions: []RuleConditionSpec{{Binding: "item", Target: TemplateKeyFact(task.Key())}},
+		Actions:    []RuleActionSpec{{Name: "task"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	runTrace := func(opts ...SessionOption) []string {
+		t.Helper()
+		trace = trace[:0]
+		session, err := NewSession(
+			revision,
+			append([]SessionOption{
+				WithStrategy(StrategyBreadth),
+				WithInitialFacts(SessionInitialFact{TemplateKey: start.Key(), Fields: mustFields(t, map[string]any{})}),
+			}, opts...)...,
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 3 {
+			t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+		}
+		return append([]string(nil), trace...)
+	}
+
+	want := []string{"task:2", "task:1"}
+	if got := runTrace(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct trace = %#v, want %#v", got, want)
+	}
+	if got := runTrace(WithEventListener(EventFunc(func(context.Context, Event) error { return nil }), ForEventTypes(EventRuleFired))); !reflect.DeepEqual(got, want) {
+		t.Fatalf("coalesced trace = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionStrategyBreadthAssignsNewBirthOnReactivation(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "item",
+		Fields: []FieldSpec{{Name: "seq", Kind: ValueInt, Required: true}},
+	})
+	carry := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "carry",
+		Fields: []FieldSpec{{Name: "seq", Kind: ValueInt, Required: true}},
+	})
+	blocker := mustAddTemplate(t, workspace, TemplateSpec{Name: "blocker"})
+
+	trace := make([]string, 0, 3)
+	mustAddAction(t, workspace, strategyTraceAction("carry", "item", "seq", &trace))
+	mustAddAction(t, workspace, strategyTraceAction("task", "item", "seq", &trace))
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "carry",
+		Conditions: []RuleConditionSpec{{Binding: "item", Target: TemplateKeyFact(carry.Key())}},
+		Actions:    []RuleActionSpec{{Name: "carry"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "task",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
+			Not{Condition: Match{Binding: "blocked", Target: TemplateKeyFact(blocker.Key())}},
+		}},
+		Actions: []RuleActionSpec{{Name: "task"}},
+	})
+
+	session := mustStrategySession(t, mustCompileWorkspace(t, workspace), "breadth-reactivation", WithStrategy(StrategyBreadth))
+	assertStrategyTasks(t, session, item.Key(), 1, 2)
+	blocked, err := session.Assert(ctx, blocker.Key(), mustFields(t, map[string]any{}))
+	if err != nil {
+		t.Fatalf("Assert(blocker): %v", err)
+	}
+	if _, err := session.Assert(ctx, carry.Key(), mustFields(t, map[string]any{"seq": 0})); err != nil {
+		t.Fatalf("Assert(carry): %v", err)
+	}
+	if _, err := session.Retract(ctx, blocked.Fact.ID()); err != nil {
+		t.Fatalf("Retract(blocker): %v", err)
+	}
+
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 3 {
+		t.Fatalf("run result = (%v, %d), want (%v, 3)", result.Status, result.Fired, RunCompleted)
+	}
+	if got, want := append([]string(nil), trace...), []string{"carry:0", "task:1", "task:2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("trace = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionStrategyBreadthReactivationParityAcrossDirectAndCoalescedRunPaths(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	start := mustAddTemplate(t, workspace, TemplateSpec{Name: "start"})
+	item := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "item",
+		Fields: []FieldSpec{{Name: "seq", Kind: ValueInt, Required: true}},
+	})
+	carry := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "carry",
+		Fields: []FieldSpec{{Name: "seq", Kind: ValueInt, Required: true}},
+	})
+	blocker := mustAddTemplate(t, workspace, TemplateSpec{Name: "blocker"})
+
+	trace := make([]string, 0, 3)
+	mustAddAction(t, workspace, ActionSpec{
+		Name: "seed",
+		Fn: func(ctx ActionContext) error {
+			blocked, err := ctx.Assert(blocker.Key(), Fields{})
+			if err != nil {
+				return err
+			}
+			if err := ctx.AssertTemplateValues(carry.Key(), newIntValue(0)); err != nil {
+				return err
+			}
+			_, err = ctx.Retract(blocked.Fact.ID())
+			return err
+		},
+	})
+	mustAddAction(t, workspace, strategyTraceAction("carry", "item", "seq", &trace))
+	mustAddAction(t, workspace, strategyTraceAction("task", "item", "seq", &trace))
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "seed",
+		Salience:   10,
+		Conditions: []RuleConditionSpec{{Binding: "start", Target: TemplateKeyFact(start.Key())}},
+		Actions:    []RuleActionSpec{{Name: "seed"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "carry",
+		Conditions: []RuleConditionSpec{{Binding: "item", Target: TemplateKeyFact(carry.Key())}},
+		Actions:    []RuleActionSpec{{Name: "carry"}},
+	})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "task",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "item", Target: TemplateKeyFact(item.Key())},
+			Not{Condition: Match{Binding: "blocked", Target: TemplateKeyFact(blocker.Key())}},
+		}},
+		Actions: []RuleActionSpec{{Name: "task"}},
+	})
+
+	revision := mustCompileWorkspace(t, workspace)
+	runTrace := func(opts ...SessionOption) []string {
+		t.Helper()
+		trace = trace[:0]
+		session, err := NewSession(
+			revision,
+			append([]SessionOption{
+				WithStrategy(StrategyBreadth),
+				WithInitialFacts(
+					SessionInitialFact{TemplateKey: start.Key(), Fields: mustFields(t, map[string]any{})},
+					SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"seq": 2})},
+					SessionInitialFact{TemplateKey: item.Key(), Fields: mustFields(t, map[string]any{"seq": 1})},
+				),
+			}, opts...)...,
+		)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		result, err := session.Run(ctx)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 4 {
+			t.Fatalf("run result = (%v, %d), want (%v, 4)", result.Status, result.Fired, RunCompleted)
+		}
+		return append([]string(nil), trace...)
+	}
+
+	want := []string{"carry:0", "task:2", "task:1"}
+	if got := runTrace(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("direct trace = %#v, want %#v", got, want)
+	}
+	if got := runTrace(WithEventListener(EventFunc(func(context.Context, Event) error { return nil }), ForEventTypes(EventRuleFired))); !reflect.DeepEqual(got, want) {
+		t.Fatalf("coalesced trace = %#v, want %#v", got, want)
+	}
+}
+
+func strategyName(strategy Strategy) string {
+	switch strategy {
+	case StrategyDepth:
+		return "depth"
+	case StrategyBreadth:
+		return "breadth"
+	default:
+		return fmt.Sprintf("strategy-%d", strategy)
 	}
 }

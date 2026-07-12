@@ -469,6 +469,10 @@ func agendaMemoryHighWater(a *agenda) int {
 	highWater += cap(a.deltaActivated)
 	highWater += cap(a.purgeChanges)
 	highWater += cap(a.pendingScratch)
+	highWater += cap(a.birthActivationScratch)
+	highWater += cap(a.birthRecordScratch)
+	highWater += cap(a.birthEntryScratch)
+	highWater += cap(a.birthSeenScratch)
 	highWater += cap(a.activations)
 	for _, queue := range a.moduleQueues {
 		if queue != nil {
@@ -525,6 +529,10 @@ func agendaMemoryRetainedBytes(a *agenda) uint64 {
 	bytes += sliceBytes[agendaChange](cap(a.deltaActivated))
 	bytes += sliceBytes[agendaChange](cap(a.purgeChanges))
 	bytes += sliceBytes[*activation](cap(a.pendingScratch))
+	bytes += sliceBytes[*activation](cap(a.birthActivationScratch))
+	bytes += sliceBytes[activationBirthRankRecord](cap(a.birthRecordScratch))
+	bytes += sliceBytes[activationBirthSortEntry](cap(a.birthEntryScratch))
+	bytes += sliceBytes[uint64](cap(a.birthSeenScratch))
 	return bytes
 }
 
