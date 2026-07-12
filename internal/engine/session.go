@@ -178,6 +178,7 @@ type Session struct {
 	}
 
 	nextRunSequence uint64
+	refractions     sessionRefractionStore
 	tms             sessionTMSStore
 	backchain       sessionBackchainStore
 }
@@ -805,6 +806,7 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 			lock   chan struct{}
 		}{make(chan struct{}, 1), make(chan struct{}, 1)},
 		nextRunSequence: s.nextRunSequence,
+		refractions:     s.refractions.clone(),
 		tms:             s.tms.cloneForFork(),
 	}
 	if fork.id == "" {
@@ -3038,6 +3040,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	s.agendaDriver.markUnready()
 	s.resetFocusStack()
 	s.clearLogicalSupports()
+	s.refractions.clear()
 	s.clearBackchainDemandSupports()
 	s.swapFactWorkspace(next)
 	s.factStore.generation = next.generation
@@ -3341,6 +3344,7 @@ func (s *Session) applyPendingLifecycleAgendaDeltaWithEventContext(ctx, eventCtx
 	} else if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return nil, err
 	}
+	s.refractions.removeDelta(s.revision, delta.removed)
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordAgendaDeltaApplication()
 	}
@@ -3395,6 +3399,7 @@ func (s *Session) applyReteAgendaDeltaInternal(ctx context.Context, delta reteAg
 	} else if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return nil, true, err
 	}
+	s.refractions.removeDelta(s.revision, delta.removed)
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordAgendaDeltaApplication()
 	}
@@ -6978,6 +6983,7 @@ func (s *Session) applyReteAgendaDeltaDirect(ctx context.Context, delta reteAgen
 	if err := s.applyTerminalTokenDeltasWithoutChangesAndAttach(ctx, delta.removed, delta.added); err != nil {
 		return true, err
 	}
+	s.refractions.removeDelta(s.revision, delta.removed)
 	if s.propagation.counters != nil {
 		s.propagation.counters.recordAgendaDeltaApplication()
 	}

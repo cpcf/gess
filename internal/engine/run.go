@@ -215,6 +215,7 @@ func (s *Session) runAgendaLoop(ctx context.Context, runID RunID, config runConf
 		fired++
 
 		s.emitRuleFiredEvent(ctx, runID, activation)
+		s.refractions.record(s.agendaDriver.agenda, activation)
 
 		s.runActivation.Store(currentActivation)
 		err := s.executeTrustedActivationActions(ctx, runID, activation)

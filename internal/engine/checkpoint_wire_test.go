@@ -173,6 +173,14 @@ func TestCheckpointWireValidationRejectsSemanticInconsistency(t *testing.T) {
 			document.State.NextFactSequence = 1
 			document.State.NextRecency = 3
 		}},
+		{name: "metadata-only fact", mutate: func(document *checkpointWireDocument) {
+			document.State.Facts = []checkpointWireFact{{
+				ID: checkpointWireFactID{Generation: 1, Sequence: 1}, TemplateKey: "template:item", Version: 1,
+				Recency: 1, Support: FactSupportMetadataOnly, Fields: []checkpointWireField{},
+			}}
+			document.State.NextFactSequence = 1
+			document.State.NextRecency = 1
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -17,6 +17,7 @@ func TestSessionCheckpointWireCapturesConfigurationFactsAgendaAndRefraction(t *t
 		Fields: []FieldSpec{
 			{Name: "id", Kind: ValueInt, Required: true},
 			{Name: "label", Kind: ValueString, HasDefault: true, Default: "new"},
+			{Name: "note", Kind: ValueString},
 			{Name: "payload", Kind: ValueMap, Required: true},
 		},
 	})
@@ -102,6 +103,10 @@ func TestSessionCheckpointWireCapturesConfigurationFactsAgendaAndRefraction(t *t
 	if initialLabel.Presence != FieldPresenceDefault {
 		t.Fatalf("initial label presence = %q, want default", initialLabel.Presence)
 	}
+	omittedNote := checkpointWireFieldByName(t, document.State.Facts[0].Fields, "note")
+	if omittedNote.Presence != FieldPresenceOmitted || omittedNote.Value != nil {
+		t.Fatalf("initial note = %+v, want omitted without value", omittedNote)
+	}
 
 	statuses := map[string]int{}
 	for _, activation := range document.State.Agenda.Activations {
@@ -128,13 +133,45 @@ func TestSessionCheckpointWireCapturesConfigurationFactsAgendaAndRefraction(t *t
 	if !reflect.DeepEqual(decoded, document) {
 		t.Fatalf("decoded capture differs:\n got %#v\nwant %#v", decoded, document)
 	}
+	restored, err := restoreCheckpointWire(ctx, revision, decoded)
+	if err != nil {
+		t.Fatalf("restoreCheckpointWire: %v", err)
+	}
+	restoredDocument, err := restored.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("restored checkpointWire: %v", err)
+	}
+	if !reflect.DeepEqual(restoredDocument, document) {
+		t.Fatalf("restored checkpoint differs:\n got %#v\nwant %#v", restoredDocument, document)
+	}
+	originalRun, originalErr := session.Run(ctx)
+	restoredRun, restoredErr := restored.Run(ctx)
+	if originalErr != nil || restoredErr != nil || originalRun.Fired != restoredRun.Fired || originalRun.Status != restoredRun.Status {
+		t.Fatalf("continued runs differ: original=(%+v,%v) restored=(%+v,%v)", originalRun, originalErr, restoredRun, restoredErr)
+	}
+	originalNext, err := session.Assert(ctx, item.Key(), mustFields(t, map[string]any{
+		"id": int64(3), "payload": map[string]any{"source": "tail"},
+	}))
+	if err != nil {
+		t.Fatalf("original tail Assert: %v", err)
+	}
+	restoredNext, err := restored.Assert(ctx, item.Key(), mustFields(t, map[string]any{
+		"id": int64(3), "payload": map[string]any{"source": "tail"},
+	}))
+	if err != nil {
+		t.Fatalf("restored tail Assert: %v", err)
+	}
+	if originalNext.Fact.ID() != restoredNext.Fact.ID() || originalNext.Fact.Recency() != restoredNext.Fact.Recency() {
+		t.Fatalf("continued allocators differ: original=%s/%d restored=%s/%d", originalNext.Fact.ID(), originalNext.Fact.Recency(), restoredNext.Fact.ID(), restoredNext.Fact.Recency())
+	}
 }
 
 func TestSessionCheckpointWireCapturesLogicalSupportSourcesAndCounters(t *testing.T) {
 	ctx := context.Background()
 	revision, sourceKey, _, _ := mustLogicalSupportRuleset(t, false)
 	session := mustSession(t, revision, "checkpoint-logical")
-	if _, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-1"})); err != nil {
+	source, err := session.Assert(ctx, sourceKey, mustFields(t, map[string]any{"id": "s-1"}))
+	if err != nil {
 		t.Fatalf("Assert: %v", err)
 	}
 	if result, err := session.Run(ctx); err != nil || result.Fired != 2 {
@@ -169,6 +206,28 @@ func TestSessionCheckpointWireCapturesLogicalSupportSourcesAndCounters(t *testin
 	if _, err := encodeCheckpointWire(document); err != nil {
 		t.Fatalf("encode logical checkpoint: %v", err)
 	}
+	restored, err := restoreCheckpointWire(ctx, revision, document)
+	if err != nil {
+		t.Fatalf("restore logical checkpoint: %v", err)
+	}
+	restoredDocument, err := restored.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("capture restored logical checkpoint: %v", err)
+	}
+	if !reflect.DeepEqual(restoredDocument, document) {
+		t.Fatalf("restored logical checkpoint differs:\n got %#v\nwant %#v", restoredDocument, document)
+	}
+	if _, err := session.Retract(ctx, source.Fact.ID()); err != nil {
+		t.Fatalf("original Retract: %v", err)
+	}
+	if _, err := restored.Retract(ctx, source.Fact.ID()); err != nil {
+		t.Fatalf("restored Retract: %v", err)
+	}
+	originalAfter := mustSnapshot(t, ctx, session)
+	restoredAfter := mustSnapshot(t, ctx, restored)
+	if !reflect.DeepEqual(originalAfter.Facts(), restoredAfter.Facts()) || !reflect.DeepEqual(originalAfter.SupportGraph(), restoredAfter.SupportGraph()) {
+		t.Fatalf("logical continuation differs:\noriginal=%#v %#v\nrestored=%#v %#v", originalAfter.Facts(), originalAfter.SupportGraph(), restoredAfter.Facts(), restoredAfter.SupportGraph())
+	}
 }
 
 func TestSessionCheckpointWireFollowsIdleOwnershipContract(t *testing.T) {
@@ -191,6 +250,76 @@ func TestSessionCheckpointWireFollowsIdleOwnershipContract(t *testing.T) {
 	session.agendaDriver.markDirty()
 	if _, err := session.checkpointWire(context.Background()); !errors.Is(err, ErrUnsupportedRuntime) {
 		t.Fatalf("dirty-agenda checkpoint error = %v, want ErrUnsupportedRuntime", err)
+	}
+}
+
+func TestSessionCheckpointRefractionStoreTracksGraphRemovalResetAndFork(t *testing.T) {
+	ctx := context.Background()
+	revision, taskKey := mustForkTaskRevision(t)
+	session := mustSession(t, revision, "checkpoint-refraction")
+	inserted, err := session.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)}))
+	if err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	if result, err := session.Run(ctx); err != nil || result.Fired != 1 {
+		t.Fatalf("Run = (%+v, %v), want one firing", result, err)
+	}
+	if len(session.refractions.byIdentity) != 1 {
+		t.Fatalf("refractions after fire = %d, want 1", len(session.refractions.byIdentity))
+	}
+	fork, err := session.Fork(ctx, WithSessionID("checkpoint-refraction-fork"))
+	if err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	if len(fork.refractions.byIdentity) != 1 {
+		t.Fatalf("fork refractions = %d, want 1", len(fork.refractions.byIdentity))
+	}
+	for key := range fork.refractions.byIdentity {
+		delete(fork.refractions.byIdentity, key)
+	}
+	if len(session.refractions.byIdentity) != 1 {
+		t.Fatal("fork refraction mutation changed parent")
+	}
+	if _, err := session.Retract(ctx, inserted.Fact.ID()); err != nil {
+		t.Fatalf("Retract: %v", err)
+	}
+	if len(session.refractions.byIdentity) != 0 {
+		t.Fatalf("refractions after terminal removal = %d, want 0", len(session.refractions.byIdentity))
+	}
+	if _, err := session.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(2)})); err != nil {
+		t.Fatalf("second Assert: %v", err)
+	}
+	if result, err := session.Run(ctx); err != nil || result.Fired != 1 {
+		t.Fatalf("second Run = (%+v, %v), want one firing", result, err)
+	}
+	if _, err := session.Reset(ctx); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	if len(session.refractions.byIdentity) != 0 {
+		t.Fatalf("refractions after Reset = %d, want 0", len(session.refractions.byIdentity))
+	}
+}
+
+func TestRestoreCheckpointWireRejectsRulesetAndGraphDisagreement(t *testing.T) {
+	ctx := context.Background()
+	revision, taskKey := mustForkTaskRevision(t)
+	session := mustSession(t, revision, "checkpoint-invalid-restore")
+	if _, err := session.Assert(ctx, taskKey, mustFields(t, map[string]any{"id": int64(1)})); err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	document, err := session.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("checkpointWire: %v", err)
+	}
+	if _, err := restoreCheckpointWire(ctx, mustCompile(t), document); !errors.Is(err, ErrIncompatibleRuleset) {
+		t.Fatalf("mismatched ruleset error = %v, want ErrIncompatibleRuleset", err)
+	}
+	if len(document.State.Agenda.Activations) != 1 || len(document.State.Agenda.Activations[0].FactVersions) != 1 {
+		t.Fatalf("restore corruption fixture agenda = %+v", document.State.Agenda)
+	}
+	document.State.Agenda.Activations[0].FactVersions[0]++
+	if _, err := restoreCheckpointWire(ctx, revision, document); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("graph disagreement error = %v, want ErrInvalidCheckpoint", err)
 	}
 }
 

@@ -86,6 +86,8 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "factStore.nextFactSequence", policy: forkRebuiltDerived, rationale: "the sequence is read from the cloned fact workspace"},
 	{name: "factStore.nextRecency", policy: forkRebuiltDerived, rationale: "recency is read from the cloned fact workspace"},
 	{name: "nextRunSequence", policy: forkCopied, rationale: "run sequence continuity is part of the snapshot"},
+	{name: "refractions", policy: forkCloned, rationale: "fired-match refraction records are deep-cloned for independent continuation"},
+	{name: "refractions.byIdentity", policy: forkCloned, rationale: "the child owns its compact consumed-activation map"},
 	{name: "factStore.facts", policy: forkCloned, rationale: "working facts are deep-cloned"},
 	{name: "factStore.compactFacts", policy: forkCloned, rationale: "compact fact storage is cloned"},
 	{name: "factStore.factsByID", policy: forkCloned, rationale: "the fact identity index is cloned"},

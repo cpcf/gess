@@ -170,18 +170,28 @@ func (s *Session) checkpointWireFacts() ([]checkpointWireFact, error) {
 }
 
 func checkpointWireFields(fields Fields, presence map[string]FieldPresence) ([]checkpointWireField, error) {
-	names := make([]string, 0, len(fields))
+	names := make([]string, 0, len(fields)+len(presence))
+	seen := make(map[string]struct{}, len(fields)+len(presence))
 	for name := range fields {
 		names = append(names, name)
+		seen[name] = struct{}{}
+	}
+	for name := range presence {
+		if _, exists := seen[name]; !exists {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	out := make([]checkpointWireField, len(names))
 	for i, name := range names {
-		value, err := checkpointWireValueFromValue(fields[name])
-		if err != nil {
-			return nil, err
+		out[i] = checkpointWireField{Name: name, Presence: presence[name]}
+		if raw, ok := fields[name]; ok {
+			value, err := checkpointWireValueFromValue(raw)
+			if err != nil {
+				return nil, err
+			}
+			out[i].Value = &value
 		}
-		out[i] = checkpointWireField{Name: name, Presence: presence[name], Value: value}
 	}
 	return out, nil
 }
@@ -261,7 +271,55 @@ func (s *Session) checkpointWireAgenda() (checkpointWireAgendaState, error) {
 		}
 		state.Activations = append(state.Activations, wire)
 	}
+	terminalActivations, err := s.checkpointWireImplicitRefractions(state.Activations)
+	if err != nil {
+		return checkpointWireAgendaState{}, err
+	}
+	state.Activations = append(state.Activations, terminalActivations...)
 	return state, nil
+}
+
+// A drained agenda releases consumed activation rows. The session refraction
+// store retains graph-independent records for those fired matches. Pending or
+// still-retained consumed agenda rows captured above win.
+func (s *Session) checkpointWireImplicitRefractions(captured []checkpointWireActivation) ([]checkpointWireActivation, error) {
+	if s == nil || len(s.refractions.byIdentity) == 0 {
+		return nil, nil
+	}
+	seen := make(map[activationLookupKey]struct{}, len(captured))
+	for _, activation := range captured {
+		seen[activationLookupKey{
+			ruleRevisionID: activation.RuleRevisionID,
+			identityKey: candidateIdentityKey{
+				scopeHash: activation.Identity.ScopeHash,
+				hash:      activation.Identity.Hash,
+			},
+		}] = struct{}{}
+	}
+	keys := make([]activationLookupKey, 0, len(s.refractions.byIdentity))
+	for key := range s.refractions.byIdentity {
+		if _, exists := seen[key]; !exists {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].ruleRevisionID != keys[j].ruleRevisionID {
+			return keys[i].ruleRevisionID.String() < keys[j].ruleRevisionID.String()
+		}
+		if keys[i].identityKey.scopeHash != keys[j].identityKey.scopeHash {
+			return keys[i].identityKey.scopeHash < keys[j].identityKey.scopeHash
+		}
+		return keys[i].identityKey.hash < keys[j].identityKey.hash
+	})
+	out := make([]checkpointWireActivation, 0, len(keys))
+	for _, key := range keys {
+		wire, err := checkpointWireActivationFromActivation(s.refractions.byIdentity[key])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, wire)
+	}
+	return out, nil
 }
 
 func checkpointWireActivationFromActivation(activation activation) (checkpointWireActivation, error) {

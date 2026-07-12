@@ -72,9 +72,9 @@ type checkpointWireFact struct {
 }
 
 type checkpointWireField struct {
-	Name     string              `json:"name"`
-	Presence FieldPresence       `json:"presence,omitempty"`
-	Value    checkpointWireValue `json:"value"`
+	Name     string               `json:"name"`
+	Presence FieldPresence        `json:"presence,omitempty"`
+	Value    *checkpointWireValue `json:"value,omitempty"`
 }
 
 type checkpointWireLogicalSupportState struct {
@@ -324,7 +324,7 @@ func validateCheckpointWireDocument(document checkpointWireDocument) error {
 	var maxSequence uint64
 	var maxRecency Recency
 	for i, fact := range document.State.Facts {
-		if fact.ID.Generation != document.State.Generation || fact.ID.Sequence == 0 {
+		if fact.ID.Generation != document.State.Generation || fact.ID.Sequence == 0 || fact.Version == 0 || fact.Recency == 0 {
 			return fmt.Errorf("%w: fact %d has invalid identity", ErrInvalidCheckpoint, i)
 		}
 		if _, exists := facts[fact.ID]; exists {
@@ -337,7 +337,7 @@ func validateCheckpointWireDocument(document checkpointWireDocument) error {
 			return fmt.Errorf("%w: fact %d must have exactly one target", ErrInvalidCheckpoint, i)
 		}
 		switch fact.Support {
-		case FactSupportStated, FactSupportLogical, FactSupportStatedAndLogical, FactSupportMetadataOnly:
+		case FactSupportStated, FactSupportLogical, FactSupportStatedAndLogical:
 		default:
 			return fmt.Errorf("%w: fact %d has invalid support %q", ErrInvalidCheckpoint, i, fact.Support)
 		}
@@ -420,7 +420,13 @@ func validateCheckpointFields(fields []checkpointWireField, owner string) error 
 		default:
 			return fmt.Errorf("%w: %s field %q has invalid presence", ErrInvalidCheckpoint, owner, field.Name)
 		}
-		if _, err := field.Value.value(); err != nil {
+		if field.Value == nil {
+			if field.Presence != FieldPresenceOmitted {
+				return fmt.Errorf("%w: %s field %q has no value unless omitted", ErrInvalidCheckpoint, owner, field.Name)
+			}
+		} else if field.Presence == FieldPresenceOmitted {
+			return fmt.Errorf("%w: %s field %q has a value with omitted presence", ErrInvalidCheckpoint, owner, field.Name)
+		} else if _, err := field.Value.value(); err != nil {
 			return fmt.Errorf("%w: %s field %q: %v", ErrInvalidCheckpoint, owner, field.Name, err)
 		}
 		last = field.Name
