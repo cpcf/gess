@@ -117,6 +117,7 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "backchain.demandLimit", policy: forkCopied, rationale: "the inherited cascade limit is a value unless an option replaces it"},
 	{name: "backchain.demandCounters", policy: forkCopied, rationale: "demand observability counters continue from the snapshot"},
 	{name: "backchain.activeDemandCascade", policy: forkReinitializedTransient, rationale: "no demand cascade is active while the child is constructed"},
+	{name: "backchain.activeDemandRemoval", policy: forkReinitializedTransient, rationale: "no demand removal cascade is active while the child is constructed"},
 	{name: "backchain.activeQueryProof", policy: forkReinitializedTransient, rationale: "query proof ownership never crosses the fork boundary"},
 	{name: "backchain.queryProofScratch", policy: forkReinitializedTransient, rationale: "session-owned proof scratch starts empty"},
 }
@@ -333,6 +334,7 @@ func TestSessionForkOwnsTMSAndRebuildsBackchainStore(t *testing.T) {
 	parent.backchain.demandLimit = 11
 	parent.backchain.demandCounters = backchainDemandCascadeCounters{Cascades: 2, Steps: 5}
 	parent.backchain.activeDemandCascade = &backchainDemandCascadeBudget{session: parent, started: true}
+	parent.backchain.activeDemandRemoval = &backchainDemandRemovalCascade{pending: []backchainDemandRemoval{{demandFactID: newFactID(1, 2)}}}
 	parent.backchain.queryProofScratch.session = parent
 	parent.backchain.queryProofScratch.facts = make([]workingFact, 1)
 	parent.backchain.activeQueryProof = &parent.backchain.queryProofScratch
@@ -357,13 +359,13 @@ func TestSessionForkOwnsTMSAndRebuildsBackchainStore(t *testing.T) {
 	if child.backchain.demandLimit != 11 || child.backchain.demandCounters != parent.backchain.demandCounters {
 		t.Fatalf("child backchain config/counters = limit %d, counters %#v", child.backchain.demandLimit, child.backchain.demandCounters)
 	}
-	if child.backchain.activeDemandCascade != nil || child.backchain.activeQueryProof != nil {
+	if child.backchain.activeDemandCascade != nil || child.backchain.activeDemandRemoval != nil || child.backchain.activeQueryProof != nil {
 		t.Fatal("child inherited active backchain transient state")
 	}
 	if child.backchain.queryProofScratch.session != nil || len(child.backchain.queryProofScratch.facts) != 0 {
 		t.Fatalf("child proof scratch = %#v, want fresh zero state", child.backchain.queryProofScratch)
 	}
-	if parent.backchain.activeDemandCascade == nil || parent.backchain.activeQueryProof == nil || len(parent.backchain.queryProofScratch.facts) != 1 {
+	if parent.backchain.activeDemandCascade == nil || parent.backchain.activeDemandRemoval == nil || parent.backchain.activeQueryProof == nil || len(parent.backchain.queryProofScratch.facts) != 1 {
 		t.Fatal("Fork mutated parent backchain transient state")
 	}
 }

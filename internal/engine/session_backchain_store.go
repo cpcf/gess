@@ -17,6 +17,7 @@ type sessionBackchainStore struct {
 	demandLimit          int
 	demandCounters       backchainDemandCascadeCounters
 	activeDemandCascade  *backchainDemandCascadeBudget
+	activeDemandRemoval  *backchainDemandRemovalCascade
 	activeQueryProof     *backchainQueryProofContext
 	queryProofScratch    backchainQueryProofContext
 }

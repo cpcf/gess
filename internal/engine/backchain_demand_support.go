@@ -97,6 +97,16 @@ type backchainDemandSupportIDBucket struct {
 	overflow []backchainDemandSupportID
 }
 
+type backchainDemandRemoval struct {
+	demandFactID FactID
+	origin       mutationOrigin
+}
+
+type backchainDemandRemovalCascade struct {
+	pending []backchainDemandRemoval
+	head    int
+}
+
 func (s *Session) ensureBackchainDemandSupportTables() {
 	if s == nil {
 		return
@@ -448,6 +458,35 @@ func (s *Session) removeBackchainDemandFactAndDependentSupportsImmediate(ctx con
 	if s == nil || demandFactID.IsZero() {
 		return combined, nil
 	}
+	removal := backchainDemandRemoval{demandFactID: demandFactID, origin: origin}
+	if cascade := s.backchain.activeDemandRemoval; cascade != nil {
+		cascade.pending = append(cascade.pending, removal)
+		return combined, nil
+	}
+	cascade := &backchainDemandRemovalCascade{pending: []backchainDemandRemoval{removal}}
+	s.backchain.activeDemandRemoval = cascade
+	defer func() { s.backchain.activeDemandRemoval = nil }()
+	for cascade.head < len(cascade.pending) {
+		removal = cascade.pending[cascade.head]
+		cascade.pending[cascade.head] = backchainDemandRemoval{}
+		cascade.head++
+		delta, err := s.removeSingleBackchainDemandFactAndDependentSupportsImmediate(ctx, removal.demandFactID, removal.origin)
+		if err != nil {
+			return combined, err
+		}
+		combined = mergeReteAgendaDelta(combined, delta)
+		if cascade.head >= 1024 && cascade.head*2 >= len(cascade.pending) {
+			remaining := copy(cascade.pending, cascade.pending[cascade.head:])
+			clear(cascade.pending[remaining:])
+			cascade.pending = cascade.pending[:remaining]
+			cascade.head = 0
+		}
+	}
+	return combined, nil
+}
+
+func (s *Session) removeSingleBackchainDemandFactAndDependentSupportsImmediate(ctx context.Context, demandFactID FactID, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
 	if _, ok := s.workingFactByID(demandFactID); ok {
 		delta, err := s.removeBackchainDemandFactImmediate(ctx, demandFactID, origin)
 		if err != nil {

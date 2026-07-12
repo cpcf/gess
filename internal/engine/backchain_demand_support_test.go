@@ -46,6 +46,50 @@ func TestBackchainDemandSupportGenericPathStoresSupport(t *testing.T) {
 	}
 }
 
+func TestBackchainDemandRemovalHandlesHundredThousandFactChain(t *testing.T) {
+	const chainLength = 100_000
+	facts := make([]workingFact, chainLength)
+	factsByID := make(map[FactID]int, chainLength)
+	for i := range facts {
+		id := newFactID(1, uint64(i+1))
+		facts[i] = workingFact{id: id, version: 1, targetIndexesSkipped: true}
+		factsByID[id] = i
+	}
+	session := &Session{
+		factStore: newSessionFactStore(&factWorkspace{
+			generation: 2,
+			facts:      facts,
+			factsByID:  factsByID,
+		}),
+	}
+	for i := 1; i < chainLength; i++ {
+		request := backchainDemandRequest{
+			templateKey:  TemplateKey("chain"),
+			supportFacts: []backchainDemandSupportFact{{id: facts[i-1].id, version: 1}},
+		}
+		if id := session.addBackchainDemandSupport(&facts[i], request); id == 0 {
+			t.Fatalf("add support at depth %d returned zero ID", i)
+		}
+	}
+
+	delta, err := session.removeBackchainDemandFactAndDependentSupportsImmediate(context.Background(), facts[0].id, mutationOrigin{})
+	if err != nil {
+		t.Fatalf("remove 100k demand chain: %v", err)
+	}
+	if !delta.supported {
+		t.Fatal("removal delta is unsupported")
+	}
+	if got := session.factCount(); got != 0 {
+		t.Fatalf("fact count after removal = %d, want 0", got)
+	}
+	if owner := session.backchainDemandSupportMemoryOwnerDiagnostics(); owner.Rows != 0 {
+		t.Fatalf("live demand support rows after removal = %d, want 0", owner.Rows)
+	}
+	if session.backchain.activeDemandRemoval != nil {
+		t.Fatal("demand removal cascade remains active after removal")
+	}
+}
+
 func TestBackchainDemandSupportDiagnosticsExposeSlotsAndLiveRecords(t *testing.T) {
 	session := &Session{}
 	request := backchainDemandRequest{
