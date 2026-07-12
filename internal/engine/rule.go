@@ -2043,7 +2043,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 				id:          aggregateID,
 				binding:     "accumulate",
 				bindingSlot: firstSlot,
-				path:        []int{i},
+				path:        cloneIntPath(node.path),
 				source:      node.source,
 				aggregate: &compiledAggregatePlan{
 					inputPlans: inputSet.conditionPlans,
@@ -2074,7 +2074,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			}
 			planPredicate.placement = ExpressionPredicatePlacementBetaResidual
 			conditionPlans = append(conditionPlans, compiledConditionPlan{
-				path:           []int{i},
+				path:           cloneIntPath(node.path),
 				source:         node.source,
 				isTest:         true,
 				predicates:     []compiledExpressionPredicate{planPredicate},
@@ -2231,7 +2231,7 @@ func compileNormalizedRuleConditionBranchWithOuterAndParams(ruleName string, rul
 			binding:          condition.Binding,
 			syntheticBinding: condition.SyntheticBinding,
 			bindingSlot:      publicBindingSlot,
-			path:             []int{i},
+			path:             cloneIntPath(node.path),
 			source:           node.source,
 			negated:          node.negated,
 			explicit:         node.explicit,

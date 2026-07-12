@@ -53,6 +53,7 @@ type branchPlanningNode struct {
 	dependsOn []string
 	hardDeps  []string
 	movable   bool
+	volatile  bool
 	barrier   branchPlanningBarrierKind
 }
 
@@ -123,6 +124,7 @@ func newBranchPlanningNode(condition normalizedRuleCondition, order int) branchP
 		dependsOn: branchPlanningDependencyBindings(condition),
 		hardDeps:  branchPlanningHardDependencyBindings(condition),
 		movable:   branchPlanningConditionMovable(condition),
+		volatile:  condition.spec.Volatile,
 	}
 	switch {
 	case condition.isAggregate || condition.higherOrder.kind != conditionHigherOrderUnknown:
@@ -529,6 +531,21 @@ func (ir branchPlanningIR) selectNextBranchPlanningNode(nodes []branchPlanningNo
 			}
 			continue
 		}
+		if node.volatile != nodes[best].volatile {
+			nodeStablePrefix := !node.volatile && branchPlanningNodeFeedsRemaining(node, nodes)
+			bestStablePrefix := !nodes[best].volatile && branchPlanningNodeFeedsRemaining(nodes[best], nodes)
+			if nodeStablePrefix != bestStablePrefix {
+				if !nodeStablePrefix {
+					continue
+				}
+				best = i
+				bestJoinStrength = joinStrength
+				if useProfile {
+					bestProfileFanout, _ = ir.profile.fanout(ir.ruleID, node)
+				}
+				continue
+			}
+		}
 		if useProfile {
 			profileFanout, _ := ir.profile.fanout(ir.ruleID, node)
 			if branchPlanningSelectivityScore(node) == branchPlanningSelectivityScore(nodes[best]) && profileFanout != bestProfileFanout {
@@ -549,6 +566,18 @@ func (ir branchPlanningIR) selectNextBranchPlanningNode(nodes []branchPlanningNo
 		}
 	}
 	return best
+}
+
+func branchPlanningNodeFeedsRemaining(node branchPlanningNode, remaining []branchPlanningNode) bool {
+	for _, other := range remaining {
+		if other.order == node.order {
+			continue
+		}
+		if branchPlanningBindingsIntersect(node.defines, other.dependsOn) {
+			return true
+		}
+	}
+	return false
 }
 
 func branchPlanningProfileNodeReady(node branchPlanningNode, joins []branchPlanningJoin, defined map[string]struct{}) bool {

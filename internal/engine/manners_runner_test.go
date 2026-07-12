@@ -46,16 +46,29 @@ func mannersGuests(count int) []mannersGuest {
 }
 
 func mustCompileMannersRuleset(t testing.TB) *Ruleset {
-	return mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, nil, false)
+	return mustCompileMannersRulesetWithOptions(t, nil, false, false)
 }
 
 func mustCompileMannersRulesetWithProfile(t testing.TB, profile *branchPlanningProfile) *Ruleset {
-	return mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, profile, false)
+	return mustCompileMannersRulesetWithOptions(t, profile, false, false)
 }
 
-func mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t testing.TB, profile *branchPlanningProfile, legacyCountBeforeNegations bool) *Ruleset {
-	t.Helper()
+func mustCompileMannersRulesetWithVolatileFindSeatingContext(t testing.TB) *Ruleset {
+	return mustCompileMannersRulesetWithOptions(t, nil, false, true)
+}
 
+func mustCompileMannersRulesetWithOptions(t testing.TB, profile *branchPlanningProfile, legacyCountBeforeNegations, volatileFindSeatingContext bool) *Ruleset {
+	t.Helper()
+	workspace := newMannersWorkspace(t, volatileFindSeatingContext)
+	revision := mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
+	if legacyCountBeforeNegations {
+		reorderMannersFindSeatingToLegacyOrder(t, revision)
+	}
+	return revision
+}
+
+func newMannersWorkspace(t testing.TB, volatileFindSeatingContext bool) *Workspace {
+	t.Helper()
 	workspace := NewWorkspace()
 	guest := mustAddTemplate(t, workspace, TemplateSpec{
 		Name: "guest",
@@ -275,7 +288,8 @@ func mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t testing.TB,
 		Salience: 30,
 		ConditionTree: And{Conditions: []ConditionSpec{
 			Match{
-				Binding: "ctx",
+				Binding:  "ctx",
+				Volatile: volatileFindSeatingContext,
 				FieldConstraints: []FieldConstraintSpec{
 					{Field: "state", Operator: FieldConstraintEqual, Value: "assign_seats"},
 				},
@@ -424,24 +438,29 @@ func mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t testing.TB,
 		Actions: []RuleActionSpec{{Name: "manners-continue"}},
 	})
 
-	revision := mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
-	if legacyCountBeforeNegations {
-		reorderMannersFindSeatingToLegacyOrder(t, revision)
-	}
-	return revision
+	return workspace
 }
 
-func mustCompileMannersRulesetWithLateContextFindSeatingOrder(t testing.TB) *Ruleset {
+func markMannersFindSeatingContextVolatile(t testing.TB, workspace *Workspace) {
 	t.Helper()
-	return mustCompileMannersRulesetWithProfile(t, &branchPlanningProfile{byRule: map[RuleID]map[string]float64{
-		RuleID("find-seating"): {
-			"seat": 1,
-			"g1":   1,
-			"g2":   1,
-			"ctx":  2,
-			"cnt":  3,
-		},
-	}})
+	for i := range workspace.rules {
+		if workspace.rules[i].Name != "find-seating" {
+			continue
+		}
+		tree, ok := cloneConditionSpec(workspace.rules[i].ConditionTree).(And)
+		if !ok || len(tree.Conditions) == 0 {
+			t.Fatalf("find-seating condition tree = %#v, want non-empty and", workspace.rules[i].ConditionTree)
+		}
+		contextMatch, ok := tree.Conditions[0].(Match)
+		if !ok || contextMatch.Binding != "ctx" {
+			t.Fatalf("find-seating first condition = %#v, want ctx match", tree.Conditions[0])
+		}
+		contextMatch.Volatile = true
+		tree.Conditions[0] = contextMatch
+		workspace.rules[i].ConditionTree = tree
+		return
+	}
+	t.Fatal("find-seating rule not found")
 }
 
 func reorderMannersFindSeatingToLegacyOrder(t testing.TB, revision *Ruleset) {

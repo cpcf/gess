@@ -137,7 +137,7 @@ func TestMannersFindSeatingPlannerDefersCountPastNegations(t *testing.T) {
 	guests := mannersGuests(64)
 	initials := mannersInitialFacts(guests)
 	planned := mustCompileMannersRuleset(t)
-	legacy := mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, nil, true)
+	legacy := mustCompileMannersRulesetWithOptions(t, nil, true, false)
 
 	if got, want := findSeatingPlannedBindings(t, planned), []string{"ctx", "seat", "g1", "g2", "blockedpath", "blockedchoice", "cnt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("planned find-seating order = %#v, want %#v", got, want)
@@ -199,11 +199,19 @@ func BenchmarkMannersFindSeatingBranchOrdering(b *testing.B) {
 	}
 }
 
-func TestMannersFindSeatingLateContextSpike(t *testing.T) {
+func TestMannersFindSeatingVolatileContextPlanning(t *testing.T) {
 	guests := mannersGuests(64)
 	initials := mannersInitialFacts(guests)
-	production := mustCompileMannersRuleset(t)
-	lateContext := mustCompileMannersRulesetWithLateContextFindSeatingOrder(t)
+	workspace := newMannersWorkspace(t, false)
+	production := mustCompileWorkspace(t, workspace)
+	markMannersFindSeatingContextVolatile(t, workspace)
+	lateContext := mustCompileWorkspace(t, workspace)
+	if production.rules["find-seating"].revisionID != lateContext.rules["find-seating"].revisionID {
+		t.Fatalf("volatile planning hint changed find-seating revision identity: production=%q volatile=%q", production.rules["find-seating"].revisionID, lateContext.rules["find-seating"].revisionID)
+	}
+	if production.ID() != lateContext.ID() {
+		t.Fatalf("volatile planning hint changed ruleset identity: production=%q volatile=%q", production.ID(), lateContext.ID())
+	}
 
 	if got, want := findSeatingPlannedBindings(t, production), []string{"ctx", "seat", "g1", "g2", "blockedpath", "blockedchoice", "cnt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("production find-seating order = %#v, want %#v", got, want)
@@ -266,6 +274,20 @@ func TestMannersFindSeatingLateContextSpike(t *testing.T) {
 	if lateContextRun.lifecycle.Totals.TokenRowsAllocated >= productionRun.lifecycle.Totals.TokenRowsAllocated {
 		t.Fatalf("late-context token rows = %d, want fewer than production %d", lateContextRun.lifecycle.Totals.TokenRowsAllocated, productionRun.lifecycle.Totals.TokenRowsAllocated)
 	}
+	if lateContextRun.lifecycle.Totals.TokenRowsAllocated*100 > productionRun.lifecycle.Totals.TokenRowsAllocated*60 {
+		t.Fatalf("late-context token rows = %d, want at most 60%% of production %d", lateContextRun.lifecycle.Totals.TokenRowsAllocated, productionRun.lifecycle.Totals.TokenRowsAllocated)
+	}
+	lateCapacity := lateContextRun.lifecycle.GraphBetaMemory.TokenRowCapacity
+	productionCapacity := productionRun.lifecycle.GraphBetaMemory.TokenRowCapacity
+	if lateCapacity*100 > productionCapacity*110 {
+		t.Fatalf("late-context retained token capacity = %d, want at most 110%% of production %d", lateCapacity, productionCapacity)
+	}
+	if lateContextRun.betaOwner.Bytes > productionRun.betaOwner.Bytes {
+		t.Fatalf("late-context retained structural beta bytes = %d, want no more than production %d", lateContextRun.betaOwner.Bytes, productionRun.betaOwner.Bytes)
+	}
+	if lateContextRun.diagnostics.MaxBetaJoinBucketDepth > 2048 {
+		t.Fatalf("late-context maximum beta bucket depth = %d, want at most 2048", lateContextRun.diagnostics.MaxBetaJoinBucketDepth)
+	}
 
 	logMannersBranchOrderObservation(t, "production", production, productionRun)
 	logMannersBranchOrderObservation(t, "late-context", lateContext, lateContextRun)
@@ -295,7 +317,7 @@ func BenchmarkMannersFindSeatingLateContextBranchOrdering(b *testing.B) {
 		compile func(testing.TB) *Ruleset
 	}{
 		{name: "production-default", compile: func(t testing.TB) *Ruleset { return mustCompileMannersRuleset(t) }},
-		{name: "late-context", compile: mustCompileMannersRulesetWithLateContextFindSeatingOrder},
+		{name: "explicit-volatile-context", compile: mustCompileMannersRulesetWithVolatileFindSeatingContext},
 	} {
 		b.Run(variant.name, func(b *testing.B) {
 			benchmarkMannersLateContextBranchOrder(b, variant.compile(b))
@@ -572,7 +594,7 @@ func benchmarkMannersFindSeatingBranchOrder(b *testing.B, legacyCountBeforeNegat
 	ctx := context.Background()
 	guests := mannersGuests(64)
 	initials := mannersInitialFacts(guests)
-	revision := mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(b, nil, legacyCountBeforeNegations)
+	revision := mustCompileMannersRulesetWithOptions(b, nil, legacyCountBeforeNegations, false)
 	result, lifecycle := collectMannersLifecycleCounters(b, revision, initials, guests)
 	b.ReportAllocs()
 	b.ResetTimer()

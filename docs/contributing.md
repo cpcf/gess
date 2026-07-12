@@ -87,6 +87,8 @@ Several internal contracts are load-bearing:
 - `conditionPlans` remain in planned execution order. Public condition order
   is resolved through `bindingSlot`, never by positional indexing with
   `condition.Order`.
+- Compiled condition-tree paths remain authored paths. Physical planning must
+  not rewrite them; rule and ruleset identities are plan-independent.
 - Activation identity is the binding tuple, including its fact identities and
   versions; display paths are not identity.
 - Terminal and agenda deltas have one owner. A delta that does not report

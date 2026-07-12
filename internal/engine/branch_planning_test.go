@@ -216,6 +216,66 @@ func TestBranchPlanningIRPrefersStrongerJoinToCurrentToken(t *testing.T) {
 	}
 }
 
+func TestBranchPlanningIRDefersExplicitVolatileMatch(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		{
+			spec: RuleConditionSpec{
+				Binding: "gate", Volatile: true,
+				FieldConstraints: []FieldConstraintSpec{{Field: "state", Operator: FieldConstraintEqual, Value: "ready"}},
+				Target:           DynamicFact("gate"),
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding:          "root",
+				FieldConstraints: []FieldConstraintSpec{{Field: "active", Operator: FieldConstraintEqual, Value: true}},
+				Target:           DynamicFact("root"),
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding:         "child",
+				JoinConstraints: []JoinConstraintSpec{{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}}},
+				Target:          DynamicFact("child"),
+			},
+			visible: true,
+		},
+		{
+			spec: RuleConditionSpec{
+				Binding:         "blocked",
+				JoinConstraints: []JoinConstraintSpec{{Field: "child", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "child", Field: "id"}}},
+				Target:          DynamicFact("blocked"),
+			},
+			negated: true,
+		},
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"root", "child", "blocked", "gate"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("volatile condition order = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRKeepsJoinStrengthAheadOfVolatility(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		{spec: RuleConditionSpec{Binding: "root", Target: DynamicFact("root")}, visible: true},
+		{
+			spec: RuleConditionSpec{
+				Binding: "connected", Volatile: true,
+				JoinConstraints: []JoinConstraintSpec{{Field: "root", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "root", Field: "id"}}},
+				Target:          DynamicFact("connected"),
+			},
+			visible: true,
+		},
+		{spec: RuleConditionSpec{Binding: "independent", Target: DynamicFact("independent")}, visible: true},
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"root", "connected", "independent"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("join-connected volatile condition order = %#v, want %#v", got, want)
+	}
+}
+
 func TestBranchPlanningIRDefersIndependentPayloadPastConsecutiveNegations(t *testing.T) {
 	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
 		branchPlanningMatch("anchor", "anchor"),

@@ -104,7 +104,10 @@ err := workspace.AddRule(rules.RuleSpec{
 
 - `rules.Match`: a positive fact pattern with a `Binding`, a `Target`,
   `FieldConstraints`, `JoinConstraints`, `Predicates` (expressions), and
-  `ListPatterns`.
+  `ListPatterns`. Set `Volatile: true` when the matched fact is expected to be
+  modified frequently; the static planner may place that independent gate
+  later to reduce propagation churn. The hint does not change match semantics
+  or revision identity.
 - `rules.And`, `rules.Or`: grouping. Bindings inside an `Or` branch stay
   local to that branch.
 - `rules.Not`: absence; bindings inside are local.
@@ -131,6 +134,9 @@ shorthand for a top-level `And` of matches.
 Set either `Conditions` or `ConditionTree` on a `RuleSpec`, not both.
 Nothing on the struct itself prevents setting both at once.
 :::
+
+`Volatile` is an explicit Go authoring hint. The zero value preserves ordinary
+static planning, and Gess never infers it from runtime counters or names.
 
 ### Targets, constraints, and joins
 
