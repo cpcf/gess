@@ -32,17 +32,22 @@ func (t *betaJoinBucketTable) holderID() uint32 {
 	return t.id
 }
 
-func (t *betaJoinBucketTable) ensureIdentityIndex() {
+func (t *betaJoinBucketTable) ensureIdentityIndex(counters *propagationCounterLedger) {
 	if t.byIdentity != nil {
 		return
 	}
 	t.byIdentity = make(map[uint64][]int32, t.rowCount)
+	inserts := 0
 	for i := range t.rows {
 		if t.rows[i].token.isZero() {
 			continue
 		}
 		state := t.rows[i].token.identityState()
 		t.byIdentity[state] = append(t.byIdentity[state], int32(i+1))
+		inserts++
+	}
+	if counters != nil {
+		counters.recordBetaIdentityIndexBuild(inserts)
 	}
 }
 
@@ -52,6 +57,9 @@ func (t *betaJoinBucketTable) indexIdentity(ref int32) {
 	}
 	state := t.rows[ref-1].token.identityState()
 	t.byIdentity[state] = append(t.byIdentity[state], ref)
+	if counters := t.rows[ref-1].token.propagationCounters(); counters != nil {
+		counters.recordBetaIdentityIndexInsert()
+	}
 }
 
 func (t *betaJoinBucketTable) unindexIdentity(ref int32) {
@@ -83,12 +91,16 @@ func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*b
 		return betaTokenRow{}, false
 	}
 	tokenRow, ok := token.resolve()
+	counters := token.propagationCounters()
 	if !ok {
 		return t.removeIdentityTokenScan(token, filter, onTouch)
 	}
 	if ref := tokenRow.holderRefForTable(t.id); t.id != 0 && ref > 0 && int(ref) <= len(t.rows) {
 		held := &t.rows[ref-1]
 		if held.token.handle.row == tokenRow {
+			if counters != nil {
+				counters.recordBetaHolderHit()
+			}
 			if onTouch != nil {
 				onTouch()
 			}
@@ -99,8 +111,12 @@ func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*b
 			}
 		}
 	}
-	t.ensureIdentityIndex()
-	for _, ref := range t.byIdentity[token.identityState()] {
+	t.ensureIdentityIndex(counters)
+	refs := t.byIdentity[token.identityState()]
+	if counters != nil {
+		counters.recordBetaIdentityIndexProbe(len(refs))
+	}
+	for _, ref := range refs {
 		row := &t.rows[ref-1]
 		if row.token.isZero() {
 			continue
@@ -122,10 +138,20 @@ func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*b
 }
 
 func (t *betaJoinBucketTable) removeIdentityTokenScan(token tokenRef, filter func(*betaTokenRow) bool, onTouch func()) (betaTokenRow, bool) {
+	candidates := 0
+	counters := token.propagationCounters()
+	if counters != nil {
+		defer func() {
+			counters.recordBetaIdentityScanFallback(candidates)
+		}()
+	}
 	for i := range t.rows {
 		row := &t.rows[i]
 		if row.token.isZero() {
 			continue
+		}
+		if counters != nil {
+			candidates++
 		}
 		if onTouch != nil {
 			onTouch()

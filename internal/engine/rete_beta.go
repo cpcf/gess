@@ -143,7 +143,17 @@ func recordTokenHolder(token tokenRef, tableID uint32, ref int32) {
 		row.holderRef = tokenHolderMulti
 		row.holder2TableID = 0
 		row.holder2Ref = 0
+		if counters := token.propagationCounters(); counters != nil {
+			counters.recordBetaMultiHolderDemotion()
+		}
 	}
+}
+
+func (r tokenRef) propagationCounters() *propagationCounterLedger {
+	if r.handle.arena == nil {
+		return nil
+	}
+	return r.handle.arena.counters
 }
 
 // holderRefForTable reports the row ref this token is stored at in the given

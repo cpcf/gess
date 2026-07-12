@@ -73,6 +73,14 @@ type propagationCounterTotals struct {
 	BetaResidualTests                   int
 	BetaResidualFailures                int
 	BetaJoinedTokensProduced            int
+	BetaHolderHits                      int
+	BetaMultiHolderDemotions            int
+	BetaIdentityIndexBuilds             int
+	BetaIdentityIndexInserts            int
+	BetaIdentityIndexProbes             int
+	BetaIdentityIndexCandidates         int
+	BetaIdentityScanFallbacks           int
+	BetaIdentityScanCandidates          int
 	ExpressionPredicateTests            int
 	ExpressionPredicateFailures         int
 	ExpressionPredicateErrors           int
@@ -159,6 +167,14 @@ func (t *propagationCounterTotals) add(other propagationCounterTotals) {
 	t.BetaResidualTests += other.BetaResidualTests
 	t.BetaResidualFailures += other.BetaResidualFailures
 	t.BetaJoinedTokensProduced += other.BetaJoinedTokensProduced
+	t.BetaHolderHits += other.BetaHolderHits
+	t.BetaMultiHolderDemotions += other.BetaMultiHolderDemotions
+	t.BetaIdentityIndexBuilds += other.BetaIdentityIndexBuilds
+	t.BetaIdentityIndexInserts += other.BetaIdentityIndexInserts
+	t.BetaIdentityIndexProbes += other.BetaIdentityIndexProbes
+	t.BetaIdentityIndexCandidates += other.BetaIdentityIndexCandidates
+	t.BetaIdentityScanFallbacks += other.BetaIdentityScanFallbacks
+	t.BetaIdentityScanCandidates += other.BetaIdentityScanCandidates
 	t.ExpressionPredicateTests += other.ExpressionPredicateTests
 	t.ExpressionPredicateFailures += other.ExpressionPredicateFailures
 	t.ExpressionPredicateErrors += other.ExpressionPredicateErrors
@@ -678,6 +694,48 @@ func (l *propagationCounterLedger) recordCoalescerIdentityIndexProbe(candidates 
 	}
 	l.totals.CoalescerIdentityIndexProbes++
 	l.totals.CoalescerIdentityIndexCandidates += candidates
+}
+
+func (l *propagationCounterLedger) recordBetaHolderHit() {
+	if l != nil {
+		l.totals.BetaHolderHits++
+	}
+}
+
+func (l *propagationCounterLedger) recordBetaMultiHolderDemotion() {
+	if l != nil {
+		l.totals.BetaMultiHolderDemotions++
+	}
+}
+
+func (l *propagationCounterLedger) recordBetaIdentityIndexBuild(inserts int) {
+	if l == nil {
+		return
+	}
+	l.totals.BetaIdentityIndexBuilds++
+	l.totals.BetaIdentityIndexInserts += inserts
+}
+
+func (l *propagationCounterLedger) recordBetaIdentityIndexInsert() {
+	if l != nil {
+		l.totals.BetaIdentityIndexInserts++
+	}
+}
+
+func (l *propagationCounterLedger) recordBetaIdentityIndexProbe(candidates int) {
+	if l == nil {
+		return
+	}
+	l.totals.BetaIdentityIndexProbes++
+	l.totals.BetaIdentityIndexCandidates += candidates
+}
+
+func (l *propagationCounterLedger) recordBetaIdentityScanFallback(candidates int) {
+	if l == nil {
+		return
+	}
+	l.totals.BetaIdentityScanFallbacks++
+	l.totals.BetaIdentityScanCandidates += candidates
 }
 
 func (l *propagationCounterLedger) recordTokenRowAllocated() {

@@ -83,6 +83,28 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 	if totals.NegativeBlockerOneToZero > totals.NegativeBlockerDecrements {
 		t.Fatalf("negative blocker 1->0 transitions = %d, decrements = %d", totals.NegativeBlockerOneToZero, totals.NegativeBlockerDecrements)
 	}
+	if totals.BetaIdentityIndexInserts < totals.BetaIdentityIndexBuilds {
+		t.Fatalf("beta identity-index inserts = %d, builds = %d", totals.BetaIdentityIndexInserts, totals.BetaIdentityIndexBuilds)
+	}
+	betaIdentityLifecycle := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{name: "holder hits", got: totals.BetaHolderHits, want: 137724},
+		{name: "multi-holder demotions", got: totals.BetaMultiHolderDemotions, want: 0},
+		{name: "index builds", got: totals.BetaIdentityIndexBuilds, want: 3},
+		{name: "index inserts", got: totals.BetaIdentityIndexInserts, want: 64702},
+		{name: "index probes", got: totals.BetaIdentityIndexProbes, want: 80766},
+		{name: "index candidates", got: totals.BetaIdentityIndexCandidates, want: 126},
+		{name: "scan fallbacks", got: totals.BetaIdentityScanFallbacks, want: 0},
+		{name: "scan candidates", got: totals.BetaIdentityScanCandidates, want: 0},
+	}
+	for _, counts := range betaIdentityLifecycle {
+		if counts.got != counts.want {
+			t.Fatalf("beta identity lifecycle %s = %d, want %d", counts.name, counts.got, counts.want)
+		}
+	}
 	if totals.FullAgendaReconciles != 0 || totals.WholeTerminalScans != 0 || totals.OracleStyleMatchRequests != 0 || totals.UnsupportedAgendaDeltas != 0 {
 		t.Fatalf("non-graph lifecycle counters = %+v", totals)
 	}
@@ -120,6 +142,14 @@ func reportMannersLifecycleMetrics(b *testing.B, totals propagationCounterTotals
 	b.ReportMetric(float64(totals.ModifySameTokenCancellations), "same-token-cancellations/run")
 	b.ReportMetric(float64(totals.CoalescerIdentityIndexProbes), "identity-index-probes/run")
 	b.ReportMetric(float64(totals.CoalescerIdentityIndexCandidates), "identity-index-candidates/run")
+	b.ReportMetric(float64(totals.BetaHolderHits), "beta-holder-hits/run")
+	b.ReportMetric(float64(totals.BetaMultiHolderDemotions), "beta-multi-holder-demotions/run")
+	b.ReportMetric(float64(totals.BetaIdentityIndexBuilds), "beta-identity-index-builds/run")
+	b.ReportMetric(float64(totals.BetaIdentityIndexInserts), "beta-identity-index-inserts/run")
+	b.ReportMetric(float64(totals.BetaIdentityIndexProbes), "beta-identity-index-probes/run")
+	b.ReportMetric(float64(totals.BetaIdentityIndexCandidates), "beta-identity-index-candidates/run")
+	b.ReportMetric(float64(totals.BetaIdentityScanFallbacks), "beta-identity-scan-fallbacks/run")
+	b.ReportMetric(float64(totals.BetaIdentityScanCandidates), "beta-identity-scan-candidates/run")
 	b.ReportMetric(float64(totals.TokenRowsAllocated), "token-rows-allocated/run")
 	b.ReportMetric(float64(totals.BetaRowsRemoved), "beta-rows-removed/run")
 	b.ReportMetric(float64(totals.NegativeBetaRowsRemoved), "negative-beta-rows-removed/run")
