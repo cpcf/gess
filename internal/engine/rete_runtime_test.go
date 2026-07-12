@@ -4606,7 +4606,7 @@ func assertMatchCandidateEqual(t testing.TB, resultIndex, candidateIndex int, le
 	if !reflect.DeepEqual(left.factVersions, right.factVersions) {
 		t.Fatalf("candidate %d/%d fact versions differ:\n%s=%#v\n%s=%#v", resultIndex, candidateIndex, leftName, left.factVersions, rightName, right.factVersions)
 	}
-	if !reflect.DeepEqual(left.path, right.path) {
+	if !slices.Equal(left.path, right.path) {
 		t.Fatalf("candidate %d/%d path differs:\n%s=%#v\n%s=%#v", resultIndex, candidateIndex, leftName, left.path, rightName, right.path)
 	}
 }

@@ -128,6 +128,9 @@ Style expectations:
 - `matcher_oracle_test.go` defines a brute-force oracle matcher, and
   parity helpers assert that the Rete graph agrees with it. New matching
   behavior should extend oracle parity coverage.
+- `executable_semantics_fuzz_test.go` generates bounded template, rule, fact,
+  and lifecycle corpora, checks graph-vs-oracle parity after every mutation,
+  and verifies byte-identical explain JSON for equal histories.
 - Fixture runners (Miss Manners in `manners_runner_test.go`, claims
   triage, loan underwriting, and the scaling runners) double as
   correctness tests and as opt-in performance harnesses gated by

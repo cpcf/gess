@@ -35,6 +35,9 @@ Once the basics are working, these guides go deeper:
 - [Session lifecycle](session-lifecycle.md): assert, modify, retract,
   reset, run, queries, snapshots, events, the focus stack, and
   `ApplyRuleset`.
+- [Executable semantics](executable-semantics.md): evaluation truth tables,
+  condition and lifecycle semantics, ordering guarantees, and the differential
+  fuzz verification contract.
 - [Runtime diagnostics JSON](diagnostics-json.md): versioned graph, memory,
   agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.
 - [Command-line tools](cli.md): `gessc` and `gessfmt`.

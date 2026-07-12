@@ -801,6 +801,30 @@ func (r compiledRule) matchCandidatesWithAlpha(ctx context.Context, source factS
 				}
 				return walk(conditionIndex+1, selected)
 			}
+			if plan.negated {
+				positive := plan
+				positive.negated = false
+				matched := false
+				yield := func(conditionMatch) error {
+					matched = true
+					return nil
+				}
+				if alphaSource != nil {
+					if facts, ok := alphaSource.factsForCondition(plan.id); ok {
+						if err := positive.forEachAlphaMatchWithBindings(ctx, facts, selected, yield); err != nil {
+							return err
+						}
+					} else if err := positive.forEachMatchWithBindings(ctx, source, selected, yield); err != nil {
+						return err
+					}
+				} else if err := positive.forEachMatchWithBindings(ctx, source, selected, yield); err != nil {
+					return err
+				}
+				if matched {
+					return nil
+				}
+				return walk(conditionIndex+1, selected)
+			}
 			if plan.aggregate != nil {
 				bindings, ok, err := plan.aggregate.evaluate(ctx, source, selected)
 				if err != nil {
@@ -964,9 +988,12 @@ func (r compiledRule) matchStructuralShape(ctx context.Context, source factSourc
 			return nil, fmt.Errorf("%w: malformed structural leaf in rule %q", ErrMatcher, r.name)
 		}
 		plan := r.structuralConditionPlans[shape.conditionIndex]
-		if plan.negated && !ignoreLeafNegation {
+		if plan.negated {
 			positive := plan
 			positive.negated = false
+			if ignoreLeafNegation {
+				return r.matchStructuralLeaf(ctx, source, alphaSource, positive, selected)
+			}
 			matches, err := r.matchStructuralLeaf(ctx, source, alphaSource, positive, selected)
 			if err != nil || len(matches) != 0 {
 				return nil, err
