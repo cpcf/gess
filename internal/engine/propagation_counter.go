@@ -230,6 +230,47 @@ type propagationCounterKey struct {
 	origin      propagationOrigin
 }
 
+type propagationMutationKind uint8
+
+const (
+	propagationMutationAssert propagationMutationKind = iota + 1
+	propagationMutationModify
+	propagationMutationRetract
+)
+
+func (k propagationMutationKind) String() string {
+	switch k {
+	case propagationMutationAssert:
+		return "assert"
+	case propagationMutationModify:
+		return "modify"
+	case propagationMutationRetract:
+		return "retract"
+	default:
+		return "unknown"
+	}
+}
+
+type propagationAllocationSource struct {
+	templateKey TemplateKey
+	kind        propagationMutationKind
+}
+
+func (s propagationAllocationSource) valid() bool {
+	return s.templateKey != "" && s.kind != 0
+}
+
+type propagationTokenRowSourceKey struct {
+	Stage       reteGraphStageRef
+	TemplateKey TemplateKey
+	Kind        propagationMutationKind
+}
+
+type propagationTokenRowSourceCount struct {
+	Source propagationTokenRowSourceKey
+	Count  int
+}
+
 type propagationBranchKey struct {
 	ownerKind      reteGraphBranchOwnerKind
 	ruleRevisionID RuleRevisionID
@@ -282,6 +323,7 @@ type propagationCounterLedger struct {
 	terminalRowsRetained int
 	graphBetaMemory      reteGraphBetaMemoryStats
 	tokenRowsByStage     map[reteGraphStageRef]int
+	tokenRowsBySource    map[propagationTokenRowSourceKey]int
 }
 
 type propagationCounterSpan struct {
@@ -303,6 +345,7 @@ type propagationCounterSnapshot struct {
 	RuntimePath          propagationRuntimePath
 	UnsupportedReasons   map[string]int
 	TokenRowsByStage     []propagationStageCount
+	TokenRowsBySource    []propagationTokenRowSourceCount
 }
 
 type propagationStageCount struct {
@@ -379,6 +422,24 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 				return int(a.Stage.kind) - int(b.Stage.kind)
 			}
 			return a.Stage.id - b.Stage.id
+		})
+	}
+	if len(l.tokenRowsBySource) > 0 {
+		out.TokenRowsBySource = make([]propagationTokenRowSourceCount, 0, len(l.tokenRowsBySource))
+		for source, count := range l.tokenRowsBySource {
+			out.TokenRowsBySource = append(out.TokenRowsBySource, propagationTokenRowSourceCount{Source: source, Count: count})
+		}
+		slices.SortFunc(out.TokenRowsBySource, func(a, b propagationTokenRowSourceCount) int {
+			if a.Source.Stage.kind != b.Source.Stage.kind {
+				return int(a.Source.Stage.kind) - int(b.Source.Stage.kind)
+			}
+			if a.Source.Stage.id != b.Source.Stage.id {
+				return a.Source.Stage.id - b.Source.Stage.id
+			}
+			if a.Source.TemplateKey != b.Source.TemplateKey {
+				return strings.Compare(string(a.Source.TemplateKey), string(b.Source.TemplateKey))
+			}
+			return int(a.Source.Kind) - int(b.Source.Kind)
 		})
 	}
 	return out
@@ -757,7 +818,7 @@ func (l *propagationCounterLedger) recordBetaIdentityScanFallback(candidates int
 	l.totals.BetaIdentityScanCandidates += candidates
 }
 
-func (l *propagationCounterLedger) recordTokenRowAllocated(stage reteGraphStageRef) {
+func (l *propagationCounterLedger) recordTokenRowAllocated(stage reteGraphStageRef, source propagationAllocationSource) {
 	if l == nil {
 		return
 	}
@@ -766,6 +827,16 @@ func (l *propagationCounterLedger) recordTokenRowAllocated(stage reteGraphStageR
 		l.tokenRowsByStage = make(map[reteGraphStageRef]int)
 	}
 	l.tokenRowsByStage[stage]++
+	if source.valid() {
+		if l.tokenRowsBySource == nil {
+			l.tokenRowsBySource = make(map[propagationTokenRowSourceKey]int)
+		}
+		l.tokenRowsBySource[propagationTokenRowSourceKey{
+			Stage:       stage,
+			TemplateKey: source.templateKey,
+			Kind:        source.kind,
+		}]++
+	}
 }
 
 func (l *propagationCounterLedger) recordBetaRowRemoved() {

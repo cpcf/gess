@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,40 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 	if stageTotal != totals.TokenRowsAllocated {
 		t.Fatalf("token rows by stage = %d, want total allocated = %d", stageTotal, totals.TokenRowsAllocated)
 	}
+	sourceTotal := 0
+	observedTemplates := make(map[TemplateKey]bool)
+	type templateMutation struct {
+		templateKey TemplateKey
+		kind        propagationMutationKind
+	}
+	rowsByTemplateMutation := make(map[templateMutation]int)
+	for _, source := range first.TokenRowsBySource {
+		if source.Source.Stage.kind == reteGraphStageUnknown || source.Source.TemplateKey == "" || source.Source.Kind == 0 {
+			t.Fatalf("invalid token row source: %+v", source)
+		}
+		sourceTotal += source.Count
+		observedTemplates[source.Source.TemplateKey] = true
+		rowsByTemplateMutation[templateMutation{templateKey: source.Source.TemplateKey, kind: source.Source.Kind}] += source.Count
+	}
+	if sourceTotal != totals.TokenRowsAllocated {
+		t.Fatalf("token rows by source = %d, want total allocated = %d", sourceTotal, totals.TokenRowsAllocated)
+	}
+	for _, templateKey := range []TemplateKey{"context", "count", "path", "chosen", "seating"} {
+		if !observedTemplates[templateKey] {
+			t.Errorf("token row sources do not distinguish template %q", templateKey)
+		}
+	}
+	wantRowsByTemplateMutation := map[templateMutation]int{
+		{templateKey: "context", kind: propagationMutationModify}: 283081,
+		{templateKey: "count", kind: propagationMutationModify}:   41424,
+		{templateKey: "path", kind: propagationMutationAssert}:    6240,
+		{templateKey: "seating", kind: propagationMutationAssert}: 128,
+		{templateKey: "seating", kind: propagationMutationModify}: 252,
+		{templateKey: "chosen", kind: propagationMutationAssert}:  63,
+	}
+	if !reflect.DeepEqual(rowsByTemplateMutation, wantRowsByTemplateMutation) {
+		t.Fatalf("token rows by template and mutation = %#v, want %#v", rowsByTemplateMutation, wantRowsByTemplateMutation)
+	}
 	wantTopStages := []propagationStageCount{
 		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 5}, Count: 145152},
 		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 9}, Count: 82271},
@@ -93,6 +128,7 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 		t.Fatalf("top token allocation stages = %v, want %v", got, wantTopStages)
 	}
 	t.Logf("top token allocation stages: %v", topPropagationStageCounts(first.TokenRowsByStage, 8))
+	t.Logf("token allocation sources: %v", topPropagationTokenRowSourceCounts(first.TokenRowsBySource, -1))
 	if got, want := totals.ModifyRawTerminalAdds, totals.ModifyKeptTerminalAdds+totals.ModifyCoalescedPairs; got != want {
 		t.Fatalf("raw terminal adds = %d, want kept adds + coalesced pairs = %d", got, want)
 	}
@@ -186,6 +222,16 @@ func reportMannersLifecycleMetrics(b *testing.B, snapshot propagationCounterSnap
 	for _, stage := range topPropagationStageCounts(snapshot.TokenRowsByStage, 5) {
 		b.ReportMetric(float64(stage.Count), fmt.Sprintf("token-rows-%s-%d/run", propagationStageKindName(stage.Stage.kind), stage.Stage.id))
 	}
+	for _, source := range topPropagationTokenRowSourceCounts(snapshot.TokenRowsBySource, 8) {
+		name := fmt.Sprintf(
+			"token-rows-source-%s-%d-%s-%s/run",
+			propagationStageKindName(source.Source.Stage.kind),
+			source.Source.Stage.id,
+			sanitizeBenchmarkMetricName(string(source.Source.TemplateKey)),
+			source.Source.Kind.String(),
+		)
+		b.ReportMetric(float64(source.Count), name)
+	}
 }
 
 func topPropagationStageCounts(counts []propagationStageCount, limit int) []propagationStageCount {
@@ -203,6 +249,50 @@ func topPropagationStageCounts(counts []propagationStageCount, limit int) []prop
 		top = top[:limit]
 	}
 	return top
+}
+
+func topPropagationTokenRowSourceCounts(counts []propagationTokenRowSourceCount, limit int) []propagationTokenRowSourceCount {
+	top := slices.Clone(counts)
+	slices.SortFunc(top, func(a, b propagationTokenRowSourceCount) int {
+		if a.Count != b.Count {
+			return b.Count - a.Count
+		}
+		if a.Source.Stage.kind != b.Source.Stage.kind {
+			return int(a.Source.Stage.kind) - int(b.Source.Stage.kind)
+		}
+		if a.Source.Stage.id != b.Source.Stage.id {
+			return a.Source.Stage.id - b.Source.Stage.id
+		}
+		if a.Source.TemplateKey != b.Source.TemplateKey {
+			return strings.Compare(string(a.Source.TemplateKey), string(b.Source.TemplateKey))
+		}
+		return int(a.Source.Kind) - int(b.Source.Kind)
+	})
+	if limit >= 0 && len(top) > limit {
+		top = top[:limit]
+	}
+	return top
+}
+
+func sanitizeBenchmarkMetricName(name string) string {
+	var out strings.Builder
+	lastDash := false
+	for _, char := range strings.ToLower(name) {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
+			out.WriteRune(char)
+			lastDash = false
+			continue
+		}
+		if out.Len() > 0 && !lastDash {
+			out.WriteByte('-')
+			lastDash = true
+		}
+	}
+	sanitized := strings.TrimSuffix(out.String(), "-")
+	if sanitized == "" {
+		return "unknown"
+	}
+	return sanitized
 }
 
 func propagationStageKindName(kind reteGraphStageKind) string {

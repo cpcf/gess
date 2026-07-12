@@ -56,12 +56,54 @@ func TestReteGraphPropagationEventCarriesModifyMetadata(t *testing.T) {
 	if event.origin != origin {
 		t.Fatalf("origin = %#v, want %#v", event.origin, origin)
 	}
+	if got, want := event.allocationSource, (propagationAllocationSource{templateKey: templateKey, kind: propagationMutationModify}); got != want {
+		t.Fatalf("allocation source = %#v, want %#v", got, want)
+	}
 	if got, want := event.changedSlots, []int{1, 0}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("changed slots = %#v, want %#v", got, want)
 	}
 	changes[0].Field = "mutated"
 	if event.changes[0].Field != "note" {
 		t.Fatalf("event changes alias caller changes: %#v", event.changes)
+	}
+}
+
+func TestTokenRowAllocationSourcesTrackAssertAndModify(t *testing.T) {
+	ctx := context.Background()
+	revision, templateKey := mustModifyFastPathRuleset(t)
+	session := mustSession(t, revision, "token-row-allocation-source-session")
+	session.attachPropagationCounters()
+
+	asserted, err := session.Assert(ctx, templateKey, mustFields(t, map[string]any{
+		"age":    32,
+		"note":   "old",
+		"status": "active",
+	}))
+	if err != nil {
+		t.Fatalf("Assert: %v", err)
+	}
+	if _, err := session.Modify(ctx, asserted.Fact.ID(), FactPatch{Set: mustFields(t, map[string]any{"age": 33})}); err != nil {
+		t.Fatalf("Modify: %v", err)
+	}
+
+	snapshot := session.propagationCounterSnapshot()
+	sourceTotal := 0
+	byKind := make(map[propagationMutationKind]int)
+	for _, source := range snapshot.TokenRowsBySource {
+		if source.Source.TemplateKey != templateKey {
+			t.Fatalf("source template = %q, want %q", source.Source.TemplateKey, templateKey)
+		}
+		sourceTotal += source.Count
+		byKind[source.Source.Kind] += source.Count
+	}
+	if sourceTotal != snapshot.Totals.TokenRowsAllocated {
+		t.Fatalf("source rows = %d, want allocated rows = %d", sourceTotal, snapshot.Totals.TokenRowsAllocated)
+	}
+	if byKind[propagationMutationAssert] == 0 {
+		t.Fatal("assert token rows = 0, want positive")
+	}
+	if byKind[propagationMutationModify] == 0 {
+		t.Fatal("modify token rows = 0, want positive")
 	}
 }
 
@@ -131,9 +173,12 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 		t.Fatalf("newReteGraphBetaMemoryForGeneration: %v", err)
 	}
 	memory.compactSlotStore = state.compactSlotStore
+	counters := newPropagationCounterLedger()
 	event := newReteGraphWorkingModifyEvent(revision, before, beforeFact, afterFact, after, []FieldChange{
 		{Field: "note", Old: mustValue(t, "old"), New: mustValue(t, "new")},
-	}, false, mutationOrigin{}, nil)
+	}, false, mutationOrigin{}, counters)
+	previousSource := propagationAllocationSource{templateKey: "outer", kind: propagationMutationAssert}
+	memory.arena.allocSource = previousSource
 
 	removed, err := memory.propagateEvent(ctx, newReteGraphModifyRemoveEvent(event))
 	if err != nil {
@@ -145,6 +190,9 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	if got, want := memory.sourceGeneration(), before.Generation(); got != want {
 		t.Fatalf("source generation after modify-remove = %d, want %d", got, want)
 	}
+	if memory.arena.allocSource != previousSource {
+		t.Fatalf("allocation source after nested modify-remove = %#v, want %#v", memory.arena.allocSource, previousSource)
+	}
 
 	added, err := memory.propagateEvent(ctx, newReteGraphModifyAddEvent(event))
 	if err != nil {
@@ -155,6 +203,16 @@ func TestReteGraphModifyAddRemoveEventsPropagateWithoutFactSourceMutation(t *tes
 	}
 	if got, want := memory.sourceGeneration(), after.Generation(); got != want {
 		t.Fatalf("source generation after modify-add = %d, want %d", got, want)
+	}
+	if memory.arena.allocSource != previousSource {
+		t.Fatalf("allocation source after nested modify-add = %#v, want %#v", memory.arena.allocSource, previousSource)
+	}
+
+	if _, err := memory.propagateEvent(ctx, event); err != nil {
+		t.Fatalf("propagate nested modify event: %v", err)
+	}
+	if memory.arena.allocSource != previousSource {
+		t.Fatalf("allocation source after nested modify event = %#v, want %#v", memory.arena.allocSource, previousSource)
 	}
 }
 

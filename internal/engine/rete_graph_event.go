@@ -33,6 +33,7 @@ type reteGraphPropagationEvent struct {
 	origin            mutationOrigin
 	span              *propagationCounterSpan
 	counters          *propagationCounterLedger
+	allocationSource  propagationAllocationSource
 }
 
 func newReteGraphAssertEvent(fact FactSnapshot, origin mutationOrigin, span *propagationCounterSpan) reteGraphPropagationEvent {
@@ -44,6 +45,7 @@ func newReteGraphAssertEvent(fact FactSnapshot, origin mutationOrigin, span *pro
 		updateSource:     true,
 		origin:           origin,
 		span:             span,
+		allocationSource: propagationAllocationSource{templateKey: fact.TemplateKey(), kind: propagationMutationAssert},
 	}
 }
 
@@ -57,6 +59,7 @@ func newReteGraphWorkingAssertEvent(fact *workingFact, snapshot FactSnapshot, or
 		updateSource:     true,
 		origin:           origin,
 		span:             span,
+		allocationSource: propagationAllocationSource{templateKey: snapshot.TemplateKey(), kind: propagationMutationAssert},
 	}
 }
 
@@ -66,6 +69,7 @@ func newReteGraphResetAssertEvent(fact FactSnapshot) reteGraphPropagationEvent {
 		fact:             fact,
 		after:            fact,
 		sourceGeneration: fact.Generation(),
+		allocationSource: propagationAllocationSource{templateKey: fact.TemplateKey(), kind: propagationMutationAssert},
 	}
 }
 
@@ -76,6 +80,7 @@ func newReteGraphResetWorkingAssertEvent(fact *workingFact, snapshot FactSnapsho
 		workingFact:      fact,
 		after:            snapshot,
 		sourceGeneration: snapshot.Generation(),
+		allocationSource: propagationAllocationSource{templateKey: snapshot.TemplateKey(), kind: propagationMutationAssert},
 	}
 }
 
@@ -91,6 +96,7 @@ func newReteGraphGeneratedAssertEvent(fact *workingFact, origin mutationOrigin, 
 		sourceGeneration: generation,
 		origin:           origin,
 		span:             span,
+		allocationSource: propagationAllocationSource{templateKey: workingFactTemplateKey(fact), kind: propagationMutationAssert},
 	}
 }
 
@@ -101,6 +107,7 @@ func newReteGraphQueryTriggerEvent(fact FactSnapshot) reteGraphPropagationEvent 
 		after:            fact,
 		sourceGeneration: fact.Generation(),
 		transient:        true,
+		allocationSource: propagationAllocationSource{templateKey: fact.TemplateKey(), kind: propagationMutationAssert},
 	}
 }
 
@@ -111,6 +118,7 @@ func newReteGraphQueryTriggerRemoveEvent(fact FactSnapshot) reteGraphPropagation
 		before:           fact,
 		sourceGeneration: fact.Generation(),
 		transient:        true,
+		allocationSource: propagationAllocationSource{templateKey: fact.TemplateKey(), kind: propagationMutationRetract},
 	}
 }
 
@@ -125,6 +133,7 @@ func newReteGraphWorkingRetractEvent(fact *workingFact, origin mutationOrigin, c
 		sourceGeneration: generation,
 		origin:           origin,
 		counters:         counters,
+		allocationSource: propagationAllocationSource{templateKey: workingFactTemplateKey(fact), kind: propagationMutationRetract},
 	}
 }
 
@@ -142,6 +151,7 @@ func newReteGraphRetractEvent(fact FactSnapshot, origin mutationOrigin, counters
 		sourceGeneration: fact.Generation(),
 		origin:           origin,
 		counters:         counters,
+		allocationSource: propagationAllocationSource{templateKey: fact.TemplateKey(), kind: propagationMutationRetract},
 	}
 }
 
@@ -159,6 +169,7 @@ func newReteGraphModifyEvent(revision *Ruleset, before, after FactSnapshot, chan
 		sourceGeneration: after.Generation(),
 		origin:           origin,
 		counters:         counters,
+		allocationSource: propagationAllocationSource{templateKey: after.TemplateKey(), kind: propagationMutationModify},
 	}
 }
 
@@ -173,6 +184,7 @@ func newReteGraphModifyRemoveEvent(event reteGraphPropagationEvent) reteGraphPro
 	event.tag = reteGraphPropagationModifyRemove
 	event.fact = event.before
 	event.workingFact = event.beforeWorkingFact
+	event.allocationSource = propagationAllocationSource{templateKey: event.before.TemplateKey(), kind: propagationMutationModify}
 	return event
 }
 
@@ -180,7 +192,15 @@ func newReteGraphModifyAddEvent(event reteGraphPropagationEvent) reteGraphPropag
 	event.tag = reteGraphPropagationModifyAdd
 	event.fact = event.after
 	event.workingFact = event.afterWorkingFact
+	event.allocationSource = propagationAllocationSource{templateKey: event.after.TemplateKey(), kind: propagationMutationModify}
 	return event
+}
+
+func workingFactTemplateKey(fact *workingFact) TemplateKey {
+	if fact == nil {
+		return ""
+	}
+	return fact.storedTemplateKey()
 }
 
 func newReteGraphClearEvent(generation Generation, origin mutationOrigin, counters *propagationCounterLedger) reteGraphPropagationEvent {

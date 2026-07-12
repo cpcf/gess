@@ -1548,6 +1548,9 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	if m == nil {
 		return reteAgendaDelta{}, nil
 	}
+	if event.allocationSource.templateKey == "" && event.workingFact != nil {
+		event.allocationSource.templateKey = event.workingFact.templateKeyForRevision(m.revision)
+	}
 	counters := event.counters
 	if counters == nil && event.span != nil {
 		counters = event.span.ledger
@@ -1557,10 +1560,17 @@ func (m *reteGraphBetaMemory) propagateEvent(ctx context.Context, event reteGrap
 	if m.arena != nil {
 		m.arena.counters = counters
 	}
+	var previousAllocationSource propagationAllocationSource
+	if counters != nil && m.arena != nil {
+		previousAllocationSource = m.arena.setAllocSource(event.allocationSource)
+	}
 	defer func() {
 		m.propagationCounters = previousCounters
 		if m.arena != nil {
 			m.arena.counters = previousCounters
+			if counters != nil {
+				m.arena.allocSource = previousAllocationSource
+			}
 		}
 	}()
 	wasDeferring := m.deferAggregateOutputs
