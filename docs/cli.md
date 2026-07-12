@@ -140,7 +140,8 @@ gess-mcp --ruleset-root <dir> \
   [--explain-log-max-entries <n>] \
   [--max-firings <n>] \
   [--max-query-rows <n>] \
-  [--max-demand-cascade-steps <n>]
+  [--max-demand-cascade-steps <n>] \
+  [--max-what-if-operations <n>]
 ```
 
 `gess-mcp` is a stdio MCP server with one process-owned Gess session. Start it
@@ -163,6 +164,8 @@ The tool set is:
 - `retract`: remove stated support from a fact ID.
 - `run`: fire activations under a mandatory limit.
 - `query`: execute a compiled query and return a bounded row prefix.
+- `what_if`: apply hypothetical assert/modify/retract operations to a
+  disposable fork, run it, and return the versioned WhatIf report.
 
 `--max-firings` is the ceiling for one `run` call (default 10000). A tool call
 may request a smaller positive `maxFirings` but cannot raise the ceiling. A
@@ -174,6 +177,13 @@ selected. `--max-demand-cascade-steps` bounds backchain demand generation
 (default 10000). Backchain-reactive queries are marked stateful because proof
 rules may persist derived facts.
 
+`what_if` uses the same firing ceiling as `run` and accepts at most
+`--max-what-if-operations` hypothetical mutations (default 100). A call may
+lower the firing limit but cannot raise it. The operation schema is closed to
+`assert`, `modify`, and `retract`; the fork is never retained and emitted output
+is discarded. Set `explain: true` to include bounded derivations for added
+facts. The base session remains unchanged on success, failure, and cancellation.
+
 JSON numbers without a fractional part are treated as integers when converted
 to Gess values, including nested list/map values. This lets ordinary MCP JSON
 populate INTEGER fields and query parameters without a separate typed-value
@@ -181,8 +191,9 @@ wrapper.
 
 Custom load, snapshot, agenda, mutation, run, and query results carry
 `gessMcpSchema: 1` plus a `kind` discriminator. Diagnostics and explain tools
-return their existing versioned JSON contracts. MCP requests may be concurrent,
-but the command serializes all handlers around its single session.
+return their existing versioned JSON contracts; `what_if` returns the existing
+`gessExplainSchema` WhatIf document. MCP requests may be concurrent, but the
+command serializes all handlers around its single session.
 
 For example, an MCP client configuration can launch:
 

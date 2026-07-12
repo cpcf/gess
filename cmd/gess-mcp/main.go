@@ -17,11 +17,12 @@ func main() {
 	maxFirings := flags.Int("max-firings", 10_000, "maximum activations fired by one run tool call")
 	maxQueryRows := flags.Int("max-query-rows", 1_000, "maximum query rows returned by one tool call")
 	maxDemandCascadeSteps := flags.Int("max-demand-cascade-steps", 10_000, "maximum backchain demand steps per cascade")
+	maxWhatIfOperations := flags.Int("max-what-if-operations", 100, "maximum hypothetical mutations in one what_if tool call")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 	if flags.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: gess-mcp --ruleset-root <dir> [--explain-log-max-entries <n>] [--max-firings <n>] [--max-query-rows <n>] [--max-demand-cascade-steps <n>]")
+		fmt.Fprintln(os.Stderr, "usage: gess-mcp --ruleset-root <dir> [--explain-log-max-entries <n>] [--max-firings <n>] [--max-query-rows <n>] [--max-demand-cascade-steps <n>] [--max-what-if-operations <n>]")
 		os.Exit(2)
 	}
 	service, err := server.New(server.Config{
@@ -30,6 +31,7 @@ func main() {
 		MaxFirings:            *maxFirings,
 		MaxQueryRows:          *maxQueryRows,
 		MaxDemandCascadeSteps: *maxDemandCascadeSteps,
+		MaxWhatIfOperations:   *maxWhatIfOperations,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -137,6 +137,89 @@ func (s *Server) query(ctx context.Context, _ *mcp.CallToolRequest, input queryI
 	return nil, projectQueryRows(name, rows, limit), nil
 }
 
+func (s *Server) whatIf(ctx context.Context, _ *mcp.CallToolRequest, input whatIfInput) (*mcp.CallToolResult, any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.requireSession(); err != nil {
+		return nil, nil, err
+	}
+	if len(input.Operations) > s.maxWhatIfOperations {
+		return nil, nil, fmt.Errorf("what-if operation count %d exceeds server ceiling %d", len(input.Operations), s.maxWhatIfOperations)
+	}
+	limit, err := boundedRequestLimit("max firings", input.MaxFirings, s.maxFirings)
+	if err != nil {
+		return nil, nil, err
+	}
+	scenario := func(ctx context.Context, fork *sess.Session) error {
+		for i, operation := range input.Operations {
+			if err := s.applyWhatIfOperation(ctx, fork, operation); err != nil {
+				return fmt.Errorf("operation %d: %w", i, err)
+			}
+		}
+		return nil
+	}
+	options := []sess.WhatIfOption{sess.WithWhatIfMaxFirings(limit)}
+	if input.Explain {
+		options = append(options, sess.WithWhatIfExplain(sess.WithExplainLogMaxEntries(s.explainLogMaxEntries)))
+	}
+	report, err := s.session.WhatIf(ctx, scenario, options...)
+	if err != nil {
+		return nil, nil, err
+	}
+	output, err := jsonObject(report)
+	return nil, output, err
+}
+
+func (s *Server) applyWhatIfOperation(ctx context.Context, fork *sess.Session, operation whatIfOperation) error {
+	switch strings.TrimSpace(operation.Kind) {
+	case "assert":
+		templateName := strings.TrimSpace(operation.Template)
+		if templateName == "" {
+			return fmt.Errorf("assert template is required")
+		}
+		template, ok := s.ruleset.Template(templateName)
+		if !ok {
+			return fmt.Errorf("unknown template %q", templateName)
+		}
+		fields, err := rules.NewFields(normalizeJSONObject(operation.Fields))
+		if err != nil {
+			return err
+		}
+		_, err = fork.Assert(ctx, template.Key(), fields)
+		return err
+	case "modify":
+		if len(operation.Set) == 0 && len(operation.Unset) == 0 {
+			return fmt.Errorf("modify requires at least one set or unset field")
+		}
+		id, err := parseFactID(operation.FactID)
+		if err != nil {
+			return err
+		}
+		set, err := rules.NewFields(normalizeJSONObject(operation.Set))
+		if err != nil {
+			return err
+		}
+		unset := make([]string, len(operation.Unset))
+		for i, field := range operation.Unset {
+			unset[i] = strings.TrimSpace(field)
+			if unset[i] == "" {
+				return fmt.Errorf("unset field names must not be empty")
+			}
+		}
+		_, err = fork.Modify(ctx, id, rules.FactPatch{Set: set, Unset: unset})
+		return err
+	case "retract":
+		id, err := parseFactID(operation.FactID)
+		if err != nil {
+			return err
+		}
+		_, err = fork.Retract(ctx, id)
+		return err
+	default:
+		return fmt.Errorf("unsupported kind %q", operation.Kind)
+	}
+}
+
 func boundedRequestLimit(name string, requested, ceiling int) (int, error) {
 	if requested == 0 {
 		return ceiling, nil

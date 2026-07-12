@@ -85,6 +85,7 @@ func TestConfigRejectsNonPositiveBounds(t *testing.T) {
 		{name: "firings", config: Config{RulesetRoot: root, MaxFirings: -1}, want: "max firings"},
 		{name: "query rows", config: Config{RulesetRoot: root, MaxQueryRows: -1}, want: "max query rows"},
 		{name: "demand cascade", config: Config{RulesetRoot: root, MaxDemandCascadeSteps: -1}, want: "max demand cascade steps"},
+		{name: "what-if operations", config: Config{RulesetRoot: root, MaxWhatIfOperations: -1}, want: "max what-if operations"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -123,6 +124,7 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 		MaxFirings:            2,
 		MaxQueryRows:          2,
 		MaxDemandCascadeSteps: 20,
+		MaxWhatIfOperations:   3,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -145,10 +147,10 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("tool count = %d, want 11", len(tools.Tools))
+	if len(tools.Tools) != 12 {
+		t.Fatalf("tool count = %d, want 12", len(tools.Tools))
 	}
-	readOnly := map[string]bool{"snapshot": true, "agenda": true, "diagnostics": true, "explain": true, "why_not": true}
+	readOnly := map[string]bool{"snapshot": true, "agenda": true, "diagnostics": true, "explain": true, "why_not": true, "what_if": true}
 	idempotent := map[string]bool{"modify": true, "retract": true}
 	for _, tool := range tools.Tools {
 		if tool.Annotations == nil {
@@ -276,6 +278,7 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	if third["status"] != "inserted" {
 		t.Fatalf("third assert = %#v", third)
 	}
+	thirdID := third["fact"].(map[string]any)["id"].(string)
 
 	queryOverLimit := callTool(t, ctx, clientSession, "query", map[string]any{
 		"name": "all-orders", "maxRows": 3,
@@ -304,6 +307,69 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	retracted := toolObject(t, callTool(t, ctx, clientSession, "retract", map[string]any{"factId": assertedID}))
 	if retracted["kind"] != "retract" || retracted["status"] != "removed" {
 		t.Fatalf("retract output = %#v", retracted)
+	}
+
+	whatIfOverFirings := callTool(t, ctx, clientSession, "what_if", map[string]any{"maxFirings": 3})
+	if !whatIfOverFirings.IsError || !strings.Contains(toolText(whatIfOverFirings), "exceeds server ceiling 2") {
+		t.Fatalf("over-limit what-if firings = error %t content %q", whatIfOverFirings.IsError, toolText(whatIfOverFirings))
+	}
+	whatIfOverOperations := callTool(t, ctx, clientSession, "what_if", map[string]any{
+		"operations": []any{
+			map[string]any{"kind": "retract", "factId": factID},
+			map[string]any{"kind": "retract", "factId": factID},
+			map[string]any{"kind": "retract", "factId": factID},
+			map[string]any{"kind": "retract", "factId": factID},
+		},
+	})
+	if !whatIfOverOperations.IsError || !strings.Contains(toolText(whatIfOverOperations), "operation count 4 exceeds server ceiling 3") {
+		t.Fatalf("over-limit what-if operations = error %t content %q", whatIfOverOperations.IsError, toolText(whatIfOverOperations))
+	}
+	failedWhatIf := callTool(t, ctx, clientSession, "what_if", map[string]any{
+		"operations": []any{
+			map[string]any{"kind": "assert", "template": "order", "fields": map[string]any{"id": "O-FAIL", "amount": 99}},
+			map[string]any{"kind": "unsupported"},
+		},
+	})
+	if !failedWhatIf.IsError || !strings.Contains(toolText(failedWhatIf), "operation 1") {
+		t.Fatalf("failed what-if = error %t content %q", failedWhatIf.IsError, toolText(failedWhatIf))
+	}
+	if failedSnapshot := toolObject(t, callTool(t, ctx, clientSession, "snapshot", nil)); len(failedSnapshot["facts"].([]any)) != 2 {
+		t.Fatalf("failed what-if mutated base: %#v", failedSnapshot)
+	}
+	whatIf := toolObject(t, callTool(t, ctx, clientSession, "what_if", map[string]any{
+		"explain": true,
+		"operations": []any{
+			map[string]any{"kind": "assert", "template": "order", "fields": map[string]any{"id": "O-400", "amount": 50}},
+			map[string]any{"kind": "modify", "factId": factID, "set": map[string]any{"amount": 5}},
+			map[string]any{"kind": "retract", "factId": thirdID},
+		},
+	}))
+	if whatIf["gessExplainSchema"] != float64(1) || whatIf["kind"] != "whatif" {
+		t.Fatalf("what-if envelope = %#v", whatIf)
+	}
+	whatIfRun := whatIf["run"].(map[string]any)
+	if whatIfRun["status"] != "completed" || whatIfRun["fired"] != float64(1) {
+		t.Fatalf("what-if run = %#v", whatIfRun)
+	}
+	diff := whatIf["diff"].(map[string]any)
+	if len(diff["added"].([]any)) != 1 || len(diff["modified"].([]any)) != 1 || len(diff["retracted"].([]any)) != 1 {
+		t.Fatalf("what-if diff = %#v", diff)
+	}
+	if derivations := whatIf["derivations"].([]any); len(derivations) != 1 {
+		t.Fatalf("what-if derivations = %#v, want one", derivations)
+	}
+	baseAfterWhatIf := toolObject(t, callTool(t, ctx, clientSession, "snapshot", nil))
+	baseFacts := baseAfterWhatIf["facts"].([]any)
+	if len(baseFacts) != 2 {
+		t.Fatalf("base facts after what-if = %d, want 2", len(baseFacts))
+	}
+	baseByID := make(map[string]map[string]any, len(baseFacts))
+	for _, raw := range baseFacts {
+		projected := raw.(map[string]any)
+		baseByID[projected["id"].(string)] = projected
+	}
+	if baseByID[factID]["fields"].(map[string]any)["amount"] != float64(25) || baseByID[thirdID] == nil {
+		t.Fatalf("what-if mutated base session: %#v", baseByID)
 	}
 
 	testConcurrentInspectionCalls(t, ctx, clientSession)

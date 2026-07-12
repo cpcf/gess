@@ -22,6 +22,7 @@ const (
 	defaultMaxFirings            = 10_000
 	defaultMaxQueryRows          = 1_000
 	defaultMaxDemandCascadeSteps = 10_000
+	defaultMaxWhatIfOperations   = 100
 	mcpToolSchemaVersion         = 1
 )
 
@@ -31,6 +32,7 @@ type Config struct {
 	MaxFirings            int
 	MaxQueryRows          int
 	MaxDemandCascadeSteps int
+	MaxWhatIfOperations   int
 }
 
 type Server struct {
@@ -40,6 +42,7 @@ type Server struct {
 	maxFirings            int
 	maxQueryRows          int
 	maxDemandCascadeSteps int
+	maxWhatIfOperations   int
 	ruleset               *rules.Ruleset
 	session               *sess.Session
 	mcp                   *mcp.Server
@@ -82,6 +85,21 @@ type queryInput struct {
 	MaxRows int            `json:"maxRows,omitempty" jsonschema:"positive output row limit no greater than the server ceiling; omit to use the ceiling"`
 }
 
+type whatIfInput struct {
+	Operations []whatIfOperation `json:"operations,omitempty" jsonschema:"ordered hypothetical mutations applied to the fork before its automatic run"`
+	MaxFirings int               `json:"maxFirings,omitempty" jsonschema:"positive firing limit no greater than the server ceiling; omit to use the ceiling"`
+	Explain    bool              `json:"explain,omitempty" jsonschema:"include bounded derivations for added facts"`
+}
+
+type whatIfOperation struct {
+	Kind     string         `json:"kind" jsonschema:"operation kind: assert, modify, or retract"`
+	Template string         `json:"template,omitempty" jsonschema:"template name for assert"`
+	FactID   string         `json:"factId,omitempty" jsonschema:"fact identity for modify or retract"`
+	Fields   map[string]any `json:"fields,omitempty" jsonschema:"field values for assert"`
+	Set      map[string]any `json:"set,omitempty" jsonschema:"field values to set for modify"`
+	Unset    []string       `json:"unset,omitempty" jsonschema:"field names to restore to defaults for modify"`
+}
+
 func New(config Config) (*Server, error) {
 	root, err := canonicalRulesetRoot(config.RulesetRoot)
 	if err != nil {
@@ -102,6 +120,9 @@ func New(config Config) (*Server, error) {
 	if config.MaxDemandCascadeSteps == 0 {
 		config.MaxDemandCascadeSteps = defaultMaxDemandCascadeSteps
 	}
+	if config.MaxWhatIfOperations == 0 {
+		config.MaxWhatIfOperations = defaultMaxWhatIfOperations
+	}
 	if config.MaxFirings < 1 {
 		return nil, fmt.Errorf("max firings must be positive")
 	}
@@ -111,12 +132,16 @@ func New(config Config) (*Server, error) {
 	if config.MaxDemandCascadeSteps < 1 {
 		return nil, fmt.Errorf("max demand cascade steps must be positive")
 	}
+	if config.MaxWhatIfOperations < 1 {
+		return nil, fmt.Errorf("max what-if operations must be positive")
+	}
 	s := &Server{
 		rulesetRoot:           root,
 		explainLogMaxEntries:  config.ExplainLogMaxEntries,
 		maxFirings:            config.MaxFirings,
 		maxQueryRows:          config.MaxQueryRows,
 		maxDemandCascadeSteps: config.MaxDemandCascadeSteps,
+		maxWhatIfOperations:   config.MaxWhatIfOperations,
 	}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "gess-mcp", Version: "0.1.0"},
@@ -174,6 +199,7 @@ func (s *Server) registerTools() {
 	mcp.AddTool[retractInput, any](s.mcp, statefulTool("retract", "Retract a fact", "Remove stated support from one live fact.", true), s.retract)
 	mcp.AddTool[runInput, any](s.mcp, statefulTool("run", "Run pending activations", "Fire pending activations up to the server-enforced ceiling.", false), s.run)
 	mcp.AddTool[queryInput, any](s.mcp, statefulTool("query", "Run a query", "Run a compiled query and return a bounded row prefix. Backchain-reactive queries may persist proof facts.", false), s.query)
+	mcp.AddTool[whatIfInput, any](s.mcp, readOnlyTool("what_if", "Run a counterfactual", "Apply bounded hypothetical mutations to a disposable fork, run it under the firing ceiling, and return the versioned WhatIf report."), s.whatIf)
 }
 
 func readOnlyTool(name, title, description string) *mcp.Tool {
