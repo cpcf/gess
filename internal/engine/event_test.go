@@ -180,6 +180,73 @@ func TestSessionListenerFailureDoesNotFailMutationAndStillDispatchesToLaterListe
 	}
 }
 
+func TestSessionEventListenerReentryFailsFastDuringRun(t *testing.T) {
+	workspace := NewWorkspace()
+	person := mustAddTemplate(t, workspace, TemplateSpec{
+		Name:   "person",
+		Fields: []FieldSpec{{Name: "name", Kind: ValueString, Required: true}},
+	})
+	mustAddAction(t, workspace, ActionSpec{Name: "observe", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name:       "observe-person",
+		Conditions: []RuleConditionSpec{{Binding: "person", Target: TemplateKeyFact(person.Key())}},
+		Actions:    []RuleActionSpec{{Name: "observe"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+
+	var session *Session
+	var nested AssertResult
+	var nestedErr, snapshotErr, closeErr error
+	listener := EventFunc(func(ctx context.Context, _ Event) error {
+		nested, nestedErr = session.Assert(ctx, person.Key(), mustFields(t, map[string]any{"name": "Grace"}))
+		_, snapshotErr = session.Snapshot(ctx)
+		closeErr = session.Close()
+		if session.ID() != "listener-reentry" {
+			t.Errorf("listener metadata read returned session ID %q", session.ID())
+		}
+		return nil
+	})
+	var err error
+	session, err = NewSession(
+		revision,
+		WithSessionID("listener-reentry"),
+		WithEventListener(listener, ForEventTypes(EventRuleFired)),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if _, err := session.Assert(context.Background(), person.Key(), mustFields(t, map[string]any{"name": "Ada"})); err != nil {
+		t.Fatalf("Assert seed: %v", err)
+	}
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	result, err := session.Run(runCtx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted || result.Fired != 1 {
+		t.Fatalf("run result = %#v, want one completed firing", result)
+	}
+	if nested.Status != AssertConcurrencyMisuse || !errors.Is(nestedErr, ErrConcurrencyMisuse) {
+		t.Fatalf("listener Assert = (%v, %v), want (%v, ErrConcurrencyMisuse)", nested.Status, nestedErr, AssertConcurrencyMisuse)
+	}
+	if !errors.Is(snapshotErr, ErrConcurrencyMisuse) {
+		t.Fatalf("listener Snapshot error = %v, want ErrConcurrencyMisuse", snapshotErr)
+	}
+	if !errors.Is(closeErr, ErrConcurrencyMisuse) {
+		t.Fatalf("listener Close error = %v, want ErrConcurrencyMisuse", closeErr)
+	}
+
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot after run: %v", err)
+	}
+	if got := len(snapshot.FactsByTemplateKey(person.Key())); got != 1 {
+		t.Fatalf("facts after rejected listener reentry = %d, want 1", got)
+	}
+}
+
 func TestSessionEventListenerMasksFilterDeliveryAndPreserveGlobalSequence(t *testing.T) {
 	revision, personKey, _, _ := mustTraceRuleset(t)
 	ruleFired := &testEventCollector{}

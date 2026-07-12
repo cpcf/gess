@@ -78,6 +78,10 @@ Sessions have one logical owner. Unsupported graph shapes fail with
 `ErrUnsupportedRuntime`; they are never made to appear supported by a
 rule-local matcher or full reconciliation path.
 
+Event listeners execute synchronously under engine control. A listener may
+read immutable session metadata, but reentrant stateful operations fail fast
+with `ErrConcurrencyMisuse` and do not enter the during-run mutation queue.
+
 ## Verification harness
 
 `FuzzExecutableSemantics` in `internal/engine` derives template definitions,

@@ -75,6 +75,7 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "runActive", policy: forkReinitializedTransient, rationale: "no run is active while the child is constructed"},
 	{name: "runActivation", policy: forkReinitializedTransient, rationale: "no activation is executing in the child"},
 	{name: "runHaltRequested", policy: forkReinitializedTransient, rationale: "halt requests do not cross the fork boundary"},
+	{name: "listenerDispatchActive", policy: forkReinitializedTransient, rationale: "the child is not dispatching a parent listener callback"},
 	{name: "actionBindingScratch", policy: forkReinitializedTransient, rationale: "action evaluation scratch is never shared across sessions"},
 	{name: "actionValueScratch", policy: forkReinitializedTransient, rationale: "action value scratch starts empty"},
 	{name: "actionMatchScratch", policy: forkReinitializedTransient, rationale: "action match scratch starts empty"},

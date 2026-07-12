@@ -318,6 +318,13 @@ mutation delta. Event types:
 Listener errors are ignored: they never fail the mutation, and later
 listeners still run.
 
+Listener callbacks run synchronously while the engine is delivering the
+event. They may inspect the event and immutable session metadata such as
+`ID` and `RulesetID`, but must not call stateful session operations. Reentrant
+mutation, inspection, run, and close calls fail fast with
+`ErrConcurrencyMisuse`; in particular, a mutation callback during `Run` is not
+placed on the external mutation queue.
+
 ## Focus stack
 
 Rules live in modules; the focus stack decides which module's activations

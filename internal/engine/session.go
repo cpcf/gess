@@ -148,30 +148,31 @@ func WithMaxDemandCascadeSteps(n int) SessionOption {
 }
 
 type Session struct {
-	id                   SessionID
-	revision             *Ruleset
-	agendaDriver         sessionAgendaDriver
-	forkCount            uint64
-	propagation          sessionPropagationCoordinator
-	factStore            sessionFactStore
-	initials             []SessionInitialFact
-	globalValues         []Value
-	initialCount         int
-	compiledInitials     []compiledSessionInitialFact
-	resetBeforeSnapshot  bool
-	diagnostics          sessionDiagnosticsExporter
-	output               io.Writer
-	closed               bool
-	runGuard             chan struct{}
-	runActive            atomic.Bool
-	runActivation        atomic.Pointer[activation]
-	runHaltRequested     atomic.Bool
-	actionBindingScratch actionContextBindingState
-	actionValueScratch   []Value
-	actionMatchScratch   []conditionMatch
-	mutationQueueMu      sync.Mutex
-	mutationQueue        []queuedMutation
-	mu                   struct {
+	id                     SessionID
+	revision               *Ruleset
+	agendaDriver           sessionAgendaDriver
+	forkCount              uint64
+	propagation            sessionPropagationCoordinator
+	factStore              sessionFactStore
+	initials               []SessionInitialFact
+	globalValues           []Value
+	initialCount           int
+	compiledInitials       []compiledSessionInitialFact
+	resetBeforeSnapshot    bool
+	diagnostics            sessionDiagnosticsExporter
+	output                 io.Writer
+	closed                 bool
+	runGuard               chan struct{}
+	runActive              atomic.Bool
+	runActivation          atomic.Pointer[activation]
+	runHaltRequested       atomic.Bool
+	listenerDispatchActive atomic.Bool
+	actionBindingScratch   actionContextBindingState
+	actionValueScratch     []Value
+	actionMatchScratch     []conditionMatch
+	mutationQueueMu        sync.Mutex
+	mutationQueue          []queuedMutation
+	mu                     struct {
 		mutate chan struct{}
 		lock   chan struct{}
 	}
@@ -864,6 +865,13 @@ func (s *Session) Close() error {
 	if s == nil {
 		return ErrClosedSession
 	}
+	if s.listenerDispatchActive.Load() || s.runGuardHeld() {
+		return ErrConcurrencyMisuse
+	}
+	if !s.lock() {
+		return ErrConcurrencyMisuse
+	}
+	defer s.unlock()
 	s.closed = true
 	return nil
 }
@@ -6796,7 +6804,7 @@ func (s *Session) canMutateDuringRun(origin mutationOrigin) bool {
 }
 
 func (s *Session) shouldQueueMutationDuringRun(origin mutationOrigin) bool {
-	if s == nil || !origin.isZero() || !s.runGuardHeld() {
+	if s == nil || s.listenerDispatchActive.Load() || !origin.isZero() || !s.runGuardHeld() {
 		return false
 	}
 	return true
@@ -7409,6 +7417,8 @@ func (s *Session) emitEvent(ctx context.Context, event Event) {
 	if s == nil {
 		return
 	}
+	wasActive := s.listenerDispatchActive.Swap(true)
+	defer s.listenerDispatchActive.Store(wasActive)
 	s.diagnostics.emit(ctx, event)
 }
 
