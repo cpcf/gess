@@ -431,6 +431,19 @@ func mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t testing.TB,
 	return revision
 }
 
+func mustCompileMannersRulesetWithLateContextFindSeatingOrder(t testing.TB) *Ruleset {
+	t.Helper()
+	return mustCompileMannersRulesetWithProfile(t, &branchPlanningProfile{byRule: map[RuleID]map[string]float64{
+		RuleID("find-seating"): {
+			"seat": 1,
+			"g1":   1,
+			"g2":   1,
+			"ctx":  2,
+			"cnt":  3,
+		},
+	}})
+}
+
 func reorderMannersFindSeatingToLegacyOrder(t testing.TB, revision *Ruleset) {
 	t.Helper()
 	rule := revision.rules["find-seating"]

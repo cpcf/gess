@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -197,6 +199,375 @@ func BenchmarkMannersFindSeatingBranchOrdering(b *testing.B) {
 	}
 }
 
+func TestMannersFindSeatingLateContextSpike(t *testing.T) {
+	guests := mannersGuests(64)
+	initials := mannersInitialFacts(guests)
+	production := mustCompileMannersRuleset(t)
+	lateContext := mustCompileMannersRulesetWithLateContextFindSeatingOrder(t)
+
+	if got, want := findSeatingPlannedBindings(t, production), []string{"ctx", "seat", "g1", "g2", "blockedpath", "blockedchoice", "cnt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("production find-seating order = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingBetaKinds(t, production), []reteGraphBetaNodeKind{
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeResidualFilter,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeJoin,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("production find-seating beta chain = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingPlannedBindings(t, lateContext), []string{"seat", "g1", "g2", "blockedpath", "blockedchoice", "ctx", "cnt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("late-context find-seating order = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingBetaKinds(t, lateContext), []reteGraphBetaNodeKind{
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeResidualFilter,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("late-context find-seating beta chain = %#v, want %#v", got, want)
+	}
+	productionSlots := findSeatingBindingSlots(t, production)
+	lateContextSlots := findSeatingBindingSlots(t, lateContext)
+	if !reflect.DeepEqual(lateContextSlots, productionSlots) {
+		t.Fatalf("late-context binding slots = %#v, want production slots %#v", lateContextSlots, productionSlots)
+	}
+	if want := map[string]int{"ctx": 0, "seat": 1, "g1": 2, "g2": 3, "cnt": 4, "blockedpath": -1, "blockedchoice": -1}; !reflect.DeepEqual(lateContextSlots, want) {
+		t.Fatalf("late-context binding slots = %#v, want authored slots %#v", lateContextSlots, want)
+	}
+
+	productionRun := observeMannersBranchOrder(t, production, initials, guests)
+	lateContextRun := observeMannersBranchOrder(t, lateContext, initials, guests)
+	if productionRun.result.Fired != 2206 || lateContextRun.result.Fired != 2206 {
+		t.Fatalf("fired = (production %d, late-context %d), want (2206, 2206)", productionRun.result.Fired, lateContextRun.result.Fired)
+	}
+	if productionRun.result.Status != lateContextRun.result.Status {
+		t.Fatalf("run status = (production %v, late-context %v), want identical", productionRun.result.Status, lateContextRun.result.Status)
+	}
+	if productionRun.finalFacts != lateContextRun.finalFacts {
+		t.Fatal("late-context final fact multiset differs from production")
+	}
+	productionDepthTrace := traceMannersBranchOrderWithStrategy(t, production, initials, guests, StrategyDepth)
+	lateContextDepthTrace := traceMannersBranchOrderWithStrategy(t, lateContext, initials, guests, StrategyDepth)
+	depthTraceSame := reflect.DeepEqual(lateContextDepthTrace.firedTrace, productionDepthTrace.firedTrace)
+	depthRuleOrderSame := reflect.DeepEqual(ruleOrderFromFiredTrace(lateContextDepthTrace.firedTrace), ruleOrderFromFiredTrace(productionDepthTrace.firedTrace))
+	if !depthTraceSame {
+		index, productionEntry, lateContextEntry := firstFiredTraceDifference(productionDepthTrace.firedTrace, lateContextDepthTrace.firedTrace)
+		t.Logf("depth rule-fired activation trace differs at %d: production=%q late-context=%q", index, productionEntry, lateContextEntry)
+	}
+	if got, want := terminalModifyLifecycle(lateContextRun.lifecycle), terminalModifyLifecycle(productionRun.lifecycle); got != want {
+		t.Fatalf("late-context terminal/modify lifecycle = %+v, want production lifecycle %+v", got, want)
+	}
+	if lateContextRun.lifecycle.Totals.TokenRowsAllocated >= productionRun.lifecycle.Totals.TokenRowsAllocated {
+		t.Fatalf("late-context token rows = %d, want fewer than production %d", lateContextRun.lifecycle.Totals.TokenRowsAllocated, productionRun.lifecycle.Totals.TokenRowsAllocated)
+	}
+
+	logMannersBranchOrderObservation(t, "production", production, productionRun)
+	logMannersBranchOrderObservation(t, "late-context", lateContext, lateContextRun)
+
+	breadthGuests := mannersGuests(8)
+	breadthInitials := mannersInitialFacts(breadthGuests)
+	productionBreadth := traceMannersBranchOrderWithStrategy(t, production, breadthInitials, breadthGuests, StrategyBreadth)
+	lateContextBreadth := traceMannersBranchOrderWithStrategy(t, lateContext, breadthInitials, breadthGuests, StrategyBreadth)
+	breadthResultSame := productionBreadth.result == lateContextBreadth.result
+	breadthFactsSame := productionBreadth.finalFacts == lateContextBreadth.finalFacts
+	breadthTraceSame := reflect.DeepEqual(lateContextBreadth.firedTrace, productionBreadth.firedTrace)
+	breadthRuleOrderSame := reflect.DeepEqual(ruleOrderFromFiredTrace(lateContextBreadth.firedTrace), ruleOrderFromFiredTrace(productionBreadth.firedTrace))
+	if !breadthTraceSame {
+		index, productionEntry, lateContextEntry := firstFiredTraceDifference(productionBreadth.firedTrace, lateContextBreadth.firedTrace)
+		t.Logf("breadth rule-fired activation trace differs at %d: production=%q late-context=%q", index, productionEntry, lateContextEntry)
+	}
+	t.Logf(
+		"rule-fired trace comparison: depth firings=%d exact=%v rule-order=%v; breadth production/late firings=%d/%d result=%v facts=%v exact=%v rule-order=%v",
+		len(productionDepthTrace.firedTrace), depthTraceSame, depthRuleOrderSame,
+		len(productionBreadth.firedTrace), len(lateContextBreadth.firedTrace), breadthResultSame, breadthFactsSame, breadthTraceSame, breadthRuleOrderSame,
+	)
+}
+
+func BenchmarkMannersFindSeatingLateContextBranchOrdering(b *testing.B) {
+	for _, variant := range []struct {
+		name    string
+		compile func(testing.TB) *Ruleset
+	}{
+		{name: "production-default", compile: func(t testing.TB) *Ruleset { return mustCompileMannersRuleset(t) }},
+		{name: "late-context", compile: mustCompileMannersRulesetWithLateContextFindSeatingOrder},
+	} {
+		b.Run(variant.name, func(b *testing.B) {
+			benchmarkMannersLateContextBranchOrder(b, variant.compile(b))
+		})
+	}
+}
+
+func benchmarkMannersLateContextBranchOrder(b *testing.B, revision *Ruleset) {
+	b.Helper()
+	ctx := context.Background()
+	guests := mannersGuests(64)
+	initials := mannersInitialFacts(guests)
+	observation := observeMannersBranchOrder(b, revision, initials, guests)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	var result RunResult
+	for range b.N {
+		b.StopTimer()
+		session, err := NewSession(revision, WithInitialFacts(initials...))
+		if err != nil {
+			b.Fatalf("NewSession: %v", err)
+		}
+		b.StartTimer()
+		result, err = session.Run(ctx)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 2206 {
+			b.Fatalf("run result = (%v, %d), want (%v, 2206)", result.Status, result.Fired, RunCompleted)
+		}
+		validateMannersSolution(b, ctx, session, guests)
+	}
+	b.ReportMetric(float64(result.Fired), "fired/run")
+	reportMannersLifecycleMetrics(b, observation.lifecycle)
+	reportMannersRetainedMetrics(b, observation)
+}
+
+type mannersBranchOrderObservation struct {
+	result      RunResult
+	lifecycle   propagationCounterSnapshot
+	finalFacts  string
+	diagnostics reteGraphBetaMemoryDiagnostics
+	betaOwner   RuntimeMemoryOwnerDiagnostics
+}
+
+func observeMannersBranchOrder(t testing.TB, revision *Ruleset, initials []SessionInitialFact, guests []mannersGuest) mannersBranchOrderObservation {
+	t.Helper()
+	ctx := context.Background()
+	session, err := NewSession(revision, WithInitialFacts(initials...))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	session.attachPropagationCounters()
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+	}
+	validateMannersSolution(t, ctx, session, guests)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	runtimeDiagnostics, err := session.RuntimeDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RuntimeDiagnostics: %v", err)
+	}
+	var betaOwner RuntimeMemoryOwnerDiagnostics
+	for _, owner := range runtimeDiagnostics.MemoryOwners {
+		if owner.Owner == runtimeMemoryOwnerBeta {
+			betaOwner = owner
+			break
+		}
+	}
+	if betaOwner.Owner == "" {
+		t.Fatalf("runtime diagnostics missing beta owner: %#v", runtimeDiagnostics.MemoryOwners)
+	}
+	return mannersBranchOrderObservation{
+		result:      result,
+		lifecycle:   session.propagationCounterSnapshot(),
+		finalFacts:  canonicalMannersFactMultiset(snapshot),
+		diagnostics: session.propagation.runtime.graphBeta.diagnostics(),
+		betaOwner:   betaOwner,
+	}
+}
+
+type mannersBranchOrderTrace struct {
+	result     RunResult
+	finalFacts string
+	firedTrace []string
+}
+
+func traceMannersBranchOrderWithStrategy(t testing.TB, revision *Ruleset, initials []SessionInitialFact, guests []mannersGuest, strategy Strategy) mannersBranchOrderTrace {
+	t.Helper()
+	ctx := context.Background()
+	firedTrace := make([]string, 0, 2206)
+	listener := EventFunc(func(_ context.Context, event Event) error {
+		if event.Type == EventRuleFired {
+			firedTrace = append(firedTrace, fmt.Sprintf("%s|%s|%v", event.RuleID, event.ActivationID, event.FactIDs))
+		}
+		return nil
+	})
+	session, err := NewSession(
+		revision,
+		WithInitialFacts(initials...),
+		WithStrategy(strategy),
+		WithEventListener(listener, ForEventTypes(EventRuleFired)),
+	)
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	result, err := session.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status != RunCompleted {
+		t.Fatalf("run status = %v, want %v", result.Status, RunCompleted)
+	}
+	validateMannersSolution(t, ctx, session, guests)
+	snapshot, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	return mannersBranchOrderTrace{
+		result:     result,
+		finalFacts: canonicalMannersFactMultiset(snapshot),
+		firedTrace: firedTrace,
+	}
+}
+
+type mannersTerminalModifyLifecycle struct {
+	Asserts                      int
+	RHSAsserts                   int
+	AgendaDeltaApplications      int
+	ActivationsStored            int
+	TerminalDeltasEmitted        int
+	TerminalDeltasRemoved        int
+	NegativeTerminalRowsRemoved  int
+	TerminalRowsInserted         int
+	TerminalRowsDeduped          int
+	TerminalRowsRemoved          int
+	ModifyCascades               int
+	ModifyRawTerminalAdds        int
+	ModifyRawTerminalRemoves     int
+	ModifyKeptTerminalAdds       int
+	ModifyKeptTerminalRemoves    int
+	ModifyCoalescedPairs         int
+	ModifyDistinctTokenUpdates   int
+	ModifySameTokenCancellations int
+	TerminalRowsRetained         int
+}
+
+func terminalModifyLifecycle(snapshot propagationCounterSnapshot) mannersTerminalModifyLifecycle {
+	totals := snapshot.Totals
+	return mannersTerminalModifyLifecycle{
+		Asserts:                      totals.Asserts,
+		RHSAsserts:                   totals.RHSAsserts,
+		AgendaDeltaApplications:      totals.AgendaDeltaApplications,
+		ActivationsStored:            totals.ActivationsStored,
+		TerminalDeltasEmitted:        totals.TerminalDeltasEmitted,
+		TerminalDeltasRemoved:        totals.TerminalDeltasRemoved,
+		NegativeTerminalRowsRemoved:  totals.NegativeTerminalRowsRemoved,
+		TerminalRowsInserted:         totals.TerminalRowsInserted,
+		TerminalRowsDeduped:          totals.TerminalRowsDeduped,
+		TerminalRowsRemoved:          totals.TerminalRowsRemoved,
+		ModifyCascades:               totals.ModifyCascades,
+		ModifyRawTerminalAdds:        totals.ModifyRawTerminalAdds,
+		ModifyRawTerminalRemoves:     totals.ModifyRawTerminalRemoves,
+		ModifyKeptTerminalAdds:       totals.ModifyKeptTerminalAdds,
+		ModifyKeptTerminalRemoves:    totals.ModifyKeptTerminalRemoves,
+		ModifyCoalescedPairs:         totals.ModifyCoalescedPairs,
+		ModifyDistinctTokenUpdates:   totals.ModifyDistinctTokenUpdates,
+		ModifySameTokenCancellations: totals.ModifySameTokenCancellations,
+		TerminalRowsRetained:         snapshot.TerminalRowsRetained,
+	}
+}
+
+func canonicalMannersFactMultiset(snapshot Snapshot) string {
+	facts := snapshot.Facts()
+	encoded := make([]string, 0, len(facts))
+	for _, fact := range facts {
+		fields := fact.Fields()
+		names := make([]string, 0, len(fields))
+		for name := range fields {
+			names = append(names, name)
+		}
+		slices.Sort(names)
+		var out strings.Builder
+		fmt.Fprintf(&out, "%s|%s", fact.TemplateKey(), fact.Name())
+		for _, name := range names {
+			fmt.Fprintf(&out, "|%s=%s", name, fields[name].String())
+		}
+		encoded = append(encoded, out.String())
+	}
+	slices.Sort(encoded)
+	return strings.Join(encoded, "\n")
+}
+
+func ruleOrderFromFiredTrace(trace []string) []string {
+	out := make([]string, len(trace))
+	for i, entry := range trace {
+		out[i], _, _ = strings.Cut(entry, "|")
+	}
+	return out
+}
+
+func firstFiredTraceDifference(left, right []string) (int, string, string) {
+	limit := min(len(left), len(right))
+	for i := range limit {
+		if left[i] != right[i] {
+			return i, left[i], right[i]
+		}
+	}
+	if len(left) == len(right) {
+		return -1, "", ""
+	}
+	var leftEntry, rightEntry string
+	if limit < len(left) {
+		leftEntry = left[limit]
+	}
+	if limit < len(right) {
+		rightEntry = right[limit]
+	}
+	return limit, leftEntry, rightEntry
+}
+
+func reportMannersRetainedMetrics(b *testing.B, observation mannersBranchOrderObservation) {
+	b.Helper()
+	memory := observation.lifecycle.GraphBetaMemory
+	b.ReportMetric(float64(memory.TokenRows), "retained-beta-token-rows")
+	b.ReportMetric(float64(memory.TokenRowCapacity), "retained-beta-token-capacity")
+	b.ReportMetric(float64(memory.TokenRowReserve), "retained-beta-token-reserve")
+	b.ReportMetric(float64(memory.JoinIndexKeys), "retained-beta-join-index-keys")
+	b.ReportMetric(float64(memory.JoinIndexReserve), "retained-beta-join-index-reserve")
+	b.ReportMetric(float64(memory.IdentityIndexKeys), "retained-beta-identity-index-keys")
+	b.ReportMetric(float64(memory.IdentityIndexReserve), "retained-beta-identity-index-reserve")
+	b.ReportMetric(float64(memory.FactIndexKeys), "retained-beta-fact-index-keys")
+	b.ReportMetric(float64(memory.FactIndexReserve), "retained-beta-fact-index-reserve")
+	b.ReportMetric(float64(observation.betaOwner.Rows), "estimated-structural-beta-rows")
+	b.ReportMetric(float64(observation.betaOwner.Buckets), "estimated-structural-beta-buckets")
+	b.ReportMetric(float64(observation.betaOwner.Indexes), "estimated-structural-beta-indexes")
+	b.ReportMetric(float64(observation.betaOwner.Bytes), "estimated-structural-beta-bytes")
+	b.ReportMetric(float64(observation.betaOwner.HighWater), "estimated-structural-beta-high-water")
+	b.ReportMetric(float64(observation.diagnostics.MaxBetaRows), "max-beta-node-rows")
+	b.ReportMetric(float64(observation.diagnostics.MaxBetaJoinIndexKeys), "max-beta-node-join-index-keys")
+	b.ReportMetric(float64(observation.diagnostics.MaxBetaJoinBucketDepth), "max-beta-node-join-bucket-depth")
+}
+
+func logMannersBranchOrderObservation(t testing.TB, label string, revision *Ruleset, observation mannersBranchOrderObservation) {
+	t.Helper()
+	t.Logf("%s terminal/modify lifecycle: %+v", label, terminalModifyLifecycle(observation.lifecycle))
+	t.Logf("%s lifecycle totals: %+v", label, observation.lifecycle.Totals)
+	t.Logf("%s token rows by stage: %v", label, topPropagationStageCounts(observation.lifecycle.TokenRowsByStage, -1))
+	t.Logf("%s token rows by source: %v", label, topPropagationTokenRowSourceCounts(observation.lifecycle.TokenRowsBySource, -1))
+	t.Logf("%s retained beta stats: %+v", label, observation.lifecycle.GraphBetaMemory)
+	t.Logf("%s estimated structural beta owner (excludes token arena batches): %+v", label, observation.betaOwner)
+	diagnosticsByID := make(map[reteGraphBetaNodeID]reteGraphBetaNodeMemoryDiagnostics, len(observation.diagnostics.BetaNodes))
+	for _, diagnostic := range observation.diagnostics.BetaNodes {
+		diagnosticsByID[diagnostic.ID] = diagnostic
+	}
+	retained := make([]reteGraphBetaNodeMemoryDiagnostics, 0, 7)
+	for _, id := range findSeatingBetaNodeIDs(t, revision) {
+		retained = append(retained, diagnosticsByID[id])
+	}
+	t.Logf("%s find-seating retained beta nodes: %+v", label, retained)
+}
+
 func benchmarkMannersFindSeatingBranchOrder(b *testing.B, legacyCountBeforeNegations bool) {
 	b.Helper()
 	ctx := context.Background()
@@ -243,7 +614,37 @@ func findSeatingPlannedBindings(t testing.TB, revision *Ruleset) []string {
 	return nil
 }
 
+func findSeatingBindingSlots(t testing.TB, revision *Ruleset) map[string]int {
+	t.Helper()
+	for _, inspection := range revision.graph.branchInspections {
+		if inspection.RuleName != "find-seating" {
+			continue
+		}
+		slots := make(map[string]int, len(inspection.PlannedOrder))
+		for _, condition := range inspection.PlannedOrder {
+			slots[condition.Binding] = condition.BindingSlot
+		}
+		return slots
+	}
+	t.Fatal("find-seating branch inspection not found")
+	return nil
+}
+
 func findSeatingBetaKinds(t testing.TB, revision *Ruleset) []reteGraphBetaNodeKind {
+	t.Helper()
+	ids := findSeatingBetaNodeIDs(t, revision)
+	kinds := make([]reteGraphBetaNodeKind, len(ids))
+	for i, id := range ids {
+		node := revision.graph.betaNode(id)
+		if node == nil {
+			t.Fatalf("find-seating beta node %d not found", id)
+		}
+		kinds[i] = node.kind
+	}
+	return kinds
+}
+
+func findSeatingBetaNodeIDs(t testing.TB, revision *Ruleset) []reteGraphBetaNodeID {
 	t.Helper()
 	var terminalID reteGraphTerminalNodeID
 	for _, inspection := range revision.graph.branchInspections {
@@ -256,20 +657,21 @@ func findSeatingBetaKinds(t testing.TB, revision *Ruleset) []reteGraphBetaNodeKi
 		t.Fatalf("find-seating terminal = %d, want a valid terminal", terminalID)
 	}
 	stage := revision.graph.terminalNodes[int(terminalID)-1].input
-	reversed := make([]reteGraphBetaNodeKind, 0, 7)
+	reversed := make([]reteGraphBetaNodeID, 0, 7)
 	for stage.kind == reteGraphStageBeta {
-		node := revision.graph.betaNode(reteGraphBetaNodeID(stage.id))
+		id := reteGraphBetaNodeID(stage.id)
+		node := revision.graph.betaNode(id)
 		if node == nil {
 			t.Fatalf("find-seating beta node %d not found", stage.id)
 		}
-		reversed = append(reversed, node.kind)
+		reversed = append(reversed, id)
 		stage = node.left
 	}
-	kinds := make([]reteGraphBetaNodeKind, len(reversed))
+	ids := make([]reteGraphBetaNodeID, len(reversed))
 	for i := range reversed {
-		kinds[len(reversed)-1-i] = reversed[i]
+		ids[len(reversed)-1-i] = reversed[i]
 	}
-	return kinds
+	return ids
 }
 
 func benchmarkMannersPlanningVariant(b *testing.B, profile *branchPlanningProfile) {
