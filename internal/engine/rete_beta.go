@@ -188,6 +188,7 @@ type tokenIdentityKey = graphTokenIdentityKey
 
 type tokenArena struct {
 	counters     *propagationCounterLedger
+	allocStage   reteGraphStageRef
 	factRefs     []conditionFactRef
 	factRefIndex map[tokenFactRefKey]int
 	spare        []tokenRow
@@ -219,6 +220,7 @@ func (a *tokenArena) reset() {
 	a.spare = nil
 	a.count = 0
 	a.generation = 0
+	a.allocStage = reteGraphStageRef{}
 }
 
 func (a *tokenArena) add(parent tokenRef, entry bindingTupleEntry, match conditionMatch, recency Recency, generation Generation) tokenRef {
@@ -275,7 +277,7 @@ func (a *tokenArena) addCompactSource(parent tokenRef, source tokenRef, entry to
 func (a *tokenArena) allocRow() *tokenRow {
 	a.count++
 	if a.counters != nil {
-		a.counters.recordTokenRowAllocated()
+		a.counters.recordTokenRowAllocated(a.allocStage)
 	}
 	if len(a.spare) == 0 {
 		a.spare = make([]tokenRow, tokenRowAllocBatch)
@@ -283,6 +285,12 @@ func (a *tokenArena) allocRow() *tokenRow {
 	row := &a.spare[0]
 	a.spare = a.spare[1:]
 	return row
+}
+
+func (a *tokenArena) setAllocStage(stage reteGraphStageRef) reteGraphStageRef {
+	previous := a.allocStage
+	a.allocStage = stage
+	return previous
 }
 
 const tokenRowAllocBatch = 16

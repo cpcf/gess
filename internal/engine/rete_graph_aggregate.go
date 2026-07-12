@@ -26,7 +26,8 @@ func (m reteGraphAggregateMemory) insertInput(match conditionMatch, span *propag
 		}
 		return
 	}
-	token := m.owner.newTokenRef(tokenRef{}, m.node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), span)
+	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
+	token := m.owner.newTokenRef(stage, tokenRef{}, m.node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), span)
 	m.insertToken(token, span, delta)
 }
 
@@ -37,7 +38,8 @@ func (m reteGraphAggregateMemory) removeInput(match conditionMatch, counters *pr
 		}
 		return
 	}
-	token := m.owner.newTokenRef(tokenRef{}, m.node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), nil)
+	stage := reteGraphStageRef{kind: reteGraphStageAggregate, id: int(m.id)}
+	token := m.owner.newTokenRef(stage, tokenRef{}, m.node.inputEntry, match, match.fact.Recency(), match.fact.Generation(), nil)
 	m.removeToken(token, counters, delta)
 }
 

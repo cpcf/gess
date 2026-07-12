@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -48,7 +49,7 @@ func BenchmarkGessMannersSessionRun(b *testing.B) {
 			b.ReportMetric(float64(result.Fired), "fired/run")
 			b.ReportMetric(float64(guestCount), "guests")
 			if guestCount == 64 {
-				reportMannersLifecycleMetrics(b, lifecycle.Totals)
+				reportMannersLifecycleMetrics(b, lifecycle)
 			}
 		})
 	}
@@ -68,6 +69,30 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 		t.Fatalf("lifecycle snapshots differ:\nfirst:  %+v\nsecond: %+v", first.Totals, second.Totals)
 	}
 	totals := first.Totals
+	stageTotal := 0
+	for _, stage := range first.TokenRowsByStage {
+		if stage.Stage.kind == reteGraphStageUnknown {
+			t.Fatalf("token rows attributed to unknown stage: %d", stage.Count)
+		}
+		stageTotal += stage.Count
+	}
+	if got, want := totals.TokenRowsAllocated, 462165; got != want {
+		t.Fatalf("token rows allocated = %d, want %d", got, want)
+	}
+	if stageTotal != totals.TokenRowsAllocated {
+		t.Fatalf("token rows by stage = %d, want total allocated = %d", stageTotal, totals.TokenRowsAllocated)
+	}
+	wantTopStages := []propagationStageCount{
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 5}, Count: 145152},
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 7}, Count: 129024},
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 8}, Count: 86240},
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 9}, Count: 82271},
+		{Stage: reteGraphStageRef{kind: reteGraphStageAlpha, id: 6}, Count: 6240},
+	}
+	if got := topPropagationStageCounts(first.TokenRowsByStage, len(wantTopStages)); !reflect.DeepEqual(got, wantTopStages) {
+		t.Fatalf("top token allocation stages = %v, want %v", got, wantTopStages)
+	}
+	t.Logf("top token allocation stages: %v", topPropagationStageCounts(first.TokenRowsByStage, 8))
 	if got, want := totals.ModifyRawTerminalAdds, totals.ModifyKeptTerminalAdds+totals.ModifyCoalescedPairs; got != want {
 		t.Fatalf("raw terminal adds = %d, want kept adds + coalesced pairs = %d", got, want)
 	}
@@ -130,8 +155,9 @@ func collectMannersLifecycleCounters(t testing.TB, revision *Ruleset, initials [
 	return result, snapshot
 }
 
-func reportMannersLifecycleMetrics(b *testing.B, totals propagationCounterTotals) {
+func reportMannersLifecycleMetrics(b *testing.B, snapshot propagationCounterSnapshot) {
 	b.Helper()
+	totals := snapshot.Totals
 	b.ReportMetric(float64(totals.ModifyCascades), "modify-cascades/run")
 	b.ReportMetric(float64(totals.ModifyRawTerminalAdds), "raw-terminal-adds/run")
 	b.ReportMetric(float64(totals.ModifyRawTerminalRemoves), "raw-terminal-removes/run")
@@ -157,4 +183,41 @@ func reportMannersLifecycleMetrics(b *testing.B, totals propagationCounterTotals
 	b.ReportMetric(float64(totals.NegativeBlockerDecrements), "blocker-decrements/run")
 	b.ReportMetric(float64(totals.NegativeBlockerZeroToOne), "blocker-zero-to-one/run")
 	b.ReportMetric(float64(totals.NegativeBlockerOneToZero), "blocker-one-to-zero/run")
+	for _, stage := range topPropagationStageCounts(snapshot.TokenRowsByStage, 5) {
+		b.ReportMetric(float64(stage.Count), fmt.Sprintf("token-rows-%s-%d/run", propagationStageKindName(stage.Stage.kind), stage.Stage.id))
+	}
+}
+
+func topPropagationStageCounts(counts []propagationStageCount, limit int) []propagationStageCount {
+	top := slices.Clone(counts)
+	slices.SortFunc(top, func(a, b propagationStageCount) int {
+		if a.Count != b.Count {
+			return b.Count - a.Count
+		}
+		if a.Stage.kind != b.Stage.kind {
+			return int(a.Stage.kind) - int(b.Stage.kind)
+		}
+		return a.Stage.id - b.Stage.id
+	})
+	if limit >= 0 && len(top) > limit {
+		top = top[:limit]
+	}
+	return top
+}
+
+func propagationStageKindName(kind reteGraphStageKind) string {
+	switch kind {
+	case reteGraphStageRoot:
+		return "root"
+	case reteGraphStageAlpha:
+		return "alpha"
+	case reteGraphStageBeta:
+		return "beta"
+	case reteGraphStageAggregate:
+		return "aggregate"
+	case reteGraphStageUnion:
+		return "union"
+	default:
+		return "unknown"
+	}
 }

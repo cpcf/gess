@@ -281,6 +281,7 @@ type propagationCounterLedger struct {
 	unsupportedReasons   map[string]int
 	terminalRowsRetained int
 	graphBetaMemory      reteGraphBetaMemoryStats
+	tokenRowsByStage     map[reteGraphStageRef]int
 }
 
 type propagationCounterSpan struct {
@@ -301,6 +302,12 @@ type propagationCounterSnapshot struct {
 	ByBranch             map[propagationBranchKey]propagationCounterTotals
 	RuntimePath          propagationRuntimePath
 	UnsupportedReasons   map[string]int
+	TokenRowsByStage     []propagationStageCount
+}
+
+type propagationStageCount struct {
+	Stage reteGraphStageRef
+	Count int
 }
 
 func newPropagationCounterLedger() *propagationCounterLedger {
@@ -361,6 +368,18 @@ func (l *propagationCounterLedger) snapshot() propagationCounterSnapshot {
 		if totals != nil {
 			out.ByBranch[key] = *totals
 		}
+	}
+	if len(l.tokenRowsByStage) > 0 {
+		out.TokenRowsByStage = make([]propagationStageCount, 0, len(l.tokenRowsByStage))
+		for stage, count := range l.tokenRowsByStage {
+			out.TokenRowsByStage = append(out.TokenRowsByStage, propagationStageCount{Stage: stage, Count: count})
+		}
+		slices.SortFunc(out.TokenRowsByStage, func(a, b propagationStageCount) int {
+			if a.Stage.kind != b.Stage.kind {
+				return int(a.Stage.kind) - int(b.Stage.kind)
+			}
+			return a.Stage.id - b.Stage.id
+		})
 	}
 	return out
 }
@@ -738,10 +757,15 @@ func (l *propagationCounterLedger) recordBetaIdentityScanFallback(candidates int
 	l.totals.BetaIdentityScanCandidates += candidates
 }
 
-func (l *propagationCounterLedger) recordTokenRowAllocated() {
-	if l != nil {
-		l.totals.TokenRowsAllocated++
+func (l *propagationCounterLedger) recordTokenRowAllocated(stage reteGraphStageRef) {
+	if l == nil {
+		return
 	}
+	l.totals.TokenRowsAllocated++
+	if l.tokenRowsByStage == nil {
+		l.tokenRowsByStage = make(map[reteGraphStageRef]int)
+	}
+	l.tokenRowsByStage[stage]++
 }
 
 func (l *propagationCounterLedger) recordBetaRowRemoved() {

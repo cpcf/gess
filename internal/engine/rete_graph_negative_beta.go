@@ -311,7 +311,7 @@ func (m reteGraphNegativeBetaMemory) emitLeftAdd(row *negativeBetaLeftRow, span 
 		return false, nil
 	}
 	if row.output.isZero() {
-		row.output = m.owner.newNegativeOutputTokenRef(row.token, span)
+		row.output = m.owner.newNegativeOutputTokenRef(reteGraphStageRef{kind: reteGraphStageBeta, id: int(m.id)}, row.token, span)
 	}
 	if row.output.isZero() {
 		return false, nil
