@@ -81,6 +81,79 @@ func projectAgenda(agenda sess.Agenda) map[string]any {
 	}
 }
 
+func projectAssertResult(result sess.AssertResult) map[string]any {
+	out := mutationResult("assert", string(result.Status), result.Fact)
+	if result.DuplicateKey != "" {
+		out["duplicateKey"] = string(result.DuplicateKey)
+	}
+	return out
+}
+
+func projectModifyResult(result sess.ModifyResult) map[string]any {
+	return mutationResult("modify", string(result.Status), result.Fact)
+}
+
+func projectRetractResult(result sess.RetractResult) map[string]any {
+	return mutationResult("retract", string(result.Status), result.Fact)
+}
+
+func mutationResult(kind, status string, fact sess.FactSnapshot) map[string]any {
+	out := map[string]any{
+		"gessMcpSchema": mcpToolSchemaVersion,
+		"kind":          kind,
+		"status":        status,
+	}
+	if !fact.ID().IsZero() {
+		out["fact"] = projectFact(fact)
+	}
+	return out
+}
+
+func projectQueryRows(name string, rows []sess.QueryRow, limit int) map[string]any {
+	total := len(rows)
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	projected := make([]any, len(rows))
+	for i, row := range rows {
+		projected[i] = projectQueryRow(row)
+	}
+	return map[string]any{
+		"gessMcpSchema": mcpToolSchemaVersion,
+		"kind":          "query",
+		"name":          name,
+		"rows":          projected,
+		"rowCount":      len(projected),
+		"totalRows":     total,
+		"truncated":     total > len(projected),
+		"maxRows":       limit,
+	}
+}
+
+func projectQueryRow(row sess.QueryRow) map[string]any {
+	aliases := row.Aliases()
+	projectedAliases := append([]string(nil), aliases...)
+	facts := make(map[string]any)
+	values := make(map[string]any)
+	for _, alias := range aliases {
+		if fact, ok := row.Fact(alias); ok {
+			facts[alias] = projectFact(fact)
+			continue
+		}
+		if value, ok := row.Value(alias); ok {
+			values[alias] = projectValue(value)
+		}
+	}
+	out := map[string]any{"aliases": projectedAliases}
+	if len(facts) > 0 {
+		out["facts"] = facts
+	}
+	if len(values) > 0 {
+		out["values"] = values
+	}
+	return out
+}
+
 func projectValue(value rules.Value) any {
 	switch value.Kind() {
 	case rules.ValueNull:

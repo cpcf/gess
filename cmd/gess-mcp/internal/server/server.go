@@ -18,22 +18,31 @@ import (
 )
 
 const (
-	defaultExplainLogMaxEntries = 4096
-	mcpToolSchemaVersion        = 1
+	defaultExplainLogMaxEntries  = 4096
+	defaultMaxFirings            = 10_000
+	defaultMaxQueryRows          = 1_000
+	defaultMaxDemandCascadeSteps = 10_000
+	mcpToolSchemaVersion         = 1
 )
 
 type Config struct {
-	RulesetRoot          string
-	ExplainLogMaxEntries int
+	RulesetRoot           string
+	ExplainLogMaxEntries  int
+	MaxFirings            int
+	MaxQueryRows          int
+	MaxDemandCascadeSteps int
 }
 
 type Server struct {
-	mu                   sync.Mutex
-	rulesetRoot          string
-	explainLogMaxEntries int
-	ruleset              *rules.Ruleset
-	session              *sess.Session
-	mcp                  *mcp.Server
+	mu                    sync.Mutex
+	rulesetRoot           string
+	explainLogMaxEntries  int
+	maxFirings            int
+	maxQueryRows          int
+	maxDemandCascadeSteps int
+	ruleset               *rules.Ruleset
+	session               *sess.Session
+	mcp                   *mcp.Server
 }
 
 type loadInput struct {
@@ -48,6 +57,31 @@ type whyNotInput struct {
 	Rule string `json:"rule" jsonschema:"compiled rule name to diagnose"`
 }
 
+type assertInput struct {
+	Template string         `json:"template" jsonschema:"compiled template name"`
+	Fields   map[string]any `json:"fields,omitempty" jsonschema:"field values keyed by template slot name"`
+}
+
+type modifyInput struct {
+	FactID string         `json:"factId" jsonschema:"fact identity returned by snapshot"`
+	Set    map[string]any `json:"set,omitempty" jsonschema:"field values to set"`
+	Unset  []string       `json:"unset,omitempty" jsonschema:"field names to restore to their defaults"`
+}
+
+type retractInput struct {
+	FactID string `json:"factId" jsonschema:"fact identity returned by snapshot"`
+}
+
+type runInput struct {
+	MaxFirings int `json:"maxFirings,omitempty" jsonschema:"positive firing limit no greater than the server ceiling; omit to use the ceiling"`
+}
+
+type queryInput struct {
+	Name    string         `json:"name" jsonschema:"compiled query name"`
+	Args    map[string]any `json:"args,omitempty" jsonschema:"query arguments keyed by parameter name without the leading question mark"`
+	MaxRows int            `json:"maxRows,omitempty" jsonschema:"positive output row limit no greater than the server ceiling; omit to use the ceiling"`
+}
+
 func New(config Config) (*Server, error) {
 	root, err := canonicalRulesetRoot(config.RulesetRoot)
 	if err != nil {
@@ -59,9 +93,30 @@ func New(config Config) (*Server, error) {
 	if config.ExplainLogMaxEntries < 1 {
 		return nil, fmt.Errorf("explain log max entries must be positive")
 	}
+	if config.MaxFirings == 0 {
+		config.MaxFirings = defaultMaxFirings
+	}
+	if config.MaxQueryRows == 0 {
+		config.MaxQueryRows = defaultMaxQueryRows
+	}
+	if config.MaxDemandCascadeSteps == 0 {
+		config.MaxDemandCascadeSteps = defaultMaxDemandCascadeSteps
+	}
+	if config.MaxFirings < 1 {
+		return nil, fmt.Errorf("max firings must be positive")
+	}
+	if config.MaxQueryRows < 1 {
+		return nil, fmt.Errorf("max query rows must be positive")
+	}
+	if config.MaxDemandCascadeSteps < 1 {
+		return nil, fmt.Errorf("max demand cascade steps must be positive")
+	}
 	s := &Server{
-		rulesetRoot:          root,
-		explainLogMaxEntries: config.ExplainLogMaxEntries,
+		rulesetRoot:           root,
+		explainLogMaxEntries:  config.ExplainLogMaxEntries,
+		maxFirings:            config.MaxFirings,
+		maxQueryRows:          config.MaxQueryRows,
+		maxDemandCascadeSteps: config.MaxDemandCascadeSteps,
 	}
 	s.mcp = mcp.NewServer(
 		&mcp.Implementation{Name: "gess-mcp", Version: "0.1.0"},
@@ -114,6 +169,11 @@ func (s *Server) registerTools() {
 	mcp.AddTool[struct{}, any](s.mcp, readOnlyTool("diagnostics", "Inspect runtime diagnostics", "Return the versioned Gess runtime diagnostics document."), s.diagnostics)
 	mcp.AddTool[explainInput, any](s.mcp, readOnlyTool("explain", "Explain a fact", "Return the versioned derivation document for one fact identity."), s.explain)
 	mcp.AddTool[whyNotInput, any](s.mcp, readOnlyTool("why_not", "Diagnose a missing activation", "Return the versioned WhyNot document for one compiled rule."), s.whyNot)
+	mcp.AddTool[assertInput, any](s.mcp, statefulTool("assert", "Assert a fact", "Assert a fact into the live session.", false), s.assert)
+	mcp.AddTool[modifyInput, any](s.mcp, statefulTool("modify", "Modify a fact", "Set or unset fields on one live fact.", true), s.modify)
+	mcp.AddTool[retractInput, any](s.mcp, statefulTool("retract", "Retract a fact", "Remove stated support from one live fact.", true), s.retract)
+	mcp.AddTool[runInput, any](s.mcp, statefulTool("run", "Run pending activations", "Fire pending activations up to the server-enforced ceiling.", false), s.run)
+	mcp.AddTool[queryInput, any](s.mcp, statefulTool("query", "Run a query", "Run a compiled query and return a bounded row prefix. Backchain-reactive queries may persist proof facts.", false), s.query)
 }
 
 func readOnlyTool(name, title, description string) *mcp.Tool {
@@ -127,6 +187,22 @@ func readOnlyTool(name, title, description string) *mcp.Tool {
 			ReadOnlyHint:   true,
 			IdempotentHint: true,
 			OpenWorldHint:  &closedWorld,
+		},
+	}
+}
+
+func statefulTool(name, title, description string, idempotent bool) *mcp.Tool {
+	closedWorld := false
+	destructive := true
+	return &mcp.Tool{
+		Name:        name,
+		Title:       title,
+		Description: description,
+		Annotations: &mcp.ToolAnnotations{
+			Title:           title,
+			DestructiveHint: &destructive,
+			IdempotentHint:  idempotent,
+			OpenWorldHint:   &closedWorld,
 		},
 	}
 }
@@ -163,6 +239,7 @@ func (s *Server) load(ctx context.Context, _ *mcp.CallToolRequest, input loadInp
 		ruleset,
 		sess.WithInitialFacts(dsl.InitialFacts(doc)...),
 		sess.WithExplainLog(sess.WithExplainLogMaxEntries(s.explainLogMaxEntries)),
+		sess.WithMaxDemandCascadeSteps(s.maxDemandCascadeSteps),
 	)
 	if err != nil {
 		return nil, nil, err

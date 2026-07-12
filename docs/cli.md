@@ -136,7 +136,11 @@ the command exits nonzero.
 ## `gess-mcp`
 
 ```sh
-gess-mcp --ruleset-root <dir> [--explain-log-max-entries <n>]
+gess-mcp --ruleset-root <dir> \
+  [--explain-log-max-entries <n>] \
+  [--max-firings <n>] \
+  [--max-query-rows <n>] \
+  [--max-demand-cascade-steps <n>]
 ```
 
 `gess-mcp` is a stdio MCP server with one process-owned Gess session. Start it
@@ -146,7 +150,7 @@ root, rejects rulesets requiring host action or call registrations, and
 replaces the current session. Explain capture is always enabled and bounded;
 the default retains 4096 entries.
 
-The initial tool set is:
+The tool set is:
 
 - `load`: load one confined ruleset and its `deffacts`.
 - `snapshot`: inspect all live facts in deterministic insertion order.
@@ -154,11 +158,31 @@ The initial tool set is:
 - `diagnostics`: return the versioned runtime diagnostics document.
 - `explain`: return the versioned derivation document for a fact ID.
 - `why_not`: return the versioned WhyNot document for a rule.
+- `assert`: assert a fact from a template name and JSON field object.
+- `modify`: set or unset fields on a fact ID.
+- `retract`: remove stated support from a fact ID.
+- `run`: fire activations under a mandatory limit.
+- `query`: execute a compiled query and return a bounded row prefix.
 
-Custom load, snapshot, and agenda results carry `gessMcpSchema: 1` plus a
-`kind` discriminator. Diagnostics and explain tools return their existing
-versioned JSON contracts. MCP requests may be concurrent, but the command
-serializes all handlers around its single session.
+`--max-firings` is the ceiling for one `run` call (default 10000). A tool call
+may request a smaller positive `maxFirings` but cannot raise the ceiling. A
+`fire_limit` result is resumable by a later `run` call. `--max-query-rows`
+bounds rows returned to the client (default 1000); query results include
+`rowCount`, `totalRows`, and `truncated`. This is an output/payload bound:
+forward query matches are still materialized by the engine before the prefix is
+selected. `--max-demand-cascade-steps` bounds backchain demand generation
+(default 10000). Backchain-reactive queries are marked stateful because proof
+rules may persist derived facts.
+
+JSON numbers without a fractional part are treated as integers when converted
+to Gess values, including nested list/map values. This lets ordinary MCP JSON
+populate INTEGER fields and query parameters without a separate typed-value
+wrapper.
+
+Custom load, snapshot, agenda, mutation, run, and query results carry
+`gessMcpSchema: 1` plus a `kind` discriminator. Diagnostics and explain tools
+return their existing versioned JSON contracts. MCP requests may be concurrent,
+but the command serializes all handlers around its single session.
 
 For example, an MCP client configuration can launch:
 

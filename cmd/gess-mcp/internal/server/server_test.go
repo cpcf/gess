@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,17 @@ const testRuleset = `(deftemplate order
   (test (> ?amount 10))
   =>
   (emit ?id))
+
+(defquery all-orders
+  (order (id ?id) (amount ?amount))
+  (return
+    (id ?id)
+    (amount ?amount)))
+
+(defquery orders-at-amount
+  (declare (variables ?amount))
+  (order (id ?id) (amount ?amount))
+  (return (id ?id)))
 `
 
 func TestRulesetPathConfinement(t *testing.T) {
@@ -62,11 +74,56 @@ func TestRulesetPathConfinement(t *testing.T) {
 	}
 }
 
-func TestMCPReadOnlyInterrogation(t *testing.T) {
+func TestConfigRejectsNonPositiveBounds(t *testing.T) {
+	root := t.TempDir()
+	tests := []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{name: "explain log", config: Config{RulesetRoot: root, ExplainLogMaxEntries: -1}, want: "explain log max entries"},
+		{name: "firings", config: Config{RulesetRoot: root, MaxFirings: -1}, want: "max firings"},
+		{name: "query rows", config: Config{RulesetRoot: root, MaxQueryRows: -1}, want: "max query rows"},
+		{name: "demand cascade", config: Config{RulesetRoot: root, MaxDemandCascadeSteps: -1}, want: "max demand cascade steps"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := New(test.config); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("New error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeJSONValue(t *testing.T) {
+	got := normalizeJSONValue(map[string]any{
+		"integer":    float64(3),
+		"fractional": float64(3.5),
+		"tooLarge":   float64(math.MaxInt64),
+		"list":       []any{float64(4)},
+	}).(map[string]any)
+	if got["integer"] != int64(3) || got["fractional"] != float64(3.5) {
+		t.Fatalf("normalized scalars = %#v", got)
+	}
+	if _, ok := got["tooLarge"].(float64); !ok {
+		t.Fatalf("too-large integer normalized to %T, want float64", got["tooLarge"])
+	}
+	if list := got["list"].([]any); list[0] != int64(4) {
+		t.Fatalf("normalized list = %#v", list)
+	}
+}
+
+func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	writeTestFile(t, filepath.Join(root, "rules.gess"), testRuleset)
-	service, err := New(Config{RulesetRoot: root, ExplainLogMaxEntries: 32})
+	service, err := New(Config{
+		RulesetRoot:           root,
+		ExplainLogMaxEntries:  32,
+		MaxFirings:            2,
+		MaxQueryRows:          2,
+		MaxDemandCascadeSteps: 20,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -88,18 +145,26 @@ func TestMCPReadOnlyInterrogation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 6 {
-		t.Fatalf("tool count = %d, want 6", len(tools.Tools))
+	if len(tools.Tools) != 11 {
+		t.Fatalf("tool count = %d, want 11", len(tools.Tools))
 	}
+	readOnly := map[string]bool{"snapshot": true, "agenda": true, "diagnostics": true, "explain": true, "why_not": true}
+	idempotent := map[string]bool{"modify": true, "retract": true}
 	for _, tool := range tools.Tools {
-		if tool.Name == "load" {
-			if tool.Annotations == nil || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || tool.Annotations.IdempotentHint {
-				t.Fatalf("load safety annotations = %#v", tool.Annotations)
+		if tool.Annotations == nil {
+			t.Fatalf("tool %q has no safety annotations", tool.Name)
+		}
+		if readOnly[tool.Name] {
+			if !tool.Annotations.ReadOnlyHint {
+				t.Fatalf("tool %q is missing read-only annotation", tool.Name)
 			}
 			continue
 		}
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Fatalf("tool %q is missing read-only annotation", tool.Name)
+		if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint {
+			t.Fatalf("stateful tool %q annotations = %#v", tool.Name, tool.Annotations)
+		}
+		if tool.Annotations.IdempotentHint != idempotent[tool.Name] {
+			t.Fatalf("tool %q idempotent = %t, want %t", tool.Name, tool.Annotations.IdempotentHint, idempotent[tool.Name])
 		}
 	}
 
@@ -144,6 +209,9 @@ func TestMCPReadOnlyInterrogation(t *testing.T) {
 	if diagnostics["gessDiagnosticsSchema"] != float64(1) {
 		t.Fatalf("diagnostics schema = %#v, want 1", diagnostics["gessDiagnosticsSchema"])
 	}
+	if backchain := diagnostics["backchain"].(map[string]any); backchain["cascadeLimit"] != float64(20) {
+		t.Fatalf("diagnostics cascade limit = %#v, want 20", backchain["cascadeLimit"])
+	}
 
 	explain := toolObject(t, callTool(t, ctx, clientSession, "explain", map[string]any{"factId": factID}))
 	if explain["gessExplainSchema"] != float64(1) || explain["kind"] != "derivation" {
@@ -153,6 +221,89 @@ func TestMCPReadOnlyInterrogation(t *testing.T) {
 	whyNot := toolObject(t, callTool(t, ctx, clientSession, "why_not", map[string]any{"rule": "route-order"}))
 	if whyNot["gessExplainSchema"] != float64(1) || whyNot["kind"] != "whynot" {
 		t.Fatalf("why-not envelope = %#v", whyNot)
+	}
+	invalidAssert := callTool(t, ctx, clientSession, "assert", map[string]any{
+		"template": "order",
+		"fields":   map[string]any{"id": "BAD", "amount": "not-an-integer"},
+	})
+	if !invalidAssert.IsError {
+		t.Fatal("invalid assert did not return a tool error")
+	}
+	invalidOutput, ok := invalidAssert.StructuredContent.(map[string]any)
+	if !ok || invalidOutput["kind"] != "assert" || invalidOutput["status"] != "validation_failure" {
+		t.Fatalf("invalid assert structured result = %#v", invalidAssert.StructuredContent)
+	}
+
+	asserted := toolObject(t, callTool(t, ctx, clientSession, "assert", map[string]any{
+		"template": "order",
+		"fields":   map[string]any{"id": "O-200", "amount": 30},
+	}))
+	if asserted["kind"] != "assert" || asserted["status"] != "inserted" {
+		t.Fatalf("assert output = %#v", asserted)
+	}
+	assertedFact := asserted["fact"].(map[string]any)
+	assertedID := assertedFact["id"].(string)
+	assertedFields := assertedFact["fields"].(map[string]any)
+	if assertedFields["amount"] != float64(30) {
+		t.Fatalf("asserted amount = %#v, want 30", assertedFields["amount"])
+	}
+
+	overLimit := callTool(t, ctx, clientSession, "run", map[string]any{"maxFirings": 3})
+	if !overLimit.IsError || !strings.Contains(toolText(overLimit), "exceeds server ceiling 2") {
+		t.Fatalf("over-limit run = error %t content %q", overLimit.IsError, toolText(overLimit))
+	}
+	firstRun := toolObject(t, callTool(t, ctx, clientSession, "run", map[string]any{"maxFirings": 1}))
+	if firstRun["kind"] != "run" || firstRun["status"] != "fire_limit" || firstRun["fired"] != float64(1) || firstRun["maxFirings"] != float64(1) {
+		t.Fatalf("first bounded run = %#v", firstRun)
+	}
+	secondRun := toolObject(t, callTool(t, ctx, clientSession, "run", nil))
+	if secondRun["status"] != "completed" || secondRun["fired"] != float64(1) || secondRun["maxFirings"] != float64(2) {
+		t.Fatalf("second bounded run = %#v", secondRun)
+	}
+
+	modified := toolObject(t, callTool(t, ctx, clientSession, "modify", map[string]any{
+		"factId": assertedID,
+		"set":    map[string]any{"amount": 5},
+	}))
+	if modified["kind"] != "modify" || modified["status"] != "changed" {
+		t.Fatalf("modify output = %#v", modified)
+	}
+
+	third := toolObject(t, callTool(t, ctx, clientSession, "assert", map[string]any{
+		"template": "order",
+		"fields":   map[string]any{"id": "O-300", "amount": 40},
+	}))
+	if third["status"] != "inserted" {
+		t.Fatalf("third assert = %#v", third)
+	}
+
+	queryOverLimit := callTool(t, ctx, clientSession, "query", map[string]any{
+		"name": "all-orders", "maxRows": 3,
+	})
+	if !queryOverLimit.IsError || !strings.Contains(toolText(queryOverLimit), "exceeds server ceiling 2") {
+		t.Fatalf("over-limit query = error %t content %q", queryOverLimit.IsError, toolText(queryOverLimit))
+	}
+	query := toolObject(t, callTool(t, ctx, clientSession, "query", map[string]any{
+		"name": "all-orders", "maxRows": 1,
+	}))
+	if query["kind"] != "query" || query["rowCount"] != float64(1) || query["totalRows"] != float64(3) || query["truncated"] != true {
+		t.Fatalf("bounded query = %#v", query)
+	}
+	rows := query["rows"].([]any)
+	row := rows[0].(map[string]any)
+	if len(row["aliases"].([]any)) != 2 || row["values"] == nil {
+		t.Fatalf("query row = %#v", row)
+	}
+	parameterizedQuery := toolObject(t, callTool(t, ctx, clientSession, "query", map[string]any{
+		"name": "orders-at-amount", "args": map[string]any{"amount": 5},
+	}))
+	if parameterizedQuery["totalRows"] != float64(1) || parameterizedQuery["truncated"] != false {
+		t.Fatalf("parameterized query = %#v", parameterizedQuery)
+	}
+
+	retracted := toolObject(t, callTool(t, ctx, clientSession, "retract", map[string]any{"factId": assertedID}))
+	if retracted["kind"] != "retract" || retracted["status"] != "removed" {
+		t.Fatalf("retract output = %#v", retracted)
 	}
 
 	testConcurrentInspectionCalls(t, ctx, clientSession)
