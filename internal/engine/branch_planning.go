@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"sort"
 	"strings"
 )
@@ -356,7 +357,104 @@ func (ir branchPlanningIR) plannedNodes() []branchPlanningNode {
 		out = append(out, cloneBranchPlanningNode(node))
 	}
 	out = append(out, ir.planBranchPlanningSegment(segment, out)...)
+	return deferIndependentPayloadsPastNegations(out)
+}
+
+func deferIndependentPayloadsPastNegations(nodes []branchPlanningNode) []branchPlanningNode {
+	out := cloneBranchPlanningNodes(nodes)
+	for negationStart := 0; negationStart < len(out); {
+		if out[negationStart].barrier != branchPlanningBarrierNegation {
+			negationStart++
+			continue
+		}
+		negationEnd := negationStart + 1
+		for negationEnd < len(out) && out[negationEnd].barrier == branchPlanningBarrierNegation {
+			negationEnd++
+		}
+
+		payloadStart := negationStart
+		for payloadStart > 0 && branchPlanningPayloadCanCrossNegations(out, payloadStart-1, negationStart, negationEnd) {
+			payloadStart--
+		}
+		if payloadStart < negationStart {
+			region := cloneBranchPlanningNodes(out[payloadStart:negationEnd])
+			negationCount := negationEnd - negationStart
+			copy(out[payloadStart:payloadStart+negationCount], region[negationStart-payloadStart:])
+			copy(out[payloadStart+negationCount:negationEnd], region[:negationStart-payloadStart])
+		}
+		negationStart = negationEnd
+	}
 	return out
+}
+
+func branchPlanningPayloadCanCrossNegations(nodes []branchPlanningNode, candidateIndex, negationStart, negationEnd int) bool {
+	candidate := nodes[candidateIndex]
+	if !branchPlanningIndependentPayload(candidate) {
+		return false
+	}
+	for i, other := range nodes {
+		if i == candidateIndex {
+			continue
+		}
+		if branchPlanningBindingsIntersect(candidate.defines, other.dependsOn) {
+			return false
+		}
+	}
+
+	defined := branchPlanningDefinedBefore(nodes, candidateIndex)
+	if !branchPlanningDependenciesDefined(candidate.dependsOn, defined) {
+		return false
+	}
+	for i := negationStart; i < negationEnd; i++ {
+		if branchPlanningBindingsIntersect(candidate.defines, nodes[i].dependsOn) || !branchPlanningDependenciesDefined(nodes[i].dependsOn, defined) {
+			return false
+		}
+	}
+	return branchPlanningHasPositiveAnchor(nodes[:candidateIndex])
+}
+
+func branchPlanningIndependentPayload(node branchPlanningNode) bool {
+	return node.movable && node.barrier == branchPlanningBarrierNone && node.condition.visible && len(node.defines) > 0 &&
+		strings.TrimSpace(node.condition.spec.Binding) != internalQueryTriggerBinding
+}
+
+func branchPlanningDefinedBefore(nodes []branchPlanningNode, end int) map[string]struct{} {
+	defined := make(map[string]struct{})
+	for i := range end {
+		for _, binding := range nodes[i].defines {
+			defined[binding] = struct{}{}
+		}
+	}
+	return defined
+}
+
+func branchPlanningDependenciesDefined(dependencies []string, defined map[string]struct{}) bool {
+	for _, dependency := range dependencies {
+		if _, ok := defined[dependency]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func branchPlanningBindingsIntersect(left, right []string) bool {
+	for _, leftBinding := range left {
+		if slices.Contains(right, leftBinding) {
+			return true
+		}
+	}
+	return false
+}
+
+func branchPlanningHasPositiveAnchor(nodes []branchPlanningNode) bool {
+	for _, node := range nodes {
+		if node.condition.visible && len(node.defines) > 0 && !node.condition.negated && !node.condition.isTest && !node.condition.isAggregate &&
+			node.condition.higherOrder.kind == conditionHigherOrderUnknown &&
+			strings.TrimSpace(node.condition.spec.Binding) != internalQueryTriggerBinding {
+			return true
+		}
+	}
+	return false
 }
 
 func (ir branchPlanningIR) planBranchPlanningSegment(segment []branchPlanningNode, prior []branchPlanningNode) []branchPlanningNode {

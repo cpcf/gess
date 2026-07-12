@@ -76,7 +76,7 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 		}
 		stageTotal += stage.Count
 	}
-	if got, want := totals.TokenRowsAllocated, 462165; got != want {
+	if got, want := totals.TokenRowsAllocated, 331188; got != want {
 		t.Fatalf("token rows allocated = %d, want %d", got, want)
 	}
 	if stageTotal != totals.TokenRowsAllocated {
@@ -84,9 +84,9 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 	}
 	wantTopStages := []propagationStageCount{
 		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 5}, Count: 145152},
-		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 7}, Count: 129024},
-		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 8}, Count: 86240},
 		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 9}, Count: 82271},
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 7}, Count: 43120},
+		{Stage: reteGraphStageRef{kind: reteGraphStageBeta, id: 8}, Count: 41167},
 		{Stage: reteGraphStageRef{kind: reteGraphStageAlpha, id: 6}, Count: 6240},
 	}
 	if got := topPropagationStageCounts(first.TokenRowsByStage, len(wantTopStages)); !reflect.DeepEqual(got, wantTopStages) {
@@ -116,7 +116,7 @@ func TestManners64LifecycleCountersDeterministic(t *testing.T) {
 		got  int
 		want int
 	}{
-		{name: "holder hits", got: totals.BetaHolderHits, want: 137724},
+		{name: "holder hits", got: totals.BetaHolderHits, want: 114379},
 		{name: "multi-holder demotions", got: totals.BetaMultiHolderDemotions, want: 0},
 		{name: "index builds", got: totals.BetaIdentityIndexBuilds, want: 3},
 		{name: "index inserts", got: totals.BetaIdentityIndexInserts, want: 64702},

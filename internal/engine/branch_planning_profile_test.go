@@ -26,7 +26,7 @@ func TestBranchPlanningProfileRanksReadyConditions(t *testing.T) {
 	}
 }
 
-func TestBranchPlanningProfilePreservesDependenciesAndBarriers(t *testing.T) {
+func TestBranchPlanningProfilePreservesDependenciesAndSafelyCrossesNegation(t *testing.T) {
 	profile := &branchPlanningProfile{byRule: map[RuleID]map[string]float64{
 		RuleID("profiled-rule"): {
 			"root":        1,
@@ -48,7 +48,7 @@ func TestBranchPlanningProfilePreservesDependenciesAndBarriers(t *testing.T) {
 		{spec: RuleConditionSpec{Binding: "blocked", Target: DynamicFact("blocked")}, negated: true},
 	}, profile)
 
-	if got, want := conditionBindings(ir.normalizedConditions()), []string{"root", "dependent", "independent", "blocked"}; !reflect.DeepEqual(got, want) {
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"root", "blocked", "dependent", "independent"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("profiled dependency order = %#v, want %#v", got, want)
 	}
 }
@@ -111,7 +111,7 @@ func TestBranchPlanningProfileKeepsNegatedRuleIdentity(t *testing.T) {
 	if baseline.rules["profiled-negated-rule"].revisionID != profiled.rules["profiled-negated-rule"].revisionID {
 		t.Fatalf("negated rule revision changed with plan order: baseline=%q profiled=%q", baseline.rules["profiled-negated-rule"].revisionID, profiled.rules["profiled-negated-rule"].revisionID)
 	}
-	if got, want := conditionPlanBindings(profiled.rules["profiled-negated-rule"].executionConditionBranches()[0].plans), []string{"second", "first", "blocked"}; !reflect.DeepEqual(got, want) {
+	if got, want := conditionPlanBindings(profiled.rules["profiled-negated-rule"].executionConditionBranches()[0].plans), []string{"second", "blocked", "first"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("negated profiled execution order = %#v, want %#v", got, want)
 	}
 }
@@ -129,6 +129,147 @@ func BenchmarkProfileGuidedPlanningLossZones(b *testing.B) {
 	b.Run("steady-state/profiled", func(b *testing.B) {
 		benchmarkSteadyStatePlanningVariant(b, steadyStatePlanningProfile())
 	})
+}
+
+func TestMannersFindSeatingPlannerDefersCountPastNegations(t *testing.T) {
+	guests := mannersGuests(64)
+	initials := mannersInitialFacts(guests)
+	planned := mustCompileMannersRuleset(t)
+	legacy := mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, nil, true)
+
+	if got, want := findSeatingPlannedBindings(t, planned), []string{"ctx", "seat", "g1", "g2", "blockedpath", "blockedchoice", "cnt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned find-seating order = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingBetaKinds(t, planned), []reteGraphBetaNodeKind{
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeResidualFilter,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeJoin,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned find-seating beta chain = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingPlannedBindings(t, legacy), []string{"ctx", "seat", "g1", "g2", "cnt", "blockedpath", "blockedchoice"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy find-seating order = %#v, want %#v", got, want)
+	}
+	if got, want := findSeatingBetaKinds(t, legacy), []reteGraphBetaNodeKind{
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeResidualFilter,
+		reteGraphBetaNodeJoin,
+		reteGraphBetaNodeNot,
+		reteGraphBetaNodeNot,
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy find-seating beta chain = %#v, want %#v", got, want)
+	}
+	for _, plan := range planned.rules["find-seating"].executionConditionBranches()[0].plans {
+		t.Logf("plan binding=%q slot=%d negated=%v", plan.binding, plan.bindingSlot, plan.negated)
+	}
+
+	plannedResult, plannedLifecycle := collectMannersLifecycleCounters(t, planned, initials, guests)
+	legacyResult, legacyLifecycle := collectMannersLifecycleCounters(t, legacy, initials, guests)
+	if plannedResult.Fired != 2206 || legacyResult.Fired != 2206 {
+		t.Fatalf("fired = (planned %d, legacy %d), want (2206, 2206)", plannedResult.Fired, legacyResult.Fired)
+	}
+	if plannedResult.Status != legacyResult.Status {
+		t.Fatalf("run status = (planned %v, legacy %v), want identical", plannedResult.Status, legacyResult.Status)
+	}
+	t.Logf("planned lifecycle: %+v", plannedLifecycle.Totals)
+	t.Logf("planned token rows by stage: %v", topPropagationStageCounts(plannedLifecycle.TokenRowsByStage, 10))
+	t.Logf("legacy lifecycle: %+v", legacyLifecycle.Totals)
+	t.Logf("legacy token rows by stage: %v", topPropagationStageCounts(legacyLifecycle.TokenRowsByStage, 10))
+}
+
+func BenchmarkMannersFindSeatingBranchOrdering(b *testing.B) {
+	for _, variant := range []struct {
+		name                       string
+		legacyCountBeforeNegations bool
+	}{
+		{name: "legacy-count-before-negations", legacyCountBeforeNegations: true},
+		{name: "planned-default"},
+	} {
+		b.Run(variant.name, func(b *testing.B) {
+			benchmarkMannersFindSeatingBranchOrder(b, variant.legacyCountBeforeNegations)
+		})
+	}
+}
+
+func benchmarkMannersFindSeatingBranchOrder(b *testing.B, legacyCountBeforeNegations bool) {
+	b.Helper()
+	ctx := context.Background()
+	guests := mannersGuests(64)
+	initials := mannersInitialFacts(guests)
+	revision := mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(b, nil, legacyCountBeforeNegations)
+	result, lifecycle := collectMannersLifecycleCounters(b, revision, initials, guests)
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		b.StopTimer()
+		session, err := NewSession(revision, WithInitialFacts(initials...))
+		if err != nil {
+			b.Fatalf("NewSession: %v", err)
+		}
+		b.StartTimer()
+		result, err = session.Run(ctx)
+		b.StopTimer()
+		if err != nil {
+			b.Fatalf("Run: %v", err)
+		}
+		if result.Status != RunCompleted || result.Fired != 2206 {
+			b.Fatalf("run result = (%v, %d), want (%v, 2206)", result.Status, result.Fired, RunCompleted)
+		}
+		validateMannersSolution(b, ctx, session, guests)
+	}
+	b.ReportMetric(float64(result.Fired), "fired/run")
+	reportMannersLifecycleMetrics(b, lifecycle)
+}
+
+func findSeatingPlannedBindings(t testing.TB, revision *Ruleset) []string {
+	t.Helper()
+	for _, inspection := range revision.graph.branchInspections {
+		if inspection.RuleName == "find-seating" {
+			bindings := make([]string, len(inspection.PlannedOrder))
+			for i, condition := range inspection.PlannedOrder {
+				bindings[i] = condition.Binding
+			}
+			return bindings
+		}
+	}
+	t.Fatal("find-seating branch inspection not found")
+	return nil
+}
+
+func findSeatingBetaKinds(t testing.TB, revision *Ruleset) []reteGraphBetaNodeKind {
+	t.Helper()
+	var terminalID reteGraphTerminalNodeID
+	for _, inspection := range revision.graph.branchInspections {
+		if inspection.RuleName == "find-seating" {
+			terminalID = inspection.TerminalID
+			break
+		}
+	}
+	if terminalID == 0 || int(terminalID) > len(revision.graph.terminalNodes) {
+		t.Fatalf("find-seating terminal = %d, want a valid terminal", terminalID)
+	}
+	stage := revision.graph.terminalNodes[int(terminalID)-1].input
+	reversed := make([]reteGraphBetaNodeKind, 0, 7)
+	for stage.kind == reteGraphStageBeta {
+		node := revision.graph.betaNode(reteGraphBetaNodeID(stage.id))
+		if node == nil {
+			t.Fatalf("find-seating beta node %d not found", stage.id)
+		}
+		reversed = append(reversed, node.kind)
+		stage = node.left
+	}
+	kinds := make([]reteGraphBetaNodeKind, len(reversed))
+	for i := range reversed {
+		kinds[len(reversed)-1-i] = reversed[i]
+	}
+	return kinds
 }
 
 func benchmarkMannersPlanningVariant(b *testing.B, profile *branchPlanningProfile) {

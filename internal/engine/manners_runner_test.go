@@ -46,10 +46,14 @@ func mannersGuests(count int) []mannersGuest {
 }
 
 func mustCompileMannersRuleset(t testing.TB) *Ruleset {
-	return mustCompileMannersRulesetWithProfile(t, nil)
+	return mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, nil, false)
 }
 
 func mustCompileMannersRulesetWithProfile(t testing.TB, profile *branchPlanningProfile) *Ruleset {
+	return mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t, profile, false)
+}
+
+func mustCompileMannersRulesetWithProfileAndLegacyFindSeatingOrder(t testing.TB, profile *branchPlanningProfile, legacyCountBeforeNegations bool) *Ruleset {
 	t.Helper()
 
 	workspace := NewWorkspace()
@@ -420,7 +424,46 @@ func mustCompileMannersRulesetWithProfile(t testing.TB, profile *branchPlanningP
 		Actions: []RuleActionSpec{{Name: "manners-continue"}},
 	})
 
-	return mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
+	revision := mustCompileWorkspaceWithBranchPlanningProfile(t, workspace, profile)
+	if legacyCountBeforeNegations {
+		reorderMannersFindSeatingToLegacyOrder(t, revision)
+	}
+	return revision
+}
+
+func reorderMannersFindSeatingToLegacyOrder(t testing.TB, revision *Ruleset) {
+	t.Helper()
+	rule := revision.rules["find-seating"]
+	if len(rule.conditionBranches) != 1 {
+		t.Fatalf("find-seating condition branches = %d, want 1", len(rule.conditionBranches))
+	}
+	plansByBinding := make(map[string]compiledConditionPlan, len(rule.conditionBranches[0].plans))
+	for _, plan := range rule.conditionBranches[0].plans {
+		plansByBinding[plan.binding] = plan
+	}
+	bindings := []string{"ctx", "seat", "g1", "g2", "cnt", "blockedpath", "blockedchoice"}
+	plans := make([]compiledConditionPlan, len(bindings))
+	for i, binding := range bindings {
+		plan, ok := plansByBinding[binding]
+		if !ok {
+			t.Fatalf("find-seating plan binding %q not found", binding)
+		}
+		plans[i] = plan
+	}
+	rule.conditionBranches[0].plans = plans
+	revision.rules[rule.name] = rule
+	revision.rulesByID[rule.id] = rule
+	revision.rulesByRevisionID[rule.revisionID] = rule
+
+	compiledRules := make([]compiledRule, 0, len(revision.ruleOrder))
+	for _, name := range revision.ruleOrder {
+		compiledRules = append(compiledRules, revision.rules[name])
+	}
+	compiledQueries := make([]compiledQuery, 0, len(revision.queryOrder))
+	for _, name := range revision.queryOrder {
+		compiledQueries = append(compiledQueries, revision.queries[name])
+	}
+	revision.graph = compileReteGraph(compiledRules, compiledQueries, revision.templatesByKey)
 }
 
 func mannersInitialFacts(guests []mannersGuest) []SessionInitialFact {

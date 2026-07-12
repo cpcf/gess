@@ -216,6 +216,109 @@ func TestBranchPlanningIRPrefersStrongerJoinToCurrentToken(t *testing.T) {
 	}
 }
 
+func TestBranchPlanningIRDefersIndependentPayloadPastConsecutiveNegations(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		branchPlanningMatch("anchor", "anchor"),
+		branchPlanningJoinedMatch("payload", "payload", "anchor"),
+		branchPlanningNegation("first-blocker", "anchor"),
+		branchPlanningNegation("second-blocker", "anchor"),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"anchor", "first-blocker", "second-blocker", "payload"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRKeepsPayloadBeforeDependentNegation(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		branchPlanningMatch("anchor", "anchor"),
+		branchPlanningJoinedMatch("payload", "payload", "anchor"),
+		branchPlanningNegation("blocker", "payload"),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"anchor", "payload", "blocker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRKeepsPayloadConsumedByLaterCondition(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		branchPlanningMatch("anchor", "anchor"),
+		branchPlanningJoinedMatch("payload", "payload", "anchor"),
+		branchPlanningNegation("blocker", "anchor"),
+		branchPlanningJoinedMatch("consumer", "consumer", "payload"),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"anchor", "payload", "blocker", "consumer"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRRetainsPositiveAnchorBeforeNegation(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		branchPlanningMatch("anchor", "anchor"),
+		branchPlanningMatch("payload", "payload"),
+		branchPlanningNegation("blocker", ""),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"anchor", "blocker", "payload"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRDoesNotUseInvisiblePositiveAsNegationAnchor(t *testing.T) {
+	hidden := branchPlanningMatch("hidden", "hidden")
+	hidden.visible = false
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		hidden,
+		branchPlanningMatch("payload", "payload"),
+		branchPlanningNegation("blocker", ""),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"hidden", "payload", "blocker"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRPreservesDeferredPayloadOrder(t *testing.T) {
+	ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+		branchPlanningMatch("anchor", "anchor"),
+		branchPlanningJoinedMatch("first-payload", "first-payload", "anchor"),
+		branchPlanningJoinedMatch("second-payload", "second-payload", "anchor"),
+		branchPlanningNegation("blocker", "anchor"),
+	})
+
+	if got, want := conditionBindings(ir.normalizedConditions()), []string{"anchor", "blocker", "first-payload", "second-payload"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("planned bindings = %#v, want %#v", got, want)
+	}
+}
+
+func TestBranchPlanningIRDoesNotCrossPinnedConditions(t *testing.T) {
+	tests := []struct {
+		name   string
+		pinned normalizedRuleCondition
+	}{
+		{name: "test", pinned: normalizedRuleCondition{isTest: true, test: ConstExpr{Value: true}}},
+		{name: "aggregate", pinned: normalizedRuleCondition{isAggregate: true, aggregate: Accumulate(Match{Binding: "item", Target: DynamicFact("item")}, Count().As("count")), visible: true}},
+		{name: "higher-order", pinned: normalizedRuleCondition{higherOrder: compiledHigherOrderConditionSpec{kind: conditionHigherOrderExists, input: Match{Binding: "item", Target: DynamicFact("item")}}}},
+		{name: "query-trigger", pinned: branchPlanningMatch(internalQueryTriggerBinding, "query-trigger")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ir := newReorderedBranchPlanningIR(0, []normalizedRuleCondition{
+				branchPlanningMatch("anchor", "anchor"),
+				branchPlanningJoinedMatch("payload", "payload", "anchor"),
+				tt.pinned,
+				branchPlanningNegation("blocker", "anchor"),
+			})
+
+			if got := conditionBindings(ir.normalizedConditions()); got[1] != "payload" {
+				t.Fatalf("planned bindings = %#v, want payload retained before pinned condition", got)
+			}
+		})
+	}
+}
+
 func TestBranchPlanningIRPreservesJoinsWithoutReordering(t *testing.T) {
 	ir := newBranchPlanningIR(0, []normalizedRuleCondition{
 		{
@@ -403,4 +506,32 @@ func conditionBindings(conditions []normalizedRuleCondition) []string {
 		out[i] = condition.spec.Binding
 	}
 	return out
+}
+
+func branchPlanningMatch(binding, target string) normalizedRuleCondition {
+	return normalizedRuleCondition{
+		spec:    RuleConditionSpec{Binding: binding, Target: DynamicFact(target)},
+		visible: true,
+	}
+}
+
+func branchPlanningJoinedMatch(binding, target, dependency string) normalizedRuleCondition {
+	condition := branchPlanningMatch(binding, target)
+	condition.spec.JoinConstraints = []JoinConstraintSpec{{
+		Field: "key", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: dependency, Field: "key"},
+	}}
+	return condition
+}
+
+func branchPlanningNegation(binding, dependency string) normalizedRuleCondition {
+	condition := normalizedRuleCondition{
+		spec:    RuleConditionSpec{Binding: binding, Target: DynamicFact(binding)},
+		negated: true,
+	}
+	if dependency != "" {
+		condition.spec.JoinConstraints = []JoinConstraintSpec{{
+			Field: "key", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: dependency, Field: "key"},
+		}}
+	}
+	return condition
 }
