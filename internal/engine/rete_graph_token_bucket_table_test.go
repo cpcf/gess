@@ -80,6 +80,71 @@ func TestBetaJoinBucketTableRecordsIdentityScanCandidates(t *testing.T) {
 	}
 }
 
+func TestBetaJoinBucketTableIdentityBucketsInlineAndReuseOverflow(t *testing.T) {
+	arena := newTokenArena()
+	token := testBetaBucketToken(t, arena, 1)
+
+	var table betaJoinBucketTable
+	refs := make([]int32, 4)
+	for i := range refs {
+		var ok bool
+		refs[i], ok = table.insert(betaTokenRow{token: token})
+		if !ok {
+			t.Fatalf("insert %d returned false", i)
+		}
+	}
+	table.ensureIdentityIndex(nil)
+	state := token.identityState()
+	bucket := table.byIdentity[state]
+	if got, want := bucket.len(), 4; got != want {
+		t.Fatalf("identity bucket length = %d, want %d", got, want)
+	}
+	if bucket.first == 0 || bucket.second == 0 || len(bucket.overflow) != 2 {
+		t.Fatalf("identity bucket = %+v, want two inline refs and two overflow refs", bucket)
+	}
+
+	if !table.unlink(refs[0]) || !table.unlink(refs[1]) {
+		t.Fatal("unlink inline refs returned false")
+	}
+	bucket = table.byIdentity[state]
+	if got, want := bucket.len(), 2; got != want {
+		t.Fatalf("identity bucket length after demotion = %d, want %d", got, want)
+	}
+	if bucket.first == 0 || bucket.second == 0 || bucket.overflow != nil {
+		t.Fatalf("identity bucket after demotion = %+v, want two inline refs", bucket)
+	}
+	if got, want := len(table.identityOverflowPool), 1; got != want {
+		t.Fatalf("overflow pool length = %d, want %d", got, want)
+	}
+
+	overflowRef, ok := table.insert(betaTokenRow{token: token})
+	if !ok {
+		t.Fatal("overflow reuse insert returned false")
+	}
+	bucket = table.byIdentity[state]
+	if got, want := bucket.len(), 3; got != want {
+		t.Fatalf("identity bucket length after reuse = %d, want %d", got, want)
+	}
+	if len(bucket.overflow) != 1 || len(table.identityOverflowPool) != 0 {
+		t.Fatalf("overflow length = %d, pool length = %d, want 1 and 0", len(bucket.overflow), len(table.identityOverflowPool))
+	}
+	if !table.unlink(overflowRef) {
+		t.Fatal("overflow unlink returned false")
+	}
+	bucket = table.byIdentity[state]
+	if bucket.overflow != nil || len(table.identityOverflowPool) != 1 {
+		t.Fatalf("overflow after direct removal = %v, pool length = %d, want nil and 1", bucket.overflow, len(table.identityOverflowPool))
+	}
+
+	table.clear()
+	if table.byIdentity != nil {
+		t.Fatal("identity index retained after clear")
+	}
+	if got, want := len(table.identityOverflowPool), 1; got != want {
+		t.Fatalf("overflow pool length after clear = %d, want %d", got, want)
+	}
+}
+
 func testBetaBucketToken(t testing.TB, arena *tokenArena, sequence uint64) tokenRef {
 	t.Helper()
 	fact := FactSnapshot{id: newFactID(1, sequence), version: 1, recency: Recency(sequence), generation: 1}

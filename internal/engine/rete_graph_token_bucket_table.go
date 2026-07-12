@@ -12,17 +12,35 @@ const (
 // byIdentity indexes live rows by token identity hash; it is built on the
 // first token removal so insert-only memories never pay for it.
 type betaJoinBucketTable struct {
-	heads      []int32
-	tails      []int32
-	rows       []betaTokenRow
-	next       []int32
-	prev       []int32
-	byIdentity map[uint64][]int32
-	freeHead   int32
-	touched    []int
-	slotCount  int
-	rowCount   int
-	id         uint32
+	heads                []int32
+	tails                []int32
+	rows                 []betaTokenRow
+	next                 []int32
+	prev                 []int32
+	byIdentity           map[uint64]betaIdentityBucket
+	identityOverflowPool [][]int32
+	freeHead             int32
+	touched              []int
+	slotCount            int
+	rowCount             int
+	id                   uint32
+}
+
+type betaIdentityBucket struct {
+	first    int32
+	second   int32
+	overflow []int32
+}
+
+func (b betaIdentityBucket) len() int {
+	count := len(b.overflow)
+	if b.first != 0 {
+		count++
+	}
+	if b.second != 0 {
+		count++
+	}
+	return count
 }
 
 func (t *betaJoinBucketTable) holderID() uint32 {
@@ -36,14 +54,14 @@ func (t *betaJoinBucketTable) ensureIdentityIndex(counters *propagationCounterLe
 	if t.byIdentity != nil {
 		return
 	}
-	t.byIdentity = make(map[uint64][]int32, t.rowCount)
+	t.byIdentity = make(map[uint64]betaIdentityBucket, t.rowCount)
 	inserts := 0
 	for i := range t.rows {
 		if t.rows[i].token.isZero() {
 			continue
 		}
 		state := t.rows[i].token.identityState()
-		t.byIdentity[state] = append(t.byIdentity[state], int32(i+1))
+		t.addIdentityRef(state, int32(i+1))
 		inserts++
 	}
 	if counters != nil {
@@ -56,7 +74,7 @@ func (t *betaJoinBucketTable) indexIdentity(ref int32) {
 		return
 	}
 	state := t.rows[ref-1].token.identityState()
-	t.byIdentity[state] = append(t.byIdentity[state], ref)
+	t.addIdentityRef(state, ref)
 	if counters := t.rows[ref-1].token.propagationCounters(); counters != nil {
 		counters.recordBetaIdentityIndexInsert()
 	}
@@ -67,20 +85,83 @@ func (t *betaJoinBucketTable) unindexIdentity(ref int32) {
 		return
 	}
 	state := t.rows[ref-1].token.identityState()
-	refs := t.byIdentity[state]
-	for i, existing := range refs {
-		if existing != ref {
-			continue
-		}
-		refs[i] = refs[len(refs)-1]
-		refs = refs[:len(refs)-1]
-		if len(refs) == 0 {
-			delete(t.byIdentity, state)
-		} else {
-			t.byIdentity[state] = refs
-		}
+	bucket, ok := t.byIdentity[state]
+	if !ok {
 		return
 	}
+	if bucket.first == ref {
+		bucket.first = bucket.second
+		bucket.second = 0
+		bucket.promoteOverflow(t)
+	} else if bucket.second == ref {
+		bucket.second = 0
+		bucket.promoteOverflow(t)
+	} else {
+		for i, existing := range bucket.overflow {
+			if existing != ref {
+				continue
+			}
+			last := len(bucket.overflow) - 1
+			bucket.overflow[i] = bucket.overflow[last]
+			bucket.overflow = bucket.overflow[:last]
+			break
+		}
+		if bucket.overflow != nil && len(bucket.overflow) == 0 {
+			t.releaseIdentityOverflow(bucket.overflow)
+			bucket.overflow = nil
+		}
+	}
+	if bucket.first == 0 {
+		t.releaseIdentityOverflow(bucket.overflow)
+		delete(t.byIdentity, state)
+		return
+	}
+	t.byIdentity[state] = bucket
+}
+
+func (t *betaJoinBucketTable) addIdentityRef(state uint64, ref int32) {
+	bucket := t.byIdentity[state]
+	if bucket.first == 0 {
+		bucket.first = ref
+	} else if bucket.second == 0 {
+		bucket.second = ref
+	} else {
+		if bucket.overflow == nil {
+			bucket.overflow = t.takeIdentityOverflow()
+		}
+		bucket.overflow = append(bucket.overflow, ref)
+	}
+	t.byIdentity[state] = bucket
+}
+
+func (b *betaIdentityBucket) promoteOverflow(t *betaJoinBucketTable) {
+	if len(b.overflow) == 0 {
+		return
+	}
+	last := len(b.overflow) - 1
+	b.second = b.overflow[last]
+	b.overflow = b.overflow[:last]
+	if len(b.overflow) == 0 {
+		t.releaseIdentityOverflow(b.overflow)
+		b.overflow = nil
+	}
+}
+
+func (t *betaJoinBucketTable) takeIdentityOverflow() []int32 {
+	last := len(t.identityOverflowPool) - 1
+	if last < 0 {
+		return make([]int32, 0, 2)
+	}
+	overflow := t.identityOverflowPool[last]
+	t.identityOverflowPool = t.identityOverflowPool[:last]
+	return overflow[:0]
+}
+
+func (t *betaJoinBucketTable) releaseIdentityOverflow(overflow []int32) {
+	if cap(overflow) == 0 {
+		return
+	}
+	t.identityOverflowPool = append(t.identityOverflowPool, overflow[:0])
 }
 
 // removeIdentityToken unlinks the first row structurally equal to token,
@@ -112,27 +193,41 @@ func (t *betaJoinBucketTable) removeIdentityToken(token tokenRef, filter func(*b
 		}
 	}
 	t.ensureIdentityIndex(counters)
-	refs := t.byIdentity[token.identityState()]
+	bucket := t.byIdentity[token.identityState()]
 	if counters != nil {
-		counters.recordBetaIdentityIndexProbe(len(refs))
+		counters.recordBetaIdentityIndexProbe(bucket.len())
 	}
-	for _, ref := range refs {
+	removeRef := func(ref int32) (betaTokenRow, bool) {
+		if ref == 0 {
+			return betaTokenRow{}, false
+		}
 		row := &t.rows[ref-1]
 		if row.token.isZero() {
-			continue
+			return betaTokenRow{}, false
 		}
 		if onTouch != nil {
 			onTouch()
 		}
 		if !tokenRefEqual(row.token, token) {
-			continue
+			return betaTokenRow{}, false
 		}
 		if filter != nil && !filter(row) {
-			continue
+			return betaTokenRow{}, false
 		}
 		removed := *row
 		t.unlink(ref)
 		return removed, true
+	}
+	if removed, ok := removeRef(bucket.first); ok {
+		return removed, true
+	}
+	if removed, ok := removeRef(bucket.second); ok {
+		return removed, true
+	}
+	for _, ref := range bucket.overflow {
+		if removed, ok := removeRef(ref); ok {
+			return removed, true
+		}
 	}
 	return betaTokenRow{}, false
 }
@@ -324,6 +419,9 @@ func (t *betaJoinBucketTable) clear() {
 	t.rows = t.rows[:0]
 	t.next = t.next[:0]
 	t.prev = t.prev[:0]
+	for _, bucket := range t.byIdentity {
+		t.releaseIdentityOverflow(bucket.overflow)
+	}
 	t.byIdentity = nil
 	t.freeHead = 0
 	t.slotCount = 0
