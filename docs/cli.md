@@ -1,8 +1,9 @@
 # Command-line tools
 
-Gess ships three commands. The `gess` command runs the interactive REPL,
-`gessc` compiles `.gess` files to Go, and `gessfmt` formats `.gess` files.
-All three live under `cmd/` and run
+Gess ships four commands. The `gess` command runs the interactive REPL,
+`gessc` compiles `.gess` files to Go, `gessfmt` formats `.gess` files, and
+`gess-mcp` exposes a bounded agent-facing MCP server. All four live under
+`cmd/` and run
 with `go run` from the module root. When a standalone binary is more
 convenient, install them:
 
@@ -10,6 +11,7 @@ convenient, install them:
 go install github.com/cpcf/gess/cmd/gess@latest
 go install github.com/cpcf/gess/cmd/gessc@latest
 go install github.com/cpcf/gess/cmd/gessfmt@latest
+go install github.com/cpcf/gess/cmd/gess-mcp@latest
 ```
 
 ## `gess repl`
@@ -130,6 +132,42 @@ go run ./cmd/gessfmt -w examples/gess-files/order_routing/rules.gess
 
 Files that fail to parse are reported with `file:line:column` positions and
 the command exits nonzero.
+
+## `gess-mcp`
+
+```sh
+gess-mcp --ruleset-root <dir> [--explain-log-max-entries <n>]
+```
+
+`gess-mcp` is a stdio MCP server with one process-owned Gess session. Start it
+with a required root containing vetted `.gess` files. The `load` tool accepts
+only regular `.gess` files whose symlink-resolved path remains inside that
+root, rejects rulesets requiring host action or call registrations, and
+replaces the current session. Explain capture is always enabled and bounded;
+the default retains 4096 entries.
+
+The initial tool set is:
+
+- `load`: load one confined ruleset and its `deffacts`.
+- `snapshot`: inspect all live facts in deterministic insertion order.
+- `agenda`: inspect pending activations in firing order.
+- `diagnostics`: return the versioned runtime diagnostics document.
+- `explain`: return the versioned derivation document for a fact ID.
+- `why_not`: return the versioned WhyNot document for a rule.
+
+Custom load, snapshot, and agenda results carry `gessMcpSchema: 1` plus a
+`kind` discriminator. Diagnostics and explain tools return their existing
+versioned JSON contracts. MCP requests may be concurrent, but the command
+serializes all handlers around its single session.
+
+For example, an MCP client configuration can launch:
+
+```json
+{
+  "command": "gess-mcp",
+  "args": ["--ruleset-root", "/absolute/path/to/vetted-rules"]
+}
+```
 
 ## Next steps
 

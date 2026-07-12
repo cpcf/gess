@@ -40,7 +40,8 @@ Once the basics are working, these guides go deeper:
   fuzz verification contract.
 - [Runtime diagnostics JSON](diagnostics-json.md): versioned graph, memory,
   agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.
-- [Command-line tools](cli.md): `gessc` and `gessfmt`.
+- [Command-line tools](cli.md): the `gess` REPL, `gessc`, `gessfmt`, and the
+  `gess-mcp` agent-facing stdio server.
 - [Advanced behavior](advanced.md): the Rete runtime, expression predicate
   placement, aggregates, higher-order conditions, logical support,
   backward chaining, and module focus.

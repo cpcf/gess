@@ -17,8 +17,10 @@ conventions for tests, benchmarks, and documentation.
   formatter behind the `.gess` language and `gessfmt`.
 - `internal/fnvhash/`: hash primitives used for order-independent token
   and identity hashing.
-- `cmd/gessc/`, `cmd/gessfmt/`: the command-line tools, thin wrappers over
-  `dsl.GenerateGo` and `gesssexp.Format`.
+- `cmd/gessc/`, `cmd/gessfmt/`: generation and formatting tools, thin wrappers
+  over `dsl.GenerateGo` and `gesssexp.Format`. `cmd/gess/` owns the REPL;
+  `cmd/gess-mcp/` owns the official MCP SDK dependency and the serialized,
+  root-confined agent-facing session adapter.
 - `examples/`, `tutorial/`: runnable examples and the workshop; see
   `examples.md`.
 - `docs/`: this documentation set.
