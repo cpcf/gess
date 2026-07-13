@@ -38,7 +38,7 @@ condition and do not escape it.
 | --- | --- |
 | `match` | Emits one tuple for every fact of the target name or template that satisfies field constraints, joins, list patterns, and predicates. A fact may participate in more than one binding unless constraints exclude it. |
 | `and` | Evaluates children left to right for meaning; a tuple survives only when every child succeeds. The compiler may reorder independent positive matches without changing results. |
-| `or` | Emits the union of its branches in authored branch order. Identical terminal tuples are deduplicated. Every branch must export a compatible binding contract. |
+| `or` | Emits the union of its branches in authored branch order. Duplicate terminal tuples collapse to one. Every branch must export a compatible binding contract. |
 | `not C` | Emits its input tuple exactly once when `C` has no match for that tuple; otherwise emits none. |
 | `exists C` | Emits its input tuple exactly once when `C` has at least one match; the number of matches does not multiply the outer tuple. |
 | `forall D R` | Emits its input tuple when every tuple in domain `D` has at least one matching requirement `R`. An empty domain succeeds. |
@@ -70,8 +70,11 @@ for equal inputs at the same explain schema version.
 | Retract | Removes stated support or the fact itself according to its support state, propagates removal, removes dependent activations, and cascades unsupported logical facts. |
 | Run | Fires eligible activations in agenda order until quiescence, halt, limit, cancellation, or error. Mutations from an action propagate before the next activation is selected. |
 | Reset | Advances the generation, clears working memory, agenda, focus, demand, and logical support, reasserts initial facts, and rebuilds graph-owned memories by propagation. Old fact IDs become stale. |
-| ApplyRuleset | Keeps live facts only when template compatibility holds. An unchanged declaration rebinds host closures without rebuilding runtime state; a changed compatible revision purges invalid logical support and rebuilds graph memories and agenda through lifecycle deltas. |
+| ApplyRuleset | Keeps live facts only when template compatibility holds and carries global bindings forward by name. An unchanged declaration rebinds host closures without rebuilding runtime state; a changed compatible revision purges invalid logical support and rebuilds graph memories and agenda through lifecycle deltas. A newly required global with no default makes the apply fail. |
 | Query | Reads graph terminal memory. Backward-chaining queries may create scoped demand and run only proof-origin activations; ordinary unrelated agenda entries remain pending. |
+| Checkpoint / Restore | Captures canonical semantic session state without serializing the graph or host callbacks. Restore requires the same `RulesetID`, rebuilds graph memory, and preserves fact identity, agenda/refraction, focus, support, demand, globals, and allocators. |
+| Mutation-log replay | Validates a checkpoint-anchored SHA-256 commit chain and restores its final canonical checkpoint without rerunning host actions. |
+| Fork | Creates an independent mutable session from the parent's current state. Immutable ruleset data may be shared; mutable working, graph, agenda, focus, support, and demand state is owned by the fork. |
 | WhatIf | Runs on an isolated fork and reports its diff. Unless explicitly retained, the fork is closed and the base session is unchanged. |
 
 Sessions have one logical owner. Unsupported graph shapes fail with
@@ -79,8 +82,9 @@ Sessions have one logical owner. Unsupported graph shapes fail with
 rule-local matcher or full reconciliation path.
 
 Event listeners execute synchronously under engine control. A listener may
-read immutable session metadata, but reentrant stateful operations fail fast
-with `ErrConcurrencyMisuse` and do not enter the during-run mutation queue.
+read immutable session metadata, but stateful calls from inside the listener
+fail fast with `ErrConcurrencyMisuse` and do not enter the during-run mutation
+queue.
 
 ## Verification harness
 

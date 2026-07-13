@@ -1,10 +1,10 @@
 # Machine-readable explain contract (JSON)
 
-Gess encodes its three interrogation reports — `Derivation` (why a fact
+Gess encodes its three interrogation reports—`Derivation` (why a fact
 exists), `WhyNotReport` (why a rule has no activation), and `WhatIfReport` (a
-counterfactual run) — as versioned JSON documents, so UIs, audit pipelines, and
-LLM agents consume proof trees and counterfactual reports as data instead of
-scraping rendered text.
+counterfactual run)—as versioned JSON documents, so user interfaces, audit
+pipelines, and LLM agents consume proof trees and counterfactual reports as
+data instead of scraping rendered text.
 
 Each type implements `json.MarshalJSON`, so `json.Marshal(report)` produces the
 document directly:
@@ -22,7 +22,7 @@ Every top-level document carries the schema version and its kind:
 ```
 
 `kind` is one of `"derivation"`, `"whynot"`, or `"whatif"`. The version
-(`ExplainSchemaVersion`) is bumped only on a **breaking** change — a field
+(`ExplainSchemaVersion`) is bumped only on a **breaking** change—a field
 removal or rename. Additive changes (new fields) keep the same version, so
 consumers must ignore unknown fields. Nested objects (child derivations,
 branches, facts) do not repeat the envelope.
@@ -30,21 +30,23 @@ branches, facts) do not repeat the envelope.
 ## Conventions
 
 - **IDs** encode as their string forms: `"fact:g1:12"`, `"rule:open-ticket"`,
-  `"run:3"`, and so on — human-legible, greppable, and matching REPL output.
+  `"run:3"`, and so on—human-legible, searchable, and matching REPL output.
 - **Integers** encode as JSON numbers. The exact digits are preserved in the
   document, but a consumer that parses JSON numbers as `float64` (JavaScript,
   most `json` libraries by default) loses precision beyond 2^53. Read
-  large integer fields as strings if that matters.
+  large integer fields with an arbitrary-precision or number-preserving JSON
+  decoder if that matters.
 - **Object key order** is deterministic (keys are sorted), so documents are
   byte-stable for equal inputs and safe to diff.
-- **Nil / empty fields are omitted**; `truncated` is always present.
+- **Nil / empty fields are omitted**; `truncated` is always present on
+  derivation and why-not objects.
 - These are **export-only** documents. There is no decoder back into engine
   types; the contract is a one-way projection.
 
 ## `derivation`
 
 A fact, its support state, the firing that produced it (with the rendered
-`.gess` action and — with firing-time capture — the exact bindings), the facts
+`.gess` action and—with firing-time capture—the exact bindings), the facts
 it logically depends on (recursively), and its `history` of mutations. Tier-1
 (snapshot) derivations omit `history` and omit `producedBy` for stated facts.
 
@@ -118,7 +120,7 @@ prefix before `firstFailing`; every condition is satisfied when
 
 The bounded `run` result, the ordered `firings`, the working-memory `diff`
 (the base and fork snapshots are represented by their difference, not in full),
-the agenda counts before and after, and — with `WithWhatIfExplain` —
+the agenda counts before and after, and—with `WithWhatIfExplain`—
 `derivations` for the added facts. Pass `WithExplainLogMaxEntries` to
 `WithWhatIfExplain` when a scenario needs more than the default 4096 retained
 history entries.

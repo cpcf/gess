@@ -1990,11 +1990,11 @@ const (
 	// added, removed, replaced, or unchanged.
 	ApplyRulesetApplied = rules.ApplyRulesetApplied
 	// ApplyRulesetUnchanged reports that the target ruleset has the
-	// same RulesetID as the current one, so no work was performed.
+	// same RulesetID as the current one, so graph and agenda state were
+	// preserved.
 	// RulesetID does not cover Go host function or action
 	// implementations, so a ruleset differing only in its Go closures
-	// reports Unchanged and the session keeps executing the previously
-	// applied closures.
+	// reports Unchanged and rebinds those implementations for this session.
 	ApplyRulesetUnchanged = rules.ApplyRulesetUnchanged
 	// ApplyRulesetIncompatible reports that the target ruleset is nil,
 	// doesn't define the templates live facts depend on with an
@@ -2117,7 +2117,9 @@ func WithInitialFacts(initials ...InitialFact) Option {
 // WithGlobals binds per-session values for globals declared on the
 // ruleset, keyed by global name without the '*' markers. Unnamed globals
 // keep their declared defaults; naming an undeclared global or supplying
-// a value of the wrong kind fails session construction.
+// a value of the wrong kind fails session construction. ApplyRuleset carries
+// current values forward by name; adding a required global with no default
+// requires creating a new session instead.
 func WithGlobals(values map[string]any) Option {
 	return engine.WithGlobals(values)
 }
@@ -2404,7 +2406,8 @@ func (s *Session) Reset(ctx context.Context) (ResetResult, error) {
 }
 
 // ApplyRuleset swaps in a compatible compiled ruleset while preserving working
-// memory.
+// memory. A target with the current RulesetID rebinds host implementations
+// without rebuilding graph, agenda, or focus state.
 func (s *Session) ApplyRuleset(ctx context.Context, next *rules.Ruleset) (ApplyRulesetResult, error) {
 	var engineRevision *engine.Ruleset
 	if next != nil {

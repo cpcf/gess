@@ -59,7 +59,7 @@ const pages = [
     order: 3,
     title: "The .gess language reference",
     description:
-      "Every form the .gess parser accepts, with limits and errors.",
+      "Modules, globals, functions, templates, facts, rules, queries, actions, expressions, limits, and errors.",
   },
   {
     slug: "go-api",
@@ -75,7 +75,7 @@ const pages = [
     order: 5,
     title: "Session lifecycle",
     description:
-      "Assert, modify, retract, reset, run, queries, snapshots, events, the focus stack, and ApplyRuleset.",
+      "Mutations, runs, queries, inspection, durable state, forks, events, focus, and ruleset replacement.",
   },
   {
     slug: "executable-semantics",
@@ -90,7 +90,7 @@ const pages = [
     source: "cli.md",
     order: 7,
     title: "Command-line tools",
-    description: "gessc and gessfmt.",
+    description: "The Gess REPL, compiler, formatter, and MCP server.",
   },
   {
     slug: "advanced",
@@ -98,7 +98,7 @@ const pages = [
     order: 8,
     title: "Advanced behavior",
     description:
-      "The Rete runtime, expression predicate placement, aggregates, higher-order conditions, logical support, backward chaining, and module focus.",
+      "The Rete runtime, predicate placement, aggregates, higher-order conditions, logical support, explanations, backward chaining, and focus.",
   },
   {
     slug: "examples",
@@ -116,9 +116,17 @@ const pages = [
       "Versioned graph, memory, agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.",
   },
   {
+    slug: "explain-json",
+    source: "explain-json.md",
+    order: 11,
+    title: "Explain JSON",
+    description:
+      "Versioned derivation, why-not, and what-if documents for tools and audit pipelines.",
+  },
+  {
     slug: "contributing",
     source: "contributing.md",
-    order: 11,
+    order: 12,
     title: "Developer guide",
     description:
       "Repository layout, engine architecture, tests, benchmarks, and the documentation workflow.",
@@ -128,7 +136,7 @@ const pages = [
     source: "README.md",
     sourceDir: path.join("..", "tutorial"),
     editSourcePath: "tutorial/README.md",
-    order: 15,
+    order: 16,
     title: "Interactive tutorial workshop",
     description:
       "Run the local browser or terminal workshop for the vulnerability response scenario.",
@@ -142,7 +150,7 @@ const apiPackages = [
     slug: "reference/rules",
     pkgDir: "rules",
     importPath: "github.com/cpcf/gess/rules",
-    order: 12,
+    order: 13,
     title: "rules package reference",
     description: "Generated API reference for github.com/cpcf/gess/rules.",
   },
@@ -150,7 +158,7 @@ const apiPackages = [
     slug: "reference/session",
     pkgDir: "session",
     importPath: "github.com/cpcf/gess/session",
-    order: 13,
+    order: 14,
     title: "session package reference",
     description: "Generated API reference for github.com/cpcf/gess/session.",
   },
@@ -158,7 +166,7 @@ const apiPackages = [
     slug: "reference/dsl",
     pkgDir: "dsl",
     importPath: "github.com/cpcf/gess/dsl",
-    order: 14,
+    order: 15,
     title: "dsl package reference",
     description: "Generated API reference for github.com/cpcf/gess/dsl.",
   },

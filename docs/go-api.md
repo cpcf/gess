@@ -8,7 +8,8 @@ handles and behavior are implemented by `internal/engine` behind the facades.
   `Ruleset` facade, covering templates, rules, queries, actions, expressions,
   and values.
 - `github.com/cpcf/gess/session`: the runtime, covering sessions,
-  workspace construction, mutations, runs, queries, snapshots, and events.
+  workspace construction, mutations, runs, queries, snapshots, durable state,
+  diagnostics, explanations, and events.
 - `github.com/cpcf/gess/dsl`: `.gess` parsing, loading, code generation, and
   the registry that connects `.gess` files to host Go code.
 
@@ -33,15 +34,19 @@ engine-backed implementation behind the public `rules.Workspace` facade.
 Importing `rules` alone is sufficient for authoring values, but compilation
 requires the `session` runtime boundary.
 
-Workspace methods: `AddModule`, `AddTemplate`, `AddAction` /
+Workspace methods: `AddModule`, `AddTemplate`, `AddGlobal` / `ReplaceGlobal` /
+`RemoveGlobal`, `AddAction` /
 `ReplaceAction` / `RemoveAction`, `AddFunction` / `ReplaceFunction` /
-`RemoveFunction`, `AddRule` / `ReplaceRule` / `RemoveRule`, and `AddQuery`
-/ `ReplaceQuery` / `RemoveQuery`. Definitions are validated at `Add` time
-and again at compile; errors wrap `rules.ErrValidation` and related
-sentinels.
+`RemoveFunction`, `AddExpressionFunction`, `AddRule` / `ReplaceRule` /
+`RemoveRule`, and `AddQuery` / `ReplaceQuery` / `RemoveQuery`. Definitions are
+validated at `Add` time and again at compile; errors wrap
+`rules.ErrValidation` and related sentinels.
 
 A compiled ruleset is safe to share: sessions never mutate it, and several
-sessions can use the same ruleset.
+sessions can use the same ruleset. Its `Modules`, `Templates`, `Globals`,
+`Actions`, `Functions`, `Rules`, and `Queries` methods return detached
+inspection values; singular lookup methods retrieve definitions by name or
+identity.
 
 ## Templates
 
@@ -71,6 +76,30 @@ whose key matches an existing fact but whose non-key fields differ replaces
 the old fact: retract old, assert new, with a new fact ID, reported as
 `AssertReplaced`, while asserting an identical fact is a no-op
 (`AssertExisting`).
+
+## Global values
+
+Globals are typed values declared once on a ruleset and bound for each session:
+
+```go
+err := workspace.AddGlobal(rules.GlobalSpec{
+	Name:       "max-amount",
+	Kind:       rules.ValueInt,
+	Default:    1000,
+	HasDefault: true,
+})
+
+session, err := sess.New(ruleset,
+	sess.WithGlobals(map[string]any{"max-amount": 5000}),
+)
+```
+
+A declaration without a default requires every session to supply a value.
+Unknown names and incompatible values fail session construction. Use
+`rules.GlobalValue("max-amount")` in expression specs and
+`ActionContext.Global("max-amount")` in host actions. Global values are fixed
+for a session's lifetime; `ApplyRuleset` carries bindings with matching names
+into a compatible revision.
 
 ## Rules
 
@@ -190,11 +219,14 @@ err := workspace.AddAction(rules.ActionSpec{
 })
 ```
 
-`ActionSpec` takes exactly one of `Fn` (an `ActionFunc`) or
-`AssertTemplateValues` (a declarative assert of expression values in
-template field order, which the `.gess` compiler uses for `assert`
-actions). The optional `BindingReads` declares which bindings the action
-reads so the runtime can avoid materializing the rest.
+`ActionSpec` takes exactly one implementation: `Fn` for ordinary host Go code,
+`Effect` for a declarative expression-backed action, `Call` for an
+expression-backed host call, or `AssertTemplateValues` for an optimized
+template-order assert. The `.gess` compiler generates the declarative forms.
+For a `Fn`, optional `BindingReads` declares which bindings the action reads so
+the runtime can avoid materializing the rest. `NonEscaping` is a narrower
+optimization for functions that don't retain their action context or
+binding-derived data after returning.
 
 The `rules.ActionContext` passed to `Fn` provides activation identity,
 binding access, the mutation API including `AssertLogical`, `Halt`, and
@@ -245,6 +277,7 @@ query returns:
   `rules.BindingPath(binding, path)`: a field of an earlier binding.
 - `rules.BindingValueExpr{Binding: ...}`: a value binding, such as an
   aggregate result.
+- `rules.GlobalValue(name)`: a per-session global declared on the ruleset.
 - `rules.ParamExpr{Name: ...}`: a query parameter.
 - `rules.HasPath(path)`: whether a nested path exists.
 - `rules.CompareExpr{Operator, Left, Right}` with the
@@ -281,6 +314,13 @@ Provide exactly one of `Func` (variadic) or the fixed-arity `Func0` through
 name at compile time; unknown names fail compilation with an error wrapping
 `rules.ErrFunctionValidation`.
 
+For a function implemented as a Gess expression instead of a Go callback, use
+`workspace.AddExpressionFunction(rules.ExpressionFunctionSpec{...})`. Its
+typed parameters are `ExpressionFunctionParamSpec` values and its body is one
+`ExpressionSpec`. Expression functions may call host functions and earlier
+expression functions, but not later definitions or themselves. The `.gess`
+`deffunction` form compiles to the same representation.
+
 ## Values and fields
 
 Facts carry `rules.Value` data with kinds `ValueNull`, `ValueBool`,
@@ -311,6 +351,12 @@ The `dsl` package connects `.gess` sources to the preceding API:
   function; `gessc` is a thin wrapper around it.
 - `dsl.InitialFacts(doc)` extracts `deffacts` facts as
   `session.InitialFact` values.
+- `dsl.RenderRuleset` and the construct-specific `RenderModule`,
+  `RenderTemplate`, `RenderRule`, `RenderQuery`, and `RenderFunction` methods
+  render compiled definitions back to canonical `.gess`.
+
+`Document.MissingRegistrations(registry)` reports the host actions and calls a
+document still requires before load or generation.
 
 `dsl.Registry` supplies the host implementations a `.gess` file references:
 
@@ -348,9 +394,9 @@ if err != nil {
 rows, err := session.QueryAll(ctx, "routes", nil)
 ```
 
-See `session-lifecycle.md` for the full session API: mutation results,
-run statuses, queries, snapshots, events, the focus stack, and
-`ApplyRuleset`.
+See `session-lifecycle.md` for the full session API: mutation results, run
+statuses, queries, snapshots, diagnostics, checkpoints, mutation-log replay,
+forks, what-if runs, events, the focus stack, and `ApplyRuleset`.
 
 ## Next steps
 

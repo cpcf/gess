@@ -189,6 +189,6 @@ action and built-in function list.
 - [Core concepts](../docs/concepts.md) for the vocabulary behind what you
   just built.
 - [The `.gess` language reference](../docs/gess-language.md) for every form
-  the parser accepts.
+  the loader accepts.
 - [Examples map](../docs/examples.md) for more `.gess` and Go-API examples,
   organized by feature.

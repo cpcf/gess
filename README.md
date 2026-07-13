@@ -1,8 +1,8 @@
 # Gess
 
 Gess is a Go rules engine. It provides a Rete-based runtime, a Go API for
-building rulesets, and a `.gess` file format for defining templates, seed facts,
-rules, and queries outside app code.
+building rulesets, and a `.gess` file format for defining modules, globals,
+pure functions, templates, seed facts, rules, and queries outside app code.
 
 The preferred workflow is to keep rule definitions in `.gess` files, compile
 them to Go with `gessc`, and use the generated ruleset from normal Go code.
@@ -121,11 +121,16 @@ The guides under [`docs/`](docs/README.md) cover the engine in depth:
 - [Go API guide](docs/go-api.md) for the `rules`, `session`, and `dsl`
   packages.
 - [Session lifecycle](docs/session-lifecycle.md): mutations, runs, queries,
-  snapshots, events, focus, and ruleset swaps.
-- [Command-line tools](docs/cli.md): `gessc` and `gessfmt`.
+  snapshots, diagnostics, durable checkpoints, mutation logs, forks, what-if
+  runs, events, focus, and ruleset swaps.
+- [Runtime diagnostics JSON](docs/diagnostics-json.md) and [explain
+  JSON](docs/explain-json.md): versioned machine-readable inspection
+  contracts.
+- [Command-line tools](docs/cli.md): the `gess` REPL, `gessc`, `gessfmt`, and
+  the `gess-mcp` stdio server.
 - [Advanced behavior](docs/advanced.md): the Rete runtime, aggregates,
-  higher-order conditions, logical support, backward chaining, and module
-  focus.
+  higher-order conditions, logical support, explanations, backward chaining,
+  and module focus.
 - [Examples map](docs/examples.md): where to start in `examples/`.
 - [Developer guide](docs/contributing.md): repository layout, architecture,
   tests, and benchmarks.
@@ -147,15 +152,24 @@ Beyond assert/run/query, sessions expose:
 - **Conflict strategy** — `sess.WithStrategy(sess.StrategyBreadth)` switches
   equal-salience ordering from recency (depth, the default) to FIFO creation
   order.
-- **Globals** — declare typed constants with `defglobal` (or
+- **Globals** — declare typed per-session values with `defglobal` (or
   `Workspace.AddGlobal`), read them as `*name*` in rule and query expressions
   and RHS asserts, and bind per-session values with `sess.WithGlobals`.
 - **DSL functions** — `deffunction` defines pure expression-bodied functions
   directly in `.gess`, callable from any condition, test, or query expression;
   no Go registration needed.
 - **Session fork** — `session.Fork(ctx)` branches an idle session (facts,
-  agenda, refraction, focus, logical support) for what-if runs without
-  rebuilding.
+  globals, graph memory, agenda, refraction, focus, logical support, and
+  demand) for what-if runs without rebuilding.
+- **Explain and counterfactuals** — `Explain` traces why a fact exists,
+  `WhyNot` diagnoses a missing activation, and `WhatIf` runs bounded mutations
+  on an isolated fork and returns its fact/agenda diff.
+- **Durable state** — `Checkpoint` plus `Restore` preserves exact semantic
+  session state across processes; checkpoint-anchored mutation logs add a
+  validated, append-only replay stream.
+- **Runtime diagnostics** — `Diagnostics` exports graph, memory, agenda,
+  terminal, query, aggregate, truth-maintenance, and backchain state as typed
+  Go data or versioned JSON.
 - **Runtime source spans** — rulesets compiled from `.gess` carry file:line
   spans into runtime errors (`ActionFailureError`, expression evaluation) and
   rule events.
@@ -190,7 +204,8 @@ pure functions cannot be stubbed because they affect matching.
 - `rules`: public types for templates, conditions, actions, queries, values, and
   compiled rulesets.
 - `session`: runtime API for asserting, modifying, retracting, running rules,
-  querying, snapshots, events, and logical support.
+  querying, snapshots, diagnostics, explanations, durable state, forks,
+  events, and logical support.
 - `dsl`: parser, loader, generated-code support, and registry hooks for `.gess`
   files.
 - `cmd/gessc`: command-line compiler from `.gess` files to generated Go.
@@ -199,6 +214,7 @@ pure functions cannot be stubbed because they affect matching.
   `.gess` line.
 - `cmd/gessfmt`: canonical formatter for `.gess` files.
 - `cmd/gess`: interactive REPL (`gess repl`).
+- `cmd/gess-mcp`: bounded, root-confined stdio MCP server over one session.
 
 Most implementation code lives under `internal/engine`.
 

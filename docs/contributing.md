@@ -65,8 +65,12 @@ A map of `internal/engine` by subsystem:
   and backward chaining remain implemented in `logical_support.go`,
   `backchain_demand_support.go`, and `backchain_query_proof.go`.
   `runtime_diagnostics.go` and `propagation_counter.go` provide
-  instrumentation. Public values, errors, and identifiers are declared in
-  `rules`; the corresponding engine files retain compiler and runtime helpers.
+  instrumentation. `checkpoint*.go` captures and restores canonical durable
+  session state; `mutation_log*.go` implements checkpoint-anchored replay;
+  `explain*.go`, `whynot*.go`, and `whatif.go` implement interrogation and
+  counterfactual reports. Public values, errors, and identifiers are declared
+  in `rules`; the corresponding engine files retain compiler and runtime
+  helpers.
 - The `.gess` language: `gess_dsl.go` and `gess_dsl_parse.go` (loader and
   parser), `gess_generate.go` (Go code generation for `gessc`).
 

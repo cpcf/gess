@@ -9,8 +9,10 @@ deduplicates
 destructuring
 fanout
 Gess
+Graphviz
 gessc
 gessfmt
+globals
 go:generate
 goroutine
 goroutines

@@ -26,9 +26,9 @@ type WorkspaceHandle interface {
 	Compile(context.Context) (*Ruleset, error)
 }
 
-// Workspace is a mutable collection of module, template, action, function,
-// rule, and query definitions. Definitions are validated as they're added;
-// Compile produces an immutable Ruleset.
+// Workspace is a mutable collection of module, template, global, action,
+// function, rule, and query definitions. Definitions are validated as they're
+// added; Compile produces an immutable Ruleset.
 type Workspace struct {
 	handle WorkspaceHandle
 }

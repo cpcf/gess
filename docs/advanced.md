@@ -60,12 +60,12 @@ than falling back to a slower matcher.
 lineage across the modify, so downstream rules, queries, and support edges that
 reference it continue to do so. The modify propagates as remove-then-add
 deltas: the fact is re-tested against every pattern, so it can newly match rules
-whose conditions the old slot values didn't satisfy, and unmatch rules the old
-values did.
+whose conditions the old slot values didn't satisfy and stop matching rules the
+old values did.
 
 A rule that modifies a fact it matched does not necessarily loop. When the new
 slot values no longer satisfy the rule's own left-hand side, the fact stops
-matching and the rule does not re-activate — the common `(defrule r ?f <-
+matching and the rule does not re-activate—the common `(defrule r ?f <-
 (order (status "new")) => (modify ?f (set (status "shipped"))))` fires once. A
 rule whose modified fact still matches its own left-hand side would re-activate;
 gate that with a status slot that the modify changes, or a guard condition, so
@@ -187,11 +187,12 @@ edge lifecycle. `Reset` clears all logical support.
 
 Logical support and mutation lineage answer *why a fact exists*, but you
 normally have to piece that together from the support graph and the event
-stream. `Explain` returns it as one typed, renderable structure.
+stream. `Explain` returns it as one typed structure that can render as text or
+a graph.
 
 A `Derivation` carries the fact, its `FactSupportState`, the `Firing` that
-produced it (rule, activation, rendered `.gess` action source, and — with
-firing-time capture — the bound values the action evaluated), the facts it
+produced it (rule, activation, rendered `.gess` action source, and—with
+firing-time capture—the bound values the action evaluated), the facts it
 logically depends on (recursively, cycle-guarded), and its
 assert→modify… `History` for the current generation.
 
@@ -200,8 +201,8 @@ There are two tiers:
 - **`Snapshot.Explain(id, opts…)` (tier 1)** is a pure read of a
   session-produced snapshot. It always works and allocates only at call
   time. It fills the support state and the recursive logical-support tree,
-  and, for logically-supported facts, the producing rule from the support
-  edge. It does not know the lineage of *stated* facts — that needs a log.
+  and, for logically supported facts, the producing rule from the support
+  edge. It does not know the lineage of *stated* facts—that needs a log.
 
   ```go
   snap, _ := session.Snapshot(ctx)
@@ -222,7 +223,7 @@ There are two tiers:
 
 The log is bounded (`WithExplainLogMaxEntries`, default 4096). When a fact's
 earliest entries are evicted, its reconstructed `History` is reported with
-`Truncated` set — never silently dropped. `Reset` clears the log, and a
+`Truncated` set—never silently dropped. `Reset` clears the log, and a
 `Fork` does not inherit it (pass `WithExplainLog` to the fork to record
 lineage there; event sequences continue from the parent).
 
@@ -241,23 +242,23 @@ prints the tree and `explain <fact-id> dot` prints the graph.
 
 ### Why a rule did not fire
 
-The most common rules-engine question — *why didn't my rule fire?* —
-`Session.WhyNot(ctx, ruleName)` answers structurally by reading the live Rete
-memories the engine matches with. It never mutates the runtime and adds no
-per-fact state; it re-executes predicates only along the probed chain at call
-time, and is idle-only under the same guard as `Agenda`.
+`Session.WhyNot(ctx, ruleName)` structurally answers a common rules-engine
+question: *why did this rule not fire?* It reads the live Rete memories the
+engine matches with. It never mutates the runtime and adds no per-fact state;
+it re-executes predicates only along the probed chain at call time, and is
+idle-only under the same guard as `Agenda`.
 
 A `WhyNotReport` has an `Outcome`:
 
-- `WhyNotActivated` — the rule *is* pending (the report lists the activations).
-- `WhyNotAlreadyFired` — it matched and fired; the activation is refracted.
-- `WhyNotNeverMatched` — no branch completed; each branch's first failing
+- `WhyNotActivated`—the rule *is* pending (the report lists the activations).
+- `WhyNotAlreadyFired`—it matched and fired; the activation is refracted.
+- `WhyNotNeverMatched`—no branch completed; each branch's first failing
   condition is classified.
-- `WhyNotBlocked` — the closest branch failed on a negated condition currently
+- `WhyNotBlocked`—the closest branch failed on a negated condition currently
   blocked by one or more facts (the report names them).
 
 Per branch, each condition reports its authored and planned order, whether it
-is satisfied, its alpha match count, and — on the first failing condition — a
+is satisfied, its alpha match count, and—on the first failing condition—a
 typed `Reason` (`no_alpha_matches`, `join_mismatch`, `predicate_rejected`, or
 `negation_blocked`), the rejecting constraint's `SourceSpan`, and the blocking
 facts for a negation. The deepest surviving partial matches are reported as
@@ -269,7 +270,7 @@ report, err := session.WhyNot(ctx, "escalate-critical")
 ```
 
 `WhyNotReport.String()` renders an answer-shaped diagnosis, and the REPL
-`whynot <rule>` command prints it — for example, `whynot ship-order` on a
+`whynot <rule>` command prints it—for example, `whynot ship-order` on a
 loaded `.gess` ruleset points at the failing condition with its
 `file:line:col` location. Partial-match and probe work are bounded by
 `WithWhyNotMaxPartialMatches`, `WithWhyNotMaxBlockers`, and

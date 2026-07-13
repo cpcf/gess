@@ -1,9 +1,9 @@
 # The `.gess` language reference
 
-`.gess` files define templates, seed facts, rules, and queries as
-S-expressions. The compiler in `cmd/gessc` and the loader in the `dsl` package
-accept the same language. This reference describes every form the parser
-accepts and the limits it enforces.
+`.gess` files define modules, typed globals, pure functions, templates, seed
+facts, rules, and queries as S-expressions. The compiler in `cmd/gessc` and the
+loader in the `dsl` package accept the same language. This reference describes
+every form the loader accepts and the limits it enforces.
 
 For the recommended workflow around `.gess` files, see `TUTORIAL.md`. For
 the Go APIs that load them, see `go-api.md`.
@@ -41,13 +41,17 @@ CLIPS or Jess should not expect other top-level forms to work.
 :::
 
 - `(defmodule NAME ...)`: declare a module.
+- `(defglobal *NAME* ...)`: declare a typed, per-session global.
+- `(deffunction NAME ...)`: declare a pure expression function.
 - `(deftemplate NAME ...)`: declare a fact template.
 - `(deffacts NAME fact...)`: declare seed facts.
 - `(defrule NAME ... => ...)`: declare a rule.
 - `(defquery NAME ...)`: declare a query.
 
-Templates and modules are loaded before facts, rules, and queries, so
-definition order within a file doesn't matter across those groups.
+Modules, globals, and templates are loaded before functions, facts, rules, and
+queries, so those declarations may appear later in a file than their users.
+Expression functions themselves retain source order because one function may
+call only functions declared before it.
 
 ### Module-qualified names
 
@@ -67,6 +71,72 @@ Unqualified names belong to the `MAIN` module.
 recognized declaration is `(auto-focus TRUE|FALSE)`: when true, activations of
 the module's rules push the module onto the focus stack automatically. See
 `advanced.md` for focus semantics.
+
+## `defglobal`
+
+```cl
+(defglobal *max-amount*
+  (type INTEGER)
+  (default 1000)
+  (description "maximum amount for automatic approval")
+)
+```
+
+`defglobal` declares a named, typed value whose binding belongs to a session.
+The name must use `*name*` syntax. `(type KIND)` is required and accepts the
+same kinds as template slots. `(default VALUE)` is optional and accepts a
+scalar value; a global without a default must be supplied when the session is
+created:
+
+```go
+session, err := sess.New(ruleset,
+	sess.WithGlobals(map[string]any{"max-amount": 5000}),
+)
+```
+
+The `WithGlobals` map uses the name without `*` markers. Unknown names and
+values of the wrong kind fail session construction. A session's globals are
+immutable after construction, while different sessions may bind different
+values against the same compiled ruleset.
+
+Reference a global as `*name*` in rule and query expressions, aggregate
+arguments, and expression-valued actions such as `assert`, `modify`, `bind`,
+`emit`, and `call`. Globals aren't supported inside `deffacts`, because seed
+facts are compiled independently of a particular session's bindings.
+
+## `deffunction`
+
+```cl
+(deffunction discounted
+  (description "apply the standard discount")
+  (param ?price INTEGER)
+  (return INTEGER)
+  (- ?price 100)
+)
+```
+
+`deffunction` declares a deterministic, side-effect-free function whose body
+is one expression. Each `(param ?name KIND)` declares one typed parameter, and
+`(return KIND)` declares the required return kind. A grouped parameter form is
+also accepted:
+
+```cl
+(deffunction between
+  (params (?value INTEGER) (?low INTEGER) (?high INTEGER))
+  (return BOOLEAN)
+  (and (>= ?value ?low) (<= ?value ?high))
+)
+```
+
+Parameter names may be written with or without the leading `?`; references in
+the body use `?name`. The body may call built-ins, functions supplied through
+`dsl.Registry.Functions`, and `deffunction` definitions declared earlier in
+the file. Forward calls and direct or mutual recursion are rejected. Function
+names share one pure-function name table, so they must not collide with a
+built-in, a registered function, or another `deffunction`.
+
+Calls use the ordinary expression syntax, such as `(discounted ?price)`, and
+work in conditions, aggregates, query returns, and expression-valued actions.
 
 ## `deftemplate`
 
@@ -187,7 +257,7 @@ The pattern language intentionally stops there: per-slot predicate
 constraints, connective constraints, and multifield patterns aren't part of
 the language. Use `test` conditions for anything beyond equality. In
 particular, a projection `?binding:field` is not valid as a pattern field
-value — today it is read as a plain atom and the pattern never matches.
+value—today it is read as a plain atom and the pattern never matches.
 Bind a variable in the source pattern and compare with `test` instead.
 :::
 
@@ -233,8 +303,8 @@ actions and in later expressions.
 
 Because `critical-vulnerability-summary` uses a `unique-key` duplicate policy,
 adding another critical vulnerability re-fires this rule and replaces the
-existing summary fact in place with the new `count` and `total`, rather than
-leaving a stale summary alongside a new one.
+existing summary fact with a new fact containing the updated `count` and
+`total`, rather than leaving a stale summary alongside it.
 
 ### Actions
 
@@ -243,7 +313,8 @@ with an `unsupported action` error:
 
 - `(assert (template (field value)...))`: assert a fact. Values are scalar
   literals, variables, projections such as `?order:id`, aggregate result
-  variables, or built-in function calls such as `(+ ?a ?b)`.
+  variables, globals, or function calls such as `(+ ?a ?b)` and
+  `(discounted ?price)`.
 - `(assert-logical (template (field value)...))`: assert a fact with logical
   support from the activation's matched facts. The fact is retracted
   automatically when its support goes away. See `advanced.md`.
@@ -269,14 +340,15 @@ with an `unsupported action` error:
 - `(call name arg...)`: invoke a host function registered through
   `dsl.Registry`. With arguments, `name` must be registered in
   `Registry.Calls`; with no arguments, in `Registry.Actions`. Arguments are
-  scalar literals, variables, projections, or built-in function calls.
+  expressions, including literals, variables, projections, globals, and
+  function calls.
 
 :::caution
 Right-hand-side control flow (`if`, `while`, `foreach`, `progn`) and arbitrary
 in-rule code remain host-only: compose that behavior with registered `(call
 ...)` actions, which receive an action context with the full mutation API.
-Modifying a fact that is held up purely by logical support is rejected — a
-logically-supported fact is entailed by its support, so change the support
+Modifying a fact that is held up purely by logical support is rejected—a
+logically supported fact is entailed by its support, so change the support
 instead. CLIPS `printout`'s router model is not carried over; use `emit`.
 :::
 
@@ -307,8 +379,8 @@ A query has optional parameters, a body of conditions, and optional returns:
   `accumulate`. A pattern variable with the same name as a parameter becomes
   an equality constraint against the argument.
 - `(return (alias value)...)` names the columns of each result row. Values
-  are full expressions: variables, projections, literals, comparisons, and
-  function calls. Multiple `return` forms concatenate.
+  are full expressions: variables, projections, globals, literals,
+  comparisons, and function calls. Multiple `return` forms concatenate.
 
 ## Expressions
 
@@ -316,13 +388,13 @@ Expressions appear in `test` conditions, aggregate arguments, and query
 returns:
 
 - Atoms: scalar literals, bound variables `?name`, projections
-  `?binding:field`, and query parameters.
+  `?binding:field`, globals `*name*`, and query parameters.
 - Comparisons, each with exactly two operands: `=`, `!=` (alias `<>`), `<`,
   `<=`, `>`, `>=`.
 - Boolean forms: `(and e...)`, `(or e...)`, `(not e)`.
 - Function calls: `(name arg...)` for any other head, resolved first against
-  the built-in functions below, then against pure functions registered through
-  `dsl.Registry.Functions`.
+  the built-in functions below, then against compiled pure functions from
+  `deffunction` and `dsl.Registry.Functions`.
 
 ### Missing values and type errors
 
@@ -363,9 +435,9 @@ combine more than two operands (for example `(+ ?a (+ ?b ?c))`).
 
 Built-in names are reserved: a host function or `deffunction` that reuses a
 built-in name fails to compile with a `shadows a built-in` error. Comparison
-operators (`=`, `!=`, `<`, `<=`, `>`, `>=`) are the comparison forms above, not
-functions. No built-in reads wall-clock time or randomness, so results stay
-deterministic.
+operators (`=`, `!=`, `<`, `<=`, `>`, `>=`) are the preceding comparison
+forms, not functions. No built-in reads wall-clock time or randomness, so
+results stay deterministic.
 
 Built-in and registered functions may be used anywhere an expression is
 allowed, including as `assert`/`modify`/`bind`/`emit`/`call` action values (for
@@ -392,7 +464,7 @@ a rule fires.
 The loader reports precise `file:line:column` positions for syntax errors.
 Notable rejections, verbatim from the loader:
 
-- `unsupported top-level form`: only the five forms listed earlier are
+- `unsupported top-level form`: only the seven forms listed earlier are
   accepted.
 - `slot constraint must be (field value)`: no positional patterns.
 - `unsupported action`: the right-hand side accepts only the actions listed
@@ -411,11 +483,10 @@ Notable rejections, verbatim from the loader:
 - `unregistered action`: a `call` names a function the registry doesn't
   provide.
 
-:::caution
-Unknown `declare` keys and unknown slot attributes are ignored rather than
-rejected, so check spelling carefully when a declaration seems to have no
-effect.
-:::
+Unknown template, rule, and query declaration keys, unknown global attributes,
+and unknown slot attributes are rejected with a source position. `defmodule`
+is the exception: it currently ignores unknown items and declaration keys, so
+spell its `auto-focus` declaration carefully.
 
 ## Next steps
 

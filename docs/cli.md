@@ -45,7 +45,8 @@ gess repl < script.txt
 
 Use `--stub-calls` when loading `.gess` files with unregistered `(call ...)`
 actions that should print stub invocations instead of failing. Use
-`--no-prompt` to force line-oriented behavior even when stdin is a terminal.
+`--no-prompt` to force line-oriented behavior even when standard input is a
+terminal.
 
 ## `gessc`
 
@@ -108,7 +109,7 @@ two-space indentation, one blank line between top-level forms, short forms
 kept on one line, and long forms expanded with closing parentheses on their
 own lines.
 
-`gessfmt` preserves `;` comments: comment lines stay above the form they
+`gessfmt` preserves `;` comments: comment lines stay before the form they
 precede, same-line comments stay on their line, and comments before a
 closing parenthesis or at end of file keep their position.
 
