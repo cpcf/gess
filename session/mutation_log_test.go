@@ -14,8 +14,8 @@ func TestMutationLogPublicRoundTripReplay(t *testing.T) {
 	ctx := context.Background()
 	workspace := session.NewWorkspace()
 	if err := workspace.AddTemplate(rules.TemplateSpec{
-		Name: "item",
-		Key:  "item",
+		Name:   "item",
+		Key:    "item",
 		Fields: []rules.FieldSpec{{Name: "id", Kind: rules.ValueInt, Required: true}},
 	}); err != nil {
 		t.Fatalf("AddTemplate: %v", err)

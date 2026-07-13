@@ -78,16 +78,24 @@ const pages = [
       "Assert, modify, retract, reset, run, queries, snapshots, events, the focus stack, and ApplyRuleset.",
   },
   {
+    slug: "executable-semantics",
+    source: "executable-semantics.md",
+    order: 6,
+    title: "Executable semantics",
+    description:
+      "Evaluation, condition, ordering, lifecycle, and differential verification semantics.",
+  },
+  {
     slug: "cli",
     source: "cli.md",
-    order: 6,
+    order: 7,
     title: "Command-line tools",
     description: "gessc and gessfmt.",
   },
   {
     slug: "advanced",
     source: "advanced.md",
-    order: 7,
+    order: 8,
     title: "Advanced behavior",
     description:
       "The Rete runtime, expression predicate placement, aggregates, higher-order conditions, logical support, backward chaining, and module focus.",
@@ -95,14 +103,14 @@ const pages = [
   {
     slug: "examples",
     source: "examples.md",
-    order: 8,
+    order: 9,
     title: "Examples map",
     description: "What each example demonstrates and where to start.",
   },
   {
     slug: "diagnostics-json",
     source: "diagnostics-json.md",
-    order: 9,
+    order: 10,
     title: "Runtime diagnostics JSON",
     description:
       "Versioned graph, memory, agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.",
@@ -110,7 +118,7 @@ const pages = [
   {
     slug: "contributing",
     source: "contributing.md",
-    order: 10,
+    order: 11,
     title: "Developer guide",
     description:
       "Repository layout, engine architecture, tests, benchmarks, and the documentation workflow.",
@@ -120,7 +128,7 @@ const pages = [
     source: "README.md",
     sourceDir: path.join("..", "tutorial"),
     editSourcePath: "tutorial/README.md",
-    order: 14,
+    order: 15,
     title: "Interactive tutorial workshop",
     description:
       "Run the local browser or terminal workshop for the vulnerability response scenario.",
@@ -134,7 +142,7 @@ const apiPackages = [
     slug: "reference/rules",
     pkgDir: "rules",
     importPath: "github.com/cpcf/gess/rules",
-    order: 11,
+    order: 12,
     title: "rules package reference",
     description: "Generated API reference for github.com/cpcf/gess/rules.",
   },
@@ -142,7 +150,7 @@ const apiPackages = [
     slug: "reference/session",
     pkgDir: "session",
     importPath: "github.com/cpcf/gess/session",
-    order: 12,
+    order: 13,
     title: "session package reference",
     description: "Generated API reference for github.com/cpcf/gess/session.",
   },
@@ -150,7 +158,7 @@ const apiPackages = [
     slug: "reference/dsl",
     pkgDir: "dsl",
     importPath: "github.com/cpcf/gess/dsl",
-    order: 13,
+    order: 14,
     title: "dsl package reference",
     description: "Generated API reference for github.com/cpcf/gess/dsl.",
   },
