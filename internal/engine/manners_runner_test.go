@@ -642,6 +642,9 @@ func TestMannersComparableHarness(t *testing.T) {
 	ctx := context.Background()
 	guests := mannersGuests(guestCount)
 	revision := mustCompileMannersRuleset(t)
+	if os.Getenv("GESS_MANNERS_VOLATILE") != "" {
+		revision = mustCompileMannersRulesetWithVolatileFindSeatingContext(t)
+	}
 	initials := mannersInitialFacts(guests)
 
 	runOnce := func(label string) (RunResult, time.Duration) {
