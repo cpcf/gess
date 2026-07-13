@@ -165,6 +165,12 @@ Add benchmarks only where performance claims or regressions matter:
 propagation fanout, bucket probes, row scans, memory growth, modify cost,
 retract cost, and agenda deltas all have precedents to follow.
 
+Pull-request CI runs correctness tests, race detection, coverage, fuzz smoke
+tests, and documentation checks; it doesn't run the benchmark matrix. Use the
+manual `bench` workflow in GitHub Actions when a change needs a repeated
+head-versus-base performance comparison. The manual run uploads the raw
+measurements and `benchstat` comparison as its `bench-results` artifact.
+
 ## Documentation workflow
 
 Markdown in this repository is checked with Vale, configured by
