@@ -124,6 +124,23 @@ Marshaling emits compact deterministic bytes. Map construction and iteration
 order cannot affect the result: values with the same kinds and contents produce
 byte-identical JSON.
 
+## Scenario and report locations
+
+The portable scenario and run-report artifacts use this envelope only where a
+field represents a Gess `rules.Value`:
+
+- scenario initial-fact fields, `globals`, and selected-query arguments;
+- report final-fact fields and query arguments; and
+- report query cells whose result is a value rather than a fact ID.
+
+Events, diagnostics, counters, IDs, counts, limits, and output text use their
+artifact-specific JSON types. Structural unsigned 64-bit fields, including
+counter values, use canonical decimal JSON strings through
+`scenario.DecimalUint64`; bounded counts and limits use safe JSON integers.
+Neither is a typed Gess value. See
+[Scenario and report JSON](scenario-report-json.md) for those surrounding
+documents, their strict decoders, and their canonical ordering.
+
 ## Tool input and output
 
 MCP tool inputs continue to accept ordinary JSON values for convenience.

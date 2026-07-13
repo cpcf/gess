@@ -67,7 +67,7 @@ const pages = [
     order: 4,
     title: "Go API guide",
     description:
-      "Building templates, rules, queries, actions, pure functions, and portable value JSON with the rules, session, dsl, and scenario packages.",
+      "Building templates, rules, queries, actions, pure functions, and portable scenario, report, and value JSON with the rules, session, dsl, and scenario packages.",
   },
   {
     slug: "session-lifecycle",
@@ -132,9 +132,17 @@ const pages = [
       "The lossless, deterministic typed-value contract shared by scenarios, reports, Workbench, and MCP.",
   },
   {
+    slug: "scenario-report-json",
+    source: "scenario-report-json.md",
+    order: 13,
+    title: "Scenario and report JSON",
+    description:
+      "Strict, versioned, byte-deterministic artifacts for portable scenario inputs and run reports.",
+  },
+  {
     slug: "contributing",
     source: "contributing.md",
-    order: 13,
+    order: 14,
     title: "Developer guide",
     description:
       "Repository layout, engine architecture, tests, benchmarks, and the documentation workflow.",
@@ -144,7 +152,7 @@ const pages = [
     source: "README.md",
     sourceDir: path.join("..", "tutorial"),
     editSourcePath: "tutorial/README.md",
-    order: 18,
+    order: 19,
     title: "Interactive tutorial workshop",
     description:
       "Run the local browser or terminal workshop for the vulnerability response scenario.",
@@ -158,7 +166,7 @@ const apiPackages = [
     slug: "reference/rules",
     pkgDir: "rules",
     importPath: "github.com/cpcf/gess/rules",
-    order: 14,
+    order: 15,
     title: "rules package reference",
     description: "Generated API reference for github.com/cpcf/gess/rules.",
   },
@@ -166,7 +174,7 @@ const apiPackages = [
     slug: "reference/session",
     pkgDir: "session",
     importPath: "github.com/cpcf/gess/session",
-    order: 15,
+    order: 16,
     title: "session package reference",
     description: "Generated API reference for github.com/cpcf/gess/session.",
   },
@@ -174,7 +182,7 @@ const apiPackages = [
     slug: "reference/dsl",
     pkgDir: "dsl",
     importPath: "github.com/cpcf/gess/dsl",
-    order: 16,
+    order: 17,
     title: "dsl package reference",
     description: "Generated API reference for github.com/cpcf/gess/dsl.",
   },
@@ -182,7 +190,7 @@ const apiPackages = [
     slug: "reference/scenario",
     pkgDir: "scenario",
     importPath: "github.com/cpcf/gess/scenario",
-    order: 17,
+    order: 18,
     title: "scenario package reference",
     description: "Generated API reference for github.com/cpcf/gess/scenario.",
   },

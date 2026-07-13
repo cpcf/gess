@@ -11,8 +11,8 @@ handles and behavior are implemented by `internal/engine` behind the facades.
   workspace construction, mutations, runs, queries, snapshots, and events.
 - `github.com/cpcf/gess/dsl`: `.gess` parsing, loading, code generation, and
   the registry that connects `.gess` files to host Go code.
-- `github.com/cpcf/gess/scenario`: lossless, deterministic JSON adapters for
-  `rules.Value` data shared by scenarios, reports, Workbench, and MCP.
+- `github.com/cpcf/gess/scenario`: strict, deterministic scenario and
+  run-report artifacts plus lossless JSON adapters for `rules.Value` data.
 
 The preferred workflow keeps rule definitions in `.gess` files compiled with
 `gessc` (see `TUTORIAL.md`). This guide covers the programmatic API,
@@ -313,6 +313,44 @@ Nested lists use nested envelopes, and maps use entry arrays sorted by key, so
 equal typed contents marshal to deterministic bytes. See
 [Value JSON](value-json.md) for the exact seven shapes, canonical number rules,
 strict decoder behavior, and the Explain v1 compatibility exception.
+
+### Portable scenario and run-report artifacts
+
+The `scenario` package also owns the `Scenario` input and `RunReport` output
+contracts. Their independent version constants are
+`ScenarioSchemaVersion` (`gess.workbench.scenario.v1`) and
+`RunReportSchemaVersion` (`gess.workbench.report.v1`). Use the contract
+functions instead of marshaling the structs directly:
+
+```go
+func ValidateScenario(document Scenario) error
+func MarshalScenario(document Scenario) ([]byte, error)
+func UnmarshalScenario(data []byte) (Scenario, error)
+func ScenarioDigest(document Scenario) (string, error)
+
+func ValidateRunReport(document RunReport) error
+func MarshalRunReport(document RunReport) ([]byte, error)
+func UnmarshalRunReport(data []byte) (RunReport, error)
+func RunReportDigest(document RunReport) (string, error)
+```
+
+Invalid documents wrap `ErrInvalidScenario` or `ErrInvalidRunReport`. Strict
+decoding classifies unknown versions with `ErrUnsupportedScenarioVersion` or
+`ErrUnsupportedRunReportVersion`. The contract functions normalize ordering,
+enforce every applied limit and truncation invariant, and emit byte-identical
+JSON for equal artifacts. They define data contracts only: they do not load
+source files, run a session, or evaluate expectations.
+
+Full-width structural counters use `scenario.DecimalUint64`, constructed with
+`scenario.NewDecimalUint64(value)` and read with `Uint64()`. It encodes as a
+canonical decimal string, while bounded counts and limits remain JSON numbers
+within JavaScript's safe-integer range. Every bounded report section also
+publishes its `status`, `totalKnown`, applied limit, returned count, and
+truncation decision; `limits` echoes input, run, and report bounds.
+
+See [Scenario and report JSON](scenario-report-json.md) for every wire member,
+enumerated value, canonical order, digest and portable-path rule, and the
+locations that use typed `scenario.Value` envelopes.
 
 ## The `dsl` package
 

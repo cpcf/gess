@@ -36,7 +36,7 @@ jobs:
         run: go test ./...
 
       - name: go test -race (core packages)
-        run: go test -race ./internal/... ./rules ./session ./dsl
+        run: go test -race ./internal/... ./rules ./session ./dsl ./scenario
 
       - name: coverage
         run: |
@@ -68,3 +68,9 @@ jobs:
 
       - name: FuzzCompile
         run: go test ./dsl -fuzz FuzzCompile -fuzztime 30s
+
+      - name: FuzzScenarioJSONCanonicalStability
+        run: go test ./scenario -fuzz FuzzScenarioJSONCanonicalStability -fuzztime 30s
+
+      - name: FuzzRunReportJSONCanonicalStability
+        run: go test ./scenario -fuzz FuzzRunReportJSONCanonicalStability -fuzztime 30s
