@@ -2346,6 +2346,24 @@ func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, r
 	if s == nil || len(resolved) == 0 && len(owners) == 0 {
 		return combined, nil
 	}
+	requests := make([]backchainDemandRequest, 0, len(resolved))
+	for _, id := range resolved {
+		request, ok := s.backchainDemandRequestByID(id)
+		if !ok {
+			combined.supported = false
+			continue
+		}
+		requests = append(requests, request)
+	}
+	delta, err := s.resolveBackchainDemandRequestValuesImmediate(ctx, requests, owners, origin)
+	return mergeReteAgendaDelta(combined, delta), err
+}
+
+func (s *Session) resolveBackchainDemandRequestValuesImmediate(ctx context.Context, requests []backchainDemandRequest, owners []backchainDemandOwnerKey, origin mutationOrigin) (reteAgendaDelta, error) {
+	combined := reteAgendaDelta{supported: true}
+	if s == nil || len(requests) == 0 && len(owners) == 0 {
+		return combined, nil
+	}
 	for _, owner := range owners {
 		delta, err := s.removeBackchainDemandSupportForOwner(ctx, owner, origin)
 		if err != nil {
@@ -2353,12 +2371,7 @@ func (s *Session) resolveBackchainDemandRequestsImmediate(ctx context.Context, r
 		}
 		combined = mergeReteAgendaDelta(combined, delta)
 	}
-	for _, id := range resolved {
-		request, ok := s.backchainDemandRequestByID(id)
-		if !ok {
-			combined.supported = false
-			continue
-		}
+	for _, request := range requests {
 		delta, err := s.removeBackchainDemandSupportForRequest(ctx, request, origin)
 		if err != nil {
 			return combined, err

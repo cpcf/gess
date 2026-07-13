@@ -635,6 +635,31 @@ func coalesceReteAgendaDelta(revision *Ruleset, delta reteAgendaDelta) reteAgend
 	return delta
 }
 
+// reteAgendaDeltaFromEmptyState converts token replacements into additions
+// and drops removals. A graph lifecycle reset starts without terminal state,
+// so its delta must describe the final candidates to an initially empty
+// agenda rather than updates to candidates that existed transiently during
+// bulk propagation.
+func reteAgendaDeltaFromEmptyState(delta reteAgendaDelta) reteAgendaDelta {
+	if !delta.supported {
+		return delta
+	}
+	for _, update := range delta.updated {
+		if update.after.isZero() {
+			continue
+		}
+		delta.added = append(delta.added, reteTerminalTokenDelta{
+			ruleRevisionID: update.ruleRevisionID,
+			token:          update.after,
+			identity:       update.identity,
+			queryProofID:   update.queryProofID,
+		})
+	}
+	delta.removed = nil
+	delta.updated = nil
+	return delta
+}
+
 func mergeReteAgendaDeltaSlice[T any](left, right []T) []T {
 	if len(right) == 0 {
 		return left

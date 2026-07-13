@@ -53,7 +53,8 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	if err != nil {
 		return nil, err
 	}
-	lifecycleDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, state, state.generation)
+	graphState := checkpointGraphLifecycleWorkspace(state, revision)
+	lifecycleDelta, err := rete.resetGraphBetaFromWorkspaceForGenerationWithDelta(ctx, &graphState, state.generation)
 	if err != nil {
 		return nil, fmt.Errorf("%w: graph lifecycle build: %v", ErrInvalidCheckpoint, err)
 	}
@@ -109,6 +110,9 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	if err != nil {
 		return nil, fmt.Errorf("%w: settle backchain lifecycle: %v", ErrInvalidCheckpoint, err)
 	}
+	if err := session.restoreCheckpointFactAllocators(document.State); err != nil {
+		return nil, err
+	}
 	session.propagation.setPendingLifecycleDelta(lifecycleDelta)
 	if _, err := session.reconcileAgendaInternal(ctx); err != nil {
 		return nil, fmt.Errorf("%w: reconcile graph lifecycle agenda: %v", ErrInvalidCheckpoint, err)
@@ -129,6 +133,49 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	session.nextRunSequence = document.State.NextRunSequence
 	session.syncPropagationCounters()
 	return session, nil
+}
+
+func checkpointGraphLifecycleWorkspace(state *factWorkspace, revision *Ruleset) factWorkspace {
+	if state == nil {
+		return factWorkspace{}
+	}
+	graphState := *state
+	if revision == nil || len(state.insertionOrder) < 2 {
+		return graphState
+	}
+	ordered := make([]FactID, 0, len(state.insertionOrder))
+	appendClass := func(reactive bool) {
+		for _, id := range state.insertionOrder {
+			fact, ok := state.workingFactByID(id)
+			if !ok {
+				continue
+			}
+			template, templated := fact.templateRefForRevision(revision)
+			if templated && template.backchainReactive == reactive {
+				ordered = append(ordered, id)
+			} else if !templated && !reactive {
+				ordered = append(ordered, id)
+			}
+		}
+	}
+	appendClass(true)
+	appendClass(false)
+	graphState.insertionOrder = ordered
+	return graphState
+}
+
+func (s *Session) restoreCheckpointFactAllocators(state checkpointWireSessionState) error {
+	if s == nil || len(s.factStore.insertionOrder) != len(state.Facts) {
+		return fmt.Errorf("%w: settled graph changed checkpoint fact count", ErrInvalidCheckpoint)
+	}
+	for i, wire := range state.Facts {
+		if s.factStore.insertionOrder[i] != checkpointFactIDFromWire(wire.ID) {
+			return fmt.Errorf("%w: settled graph changed checkpoint fact order", ErrInvalidCheckpoint)
+		}
+	}
+	s.factStore.nextFactSequence = state.NextFactSequence
+	s.factStore.nextRecency = state.NextRecency
+	return nil
 }
 
 func checkpointRestoreLocalConfig(opts []SessionOption) (sessionConfig, error) {
@@ -290,7 +337,7 @@ func (s *Session) restoreCheckpointAgenda(wire checkpointWireAgendaState) error 
 		key := activationLookupKey{ruleRevisionID: current.ruleRevisionID, identityKey: current.identityKey}
 		persisted, ok := byIdentity[key]
 		if !ok {
-			return fmt.Errorf("%w: rebuilt graph activation %s/%d/%d missing from checkpoint", ErrInvalidCheckpoint, current.ruleRevisionID, current.identityKey.scopeHash, current.identityKey.hash)
+			return fmt.Errorf("%w: rebuilt graph activation %s/%d/%d for facts %v missing from checkpoint", ErrInvalidCheckpoint, current.ruleRevisionID, current.identityKey.scopeHash, current.identityKey.hash, current.factIDs())
 		}
 		materialized := agenda.publicActivation(current)
 		if err := validateCheckpointActivationCandidate(materialized, persisted); err != nil {
@@ -313,7 +360,11 @@ func (s *Session) restoreCheckpointAgenda(wire checkpointWireAgendaState) error 
 		}
 	}
 	if len(matched) != len(byIdentity) {
-		return fmt.Errorf("%w: checkpoint activation missing from rebuilt graph", ErrInvalidCheckpoint)
+		for key, persisted := range byIdentity {
+			if _, ok := matched[key]; !ok {
+				return fmt.Errorf("%w: checkpoint activation %s/%d/%d for facts %v missing from rebuilt graph: matched %d of %d", ErrInvalidCheckpoint, key.ruleRevisionID, key.identityKey.scopeHash, key.identityKey.hash, persisted.FactIDs, len(matched), len(byIdentity))
+			}
+		}
 	}
 	agenda.nextOrdinal = wire.NextOrdinal
 	agenda.nextBirthEpoch = wire.NextBirthEpoch

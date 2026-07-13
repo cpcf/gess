@@ -1442,11 +1442,18 @@ func (s *Session) completeBackchainQueryDeltaImmediate(ctx context.Context, delt
 
 func (s *Session) completeBackchainDemandDeltaImmediate(ctx context.Context, delta reteAgendaDelta, origin mutationOrigin) (reteAgendaDelta, error) {
 	combined := normalizeBackchainDemandNoopDelta(delta)
-	resolvedDelta, err := s.resolveBackchainDemandRequestsImmediate(ctx, combined.resolvedDemands, combined.resolvedOwners, origin)
-	if err != nil {
-		return mergeReteAgendaDelta(combined, resolvedDelta), err
+	resolvedRequests := make([]backchainDemandRequest, 0, len(combined.resolvedDemands))
+	for _, id := range combined.resolvedDemands {
+		request, ok := s.backchainDemandRequestByID(id)
+		if !ok {
+			combined.supported = false
+			continue
+		}
+		request.slots = cloneFactSlots(request.slots)
+		request.supportFacts = slices.Clone(request.supportFacts)
+		resolvedRequests = append(resolvedRequests, request)
 	}
-	combined = mergeReteAgendaDelta(combined, resolvedDelta)
+	resolvedOwners := slices.Clone(combined.resolvedOwners)
 	state := s.activeFactWorkspace()
 	demandDelta, err := s.flushBackchainDemandRequestsImmediate(ctx, &state, combined.demands, origin)
 	if err != nil {
@@ -1454,10 +1461,15 @@ func (s *Session) completeBackchainDemandDeltaImmediate(ctx context.Context, del
 	}
 	s.commitFactWorkspace(state)
 	combined = mergeReteAgendaDelta(combined, demandDelta)
+	resolvedDelta, err := s.resolveBackchainDemandRequestValuesImmediate(ctx, resolvedRequests, resolvedOwners, origin)
+	if err != nil {
+		return mergeReteAgendaDelta(combined, resolvedDelta), err
+	}
+	combined = mergeReteAgendaDelta(combined, resolvedDelta)
 	combined.demands = nil
 	combined.resolvedDemands = nil
 	combined.resolvedOwners = nil
-	return combined, nil
+	return coalesceReteAgendaDelta(s.revision, combined), nil
 }
 
 func (s *Session) queryTriggerFact(query compiledQuery, args *compiledQueryArgs) FactSnapshot {

@@ -422,6 +422,29 @@ func TestCheckpointRestoreRebuildsActiveBackchainDemandState(t *testing.T) {
 	}
 }
 
+func TestCheckpointRestoreRebuildsSettledBackchainState(t *testing.T) {
+	ctx := context.Background()
+	revision, requestKey := mustCompileBackchainRuntimeRuleset(t)
+	session := mustSession(t, revision, "checkpoint-settled-backchain")
+	runBackchainRuntimeDemand(t, ctx, session, requestKey)
+
+	document, err := session.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("checkpointWire: %v", err)
+	}
+	restored, err := restoreCheckpointWire(ctx, revision, document)
+	if err != nil {
+		t.Fatalf("restoreCheckpointWire: %v", err)
+	}
+	restoredDocument, err := restored.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("restored checkpointWire: %v", err)
+	}
+	if !reflect.DeepEqual(restoredDocument, document) {
+		t.Fatalf("restored settled backchain checkpoint differs:\n got %#v\nwant %#v", restoredDocument, document)
+	}
+}
+
 func checkpointWireFactByID(t *testing.T, facts []checkpointWireFact, id FactID) checkpointWireFact {
 	t.Helper()
 	want := checkpointWireFactIDFromFactID(id)

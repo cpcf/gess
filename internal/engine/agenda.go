@@ -1831,8 +1831,15 @@ func (a *agenda) compactConsumedTokenActivation(current *activation) {
 	if current == nil || current.status != activationStatusConsumed || current.token.isZero() {
 		return
 	}
+	if a == nil || a.revision == nil {
+		return
+	}
+	rule, ok := a.revision.rulesByRevisionID[current.ruleRevisionID]
+	if !ok {
+		return
+	}
 	payload := a.takeActivationPayload()
-	factIDs, factVersions, ok := materializePublicTokenFactsInto(current.token, payload.factIDs, payload.factVersions)
+	factIDs, factVersions, ok := materializePublicTokenFactsInto(rule, current.token, payload.factIDs, payload.factVersions)
 	payload.factIDs = factIDs
 	payload.factVersions = factVersions
 	if !ok {
@@ -1866,7 +1873,20 @@ func (a *agenda) compactDeactivatedTokenActivation(current *activation) {
 		scratchIDs = pooled.factIDs
 		scratchVersions = pooled.factVersions
 	}
-	factIDs, factVersions, ok := materializePublicTokenFactsInto(current.token, scratchIDs, scratchVersions)
+	if a == nil || a.revision == nil {
+		if pooled != nil {
+			a.recycleActivationPayload(pooled)
+		}
+		return
+	}
+	rule, ruleOK := a.revision.rulesByRevisionID[current.ruleRevisionID]
+	if !ruleOK {
+		if pooled != nil {
+			a.recycleActivationPayload(pooled)
+		}
+		return
+	}
+	factIDs, factVersions, ok := materializePublicTokenFactsInto(rule, current.token, scratchIDs, scratchVersions)
 	if !ok {
 		if pooled != nil {
 			pooled.factIDs = factIDs
@@ -1895,39 +1915,69 @@ func rearmActivationToken(existing *activation, token tokenRef) {
 	existing.token = token
 }
 
-// materializePublicTokenFactsInto reuses the capacity of ids and versions
-// when possible. On failure the returned slices carry whatever was written so
-// callers can recycle them; their previous contents are not preserved.
-func materializePublicTokenFactsInto(token tokenRef, ids []FactID, versions []FactVersion) ([]FactID, []FactVersion, bool) {
-	if token.isZero() {
+// materializePublicTokenFactsInto writes the authored binding-slot order used
+// by public activations while reusing ids and versions when possible. On
+// failure the returned slices carry whatever was written so callers can
+// recycle them; their previous contents are not preserved.
+func materializePublicTokenFactsInto(rule compiledRule, token tokenRef, ids []FactID, versions []FactVersion) ([]FactID, []FactVersion, bool) {
+	if token.isZero() || len(rule.conditions) == 0 {
 		return nil, nil, true
 	}
-	size := token.size()
+	size := len(rule.conditions)
 	if cap(ids) < size {
-		ids = make([]FactID, 0, size)
+		ids = make([]FactID, size)
 	} else {
-		ids = ids[:0]
+		ids = ids[:size]
+		clear(ids)
 	}
 	if cap(versions) < size {
-		versions = make([]FactVersion, 0, size)
+		versions = make([]FactVersion, size)
 	} else {
-		versions = versions[:0]
+		versions = versions[:size]
+		clear(versions)
 	}
-	current := token
-	for {
-		id, version, hasFact, ok := nextPublicTokenFact(&current)
+	if size <= 64 {
+		var seen uint64
+		for current := token; !current.isZero(); current = current.parent() {
+			row, ok := current.resolve()
+			if !ok {
+				return ids, versions, false
+			}
+			match, ok := row.conditionMatch()
+			if !ok || match.bindingSlot < 0 || match.bindingSlot >= size {
+				return ids, versions, false
+			}
+			mask := uint64(1) << uint(match.bindingSlot)
+			if seen&mask != 0 {
+				return ids, versions, false
+			}
+			seen |= mask
+			ids[match.bindingSlot] = match.fact.ID()
+			versions[match.bindingSlot] = match.fact.Version()
+		}
+		wantSeen := ^uint64(0)
+		if size < 64 {
+			wantSeen = uint64(1)<<uint(size) - 1
+		}
+		return ids, versions, seen == wantSeen
+	}
+	seen := make([]bool, size)
+	seenCount := 0
+	for current := token; !current.isZero(); current = current.parent() {
+		row, ok := current.resolve()
 		if !ok {
 			return ids, versions, false
 		}
-		if !hasFact {
-			break
+		match, ok := row.conditionMatch()
+		if !ok || match.bindingSlot < 0 || match.bindingSlot >= size || seen[match.bindingSlot] {
+			return ids, versions, false
 		}
-		ids = append(ids, id)
-		versions = append(versions, version)
+		seen[match.bindingSlot] = true
+		seenCount++
+		ids[match.bindingSlot] = match.fact.ID()
+		versions[match.bindingSlot] = match.fact.Version()
 	}
-	slices.Reverse(ids)
-	slices.Reverse(versions)
-	return ids, versions, true
+	return ids, versions, seenCount == size
 }
 
 func (a *agenda) activationRunSnapshot(current *activation) activation {

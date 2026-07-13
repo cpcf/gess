@@ -1267,6 +1267,7 @@ func (m *reteGraphBetaMemory) finalizeGraphLifecycleDelta(delta reteAgendaDelta)
 		return reteAgendaDelta{}
 	}
 	delta = coalesceReteAgendaDelta(m.revision, delta)
+	delta = reteAgendaDeltaFromEmptyState(delta)
 	return cloneRetainedReteAgendaDelta(delta)
 }
 
