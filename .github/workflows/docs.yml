@@ -8,6 +8,7 @@ on:
       - "rules/**"
       - "session/**"
       - "dsl/**"
+      - "scenario/**"
       - ".github/workflows/docs.yml"
   push:
     branches:
@@ -18,6 +19,7 @@ on:
       - "rules/**"
       - "session/**"
       - "dsl/**"
+      - "scenario/**"
       - ".github/workflows/docs.yml"
 
 jobs:
@@ -33,7 +35,7 @@ jobs:
         with:
           files: docs
           fail_on_error: "true"
-          filter_mode: nofilter
+          filter_mode: added
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

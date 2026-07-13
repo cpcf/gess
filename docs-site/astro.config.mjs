@@ -28,6 +28,7 @@ export default defineConfig({
 				{ label: '.gess language reference', slug: 'gess-language' },
 				{ label: 'Go API guide', slug: 'go-api' },
 				{ label: 'Value JSON', slug: 'value-json' },
+				{ label: 'Explain JSON', slug: 'explain-json' },
 				{ label: 'Session lifecycle', slug: 'session-lifecycle' },
 				{ label: 'Command-line tools', slug: 'cli' },
 				{ label: 'Advanced behavior', slug: 'advanced' },
