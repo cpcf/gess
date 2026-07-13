@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/cpcf/gess/internal/gesssexp"
+	"github.com/cpcf/gess/dsl"
 )
 
 func main() {
@@ -54,7 +54,7 @@ func formatReader(name string, r io.Reader, w io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", name, err)
 	}
-	formatted, err := gesssexp.Format(name, source)
+	formatted, err := dsl.Format(name, source)
 	if err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func formatFile(path string, write bool, quiet bool) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	formatted, err := gesssexp.Format(path, source)
+	formatted, err := dsl.Format(path, source)
 	if err != nil {
 		return false, err
 	}

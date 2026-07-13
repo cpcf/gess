@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/cpcf/gess/internal/engine"
+	"github.com/cpcf/gess/internal/gesssexp"
 	"github.com/cpcf/gess/rules"
 	"github.com/cpcf/gess/session"
 )
@@ -110,6 +111,20 @@ func wrapError(err error) error {
 			Err:    fileErr.Err,
 		}
 	}
+	var sexpErr *gesssexp.FileError
+	if errors.As(err, &sexpErr) {
+		return &FileError{
+			Span: SourceSpan{
+				Name:        sexpErr.Span.Name,
+				StartLine:   sexpErr.Span.StartLine,
+				StartColumn: sexpErr.Span.StartColumn,
+				EndLine:     sexpErr.Span.EndLine,
+				EndColumn:   sexpErr.Span.EndColumn,
+			},
+			Reason: sexpErr.Reason,
+			Err:    sexpErr.Err,
+		}
+	}
 	return err
 }
 
@@ -204,6 +219,16 @@ func Parse(name string, source []byte) (*Document, error) {
 		return nil, wrapError(err)
 	}
 	return wrapDocument(doc), nil
+}
+
+// Format parses source and returns the canonical byte layout used by gessfmt,
+// preserving comments and reporting syntax failures as FileError values.
+func Format(name string, source []byte) ([]byte, error) {
+	formatted, err := gesssexp.Format(name, source)
+	if err != nil {
+		return nil, wrapError(err)
+	}
+	return formatted, nil
 }
 
 // Load lowers a parsed Document into workspace, registering its modules,
