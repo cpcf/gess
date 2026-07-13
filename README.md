@@ -122,6 +122,9 @@ The guides under [`docs/`](docs/README.md) cover the engine in depth:
   `scenario` packages.
 - [Value JSON](docs/value-json.md): the lossless typed-value contract shared by
   scenarios, reports, Workbench, and MCP.
+- [Scenario and report JSON](docs/scenario-report-json.md): the strict,
+  versioned portable artifacts for deterministic scenario inputs and run
+  reports.
 - [Explain JSON](docs/explain-json.md): the versioned, one-way contract for
   derivations, why-not reports, and counterfactual runs.
 - [Session lifecycle](docs/session-lifecycle.md): mutations, runs, queries,
@@ -197,7 +200,8 @@ pure functions cannot be stubbed because they affect matching.
   querying, snapshots, events, and logical support.
 - `dsl`: parser, loader, generated-code support, and registry hooks for `.gess`
   files.
-- `scenario`: lossless, deterministic JSON adapters for `rules.Value` data.
+- `scenario`: strict, deterministic scenario and run-report artifacts plus
+  lossless JSON adapters for `rules.Value` data.
 - `cmd/gessc`: command-line compiler from `.gess` files to generated Go.
   Generated code embeds each construct's source span verbatim from the input
   file name passed to `gessc`, so runtime errors point back at the authored

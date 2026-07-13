@@ -9,9 +9,16 @@ conventions for tests, benchmarks, and documentation.
   the public rule-definition values, workspace facade, and compiled ruleset
   facade; `session` explicitly constructs engine-backed workspaces and exposes
   the runtime facade; `dsl` exposes the loader facade; and `scenario` owns the
-  shared, lossless JSON value contract.
+  portable scenario and run-report artifacts and their shared, lossless JSON
+  value contract.
   Keep public import paths stable while the engine evolves, and avoid
   exposing new engine internals directly.
+- `scenario/artifact_types.go` declares the portable scenario and run-report
+  data types, `artifact_number.go` owns precision-safe structural counters,
+  `artifact_validation.go` owns semantic validation and canonical ordering,
+  and `artifact_json.go` owns strict decoding, canonical encoding, and artifact
+  digests. Keep all Gess-valued fields on the shared `scenario.Value` encoding
+  instead of inventing another JSON projection.
 - `internal/engine/`: nearly all implementation code, as one flat package
   with tests and benchmarks beside the implementation files.
 - `internal/gesssexp/`: the S-expression lexer, parser, and canonical
@@ -149,6 +156,14 @@ Style expectations:
 
 Behavior changes come with new or updated tests, preferring contract-style
 and table-driven forms.
+
+Scenario and run-report schema changes require strict-decoder cases, canonical
+re-encoding coverage, and checked-in JSON fixtures under
+`scenario/testdata/<version>/`. Keeping each schema version in its own directory
+prevents a version bump from silently overwriting the previous wire contract.
+Golden files end with one file newline, but digest and canonical-byte assertions
+use the compact bytes from `MarshalScenario` or `MarshalRunReport` without that
+newline.
 
 ## Benchmarks
 
