@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/cpcf/gess/rules"
@@ -25,7 +24,11 @@ func (s *Server) assert(ctx context.Context, _ *mcp.CallToolRequest, input asser
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown template %q", templateName)
 	}
-	fields, err := rules.NewFields(normalizeJSONObject(input.Fields))
+	decoded, err := decodeJSONObject(input.Fields)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields, err := rules.NewFields(decoded)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -49,7 +52,11 @@ func (s *Server) modify(ctx context.Context, _ *mcp.CallToolRequest, input modif
 	if err != nil {
 		return nil, nil, err
 	}
-	set, err := rules.NewFields(normalizeJSONObject(input.Set))
+	decoded, err := decodeJSONObject(input.Set)
+	if err != nil {
+		return nil, nil, err
+	}
+	set, err := rules.NewFields(decoded)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -128,7 +135,11 @@ func (s *Server) query(ctx context.Context, _ *mcp.CallToolRequest, input queryI
 	}
 	args := make(sess.QueryArgs, len(input.Args))
 	for key, value := range input.Args {
-		args[key] = normalizeJSONValue(value)
+		decoded, err := decodeJSONValue(value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("query argument %q: %w", key, err)
+		}
+		args[key] = decoded
 	}
 	rows, err := s.session.QueryAll(ctx, name, args)
 	if err != nil {
@@ -181,7 +192,11 @@ func (s *Server) applyWhatIfOperation(ctx context.Context, fork *sess.Session, o
 		if !ok {
 			return fmt.Errorf("unknown template %q", templateName)
 		}
-		fields, err := rules.NewFields(normalizeJSONObject(operation.Fields))
+		decoded, err := decodeJSONObject(operation.Fields)
+		if err != nil {
+			return err
+		}
+		fields, err := rules.NewFields(decoded)
 		if err != nil {
 			return err
 		}
@@ -195,7 +210,11 @@ func (s *Server) applyWhatIfOperation(ctx context.Context, fork *sess.Session, o
 		if err != nil {
 			return err
 		}
-		set, err := rules.NewFields(normalizeJSONObject(operation.Set))
+		decoded, err := decodeJSONObject(operation.Set)
+		if err != nil {
+			return err
+		}
+		set, err := rules.NewFields(decoded)
 		if err != nil {
 			return err
 		}
@@ -237,35 +256,4 @@ func mcpToolError(err error) *mcp.CallToolResult {
 	result := &mcp.CallToolResult{}
 	result.SetError(err)
 	return result
-}
-
-func normalizeJSONObject(value map[string]any) map[string]any {
-	if value == nil {
-		return nil
-	}
-	out := make(map[string]any, len(value))
-	for key, item := range value {
-		out[key] = normalizeJSONValue(item)
-	}
-	return out
-}
-
-func normalizeJSONValue(value any) any {
-	switch value := value.(type) {
-	case float64:
-		if !math.IsNaN(value) && !math.IsInf(value, 0) && math.Trunc(value) == value && value >= math.MinInt64 && value < math.MaxInt64 {
-			return int64(value)
-		}
-		return value
-	case []any:
-		out := make([]any, len(value))
-		for i, item := range value {
-			out[i] = normalizeJSONValue(item)
-		}
-		return out
-	case map[string]any:
-		return normalizeJSONObject(value)
-	default:
-		return value
-	}
 }

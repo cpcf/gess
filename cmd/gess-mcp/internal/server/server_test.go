@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cpcf/gess/rules"
+	"github.com/cpcf/gess/scenario"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -96,13 +99,18 @@ func TestConfigRejectsNonPositiveBounds(t *testing.T) {
 	}
 }
 
-func TestNormalizeJSONValue(t *testing.T) {
-	got := normalizeJSONValue(map[string]any{
+func TestDecodeJSONValue(t *testing.T) {
+	decoded, err := decodeJSONValue(map[string]any{
 		"integer":    float64(3),
 		"fractional": float64(3.5),
 		"tooLarge":   float64(math.MaxInt64),
 		"list":       []any{float64(4)},
-	}).(map[string]any)
+		"object":     map[string]any{"kind": "domain", "count": float64(5)},
+	})
+	if err != nil {
+		t.Fatalf("decode ordinary JSON: %v", err)
+	}
+	got := decoded.(map[string]any)
 	if got["integer"] != int64(3) || got["fractional"] != float64(3.5) {
 		t.Fatalf("normalized scalars = %#v", got)
 	}
@@ -111,6 +119,24 @@ func TestNormalizeJSONValue(t *testing.T) {
 	}
 	if list := got["list"].([]any); list[0] != int64(4) {
 		t.Fatalf("normalized list = %#v", list)
+	}
+	if object := got["object"].(map[string]any); object["kind"] != "domain" || object["count"] != int64(5) {
+		t.Fatalf("unknown-kind object = %#v", object)
+	}
+
+	typed, err := decodeJSONValue(map[string]any{"kind": "int", "int": "9223372036854775807"})
+	if err != nil {
+		t.Fatalf("decode typed integer: %v", err)
+	}
+	integer, ok := typed.(rules.Value)
+	if !ok {
+		t.Fatalf("decoded typed integer = %T, want rules.Value", typed)
+	}
+	if value, ok := integer.AsInt64(); !ok || value != math.MaxInt64 {
+		t.Fatalf("decoded typed integer = (%d, %t), want (%d, true)", value, ok, int64(math.MaxInt64))
+	}
+	if _, err := decodeJSONValue(map[string]any{"kind": "int", "int": "01"}); !errors.Is(err, scenario.ErrInvalidValueJSON) {
+		t.Fatalf("non-canonical typed integer error = %v, want ErrInvalidValueJSON", err)
 	}
 }
 
@@ -197,6 +223,9 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	if factID == "" {
 		t.Fatalf("snapshot fact ID = %#v", fact["id"])
 	}
+	if amount := fact["fields"].(map[string]any)["amount"]; projectedInt(amount) != "25" {
+		t.Fatalf("snapshot amount = %#v, want typed integer 25", amount)
+	}
 
 	agenda := toolObject(t, callTool(t, ctx, clientSession, "agenda", nil))
 	if agenda["gessMcpSchema"] != float64(1) || agenda["kind"] != "agenda" {
@@ -235,10 +264,17 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	if !ok || invalidOutput["kind"] != "assert" || invalidOutput["status"] != "validation_failure" {
 		t.Fatalf("invalid assert structured result = %#v", invalidAssert.StructuredContent)
 	}
+	nonCanonicalAssert := callTool(t, ctx, clientSession, "assert", map[string]any{
+		"template": "order",
+		"fields":   map[string]any{"id": "BAD-TYPED", "amount": map[string]any{"kind": "int", "int": "030"}},
+	})
+	if !nonCanonicalAssert.IsError || !strings.Contains(toolText(nonCanonicalAssert), "non-canonical int") {
+		t.Fatalf("non-canonical typed assert = error %t content %q", nonCanonicalAssert.IsError, toolText(nonCanonicalAssert))
+	}
 
 	asserted := toolObject(t, callTool(t, ctx, clientSession, "assert", map[string]any{
 		"template": "order",
-		"fields":   map[string]any{"id": "O-200", "amount": 30},
+		"fields":   map[string]any{"id": "O-200", "amount": map[string]any{"kind": "int", "int": "9223372036854775807"}},
 	}))
 	if asserted["kind"] != "assert" || asserted["status"] != "inserted" {
 		t.Fatalf("assert output = %#v", asserted)
@@ -246,8 +282,8 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	assertedFact := asserted["fact"].(map[string]any)
 	assertedID := assertedFact["id"].(string)
 	assertedFields := assertedFact["fields"].(map[string]any)
-	if assertedFields["amount"] != float64(30) {
-		t.Fatalf("asserted amount = %#v, want 30", assertedFields["amount"])
+	if projectedInt(assertedFields["amount"]) != "9223372036854775807" {
+		t.Fatalf("asserted amount = %#v, want typed max int64", assertedFields["amount"])
 	}
 
 	overLimit := callTool(t, ctx, clientSession, "run", map[string]any{"maxFirings": 3})
@@ -265,10 +301,14 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 
 	modified := toolObject(t, callTool(t, ctx, clientSession, "modify", map[string]any{
 		"factId": assertedID,
-		"set":    map[string]any{"amount": 5},
+		"set":    map[string]any{"amount": map[string]any{"kind": "int", "int": "5"}},
 	}))
 	if modified["kind"] != "modify" || modified["status"] != "changed" {
 		t.Fatalf("modify output = %#v", modified)
+	}
+	modifiedAmount := modified["fact"].(map[string]any)["fields"].(map[string]any)["amount"]
+	if projectedInt(modifiedAmount) != "5" {
+		t.Fatalf("modified amount = %#v, want typed integer 5", modifiedAmount)
 	}
 
 	third := toolObject(t, callTool(t, ctx, clientSession, "assert", map[string]any{
@@ -297,8 +337,11 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	if len(row["aliases"].([]any)) != 2 || row["values"] == nil {
 		t.Fatalf("query row = %#v", row)
 	}
+	if amount := row["values"].(map[string]any)["amount"]; projectedInt(amount) == "" {
+		t.Fatalf("query amount = %#v, want typed integer", amount)
+	}
 	parameterizedQuery := toolObject(t, callTool(t, ctx, clientSession, "query", map[string]any{
-		"name": "orders-at-amount", "args": map[string]any{"amount": 5},
+		"name": "orders-at-amount", "args": map[string]any{"amount": modifiedAmount},
 	}))
 	if parameterizedQuery["totalRows"] != float64(1) || parameterizedQuery["truncated"] != false {
 		t.Fatalf("parameterized query = %#v", parameterizedQuery)
@@ -339,8 +382,8 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 	whatIf := toolObject(t, callTool(t, ctx, clientSession, "what_if", map[string]any{
 		"explain": true,
 		"operations": []any{
-			map[string]any{"kind": "assert", "template": "order", "fields": map[string]any{"id": "O-400", "amount": 50}},
-			map[string]any{"kind": "modify", "factId": factID, "set": map[string]any{"amount": 5}},
+			map[string]any{"kind": "assert", "template": "order", "fields": map[string]any{"id": "O-400", "amount": map[string]any{"kind": "int", "int": "50"}}},
+			map[string]any{"kind": "modify", "factId": factID, "set": map[string]any{"amount": map[string]any{"kind": "int", "int": "5"}}},
 			map[string]any{"kind": "retract", "factId": thirdID},
 		},
 	}))
@@ -368,7 +411,7 @@ func TestMCPInterrogationAndStatefulTools(t *testing.T) {
 		projected := raw.(map[string]any)
 		baseByID[projected["id"].(string)] = projected
 	}
-	if baseByID[factID]["fields"].(map[string]any)["amount"] != float64(25) || baseByID[thirdID] == nil {
+	if projectedInt(baseByID[factID]["fields"].(map[string]any)["amount"]) != "25" || baseByID[thirdID] == nil {
 		t.Fatalf("what-if mutated base session: %#v", baseByID)
 	}
 
@@ -434,6 +477,15 @@ func toolText(result *mcp.CallToolResult) string {
 		return text.Text
 	}
 	return ""
+}
+
+func projectedInt(value any) string {
+	projected, ok := value.(map[string]any)
+	if !ok || projected["kind"] != "int" {
+		return ""
+	}
+	encoded, _ := projected["int"].(string)
+	return encoded
 }
 
 func writeTestFile(t *testing.T, path, contents string) {

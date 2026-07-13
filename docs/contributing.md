@@ -5,10 +5,11 @@ conventions for tests, benchmarks, and documentation.
 
 ## Repository layout
 
-- `rules/`, `session/`, `dsl/`: the public packages. `rules` owns the
-  public rule-definition values, workspace facade, and compiled ruleset
+- `rules/`, `session/`, `dsl/`, `scenario/`: the public packages. `rules` owns
+  the public rule-definition values, workspace facade, and compiled ruleset
   facade; `session` explicitly constructs engine-backed workspaces and exposes
-  the runtime facade, while `dsl` exposes the loader facade.
+  the runtime facade; `dsl` exposes the loader facade; and `scenario` owns the
+  shared, lossless JSON value contract.
   Keep public import paths stable while the engine evolves, and avoid
   exposing new engine internals directly.
 - `internal/engine/`: nearly all implementation code, as one flat package

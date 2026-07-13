@@ -2,8 +2,8 @@
 // Copies docs/*.md (canonical source) into src/content/docs/, adding
 // Starlight frontmatter and rewriting same-directory .md links to slugs.
 // Also generates API reference pages from doc comments for the rules,
-// session, and dsl packages via tools/gendoc. Run via `npm run sync` or
-// automatically before dev/build.
+// session, dsl, and scenario packages via tools/gendoc. Run via `npm run sync`
+// or automatically before dev/build.
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -67,7 +67,7 @@ const pages = [
     order: 4,
     title: "Go API guide",
     description:
-      "Building templates, rules, queries, actions, and pure functions with the rules, session, and dsl packages.",
+      "Building templates, rules, queries, actions, pure functions, and portable value JSON with the rules, session, dsl, and scenario packages.",
   },
   {
     slug: "session-lifecycle",
@@ -116,9 +116,17 @@ const pages = [
       "Versioned graph, memory, agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.",
   },
   {
+    slug: "value-json",
+    source: "value-json.md",
+    order: 11,
+    title: "Value JSON",
+    description:
+      "The lossless, deterministic typed-value contract shared by scenarios, reports, Workbench, and MCP.",
+  },
+  {
     slug: "contributing",
     source: "contributing.md",
-    order: 11,
+    order: 12,
     title: "Developer guide",
     description:
       "Repository layout, engine architecture, tests, benchmarks, and the documentation workflow.",
@@ -128,7 +136,7 @@ const pages = [
     source: "README.md",
     sourceDir: path.join("..", "tutorial"),
     editSourcePath: "tutorial/README.md",
-    order: 15,
+    order: 17,
     title: "Interactive tutorial workshop",
     description:
       "Run the local browser or terminal workshop for the vulnerability response scenario.",
@@ -142,7 +150,7 @@ const apiPackages = [
     slug: "reference/rules",
     pkgDir: "rules",
     importPath: "github.com/cpcf/gess/rules",
-    order: 12,
+    order: 13,
     title: "rules package reference",
     description: "Generated API reference for github.com/cpcf/gess/rules.",
   },
@@ -150,7 +158,7 @@ const apiPackages = [
     slug: "reference/session",
     pkgDir: "session",
     importPath: "github.com/cpcf/gess/session",
-    order: 13,
+    order: 14,
     title: "session package reference",
     description: "Generated API reference for github.com/cpcf/gess/session.",
   },
@@ -158,9 +166,17 @@ const apiPackages = [
     slug: "reference/dsl",
     pkgDir: "dsl",
     importPath: "github.com/cpcf/gess/dsl",
-    order: 14,
+    order: 15,
     title: "dsl package reference",
     description: "Generated API reference for github.com/cpcf/gess/dsl.",
+  },
+  {
+    slug: "reference/scenario",
+    pkgDir: "scenario",
+    importPath: "github.com/cpcf/gess/scenario",
+    order: 16,
+    title: "scenario package reference",
+    description: "Generated API reference for github.com/cpcf/gess/scenario.",
   },
 ];
 
