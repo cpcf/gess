@@ -31,6 +31,14 @@ type GessDocument struct {
 	initials []SessionInitialFact
 }
 
+// GessSymbol is one named top-level declaration in a parsed source document.
+type GessSymbol struct {
+	Kind   string
+	Name   string
+	Module string
+	Source SourceSpan
+}
+
 // Name returns the source name supplied to ParseGess.
 func (d *GessDocument) Name() string {
 	if d == nil {
@@ -46,6 +54,53 @@ func (d *GessDocument) InitialFacts() []SessionInitialFact {
 		return nil
 	}
 	return cloneSessionInitialFacts(d.initials)
+}
+
+// Symbols returns named top-level declarations in source order. It reports
+// syntactic declarations only; LoadGess remains authoritative for semantics.
+func (d *GessDocument) Symbols() []GessSymbol {
+	if d == nil {
+		return nil
+	}
+	symbols := make([]GessSymbol, 0, len(d.forms))
+	for _, form := range d.forms {
+		if len(form.List) < 2 || !form.List[1].IsAtom() {
+			continue
+		}
+		kind := ""
+		name := form.List[1].Text()
+		module := ""
+		switch form.Head() {
+		case "defmodule":
+			kind = "module"
+			module = name
+		case "deftemplate":
+			kind = "template"
+			moduleName, localName := splitGessName(name)
+			module, name = normalizeModuleName(moduleName).String(), localName
+		case "defrule":
+			kind = "rule"
+			moduleName, localName := splitGessName(name)
+			module, name = normalizeModuleName(moduleName).String(), localName
+		case "defquery":
+			kind = "query"
+			moduleName, localName := splitGessName(name)
+			module, name = normalizeModuleName(moduleName).String(), localName
+		case "defglobal":
+			kind = "global"
+			if normalized, ok := gessGlobalName(form.List[1]); ok {
+				name = normalized
+			}
+		case "deffunction":
+			kind = "function"
+		case "deffacts":
+			kind = "deffacts"
+		}
+		if kind != "" && name != "" {
+			symbols = append(symbols, GessSymbol{Kind: kind, Name: name, Module: module, Source: form.Span})
+		}
+	}
+	return symbols
 }
 
 // MissingRegistrations returns host action and call registrations referenced by

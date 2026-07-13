@@ -136,6 +136,27 @@ type MissingRegistrations struct {
 	Actions []string
 }
 
+// SymbolKind identifies a named top-level .gess declaration.
+type SymbolKind string
+
+const (
+	SymbolModule   SymbolKind = "module"
+	SymbolTemplate SymbolKind = "template"
+	SymbolRule     SymbolKind = "rule"
+	SymbolQuery    SymbolKind = "query"
+	SymbolFunction SymbolKind = "function"
+	SymbolGlobal   SymbolKind = "global"
+	SymbolDeffacts SymbolKind = "deffacts"
+)
+
+// Symbol is one syntactic top-level declaration from a parsed Document.
+type Symbol struct {
+	Kind   SymbolKind
+	Name   string
+	Module string
+	Source SourceSpan
+}
+
 func wrapMissingRegistrations(missing engine.DSLMissingRegistrations) MissingRegistrations {
 	return MissingRegistrations{
 		Calls:   missing.Calls,
@@ -202,6 +223,25 @@ func (d *Document) Name() string {
 // document.
 func (d *Document) InitialFacts() []session.InitialFact {
 	return d.engineDocument().InitialFacts()
+}
+
+// Symbols returns named top-level declarations in source order. Loading and
+// compilation remain authoritative for semantic validity.
+func (d *Document) Symbols() []Symbol {
+	if d == nil {
+		return nil
+	}
+	engineSymbols := d.engineDocument().Symbols()
+	symbols := make([]Symbol, len(engineSymbols))
+	for index, symbol := range engineSymbols {
+		symbols[index] = Symbol{
+			Kind:   SymbolKind(symbol.Kind),
+			Name:   symbol.Name,
+			Module: symbol.Module,
+			Source: wrapSourceSpan(symbol.Source),
+		}
+	}
+	return symbols
 }
 
 // MissingRegistrations returns host action and call registrations referenced by
