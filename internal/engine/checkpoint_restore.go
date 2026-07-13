@@ -8,7 +8,7 @@ import (
 
 // restoreCheckpointWire rebuilds a new session from a validated checkpoint
 // document. It stays internal until the public codec and resource bounds land.
-func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document checkpointWireDocument) (*Session, error) {
+func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document checkpointWireDocument, opts ...SessionOption) (*Session, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -23,6 +23,10 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	}
 	if revision.ID() != document.RulesetID {
 		return nil, fmt.Errorf("%w: checkpoint ruleset %s, supplied ruleset %s", ErrIncompatibleRuleset, document.RulesetID, revision.ID())
+	}
+	local, err := checkpointRestoreLocalConfig(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	initials, err := checkpointInitialFactsFromWire(document.Config.InitialFacts)
@@ -58,17 +62,25 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	if document.Config.Strategy == "breadth" {
 		strategy = StrategyBreadth
 	}
+	sessionID := document.SessionID
+	if local.id != "" {
+		sessionID = local.id
+	}
 	config := sessionConfig{
-		id:                  document.SessionID,
+		id:                  sessionID,
 		initials:            initials,
 		globals:             globals,
 		strategy:            strategy,
 		resetBeforeSnapshot: document.Config.ResetBeforeSnapshot,
 		demandLimit:         document.Config.DemandCascadeLimit,
+		listeners:           local.listeners,
+		eventClock:          local.eventClock,
+		output:              local.output,
+		explainLog:          local.explainLog,
 	}
-	diagnostics := newSessionDiagnosticsExporter(config, document.State.NextEventSequence)
+	diagnostics := newSessionDiagnosticsExporter(sessionConfig{eventClock: local.eventClock}, document.State.NextEventSequence)
 	session := &Session{
-		id:                  document.SessionID,
+		id:                  sessionID,
 		revision:            revision,
 		agendaDriver:        newSessionAgendaDriver(strategy),
 		propagation:         newSessionPropagationCoordinator(rete),
@@ -79,6 +91,7 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 		compiledInitials:    compiledInitials,
 		resetBeforeSnapshot: document.Config.ResetBeforeSnapshot,
 		diagnostics:         diagnostics,
+		output:              local.output,
 		backchain:           newSessionBackchainStore(document.Config.DemandCascadeLimit),
 		runGuard:            make(chan struct{}, 1),
 		mu: struct {
@@ -112,10 +125,23 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 		LengthMax: document.State.Backchain.LengthMax,
 		LimitHits: document.State.Backchain.LimitHits,
 	}
-	session.diagnostics.nextEventSequence = document.State.NextEventSequence
+	session.diagnostics = newSessionDiagnosticsExporter(config, document.State.NextEventSequence)
 	session.nextRunSequence = document.State.NextRunSequence
 	session.syncPropagationCounters()
 	return session, nil
+}
+
+func checkpointRestoreLocalConfig(opts []SessionOption) (sessionConfig, error) {
+	var local sessionConfig
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&local)
+		}
+	}
+	if len(local.initials) != 0 || len(local.globals) != 0 || local.strategy != StrategyDepth || local.resetBeforeSnapshot || local.demandLimit != 0 {
+		return sessionConfig{}, fmt.Errorf("%w: restore options cannot override persisted semantic configuration", ErrInvalidCheckpoint)
+	}
+	return local, nil
 }
 
 func checkpointInitialFactsFromWire(wire []checkpointWireInitialFact) ([]SessionInitialFact, error) {

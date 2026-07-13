@@ -193,6 +193,25 @@ func TestCheckpointWireValidationRejectsSemanticInconsistency(t *testing.T) {
 	}
 }
 
+func TestDecodeCheckpointReaderEnforcesBound(t *testing.T) {
+	if _, err := decodeCheckpointReader(strings.NewReader(strings.Repeat("x", 65)), 64); !errors.Is(err, ErrInvalidCheckpoint) {
+		t.Fatalf("oversized decode error = %v, want ErrInvalidCheckpoint", err)
+	}
+}
+
+func FuzzDecodeCheckpointWireDoesNotPanic(f *testing.F) {
+	f.Add([]byte(`{}`))
+	f.Add([]byte(`{"format":"gess/session-checkpoint","version":1}`))
+	valid, err := encodeCheckpointWire(minimalCheckpointWireDocument())
+	if err != nil {
+		f.Fatalf("encode seed: %v", err)
+	}
+	f.Add(valid)
+	f.Fuzz(func(t *testing.T, encoded []byte) {
+		_, _ = decodeCheckpointWire(encoded)
+	})
+}
+
 func mustCheckpointValue(t *testing.T, raw any) Value {
 	t.Helper()
 	value, err := NewValue(raw)

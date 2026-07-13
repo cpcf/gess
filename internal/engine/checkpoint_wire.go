@@ -361,9 +361,15 @@ func validateCheckpointWireDocument(document checkpointWireDocument) error {
 		if len(activation.FactIDs) != len(activation.FactVersions) {
 			return fmt.Errorf("%w: activation %d fact/version length mismatch", ErrInvalidCheckpoint, i)
 		}
-		for _, id := range activation.FactIDs {
+		for factIndex, id := range activation.FactIDs {
+			if id == (checkpointWireFactID{}) {
+				if activation.FactVersions[factIndex] != 0 {
+					return fmt.Errorf("%w: activation %d has version for empty fact slot", ErrInvalidCheckpoint, i)
+				}
+				continue
+			}
 			if _, ok := facts[id]; !ok {
-				return fmt.Errorf("%w: activation %d references missing fact", ErrInvalidCheckpoint, i)
+				return fmt.Errorf("%w: activation %d references missing fact g%d:%d", ErrInvalidCheckpoint, i, id.Generation, id.Sequence)
 			}
 		}
 		for j, binding := range activation.Bindings {

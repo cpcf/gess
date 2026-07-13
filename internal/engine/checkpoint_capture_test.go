@@ -323,6 +323,105 @@ func TestRestoreCheckpointWireRejectsRulesetAndGraphDisagreement(t *testing.T) {
 	}
 }
 
+func TestCheckpointRestoreRebuildsGraphLifecycleShapes(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		build func(testing.TB) (*Ruleset, []SessionInitialFact)
+	}{
+		{name: "alpha", build: buildAlphaLifecycleRuleset},
+		{name: "join", build: buildJoinLifecycleRuleset},
+		{name: "negation", build: buildNegationLifecycleRuleset},
+		{name: "aggregate", build: buildAggregateLifecycleRuleset},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			revision, initials := tc.build(t)
+			session, err := NewSession(revision, WithInitialFacts(initials...))
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+			document, err := session.checkpointWire(ctx)
+			if err != nil {
+				t.Fatalf("checkpointWire: %v", err)
+			}
+			restored, err := restoreCheckpointWire(ctx, revision, document)
+			if err != nil {
+				t.Fatalf("restoreCheckpointWire: %v", err)
+			}
+			restoredDocument, err := restored.checkpointWire(ctx)
+			if err != nil {
+				t.Fatalf("restored checkpointWire: %v", err)
+			}
+			if !reflect.DeepEqual(restoredDocument, document) {
+				t.Fatalf("restored %s lifecycle differs:\n got %#v\nwant %#v", tc.name, restoredDocument, document)
+			}
+		})
+	}
+}
+
+func TestCheckpointRestoreRebuildsActiveBackchainDemandState(t *testing.T) {
+	ctx := context.Background()
+	workspace := NewWorkspace()
+	request, answer := mustBackchainDemandTemplates(t, workspace)
+	mustAddAction(t, workspace, ActionSpec{Name: "mark", Fn: func(ActionContext) error { return nil }})
+	mustAddRule(t, workspace, RuleSpec{
+		Name: "request-needs-answer",
+		ConditionTree: And{Conditions: []ConditionSpec{
+			Match{Binding: "request", Target: TemplateKeyFact(request.Key())},
+			Match{
+				Binding: "answer",
+				FieldConstraints: []FieldConstraintSpec{
+					{Field: "kind", Operator: FieldConstraintEqual, Value: "hardware"},
+				},
+				JoinConstraints: []JoinConstraintSpec{
+					{Field: "id", Operator: FieldConstraintEqual, Ref: FieldRef{Binding: "request", Field: "id"}},
+				},
+				Target: TemplateKeyFact(answer.Key()),
+			},
+		}},
+		Actions: []RuleActionSpec{{Name: "mark"}},
+	})
+	revision := mustCompileWorkspace(t, workspace)
+	demandKey := mustDemandKey(t, revision, answer.Key())
+	session, err := NewSession(revision, WithInitialFacts(SessionInitialFact{
+		TemplateKey: request.Key(),
+		Fields:      mustFields(t, map[string]any{"id": "q1"}),
+	}))
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if got := len(mustSnapshot(t, ctx, session).FactsByTemplateKey(demandKey)); got != 1 {
+		t.Fatalf("active demands = %d, want 1", got)
+	}
+	beforeDiagnostics, err := session.Diagnostics(ctx)
+	if err != nil {
+		t.Fatalf("Diagnostics before: %v", err)
+	}
+	document, err := session.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("checkpointWire: %v", err)
+	}
+	restored, err := restoreCheckpointWire(ctx, revision, document)
+	if err != nil {
+		t.Fatalf("restoreCheckpointWire: %v", err)
+	}
+	restoredDocument, err := restored.checkpointWire(ctx)
+	if err != nil {
+		t.Fatalf("restored checkpointWire: %v", err)
+	}
+	if !reflect.DeepEqual(restoredDocument, document) {
+		t.Fatalf("restored backchain checkpoint differs:\n got %#v\nwant %#v", restoredDocument, document)
+	}
+	afterDiagnostics, err := restored.Diagnostics(ctx)
+	if err != nil {
+		t.Fatalf("Diagnostics after: %v", err)
+	}
+	if !reflect.DeepEqual(beforeDiagnostics.Backchain, afterDiagnostics.Backchain) {
+		t.Fatalf("backchain diagnostics differ: before=%+v after=%+v", beforeDiagnostics.Backchain, afterDiagnostics.Backchain)
+	}
+}
+
 func checkpointWireFactByID(t *testing.T, facts []checkpointWireFact, id FactID) checkpointWireFact {
 	t.Helper()
 	want := checkpointWireFactIDFromFactID(id)

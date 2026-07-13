@@ -858,6 +858,36 @@ type Session struct {
 	rt *engine.Session
 }
 
+const (
+	// CheckpointFormat identifies the durable-session checkpoint envelope.
+	CheckpointFormat = engine.CheckpointFormat
+	// CheckpointVersion is the checkpoint schema version this build writes.
+	CheckpointVersion = engine.CheckpointVersion
+	// DefaultCheckpointMaxBytes bounds DecodeCheckpoint input.
+	DefaultCheckpointMaxBytes = engine.DefaultCheckpointMaxBytes
+)
+
+// Checkpoint is an opaque, immutable durable-session value. Use
+// EncodeCheckpoint and DecodeCheckpoint for persistence.
+type Checkpoint struct {
+	value engine.Checkpoint
+}
+
+// FormatVersion returns the checkpoint wire schema version.
+func (c Checkpoint) FormatVersion() int {
+	return c.value.FormatVersion()
+}
+
+// RulesetID returns the compiled ruleset required to restore the checkpoint.
+func (c Checkpoint) RulesetID() RulesetID {
+	return c.value.RulesetID()
+}
+
+// SessionID returns the captured session identity.
+func (c Checkpoint) SessionID() SessionID {
+	return c.value.SessionID()
+}
+
 func wrapSession(rt *engine.Session) *Session {
 	if rt == nil {
 		return nil
@@ -2160,6 +2190,38 @@ func New(revision *rules.Ruleset, opts ...Option) (*Session, error) {
 	return wrapSession(rt), nil
 }
 
+// Restore builds an independent session from checkpoint against revision.
+// Revision must have the checkpoint's RulesetID. Options may attach
+// process-local listeners, output, explain capture, an event clock, or a
+// replacement session ID; persisted globals, initial facts, strategy, reset
+// behavior, and demand limits cannot be overridden.
+func Restore(ctx context.Context, revision *rules.Ruleset, checkpoint Checkpoint, opts ...Option) (*Session, error) {
+	engineRevision, err := engine.RulesetFromPublic(revision)
+	if err != nil {
+		return nil, err
+	}
+	rt, err := engine.RestoreCheckpoint(ctx, engineRevision, checkpoint.value, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return wrapSession(rt), nil
+}
+
+// EncodeCheckpoint writes checkpoint in the canonical versioned format.
+func EncodeCheckpoint(w io.Writer, checkpoint Checkpoint) error {
+	return engine.EncodeCheckpoint(w, checkpoint.value)
+}
+
+// DecodeCheckpoint reads one canonical checkpoint document. Input is bounded
+// by DefaultCheckpointMaxBytes.
+func DecodeCheckpoint(r io.Reader) (Checkpoint, error) {
+	checkpoint, err := engine.DecodeCheckpoint(r)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	return Checkpoint{value: checkpoint}, nil
+}
+
 // NewWorkspace returns an empty engine-backed rule workspace ready for Add
 // calls and compilation.
 func NewWorkspace() *rules.Workspace {
@@ -2189,6 +2251,15 @@ func (s *Session) Snapshot(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return wrapSnapshot(snapshot), nil
+}
+
+// Checkpoint captures the complete durable state of an idle session.
+func (s *Session) Checkpoint(ctx context.Context) (Checkpoint, error) {
+	checkpoint, err := s.engineSession().Checkpoint(ctx)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	return Checkpoint{value: checkpoint}, nil
 }
 
 // Fork returns an independent session with the same working state as s.

@@ -235,6 +235,51 @@ logical `SupportGraph()`, backchain demand diagnostics, and snapshot-scoped
 two snapshots: facts added, retracted, and modified by field value or support
 state, in deterministic fact-id order.
 
+## Durable checkpoints
+
+An idle session can be checkpointed, encoded, and restored in another process:
+
+```go
+checkpoint, err := session.Checkpoint(ctx)
+if err != nil {
+	return err
+}
+if err := sess.EncodeCheckpoint(writer, checkpoint); err != nil {
+	return err
+}
+
+decoded, err := sess.DecodeCheckpoint(reader)
+if err != nil {
+	return err
+}
+restored, err := sess.Restore(ctx, ruleset, decoded,
+	sess.WithSessionID("restored-worker"),
+	sess.WithEventListener(listener),
+)
+```
+
+The checkpoint preserves exact fact identities, versions, recency and field
+presence; initial facts and globals; pending agenda order and fired-match
+refraction; focus state; logical-support edges; backchain demand state; and
+the sequence allocators used by later mutations, runs, and events. The
+compiled graph itself is never serialized. `Restore` requires a freshly
+compiled ruleset with the checkpoint's `RulesetID` and rebuilds graph memory
+from the decoded semantic state.
+
+`DecodeCheckpoint` accepts the versioned canonical JSON format and bounds
+input at `DefaultCheckpointMaxBytes`. Malformed or inconsistent input wraps
+`rules.ErrInvalidCheckpoint`; an unsupported envelope version wraps
+`rules.ErrUnsupportedCheckpointVersion`; and a ruleset mismatch wraps
+`rules.ErrIncompatibleRuleset`.
+
+Restore options may attach process-local state: a replacement session ID,
+listeners, event clock, output writer, or explain capture. They cannot replace
+persisted globals, initial facts, agenda strategy, reset behavior, or demand
+limits. Historical events are not replayed to newly attached listeners.
+
+Checkpoint capture is idle-only, like `Fork`: an overlapping `Run` or listener
+reentry returns `rules.ErrConcurrencyMisuse`.
+
 ## Forked sessions
 
 `Session.Fork` creates an independent mutable session with the parent's current
