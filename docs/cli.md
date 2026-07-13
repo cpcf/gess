@@ -184,16 +184,36 @@ lower the firing limit but cannot raise it. The operation schema is closed to
 is discarded. Set `explain: true` to include bounded derivations for added
 facts. The base session remains unchanged on success, failure, and cancellation.
 
-JSON numbers without a fractional part are treated as integers when converted
-to Gess values, including nested list/map values. This lets ordinary MCP JSON
-populate INTEGER fields and query parameters without a separate typed-value
-wrapper.
+Ordinary input JSON remains convenient: numbers without a fractional part are
+treated as integers when converted to Gess values, including nested list/map
+values. This lets ordinary MCP JSON populate INTEGER fields and query
+parameters. Clients can instead use the exact typed envelope when kind,
+`int64` precision, or negative zero matters:
+
+```json
+{ "kind": "int", "int": "9223372036854775807" }
+{ "kind": "float", "float": "-0" }
+{ "kind": "list", "list": [{ "kind": "string", "string": "a" }] }
+{ "kind": "map", "map": [{ "key": "", "value": { "kind": "bool", "bool": true } }] }
+```
+
+All Gess values in custom MCP outputs use this lossless envelope. Integer and
+finite-float payloads are canonical strings, list values are nested envelopes,
+and map entry arrays are strictly key-sorted; empty map keys are valid. Invalid
+recognized envelopes, including numbers that are not canonical, extra payload
+fields, nested members without envelopes, and duplicate or unsorted map keys,
+are rejected. For ordinary-input compatibility, an object with an absent or
+unrecognized `kind` remains an ordinary JSON map; direct
+`scenario.UnmarshalValue` is stricter and rejects unknown kinds. See
+[Value JSON](value-json.md) for the exact contract.
 
 Custom load, snapshot, agenda, mutation, run, and query results carry
 `gessMcpSchema: 1` plus a `kind` discriminator. Diagnostics and explain tools
 return their existing versioned JSON contracts; `what_if` returns the existing
-`gessExplainSchema` WhatIf document. MCP requests may be concurrent, but the
-command serializes all handlers around its single session.
+`gessExplainSchema` WhatIf document. Explain, WhyNot, and WhatIf v1 are one-way
+compatibility exceptions whose integer values remain JSON numbers; moving them
+to typed envelopes requires a new explain schema version. MCP requests may be
+concurrent, but the command serializes all handlers around its single session.
 
 For example, an MCP client configuration can launch:
 

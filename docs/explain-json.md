@@ -41,6 +41,12 @@ branches, facts) do not repeat the envelope.
 - These are **export-only** documents. There is no decoder back into engine
   types; the contract is a one-way projection.
 
+Explain schema v1 is therefore a compatibility exception to the bidirectional,
+lossless [Value JSON](value-json.md) contract used by new scenario, report,
+Workbench, and MCP value fields. Its integer fields remain JSON numbers; using
+typed value envelopes here would require an explicit explain schema version
+bump.
+
 ## `derivation`
 
 A fact, its support state, the firing that produced it (with the rendered

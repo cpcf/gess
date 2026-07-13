@@ -10,7 +10,7 @@ them to Go with `gessc`, and use the generated ruleset from normal Go code.
 ## Status
 
 This repository is under active development. The public API is organized around
-the `rules`, `session`, and `dsl` packages.
+the `rules`, `session`, `dsl`, and `scenario` packages.
 
 ## Requirements
 
@@ -19,8 +19,8 @@ the `rules`, `session`, and `dsl` packages.
 ## Quick start
 
 Use the module path `github.com/cpcf/gess` from Go code. The main public
-packages are `github.com/cpcf/gess/rules`, `github.com/cpcf/gess/session`, and
-`github.com/cpcf/gess/dsl`.
+packages are `github.com/cpcf/gess/rules`, `github.com/cpcf/gess/session`,
+`github.com/cpcf/gess/dsl`, and `github.com/cpcf/gess/scenario`.
 
 Run the examples from the module root:
 
@@ -118,8 +118,10 @@ The guides under [`docs/`](docs/README.md) cover the engine in depth:
 - [Core concepts](docs/concepts.md): templates, facts, rules, activations,
   the agenda, sessions, rulesets, and queries.
 - [The `.gess` language reference](docs/gess-language.md).
-- [Go API guide](docs/go-api.md) for the `rules`, `session`, and `dsl`
-  packages.
+- [Go API guide](docs/go-api.md) for the `rules`, `session`, `dsl`, and
+  `scenario` packages.
+- [Value JSON](docs/value-json.md): the lossless typed-value contract shared by
+  scenarios, reports, Workbench, and MCP.
 - [Session lifecycle](docs/session-lifecycle.md): mutations, runs, queries,
   snapshots, events, focus, and ruleset swaps.
 - [Command-line tools](docs/cli.md): `gessc` and `gessfmt`.
@@ -193,6 +195,7 @@ pure functions cannot be stubbed because they affect matching.
   querying, snapshots, events, and logical support.
 - `dsl`: parser, loader, generated-code support, and registry hooks for `.gess`
   files.
+- `scenario`: lossless, deterministic JSON adapters for `rules.Value` data.
 - `cmd/gessc`: command-line compiler from `.gess` files to generated Go.
   Generated code embeds each construct's source span verbatim from the input
   file name passed to `gessc`, so runtime errors point back at the authored

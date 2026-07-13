@@ -1,11 +1,6 @@
 package server
 
-import (
-	"fmt"
-
-	"github.com/cpcf/gess/rules"
-	sess "github.com/cpcf/gess/session"
-)
+import sess "github.com/cpcf/gess/session"
 
 func projectSnapshot(snapshot sess.Snapshot) map[string]any {
 	facts := snapshot.Facts()
@@ -152,39 +147,4 @@ func projectQueryRow(row sess.QueryRow) map[string]any {
 		out["values"] = values
 	}
 	return out
-}
-
-func projectValue(value rules.Value) any {
-	switch value.Kind() {
-	case rules.ValueNull:
-		return nil
-	case rules.ValueBool:
-		out, _ := value.AsBool()
-		return out
-	case rules.ValueInt:
-		out, _ := value.AsInt64()
-		return out
-	case rules.ValueFloat:
-		out, _ := value.AsFloat64()
-		return out
-	case rules.ValueString:
-		out, _ := value.AsString()
-		return out
-	case rules.ValueList:
-		values, _ := value.AsList()
-		out := make([]any, len(values))
-		for i, item := range values {
-			out[i] = projectValue(item)
-		}
-		return out
-	case rules.ValueMap:
-		values, _ := value.AsMap()
-		out := make(map[string]any, len(values))
-		for key, item := range values {
-			out[key] = projectValue(item)
-		}
-		return out
-	default:
-		return fmt.Sprint(value)
-	}
 }

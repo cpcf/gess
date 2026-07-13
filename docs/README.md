@@ -31,7 +31,8 @@ Once the basics are working, these guides go deeper:
 - [The `.gess` language reference](gess-language.md): every form the
   `.gess` parser accepts, with limits and errors.
 - [Go API guide](go-api.md): building templates, rules, queries, actions,
-  and pure functions with the `rules`, `session`, and `dsl` packages.
+  pure functions, and portable value JSON with the `rules`, `session`, `dsl`,
+  and `scenario` packages.
 - [Session lifecycle](session-lifecycle.md): assert, modify, retract,
   reset, run, queries, snapshots, events, the focus stack, and
   `ApplyRuleset`.
@@ -40,6 +41,8 @@ Once the basics are working, these guides go deeper:
   fuzz verification contract.
 - [Runtime diagnostics JSON](diagnostics-json.md): versioned graph, memory,
   agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.
+- [Value JSON](value-json.md): the lossless, deterministic typed-value contract
+  shared by scenarios, reports, Workbench, and MCP.
 - [Command-line tools](cli.md): the `gess` REPL, `gessc`, `gessfmt`, and the
   `gess-mcp` agent-facing stdio server.
 - [Advanced behavior](advanced.md): the Rete runtime, expression predicate

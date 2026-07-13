@@ -1,6 +1,6 @@
 # Go API guide
 
-Gess exposes three public packages. They are stable public boundaries over the
+Gess exposes four public packages. They are stable public boundaries over the
 internal engine: some types are pure public values in `rules`, while runtime
 handles and behavior are implemented by `internal/engine` behind the facades.
 
@@ -11,6 +11,8 @@ handles and behavior are implemented by `internal/engine` behind the facades.
   workspace construction, mutations, runs, queries, snapshots, and events.
 - `github.com/cpcf/gess/dsl`: `.gess` parsing, loading, code generation, and
   the registry that connects `.gess` files to host Go code.
+- `github.com/cpcf/gess/scenario`: lossless, deterministic JSON adapters for
+  `rules.Value` data shared by scenarios, reports, Workbench, and MCP.
 
 The preferred workflow keeps rule definitions in `.gess` files compiled with
 `gessc` (see `TUTORIAL.md`). This guide covers the programmatic API,
@@ -297,6 +299,20 @@ Construct values from Go data:
 
 Read values with `Kind()`, `AsBool()`, `AsInt64()`, `AsFloat64()`,
 `AsString()`, and `Equal()`.
+
+### Portable value JSON
+
+The `scenario` package converts all seven value kinds to a strict typed JSON
+envelope without losing `int64` precision, float kind, or negative zero.
+`scenario.NewValue(value)` creates a JSON-facing `scenario.Value`, whose
+`RulesValue()` method returns the wrapped `rules.Value`. For standalone bytes,
+use `scenario.MarshalValue(value)` and `scenario.UnmarshalValue(data)`.
+Invalid input returns an error wrapping `scenario.ErrInvalidValueJSON`.
+
+Nested lists use nested envelopes, and maps use entry arrays sorted by key, so
+equal typed contents marshal to deterministic bytes. See
+[Value JSON](value-json.md) for the exact seven shapes, canonical number rules,
+strict decoder behavior, and the Explain v1 compatibility exception.
 
 ## The `dsl` package
 
