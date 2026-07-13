@@ -122,6 +122,8 @@ The guides under [`docs/`](docs/README.md) cover the engine in depth:
   `scenario` packages.
 - [Value JSON](docs/value-json.md): the lossless typed-value contract shared by
   scenarios, reports, Workbench, and MCP.
+- [Explain JSON](docs/explain-json.md): the versioned, one-way contract for
+  derivations, why-not reports, and counterfactual runs.
 - [Session lifecycle](docs/session-lifecycle.md): mutations, runs, queries,
   snapshots, events, focus, and ruleset swaps.
 - [Command-line tools](docs/cli.md): `gessc` and `gessfmt`.

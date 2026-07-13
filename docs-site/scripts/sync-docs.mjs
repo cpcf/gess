@@ -116,9 +116,17 @@ const pages = [
       "Versioned graph, memory, agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.",
   },
   {
+    slug: "explain-json",
+    source: "explain-json.md",
+    order: 11,
+    title: "Explain JSON",
+    description:
+      "The versioned, one-way JSON contract for derivations, why-not reports, and counterfactual runs.",
+  },
+  {
     slug: "value-json",
     source: "value-json.md",
-    order: 11,
+    order: 12,
     title: "Value JSON",
     description:
       "The lossless, deterministic typed-value contract shared by scenarios, reports, Workbench, and MCP.",
@@ -126,7 +134,7 @@ const pages = [
   {
     slug: "contributing",
     source: "contributing.md",
-    order: 12,
+    order: 13,
     title: "Developer guide",
     description:
       "Repository layout, engine architecture, tests, benchmarks, and the documentation workflow.",
@@ -136,7 +144,7 @@ const pages = [
     source: "README.md",
     sourceDir: path.join("..", "tutorial"),
     editSourcePath: "tutorial/README.md",
-    order: 17,
+    order: 18,
     title: "Interactive tutorial workshop",
     description:
       "Run the local browser or terminal workshop for the vulnerability response scenario.",
@@ -150,7 +158,7 @@ const apiPackages = [
     slug: "reference/rules",
     pkgDir: "rules",
     importPath: "github.com/cpcf/gess/rules",
-    order: 13,
+    order: 14,
     title: "rules package reference",
     description: "Generated API reference for github.com/cpcf/gess/rules.",
   },
@@ -158,7 +166,7 @@ const apiPackages = [
     slug: "reference/session",
     pkgDir: "session",
     importPath: "github.com/cpcf/gess/session",
-    order: 14,
+    order: 15,
     title: "session package reference",
     description: "Generated API reference for github.com/cpcf/gess/session.",
   },
@@ -166,7 +174,7 @@ const apiPackages = [
     slug: "reference/dsl",
     pkgDir: "dsl",
     importPath: "github.com/cpcf/gess/dsl",
-    order: 15,
+    order: 16,
     title: "dsl package reference",
     description: "Generated API reference for github.com/cpcf/gess/dsl.",
   },
@@ -174,7 +182,7 @@ const apiPackages = [
     slug: "reference/scenario",
     pkgDir: "scenario",
     importPath: "github.com/cpcf/gess/scenario",
-    order: 16,
+    order: 17,
     title: "scenario package reference",
     description: "Generated API reference for github.com/cpcf/gess/scenario.",
   },
