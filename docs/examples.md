@@ -50,7 +50,7 @@ order in place (preserving its identity), `retract` drops a cancelled order,
 the session output writer set with `session.WithOutputWriter`. A `not` condition
 routes cancelled orders to the retract rule. The ship rule computes a total with
 the built-in `(+ ?subtotal ?tax)` and builds a status string with `(str-cat
-...)` directly in its action values — function-call action values compile to
+...)` directly in its action values—function-call action values compile to
 name-based expressions, so they work under `gessc` just as they do at runtime.
 
 ### [`forward-chaining/order_routing`](https://github.com/cpcf/gess/tree/main/examples/forward-chaining/order_routing)

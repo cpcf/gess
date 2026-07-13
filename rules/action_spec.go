@@ -3,6 +3,7 @@ package rules
 import "strings"
 
 // ActionSpec names one action implementation registered on a workspace.
+// Exactly one of Fn, AssertTemplateValues, Effect, or Call must be set.
 type ActionSpec struct {
 	Name                 string
 	Fn                   ActionFunc

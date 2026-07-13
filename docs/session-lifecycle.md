@@ -1,20 +1,24 @@
 # Session lifecycle
 
 A session owns the mutable runtime state for one compiled ruleset: working
-memory, the agenda, the focus stack, and logical support. This guide covers
-the full lifecycle from construction to close. For the package overview, see
-`go-api.md`; for concepts, see `concepts.md`.
+memory, globals, the agenda, the focus stack, logical support, and backchain
+demand. This guide covers the full lifecycle from construction to close. For
+the package overview, see `go-api.md`; for concepts, see `concepts.md`.
 
 ```mermaid
 flowchart TD
-    Workspace["Workspace<br/>(templates, rules, queries)"] -->|Compile| Ruleset["Ruleset<br/>(immutable, compiled)"]
-    Ruleset -->|New| Session["Session<br/>(working memory, agenda, focus stack)"]
+    Workspace["Workspace<br/>(templates, globals, functions, rules, queries)"] -->|Compile| Ruleset["Ruleset<br/>(immutable, compiled)"]
+    Ruleset -->|New| Session["Session<br/>(working memory, globals, agenda, support, demand)"]
     Session --> Mutate["Assert / Modify / Retract"]
     Mutate --> Run["Run<br/>(fires activations until quiescent)"]
     Run --> Mutate
     Run --> Query["Query / QueryAll"]
     Query --> Mutate
     Session --> Snapshot["Snapshot"]
+    Session --> Inspect["Agenda / Diagnostics / Explain"]
+    Session --> Checkpoint["Checkpoint / mutation log"]
+    Checkpoint -->|Restore / replay| Restored["Independent session"]
+    Session --> Fork["Fork / WhatIf"]
     Session --> Reset["Reset<br/>(new generation, re-seeds initial facts)"]
     Reset --> Mutate
     Ruleset2["New Ruleset revision"] -->|ApplyRuleset| Session
@@ -55,8 +59,18 @@ memory, and computes the initial agenda. Options:
 - `WithInitialFacts(initials...)`: facts present at construction and
   re-asserted by every `Reset`. Generated `.gess` code returns these from
   `deffacts` declarations.
+- `WithGlobals(values)`: bind globals declared by the ruleset, keyed without
+  their `.gess` `*` markers. Declarations with no default require a value.
+- `WithStrategy(strategy)`: select depth (recency, the default) or breadth
+  (oldest activation first) ordering for equal-salience activations.
 - `WithResetBeforeSnapshot(enabled)`: when enabled, a successful `Reset`
   includes a pre-reset snapshot in `ResetResult.Before`.
+- `WithOutputWriter(writer)`: receive `.gess` `emit` output; output is
+  discarded when unset.
+- `WithMaxDemandCascadeSteps(n)`: bound all backchain demands raised by one
+  run or query proof; zero or negative values leave the cascade unbounded.
+- `WithExplainLog(opts...)`: retain bounded mutation lineage for
+  `Session.Explain`. The log is opt-in and cleared by `Reset`.
 
 `Close` marks the session closed; later calls return closed statuses and
 `ErrClosedSession`.
@@ -235,9 +249,34 @@ logical `SupportGraph()`, backchain demand diagnostics, and snapshot-scoped
 two snapshots: facts added, retracted, and modified by field value or support
 state, in deterministic fact-id order.
 
+Snapshots also support `Explain(id)` for support-only derivations and
+snapshot-scoped queries that never mutate the live session. See
+`advanced.md#explaining-facts` for the two explanation tiers.
+
+## Runtime inspection
+
+`Session.Agenda(ctx)` returns pending activations in the exact order a run
+would select them, including the focus-stack drain order. Its
+`ActivationsForModule` method also inspects modules that aren't currently
+focused.
+
+`Session.Diagnostics(ctx, opts...)` reports graph shape, retained memory,
+agenda, terminal state, aggregates, queries, truth maintenance, and
+backchain state. Add `WithDiagnosticsFacts()` to include detached fact
+payloads. The report is a typed value and a versioned JSON document; see
+`diagnostics-json.md` for its stability contract.
+
+`Session.Explain` reconstructs a fact's producing firing and mutation history
+when the session was created with `WithExplainLog`. `Session.WhyNot` diagnoses
+why a rule is pending, already fired, blocked, or never matched. Their typed
+reports, along with `WhatIfReport`, marshal to the versioned contract in
+`explain-json.md`. See `advanced.md#explaining-facts` for the full APIs and
+probe bounds.
+
 ## Durable checkpoints
 
-An idle session can be checkpointed, encoded, and restored in another process:
+An idle session can be captured as a checkpoint, encoded, and restored in
+another process:
 
 ```go
 checkpoint, err := session.Checkpoint(ctx)
@@ -258,7 +297,7 @@ restored, err := sess.Restore(ctx, ruleset, decoded,
 )
 ```
 
-The checkpoint preserves exact fact identities, versions, recency and field
+The checkpoint preserves exact fact identities, versions, recency, and field
 presence; initial facts and globals; pending agenda order and fired-match
 refraction; focus state; logical-support edges; backchain demand state; and
 the sequence allocators used by later mutations, runs, and events. The
@@ -288,7 +327,7 @@ a SHA-256 link to the preceding record; the graph and host callbacks are never
 serialized or rerun during replay.
 
 ```go
-base, err := sess.Checkpoint(ctx)
+base, err := session.Checkpoint(ctx)
 if err != nil {
 	return err
 }
@@ -298,7 +337,7 @@ if err != nil {
 }
 
 // After each committed mutation boundary:
-log, err = sess.AppendMutationLog(ctx, log)
+log, err = session.AppendMutationLog(ctx, log)
 if err != nil {
 	return err
 }
@@ -404,8 +443,8 @@ listeners still run.
 
 Listener callbacks run synchronously while the engine is delivering the
 event. They may inspect the event and immutable session metadata such as
-`ID` and `RulesetID`, but must not call stateful session operations. Reentrant
-mutation, inspection, run, and close calls fail fast with
+`ID` and `RulesetID`, but must not call stateful session operations. Mutation,
+inspection, run, and close calls from inside a listener fail fast with
 `ErrConcurrencyMisuse`; in particular, a mutation callback during `Run` is not
 placed on the external mutation queue.
 
@@ -446,11 +485,13 @@ unchanged rule revisions.
 
 Compatibility requires that every template used by live facts exists in the
 next ruleset with an identical spec, and that the configured initial facts
-still validate; otherwise the call fails with an incompatible status. On
-apply, logical support created by removed or replaced rules is purged with
-cascade, the Rete runtime is rebuilt, and graph-emitted terminal lifecycle
-deltas update the agenda. Already fired activations of surviving rules don't
-fire again.
+still validate; otherwise the call fails with an incompatible status. Global
+bindings carry forward by name. Adding a required global with no default makes
+the apply fail because there is no new value to bind; create a new session with
+`WithGlobals` instead. On apply, logical support created by removed or replaced
+rules is purged with cascade, the Rete runtime is rebuilt, and graph-emitted
+terminal lifecycle deltas update the agenda. Already fired activations of
+surviving rules don't fire again.
 
 ## Actions and the action context
 
@@ -460,11 +501,14 @@ plus activation metadata:
 - Identity: `SessionID`, `RulesetID`, `ActivationID`, `RuleID`,
   `RuleRevisionID`, `Generation`, and `Context()` for the run's context.
 - Bindings: `BoundFacts()`, `Binding(name)` for fact bindings,
-  `BindingValue(name)` for value bindings such as aggregate results, and
-  `BindingScalarValue(name, field)` for one field of a bound fact.
+  `BindingID(name)` for fact identities, `BindingValue(name)` for value
+  bindings such as aggregate results, `BindingScalarValue(name, field)` for
+  one field of a bound fact, and `Global(name)` for the session's globals.
+  `SetRHSBind` and `RHSBind` back ordered declarative `bind` actions.
 - Mutations: `Assert`, `AssertTemplateValues`, `AssertLogical`, `Modify`,
   `Retract`.
-- Control: `Halt`, `PushFocus`, `SetFocus`, `PopFocus`, `ClearFocusStack`.
+- Output and control: `Emit`, `Halt`, `PushFocus`, `SetFocus`, `PopFocus`,
+  `ClearFocusStack`.
 
 `AssertLogical` asserts a fact whose support is the activation's matched
 facts; when that support goes away the fact is retracted automatically. See
@@ -488,5 +532,8 @@ with `ErrConcurrencyMisuse`.
 
 - [Advanced behavior](advanced.md) for the Rete runtime, logical support,
   and backward chaining in depth.
-- [Command-line tools](cli.md) for `gessc` and `gessfmt`.
+- [Runtime diagnostics JSON](diagnostics-json.md) and [explain
+  JSON](explain-json.md) for machine-readable inspection contracts.
+- [Command-line tools](cli.md) for the REPL, compiler, formatter, and MCP
+  server.
 - [Examples map](examples.md) for runnable examples organized by feature.

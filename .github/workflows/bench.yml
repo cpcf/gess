@@ -1,13 +1,6 @@
 name: bench
 
 on:
-  pull_request:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/bench.yml"
-      - ".github/scripts/**"
   workflow_dispatch:
     inputs:
       base:
@@ -44,22 +37,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)"
-          else
-            base="$(git rev-parse "${{ inputs.base || 'origin/main' }}")"
-          fi
+          base="$(git rev-parse "${{ inputs.base || 'origin/main' }}")"
           echo "sha=${base}" >> "$GITHUB_OUTPUT"
 
       - name: Benchmark head
         env:
-          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          BENCH_FULL: "1"
         run: bash .github/scripts/run-benchmarks.sh . | tee head.txt
 
       - name: Benchmark base
         shell: bash
         env:
-          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          BENCH_FULL: "1"
         run: |
           set -euo pipefail
           git worktree add ../base-checkout "${{ steps.base.outputs.sha }}"

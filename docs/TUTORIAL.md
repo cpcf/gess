@@ -263,7 +263,7 @@ assertions. That keeps validation and matching behavior in one ruleset.
 ## Mutate and compute in place
 
 Rules can change facts and compute values without leaving `.gess`. `modify`
-updates a matched fact in place — keeping its identity — while `bind` names a
+updates a matched fact in place—keeping its identity—while `bind` names a
 value for later actions in the same rule, and `emit` writes output:
 
 ```cl
@@ -285,8 +285,8 @@ value for later actions in the same rule, and `emit` writes output:
 - `(retract ?binding)` removes a matched fact; `(emit ...)` writes to the
   session output writer set with `session.WithOutputWriter`.
 
-Built-in functions — arithmetic, string, and type predicates (`+ - * / mod`,
-`str-cat`, `upcase`, `numberp`, …) — are available without registering host
+Built-in functions—arithmetic, string, and type predicates (`+ - * / mod`,
+`str-cat`, `upcase`, `numberp`, …)—are available without registering host
 code. They work anywhere an expression is allowed, including directly as action
 values (`(modify ?f (set (total (+ ?a ?b))))`), and identically whether the
 ruleset is loaded at runtime or compiled with `gessc`. See
@@ -350,7 +350,7 @@ Go code handle session lifecycle, runtime facts, integrations, and output.
 
 ## Debugging and tuning
 
-Beyond the patterns above, a few `.gess` and session features help while
+Beyond the preceding patterns, a few `.gess` and session features help while
 developing:
 
 - `(defglobal *max-amount* (type INT) (default 1000))` declares a typed
@@ -363,9 +363,9 @@ developing:
   inside `test` and comparison expressions without registering Go code.
   Bodies are single expressions and may call only functions defined earlier
   in the file, so recursion is impossible.
-- `session.Agenda(ctx)` lists what will fire next and in what order;
+- `session.Agenda(ctx)` lists pending activations in firing order;
   `session.Run(ctx, session.WithMaxFirings(1))` steps one activation at a
-  time. Together they answer "why didn't my rule fire?" interactively.
+  time. `session.WhyNot` directly diagnoses why a rule has no activation.
 - `session.WithEventListener(session.NewTraceListener(os.Stderr))` streams a
   readable line per fact change, activation, and firing. Rules compiled from
   `.gess` include their `file:line` in rule events and runtime errors.
@@ -395,6 +395,6 @@ go test ./examples/...
 - [Core concepts](concepts.md) for the vocabulary behind what you just
   built.
 - [The `.gess` language reference](gess-language.md) for every form the
-  parser accepts.
+  loader accepts.
 - [Examples map](examples.md) for more `.gess` and Go-API examples,
   organized by feature.

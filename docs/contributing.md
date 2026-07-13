@@ -65,8 +65,12 @@ A map of `internal/engine` by subsystem:
   and backward chaining remain implemented in `logical_support.go`,
   `backchain_demand_support.go`, and `backchain_query_proof.go`.
   `runtime_diagnostics.go` and `propagation_counter.go` provide
-  instrumentation. Public values, errors, and identifiers are declared in
-  `rules`; the corresponding engine files retain compiler and runtime helpers.
+  instrumentation. `checkpoint*.go` captures and restores canonical durable
+  session state; `mutation_log*.go` implements checkpoint-anchored replay;
+  `explain*.go`, `whynot*.go`, and `whatif.go` implement interrogation and
+  counterfactual reports. Public values, errors, and identifiers are declared
+  in `rules`; the corresponding engine files retain compiler and runtime
+  helpers.
 - The `.gess` language: `gess_dsl.go` and `gess_dsl_parse.go` (loader and
   parser), `gess_generate.go` (Go code generation for `gessc`).
 
@@ -160,6 +164,12 @@ go test -bench=. -benchmem ./internal/engine/
 Add benchmarks only where performance claims or regressions matter:
 propagation fanout, bucket probes, row scans, memory growth, modify cost,
 retract cost, and agenda deltas all have precedents to follow.
+
+Pull-request CI runs correctness tests, race detection, coverage, fuzz smoke
+tests, and documentation checks; it doesn't run the benchmark matrix. Use the
+manual `bench` workflow in GitHub Actions when a change needs a repeated
+head-versus-base performance comparison. The manual run uploads the raw
+measurements and `benchstat` comparison as its `bench-results` artifact.
 
 ## Documentation workflow
 

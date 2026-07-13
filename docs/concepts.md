@@ -55,17 +55,20 @@ declaration order. Retracting or modifying a fact that a pending activation
 depends on removes the activation before it can fire.
 
 When a rule you expected to fire has no activation, `Session.WhyNot` diagnoses
-why — the first failing condition, the nearest partial match, or the blocking
+why—the first failing condition, the nearest partial match, or the blocking
 fact for a negation. See "Why a rule did not fire" in `advanced.md`.
 
 ## Sessions
 
 A session is the mutable runtime for one compiled ruleset. It owns working
-memory, the agenda, the focus stack, logical support, and event delivery.
+memory, global bindings, graph memory, the agenda, the focus stack, logical
+support, backchain demand, and event delivery.
 Host code asserts, modifies, and retracts facts, calls `Run` to fire rules
-until quiescence, executes queries, and takes snapshots. It can also
-interrogate *why* a fact exists with `Explain` — see "Explaining facts" in
-`advanced.md`. See `session-lifecycle.md`.
+until quiescence, executes queries, and takes snapshots. Sessions can be
+forked for isolated counterfactual runs, saved as checkpoints, restored across
+processes, and inspected through diagnostics. A session can also interrogate
+*why* a fact exists with `Explain` or why a rule didn't fire with `WhyNot`—
+see "Explaining facts" in `advanced.md`. See `session-lifecycle.md`.
 
 :::caution
 A session has one logical owner. Overlapping calls from other goroutines
@@ -75,16 +78,19 @@ goroutines the way many Go runtime objects are.
 
 ## Compiled rulesets
 
-A ruleset is an immutable compiled revision of a workspace: templates,
-rules, queries, actions, and pure functions, compiled into a Rete graph
-plan. Rulesets are safe to share across sessions. A running session can
-swap to a newly compiled revision with `ApplyRuleset` while keeping its
-facts.
+A ruleset is an immutable compiled revision of a workspace: modules,
+templates, globals, rules, queries, actions, and pure functions, compiled into
+a Rete graph plan. Rulesets are safe to share across sessions. A running
+session can swap to a newly compiled revision with `ApplyRuleset` while
+keeping its facts and compatible global bindings.
 
 :::note
 `ApplyRuleset` only succeeds if the templates used by the session's live
 facts are unchanged between the old and new revision; otherwise it fails
-with `ErrIncompatibleRuleset`.
+with `ErrIncompatibleRuleset`. Existing global bindings carry forward by
+name. A revision that introduces a required global with no default can't be
+applied because `ApplyRuleset` has no new-value argument; create a session with
+`WithGlobals` instead.
 :::
 
 This separation into definitions in a workspace, immutable compiled
@@ -110,13 +116,15 @@ continues below. Modules structure large rulesets into phases. See
 ## Actions and host integration
 
 Rule actions run Go code through a `rules.ActionContext`, which exposes
-the matched bindings and the session mutation API. From `.gess` files,
-actions are a fixed vocabulary — `assert`, `assert-logical`, `retract`,
-`modify`, `bind`, `emit`, focus control, `halt`, and `call` — with `call`
+the matched bindings, per-session globals, output, and the session mutation
+API. From `.gess` files,
+actions are a fixed vocabulary—`assert`, `assert-logical`, `retract`,
+`modify`, `bind`, `emit`, focus control, `halt`, and `call`—with `call`
 dispatching to host functions registered through `dsl.Registry`. A curated
-set of built-in functions (arithmetic, string, and type predicates) and
-host-registered pure functions extend the expression language with
-deterministic computations. Right-hand-side control flow stays host-only.
+set of built-in functions (arithmetic, string, and type predicates),
+expression-bodied `deffunction` definitions, and host-registered pure functions
+extend the expression language with deterministic computations.
+Right-hand-side control flow stays host-only.
 
 ## The Rete runtime
 

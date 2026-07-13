@@ -6,7 +6,7 @@ benchmarks, workbenches, and agent integrations that need runtime state without
 depending on engine internals.
 
 ```go
-report, err := sess.Diagnostics(ctx)
+report, err := session.Diagnostics(ctx)
 if err != nil {
     return err
 }
@@ -18,7 +18,7 @@ clone every fact payload. Fact identity, fields, presence, and support can be
 requested explicitly when they are needed:
 
 ```go
-report, err := sess.Diagnostics(ctx, session.WithDiagnosticsFacts())
+report, err := session.Diagnostics(ctx, sess.WithDiagnosticsFacts())
 ```
 
 As with other session inspection calls, diagnostics cannot run concurrently

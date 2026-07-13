@@ -1,8 +1,8 @@
 # Gess documentation
 
-Gess is a Go rules engine with a Rete-based runtime and a `.gess` file
-format for defining templates, seed facts, rules, and queries outside app
-code.
+Gess is a Go rules engine with a Rete-based runtime and a `.gess` file format
+for defining modules, globals, pure functions, templates, seed facts, rules,
+and queries outside app code.
 
 ## Start here
 
@@ -29,22 +29,24 @@ Once the basics are working, these guides go deeper:
 - [Core concepts](concepts.md): templates, facts, rules, activations, the
   agenda, sessions, rulesets, and queries.
 - [The `.gess` language reference](gess-language.md): every form the
-  `.gess` parser accepts, with limits and errors.
+  `.gess` loader accepts, with limits and errors.
 - [Go API guide](go-api.md): building templates, rules, queries, actions,
   and pure functions with the `rules`, `session`, and `dsl` packages.
 - [Session lifecycle](session-lifecycle.md): assert, modify, retract,
-  reset, run, queries, snapshots, events, the focus stack, and
-  `ApplyRuleset`.
+  reset, run, queries, snapshots, diagnostics, durable checkpoints, mutation
+  logs, forks, what-if runs, events, the focus stack, and `ApplyRuleset`.
 - [Executable semantics](executable-semantics.md): evaluation truth tables,
   condition and lifecycle semantics, ordering guarantees, and the differential
   fuzz verification contract.
 - [Runtime diagnostics JSON](diagnostics-json.md): versioned graph, memory,
   agenda, terminal, aggregate, query, truth-maintenance, and backchain reports.
+- [Explain JSON](explain-json.md): versioned derivation, why-not, and what-if
+  documents for tools and audit pipelines.
 - [Command-line tools](cli.md): the `gess` REPL, `gessc`, `gessfmt`, and the
   `gess-mcp` agent-facing stdio server.
 - [Advanced behavior](advanced.md): the Rete runtime, expression predicate
   placement, aggregates, higher-order conditions, logical support,
-  backward chaining, and module focus.
+  explanations, backward chaining, and module focus.
 - [Examples map](examples.md): what each example demonstrates, organized
   by feature, and where to start.
 - [Interactive tutorial workshop](../tutorial/README.md): a local
