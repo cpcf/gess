@@ -280,6 +280,45 @@ limits. Historical events are not replayed to newly attached listeners.
 Checkpoint capture is idle-only, like `Fork`: an overlapping `Run` or listener
 reentry returns `rules.ErrConcurrencyMisuse`.
 
+## Mutation logs
+
+Mutation logs provide an append-only semantic commit stream anchored to a
+checkpoint. Each v1 record contains the canonical post-mutation checkpoint and
+a SHA-256 link to the preceding record; the graph and host callbacks are never
+serialized or rerun during replay.
+
+```go
+base, err := sess.Checkpoint(ctx)
+if err != nil {
+	return err
+}
+log, err := sess.NewMutationLog(base)
+if err != nil {
+	return err
+}
+
+// After each committed mutation boundary:
+log, err = sess.AppendMutationLog(ctx, log)
+if err != nil {
+	return err
+}
+if err := sess.EncodeMutationLog(writer, log); err != nil {
+	return err
+}
+
+decoded, err := sess.DecodeMutationLog(reader)
+if err != nil {
+	return err
+}
+replayed, err := sess.ReplayMutationLog(ctx, ruleset, base, decoded)
+```
+
+`ReplayMutationLog` validates the anchor, hash chain, every committed
+checkpoint, and the supplied `RulesetID` before returning an independent
+session at the final commit. A mutation log is immutable; appending returns a
+new value. Input is bounded by `DefaultMutationLogMaxBytes`, and malformed
+documents wrap `rules.ErrInvalidMutationLog`.
+
 ## Forked sessions
 
 `Session.Fork` creates an independent mutable session with the parent's current

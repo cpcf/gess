@@ -865,6 +865,12 @@ const (
 	CheckpointVersion = engine.CheckpointVersion
 	// DefaultCheckpointMaxBytes bounds DecodeCheckpoint input.
 	DefaultCheckpointMaxBytes = engine.DefaultCheckpointMaxBytes
+	// MutationLogFormat identifies the durable-session mutation-log envelope.
+	MutationLogFormat = engine.MutationLogFormat
+	// MutationLogVersion is the mutation-log schema version this build writes.
+	MutationLogVersion = engine.MutationLogVersion
+	// DefaultMutationLogMaxBytes bounds DecodeMutationLog input.
+	DefaultMutationLogMaxBytes = engine.DefaultMutationLogMaxBytes
 )
 
 // Checkpoint is an opaque, immutable durable-session value. Use
@@ -886,6 +892,33 @@ func (c Checkpoint) RulesetID() RulesetID {
 // SessionID returns the captured session identity.
 func (c Checkpoint) SessionID() SessionID {
 	return c.value.SessionID()
+}
+
+// MutationLog is an opaque, immutable sequence of durable semantic commits.
+// Each commit is a canonical checkpoint linked to the preceding commit by a
+// SHA-256 digest.
+type MutationLog struct {
+	value engine.MutationLog
+}
+
+// FormatVersion returns the mutation-log wire schema version.
+func (l MutationLog) FormatVersion() int {
+	return l.value.FormatVersion()
+}
+
+// RulesetID returns the compiled ruleset required to replay the log.
+func (l MutationLog) RulesetID() RulesetID {
+	return l.value.RulesetID()
+}
+
+// SessionID returns the session identity anchored by the log.
+func (l MutationLog) SessionID() SessionID {
+	return l.value.SessionID()
+}
+
+// Len returns the number of committed checkpoints in the log.
+func (l MutationLog) Len() int {
+	return l.value.Len()
 }
 
 func wrapSession(rt *engine.Session) *Session {
@@ -2260,6 +2293,63 @@ func (s *Session) Checkpoint(ctx context.Context) (Checkpoint, error) {
 		return Checkpoint{}, err
 	}
 	return Checkpoint{value: checkpoint}, nil
+}
+
+// NewMutationLog anchors an empty mutation log to base.
+func NewMutationLog(base Checkpoint) (MutationLog, error) {
+	log, err := engine.NewMutationLog(base.value)
+	if err != nil {
+		return MutationLog{}, err
+	}
+	return MutationLog{value: log}, nil
+}
+
+// AppendMutationLog returns a new log with checkpoint as its next semantic
+// commit. Existing log values remain unchanged.
+func AppendMutationLog(log MutationLog, checkpoint Checkpoint) (MutationLog, error) {
+	next, err := engine.AppendMutationLog(log.value, checkpoint.value)
+	if err != nil {
+		return MutationLog{}, err
+	}
+	return MutationLog{value: next}, nil
+}
+
+// AppendMutationLog checkpoints the idle session and appends it to log.
+func (s *Session) AppendMutationLog(ctx context.Context, log MutationLog) (MutationLog, error) {
+	next, err := s.engineSession().AppendMutationLog(ctx, log.value)
+	if err != nil {
+		return MutationLog{}, err
+	}
+	return MutationLog{value: next}, nil
+}
+
+// EncodeMutationLog writes the canonical versioned mutation-log document.
+func EncodeMutationLog(w io.Writer, log MutationLog) error {
+	return engine.EncodeMutationLog(w, log.value)
+}
+
+// DecodeMutationLog reads one canonical mutation-log document. Input is
+// bounded by DefaultMutationLogMaxBytes.
+func DecodeMutationLog(r io.Reader) (MutationLog, error) {
+	log, err := engine.DecodeMutationLog(r)
+	if err != nil {
+		return MutationLog{}, err
+	}
+	return MutationLog{value: log}, nil
+}
+
+// ReplayMutationLog validates every committed checkpoint against revision and
+// restores the final commit.
+func ReplayMutationLog(ctx context.Context, revision *rules.Ruleset, base Checkpoint, log MutationLog, opts ...Option) (*Session, error) {
+	engineRevision, err := engine.RulesetFromPublic(revision)
+	if err != nil {
+		return nil, err
+	}
+	engineSession, err := engine.ReplayMutationLog(ctx, engineRevision, base.value, log.value, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return wrapSession(engineSession), nil
 }
 
 // Fork returns an independent session with the same working state as s.
