@@ -2,21 +2,29 @@ name: bench
 
 on:
   pull_request:
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".github/workflows/bench.yml"
-      - ".github/scripts/**"
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
     inputs:
       base:
-        description: "Base ref to compare against (default origin/main)."
+        description: "Base ref to compare against (default HEAD^)."
         required: false
         type: string
+      profile:
+        description: "Benchmark profile to compare."
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - extended
 
 permissions:
   contents: read
+
+concurrency:
+  group: bench-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   BENCH_COUNT: "6"
@@ -27,49 +35,112 @@ env:
 jobs:
   compare:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - name: Detect performance-relevant changes
+        if: github.event_name == 'pull_request'
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          set +e
+          git diff --quiet "$BASE_SHA" HEAD -- \
+            internal/engine \
+            internal/fnvhash \
+            internal/gesssexp \
+            rules \
+            session \
+            dsl \
+            go.mod \
+            go.sum \
+            .github/workflows/bench.yml \
+            .github/scripts/run-benchmarks.sh \
+            .github/scripts/check-benchmarks.sh
+          status=$?
+          set -e
+
+          case "$status" in
+            0) echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$status" ;;
+          esac
+
+      - name: Set up Go
+        if: github.event_name != 'pull_request' || steps.changes.outputs.run == 'true'
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
+      - name: Run blocking benchmark smoke
+        if: github.event_name == 'pull_request' && steps.changes.outputs.run == 'true'
+        timeout-minutes: 10
+        env:
+          BENCH_COUNT: "1"
+          BENCH_TIME: "100ms"
+          BENCH_PROFILE: smoke
+        run: bash .github/scripts/run-benchmarks.sh .
+
+      - name: Skip benchmark smoke
+        if: github.event_name == 'pull_request' && steps.changes.outputs.run != 'true'
+        run: echo "No performance-relevant changes; benchmark smoke is not required."
+
       - name: Install benchstat
+        if: github.event_name != 'pull_request'
         run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260409210113-8e83ce0f7b1c
 
       - name: Resolve base commit
+        if: github.event_name != 'pull_request'
         id: base
         shell: bash
+        env:
+          BASE_REF: ${{ inputs.base }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)"
+          head=$(git rev-parse HEAD)
+          if [[ -n "$BASE_REF" ]]; then
+            base=$(git rev-parse --verify --end-of-options "${BASE_REF}^{commit}")
           else
-            base="$(git rev-parse "${{ inputs.base || 'origin/main' }}")"
+            base=$(git rev-parse HEAD^)
           fi
+
+          if [[ "$base" == "$head" ]]; then
+            echo "Benchmark base and head both resolve to $head" >&2
+            exit 1
+          fi
+
           echo "sha=${base}" >> "$GITHUB_OUTPUT"
 
       - name: Benchmark head
-        env:
-          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
-        run: bash .github/scripts/run-benchmarks.sh . | tee head.txt
-
-      - name: Benchmark base
+        if: github.event_name != 'pull_request'
         shell: bash
         env:
-          BENCH_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          BENCH_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/run-benchmarks.sh . | tee head.txt
+
+      - name: Benchmark base
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          BENCH_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'full' }}
         run: |
           set -euo pipefail
           git worktree add ../base-checkout "${{ steps.base.outputs.sha }}"
           bash .github/scripts/run-benchmarks.sh ../base-checkout | tee base.txt
 
       - name: Compare against threshold
+        if: github.event_name != 'pull_request'
         run: bash .github/scripts/check-benchmarks.sh base.txt head.txt comparison.txt
 
       - name: Upload benchmark results
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
           name: bench-results
