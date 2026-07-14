@@ -910,8 +910,10 @@ func normalizeEvents(collection EventCollection, appliedLimit int64, terminal Te
 			if event.RunID != terminal.RunID {
 				return EventCollection{}, invalid("%s action failure must belong to terminal.runId", itemPath)
 			}
-			if terminal.Status != TerminalError {
-				return EventCollection{}, invalid("%s action failure requires terminal.status error", itemPath)
+			switch terminal.Status {
+			case TerminalError, TerminalMaxFacts, TerminalDeadline, TerminalCanceled:
+			default:
+				return EventCollection{}, invalid("%s action failure requires an error or interrupted terminal status", itemPath)
 			}
 			if event.Severity != SeverityError {
 				return EventCollection{}, invalid("%s action failure severity must be error", itemPath)

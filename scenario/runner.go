@@ -153,6 +153,7 @@ type ExecutionResult struct {
 	ScenarioDigest  string
 	Sources         []ResolvedSource
 	RulesetID       rules.RulesetID
+	Rules           []rules.Rule
 	CallbackProfile CallbackProfile
 	Limits          AppliedLimits
 	Run             session.RunResult
@@ -240,6 +241,7 @@ func (r *Runner) Run(ctx context.Context, document Scenario, resolver SourceReso
 		return r.classifyContextFailure(result, StageCompile, err)
 	}
 	result.RulesetID = ruleset.ID()
+	result.Rules = ruleset.Rules()
 
 	initials, err := selectedInitialFacts(document, documents, ruleset)
 	if err != nil {
