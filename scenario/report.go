@@ -223,7 +223,7 @@ func projectFirings(execution ExecutionResult, definitions map[rules.RuleRevisio
 		}
 		items = append(items, Firing{
 			Sequence:       NewDecimalUint64(event.Sequence),
-			RunID:          event.RunID.String(),
+			RunID:          execution.Run.RunID.String(),
 			ActivationID:   event.ActivationID.String(),
 			RuleID:         event.RuleID.String(),
 			RuleRevisionID: event.RuleRevisionID.String(),
@@ -254,7 +254,7 @@ func projectEvents(execution ExecutionResult) EventCollection {
 		}
 		projected := Event{
 			Sequence:       NewDecimalUint64(event.Sequence),
-			RunID:          event.RunID.String(),
+			RunID:          execution.Run.RunID.String(),
 			Type:           EventType(event.Type),
 			Severity:       severity,
 			Generation:     NewDecimalUint64(uint64(event.Generation)),
@@ -575,9 +575,12 @@ func availableSection() SectionStatus {
 }
 
 func projectFactIDs(ids []rules.FactID) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = id.String()
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id.IsZero() {
+			continue
+		}
+		out = append(out, id.String())
 	}
 	return out
 }

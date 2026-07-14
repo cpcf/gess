@@ -112,6 +112,39 @@ func TestBuildRunReportDoesNotAliasExecutionOrScenario(t *testing.T) {
 	}
 }
 
+func TestBuildRunReportNormalizesScenarioOperationEvents(t *testing.T) {
+	runner := newTestRunner(t, scenario.DisabledCallbackProfile(), dsl.Registry{})
+	document := reportScenario()
+	execution, runErr := runner.Run(context.Background(), document, mapResolver{"rules/main.gess": []byte(runnerSource)})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+	if len(execution.Firings.Items) == 0 || len(execution.Events.Items) == 0 {
+		t.Fatal("execution did not capture events")
+	}
+	execution.Firings.Items[0].RunID = rules.RunID(99)
+	execution.Firings.Items[0].FactIDs = append(execution.Firings.Items[0].FactIDs, rules.FactID{})
+	execution.Events.Items[0].RunID = rules.RunID(99)
+	execution.Events.Items[0].FactIDs = append(execution.Events.Items[0].FactIDs, rules.FactID{})
+
+	report, err := scenario.BuildRunReport(document, execution, runErr, reportMetadata)
+	if err != nil {
+		t.Fatalf("BuildRunReport: %v", err)
+	}
+	if err := scenario.ValidateRunReport(report); err != nil {
+		t.Fatalf("ValidateRunReport: %v", err)
+	}
+	wantRunID := execution.Run.RunID.String()
+	if report.Firings.Items[0].RunID != wantRunID || report.Events.Items[0].RunID != wantRunID {
+		t.Fatalf("event run IDs = %q / %q, want %q", report.Firings.Items[0].RunID, report.Events.Items[0].RunID, wantRunID)
+	}
+	for _, id := range append(report.Firings.Items[0].FactIDs, report.Events.Items[0].FactIDs...) {
+		if id == "fact:zero" {
+			t.Fatal("zero synthetic fact ID leaked into report")
+		}
+	}
+}
+
 func TestBuildRunReportProjectsFactLimitOutcome(t *testing.T) {
 	runner := newTestRunner(t, scenario.DisabledCallbackProfile(), dsl.Registry{})
 	document := reportScenario()
