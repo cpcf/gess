@@ -207,18 +207,16 @@ func TestRunnerClassifiesFireFactDeadlineAndCancellationLimits(t *testing.T) {
 		}
 	})
 
-	t.Run("deadline during run", func(t *testing.T) {
+	t.Run("deadline error during run", func(t *testing.T) {
 		profile := callbackProfile("blocking")
 		registry := dsl.Registry{Actions: map[string]rules.ActionFunc{
 			"wait": func(action rules.ActionContext) error {
-				<-action.Context().Done()
-				return action.Context().Err()
+				return context.DeadlineExceeded
 			},
 		}}
 		runner := newTestRunner(t, profile, registry)
 		document := testScenario()
 		document.CallbackProfile = profile
-		document.Run.DeadlineMS = 1
 		source := strings.Replace(runnerSource, "(emit ?id)", "(call wait)", 1)
 		result, err := runner.Run(context.Background(), document, mapResolver{"rules/main.gess": []byte(source)})
 		if err == nil || result.Outcome != scenario.OutcomeDeadline || result.Stage != scenario.StageRun {

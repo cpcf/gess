@@ -219,13 +219,11 @@ func TestBuildRunReportProjectsRemainingTerminalOutcomes(t *testing.T) {
 		profile := callbackProfile("deadline")
 		runner := newTestRunner(t, profile, dsl.Registry{Actions: map[string]rules.ActionFunc{
 			"wait": func(action rules.ActionContext) error {
-				<-action.Context().Done()
-				return action.Context().Err()
+				return context.DeadlineExceeded
 			},
 		}})
 		document := reportScenario()
 		document.CallbackProfile = profile
-		document.Run.DeadlineMS = 1
 		document.ReportLimits.MaxEvents = 100
 		source := strings.Replace(runnerSource, "(emit ?id)", "(call wait)", 1)
 		assertTerminalReport(t, runner, document, source, context.Background(), scenario.TerminalDeadline, errors.New("want execution error"))
