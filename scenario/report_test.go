@@ -124,6 +124,7 @@ func TestBuildRunReportNormalizesScenarioOperationEvents(t *testing.T) {
 	}
 	execution.Firings.Items[0].RunID = rules.RunID(99)
 	execution.Firings.Items[0].FactIDs = append(execution.Firings.Items[0].FactIDs, rules.FactID{})
+	execution.Firings.Total++
 	execution.Events.Items[0].RunID = rules.RunID(99)
 	execution.Events.Items[0].FactIDs = append(execution.Events.Items[0].FactIDs, rules.FactID{})
 
@@ -137,6 +138,9 @@ func TestBuildRunReportNormalizesScenarioOperationEvents(t *testing.T) {
 	wantRunID := execution.Run.RunID.String()
 	if report.Firings.Items[0].RunID != wantRunID || report.Events.Items[0].RunID != wantRunID {
 		t.Fatalf("event run IDs = %q / %q, want %q", report.Firings.Items[0].RunID, report.Events.Items[0].RunID, wantRunID)
+	}
+	if report.Terminal.Fired != execution.Firings.Total {
+		t.Fatalf("terminal fired = %d, want captured total %d", report.Terminal.Fired, execution.Firings.Total)
 	}
 	for _, id := range append(report.Firings.Items[0].FactIDs, report.Events.Items[0].FactIDs...) {
 		if id == "fact:zero" {

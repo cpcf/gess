@@ -63,6 +63,7 @@ func BuildRunReport(document Scenario, execution ExecutionResult, executionErr e
 	}
 
 	terminal := projectTerminal(execution, executionErr)
+	terminal.Fired = execution.Firings.Total
 	rulesByRevision := make(map[rules.RuleRevisionID]rules.Rule, len(execution.Rules))
 	for _, rule := range execution.Rules {
 		rulesByRevision[rule.RevisionID()] = rules.CloneRule(rule)
