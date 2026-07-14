@@ -26,12 +26,19 @@ func (s *sessionRefractionStore) removeDelta(revision *Ruleset, removed []reteTe
 		return
 	}
 	for _, delta := range removed {
-		if delta.token.isZero() || delta.ruleRevisionID.IsZero() {
-			continue
-		}
-		identity := candidateIdentityForTerminalTokenDelta(revision, delta)
-		delete(s.byIdentity, activationLookupKey{ruleRevisionID: delta.ruleRevisionID, identityKey: identity.key})
+		s.remove(revision, delta)
 	}
+	if len(s.byIdentity) == 0 {
+		s.byIdentity = nil
+	}
+}
+
+func (s *sessionRefractionStore) remove(revision *Ruleset, delta reteTerminalTokenDelta) {
+	if s == nil || len(s.byIdentity) == 0 || revision == nil || delta.token.isZero() || delta.ruleRevisionID.IsZero() {
+		return
+	}
+	identity := candidateIdentityForTerminalTokenDelta(revision, delta)
+	delete(s.byIdentity, activationLookupKey{ruleRevisionID: delta.ruleRevisionID, identityKey: identity.key})
 	if len(s.byIdentity) == 0 {
 		s.byIdentity = nil
 	}

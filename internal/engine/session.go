@@ -7190,8 +7190,26 @@ func (s *Session) reconcileRunAgendaDelta(ctx context.Context) error {
 		s.clearRunAgendaDelta()
 		return fmt.Errorf("%w: unsupported coalesced agenda delta during run", ErrUnsupportedRuntime)
 	}
+	s.removeAbsentRunAgendaRefractions()
 	s.clearRunAgendaDelta()
 	return nil
+}
+
+func (s *Session) removeAbsentRunAgendaRefractions() {
+	if s == nil || s.revision == nil || len(s.refractions.byIdentity) == 0 {
+		return
+	}
+	for i := range s.propagation.runAgendaStates {
+		state := &s.propagation.runAgendaStates[i]
+		if state.present {
+			continue
+		}
+		token := state.removedToken
+		if token.token.isZero() {
+			token = state.token
+		}
+		s.refractions.remove(s.revision, token)
+	}
 }
 
 // releaseTransientAgendaDeltas recycles graph-beta delta arena storage between

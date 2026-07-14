@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/cpcf/gess/dsl"
 	"github.com/cpcf/gess/rules"
 	"github.com/cpcf/gess/session"
 )
@@ -145,6 +146,52 @@ func TestCheckpointPublicCodecAndRestoreFailures(t *testing.T) {
 	}
 	if _, err := session.Restore(ctx, ruleset, checkpoint, session.WithInitialFacts(session.InitialFact{TemplateKey: "item"})); !errors.Is(err, rules.ErrInvalidCheckpoint) {
 		t.Fatalf("semantic override error = %v, want ErrInvalidCheckpoint", err)
+	}
+}
+
+func TestCheckpointRestoreAfterListenerObservedDSLModifyAction(t *testing.T) {
+	ctx := context.Background()
+	document, err := dsl.Parse("rules.gess", []byte(`
+(deftemplate item
+  (slot id (type STRING) (required TRUE))
+  (slot status (type STRING) (required TRUE)))
+(defrule route
+  ?item <- (item (status "new"))
+  =>
+  (modify ?item (set (status "done"))))`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := session.NewWorkspace()
+	if err := dsl.Load(ctx, workspace, document, dsl.Registry{}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := workspace.Compile(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := session.New(revision,
+		session.WithSessionID("checkpoint-dsl-modify"),
+		session.WithEventListener(session.EventFunc(func(context.Context, session.Event) error { return nil })),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = original.Assert(ctx, "item", rules.MustFields("id", "A", "status", "new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := original.Run(ctx); err != nil || result.Fired != 1 {
+		t.Fatalf("Run = (%+v, %v)", result, err)
+	}
+	checkpoint, err := original.Checkpoint(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Restore(ctx, revision, checkpoint,
+		session.WithSessionID("checkpoint-dsl-modify-restored"),
+	); err != nil {
+		t.Fatalf("Restore: %v", err)
 	}
 }
 
