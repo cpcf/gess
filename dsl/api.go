@@ -200,6 +200,12 @@ type Document struct {
 	doc *engine.GessDocument
 }
 
+// Deffacts is one named deffacts declaration after [Load] has lowered it.
+type Deffacts struct {
+	Name  string
+	Facts []session.InitialFact
+}
+
 func wrapDocument(doc *engine.GessDocument) *Document {
 	if doc == nil {
 		return nil
@@ -223,6 +229,20 @@ func (d *Document) Name() string {
 // document.
 func (d *Document) InitialFacts() []session.InitialFact {
 	return d.engineDocument().InitialFacts()
+}
+
+// Deffacts returns named seed-fact declarations in source order after Load.
+// Returned facts are defensive copies.
+func (d *Document) Deffacts() []Deffacts {
+	if d == nil {
+		return nil
+	}
+	declarations := d.engineDocument().Deffacts()
+	out := make([]Deffacts, len(declarations))
+	for i, declaration := range declarations {
+		out[i] = Deffacts{Name: declaration.Name, Facts: declaration.Facts}
+	}
+	return out
 }
 
 // Symbols returns named top-level declarations in source order. Loading and

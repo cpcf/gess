@@ -101,6 +101,7 @@ var sessionForkFieldDecisions = []sessionForkFieldDecision{
 	{name: "factStore.slotStorage", policy: forkCloned, rationale: "fact slots are deep-cloned"},
 	{name: "factStore.compactSlotStore", policy: forkCloned, rationale: "compact slot storage is cloned"},
 	{name: "factStore.resetWorkspace", policy: forkReinitializedTransient, rationale: "the reusable reset buffer starts empty"},
+	{name: "factStore.maxFacts", policy: forkCopied, rationale: "the inherited working-memory limit is a value unless an option replaces it"},
 	{name: "tms", policy: forkCloned, rationale: "the child receives an independently owned truth-maintenance store"},
 	{name: "tms.logicalSupportEdges", policy: forkCloned, rationale: "logical support records are deep-cloned"},
 	{name: "tms.logicalSupportBySource", policy: forkCloned, rationale: "the source support index is deep-cloned"},

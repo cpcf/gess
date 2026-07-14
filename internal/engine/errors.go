@@ -33,6 +33,7 @@ var (
 	ErrExplainLogUnavailable         = gessrules.ErrExplainLogUnavailable
 	ErrRuleNotFound                  = gessrules.ErrRuleNotFound
 	ErrDemandCascadeLimit            = gessrules.ErrDemandCascadeLimit
+	ErrFactLimit                     = gessrules.ErrFactLimit
 	ErrInvalidCheckpoint             = gessrules.ErrInvalidCheckpoint
 	ErrUnsupportedCheckpointVersion  = gessrules.ErrUnsupportedCheckpointVersion
 	ErrInvalidMutationLog            = gessrules.ErrInvalidMutationLog
@@ -41,3 +42,4 @@ var (
 
 type ValidationError = gessrules.ValidationError
 type DemandCascadeLimitError = gessrules.DemandCascadeLimitError
+type FactLimitError = gessrules.FactLimitError

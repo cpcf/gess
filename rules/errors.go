@@ -36,12 +36,34 @@ var (
 	ErrExplainLogUnavailable         = errors.New("gess: explain log unavailable")
 	ErrRuleNotFound                  = errors.New("gess: rule not found")
 	ErrDemandCascadeLimit            = errors.New("gess: backchain demand cascade limit exceeded")
+	ErrFactLimit                     = errors.New("gess: session fact limit exceeded")
 	ErrUnsupportedValue              = errors.New("gess: unsupported value")
 	ErrInvalidCheckpoint             = errors.New("gess: invalid checkpoint")
 	ErrUnsupportedCheckpointVersion  = errors.New("gess: unsupported checkpoint version")
 	ErrInvalidMutationLog            = errors.New("gess: invalid mutation log")
 	ErrUnsupportedMutationLogVersion = errors.New("gess: unsupported mutation log version")
 )
+
+// FactLimitError reports that a session refused to retain another fact.
+type FactLimitError struct {
+	Limit int
+	Facts int
+}
+
+func (e *FactLimitError) Error() string {
+	if e == nil {
+		return ErrFactLimit.Error()
+	}
+	return fmt.Sprintf("%s with %d facts (limit %d)", ErrFactLimit, e.Facts, e.Limit)
+}
+
+func (e *FactLimitError) Unwrap() error {
+	return ErrFactLimit
+}
+
+func (e *FactLimitError) Is(target error) bool {
+	return target == ErrFactLimit
+}
 
 // DemandCascadeLimitError reports that a session stopped a backward-chaining
 // demand cascade before processing another demand request.

@@ -96,6 +96,9 @@ type (
 	// DemandCascadeLimitError reports the configured cascade limit and the
 	// number of demand steps completed before it stopped the operation.
 	DemandCascadeLimitError = rules.DemandCascadeLimitError
+	// FactLimitError reports the configured working-memory limit and the
+	// fact count that the rejected insertion would have produced.
+	FactLimitError = rules.FactLimitError
 	// DuplicateKey is the computed duplicate-detection key for a fact
 	// under its template's duplicate policy.
 	DuplicateKey = rules.DuplicateKey
@@ -2061,6 +2064,9 @@ var (
 	// ErrDemandCascadeLimit is matched by [DemandCascadeLimitError] when a
 	// session reaches the bound configured by [WithMaxDemandCascadeSteps].
 	ErrDemandCascadeLimit = rules.ErrDemandCascadeLimit
+	// ErrFactLimit is matched by [FactLimitError] when a session reaches the
+	// bound configured by [WithMaxFacts].
+	ErrFactLimit = rules.ErrFactLimit
 )
 
 // WithSessionID sets the [SessionID] returned later by [Session].ID.
@@ -2148,6 +2154,13 @@ func WithOutputWriter(w io.Writer) Option {
 // leaves cascades unbounded.
 func WithMaxDemandCascadeSteps(n int) Option {
 	return engine.WithMaxDemandCascadeSteps(n)
+}
+
+// WithMaxFacts bounds facts retained in working memory, including initial and
+// rule-generated facts. Duplicate assertions and unique-key replacements do
+// not consume additional capacity. A value <= 0 leaves memory unbounded.
+func WithMaxFacts(n int) Option {
+	return engine.WithMaxFacts(n)
 }
 
 // WithMaxFirings caps one Run call at n activation firings. A run that

@@ -20,6 +20,7 @@ type sessionFactStore struct {
 	slotStorage            []factSlot
 	compactSlotStore       *factCompactSlotStore
 	resetWorkspace         factWorkspace
+	maxFacts               int
 }
 
 func newSessionFactStore(state *factWorkspace) sessionFactStore {
@@ -41,6 +42,7 @@ func newSessionFactStore(state *factWorkspace) sessionFactStore {
 		insertionOrder:         state.factsByInsertionOrder(),
 		slotStorage:            state.slotStorage,
 		compactSlotStore:       state.compactSlotStore,
+		maxFacts:               state.maxFacts,
 	}
 }
 
@@ -63,6 +65,7 @@ func (s *sessionFactStore) workspace() factWorkspace {
 		factTargetIndexesDirty: s.factTargetIndexesDirty,
 		slotStorage:            s.slotStorage,
 		compactSlotStore:       s.compactSlotStore,
+		maxFacts:               s.maxFacts,
 	}
 }
 
@@ -99,6 +102,7 @@ func (s *sessionFactStore) commit(state factWorkspace) {
 	s.insertionOrder = state.insertionOrder
 	s.slotStorage = state.slotStorage
 	s.compactSlotStore = state.compactSlotStore
+	s.maxFacts = state.maxFacts
 }
 
 // swap installs transactional fact memory while leaving generation ownership

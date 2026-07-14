@@ -49,6 +49,10 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 	if err != nil {
 		return nil, err
 	}
+	state.maxFacts = local.maxFacts
+	if err := validateFactLimit(local.maxFacts, state.factCount()); err != nil {
+		return nil, err
+	}
 	rete, err := newReteRuntime(revision, globalValues)
 	if err != nil {
 		return nil, err
@@ -78,6 +82,7 @@ func restoreCheckpointWire(ctx context.Context, revision *Ruleset, document chec
 		eventClock:          local.eventClock,
 		output:              local.output,
 		explainLog:          local.explainLog,
+		maxFacts:            local.maxFacts,
 	}
 	diagnostics := newSessionDiagnosticsExporter(sessionConfig{eventClock: local.eventClock}, document.State.NextEventSequence)
 	session := &Session{

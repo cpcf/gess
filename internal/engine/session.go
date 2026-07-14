@@ -28,6 +28,7 @@ type sessionConfig struct {
 	output              io.Writer
 	explainLog          *explainLog
 	demandLimit         int
+	maxFacts            int
 }
 
 type SessionInitialFact struct {
@@ -147,6 +148,14 @@ func WithMaxDemandCascadeSteps(n int) SessionOption {
 	}
 }
 
+// WithMaxFacts bounds the facts retained in working memory. A value <= 0
+// leaves working memory unbounded.
+func WithMaxFacts(n int) SessionOption {
+	return func(cfg *sessionConfig) {
+		cfg.maxFacts = max(0, n)
+	}
+}
+
 type Session struct {
 	id                     SessionID
 	revision               *Ruleset
@@ -250,8 +259,12 @@ func NewSession(revision *Ruleset, opts ...SessionOption) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateFactLimit(cfg.maxFacts, len(compiledInitials)); err != nil {
+		return nil, err
+	}
 	initialStorage := compiledSessionInitialStorageCounts(compiledInitials)
 	state := newFactWorkspace(1, initialStorage.broadFacts)
+	state.maxFacts = cfg.maxFacts
 	state.reserveCompiledInitialFactStorage(initialStorage)
 	state.reserveTemplateIndexes(revision)
 	state.reserveDuplicateIndexes(revision)
@@ -777,6 +790,10 @@ func (s *Session) Fork(ctx context.Context, opts ...SessionOption) (*Session, er
 	}
 
 	state := s.clonedFactWorkspace()
+	state.maxFacts = cfg.maxFacts
+	if err := validateFactLimit(cfg.maxFacts, state.factCount()); err != nil {
+		return nil, err
+	}
 	rete, err := newReteRuntime(s.revision, globalValues)
 	if err != nil {
 		return nil, err
@@ -845,6 +862,7 @@ func (s *Session) forkSessionConfig() sessionConfig {
 		resetBeforeSnapshot: s.resetBeforeSnapshot,
 		output:              s.output,
 		demandLimit:         s.backchain.demandLimit,
+		maxFacts:            s.factStore.maxFacts,
 	}
 }
 
@@ -3013,6 +3031,9 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	if err != nil {
 		return ResetResult{Status: ResetValidationFailure, Before: s.snapshotLocked()}, err
 	}
+	if err := validateFactLimit(s.factStore.maxFacts, len(compiledInitials)); err != nil {
+		return ResetResult{Status: ResetValidationFailure, Before: s.snapshotLocked()}, err
+	}
 
 	var before Snapshot
 	if s.resetBeforeSnapshot {
@@ -3021,6 +3042,7 @@ func (s *Session) resetImmediate(ctx context.Context) (ResetResult, error) {
 	initialStorage := compiledSessionInitialStorageCounts(compiledInitials)
 	next := &s.factStore.resetWorkspace
 	next.reset(s.factStore.generation+1, initialStorage.broadFacts)
+	next.maxFacts = s.factStore.maxFacts
 	next.skipFactTargetIndexes = true
 	next.reserveCompiledInitialFactStorage(initialStorage)
 	next.reserveTemplateIndexes(s.revision)
@@ -4505,6 +4527,7 @@ type factWorkspace struct {
 	compactSlotStore          *factCompactSlotStore
 	skipFactTargetIndexes     bool
 	factTargetIndexesDirty    bool
+	maxFacts                  int
 }
 
 type factWorkspaceInsertMark struct {
@@ -6144,6 +6167,20 @@ func (w *factWorkspace) factCount() int {
 	return len(w.facts) + w.compactFacts.len()
 }
 
+func validateFactLimit(limit, facts int) error {
+	if limit > 0 && facts > limit {
+		return &FactLimitError{Limit: limit, Facts: facts}
+	}
+	return nil
+}
+
+func (w *factWorkspace) checkFactInsertLimit() error {
+	if w == nil {
+		return nil
+	}
+	return validateFactLimit(w.maxFacts, w.factCount()+1)
+}
+
 func (w *factWorkspace) nextRecency() Recency {
 	if w == nil {
 		return 0
@@ -6217,6 +6254,9 @@ func (w *factWorkspace) insertFact(revision *Ruleset, generation Generation, nam
 			}
 		}
 	}
+	if err := w.checkFactInsertLimit(); err != nil {
+		return nil, "", false, err
+	}
 
 	w.sequence++
 	w.recency++
@@ -6284,6 +6324,9 @@ func (w *factWorkspace) insertFactSlots(revision *Ruleset, generation Generation
 				w.factsByDuplicate.deleteFact(duplicateIndex, existingID)
 			}
 		}
+	}
+	if err := w.checkFactInsertLimit(); err != nil {
+		return nil, "", false, err
 	}
 
 	w.sequence++
@@ -6387,6 +6430,10 @@ func (w *factWorkspace) insertPreparedGeneratedFactSlotsWithPlanUnchecked(revisi
 			}
 		}
 	}
+	if err := w.checkFactInsertLimit(); err != nil {
+		w.rollbackGeneratedFactSlots(slotMark)
+		return nil, "", false, err
+	}
 
 	w.sequence++
 	w.recency++
@@ -6462,6 +6509,10 @@ func (w *factWorkspace) insertPreparedGeneratedCompactFactSlotsWithPlanUnchecked
 				w.factsByDuplicate.deleteFact(duplicateIndex, existingID)
 			}
 		}
+	}
+	if err := w.checkFactInsertLimit(); err != nil {
+		w.rollbackGeneratedCompactFactSlots(compactSlotMark)
+		return nil, "", false, err
 	}
 
 	w.sequence++

@@ -29,6 +29,13 @@ type GessDocument struct {
 	name     string
 	forms    []gessSExpr
 	initials []SessionInitialFact
+	deffacts []GessDeffacts
+}
+
+// GessDeffacts is one named deffacts declaration after lowering.
+type GessDeffacts struct {
+	Name  string
+	Facts []SessionInitialFact
 }
 
 // GessSymbol is one named top-level declaration in a parsed source document.
@@ -54,6 +61,22 @@ func (d *GessDocument) InitialFacts() []SessionInitialFact {
 		return nil
 	}
 	return cloneSessionInitialFacts(d.initials)
+}
+
+// Deffacts returns named seed-fact declarations in source order after LoadGess
+// has lowered the document.
+func (d *GessDocument) Deffacts() []GessDeffacts {
+	if d == nil {
+		return nil
+	}
+	out := make([]GessDeffacts, len(d.deffacts))
+	for i, declaration := range d.deffacts {
+		out[i] = GessDeffacts{
+			Name:  declaration.Name,
+			Facts: cloneSessionInitialFacts(declaration.Facts),
+		}
+	}
+	return out
 }
 
 // Symbols returns named top-level declarations in source order. It reports
@@ -247,6 +270,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 		}
 	}
 	var initials []SessionInitialFact
+	var deffacts []GessDeffacts
 	for _, form := range l.doc.forms {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -259,6 +283,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 				return err
 			}
 			initials = append(initials, facts...)
+			deffacts = append(deffacts, GessDeffacts{Name: form.List[1].Text(), Facts: facts})
 		case "deffunction":
 			if err := l.loadExpressionFunction(form); err != nil {
 				return err
@@ -276,6 +301,7 @@ func (l *gessLoader) load(ctx context.Context) error {
 		}
 	}
 	l.doc.initials = initials
+	l.doc.deffacts = deffacts
 	return nil
 }
 
